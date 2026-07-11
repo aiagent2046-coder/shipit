@@ -12,6 +12,7 @@ import uuid
 from fastapi import FastAPI, HTTPException, UploadFile
 
 from app.ingest.stack_detect import Stack, detect_stack
+from app.scan.static import run_static_scan
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
@@ -48,9 +49,15 @@ async def create_audit(archive: UploadFile) -> dict:
                     "detail": "MVP supports Next.js and FastAPI only"},
         )
 
+    # Synchronous for now; moves to the arq worker with the LLM stage.
+    buf.seek(0)
+    scan = run_static_scan(buf)
+
     return {
         "audit_id": str(uuid.uuid4()),
-        "status": "accepted",
+        "status": "completed",
         "stack": stack.value,
         "file_count": report.file_count,
+        "score": scan["score"],
+        "findings": scan["findings"],
     }

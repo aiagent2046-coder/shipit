@@ -71,6 +71,9 @@ def test_audit_intake_accepts_nextjs_zip():
     body = resp.json()
     assert body["stack"] == "nextjs"
     assert body["file_count"] == 1
+    # static scan is wired in: clean-ish project still gets presence findings
+    assert "score" in body and 0 <= body["score"]["total"] <= 10
+    assert any(f["rule_id"] == "no-tests" for f in body["findings"])
 
 
 def test_audit_intake_rejects_symlink_zip_with_reason():
