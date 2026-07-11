@@ -11,9 +11,13 @@ Architecture: see `docs/shipit-architecture.md` (v0.2).
 Implemented:
 - `app/ingest/validators.py` — hostile-archive validation (size, file
   count, symlinks, path traversal, zip bombs by ratio and by total size)
-- `app/ingest/stack_detect.py` — Next.js / FastAPI detection, honest
-  `unsupported` otherwise
-- `POST /v1/audits` — intake endpoint (validation + stack detection)
+- `app/ingest/stack_detect.py` — Next.js / Vite+React / FastAPI
+  detection, honest `unsupported` otherwise
+- `app/ratelimit.py` — in-memory fixed-window rate limit per client IP
+  (`AUDIT_RATE_LIMIT_PER_DAY`, default 5), enforced before any archive
+  bytes are read
+- `POST /v1/audits` — intake endpoint (rate limit + validation + stack
+  detection + static scan)
 
 ## Dev
 
