@@ -1,8 +1,10 @@
 """ShipIt API gateway — MVP phase 1 surface.
 
 Only what exists today: health check and archive intake with validation,
-rate limiting, and stack detection. Persistence, queue, and LLM scan come
-next.
+rate limiting, stack detection, static scan, and (when providers are
+configured) the LLM auth/security scan. Persistence and the queue come
+next — the scan stage runs off the event loop in a threadpool for now,
+since the LLM call alone can take up to ~2 minutes.
 """
 
 from __future__ import annotations
@@ -11,9 +13,13 @@ import io
 import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.ingest.stack_detect import Stack, detect_stack
+from app.llm.client import LLMClient, LLMError
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
+from app.scan.llm_scan import run_llm_scan
+from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
@@ -29,6 +35,38 @@ _limiter = limiter_from_env()
 def get_rate_limiter() -> RateLimiter:
     """FastAPI dependency indirection — overridable in tests."""
     return _limiter
+
+
+def get_llm_client() -> LLMClient:
+    """FastAPI dependency indirection — overridable in tests."""
+    return LLMClient()
+
+
+def _run_scan(data: bytes, llm_client: LLMClient) -> dict:
+    """Static scan always; LLM auth/security scan too if providers are
+    configured. Blocking (network I/O) — call via run_in_threadpool from
+    the endpoint, never awaited directly on the event loop.
+    """
+    static = run_static_scan(io.BytesIO(data))
+    findings = static["findings"]
+    llm_summary: object = "skipped (no providers configured)"
+
+    if llm_client.providers:
+        try:
+            llm_findings, stats = run_llm_scan(io.BytesIO(data), llm_client)
+        except LLMError as exc:
+            # Degrade, don't fail the whole audit: static findings still
+            # stand on their own, and this is the free/lead-gen path.
+            llm_summary = f"failed: {exc}"
+        else:
+            findings = findings + [vars(f) for f in llm_findings]
+            llm_summary = vars(stats)
+
+    return {
+        "score": compute_scores([ScoredFinding(**f) for f in findings]),
+        "findings": findings,
+        "llm": llm_summary,
+    }
 
 
 def _client_key(request: Request) -> str:
@@ -54,6 +92,7 @@ async def create_audit(
     archive: UploadFile,
     request: Request,
     limiter: RateLimiter = Depends(get_rate_limiter),
+    llm_client: LLMClient = Depends(get_llm_client),
 ) -> dict:
     try:
         limiter.check(_client_key(request))
@@ -87,9 +126,9 @@ async def create_audit(
                     "detail": "MVP supports Next.js and FastAPI only"},
         )
 
-    # Synchronous for now; moves to the arq worker with the LLM stage.
-    buf.seek(0)
-    scan = run_static_scan(buf)
+    # Off the event loop: the LLM stage does real network I/O and can
+    # take up to ~2 minutes. Moves to the arq worker + queue in phase 2.
+    scan = await run_in_threadpool(_run_scan, raw, llm_client)
 
     return {
         "audit_id": str(uuid.uuid4()),
@@ -98,4 +137,5 @@ async def create_audit(
         "file_count": report.file_count,
         "score": scan["score"],
         "findings": scan["findings"],
+        "llm": scan["llm"],
     }
