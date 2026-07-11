@@ -16,7 +16,7 @@ NEXT_PKG = json.dumps({"dependencies": {"next": "15.0.0", "react": "19.0.0"}}).e
 
 class FakeLLM(LLMClient):
     """Stands in for a real provider chain; `providers` stays non-empty
-    so `_run_scan` actually attempts the LLM stage."""
+    so the scan pipeline actually attempts the LLM stage."""
 
     def __init__(self, response: str | None = None, error: Exception | None = None):
         super().__init__(providers=[Provider("anthropic", "https://x", "k", "m")])

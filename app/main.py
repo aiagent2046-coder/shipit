@@ -16,11 +16,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from app.ingest.stack_detect import Stack, detect_stack
-from app.llm.client import LLMClient, LLMError
+from app.llm.client import LLMClient
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
-from app.scan.llm_scan import run_llm_scan
-from app.scan.scoring import ScoredFinding, compute_scores
-from app.scan.static import run_static_scan
+from app.scan.pipeline import run_scan
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
@@ -40,33 +38,6 @@ def get_rate_limiter() -> RateLimiter:
 def get_llm_client() -> LLMClient:
     """FastAPI dependency indirection — overridable in tests."""
     return LLMClient()
-
-
-def _run_scan(data: bytes, llm_client: LLMClient) -> dict:
-    """Static scan always; LLM auth/security scan too if providers are
-    configured. Blocking (network I/O) — call via run_in_threadpool from
-    the endpoint, never awaited directly on the event loop.
-    """
-    static = run_static_scan(io.BytesIO(data))
-    findings = static["findings"]
-    llm_summary: object = "skipped (no providers configured)"
-
-    if llm_client.providers:
-        try:
-            llm_findings, stats = run_llm_scan(io.BytesIO(data), llm_client)
-        except LLMError as exc:
-            # Degrade, don't fail the whole audit: static findings still
-            # stand on their own, and this is the free/lead-gen path.
-            llm_summary = f"failed: {exc}"
-        else:
-            findings = findings + [vars(f) for f in llm_findings]
-            llm_summary = vars(stats)
-
-    return {
-        "score": compute_scores([ScoredFinding(**f) for f in findings]),
-        "findings": findings,
-        "llm": llm_summary,
-    }
 
 
 def _client_key(request: Request) -> str:
@@ -128,7 +99,7 @@ async def create_audit(
 
     # Off the event loop: the LLM stage does real network I/O and can
     # take up to ~2 minutes. Moves to the arq worker + queue in phase 2.
-    scan = await run_in_threadpool(_run_scan, raw, llm_client)
+    scan = await run_in_threadpool(run_scan, raw, llm_client)
 
     return {
         "audit_id": str(uuid.uuid4()),
