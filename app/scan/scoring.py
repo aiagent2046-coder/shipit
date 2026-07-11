@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 SEVERITY_WEIGHT = {"critical": 2.0, "high": 1.0, "medium": 0.4, "low": 0.1}
 
-CATEGORIES = ("Security", "Correctness", "Config", "Testing", "Deploy")
+CATEGORIES = ("Security", "Auth", "Correctness", "Config", "Testing", "Deploy")
 
 
 @dataclass(frozen=True)
