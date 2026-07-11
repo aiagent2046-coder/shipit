@@ -1,4 +1,6 @@
-"""Run a full audit on a local ZIP: python -m app.audit_cli path/to/app.zip
+"""Run a full audit on a local ZIP:
+
+  python -m app.audit_cli app.zip [report.html]
 
 Static scan always runs; LLM scan runs only if providers are configured
 in the environment (.env). Prints the report as JSON to stdout.
@@ -20,8 +22,9 @@ from app.scan.static import run_static_scan
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: python -m app.audit_cli <archive.zip>", file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print("usage: python -m app.audit_cli <archive.zip> [report.html]",
+              file=sys.stderr)
         return 2
 
     raw = Path(sys.argv[1]).read_bytes()
@@ -51,12 +54,19 @@ def main() -> int:
     from app.scan.scoring import ScoredFinding
     score = compute_scores([ScoredFinding(**f) for f in findings])
 
-    print(json.dumps({
+    report = {
         "stack": stack.value,
         "score": score,
         "findings": findings,
         "llm": llm_stats or "skipped (no providers in env)",
-    }, indent=2, ensure_ascii=False))
+    }
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+
+    if len(sys.argv) == 3:
+        from app.report.html import render_report
+        out = Path(sys.argv[2])
+        out.write_text(render_report(report, project_name=Path(sys.argv[1]).stem))
+        print(f"html report: {out}", file=sys.stderr)
     return 0
 
 
