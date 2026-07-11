@@ -76,18 +76,13 @@ def test_audit_intake_accepts_nextjs_zip():
     assert any(f["rule_id"] == "no-tests" for f in body["findings"])
 
 
-def test_audit_intake_rejects_symlink_zip_with_reason():
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        info = zipfile.ZipInfo("evil_link")
-        info.external_attr = (0o120777 << 16)
-        zf.writestr(info, "/etc/passwd")
-    buf.seek(0)
+def test_audit_intake_rejects_traversal_zip_with_reason():
+    buf = make_zip({"../../etc/evil": b"x"})
     resp = client.post(
         "/v1/audits", files={"archive": ("app.zip", buf, "application/zip")}
     )
     assert resp.status_code == 422
-    assert resp.json()["detail"]["reason"] == "symlink_entry"
+    assert resp.json()["detail"]["reason"] == "unsafe_path"
 
 
 def test_audit_intake_rejects_unsupported_stack():
@@ -97,3 +92,20 @@ def test_audit_intake_rejects_unsupported_stack():
     )
     assert resp.status_code == 422
     assert resp.json()["detail"]["reason"] == "unsupported_stack"
+
+
+def test_detect_vite_react_lovable_export():
+    pkg = json.dumps({
+        "dependencies": {"react": "18.3.1"},
+        "devDependencies": {"vite": "5.4.1", "lovable-tagger": "1.0.0"},
+    }).encode()
+    buf = make_zip({"proj/package.json": pkg, "proj/vite.config.ts": b""})
+    assert detect_stack(buf) is Stack.VITE_REACT
+
+
+def test_next_takes_priority_over_vite():
+    pkg = json.dumps({
+        "dependencies": {"next": "15.0.0", "react": "19.0.0", "vite": "5.0.0"}
+    }).encode()
+    buf = make_zip({"package.json": pkg})
+    assert detect_stack(buf) is Stack.NEXTJS

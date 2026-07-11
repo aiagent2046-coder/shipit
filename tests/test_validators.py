@@ -68,11 +68,13 @@ def test_too_many_files_rejected():
     assert exc.value.reason == "too_many_files"
 
 
-def test_symlink_entry_rejected():
+def test_symlink_entries_skipped_and_counted_not_rejected():
+    # Real GitHub zipballs contain symlinks; we never extract, so we
+    # skip and count them instead of losing the whole archive.
     buf = make_symlink_zip()
-    with pytest.raises(ArchiveValidationError) as exc:
-        validate_zip(buf, size_bytes=size_of(buf))
-    assert exc.value.reason == "symlink_entry"
+    report = validate_zip(buf, size_bytes=size_of(buf))
+    assert report.symlink_count == 1
+    assert report.file_count == 0
 
 
 @pytest.mark.parametrize(

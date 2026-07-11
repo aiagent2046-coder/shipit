@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import zipfile
 from dataclasses import dataclass
 from typing import BinaryIO
@@ -82,6 +83,8 @@ def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
     for info in zf.infolist():
         n = info.filename
         if info.is_dir() or any(d in n for d in _SKIP_DIRS):
+            continue
+        if stat.S_ISLNK(info.external_attr >> 16):
             continue
         if not n.endswith(_CODE_SUFFIXES) or n.endswith(".lock"):
             continue

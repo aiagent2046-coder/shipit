@@ -88,3 +88,24 @@ def test_clean_project_yields_no_findings():
         ".env.example": b"ANTHROPIC_API_KEY=\nDATABASE_URL=\n",
     }
     assert scan_secrets(make_zip(entries)) == []
+
+
+def _jwt_with_role(role: str) -> str:
+    import base64, json as _json
+    def b64(d): return base64.urlsafe_b64encode(_json.dumps(d).encode()).rstrip(b"=").decode()
+    return f"{b64({'alg':'HS256'})}.{b64({'role': role, 'iss': 'supabase'})}." + "s" * 20
+
+
+def test_supabase_anon_key_is_informational():
+    src = f"const k = '{_jwt_with_role('anon')}'".encode()
+    f = next(f for f in scan_secrets(make_zip({"a.ts": src}))
+             if f.rule_id == "jwt-in-code")
+    assert f.severity == "low" and f.confidence <= 0.3
+
+
+def test_supabase_service_role_key_is_critical():
+    src = f"const k = '{_jwt_with_role('service_role')}'".encode()
+    f = next(f for f in scan_secrets(make_zip({"a.ts": src}))
+             if f.rule_id == "jwt-in-code")
+    assert f.severity == "critical"
+    assert "service_role" in f.title

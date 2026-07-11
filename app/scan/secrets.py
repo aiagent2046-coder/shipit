@@ -11,7 +11,9 @@ Design rules:
 
 from __future__ import annotations
 
+import json
 import re
+import stat
 import zipfile
 from dataclasses import dataclass
 from typing import BinaryIO, Iterator
@@ -98,6 +100,8 @@ def _iter_text_files(zf: zipfile.ZipFile) -> Iterator[tuple[str, str]]:
         name = info.filename
         if info.is_dir() or info.file_size > MAX_SCANNED_FILE_BYTES:
             continue
+        if stat.S_ISLNK(info.external_attr >> 16):
+            continue
         if any(part in name for part in _SKIP_DIRS):
             continue
         if name.lower().endswith(_SKIP_SUFFIXES):
@@ -108,6 +112,25 @@ def _iter_text_files(zf: zipfile.ZipFile) -> Iterator[tuple[str, str]]:
         yield name, data.decode("utf-8", errors="ignore")
 
 
+def _jwt_severity(token: str) -> tuple[str, float, str]:
+    """Supabase keys are JWTs with a `role` claim: anon is public by
+    design (every Lovable app ships it client-side), service_role is a
+    full RLS bypass. Decode the payload to tell them apart."""
+    import base64
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload))
+        role = data.get("role", "")
+    except Exception:
+        return "high", 0.6, "JWT committed to code"
+    if role == "service_role":
+        return "critical", 0.95, "Supabase service_role key committed — full RLS bypass"
+    if role == "anon":
+        return "low", 0.3, "Supabase anon key in code (public by design, informational)"
+    return "high", 0.6, "JWT committed to code"
+
+
 def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
     findings: list[SecretFinding] = []
     with zipfile.ZipFile(fileobj) as zf:
@@ -115,14 +138,20 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
             for lineno, line in enumerate(text.splitlines(), start=1):
                 for rule in RULES:
                     m = rule.pattern.search(line)
-                    if m:
-                        findings.append(SecretFinding(
-                            rule_id=rule.id,
-                            title=rule.title,
-                            severity=rule.severity,
-                            confidence=rule.confidence,
-                            file=name,
-                            line=lineno,
-                            masked=_mask(m.group(0)),
-                        ))
+                    if not m:
+                        continue
+                    severity, confidence, title = (
+                        rule.severity, rule.confidence, rule.title
+                    )
+                    if rule.id == "jwt-in-code":
+                        severity, confidence, title = _jwt_severity(m.group(0))
+                    findings.append(SecretFinding(
+                        rule_id=rule.id,
+                        title=title,
+                        severity=severity,
+                        confidence=confidence,
+                        file=name,
+                        line=lineno,
+                        masked=_mask(m.group(0)),
+                    ))
     return findings

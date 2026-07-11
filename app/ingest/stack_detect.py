@@ -15,6 +15,7 @@ from typing import BinaryIO
 
 class Stack(str, Enum):
     NEXTJS = "nextjs"
+    VITE_REACT = "vite-react"   # what Lovable actually generates
     FASTAPI = "fastapi"
     UNSUPPORTED = "unsupported"
 
@@ -38,11 +39,12 @@ def detect_stack(fileobj: BinaryIO) -> Stack:
 
         # Next.js: package.json with next dependency, or next.config.*
         pkg_path = f"{prefix}package.json"
+        pkg_deps: dict = {}
         if pkg_path in names:
             try:
                 pkg = json.loads(zf.read(pkg_path))
-                deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-                if "next" in deps:
+                pkg_deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+                if "next" in pkg_deps:
                     return Stack.NEXTJS
             except (json.JSONDecodeError, UnicodeDecodeError):
                 pass
@@ -50,6 +52,11 @@ def detect_stack(fileobj: BinaryIO) -> Stack:
             n.startswith(f"{prefix}next.config.") for n in names
         ):
             return Stack.NEXTJS
+
+        # Vite + React: the stack Lovable/Bolt exports actually use
+        has_vite_config = any(n.startswith(f"{prefix}vite.config.") for n in names)
+        if ("react" in pkg_deps) and ("vite" in pkg_deps or has_vite_config):
+            return Stack.VITE_REACT
 
         # FastAPI: python deps manifest + a fastapi import in any .py
         has_py_manifest = any(

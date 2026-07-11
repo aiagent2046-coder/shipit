@@ -36,6 +36,7 @@ class ArchiveValidationError(Exception):
 class ArchiveReport:
     file_count: int
     total_uncompressed_bytes: int
+    symlink_count: int = 0
 
 
 def _is_symlink(info: zipfile.ZipInfo) -> bool:
@@ -58,8 +59,8 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
     """Validate an uploaded ZIP without extracting it.
 
     Raises ArchiveValidationError with one of the reasons:
-      too_large, not_a_zip, too_many_files, symlink_entry,
-      unsafe_path, zip_bomb.
+      too_large, not_a_zip, too_many_files, unsafe_path, zip_bomb.
+    Symlink entries are skipped and counted, never extracted.
     """
     if size_bytes > MAX_ARCHIVE_BYTES:
         raise ArchiveValidationError(
@@ -80,9 +81,14 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
             )
 
         total_uncompressed = 0
+        symlink_count = 0
         for info in infos:
             if _is_symlink(info):
-                raise ArchiveValidationError("symlink_entry", info.filename)
+                # Legit repos contain symlinks (seen in real GitHub zipballs).
+                # We never extract to disk, so skipping is safe; extraction
+                # code (Fix Packs, sandbox) MUST also skip these entries.
+                symlink_count += 1
+                continue
 
             if _is_unsafe_path(info.filename):
                 raise ArchiveValidationError("unsafe_path", info.filename)
@@ -108,6 +114,7 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
             )
 
     return ArchiveReport(
-        file_count=len(infos),
+        file_count=len(infos) - symlink_count,
         total_uncompressed_bytes=total_uncompressed,
+        symlink_count=symlink_count,
     )
