@@ -121,6 +121,34 @@ def test_verify_rejects_fabricated_evidence():
     )
 
 
+def test_verify_accepts_evidence_spanning_multiple_real_lines():
+    # The prompt asks for a single-line evidence string, but models
+    # sometimes return a real multi-line snippet anyway (e.g. a call
+    # split across two lines). That's still real code, not a
+    # hallucination — confirmed against a real repo during manual
+    # testing (dgero22/digital-rolecraft: a real save-to-localStorage
+    # finding was wrongly discarded for exactly this reason).
+    assert verify_finding(
+        valid_finding(
+            line_start=2, line_end=3,
+            evidence="export function decode(token: string) {\n  return jwt.decode(token)",
+        ),
+        FILES,
+    )
+
+
+def test_verify_rejects_fabricated_multiline_evidence():
+    # Joining the window shouldn't make the check any less strict for
+    # genuinely invented content spanning multiple "lines".
+    assert not verify_finding(
+        valid_finding(
+            line_start=2, line_end=3,
+            evidence="export function decode(token: string) {\n  eval(userInput)",
+        ),
+        FILES,
+    )
+
+
 def test_verify_rejects_missing_keys_and_bad_severity():
     bad = valid_finding()
     del bad["evidence"]

@@ -110,3 +110,33 @@ def test_shell_injection_finding_verifies():
         "explanation": "user_input is concatenated into a shell=True command string.",
     }
     assert verify_finding(finding, {"backend/tool_version.py": SHELL_INJECTION})
+
+
+# --- API key saved to localStorage, evidence spanning two lines ---
+# Real finding: dgero22/digital-rolecraft, CreatePersonaForm.tsx — this
+# exact finding was wrongly DISCARDED on the first real-repo test pass
+# because the model's evidence spanned the `if` line and the
+# `localStorage.setItem` line below it, and the old gate only checked
+# evidence against one line at a time. Fixed in verify_finding by
+# joining the window before the substring check.
+
+MULTILINE_SAVE = _read("multiline_localstorage_save.tsx")
+
+
+def test_multiline_save_file_selected_for_security():
+    files = [("src/hooks/usePersonaForm.tsx", MULTILINE_SAVE)]
+    assert select_files(files, "security")
+
+
+def test_multiline_save_finding_verifies():
+    finding = {
+        "file": "src/hooks/usePersonaForm.tsx",
+        "line_start": 13,
+        "line_end": 14,
+        "evidence": "if (formData.geminiApiKey) {\n      localStorage.setItem('gemini_api_key', formData.geminiApiKey)",
+        "severity": "high",
+        "confidence": 0.8,
+        "title": "Gemini API key persisted to localStorage on save",
+        "explanation": "The key is written to localStorage in plaintext on every save.",
+    }
+    assert verify_finding(finding, {"src/hooks/usePersonaForm.tsx": MULTILINE_SAVE})

@@ -148,7 +148,14 @@ _SEVERITIES = {"critical", "high", "medium", "low"}
 
 def verify_finding(f: dict, files: dict[str, str]) -> bool:
     """Anti-hallucination gate: file must exist, range must be sane,
-    evidence must appear verbatim within the cited range (±2 lines)."""
+    evidence must appear verbatim within the cited range (±2 lines).
+
+    Checked against the whole window joined by "\n", not line-by-line:
+    the prompt asks for evidence from a single line, but models
+    sometimes return a multi-line snippet anyway for a genuinely real
+    finding — that's still real code, not a hallucination, and a
+    line-by-line check would silently discard it.
+    """
     if not REQUIRED <= f.keys():
         return False
     if f["severity"] not in _SEVERITIES:
@@ -167,7 +174,8 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
     if len(evidence) < 4:
         return False
     lo, hi = max(0, start - 3), min(len(lines), end + 2)
-    return any(evidence in line for line in lines[lo:hi])
+    window = "\n".join(lines[lo:hi])
+    return evidence in window
 
 
 def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
