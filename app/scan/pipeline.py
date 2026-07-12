@@ -16,7 +16,7 @@ from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
 
 
-def run_scan(data: bytes, llm_client: LLMClient) -> dict:
+def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
     """Returns {"score": {...}, "findings": [...], "llm": <stats | status>}.
 
     `llm` is a stats dict when the stage ran, or one of two honest
@@ -28,7 +28,8 @@ def run_scan(data: bytes, llm_client: LLMClient) -> dict:
 
     if llm_client.providers:
         try:
-            llm_findings, stats = run_llm_scan(io.BytesIO(data), llm_client)
+            llm_findings, stats = run_llm_scan(io.BytesIO(data), llm_client,
+                                               passes=llm_passes)
         except LLMError as exc:
             llm_summary = f"failed: {exc}"
         else:

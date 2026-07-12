@@ -267,3 +267,46 @@ def test_4xx_not_retried(monkeypatch):
     with _pytest.raises(LLMError):
         c.complete("s", "u")
     assert calls["n"] == 1  # our request is wrong; retrying is spam
+
+
+def test_union_of_two_passes_merges_and_dedups(monkeypatch):
+    """passes=2 doubles the prompts and unions the findings: stable
+    findings collapse via (file, line) dedup, pass-unique ones are
+    kept — the paid Fix Pack completeness mode."""
+    import io
+    import zipfile as _zipfile
+    from app.scan.llm_scan import run_llm_scan
+
+    buf = io.BytesIO()
+    with _zipfile.ZipFile(buf, "w") as zf:
+        # содержимое матчит ОБЕ рубрики: auth (token) и security (env, fetch)
+        zf.writestr("src/auth.ts",
+                    "const token = await fetch(process.env.API_URL)\n")
+    buf.seek(0)
+
+    responses = iter([
+        # pass 1: auth, security
+        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
+        '"evidence":"const token = await fetch","severity":"high",'
+        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]',
+        '[]',
+        # pass 2: та же stable + уникальная для второго прохода
+        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
+        '"evidence":"const token = await fetch","severity":"high",'
+        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]',
+        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
+        '"evidence":"const token = await fetch","severity":"low",'
+        '"confidence":0.5,"title":"pass-2-only finding","explanation":"","fix_hint":""}]',
+    ])
+
+    class FakeClient:
+        providers = [object()]
+        def complete(self, system, user, max_tokens=4096):
+            return next(responses)
+
+    findings, stats = run_llm_scan(io.BytesIO(buf.getvalue()), FakeClient(),
+                                   passes=2)
+    assert stats.prompts == 4          # 2 рубрики × 2 прохода
+    # оба ответа указывают на одну (file, line): дедуп оставил тяжёлую
+    assert len(findings) == 1
+    assert findings[0].severity == "high"

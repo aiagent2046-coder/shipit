@@ -64,7 +64,7 @@ SYSTEM_PROMPT = (
     "\"evidence\": str (verbatim substring of ONE line inside the range, "
     "max 120 chars), \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", "
     "\"confidence\": float 0..1, \"title\": str, \"explanation\": str, "
-    "\"fix_hint\": str}. Report at most 12 findings. If the SAME issue "
+    "\"fix_hint\": str}. Report at most 20 findings. If the SAME issue "
     "pattern occurs in multiple files (e.g. the same kind of hardcoded "
     "secret in several migration files), report it ONCE using the most "
     "representative instance as file/line/evidence (representative = the "
@@ -186,34 +186,47 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
 
 def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                  rubrics: tuple[str, ...] = ("auth", "security"),
+                 passes: int = 1,
                  ) -> tuple[list[ScoredFinding], LLMScanStats]:
+    """`passes` > 1 = union-of-N mode: repeat every rubric prompt N
+    times and merge findings via the same (file, line) dedup. Measured
+    on a real saturated repo: the model is not deterministic even at
+    temperature=0, and a repo with more true issues than the per-prompt
+    cap makes any single pass a sample (critical findings were 100%
+    reproducible, high ~50-70% by coordinates). The free audit uses one
+    pass — score and criticals are stable, which is what the shareable
+    report leads with. The paid Fix Pack uses passes=2 for completeness
+    of scope; the extra LLM cost is covered by the Pack price. See
+    docs/shipit-architecture.md 2.2, v0.3 note."""
     stats = LLMScanStats()
     with zipfile.ZipFile(fileobj) as zf:
         files = _iter_code_files(zf)
     files_by_name = dict(files)
 
     findings: list[ScoredFinding] = []
-    for rubric in rubrics:
-        selected = select_files(files, rubric)
-        if not selected:
-            continue
-        stats.prompts += 1
-        raw = client.complete(SYSTEM_PROMPT, build_prompt(selected, rubric))
-        for f in parse_findings(raw):
-            stats.raw_findings += 1
-            if not verify_finding(f, files_by_name):
-                stats.discarded += 1
-                continue
-            stats.verified += 1
-            findings.append(ScoredFinding(
-                rule_id=f"llm-{rubric}",
-                title=str(f["title"])[:200],
-                severity=f["severity"],
-                confidence=max(0.0, min(1.0, float(f["confidence"]))),
-                category="Security" if rubric == "security" else "Auth",
-                file=f["file"],
-                line=int(f["line_start"]),
-            ))
+    for _pass in range(max(1, passes)):
+      for rubric in rubrics:
+          selected = select_files(files, rubric)
+          if not selected:
+              continue
+          stats.prompts += 1
+          raw = client.complete(SYSTEM_PROMPT, build_prompt(selected, rubric),
+                                    max_tokens=8192)
+          for f in parse_findings(raw):
+              stats.raw_findings += 1
+              if not verify_finding(f, files_by_name):
+                  stats.discarded += 1
+                  continue
+              stats.verified += 1
+              findings.append(ScoredFinding(
+                  rule_id=f"llm-{rubric}",
+                  title=str(f["title"])[:200],
+                  severity=f["severity"],
+                  confidence=max(0.0, min(1.0, float(f["confidence"]))),
+                  category="Security" if rubric == "security" else "Auth",
+                  file=f["file"],
+                  line=int(f["line_start"]),
+              ))
     return _dedup_across_rubrics(findings), stats
 
 
