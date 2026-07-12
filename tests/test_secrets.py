@@ -109,3 +109,37 @@ def test_supabase_service_role_key_is_critical():
              if f.rule_id == "jwt-in-code")
     assert f.severity == "critical"
     assert "service_role" in f.title
+
+
+def test_doc_context_damps_but_keeps_finding():
+    # A credential-shaped string inside a blog article: reported, but
+    # capped at medium and confidence-damped (real-world case: a QA
+    # tutorials site scored 0.0 from example passwords in its posts).
+    zf = make_zip({
+        "src/app/blog/posts/api-guide.ts":
+            b'const example = "AKIAIOSFODNN7EXAMPLE";\n',
+    })
+    findings = scan_secrets(zf)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "medium"
+    assert f.confidence < 0.4
+    assert "(documentation/example context)" in f.title
+
+
+def test_same_secret_outside_doc_context_stays_critical():
+    zf = make_zip({
+        "src/config.ts": b'const key = "AKIAIOSFODNN7EXAMPLE";\n',
+    })
+    findings = scan_secrets(zf)
+    assert len(findings) == 1
+    assert findings[0].severity == "critical"
+    assert findings[0].confidence >= 0.9
+    assert "(documentation" not in findings[0].title
+
+
+def test_markdown_files_are_doc_context():
+    zf = make_zip({"README.md": b'token: "AKIAIOSFODNN7EXAMPLE"\n'})
+    findings = scan_secrets(zf)
+    assert len(findings) == 1
+    assert findings[0].severity == "medium"

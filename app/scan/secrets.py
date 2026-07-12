@@ -27,6 +27,27 @@ _SKIP_SUFFIXES = (
     ".lock",  # lockfiles: huge, hash-heavy, no secrets by convention
 )
 
+# Documentation/example context: a credential-shaped string inside a
+# blog post, docs page, or test fixture is far more likely a fabricated
+# teaching example than a live secret (seen for real: a QA-tutorials
+# site scored 0.0 because its articles contain example passwords and a
+# sample private key). Findings there are NOT dropped — a real key
+# pasted into docs is still a leak — but severity is capped at medium
+# and confidence damped, so one tutorial can't zero out the whole score.
+_DOC_SEGMENTS = frozenset((
+    "blog", "docs", "doc", "content", "posts", "articles",
+    "examples", "example", "fixtures", "__fixtures__", "samples",
+))
+_DOC_SUFFIXES = (".md", ".mdx")
+_DOC_CONFIDENCE_FACTOR = 0.35
+_DOC_SEVERITY_CAP = {"critical": "medium", "high": "medium"}
+
+
+def _is_doc_context(name: str) -> bool:
+    if name.lower().endswith(_DOC_SUFFIXES):
+        return True
+    return any(seg.lower() in _DOC_SEGMENTS for seg in name.split("/")[:-1])
+
 
 @dataclass(frozen=True)
 class SecretRule:
@@ -145,6 +166,10 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
                     )
                     if rule.id == "jwt-in-code":
                         severity, confidence, title = _jwt_severity(m.group(0))
+                    if _is_doc_context(name):
+                        severity = _DOC_SEVERITY_CAP.get(severity, severity)
+                        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
+                        title = f"{title} (documentation/example context)"
                     findings.append(SecretFinding(
                         rule_id=rule.id,
                         title=title,
