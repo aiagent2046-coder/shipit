@@ -38,6 +38,30 @@ def no_database_url(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
 
+class TestGetPool:
+    async def test_create_pool_disables_statement_cache(self, monkeypatch):
+        """Regression guard: statement_cache_size=0 works around a real
+        Supavisor session-pooler hang on the first parameterized query,
+        confirmed by hand against the actual Supabase project. Don't
+        remove this without re-testing against a real pooler."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+        db_mod._pool = None
+        captured = {}
+
+        async def fake_create_pool(url, **kwargs):
+            captured.update(kwargs)
+            return "fake-pool"
+
+        monkeypatch.setattr(db_mod.asyncpg, "create_pool", fake_create_pool)
+        try:
+            pool = await db_mod.get_pool()
+        finally:
+            db_mod._pool = None
+
+        assert pool == "fake-pool"
+        assert captured["statement_cache_size"] == 0
+
+
 class TestAuditRepositoryNotConfigured:
     async def test_create_returns_none(self):
         repo = AuditRepository()

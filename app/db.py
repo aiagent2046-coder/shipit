@@ -51,7 +51,18 @@ async def get_pool() -> asyncpg.Pool:
         url = database_url_from_env()
         if not url:
             raise DatabaseNotConfigured(f"{DATABASE_URL_ENV} is not set")
-        _pool = await asyncpg.create_pool(url, min_size=1, max_size=5)
+        # statement_cache_size=0: asyncpg's default named-prepared-statement
+        # cache hangs (not even an error, a real hang) the moment it tries a
+        # parameterized query through Supabase's Supavisor session pooler --
+        # confirmed by hand against the real project. Session-mode pgbouncer
+        # is documented as supporting prepared statements fine, so this looks
+        # like a Supavisor-specific quirk, not the usual PgBouncer
+        # transaction-mode "prepared statement does not exist" error everyone
+        # else reports. Unnamed statements (this setting) sidestep it
+        # entirely. Costs a little query-plan caching, not correctness.
+        _pool = await asyncpg.create_pool(
+            url, min_size=1, max_size=5, statement_cache_size=0,
+        )
     return _pool
 
 
