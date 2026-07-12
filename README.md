@@ -34,9 +34,14 @@ Implemented:
 - `app/deploypack/delivery.py` — opens a real PR (branch + commit via
   the Git Data API) for a verified Pack, using a single operator token
   (`GITHUB_PR_TOKEN`) — not a GitHub App yet, so it can only open PRs
-  on repos that token has write access to. **Not yet exercised against
-  a real GitHub repo** — only unit-tested with a mocked transport so
-  far, same caveat sandbox.py had before its real Docker run above.
+  on repos that token has write access to. **Confirmed end-to-end**:
+  dogfooded on this repo itself — [PR #1](https://github.com/aiagent2046-coder/shipit/pull/1)
+  is a real branch + real commit + real PR opened by this exact code.
+  One honest nuance found doing that: `.env.example` didn't show up in
+  the PR diff — not a bug, `_merge_env_example` correctly produced
+  identical content to what shipit already had (no Postgres, so
+  nothing new to add), and git/GitHub correctly show zero diff for an
+  unchanged file.
 - `POST /v1/fixpacks` — Deploy Pack, free/unpaid preview (no payment
   gate, no persistence yet). Optional `deliver_to="owner/repo"` form
   field opens a real PR once verified; refuses to deliver an unverified
