@@ -36,7 +36,17 @@ def run_scan(data: bytes, llm_client: LLMClient) -> dict:
             llm_summary = vars(stats)
 
     return {
-        "score": compute_scores([ScoredFinding(**f) for f in findings]),
+        "score": {
+            **compute_scores([ScoredFinding(**f) for f in findings]),
+            # An audit whose LLM stage was skipped or failed must not
+            # look like a clean bill of health: a repo that scored 0.0
+            # with the LLM stage present scored 9.2 without it (seen in
+            # a real batch run when the provider returned 402 mid-run).
+            # The basis travels inside score_json so it persists to the
+            # DB and reaches every consumer of the score, not just ones
+            # that also read `llm`.
+            "basis": "static+llm" if isinstance(llm_summary, dict) else "static_only",
+        },
         "findings": findings,
         "llm": llm_summary,
     }

@@ -89,3 +89,55 @@ def test_llm_failure_degrades_to_static_only_not_500():
     assert body["llm"].startswith("failed:")
     # static findings (e.g. no-tests) still present despite the LLM failure
     assert any(f["rule_id"] == "no-tests" for f in body["findings"])
+
+
+def test_score_basis_static_only_when_no_providers():
+    from app.llm.client import LLMClient
+    from app.scan.pipeline import run_scan
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("requirements.txt", "fastapi\n")
+        zf.writestr("app/main.py", "from fastapi import FastAPI\napp = FastAPI()\n")
+    scan = run_scan(buf.getvalue(), LLMClient(providers=[]))
+    assert scan["score"]["basis"] == "static_only"
+
+
+def test_score_basis_static_only_when_llm_fails(monkeypatch):
+    from app.llm.client import LLMClient, LLMError
+    from app.scan import pipeline as pipeline_mod
+    from app.scan.pipeline import run_scan
+    import io, zipfile
+
+    def boom(*a, **k):
+        raise LLMError("provider down")
+    monkeypatch.setattr(pipeline_mod, "run_llm_scan", boom)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("requirements.txt", "fastapi\n")
+        zf.writestr("app/auth.py", "token = request.headers['authorization']\n")
+    fake = LLMClient(providers=[])
+    fake.providers = [object()]  # non-empty chain so the stage is attempted
+    scan = run_scan(buf.getvalue(), fake)
+    assert scan["score"]["basis"] == "static_only"
+    assert scan["llm"].startswith("failed:")
+
+
+def test_score_basis_static_plus_llm_when_stage_ran(monkeypatch):
+    from app.llm.client import LLMClient
+    from app.scan import pipeline as pipeline_mod
+    from app.scan.llm_scan import LLMScanStats
+    from app.scan.pipeline import run_scan
+    import io, zipfile
+
+    monkeypatch.setattr(pipeline_mod, "run_llm_scan",
+                        lambda *a, **k: ([], LLMScanStats(prompts=1)))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("requirements.txt", "fastapi\n")
+        zf.writestr("app/main.py", "from fastapi import FastAPI\napp = FastAPI()\n")
+    fake = LLMClient(providers=[])
+    fake.providers = [object()]
+    scan = run_scan(buf.getvalue(), fake)
+    assert scan["score"]["basis"] == "static+llm"

@@ -7,3 +7,4 @@ dist/
 
 # build artifacts
 *.egg-info/
+batch_reports/

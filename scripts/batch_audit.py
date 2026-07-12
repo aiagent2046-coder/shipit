@@ -46,7 +46,7 @@ REPOS = [
 ]
 
 RUNS = int(os.environ.get("RUNS", "2"))
-OUT = Path("/tmp/batch_reports")
+OUT = Path(__file__).resolve().parent.parent / "batch_reports"
 OUT.mkdir(exist_ok=True)
 
 
