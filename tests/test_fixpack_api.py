@@ -1,11 +1,12 @@
 """API-level tests for POST /v1/fixpacks.
 
-This sandbox has no `docker` binary at all (see
-app/deploypack/sandbox.py's module docstring), so most tests here
-exercise the real, unmocked "docker unavailable" path — that's a
-genuine, honest outcome, not a workaround. One test monkeypatches the
-sandbox call to also prove the API correctly reports verified=True
-when the sandbox does succeed.
+The "docker unavailable" path is forced deterministically by
+monkeypatching `sandbox_mod.docker_available` — the suite must not
+depend on whether the host happens to have a `docker` binary (it
+didn't in the original dev sandbox, it does on the production VPS;
+same isolation principle as the ambient DATABASE_URL fix in
+conftest.py). One test monkeypatches the sandbox call to also prove
+the API correctly reports verified=True when the sandbox succeeds.
 """
 
 import io
@@ -15,6 +16,7 @@ import zipfile
 from fastapi.testclient import TestClient
 
 import app.deploypack.pipeline as pipeline_mod
+import app.deploypack.sandbox as sandbox_mod
 import app.main as main_mod
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.deploypack.github_app import GitHubAppError
@@ -84,7 +86,8 @@ class FakePreviewRegistry:
         return 0
 
 
-def test_fastapi_pack_generated_but_unverified_without_docker():
+def test_fastapi_pack_generated_but_unverified_without_docker(monkeypatch):
+    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
     resp = post_fixpack(FASTAPI_ZIP)
     assert resp.status_code == 202
     body = resp.json()
@@ -95,7 +98,8 @@ def test_fastapi_pack_generated_but_unverified_without_docker():
     assert "docker-compose.yml" in body["files"]
 
 
-def test_vite_react_pack_generated_but_unverified_without_docker():
+def test_vite_react_pack_generated_but_unverified_without_docker(monkeypatch):
+    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
     resp = post_fixpack(VITE_ZIP)
     assert resp.status_code == 202
     body = resp.json()
@@ -123,8 +127,9 @@ def test_verified_true_when_sandbox_actually_succeeds(monkeypatch):
     assert body["pr"] is None  # no deliver_to was passed
 
 
-def test_deliver_to_skipped_when_not_verified():
-    # real, unmocked path: this sandbox has no docker, so verified=None
+def test_deliver_to_skipped_when_not_verified(monkeypatch):
+    # forced no-docker path, so verified=None
+    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
     resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app")
     assert resp.status_code == 202
     body = resp.json()
@@ -210,10 +215,9 @@ def test_want_preview_true_returns_local_url_when_verified():
     assert fake.reap_calls == 1  # reaped before starting a new one
 
 
-def test_want_preview_true_but_not_verified_returns_preview_none():
-    # real, unmocked path: this sandbox has no docker, so the real
-    # PreviewRegistry.start() genuinely fails — same honesty as the
-    # no-docker tests above, just through the preview path.
+def test_want_preview_true_but_not_verified_returns_preview_none(monkeypatch):
+    # forced no-docker path: verify fails, so preview is never started
+    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
     resp = post_fixpack(FASTAPI_ZIP, want_preview=True)
     body = resp.json()
     assert body["verified"] is None
