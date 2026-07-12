@@ -6,7 +6,7 @@ as a pull request via GitHub sync.
 
 Architecture: see `docs/shipit-architecture.md` (v0.2).
 
-## Status: phase 1 (Audit Engine) done, phase 2 (Deploy Pack) started
+## Status: phase 1 (Audit Engine) done, phase 2 (Deploy Pack) mostly done
 
 Implemented:
 - `app/ingest/validators.py` — hostile-archive validation (size, file
@@ -32,16 +32,39 @@ Implemented:
   `.github/workflows/smoke-deploy-pack.yml` / `scripts/smoke_verify_deploy_pack.py`.
   Both `fastapi_sample` and `vite_sample` verified=True.
 - `app/deploypack/delivery.py` — opens a real PR (branch + commit via
-  the Git Data API) for a verified Pack, using a single operator token
-  (`GITHUB_PR_TOKEN`) — not a GitHub App yet, so it can only open PRs
-  on repos that token has write access to. **Confirmed end-to-end**:
-  dogfooded on this repo itself — [PR #1](https://github.com/aiagent2046-coder/shipit/pull/1)
+  the Git Data API) for a verified Pack, auth-agnostic (accepts
+  whatever token it's given). **Confirmed end-to-end**: dogfooded on
+  this repo itself — [PR #1](https://github.com/aiagent2046-coder/shipit/pull/1)
   is a real branch + real commit + real PR opened by this exact code.
   One honest nuance found doing that: `.env.example` didn't show up in
   the PR diff — not a bug, `_merge_env_example` correctly produced
   identical content to what shipit already had (no Postgres, so
   nothing new to add), and git/GitHub correctly show zero diff for an
   unchanged file.
+- `app/deploypack/github_app.py` — GitHub App installation-token auth,
+  used instead of the single-operator `GITHUB_PR_TOKEN` when
+  `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` are set — works for any
+  repo the App is installed on, not just the operator's own. **Confirmed
+  end-to-end against the real GitHub API**: App id 4278482
+  (`aiagent2046-coder`), installed on this repo, real installation
+  token minted and used for a real authenticated `GET /repos/...` call
+  — see `scripts/verify_github_app_locally.py` (run locally, never
+  sends the private key anywhere).
+- `app/deploypack/preview.py` + `POST /v1/fixpacks` `want_preview=true`
+  — keeps a verified container alive (24h TTL, 256MB RAM cap, 1 live
+  preview per client) instead of tearing it down, returns a `local_url`.
+  **Confirmed end-to-end** on a real GitHub Actions Docker runner — see
+  `scripts/smoke_verify_preview.py`. Does NOT include the public
+  `{job_id}.preview.shipit.app` URL (needs a real domain + Caddy on a
+  real server, neither of which exist yet — see the module docstring).
+- `POST /internal/preview/reap` + `.github/workflows/preview-reaper.yml`
+  — bearer-token-protected endpoint plus an hourly scheduled workflow
+  that calls it. **Confirmed end-to-end**: the endpoint's auth and
+  wiring were proven for real over HTTP against a live uvicorn process
+  (`scripts/smoke_verify_reap_endpoint.py`); the schedule itself needs
+  `PREVIEW_BASE_URL` / `PREVIEW_REAP_TOKEN` repo secrets pointing at a
+  real deployment, which doesn't exist yet — every scheduled run fails
+  loudly with that exact message until it does.
 - `POST /v1/fixpacks` — Deploy Pack, free/unpaid preview (no payment
   gate, no persistence yet). Optional `deliver_to="owner/repo"` form
   field opens a real PR once verified; refuses to deliver an unverified
