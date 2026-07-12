@@ -22,3 +22,6 @@ jobs:
 
       - name: Real docker build + run + curl for both stacks
         run: python scripts/smoke_verify_deploy_pack.py
+
+      - name: Real preview: keep-alive container, curl, reap
+        run: python scripts/smoke_verify_preview.py

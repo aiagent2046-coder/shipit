@@ -98,6 +98,60 @@ def test_success_after_a_few_slow_probes(monkeypatch):
     assert result.ok is True
 
 
+def test_keep_alive_on_success_skips_stop_and_rmi(monkeypatch):
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner({
+        "docker:build": [cp(returncode=0)],
+        "docker:run": [cp(returncode=0)],
+        "curl": [cp(stdout="200")],
+    })
+    result = verify_deploy_pack(
+        ".", 8000, 8000, poll_interval_s=0.01,
+        keep_alive_on_success=True, run=runner,
+    )
+    assert result.ok is True
+    assert result.container is not None
+    assert result.image_tag is not None
+    assert not any(c[:2] == ["docker", "stop"] for c in runner.calls)
+    assert not any(c[:2] == ["docker", "rmi"] for c in runner.calls)
+
+
+def test_keep_alive_does_not_apply_to_failed_boots(monkeypatch):
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner({
+        "docker:build": [cp(returncode=0)],
+        "docker:run": [cp(returncode=0)],
+        "curl": [cp(stdout="000")] * 3,
+        "docker:logs": [cp(stdout="crash")],
+        "docker:stop": [cp(returncode=0)],
+        "docker:rmi": [cp(returncode=0)],
+    })
+    result = verify_deploy_pack(
+        ".", 8000, 8000, boot_timeout_s=0.02, poll_interval_s=0.01,
+        keep_alive_on_success=True, run=runner,
+    )
+    assert result.ok is False
+    # never booted, so keep_alive_on_success must not suppress cleanup
+    assert any(c[:2] == ["docker", "stop"] for c in runner.calls)
+    assert any(c[:2] == ["docker", "rmi"] for c in runner.calls)
+
+
+def test_memory_limit_is_passed_to_docker_run(monkeypatch):
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner({
+        "docker:build": [cp(returncode=0)],
+        "docker:run": [cp(returncode=0)],
+        "curl": [cp(stdout="200")],
+        "docker:stop": [cp(returncode=0)],
+        "docker:rmi": [cp(returncode=0)],
+    })
+    verify_deploy_pack(
+        ".", 8000, 8000, poll_interval_s=0.01, memory_limit="256m", run=runner,
+    )
+    run_call = next(c for c in runner.calls if c[:2] == ["docker", "run"])
+    assert "--memory" in run_call and "256m" in run_call
+
+
 def test_never_boots_reports_failure_and_still_stops_container(monkeypatch):
     monkeypatch.setattr(sandbox, "docker_available", lambda: True)
     runner = FakeRunner({

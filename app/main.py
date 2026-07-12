@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.pipeline import run_deploy_pack
+from app.deploypack.preview import PreviewRegistry
 from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
@@ -46,6 +47,15 @@ def get_llm_client() -> LLMClient:
 def get_pr_opener():
     """FastAPI dependency indirection — overridable in tests."""
     return open_pull_request
+
+
+_preview_registry = PreviewRegistry()
+
+
+def get_preview_registry() -> PreviewRegistry:
+    """FastAPI dependency indirection — overridable in tests. In-memory,
+    single-process, same caveat as get_rate_limiter."""
+    return _preview_registry
 
 
 def _client_key(request: Request) -> str:
@@ -129,8 +139,15 @@ async def create_fixpack(
         description='"owner/repo" to open a real PR against, once verified. '
                     "Omit to just get the generated files back, unverified-safe.",
     ),
+    want_preview: bool = Form(
+        False,
+        description="Keep the verified container alive for a live preview "
+                     "instead of tearing it down. Returns a local_url, not a "
+                     "public one — see app/deploypack/preview.py for why.",
+    ),
     limiter: RateLimiter = Depends(get_rate_limiter),
     pr_opener=Depends(get_pr_opener),
+    preview_registry: PreviewRegistry = Depends(get_preview_registry),
 ) -> dict:
     """Deploy Pack only, minimal scope (fastapi + vite-react). Free,
     unpaid preview of the plan's "verify first, pay to unlock" flow —
@@ -139,6 +156,14 @@ async def create_fixpack(
     app/deploypack/delivery.py. Shares the audit rate limiter for now;
     should become "1 free Pack run per audit_id" once audits are
     persisted (phase 2).
+
+    `want_preview=true` keeps the container alive (24h TTL, 256MB RAM
+    cap, 1 live preview per client key — same _client_key as the rate
+    limiter) and reaps anything already expired before starting a new
+    one. There's no background cron in this process yet, so a preview
+    only gets reaped when someone next calls this endpoint — wire
+    preview_registry.reap_expired() to a real periodic job before
+    relying on the 24h TTL alone.
     """
     try:
         limiter.check(_client_key(request))
@@ -166,10 +191,19 @@ async def create_fixpack(
     buf.seek(0)
     stack = detect_stack(buf)
 
+    if want_preview:
+        await run_in_threadpool(preview_registry.reap_expired)
+
     # Off the event loop: docker build/run/curl are real blocking
     # subprocess calls, up to a few minutes total.
     try:
-        result = await run_in_threadpool(run_deploy_pack, raw, stack)
+        if want_preview:
+            result = await run_in_threadpool(
+                run_deploy_pack, raw, stack,
+                preview=preview_registry, owner_key=_client_key(request),
+            )
+        else:
+            result = await run_in_threadpool(run_deploy_pack, raw, stack)
     except UnsupportedForDeployPack:
         raise HTTPException(
             status_code=422,
@@ -206,4 +240,5 @@ async def create_fixpack(
         "detail": result["detail"],
         "files": result["files"],
         "pr": pr,
+        "preview": result["preview"],
     }
