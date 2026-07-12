@@ -42,3 +42,18 @@ def _no_ambient_database_url(monkeypatch):
     db_mod._pool = None
     yield
     db_mod._pool = None
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_llm_providers(monkeypatch):
+    """Same isolation principle as DATABASE_URL above, third instance
+    of the class: a shell with AITUNNEL_*/ANTHROPIC_* exported (e.g.
+    after `set -a; . ./.env` for a manual script run) made the default
+    suite construct a real provider chain and spend real money on real
+    LLM calls — one visible assertion failure, several silent paid
+    calls, 4-minute suite. Tests that want an LLM pass explicit fake
+    providers or monkeypatch get_llm_client; nothing may inherit them
+    from the ambient environment."""
+    for var in ("AITUNNEL_API_KEY", "AITUNNEL_BASE_URL",
+                "ANTHROPIC_API_KEY", "LLM_MODEL"):
+        monkeypatch.delenv(var, raising=False)
