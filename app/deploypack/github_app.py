@@ -1,25 +1,33 @@
-"""GitHub App authentication \u2014 mints short-lived installation tokens
+"""GitHub App authentication — mints short-lived installation tokens
 instead of relying on a single operator PAT.
 
 Why this exists: shipit-architecture.md 2.1 marks the GitHub App
-"\u043e\u0431\u044f\u0437\u0430\u0442\u0435\u043b\u0435\u043d" for PR delivery. A single PAT (delivery.py's original
+"обязателен" for PR delivery. A single PAT (delivery.py's original
 scope) can only open PRs on repos the PAT's owner has write access to
-\u2014 a real stranger's repo can never receive a PR that way. Once a
+— a real stranger's repo can never receive a PR that way. Once a
 stranger installs this App on their own repo, GitHub issues a token
 scoped to exactly that installation, regardless of who operates ShipIt.
 
 Real, unavoidable manual step this module cannot do for you: creating
 the App itself. GitHub requires someone to click through
-https://github.com/settings/apps/new (or the manifest flow) \u2014 there is
+https://github.com/settings/apps/new (or the manifest flow) — there is
 no API that creates an App from nothing without that click, and no
 ShipIt operator credential can substitute for it. Once created, this
 module only needs:
 
-  GITHUB_APP_ID          \u2014 numeric app id from the App's settings page
-  GITHUB_APP_PRIVATE_KEY \u2014 the full PEM private key GitHub generates
+  GITHUB_APP_ID          — the App's Client ID (e.g. "Iv23..."), which
+                            GitHub now recommends for the JWT `iss`
+                            claim over the older numeric App ID (see
+                            https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
+                            The numeric App ID still works — not
+                            deprecated, just no longer recommended.
+                            Either is a plain string here; no branching
+                            needed since `iss` is just a string per the
+                            JWT spec.
+  GITHUB_APP_PRIVATE_KEY — the full PEM private key GitHub generates
                             when you create the App
 
-Falls back to GITHUB_PR_TOKEN (delivery.py) when these aren't set \u2014
+Falls back to GITHUB_PR_TOKEN (delivery.py) when these aren't set —
 this module is additive, not a replacement for the working PAT path.
 See app/main.py for how the two are chosen between.
 """
