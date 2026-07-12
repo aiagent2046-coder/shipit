@@ -9,12 +9,15 @@ of truth; nothing is hardcoded except API shapes.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 
 import httpx
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 TIMEOUT = httpx.Timeout(120.0, connect=10.0)
+TRANSIENT_RETRIES = 2      # extra attempts per provider on 5xx/transport errors
+RETRY_BACKOFF_S = 2.0      # linear: 2s, then 4s
 
 
 class LLMError(Exception):
@@ -57,10 +60,25 @@ class LLMClient:
             raise LLMError("no providers configured (check .env)")
         errors: list[str] = []
         for p in self.providers:
-            try:
-                return self._call(p, system, user, max_tokens)
-            except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
-                errors.append(f"{p.kind}@{p.base_url}: {exc}")
+            for attempt in range(1 + TRANSIENT_RETRIES):
+                try:
+                    return self._call(p, system, user, max_tokens)
+                except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+                    # 5xx and transport/timeout errors are transient:
+                    # retry the SAME provider with backoff (a single
+                    # provider-side 500 killed a whole audit stage in a
+                    # real run; the chain is often length 1, so "next
+                    # provider" is no safety net). 4xx means OUR request
+                    # is wrong — retrying it is spam.
+                    transient = isinstance(exc, httpx.TransportError) or (
+                        isinstance(exc, httpx.HTTPStatusError)
+                        and exc.response.status_code >= 500
+                    )
+                    if transient and attempt < TRANSIENT_RETRIES:
+                        time.sleep(RETRY_BACKOFF_S * (attempt + 1))
+                        continue
+                    errors.append(f"{p.kind}@{p.base_url}: {exc}")
+                    break
         raise LLMError("; ".join(errors))
 
     def _call(self, p: Provider, system: str, user: str, max_tokens: int) -> str:

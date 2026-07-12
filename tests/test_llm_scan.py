@@ -181,7 +181,11 @@ def test_run_llm_scan_skips_rubric_with_no_matching_files():
 
 # --- client fallback chain ---
 
-def test_client_falls_back_to_second_provider():
+def test_client_falls_back_to_second_provider(monkeypatch):
+    # 500 on the primary is now retried (TRANSIENT_RETRIES times)
+    # before falling back — the extra calls are the new contract.
+    from app.llm import client as client_mod
+    monkeypatch.setattr(client_mod, "RETRY_BACKOFF_S", 0.0)
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -200,7 +204,7 @@ def test_client_falls_back_to_second_provider():
         transport=httpx.MockTransport(handler),
     )
     assert client.complete("s", "u") == "[]"
-    assert calls == ["primary.example", "api.anthropic.com"]
+    assert calls == ["primary.example"] * 3 + ["api.anthropic.com"]
 
 
 def test_cross_rubric_dedup_keeps_most_severe():
@@ -222,3 +226,44 @@ def test_cross_rubric_dedup_keeps_most_severe():
     out2 = _dedup_across_rubrics([f("auth", "high", 0.9),
                                   replace(f("security", "high", 0.9), line=7)])
     assert len(out2) == 2
+
+
+def test_transient_5xx_retried_then_succeeds(monkeypatch):
+    from app.llm import client as client_mod
+    from app.llm.client import LLMClient, Provider
+
+    monkeypatch.setattr(client_mod, "RETRY_BACKOFF_S", 0.0)
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return httpx.Response(500, text="upstream hiccup")
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "[]"}}]})
+
+    c = LLMClient(
+        providers=[Provider("openai_compat", "https://fake", "k", "m")],
+        transport=httpx.MockTransport(handler))
+    assert c.complete("s", "u") == "[]"
+    assert calls["n"] == 3  # 500, 500, 200
+
+
+def test_4xx_not_retried(monkeypatch):
+    import pytest as _pytest
+    from app.llm import client as client_mod
+    from app.llm.client import LLMClient, LLMError, Provider
+
+    monkeypatch.setattr(client_mod, "RETRY_BACKOFF_S", 0.0)
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(400, text="bad model name")
+
+    c = LLMClient(
+        providers=[Provider("openai_compat", "https://fake", "k", "m")],
+        transport=httpx.MockTransport(handler))
+    with _pytest.raises(LLMError):
+        c.complete("s", "u")
+    assert calls["n"] == 1  # our request is wrong; retrying is spam
