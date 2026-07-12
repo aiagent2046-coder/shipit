@@ -66,9 +66,29 @@ Implemented:
   real deployment, which doesn't exist yet — every scheduled run fails
   loudly with that exact message until it does.
 - `POST /v1/fixpacks` — Deploy Pack, free/unpaid preview (no payment
-  gate, no persistence yet). Optional `deliver_to="owner/repo"` form
-  field opens a real PR once verified; refuses to deliver an unverified
-  Pack.
+  gate yet). Optional `deliver_to="owner/repo"` form field opens a real
+  PR once verified; refuses to deliver an unverified Pack.
+- `app/db.py` + `migrations/0001_audits_and_fixpack_jobs.sql` —
+  Postgres persistence for `audits` and `fixpack_jobs` (trimmed from
+  shipit-architecture.md 2.5's full schema — no `users`/auth yet, no
+  S3 columns, `findings` denormalized as JSONB instead of its own
+  table; see the migration file's comment for why). `POST /v1/audits`
+  and `POST /v1/fixpacks` persist when `DATABASE_URL` is set
+  (`"persisted": true/false` in the response either way, same request
+  still works unpersisted); `GET /v1/audits/{id}` and
+  `GET /v1/fixpacks/{id}` read them back. **Confirmed end-to-end**: a
+  real Supabase Postgres 17 project now backs this (schema applied via
+  migration, verified with real INSERT/SELECT round trips including
+  the `audits` -> `fixpack_jobs` foreign key). The actual `asyncpg`
+  driver code in `app/db.py` connecting to it is proven by
+  `scripts/verify_db_locally.py` — run locally with your own
+  `DATABASE_URL`, never sent anywhere else. **Known gap:** Row Level
+  Security is off on both tables in Supabase — fine for this app's own
+  direct Postgres connection, but if the project's anon/publishable
+  key is ever used elsewhere (a frontend, Supabase client libraries),
+  these tables would be fully readable/writable through PostgREST. Not
+  auto-fixed; enabling RLS needs real policies decided first, see
+  Supabase's advisory.
 
 ## Dev
 

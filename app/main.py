@@ -16,6 +16,7 @@ import uuid
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from app.db import AuditRepository, FixpackJobRepository
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.github_app import (
@@ -62,6 +63,22 @@ def get_preview_registry() -> PreviewRegistry:
     """FastAPI dependency indirection — overridable in tests. In-memory,
     single-process, same caveat as get_rate_limiter."""
     return _preview_registry
+
+
+_audit_repo = AuditRepository()
+_fixpack_repo = FixpackJobRepository()
+
+
+def get_audit_repo() -> AuditRepository:
+    """FastAPI dependency indirection — overridable in tests. No-ops
+    (returns None from create/get) when DATABASE_URL isn't set — see
+    app/db.py."""
+    return _audit_repo
+
+
+def get_fixpack_repo() -> FixpackJobRepository:
+    """Same as get_audit_repo, for fixpack_jobs."""
+    return _fixpack_repo
 
 
 def _reap_token() -> str | None:
@@ -117,12 +134,29 @@ async def reap_previews(
     return {"reaped": reaped, "active": preview_registry.active_count()}
 
 
+@app.get("/v1/audits/{audit_id}")
+async def get_audit(
+    audit_id: str,
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+) -> dict:
+    row = await audit_repo.get(audit_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no audit with this id, or persistence isn't "
+                               "configured on this deployment (see app/db.py)"},
+        )
+    return row
+
+
 @app.post("/v1/audits", status_code=202)
 async def create_audit(
     archive: UploadFile,
     request: Request,
     limiter: RateLimiter = Depends(get_rate_limiter),
     llm_client: LLMClient = Depends(get_llm_client),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
 ) -> dict:
     try:
         limiter.check(_client_key(request))
@@ -160,8 +194,16 @@ async def create_audit(
     # take up to ~2 minutes. Moves to the arq worker + queue in phase 2.
     scan = await run_in_threadpool(run_scan, raw, llm_client)
 
+    persisted = await audit_repo.create(
+        stack=stack.value, file_count=report.file_count,
+        score_total=scan["score"]["total"], score_json=scan["score"],
+        findings_json=scan["findings"],
+    )
+    audit_id = persisted["id"] if persisted else str(uuid.uuid4())
+
     return {
-        "audit_id": str(uuid.uuid4()),
+        "audit_id": audit_id,
+        "persisted": persisted is not None,
         "status": "completed",
         "stack": stack.value,
         "file_count": report.file_count,
@@ -169,6 +211,22 @@ async def create_audit(
         "findings": scan["findings"],
         "llm": scan["llm"],
     }
+
+
+@app.get("/v1/fixpacks/{job_id}")
+async def get_fixpack(
+    job_id: str,
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+) -> dict:
+    row = await fixpack_repo.get(job_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no fixpack job with this id, or persistence "
+                               "isn't configured on this deployment (see app/db.py)"},
+        )
+    return row
 
 
 @app.post("/v1/fixpacks", status_code=202)
@@ -186,15 +244,23 @@ async def create_fixpack(
                      "instead of tearing it down. Returns a local_url, not a "
                      "public one — see app/deploypack/preview.py for why.",
     ),
+    audit_id: str | None = Form(
+        None,
+        description="Link this Pack to a previously persisted audit, if you "
+                     "have one. Optional — the API doesn't require an audit first.",
+    ),
     limiter: RateLimiter = Depends(get_rate_limiter),
     pr_opener=Depends(get_pr_opener),
     preview_registry: PreviewRegistry = Depends(get_preview_registry),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
 ) -> dict:
     """Deploy Pack only, minimal scope (fastapi + vite-react). Free,
     unpaid preview of the plan's "verify first, pay to unlock" flow —
-    no payment gate yet, no persistence yet. Shares the audit rate
-    limiter for now; should become "1 free Pack run per audit_id" once
-    audits are persisted (phase 2).
+    no payment gate yet. Persists a fixpack_jobs row when DATABASE_URL
+    is configured (see app/db.py); `persisted: false` in the response
+    otherwise, same request still works. Shares the audit rate limiter
+    for now; should become "1 free Pack run per audit_id" now that
+    audits are persisted.
 
     PR delivery uses a GitHub App installation token when
     GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY are configured (works for
@@ -236,6 +302,16 @@ async def create_fixpack(
     buf.seek(0)
     stack = detect_stack(buf)
 
+    if audit_id is not None:
+        try:
+            uuid.UUID(audit_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail={"reason": "bad_audit_id",
+                        "detail": "audit_id must be a valid UUID"},
+            )
+
     if want_preview:
         await run_in_threadpool(preview_registry.reap_expired)
 
@@ -255,6 +331,14 @@ async def create_fixpack(
             detail={"reason": "unsupported_stack",
                     "detail": "Deploy Pack supports fastapi and vite-react only"},
         )
+
+    persisted_job = await fixpack_repo.create(
+        audit_id=audit_id, pack="deploy", stack=stack.value,
+        verified=result["verified"], detail=result["detail"],
+        preview_local_url=result["preview"]["local_url"] if result["preview"] else None,
+        preview_expires_at=result["preview"]["expires_at"] if result["preview"] else None,
+    )
+    job_id = persisted_job["id"] if persisted_job else str(uuid.uuid4())
 
     pr: dict | None = None
     if deliver_to:
@@ -284,9 +368,12 @@ async def create_fixpack(
                 else:
                     pr = {"delivered": True, "url": opened.html_url,
                           "branch": opened.branch}
+                    if persisted_job:
+                        await fixpack_repo.mark_delivered(job_id, opened.html_url)
 
     return {
-        "fixpack_id": str(uuid.uuid4()),
+        "fixpack_id": job_id,
+        "persisted": persisted_job is not None,
         "pack": "deploy",
         "stack": stack.value,
         "verified": result["verified"],
