@@ -25,3 +25,6 @@ jobs:
 
       - name: "Real preview: keep-alive container, curl, reap"
         run: python scripts/smoke_verify_preview.py
+
+      - name: "Real reap endpoint: auth + HTTP round trip against uvicorn"
+        run: python scripts/smoke_verify_reap_endpoint.py

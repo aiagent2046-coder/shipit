@@ -1,0 +1,31 @@
+name: preview-reaper
+
+# Hourly cron that asks a REAL deployment to reap expired previews.
+# Needs two repo secrets pointing at that deployment:
+#   PREVIEW_BASE_URL   -- e.g. https://api.shipit.app (no trailing slash)
+#   PREVIEW_REAP_TOKEN -- must match the server's PREVIEW_REAP_TOKEN env var
+#
+# ShipIt is not deployed anywhere persistent yet, so these secrets do
+# not exist right now and every scheduled run below will fail loudly
+# with "secrets not set" instead of silently doing nothing. That is
+# the honest state until there's a real host to point this at -- see
+# app/deploypack/preview.py's module docstring for the same caveat.
+on:
+  schedule:
+    - cron: "0 * * * *"   # hourly; architecture doc's preview TTL is 24h
+  workflow_dispatch: {}
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the live reap endpoint
+        run: |
+          if [ -z "${{ secrets.PREVIEW_BASE_URL }}" ] || [ -z "${{ secrets.PREVIEW_REAP_TOKEN }}" ]; then
+            echo "PREVIEW_BASE_URL / PREVIEW_REAP_TOKEN secrets are not set." >&2
+            echo "There is no live ShipIt deployment to reap yet -- set both repo secrets once one exists." >&2
+            exit 1
+          fi
+          curl -sf -X POST "${{ secrets.PREVIEW_BASE_URL }}/internal/preview/reap" \
+            -H "Authorization: Bearer ${{ secrets.PREVIEW_REAP_TOKEN }}" \
+            -w "\nHTTP %{http_code}\n"

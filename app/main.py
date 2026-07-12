@@ -10,6 +10,7 @@ since the LLM call alone can take up to ~2 minutes.
 from __future__ import annotations
 
 import io
+import os
 import uuid
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
@@ -58,6 +59,13 @@ def get_preview_registry() -> PreviewRegistry:
     return _preview_registry
 
 
+def _reap_token() -> str | None:
+    """Same env-var pattern as GITHUB_PR_TOKEN in delivery.py. Unset by
+    default — the endpoint below refuses to run rather than accept an
+    empty/no-op auth check."""
+    return os.environ.get("PREVIEW_REAP_TOKEN") or None
+
+
 def _client_key(request: Request) -> str:
     """Client IP, honoring one reverse-proxy hop (Caddy in prod).
 
@@ -74,6 +82,34 @@ def _client_key(request: Request) -> str:
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/internal/preview/reap")
+async def reap_previews(
+    request: Request,
+    preview_registry: PreviewRegistry = Depends(get_preview_registry),
+) -> dict:
+    """Operational endpoint for the scheduled reaper — see
+    .github/workflows/preview-reaper.yml. Not part of the public API
+    surface; there's no user-facing reason to call this directly.
+
+    Requires `Authorization: Bearer <PREVIEW_REAP_TOKEN>`. Returns 503
+    if the token isn't configured on this deployment at all, rather
+    than silently doing nothing — an unconfigured reaper is an
+    operational gap someone needs to notice, not a quiet no-op.
+    """
+    token = _reap_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "reap_not_configured",
+                    "detail": "PREVIEW_REAP_TOKEN is not set on this deployment"},
+        )
+    if request.headers.get("authorization") != f"Bearer {token}":
+        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
+
+    reaped = await run_in_threadpool(preview_registry.reap_expired)
+    return {"reaped": reaped, "active": preview_registry.active_count()}
 
 
 @app.post("/v1/audits", status_code=202)
