@@ -15,7 +15,9 @@ import zipfile
 from fastapi.testclient import TestClient
 
 import app.deploypack.pipeline as pipeline_mod
+import app.main as main_mod
 from app.deploypack.delivery import DeliveryError, PullRequestResult
+from app.deploypack.github_app import GitHubAppError
 from app.deploypack.preview import PreviewResult
 from app.deploypack.sandbox import SandboxResult
 from app.main import app, get_pr_opener, get_preview_registry
@@ -216,6 +218,74 @@ def test_want_preview_true_but_not_verified_returns_preview_none():
     body = resp.json()
     assert body["verified"] is None
     assert body["preview"] is None
+
+
+def test_deliver_to_uses_github_app_token_when_configured(monkeypatch):
+    monkeypatch.setattr(
+        pipeline_mod, "verify_deploy_pack",
+        lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
+    )
+    monkeypatch.setattr(main_mod, "app_credentials_from_env",
+                         lambda: ("999", "fake-pem"))
+    monkeypatch.setattr(main_mod, "installation_token_for_repo",
+                         lambda owner, repo, **k: "ghs_app_token")
+    captured = {}
+
+    def fake_opener(owner, repo, files, token=None, **kwargs):
+        captured["token"] = token
+        return PullRequestResult(html_url="https://github.com/acme/app/pull/9",
+                                  branch="shipit/deploy-pack-def456")
+
+    app.dependency_overrides[get_pr_opener] = lambda: fake_opener
+    try:
+        resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app")
+    finally:
+        app.dependency_overrides.pop(get_pr_opener, None)
+
+    assert resp.json()["pr"]["delivered"] is True
+    assert captured["token"] == "ghs_app_token"
+
+
+def test_deliver_to_falls_back_to_pat_when_app_not_configured(monkeypatch):
+    monkeypatch.setattr(
+        pipeline_mod, "verify_deploy_pack",
+        lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
+    )
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    captured = {}
+
+    def fake_opener(owner, repo, files, token=None, **kwargs):
+        captured["token"] = token
+        return PullRequestResult(html_url="https://github.com/acme/app/pull/10",
+                                  branch="shipit/deploy-pack-ghi789")
+
+    app.dependency_overrides[get_pr_opener] = lambda: fake_opener
+    try:
+        resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app")
+    finally:
+        app.dependency_overrides.pop(get_pr_opener, None)
+
+    assert resp.json()["pr"]["delivered"] is True
+    assert captured["token"] is None  # fake_opener would fall back to GITHUB_PR_TOKEN
+
+
+def test_deliver_to_reports_github_app_not_installed(monkeypatch):
+    monkeypatch.setattr(
+        pipeline_mod, "verify_deploy_pack",
+        lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
+    )
+    monkeypatch.setattr(main_mod, "app_credentials_from_env",
+                         lambda: ("999", "fake-pem"))
+
+    def raise_not_installed(owner, repo, **k):
+        raise GitHubAppError(f"GitHub App is not installed on {owner}/{repo}")
+
+    monkeypatch.setattr(main_mod, "installation_token_for_repo", raise_not_installed)
+
+    resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app")
+    body = resp.json()
+    assert body["pr"]["delivered"] is False
+    assert "not installed on acme/app" in body["pr"]["reason"]
 
 
 def test_deliver_to_reports_delivery_error(monkeypatch):

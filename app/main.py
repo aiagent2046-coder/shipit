@@ -18,6 +18,11 @@ from starlette.concurrency import run_in_threadpool
 
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
+from app.deploypack.github_app import (
+    GitHubAppError,
+    app_credentials_from_env,
+    installation_token_for_repo,
+)
 from app.deploypack.pipeline import run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
 from app.ingest.stack_detect import Stack, detect_stack
@@ -187,11 +192,15 @@ async def create_fixpack(
 ) -> dict:
     """Deploy Pack only, minimal scope (fastapi + vite-react). Free,
     unpaid preview of the plan's "verify first, pay to unlock" flow —
-    no payment gate yet, no persistence yet. PR delivery uses a single
-    operator token (GITHUB_PR_TOKEN), not a GitHub App — see
-    app/deploypack/delivery.py. Shares the audit rate limiter for now;
-    should become "1 free Pack run per audit_id" once audits are
-    persisted (phase 2).
+    no payment gate yet, no persistence yet. Shares the audit rate
+    limiter for now; should become "1 free Pack run per audit_id" once
+    audits are persisted (phase 2).
+
+    PR delivery uses a GitHub App installation token when
+    GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY are configured (works for
+    any repo the App is installed on, not just the operator's own),
+    falling back to the single-operator GITHUB_PR_TOKEN otherwise —
+    see app/deploypack/github_app.py and app/deploypack/delivery.py.
 
     `want_preview=true` keeps the container alive (24h TTL, 256MB RAM
     cap, 1 live preview per client key — same _client_key as the rate
@@ -259,10 +268,18 @@ async def create_fixpack(
             else:
                 body = render_pr_body("deploy", result["files"], result["detail"])
                 try:
+                    token: str | None = None
+                    app_creds = app_credentials_from_env()
+                    if app_creds is not None:
+                        app_id, private_key = app_creds
+                        token = await run_in_threadpool(
+                            installation_token_for_repo, owner, repo,
+                            app_id=app_id, private_key=private_key,
+                        )
                     opened = await run_in_threadpool(
-                        pr_opener, owner, repo, result["files"], body=body,
+                        pr_opener, owner, repo, result["files"], body=body, token=token,
                     )
-                except DeliveryError as exc:
+                except (DeliveryError, GitHubAppError) as exc:
                     pr = {"delivered": False, "reason": str(exc)}
                 else:
                     pr = {"delivered": True, "url": opened.html_url,

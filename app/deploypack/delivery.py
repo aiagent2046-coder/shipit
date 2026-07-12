@@ -1,10 +1,11 @@
 """PR delivery for a verified Deploy Pack — GitHub REST (Git Data API).
 
-MVP scope: a single Personal Access Token via `GITHUB_PR_TOKEN`, not a
-GitHub App yet (app registration + installation flow is a separate,
-bigger piece — see shipit-architecture.md 2.3: "GitHub App requests
-contents: write, pull_requests: write"). One token, one operator — this
-can only open PRs on repos that token has write access to.
+Accepts whatever token the caller passes in. app/main.py resolves that
+token: a GitHub App installation token when GITHUB_APP_ID +
+GITHUB_APP_PRIVATE_KEY are configured (see app/deploypack/github_app.py
+— works for any repo the App is installed on), falling back to the
+single-operator GITHUB_PR_TOKEN below otherwise. This module itself
+stays auth-agnostic — it doesn't know or care which kind of token it got.
 
 Never pushes to the base branch directly: creates a new branch, commits
 there, opens a PR. Merge stays with the repo owner (HITL), same
