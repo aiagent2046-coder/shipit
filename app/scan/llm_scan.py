@@ -64,9 +64,14 @@ SYSTEM_PROMPT = (
     "\"evidence\": str (verbatim substring of ONE line inside the range, "
     "max 120 chars), \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", "
     "\"confidence\": float 0..1, \"title\": str, \"explanation\": str, "
-    "\"fix_hint\": str}. Report at most 12 findings. If nothing is wrong, "
-    "respond with []. Never invent files or lines: evidence must be copied "
-    "exactly from the provided content."
+    "\"fix_hint\": str}. Report at most 12 findings. If the SAME issue "
+    "pattern occurs in multiple files (e.g. the same kind of hardcoded "
+    "secret in several migration files), report it ONCE using the most "
+    "representative instance as file/line/evidence, and state in the "
+    "explanation how many other files are affected and list them. Do "
+    "not spend multiple findings on repeats of one pattern. If nothing "
+    "is wrong, respond with []. Never invent files or lines: evidence "
+    "must be copied exactly from the provided content."
 )
 
 
@@ -208,4 +213,22 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                 file=f["file"],
                 line=int(f["line_start"]),
             ))
-    return findings, stats
+    return _dedup_across_rubrics(findings), stats
+
+
+_SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _dedup_across_rubrics(findings: list[ScoredFinding]) -> list[ScoredFinding]:
+    """Both rubrics read overlapping file sets and can report the same
+    issue at the same (file, line) — seen for real: one hardcoded cron
+    secret reported twice, once per rubric, double-penalizing the
+    score. Keep the most severe (then most confident) instance."""
+    best: dict[tuple[str, int], ScoredFinding] = {}
+    for f in findings:
+        key = (f.file, f.line)
+        cur = best.get(key)
+        if cur is None or (_SEV_RANK[f.severity], -f.confidence) < (
+                _SEV_RANK[cur.severity], -cur.confidence):
+            best[key] = f
+    return list(best.values())

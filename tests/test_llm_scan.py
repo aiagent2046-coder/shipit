@@ -201,3 +201,24 @@ def test_client_falls_back_to_second_provider():
     )
     assert client.complete("s", "u") == "[]"
     assert calls == ["primary.example", "api.anthropic.com"]
+
+
+def test_cross_rubric_dedup_keeps_most_severe():
+    from app.scan.llm_scan import _dedup_across_rubrics
+    from app.scan.scoring import ScoredFinding
+
+    def f(rubric, sev, conf):
+        return ScoredFinding(rule_id=f"llm-{rubric}", title="cron secret",
+                             severity=sev, confidence=conf,
+                             category="Auth", file="m/0001.sql", line=6)
+
+    out = _dedup_across_rubrics([f("auth", "high", 0.98),
+                                 f("security", "medium", 0.9)])
+    assert len(out) == 1
+    assert out[0].severity == "high"
+
+    # different lines are different findings — not collapsed
+    from dataclasses import replace
+    out2 = _dedup_across_rubrics([f("auth", "high", 0.9),
+                                  replace(f("security", "high", 0.9), line=7)])
+    assert len(out2) == 2

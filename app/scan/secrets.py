@@ -42,6 +42,19 @@ _DOC_SUFFIXES = (".md", ".mdx")
 _DOC_CONFIDENCE_FACTOR = 0.35
 _DOC_SEVERITY_CAP = {"critical": "medium", "high": "medium"}
 
+# Database migrations are the opposite of documentation context: a
+# secret there is committed, applied state — anon JWTs, cron shared
+# secrets and SMTP passwords in supabase/migrations/ showed up as a
+# systemic pattern across real Lovable exports. Confidence is raised,
+# and migration context always wins over doc-context damping (a path
+# like examples/migrations/ is still a migration).
+_MIGRATION_SEGMENTS = frozenset(("migrations", "migration"))
+_MIGRATION_MIN_CONFIDENCE = 0.9
+
+
+def _is_migration_context(name: str) -> bool:
+    return any(seg.lower() in _MIGRATION_SEGMENTS for seg in name.split("/")[:-1])
+
 
 def _is_doc_context(name: str) -> bool:
     if name.lower().endswith(_DOC_SUFFIXES):
@@ -89,6 +102,19 @@ RULES: tuple[SecretRule, ...] = (
         "jwt-in-code", "JWT committed to code",
         re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
         "high", 0.6,
+    ),
+    SecretRule(
+        # Systemic Lovable-export pattern, confirmed on real repos:
+        # migrations declare PL/pgSQL variables like
+        #   v_cron_secret text := 'hunter2...';
+        # The generic-assignment rule misses these because a type
+        # annotation sits between the name and the assignment.
+        "sql-secret-assignment", "Hardcoded secret in SQL/PLpgSQL assignment",
+        re.compile(
+            r"(?i)\b\w*(?:secret|password|api[_-]?key|service[_-]?role)\w*\s+"
+            r"(?:text|varchar(?:\(\d+\))?|character varying)\s*:?=\s*'[^']{8,}'"
+        ),
+        "high", 0.7,
     ),
     SecretRule(
         "generic-assignment", "Hardcoded credential assignment",
@@ -166,7 +192,10 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
                     )
                     if rule.id == "jwt-in-code":
                         severity, confidence, title = _jwt_severity(m.group(0))
-                    if _is_doc_context(name):
+                    if _is_migration_context(name):
+                        confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
+                        title = f"{title} (committed database migration)"
+                    elif _is_doc_context(name):
                         severity = _DOC_SEVERITY_CAP.get(severity, severity)
                         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
                         title = f"{title} (documentation/example context)"

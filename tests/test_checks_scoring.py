@@ -41,18 +41,31 @@ def _f(sev: str, conf: float, cat: str = "Security") -> ScoredFinding:
     )
 
 
-def test_score_formula_matches_architecture():
-    # 10 − (2.0×1.0 + 1.0×0.5 + 0.4×1.0) = 7.1
+def test_score_v2_total_is_weighted_mean_of_categories():
+    # Security: 10 − (2.0×1.0 + 1.0×0.5) = 7.5; Testing: 10 − 0.4 = 9.6
     findings = [_f("critical", 1.0), _f("high", 0.5), _f("medium", 1.0, "Testing")]
     scores = compute_scores(findings)
-    assert scores["total"] == 7.1
     assert scores["categories"]["Security"] == 7.5
     assert scores["categories"]["Testing"] == 9.6
     assert scores["categories"]["Deploy"] == 10.0
+    # total = 7.5×.25 + 10×.20 + 10×.15 + 10×.10 + 9.6×.15 + 10×.15 = 9.3
+    assert scores["total"] == 9.3
 
 
-def test_score_clamped_at_zero():
-    findings = [_f("critical", 1.0)] * 10
+def test_saturated_category_does_not_zero_total():
+    # v1 regression: 10 criticals in ONE category zeroed the whole
+    # score; v2 floors the damage at that category's weight.
+    findings = [_f("critical", 1.0)] * 10  # all Security
+    scores = compute_scores(findings)
+    assert scores["categories"]["Security"] == 0.0
+    assert scores["total"] == 7.5  # everything except Security intact
+
+
+def test_findings_across_all_categories_still_reach_zero():
+    findings = [
+        _f("critical", 1.0, cat) for cat in
+        ("Security", "Auth", "Correctness", "Config", "Testing", "Deploy")
+    ] * 10
     assert compute_scores(findings)["total"] == 0.0
 
 
@@ -66,3 +79,9 @@ def test_static_scan_end_to_end():
     assert "aws-access-key-id" in ids and "no-tests" in ids
     assert result["score"]["total"] < 10.0
     assert result["score"]["categories"]["Security"] < 10.0
+
+
+def test_perfect_total_impossible_with_findings():
+    # weighted mean can round up to 10.0 past one tiny finding
+    assert compute_scores([_f("low", 0.1, "Deploy")])["total"] == 9.9
+    assert compute_scores([])["total"] == 10.0

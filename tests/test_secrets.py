@@ -143,3 +143,39 @@ def test_markdown_files_are_doc_context():
     findings = scan_secrets(zf)
     assert len(findings) == 1
     assert findings[0].severity == "medium"
+
+
+def test_plpgsql_secret_assignment_caught():
+    zf = make_zip({
+        "supabase/migrations/20260509_cron.sql":
+            b"DECLARE\n  v_cron_secret text := 'sup3r-s3cret-value-123';\n",
+    })
+    findings = scan_secrets(zf)
+    rule_ids = {f.rule_id for f in findings}
+    assert "sql-secret-assignment" in rule_ids
+
+
+def test_migration_context_raises_confidence_and_marks_title():
+    zf = make_zip({
+        "supabase/migrations/0001_seed.sql":
+            b"insert into email_settings (password) values ('smtp-password-value');\n"
+            b"select set_config('app.api_key', 'abcdefghijklmnop', false);\n"
+            b"DECLARE v_cron_secret text := 'sup3r-s3cret-value-123';\n",
+    })
+    findings = scan_secrets(zf)
+    assert findings, "expected at least one finding in a migration"
+    for f in findings:
+        assert f.confidence >= 0.9
+        assert "(committed database migration)" in f.title
+
+
+def test_migration_context_wins_over_doc_context():
+    # examples/migrations/ is still a migration, not a teaching example
+    zf = make_zip({
+        "examples/migrations/0001.sql":
+            b"DECLARE v_password text := 'real-committed-password';\n",
+    })
+    findings = scan_secrets(zf)
+    assert len(findings) >= 1
+    assert all("(committed database migration)" in f.title for f in findings)
+    assert all(f.confidence >= 0.9 for f in findings)
