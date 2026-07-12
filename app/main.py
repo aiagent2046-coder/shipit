@@ -15,6 +15,8 @@ import uuid
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from app.deploypack.generate import UnsupportedForDeployPack
+from app.deploypack.pipeline import run_deploy_pack
 from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
@@ -109,4 +111,63 @@ async def create_audit(
         "score": scan["score"],
         "findings": scan["findings"],
         "llm": scan["llm"],
+    }
+
+
+@app.post("/v1/fixpacks", status_code=202)
+async def create_fixpack(
+    archive: UploadFile,
+    request: Request,
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> dict:
+    """Deploy Pack only, minimal scope (fastapi + vite-react). Free,
+    unpaid preview of the plan's "verify first, pay to unlock" flow —
+    no payment gate, no PR delivery, no persistence yet. Shares the
+    audit rate limiter for now; should become "1 free Pack run per
+    audit_id" once audits are persisted (phase 2).
+    """
+    try:
+        limiter.check(_client_key(request))
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {limiter.limit} audits per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+    raw = await archive.read(MAX_ARCHIVE_BYTES + 1)
+    buf = io.BytesIO(raw)
+
+    try:
+        validate_zip(buf, size_bytes=len(raw))
+    except ArchiveValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": exc.reason, "detail": exc.detail},
+        ) from exc
+
+    buf.seek(0)
+    stack = detect_stack(buf)
+
+    # Off the event loop: docker build/run/curl are real blocking
+    # subprocess calls, up to a few minutes total.
+    try:
+        result = await run_in_threadpool(run_deploy_pack, raw, stack)
+    except UnsupportedForDeployPack:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "unsupported_stack",
+                    "detail": "Deploy Pack supports fastapi and vite-react only"},
+        )
+
+    return {
+        "fixpack_id": str(uuid.uuid4()),
+        "pack": "deploy",
+        "stack": stack.value,
+        "verified": result["verified"],
+        "detail": result["detail"],
+        "files": result["files"],
     }
