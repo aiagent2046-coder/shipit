@@ -90,7 +90,21 @@ Implemented:
   not a ShipIt bug. Switched to `psycopg` (libpq-based, same library
   `psql` uses, which never hit this) with `prepare_threshold=None` to
   avoid the same class of pooler incompatibility. See `app/db.py`'s
-  module docstring for the full diagnostic trail. **Known gap:** Row Level
+  module docstring for the full diagnostic trail. **Not yet cleanly
+  proven:** re-running `scripts/verify_db_locally.py` after the
+  `psycopg` switch still hit an unpredictable hang partway through (2nd
+  query one run, 3rd another, on both a pooled and a plain unpooled
+  connection) from the same home network used for all the debugging
+  above — inconsistent with a deterministic protocol bug, and a mobile
+  hotspot test was inconclusive (carrier NAT silently drops port 5432
+  outbound, a different failure mode). Best current read: an unreliable
+  home network path to `eu-central-1`, not a `psycopg` regression — but
+  this is a plausible read, not a confirmed one. Decided to defer
+  further isolation (e.g. a throwaway VPS in the same region) until
+  real deployment, rather than keep debugging against an unreliable
+  local network. Re-run `scripts/verify_db_locally.py` for real once
+  deployed somewhere with a stable network path before trusting this in
+  production. **Known gap:** Row Level
   Security is off on both tables in Supabase — fine for this app's own
   direct Postgres connection, but if the project's anon/publishable
   key is ever used elsewhere (a frontend, Supabase client libraries),
