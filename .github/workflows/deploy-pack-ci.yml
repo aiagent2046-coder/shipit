@@ -1,0 +1,22 @@
+name: deploy-pack-ci
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+jobs:
+  build-and-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t app-image .
+      - name: Boot and healthcheck
+        run: |
+          docker run -d --rm -p 8000:8000 --name app-ci app-image
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8000/ && exit 0
+            sleep 2
+          done
+          echo "app did not become healthy" >&2
+          docker logs app-ci
+          exit 1
