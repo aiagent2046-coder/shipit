@@ -13,5 +13,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pyyaml>=6.0"]
 
+[tool.setuptools.packages.find]
+# smoke/ and scripts/ are fixtures/tooling, not part of the shipit
+# package — without this, setuptools' flat-layout auto-discovery sees
+# both app/ and smoke/ as top-level packages and refuses to guess.
+include = ["app*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
