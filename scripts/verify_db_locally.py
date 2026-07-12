@@ -12,12 +12,15 @@ insert, and read back rows, including the audits -> fixpack_jobs
 foreign key and the jsonb round-trip for score_json/findings_json.
 
 Usage:
-    export DATABASE_URL="postgresql://postgres:PASSWORD@db.YOUR-PROJECT-REF.supabase.co:5432/postgres"
+    export DATABASE_URL="postgresql://postgres.YOUR-PROJECT-REF:PASSWORD@aws-0-YOUR-REGION.pooler.supabase.com:5432/postgres"
     python scripts/verify_db_locally.py
 
-Find DATABASE_URL in your Supabase project: Project Settings ->
-Database -> Connection string (URI, "Session pooler" or direct
-connection both work here).
+Use the Session Pooler connection string (Project Settings -> Database
+-> Connection pooling), not the direct `db.<ref>.supabase.co` one --
+that one resolves IPv6-only and won't connect from an IPv4-only
+network. See app/db.py's module docstring for why this project uses
+psycopg (not asyncpg) specifically because of a Supavisor + asyncpg
+incompatibility discovered while building this.
 
 Cleans up every row it creates, even on failure.
 """
@@ -106,12 +109,13 @@ async def main() -> int:
         # test rows behind in a real database.
         try:
             pool = await get_pool()
-            if created_job_id:
-                await pool.execute("delete from fixpack_jobs where id = $1",
-                                    uuid.UUID(created_job_id))
-            if created_audit_id:
-                await pool.execute("delete from audits where id = $1",
-                                    uuid.UUID(created_audit_id))
+            async with pool.connection() as conn:
+                if created_job_id:
+                    await conn.execute("delete from fixpack_jobs where id = %s",
+                                        (uuid.UUID(created_job_id),))
+                if created_audit_id:
+                    await conn.execute("delete from audits where id = %s",
+                                        (uuid.UUID(created_audit_id),))
         except DatabaseNotConfigured:
             pass
         await close_pool()

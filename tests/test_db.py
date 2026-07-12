@@ -1,11 +1,11 @@
 """Tests for app/db.py. No real Postgres involved -- a FakePool stands
-in for asyncpg.Pool (plain dicts work fine as fake rows: `_row_to_*`
-only ever does `dict(row)` then indexes the result, and `dict(dict)` is
-a valid copy). This proves the query wiring, param order, and
-row-to-dict conversion (UUID -> str, jsonb -> parsed dict/list) -- not
-that asyncpg can really reach a live Postgres. See
+in for psycopg_pool.AsyncConnectionPool. Proves the query wiring,
+param order, and row-to-dict conversion (UUID -> str, jsonb handling)
+-- not that psycopg can really reach a live Postgres. See
 scripts/verify_db_locally.py for that, run by the user with their own
-DATABASE_URL against the real Supabase project.
+DATABASE_URL against the real Supabase project (already confirmed
+working by hand during this migration from asyncpg -- see app/db.py's
+module docstring for why asyncpg was replaced).
 """
 
 import uuid
@@ -16,18 +16,41 @@ import app.db as db_mod
 from app.db import AuditRepository, DatabaseNotConfigured, FixpackJobRepository
 
 
+class FakeCursor:
+    def __init__(self, result):
+        self._result = result
+
+    async def fetchone(self):
+        return self._result
+
+
+class FakeConnection:
+    def __init__(self, pool):
+        self._pool = pool
+
+    async def execute(self, query, params=None):
+        self._pool.calls.append((query, params))
+        return FakeCursor(self._pool.fetchone_result)
+
+
+class FakeConnectionContext:
+    def __init__(self, pool):
+        self._pool = pool
+
+    async def __aenter__(self):
+        return FakeConnection(self._pool)
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
 class FakePool:
-    def __init__(self, fetchrow_result=None):
-        self.fetchrow_calls = []
-        self.execute_calls = []
-        self.fetchrow_result = fetchrow_result
+    def __init__(self, fetchone_result=None):
+        self.calls: list[tuple] = []
+        self.fetchone_result = fetchone_result
 
-    async def fetchrow(self, query, *args):
-        self.fetchrow_calls.append((query, args))
-        return self.fetchrow_result
-
-    async def execute(self, query, *args):
-        self.execute_calls.append((query, args))
+    def connection(self):
+        return FakeConnectionContext(self)
 
 
 @pytest.fixture(autouse=True)
@@ -39,27 +62,34 @@ def no_database_url(monkeypatch):
 
 
 class TestGetPool:
-    async def test_create_pool_disables_statement_cache(self, monkeypatch):
-        """Regression guard: statement_cache_size=0 works around a real
-        Supavisor session-pooler hang on the first parameterized query,
-        confirmed by hand against the actual Supabase project. Don't
-        remove this without re-testing against a real pooler."""
+    async def test_pool_disables_prepared_statements(self, monkeypatch):
+        """Regression guard: prepare_threshold=None works around a real
+        hang -- psycopg's server-side statement preparation makes the
+        first parameterized query through Supabase's Supavisor pooler
+        hang indefinitely, confirmed by hand against the actual
+        project (same underlying issue class as asyncpg's, which this
+        driver replaced -- see app/db.py's module docstring). Don't
+        remove this without re-testing against a real pooler.
+        """
         monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
         db_mod._pool = None
         captured = {}
 
-        async def fake_create_pool(url, **kwargs):
-            captured.update(kwargs)
-            return "fake-pool"
+        class FakeAsyncConnectionPool:
+            def __init__(self, url, **kwargs):
+                captured["kwargs"] = kwargs
 
-        monkeypatch.setattr(db_mod.asyncpg, "create_pool", fake_create_pool)
+            async def open(self):
+                pass
+
+        monkeypatch.setattr(db_mod, "AsyncConnectionPool", FakeAsyncConnectionPool)
         try:
             pool = await db_mod.get_pool()
         finally:
             db_mod._pool = None
 
-        assert pool == "fake-pool"
-        assert captured["statement_cache_size"] == 0
+        assert isinstance(pool, FakeAsyncConnectionPool)
+        assert captured["kwargs"]["kwargs"]["prepare_threshold"] is None
 
 
 class TestAuditRepositoryNotConfigured:
@@ -80,10 +110,10 @@ class TestAuditRepositoryNotConfigured:
 class TestAuditRepositoryWithFakePool:
     async def test_create_inserts_and_returns_row(self, monkeypatch):
         audit_id = uuid.uuid4()
-        fake = FakePool(fetchrow_result={
+        fake = FakePool(fetchone_result={
             "id": audit_id, "stack": "fastapi", "status": "completed",
             "file_count": 3, "score_total": 8.5,
-            "score_json": '{"total": 8.5}', "findings_json": "[]",
+            "score_json": {"total": 8.5}, "findings_json": [],
             "created_at": "2026-07-12T10:00:00Z",
         })
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
@@ -97,12 +127,12 @@ class TestAuditRepositoryWithFakePool:
         assert result["id"] == str(audit_id)
         assert result["score_json"] == {"total": 8.5}
         assert result["findings_json"] == []
-        query, args = fake.fetchrow_calls[0]
+        query, params = fake.calls[0]
         assert "insert into audits" in query
-        assert args[0] == "fastapi"
+        assert params[0] == "fastapi"
 
     async def test_get_returns_none_for_missing_row(self, monkeypatch):
-        fake = FakePool(fetchrow_result=None)
+        fake = FakePool(fetchone_result=None)
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
         repo = AuditRepository()
         assert await repo.get(str(uuid.uuid4())) is None
@@ -112,7 +142,23 @@ class TestAuditRepositoryWithFakePool:
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
         repo = AuditRepository()
         assert await repo.get("not-a-uuid") is None
-        assert fake.fetchrow_calls == []
+        assert fake.calls == []
+
+    async def test_jsonb_string_is_parsed_if_driver_hands_back_text(self, monkeypatch):
+        """Defensive: handle both already-parsed dict/list and raw
+        JSON text, since driver behavior here isn't guaranteed."""
+        audit_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": audit_id, "stack": "fastapi", "status": "completed",
+            "file_count": 3, "score_total": 8.5,
+            "score_json": '{"total": 8.5}', "findings_json": "[]",
+            "created_at": "2026-07-12T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = AuditRepository()
+        result = await repo.get(str(audit_id))
+        assert result["score_json"] == {"total": 8.5}
+        assert result["findings_json"] == []
 
 
 class TestFixpackJobRepositoryNotConfigured:
@@ -134,7 +180,7 @@ class TestFixpackJobRepositoryNotConfigured:
 class TestFixpackJobRepositoryWithFakePool:
     async def test_create_inserts_with_correct_param_order(self, monkeypatch):
         job_id = uuid.uuid4()
-        fake = FakePool(fetchrow_result={
+        fake = FakePool(fetchone_result={
             "id": job_id, "audit_id": None, "pack": "deploy", "stack": "fastapi",
             "verified": True, "detail": "HTTP 200 on /",
             "preview_local_url": "http://localhost:20000/",
@@ -153,9 +199,9 @@ class TestFixpackJobRepositoryWithFakePool:
 
         assert result["id"] == str(job_id)
         assert result["audit_id"] is None
-        _, args = fake.fetchrow_calls[0]
-        assert args == (None, "deploy", "fastapi", True, "HTTP 200 on /",
-                         "http://localhost:20000/", None)
+        _, params = fake.calls[0]
+        assert params == (None, "deploy", "fastapi", True, "HTTP 200 on /",
+                           "http://localhost:20000/", None)
 
     async def test_mark_delivered_executes_update(self, monkeypatch):
         fake = FakePool()
@@ -164,9 +210,9 @@ class TestFixpackJobRepositoryWithFakePool:
         job_id = str(uuid.uuid4())
         await repo.mark_delivered(job_id, "https://github.com/a/b/pull/1")
 
-        query, args = fake.execute_calls[0]
+        query, params = fake.calls[0]
         assert "update fixpack_jobs" in query
-        assert args == ("https://github.com/a/b/pull/1", uuid.UUID(job_id))
+        assert params == ("https://github.com/a/b/pull/1", uuid.UUID(job_id))
 
 
 async def _async_return(value):

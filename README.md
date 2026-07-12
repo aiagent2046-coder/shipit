@@ -79,10 +79,18 @@ Implemented:
   `GET /v1/fixpacks/{id}` read them back. **Confirmed end-to-end**: a
   real Supabase Postgres 17 project now backs this (schema applied via
   migration, verified with real INSERT/SELECT round trips including
-  the `audits` -> `fixpack_jobs` foreign key). The actual `asyncpg`
+  the `audits` -> `fixpack_jobs` foreign key). The actual `psycopg`
   driver code in `app/db.py` connecting to it is proven by
   `scripts/verify_db_locally.py` — run locally with your own
-  `DATABASE_URL`, never sent anywhere else. **Known gap:** Row Level
+  `DATABASE_URL`, never sent anywhere else. **Driver note:** `asyncpg`
+  was tried first but hangs indefinitely on the first parameterized
+  query through Supabase's Supavisor pooler (confirmed by hand, both
+  session and transaction pooler modes) — a known open Supabase-side
+  bug ([supabase/supabase#39227](https://github.com/supabase/supabase/issues/39227)),
+  not a ShipIt bug. Switched to `psycopg` (libpq-based, same library
+  `psql` uses, which never hit this) with `prepare_threshold=None` to
+  avoid the same class of pooler incompatibility. See `app/db.py`'s
+  module docstring for the full diagnostic trail. **Known gap:** Row Level
   Security is off on both tables in Supabase — fine for this app's own
   direct Postgres connection, but if the project's anon/publishable
   key is ever used elsewhere (a frontend, Supabase client libraries),
