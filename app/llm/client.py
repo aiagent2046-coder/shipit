@@ -94,6 +94,10 @@ class LLMClient:
                     json={
                         "model": p.model,
                         "max_tokens": max_tokens,
+                        # Audit pipeline: reproducibility over creativity.
+                        # Unset temperature = provider default (usually
+                        # 1.0) = finding sets that differ run to run.
+                        "temperature": 0,
                         "system": system,
                         "messages": [{"role": "user", "content": user}],
                     },
@@ -112,6 +116,7 @@ class LLMClient:
                 json={
                     "model": p.model,
                     "max_tokens": max_tokens,
+                    "temperature": 0,
                     "messages": [
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
