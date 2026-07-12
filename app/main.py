@@ -12,9 +12,10 @@ from __future__ import annotations
 import io
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 
+from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.pipeline import run_deploy_pack
 from app.ingest.stack_detect import Stack, detect_stack
@@ -40,6 +41,11 @@ def get_rate_limiter() -> RateLimiter:
 def get_llm_client() -> LLMClient:
     """FastAPI dependency indirection — overridable in tests."""
     return LLMClient()
+
+
+def get_pr_opener():
+    """FastAPI dependency indirection — overridable in tests."""
+    return open_pull_request
 
 
 def _client_key(request: Request) -> str:
@@ -118,13 +124,21 @@ async def create_audit(
 async def create_fixpack(
     archive: UploadFile,
     request: Request,
+    deliver_to: str | None = Form(
+        None,
+        description='"owner/repo" to open a real PR against, once verified. '
+                    "Omit to just get the generated files back, unverified-safe.",
+    ),
     limiter: RateLimiter = Depends(get_rate_limiter),
+    pr_opener=Depends(get_pr_opener),
 ) -> dict:
     """Deploy Pack only, minimal scope (fastapi + vite-react). Free,
     unpaid preview of the plan's "verify first, pay to unlock" flow —
-    no payment gate, no PR delivery, no persistence yet. Shares the
-    audit rate limiter for now; should become "1 free Pack run per
-    audit_id" once audits are persisted (phase 2).
+    no payment gate yet, no persistence yet. PR delivery uses a single
+    operator token (GITHUB_PR_TOKEN), not a GitHub App — see
+    app/deploypack/delivery.py. Shares the audit rate limiter for now;
+    should become "1 free Pack run per audit_id" once audits are
+    persisted (phase 2).
     """
     try:
         limiter.check(_client_key(request))
@@ -163,6 +177,27 @@ async def create_fixpack(
                     "detail": "Deploy Pack supports fastapi and vite-react only"},
         )
 
+    pr: dict | None = None
+    if deliver_to:
+        if result["verified"] is not True:
+            pr = {"delivered": False, "reason": "not verified, refusing to open a PR"}
+        else:
+            try:
+                owner, repo = deliver_to.split("/", 1)
+            except ValueError:
+                pr = {"delivered": False, "reason": "deliver_to must be 'owner/repo'"}
+            else:
+                body = render_pr_body("deploy", result["files"], result["detail"])
+                try:
+                    opened = await run_in_threadpool(
+                        pr_opener, owner, repo, result["files"], body=body,
+                    )
+                except DeliveryError as exc:
+                    pr = {"delivered": False, "reason": str(exc)}
+                else:
+                    pr = {"delivered": True, "url": opened.html_url,
+                          "branch": opened.branch}
+
     return {
         "fixpack_id": str(uuid.uuid4()),
         "pack": "deploy",
@@ -170,4 +205,5 @@ async def create_fixpack(
         "verified": result["verified"],
         "detail": result["detail"],
         "files": result["files"],
+        "pr": pr,
     }

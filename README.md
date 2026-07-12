@@ -27,11 +27,20 @@ Implemented:
   Vite inlines them at build time, not runtime).
 - `app/deploypack/sandbox.py` — real `docker build` + `docker run` +
   `curl` verification, never trusts a generated Pack without booting
-  it. **Not yet exercised end-to-end** — this dev sandbox has no
-  `docker` binary; needs a run on a host that has one before "verified"
-  is a signal anyone should trust.
-- `POST /v1/fixpacks` — Deploy Pack only, free/unpaid preview (no
-  payment gate, no PR delivery, no persistence yet)
+  it. **Confirmed end-to-end** on a real GitHub Actions runner (this
+  dev sandbox has no `docker` binary itself) — see
+  `.github/workflows/smoke-deploy-pack.yml` / `scripts/smoke_verify_deploy_pack.py`.
+  Both `fastapi_sample` and `vite_sample` verified=True.
+- `app/deploypack/delivery.py` — opens a real PR (branch + commit via
+  the Git Data API) for a verified Pack, using a single operator token
+  (`GITHUB_PR_TOKEN`) — not a GitHub App yet, so it can only open PRs
+  on repos that token has write access to. **Not yet exercised against
+  a real GitHub repo** — only unit-tested with a mocked transport so
+  far, same caveat sandbox.py had before its real Docker run above.
+- `POST /v1/fixpacks` — Deploy Pack, free/unpaid preview (no payment
+  gate, no persistence yet). Optional `deliver_to="owner/repo"` form
+  field opens a real PR once verified; refuses to deliver an unverified
+  Pack.
 
 ## Dev
 
