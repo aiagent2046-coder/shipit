@@ -12,8 +12,12 @@ import io
 
 from app.llm.client import LLMClient, LLMError
 from app.scan.llm_scan import run_llm_scan
+from app.scan.collapse import collapse_repeats
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
+
+_SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
+                  "category", "file", "line", "masked", "explanation", "fix_hint")
 
 
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
@@ -36,9 +40,11 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
             findings = findings + [vars(f) for f in llm_findings]
             llm_summary = vars(stats)
 
+    findings = collapse_repeats(findings)
+
     return {
         "score": {
-            **compute_scores([ScoredFinding(**f) for f in findings]),
+            **compute_scores([ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f}) for f in findings]),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0
             # with the LLM stage present scored 9.2 without it (seen in

@@ -98,6 +98,17 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Remove it from the repository, add .env to .gitignore, and "
         "rotate every secret that was inside.",
     ),
+    "supabase-anon-key": (
+        "Your Supabase anon (public) key appears in the code.",
+        "This particular key is meant to be public — it ships in every "
+        "app's front-end by design, so this is informational, not a "
+        "breach. Seeing it in many committed files usually just means "
+        "the same key was pasted around; the keys that must stay secret "
+        "are the service_role key and database passwords, which are NOT "
+        "flagged here.",
+        "No urgent action needed for the anon key itself. Do confirm "
+        "your Row Level Security is on, since the anon key relies on it.",
+    ),
     "no-tests": (
         "The project has no automated tests.",
         "Every change is a blind edit: things that worked yesterday can "

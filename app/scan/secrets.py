@@ -192,15 +192,22 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
                     )
                     if rule.id == "jwt-in-code":
                         severity, confidence, title = _jwt_severity(m.group(0))
-                    if _is_migration_context(name):
+                    # Supabase anon key is public by design; migration
+                    # context must NOT re-escalate it (that produced a
+                    # wall of 40+ scary-but-false "admin login" rows in
+                    # a real report). Tag it with its own rule_id so the
+                    # report can collapse and translate it correctly.
+                    is_anon = title.startswith("Supabase anon key")
+                    effective_rule_id = "supabase-anon-key" if is_anon else rule.id
+                    if _is_migration_context(name) and not is_anon:
                         confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
                         title = f"{title} (committed database migration)"
-                    elif _is_doc_context(name):
+                    elif _is_doc_context(name) and not is_anon:
                         severity = _DOC_SEVERITY_CAP.get(severity, severity)
                         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
                         title = f"{title} (documentation/example context)"
                     findings.append(SecretFinding(
-                        rule_id=rule.id,
+                        rule_id=effective_rule_id,
                         title=title,
                         severity=severity,
                         confidence=confidence,

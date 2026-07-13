@@ -99,8 +99,20 @@ def _jwt_with_role(role: str) -> str:
 def test_supabase_anon_key_is_informational():
     src = f"const k = '{_jwt_with_role('anon')}'".encode()
     f = next(f for f in scan_secrets(make_zip({"a.ts": src}))
-             if f.rule_id == "jwt-in-code")
+             if f.rule_id == "supabase-anon-key")
     assert f.severity == "low" and f.confidence <= 0.3
+
+
+def test_anon_key_in_migration_not_reescalated():
+    # migration context must NOT turn the public anon key into a
+    # high-confidence "committed database migration" secret (that was
+    # the source of a 40-row false-alarm wall in a real report).
+    src = f"insert into x values ('{_jwt_with_role('anon')}');".encode()
+    findings = scan_secrets(make_zip({"supabase/migrations/0001.sql": src}))
+    f = next(f for f in findings if f.rule_id == "supabase-anon-key")
+    assert f.severity == "low"
+    assert f.confidence <= 0.3
+    assert "committed database migration" not in f.title
 
 
 def test_supabase_service_role_key_is_critical():
