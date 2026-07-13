@@ -66,9 +66,14 @@ class PreviewRegistry:
         self._run = run
         self._lock = threading.Lock()
         self._by_owner: dict[str, PreviewInfo] = {}
+        # Ports picked but not yet in _by_owner: a start() holds its port
+        # here across the slow verify_deploy_pack build, so a concurrent
+        # start() for a different owner (they run in parallel via
+        # /v1/fixpacks' threadpool) can't be handed the same port mid-build.
+        self._reserved: set[int] = set()
 
     def _used_ports(self) -> set[int]:
-        return {info.host_port for info in self._by_owner.values()}
+        return {info.host_port for info in self._by_owner.values()} | self._reserved
 
     def _allocate_port(self) -> int:
         used = self._used_ports()
@@ -94,29 +99,37 @@ class PreviewRegistry:
             if existing:
                 self._stop_locked(existing)
             host_port = self._allocate_port()
+            self._reserved.add(host_port)
 
-        result = verify_deploy_pack(
-            build_dir, host_port, container_port, path=path,
-            keep_alive_on_success=True, memory_limit=memory_limit,
-            run=self._run,
-        )
-        if not result.ok:
-            return PreviewResult(ok=False, detail=result.detail, build_log=result.build_log)
+        try:
+            result = verify_deploy_pack(
+                build_dir, host_port, container_port, path=path,
+                keep_alive_on_success=True, memory_limit=memory_limit,
+                run=self._run,
+            )
+            if not result.ok:
+                return PreviewResult(ok=False, detail=result.detail, build_log=result.build_log)
 
-        now = time.time()
-        info = PreviewInfo(
-            job_id=result.container, owner_key=owner_key,
-            container=result.container, image_tag=result.image_tag,
-            host_port=host_port, started_at=now, expires_at=now + ttl_seconds,
-        )
-        with self._lock:
-            self._by_owner[owner_key] = info
+            now = time.time()
+            info = PreviewInfo(
+                job_id=result.container, owner_key=owner_key,
+                container=result.container, image_tag=result.image_tag,
+                host_port=host_port, started_at=now, expires_at=now + ttl_seconds,
+            )
+            with self._lock:
+                self._by_owner[owner_key] = info
 
-        return PreviewResult(
-            ok=True, detail=result.detail,
-            local_url=f"http://localhost:{host_port}{path}",
-            expires_at=info.expires_at, job_id=info.job_id,
-        )
+            return PreviewResult(
+                ok=True, detail=result.detail,
+                local_url=f"http://localhost:{host_port}{path}",
+                expires_at=info.expires_at, job_id=info.job_id,
+            )
+        finally:
+            # Drop the in-flight reservation either way: on success the
+            # port is now covered by _by_owner (no gap where it's neither),
+            # on failure it must return to the free pool, not leak.
+            with self._lock:
+                self._reserved.discard(host_port)
 
     def _stop_locked(self, info: PreviewInfo) -> None:
         """Caller must hold self._lock."""
