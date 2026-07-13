@@ -137,15 +137,58 @@ def test_deliver_to_skipped_when_not_verified(monkeypatch):
     assert body["pr"] == {"delivered": False, "reason": "not verified, refusing to open a PR"}
 
 
-def test_deliver_to_bad_format_when_verified(monkeypatch):
+def test_deliver_to_bad_format_rejected_with_422():
+    # No slash -> not 'owner/repo'. Rejected early (before any build), so
+    # this needs no docker/verify stubbing at all.
+    resp = post_fixpack(FASTAPI_ZIP, deliver_to="not-a-repo-slug")
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["reason"] == "bad_deliver_to"
+    assert "owner/repo" in body["detail"]["detail"]
+
+
+def test_deliver_to_path_injection_rejected_before_delivery():
+    # "owner/../../x" would split(maxsplit=1) into repo="../../x" and reach
+    # a GitHub API path unvalidated. Must 422 before the opener is called.
+    called = {"n": 0}
+
+    def fake_opener(*a, **k):
+        called["n"] += 1
+        return PullRequestResult(html_url="x", branch="y")
+
+    app.dependency_overrides[get_pr_opener] = lambda: fake_opener
+    try:
+        resp = post_fixpack(FASTAPI_ZIP, deliver_to="owner/../../etc/passwd")
+    finally:
+        app.dependency_overrides.pop(get_pr_opener, None)
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["reason"] == "bad_deliver_to"
+    assert called["n"] == 0  # never reached the delivery code path
+
+
+def test_deliver_to_valid_special_chars_still_delivers(monkeypatch):
+    # Regression: hyphens, dots, underscores are legal GitHub name chars
+    # and must pass the guard through to delivery unchanged.
     monkeypatch.setattr(
         pipeline_mod, "verify_deploy_pack",
         lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
     )
-    resp = post_fixpack(FASTAPI_ZIP, deliver_to="not-a-repo-slug")
-    body = resp.json()
-    assert body["pr"]["delivered"] is False
-    assert "owner/repo" in body["pr"]["reason"]
+    captured = {}
+
+    def fake_opener(owner, repo, files, **kwargs):
+        captured["owner"], captured["repo"] = owner, repo
+        return PullRequestResult(html_url="https://github.com/x/y/pull/1", branch="b")
+
+    app.dependency_overrides[get_pr_opener] = lambda: fake_opener
+    try:
+        resp = post_fixpack(FASTAPI_ZIP, deliver_to="my-org/my.repo_v2")
+    finally:
+        app.dependency_overrides.pop(get_pr_opener, None)
+
+    assert resp.status_code == 202
+    assert resp.json()["pr"]["delivered"] is True
+    assert (captured["owner"], captured["repo"]) == ("my-org", "my.repo_v2")
 
 
 def test_deliver_to_opens_pr_when_verified(monkeypatch):

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hmac
 import io
 import os
+import re
 import uuid
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
@@ -80,6 +81,12 @@ def get_audit_repo() -> AuditRepository:
 def get_fixpack_repo() -> FixpackJobRepository:
     """Same as get_audit_repo, for fixpack_jobs."""
     return _fixpack_repo
+
+
+# GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
+# Permissive-but-safe guard so a user-supplied deliver_to can't smuggle
+# extra path segments (extra "/" or "..") into a GitHub REST API path.
+_VALID_OWNER_REPO_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _reap_token() -> str | None:
@@ -315,6 +322,22 @@ async def create_fixpack(
                         "detail": "audit_id must be a valid UUID"},
             )
 
+    # Validate deliver_to before any expensive build or GitHub call: it's
+    # user input that lands directly in GitHub REST API paths (owner/repo
+    # in delivery.py + github_app.py). Reject anything that isn't exactly
+    # two valid name segments so extra "/" or ".." can't reshape the path.
+    owner = repo = None
+    if deliver_to:
+        parts = deliver_to.split("/")
+        if len(parts) != 2 or not all(_VALID_OWNER_REPO_SEGMENT.match(p) for p in parts):
+            raise HTTPException(
+                status_code=422,
+                detail={"reason": "bad_deliver_to",
+                        "detail": "deliver_to must be 'owner/repo', each part "
+                                  "matching ^[A-Za-z0-9._-]+$"},
+            )
+        owner, repo = parts
+
     if want_preview:
         await run_in_threadpool(preview_registry.reap_expired)
 
@@ -348,31 +371,26 @@ async def create_fixpack(
         if result["verified"] is not True:
             pr = {"delivered": False, "reason": "not verified, refusing to open a PR"}
         else:
+            body = render_pr_body("deploy", result["files"], result["detail"])
             try:
-                owner, repo = deliver_to.split("/", 1)
-            except ValueError:
-                pr = {"delivered": False, "reason": "deliver_to must be 'owner/repo'"}
-            else:
-                body = render_pr_body("deploy", result["files"], result["detail"])
-                try:
-                    token: str | None = None
-                    app_creds = app_credentials_from_env()
-                    if app_creds is not None:
-                        app_id, private_key = app_creds
-                        token = await run_in_threadpool(
-                            installation_token_for_repo, owner, repo,
-                            app_id=app_id, private_key=private_key,
-                        )
-                    opened = await run_in_threadpool(
-                        pr_opener, owner, repo, result["files"], body=body, token=token,
+                token: str | None = None
+                app_creds = app_credentials_from_env()
+                if app_creds is not None:
+                    app_id, private_key = app_creds
+                    token = await run_in_threadpool(
+                        installation_token_for_repo, owner, repo,
+                        app_id=app_id, private_key=private_key,
                     )
-                except (DeliveryError, GitHubAppError) as exc:
-                    pr = {"delivered": False, "reason": str(exc)}
-                else:
-                    pr = {"delivered": True, "url": opened.html_url,
-                          "branch": opened.branch}
-                    if persisted_job:
-                        await fixpack_repo.mark_delivered(job_id, opened.html_url)
+                opened = await run_in_threadpool(
+                    pr_opener, owner, repo, result["files"], body=body, token=token,
+                )
+            except (DeliveryError, GitHubAppError) as exc:
+                pr = {"delivered": False, "reason": str(exc)}
+            else:
+                pr = {"delivered": True, "url": opened.html_url,
+                      "branch": opened.branch}
+                if persisted_job:
+                    await fixpack_repo.mark_delivered(job_id, opened.html_url)
 
     return {
         "fixpack_id": job_id,
