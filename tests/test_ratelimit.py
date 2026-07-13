@@ -42,6 +42,35 @@ def test_window_resets_after_it_elapses():
     limiter.check("1.2.3.4")  # must not raise
 
 
+def test_expired_key_is_evicted_not_just_emptied():
+    # The leak: a key seen once and never again used to sit in _windows
+    # forever. A later call for ANY key must evict the stale one entirely.
+    now = [0.0]
+    limiter = RateLimiter(limit=5, window_seconds=100, clock=lambda: now[0])
+    limiter.check("1.2.3.4")
+    assert "1.2.3.4" in limiter._windows
+
+    now[0] = 100.1  # 1.2.3.4's window has fully elapsed
+    limiter.check("5.6.7.8")  # a different client's request drives the sweep
+
+    assert "1.2.3.4" not in limiter._windows  # actually removed, not left empty
+    assert set(limiter._windows) == {"5.6.7.8"}
+
+
+def test_eviction_does_not_leak_across_many_expired_keys():
+    # Boundedness: N distinct one-shot clients, then time passes; the next
+    # request collapses the dict back down to just the active key.
+    now = [0.0]
+    limiter = RateLimiter(limit=5, window_seconds=100, clock=lambda: now[0])
+    for i in range(50):
+        limiter.check(f"10.0.0.{i}")
+    assert len(limiter._windows) == 50
+
+    now[0] = 100.1
+    limiter.check("192.168.1.1")
+    assert set(limiter._windows) == {"192.168.1.1"}
+
+
 # --- integration: the endpoint returns 429 + Retry-After once tripped ---
 
 def make_zip() -> io.BytesIO:

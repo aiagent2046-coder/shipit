@@ -55,6 +55,7 @@ class RateLimiter:
         """Raise RateLimitExceeded if `key` is over budget; else record the call."""
         now = self._clock()
         with self._lock:
+            self._evict_expired(now)
             window = self._windows.get(key)
             if window is None or now - window.start >= self.window_seconds:
                 self._windows[key] = _Window(start=now, count=1)
@@ -63,6 +64,17 @@ class RateLimiter:
                 retry_after = int(self.window_seconds - (now - window.start)) + 1
                 raise RateLimitExceeded(retry_after)
             window.count += 1
+
+    def _evict_expired(self, now: float) -> None:
+        """Drop windows whose window has fully elapsed. Without this a key
+        seen once and never again sits in `_windows` forever -- an unbounded
+        leak, since `/v1/audits` is public and keyed by client IP (rotating
+        source IPs would grow the dict without limit). Bounds it to clients
+        active within the last window. Caller holds `_lock`."""
+        stale = [k for k, w in self._windows.items()
+                 if now - w.start >= self.window_seconds]
+        for k in stale:
+            del self._windows[k]
 
 
 def limiter_from_env() -> RateLimiter:
