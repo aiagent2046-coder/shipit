@@ -9,6 +9,7 @@ since the LLM call alone can take up to ~2 minutes.
 
 from __future__ import annotations
 
+import hmac
 import io
 import os
 import uuid
@@ -127,7 +128,9 @@ async def reap_previews(
             detail={"reason": "reap_not_configured",
                     "detail": "PREVIEW_REAP_TOKEN is not set on this deployment"},
         )
-    if request.headers.get("authorization") != f"Bearer {token}":
+    # Constant-time compare so response latency doesn't leak the token.
+    provided = request.headers.get("authorization", "")
+    if not hmac.compare_digest(provided, f"Bearer {token}"):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
     reaped = await run_in_threadpool(preview_registry.reap_expired)
