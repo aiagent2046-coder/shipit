@@ -35,6 +35,7 @@ working end to end.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import os
@@ -47,6 +48,7 @@ from psycopg_pool import AsyncConnectionPool
 DATABASE_URL_ENV = "DATABASE_URL"
 
 _pool: AsyncConnectionPool | None = None
+_pool_lock = asyncio.Lock()
 
 
 class DatabaseNotConfigured(Exception):
@@ -61,19 +63,29 @@ def database_url_from_env() -> str | None:
 
 async def get_pool() -> AsyncConnectionPool:
     global _pool
-    if _pool is None:
-        url = database_url_from_env()
-        if not url:
-            raise DatabaseNotConfigured(f"{DATABASE_URL_ENV} is not set")
-        # prepare_threshold=None: disables psycopg's server-side statement
-        # preparation entirely -- see the module docstring for why. Without
-        # this, the pool hangs on the first parameterized query through
-        # Supabase's Supavisor pooler, confirmed by hand.
-        _pool = AsyncConnectionPool(
-            url, min_size=1, max_size=5, open=False,
-            kwargs={"prepare_threshold": None, "row_factory": dict_row},
-        )
-        await _pool.open()
+    if _pool is not None:
+        return _pool
+    # Lock so concurrent first-callers don't each build+open a pool (the
+    # loser's pool would leak, never closed). Re-check inside: another
+    # caller may have finished while we waited.
+    async with _pool_lock:
+        if _pool is None:
+            url = database_url_from_env()
+            if not url:
+                raise DatabaseNotConfigured(f"{DATABASE_URL_ENV} is not set")
+            # prepare_threshold=None: disables psycopg's server-side statement
+            # preparation entirely -- see the module docstring for why. Without
+            # this, the pool hangs on the first parameterized query through
+            # Supabase's Supavisor pooler, confirmed by hand.
+            pool = AsyncConnectionPool(
+                url, min_size=1, max_size=5, open=False,
+                kwargs={"prepare_threshold": None, "row_factory": dict_row},
+            )
+            # Publish to _pool only after open() succeeds: a failed open
+            # (bad password, transient blip) leaves _pool None so the next
+            # call retries, instead of caching a broken pool forever.
+            await pool.open()
+            _pool = pool
     return _pool
 
 

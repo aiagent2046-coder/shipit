@@ -91,6 +91,60 @@ class TestGetPool:
         assert isinstance(pool, FakeAsyncConnectionPool)
         assert captured["kwargs"]["kwargs"]["prepare_threshold"] is None
 
+    async def test_failed_open_is_not_cached_and_retries(self, monkeypatch):
+        """A failed .open() (bad password, transient blip) must leave
+        _pool unset so the next call retries, instead of poisoning the
+        global with a broken pool that every later call returns."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+        db_mod._pool = None
+        opens = {"n": 0}
+
+        class FlakyPool:
+            def __init__(self, url, **kwargs):
+                pass
+
+            async def open(self):
+                opens["n"] += 1
+                if opens["n"] == 1:
+                    raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(db_mod, "AsyncConnectionPool", FlakyPool)
+        try:
+            with pytest.raises(RuntimeError):
+                await db_mod.get_pool()
+            assert db_mod._pool is None  # not cached after the failed open
+
+            pool = await db_mod.get_pool()  # retries, succeeds this time
+            assert isinstance(pool, FlakyPool)
+            assert opens["n"] == 2
+        finally:
+            db_mod._pool = None
+
+    async def test_concurrent_first_callers_build_one_pool(self, monkeypatch):
+        """Two concurrent first-callers must not each construct a pool --
+        the loser's would leak (never closed). The lock + re-check means
+        the constructor runs exactly once."""
+        import asyncio
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+        db_mod._pool = None
+        built = {"n": 0}
+
+        class SlowOpenPool:
+            def __init__(self, url, **kwargs):
+                built["n"] += 1
+
+            async def open(self):
+                await asyncio.sleep(0)  # yield so both callers overlap
+
+        monkeypatch.setattr(db_mod, "AsyncConnectionPool", SlowOpenPool)
+        try:
+            a, b = await asyncio.gather(db_mod.get_pool(), db_mod.get_pool())
+            assert built["n"] == 1       # constructed once, not twice
+            assert a is b                # same shared instance
+        finally:
+            db_mod._pool = None
+
 
 class TestAuditRepositoryNotConfigured:
     async def test_create_returns_none(self):
