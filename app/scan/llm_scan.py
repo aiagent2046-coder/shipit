@@ -64,7 +64,11 @@ SYSTEM_PROMPT = (
     "\"evidence\": str (verbatim substring of ONE line inside the range, "
     "max 120 chars), \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", "
     "\"confidence\": float 0..1, \"title\": str, \"explanation\": str, "
-    "\"fix_hint\": str}. Report at most 20 findings. If the SAME issue "
+    "\"fix_hint\": str}. Write \"explanation\" for a non-technical founder: "
+    "no jargon, one or two sentences, and a CONCRETE harm scenario -- what "
+    "a malicious visitor could actually do (e.g. 'anyone who finds this "
+    "link can unsubscribe other people\'s accounts'). Write \"fix_hint\" "
+    "as a plain action, not a term of art. Report at most 20 findings. If the SAME issue "
     "pattern occurs in multiple files (e.g. the same kind of hardcoded "
     "secret in several migration files), report it ONCE using the most "
     "representative instance as file/line/evidence (representative = the "
@@ -226,6 +230,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   category="Security" if rubric == "security" else "Auth",
                   file=f["file"],
                   line=int(f["line_start"]),
+                  explanation=str(f.get("explanation", ""))[:600],
+                  fix_hint=str(f.get("fix_hint", ""))[:300],
               ))
     return _dedup_across_rubrics(findings), stats
 

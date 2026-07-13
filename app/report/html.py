@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from html import escape
 
+from app.report.plain_language import plain_fields, tier
+
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 _SEVERITY_COLOR = {
     "critical": "#e5484d", "high": "#f76b15",
@@ -40,12 +42,20 @@ def _finding_row(f: dict) -> str:
     loc = escape(str(f.get("file", "")))
     if f.get("line"):
         loc += f":{int(f['line'])}"
+    what, risk, fix = plain_fields(f)
+    emoji, tier_label = tier(sev)
+    risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
+    fix_html = f'<div class="fix">→ {escape(fix)}</div>' if fix else ""
+    tech_bits = " · ".join(x for x in (
+        escape(str(f.get("title", ""))), loc,
+        escape(str(f.get("masked", "")))) if x)
     return (
         '<tr>'
-        f'<td><span class="sev" style="background:{color}">{escape(sev)}</span></td>'
-        f'<td class="title">{escape(str(f.get("title", "")))}</td>'
-        f'<td class="loc">{loc}</td>'
-        f'<td class="loc">{escape(str(f.get("masked", "")))}</td>'
+        f'<td class="tiercell"><span class="sev" style="background:{color}">'
+        f'{emoji} {escape(tier_label)}</span></td>'
+        f'<td class="title"><div class="what">{escape(what)}</div>'
+        f'{risk_html}{fix_html}'
+        f'<div class="tech">{tech_bits}</div></td>'
         '</tr>'
     )
 
@@ -65,8 +75,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     if findings:
         rows = "".join(_finding_row(f) for f in findings)
         body = (
-            '<table><thead><tr><th></th><th>Finding</th>'
-            '<th>Location</th><th>Preview</th></tr></thead>'
+            '<table><thead><tr><th></th><th>Finding</th></tr></thead>'
             f'<tbody>{rows}</tbody></table>'
         )
     else:
@@ -104,7 +113,12 @@ def render_report(result: dict, project_name: str = "your app") -> str:
  th{{text-align:left;color:#8b8d98;font-weight:500;font-size:12px;
     padding:6px 10px;border-bottom:1px solid #26262a}}
  td{{padding:8px 10px;border-bottom:1px solid #1c1c1f;vertical-align:top}}
- .sev{{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;
+ .what{{font-weight:600;margin-bottom:4px}}
+.risk{{color:#3d3f46;margin-bottom:4px}}
+.fix{{color:#0a7d33;margin-bottom:4px}}
+.tech{{color:#8b8d98;font-size:12px;font-family:monospace}}
+.tiercell{{white-space:nowrap;vertical-align:top}}
+.sev{{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;
       color:#111113;text-transform:uppercase}}
  .loc{{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#8b8d98}}
  .clean{{color:#30a46c}}

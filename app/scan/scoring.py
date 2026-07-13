@@ -42,6 +42,12 @@ class ScoredFinding:
     file: str = ""
     line: int = 0
     masked: str = ""
+    # Plain-language layer: what this means for a non-technical owner
+    # and what to do about it. Filled from the rule dictionary for
+    # static findings and from the model's own explanation/fix_hint for
+    # LLM findings (previously dropped on the floor).
+    explanation: str = ""
+    fix_hint: str = ""
 
 
 def _score(findings: list[ScoredFinding]) -> float:
