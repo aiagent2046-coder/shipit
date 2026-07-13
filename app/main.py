@@ -168,18 +168,6 @@ async def create_audit(
     llm_client: LLMClient = Depends(get_llm_client),
     audit_repo: AuditRepository = Depends(get_audit_repo),
 ) -> dict:
-    try:
-        limiter.check(_client_key(request))
-    except RateLimitExceeded as exc:
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "reason": "rate_limited",
-                "detail": f"max {limiter.limit} audits per day",
-            },
-            headers={"Retry-After": str(exc.retry_after)},
-        ) from exc
-
     raw = await archive.read(MAX_ARCHIVE_BYTES + 1)
     buf = io.BytesIO(raw)
 
@@ -199,6 +187,22 @@ async def create_audit(
             detail={"reason": "unsupported_stack",
                     "detail": "MVP supports Next.js and FastAPI only"},
         )
+
+    # Consume quota only after the upload proves to be real work: validation
+    # and stack detection are free, so a garbage/hostile zip (or probing for
+    # validation bypasses) can't burn a client's 5-audits-a-day budget for a
+    # request that never produced an audit.
+    try:
+        limiter.check(_client_key(request))
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {limiter.limit} audits per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
 
     # Off the event loop: the LLM stage does real network I/O and can
     # take up to ~2 minutes. Moves to the arq worker + queue in phase 2.
