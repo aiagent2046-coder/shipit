@@ -56,3 +56,36 @@ def test_findings_sorted_by_severity():
 def test_empty_findings_render_clean_state():
     html = render_report(result([]))
     assert "No issues found" in html
+
+
+def test_report_endpoint_renders_persisted_audit():
+    import app.main as main_mod
+    from fastapi.testclient import TestClient
+
+    class FakeRepo:
+        async def get(self, audit_id):
+            if audit_id != "known-id":
+                return None
+            return {
+                "id": audit_id,
+                "score_json": {"total": 4.2, "basis": "static+llm",
+                               "categories": {c: 5.0 for c in
+                                              ("Security", "Auth", "Correctness",
+                                               "Config", "Testing", "Deploy")}},
+                "findings_json": [
+                    {"rule_id": "env-file-committed", "title": "Env file",
+                     "severity": "critical", "confidence": 0.9,
+                     "category": "Security", "file": ".env", "line": 0,
+                     "masked": ""}],
+            }
+
+    main_mod.app.dependency_overrides[main_mod.get_audit_repo] = lambda: FakeRepo()
+    try:
+        client = TestClient(main_mod.app)
+        r = client.get("/v1/audits/known-id/report")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/html")
+        assert "Fix before launch" in r.text
+        assert client.get("/v1/audits/unknown/report").status_code == 404
+    finally:
+        main_mod.app.dependency_overrides.pop(main_mod.get_audit_repo, None)

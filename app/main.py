@@ -16,6 +16,7 @@ import re
 import uuid
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.db import AuditRepository, FixpackJobRepository
@@ -30,6 +31,7 @@ from app.deploypack.pipeline import run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
 from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
+from app.report.html import render_report
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
 from app.scan.pipeline import run_scan
 from app.ingest.validators import (
@@ -158,6 +160,29 @@ async def get_audit(
                                "configured on this deployment (see app/db.py)"},
         )
     return row
+
+
+@app.get("/v1/audits/{audit_id}/report")
+async def get_audit_report(
+    audit_id: str,
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+) -> HTMLResponse:
+    """The shareable artifact: the same persisted audit rendered as a
+    self-contained, plain-language HTML page."""
+    row = await audit_repo.get(audit_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no audit with this id, or persistence isn't "
+                               "configured on this deployment (see app/db.py)"},
+        )
+    result = {
+        "score": row.get("score_json") or {},
+        "findings": row.get("findings_json") or [],
+    }
+    html = render_report(result, project_name=f"audit {audit_id[:8]}")
+    return HTMLResponse(content=html)
 
 
 @app.post("/v1/audits", status_code=202)
