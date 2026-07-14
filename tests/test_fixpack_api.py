@@ -39,8 +39,16 @@ VITE_ZIP = {
     "src/App.tsx": b"export default function App() { return null }\n",
 }
 
-NEXTJS_ZIP = {
+NEXTJS_NO_STANDALONE_ZIP = {
     "package.json": json.dumps({"dependencies": {"next": "15.0.0"}}).encode(),
+}
+
+NEXTJS_ZIP = {
+    "package.json": json.dumps(
+        {"dependencies": {"next": "14.2.5", "react": "18.3.1"}}
+    ).encode(),
+    "next.config.js": b'module.exports = { output: "standalone" }\n',
+    "pages/index.js": b"export default function Home(){ return <div>ok</div> }\n",
 }
 
 
@@ -108,10 +116,26 @@ def test_vite_react_pack_generated_but_unverified_without_docker(monkeypatch):
     assert "nginx.conf" in body["files"]
 
 
-def test_nextjs_is_not_supported_for_deploy_pack_even_though_audit_supports_it():
-    resp = post_fixpack(NEXTJS_ZIP)
+def test_nextjs_without_output_standalone_is_refused():
+    # Detected as Next.js, but the config doesn't set output: "standalone",
+    # so there's nothing bootable to build — refused at generation time and
+    # surfaced as unsupported_stack (the detail names the missing setting).
+    resp = post_fixpack(NEXTJS_NO_STANDALONE_ZIP)
     assert resp.status_code == 422
-    assert resp.json()["detail"]["reason"] == "unsupported_stack"
+    body = resp.json()
+    assert body["detail"]["reason"] == "unsupported_stack"
+    assert "standalone" in body["detail"]["detail"]
+
+
+def test_nextjs_standalone_pack_generated_but_unverified_without_docker(monkeypatch):
+    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
+    resp = post_fixpack(NEXTJS_ZIP)
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["stack"] == "nextjs"
+    assert body["verified"] is None
+    assert "Dockerfile" in body["files"]
+    assert "docker-compose.yml" in body["files"]
 
 
 def test_verified_true_when_sandbox_actually_succeeds(monkeypatch):

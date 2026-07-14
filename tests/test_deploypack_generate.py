@@ -144,12 +144,92 @@ def test_env_example_merge_keeps_existing_and_adds_new_keys_only():
     assert "VITE_NEW_KEY=" in env
 
 
+# --- Next.js ---
+
+def _next_files(extra: dict[str, str] | None = None) -> dict[str, str]:
+    files = {
+        "package.json": '{"dependencies":{"next":"14.2.5","react":"18"}}',
+        "next.config.js": 'module.exports = { output: "standalone" }\n',
+        "pages/index.js": "export default function Home(){ return <div>ok</div> }\n",
+    }
+    files.update(extra or {})
+    return files
+
+
+def test_nextjs_pack_standalone_npm_no_lockfile():
+    pack = generate_deploy_pack(Stack.NEXTJS, _next_files())
+    df = pack["Dockerfile"]
+    assert "RUN npm install" in df          # no lockfile -> install, not ci
+    assert "npm run build" in df
+    assert "COPY --from=build /app/.next/standalone ./" in df
+    assert "ENV HOSTNAME=0.0.0.0" in df     # the Docker-bind gotcha, fixed here
+    assert "EXPOSE 3000" in df
+    assert 'CMD ["node", "server.js"]' in df
+
+    compose = yaml.safe_load(pack["docker-compose.yml"])
+    assert compose["services"]["app"]["ports"] == ["3000:3000"]
+    assert "args" not in compose["services"]["app"]["build"]
+
+    workflow = yaml.safe_load(pack[".github/workflows/deploy-pack-ci.yml"])
+    assert workflow["jobs"]["build-and-boot"]["runs-on"] == "ubuntu-latest"
+
+
+def test_nextjs_pack_detects_package_manager_from_lockfile():
+    npm = generate_deploy_pack(Stack.NEXTJS, _next_files({"package-lock.json": "{}"}))
+    assert "RUN npm ci" in npm["Dockerfile"]
+
+    pnpm = generate_deploy_pack(Stack.NEXTJS, _next_files({"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"}))
+    assert "corepack enable && pnpm install --frozen-lockfile" in pnpm["Dockerfile"]
+    assert "pnpm run build" in pnpm["Dockerfile"]
+
+    yarn = generate_deploy_pack(Stack.NEXTJS, _next_files({"yarn.lock": "# yarn lockfile v1\n"}))
+    assert "corepack enable && yarn install --frozen-lockfile" in yarn["Dockerfile"]
+    assert "yarn build" in yarn["Dockerfile"]
+
+
+def test_nextjs_pack_wires_next_public_env_as_build_args():
+    files = _next_files({
+        "pages/index.js": (
+            "const url = process.env.NEXT_PUBLIC_API_URL\n"
+            "const key = process.env.NEXT_PUBLIC_ANON_KEY\n"
+            "export default function Home(){ return <div>{url}{key}</div> }\n"
+        ),
+    })
+    pack = generate_deploy_pack(Stack.NEXTJS, files)
+
+    assert "ARG NEXT_PUBLIC_API_URL" in pack["Dockerfile"]
+    assert "ARG NEXT_PUBLIC_ANON_KEY" in pack["Dockerfile"]
+    compose = yaml.safe_load(pack["docker-compose.yml"])
+    assert compose["services"]["app"]["build"]["args"] == {
+        "NEXT_PUBLIC_ANON_KEY": "${NEXT_PUBLIC_ANON_KEY}",
+        "NEXT_PUBLIC_API_URL": "${NEXT_PUBLIC_API_URL}",
+    }
+    assert "NEXT_PUBLIC_API_URL=" in pack[".env.example"]
+
+
+def test_nextjs_pack_refuses_without_output_standalone():
+    # next.config present but standalone not set -> refuse (would build
+    # green then fail to boot). Message must name the required setting.
+    files = _next_files({"next.config.js": "module.exports = {}\n"})
+    try:
+        generate_deploy_pack(Stack.NEXTJS, files)
+        assert False, "expected UnsupportedForDeployPack"
+    except UnsupportedForDeployPack as exc:
+        assert "standalone" in str(exc)
+
+    # no next.config at all -> also refuse
+    try:
+        generate_deploy_pack(Stack.NEXTJS, {"package.json": '{"dependencies":{"next":"14"}}'})
+        assert False, "expected UnsupportedForDeployPack"
+    except UnsupportedForDeployPack:
+        pass
+
+
 # --- unsupported ---
 
-def test_nextjs_and_unsupported_raise():
-    for stack in (Stack.NEXTJS, Stack.UNSUPPORTED):
-        try:
-            generate_deploy_pack(stack, {})
-            assert False, f"expected UnsupportedForDeployPack for {stack}"
-        except UnsupportedForDeployPack:
-            pass
+def test_unsupported_stack_raises():
+    try:
+        generate_deploy_pack(Stack.UNSUPPORTED, {})
+        assert False, "expected UnsupportedForDeployPack for UNSUPPORTED"
+    except UnsupportedForDeployPack:
+        pass

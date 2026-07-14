@@ -391,11 +391,10 @@ async def create_fixpack(
             )
         else:
             result = await run_in_threadpool(run_deploy_pack, raw, stack)
-    except UnsupportedForDeployPack:
+    except UnsupportedForDeployPack as exc:
         raise HTTPException(
             status_code=422,
-            detail={"reason": "unsupported_stack",
-                    "detail": "Deploy Pack supports fastapi and vite-react only"},
+            detail={"reason": "unsupported_stack", "detail": str(exc)},
         )
 
     persisted_job = await fixpack_repo.create(

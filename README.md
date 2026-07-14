@@ -27,16 +27,25 @@ Implemented:
   configured)
 - `app/deploypack/generate.py` — Deploy Pack, minimal scope: generates
   Dockerfile / docker-compose.yml / .env.example / CI workflow for
-  `fastapi` and `vite-react` only (Next.js deferred — no real Next.js
-  export validated yet). Detects poetry vs pip, Postgres usage, and
-  Vite build-time `VITE_*` env vars (wired as Docker build args, since
-  Vite inlines them at build time, not runtime).
+  `fastapi`, `vite-react`, and `nextjs`. Detects poetry vs pip, Postgres
+  usage, and Vite build-time `VITE_*` env vars (wired as Docker build
+  args, since Vite inlines them at build time, not runtime). Next.js
+  requires `output: "standalone"` in next.config (js/mjs/cjs/ts) — that
+  mode produces the self-contained `server.js` the image runs; without
+  it there is nothing bootable to build, so we refuse with an actionable
+  message rather than ship a Pack that builds green then fails to serve.
+  Package manager is detected from the lockfile (npm/yarn/pnpm), and
+  build-time `NEXT_PUBLIC_*` env vars are wired as Docker build args
+  (same inlining reason as `VITE_*`).
 - `app/deploypack/sandbox.py` — real `docker build` + `docker run` +
   `curl` verification, never trusts a generated Pack without booting
   it. **Confirmed end-to-end** on a real GitHub Actions runner (this
   dev sandbox has no `docker` binary itself) — see
   `.github/workflows/smoke-deploy-pack.yml` / `scripts/smoke_verify_deploy_pack.py`.
-  Both `fastapi_sample` and `vite_sample` verified=True.
+  `fastapi_sample` and `vite_sample` verified=True. `next_sample`
+  (standalone Next.js) is wired into the same smoke script but its real
+  docker build+run is **not yet confirmed** — pending the next
+  workflow_dispatch run of smoke-deploy-pack.yml.
 - `app/deploypack/delivery.py` — opens a real PR (branch + commit via
   the Git Data API) for a verified Pack, auth-agnostic (accepts
   whatever token it's given). **Confirmed end-to-end**: dogfooded on
@@ -177,7 +186,10 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
   double-counts.
 - LLM client surfaces only the HTTP status on provider errors; log the
   response body for 4xx to make the next 400 diagnosable without curl.
-- Next.js Deploy Pack still deferred.
+- Next.js Deploy Pack is implemented (requires `output: "standalone"`)
+  but its real docker build+run is not yet confirmed on CI — the
+  generation logic is unit-tested; the smoke workflow needs a
+  workflow_dispatch run to verify the `next_sample` end to end.
 
 ## Dev
 
