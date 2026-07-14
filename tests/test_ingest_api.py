@@ -4,10 +4,14 @@ import io
 import json
 import zipfile
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
+from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
-from app.main import app
+from app.ingest.validators import MAX_ARCHIVE_BYTES
+from app.main import app, get_repo_fetcher
 
 client = TestClient(app)
 
@@ -109,3 +113,234 @@ def test_next_takes_priority_over_vite():
     }).encode()
     buf = make_zip({"package.json": pkg})
     assert detect_stack(buf) is Stack.NEXTJS
+
+
+# --- repo_url intake: public GitHub URL as an alternative to file upload ---
+#
+# The outbound GitHub call is always stubbed (get_repo_fetcher override or a
+# MockTransport) — the suite never touches the real network.
+
+def _override_fetcher(fn):
+    app.dependency_overrides[get_repo_fetcher] = lambda: fn
+
+
+def _clear_fetcher():
+    app.dependency_overrides.pop(get_repo_fetcher, None)
+
+
+def test_repo_url_intake_fetches_validates_and_scans():
+    captured = {}
+
+    def fake_fetch(owner, repo, **kwargs):
+        captured["owner"], captured["repo"] = owner, repo
+        return make_zip({"package.json": NEXT_PKG}).getvalue()
+
+    _override_fetcher(fake_fetch)
+    try:
+        resp = client.post(
+            "/v1/audits", data={"repo_url": "https://github.com/acme/app"}
+        )
+    finally:
+        _clear_fetcher()
+
+    assert resp.status_code == 202
+    body = resp.json()
+    # Same success response shape as the file-upload path.
+    assert body["stack"] == "nextjs"
+    assert body["file_count"] == 1
+    assert "score" in body and 0 <= body["score"]["total"] <= 10
+    assert any(f["rule_id"] == "no-tests" for f in body["findings"])
+    # Only the validated owner/repo reached the fetcher.
+    assert (captured["owner"], captured["repo"]) == ("acme", "app")
+
+
+def test_repo_url_accepts_dot_git_suffix():
+    captured = {}
+
+    def fake_fetch(owner, repo, **kwargs):
+        captured["repo"] = repo
+        return make_zip({"package.json": NEXT_PKG}).getvalue()
+
+    _override_fetcher(fake_fetch)
+    try:
+        resp = client.post(
+            "/v1/audits", data={"repo_url": "https://github.com/acme/app.git"}
+        )
+    finally:
+        _clear_fetcher()
+
+    assert resp.status_code == 202
+    assert captured["repo"] == "app"  # .git stripped
+
+
+def test_repo_url_malformed_is_422_before_any_http_call():
+    calls = {"n": 0}
+
+    def fake_fetch(owner, repo, **kwargs):
+        calls["n"] += 1
+        return b""
+
+    _override_fetcher(fake_fetch)
+    try:
+        bad_urls = [
+            "http://github.com/acme/app",             # not https
+            "https://gitlab.com/acme/app",            # wrong host
+            "https://github.com.evil.com/acme/app",   # suffix-host trick
+            "https://github.com@evil.com/acme/app",   # userinfo trick
+            "https://evil.com/github.com/acme/app",   # host in path
+            "https://github.com:443/acme/app",        # explicit port
+            "https://github.com/acme",                # missing repo
+            "https://github.com/acme/app/tree/main",  # extra path segments
+            "https://github.com/acme/../secrets",     # traversal in segment
+            "not-a-url",
+        ]
+        for bad in bad_urls:
+            resp = client.post("/v1/audits", data={"repo_url": bad})
+            assert resp.status_code == 422, bad
+            assert resp.json()["detail"]["reason"] == "bad_repo_url", bad
+    finally:
+        _clear_fetcher()
+
+    assert calls["n"] == 0  # never reached the network
+
+
+def test_both_archive_and_repo_url_is_422():
+    buf = make_zip({"package.json": NEXT_PKG})
+    resp = client.post(
+        "/v1/audits",
+        files={"archive": ("app.zip", buf, "application/zip")},
+        data={"repo_url": "https://github.com/acme/app"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["reason"] == "bad_intake"
+
+
+def test_neither_archive_nor_repo_url_is_422():
+    resp = client.post("/v1/audits")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["reason"] == "bad_intake"
+
+
+def test_repo_url_github_404_is_clean_422_not_500():
+    def fake_fetch(owner, repo, **kwargs):
+        raise RepoFetchError(
+            "repo_not_found", "repo not found or private — only public "
+            "GitHub repos are supported")
+
+    _override_fetcher(fake_fetch)
+    try:
+        resp = client.post(
+            "/v1/audits", data={"repo_url": "https://github.com/acme/ghost"}
+        )
+    finally:
+        _clear_fetcher()
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["reason"] == "repo_not_found"
+
+
+def test_repo_url_github_unreachable_is_502():
+    def fake_fetch(owner, repo, **kwargs):
+        raise RepoFetchError("github_unreachable", "connect timeout")
+
+    _override_fetcher(fake_fetch)
+    try:
+        resp = client.post(
+            "/v1/audits", data={"repo_url": "https://github.com/acme/app"}
+        )
+    finally:
+        _clear_fetcher()
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["reason"] == "github_unreachable"
+
+
+def test_repo_url_audit_consumes_quota_like_a_file_audit():
+    # The rate-limit check sits after validation in the shared handler, so a
+    # URL-based audit consumes quota exactly like a file-based one — the
+    # third request over a limit of 2 is rejected, no second check needed.
+    from app.main import get_rate_limiter
+    from app.ratelimit import RateLimiter
+
+    tiny = RateLimiter(limit=2, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: tiny
+    _override_fetcher(
+        lambda owner, repo, **kw: make_zip({"package.json": NEXT_PKG}).getvalue()
+    )
+    try:
+        for _ in range(2):
+            resp = client.post(
+                "/v1/audits", data={"repo_url": "https://github.com/acme/app"}
+            )
+            assert resp.status_code == 202
+        resp = client.post(
+            "/v1/audits", data={"repo_url": "https://github.com/acme/app"}
+        )
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["reason"] == "rate_limited"
+    finally:
+        _clear_fetcher()
+        app.dependency_overrides.pop(get_rate_limiter, None)
+
+
+# --- fetch_repo_zip unit tests (mocked transport, no real network) ---
+
+def test_fetch_repo_zip_hits_fixed_host_and_returns_bytes():
+    payload = make_zip({"package.json": NEXT_PKG}).getvalue()
+
+    def handler(request):
+        assert str(request.url) == "https://api.github.com/repos/acme/app/zipball"
+        assert "authorization" not in request.headers  # public, no auth
+        return httpx.Response(200, content=payload)
+
+    got = fetch_repo_zip("acme", "app", transport=httpx.MockTransport(handler))
+    assert got == payload
+
+
+def test_fetch_repo_zip_404_raises_repo_not_found():
+    def handler(request):
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    with pytest.raises(RepoFetchError) as ei:
+        fetch_repo_zip("acme", "ghost", transport=httpx.MockTransport(handler))
+    assert ei.value.reason == "repo_not_found"
+
+
+def test_fetch_repo_zip_rejects_oversized_content_length(monkeypatch):
+    # Declared Content-Length over the limit -> rejected up front, before
+    # the (here tiny) body is read at all.
+    monkeypatch.setattr("app.ingest.github_fetch.MAX_ARCHIVE_BYTES", 1000)
+
+    def handler(request):
+        return httpx.Response(
+            200, headers={"content-length": "999999"}, content=b"small"
+        )
+
+    with pytest.raises(RepoFetchError) as ei:
+        fetch_repo_zip("acme", "app", transport=httpx.MockTransport(handler))
+    assert ei.value.reason == "too_large"
+
+
+def test_fetch_repo_zip_streaming_cutoff_when_length_absent(monkeypatch):
+    # codeload can respond chunked with no Content-Length; the streamed
+    # byte count is the real guard, not the header.
+    monkeypatch.setattr("app.ingest.github_fetch.MAX_ARCHIVE_BYTES", 1000)
+
+    def handler(request):
+        def gen():
+            for _ in range(5):
+                yield b"x" * 1000
+        return httpx.Response(200, content=gen())
+
+    with pytest.raises(RepoFetchError) as ei:
+        fetch_repo_zip("acme", "app", transport=httpx.MockTransport(handler))
+    assert ei.value.reason == "too_large"
+
+
+def test_fetch_repo_zip_network_error_raises_github_unreachable():
+    def handler(request):
+        raise httpx.ConnectError("boom")
+
+    with pytest.raises(RepoFetchError) as ei:
+        fetch_repo_zip("acme", "app", transport=httpx.MockTransport(handler))
+    assert ei.value.reason == "github_unreachable"

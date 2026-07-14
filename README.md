@@ -24,7 +24,19 @@ Implemented:
   bytes are read
 - `POST /v1/audits` — intake endpoint (rate limit + validation + stack
   detection + static scan + LLM auth/security scan when providers are
-  configured)
+  configured). Accepts either a zip `archive` upload or a public
+  `repo_url` (exactly one). `repo_url` is validated against a strict
+  `https://github.com/<owner>/<repo>` pattern **before any network call**
+  (the SSRF guard — host must be exactly github.com, no userinfo/port/
+  subdomain tricks), then the repo's default-branch zipball is fetched
+  from the hardcoded `api.github.com` and fed through the *same*
+  `validate_zip`/`detect_stack`/scan pipeline as an upload — no second
+  validation path. Public GitHub repos only (no auth; a private repo's
+  unauthenticated 404 is treated as "not found or private"). See
+  `app/ingest/github_fetch.py`. **Confirmed against live GitHub**: a real
+  fetch of `tiangolo/fastapi` through the actual code path downloaded,
+  validated, and detected as `fastapi` (the pytest suite itself stubs the
+  outbound call and never hits the network).
 - `app/deploypack/generate.py` — Deploy Pack, minimal scope: generates
   Dockerfile / docker-compose.yml / .env.example / CI workflow for
   `fastapi`, `vite-react`, and `nextjs`. Detects poetry vs pip, Postgres
@@ -172,8 +184,10 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
 
 ## Known gaps (honest list, post-deploy)
 
-- `POST /v1/audits` accepts a zip upload only — public-repo-URL intake
-  is not implemented yet.
+- `POST /v1/audits` intake now accepts a public GitHub `repo_url` as an
+  alternative to a zip upload (see above). Still NOT supported by design:
+  private repos, non-GitHub hosts (GitLab/Bitbucket/self-hosted), and any
+  auth/OAuth flow — public github.com repos only.
 - Cross-rubric dedup collapses a finding reported by both the auth and
   security rubrics at the same file+line into one (most severe wins, the
   other rubric noted on the survivor). It matches on exact file+line, so
