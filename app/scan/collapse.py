@@ -25,17 +25,23 @@ COLLAPSIBLE = frozenset((
 
 
 def collapse_repeats(findings: list[dict]) -> list[dict]:
-    groups: dict[str, list[dict]] = {}
+    # Group on (rule_id, masked), not rule_id alone. `masked` is a
+    # deterministic fingerprint of the secret value (first 4 chars +
+    # length -- see app/scan/secrets.py._mask), so the SAME value pasted
+    # across files collapses into one row, while DISTINCT secrets sharing
+    # a rule_id (e.g. a different hardcoded password per service) stay
+    # separate -- each keeps its own evidence and its own score penalty.
+    groups: dict[tuple[str, str], list[dict]] = {}
     passthrough: list[dict] = []
     for f in findings:
         rid = str(f.get("rule_id", ""))
         if rid in COLLAPSIBLE:
-            groups.setdefault(rid, []).append(f)
+            groups.setdefault((rid, str(f.get("masked", ""))), []).append(f)
         else:
             passthrough.append(f)
 
     collapsed: list[dict] = []
-    for rid, group in groups.items():
+    for group in groups.values():
         if len(group) == 1:
             collapsed.append(group[0])
             continue

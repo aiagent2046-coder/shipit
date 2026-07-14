@@ -89,3 +89,43 @@ def test_report_endpoint_renders_persisted_audit():
         assert client.get("/v1/audits/unknown/report").status_code == 404
     finally:
         main_mod.app.dependency_overrides.pop(main_mod.get_audit_repo, None)
+
+
+def test_report_endpoint_422s_on_missing_score_json():
+    """A row with a null/malformed score_json must yield a clean 422,
+    not an unhandled KeyError -> 500 from inside render_report."""
+    import app.main as main_mod
+    from fastapi.testclient import TestClient
+
+    class FakeRepo:
+        async def get(self, audit_id):
+            return {"id": audit_id, "score_json": None, "findings_json": []}
+
+    main_mod.app.dependency_overrides[main_mod.get_audit_repo] = lambda: FakeRepo()
+    try:
+        client = TestClient(main_mod.app)
+        r = client.get("/v1/audits/any-id/report")
+        assert r.status_code == 422
+        assert r.json()["detail"]["reason"] == "report_unavailable"
+    finally:
+        main_mod.app.dependency_overrides.pop(main_mod.get_audit_repo, None)
+
+
+def test_collapsed_occurrence_note_surfaces_in_html():
+    """The "appears in N files" note that collapse_repeats appends must
+    reach the rendered HTML, even for rule_ids with a hardcoded plain
+    translation (which otherwise replaces the explanation wholesale)."""
+    from app.scan.collapse import collapse_repeats
+
+    findings = [{
+        "rule_id": "supabase-anon-key", "title": "anon key",
+        "severity": "low", "confidence": 0.3, "category": "Security",
+        "file": f"migrations/{i}.sql", "line": 1,
+        "masked": "eyJh****(210 chars)", "explanation": "", "fix_hint": "",
+    } for i in range(6)]
+    collapsed = collapse_repeats(findings)
+    assert len(collapsed) == 1
+
+    html = render_report(result(collapsed))
+    assert "found in 6 places" in html   # title-derived count (tech line)
+    assert "6 files" in html             # occurrence note surfaced in the risk text

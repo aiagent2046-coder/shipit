@@ -177,10 +177,18 @@ async def get_audit_report(
                     "detail": "no audit with this id, or persistence isn't "
                                "configured on this deployment (see app/db.py)"},
         )
-    result = {
-        "score": row.get("score_json") or {},
-        "findings": row.get("findings_json") or [],
-    }
+    # render_report expects a well-formed score dict; guard at the API
+    # boundary so a partially-written/backfilled row (null or malformed
+    # score_json) is a deliberate error, not an unhandled KeyError -> 500.
+    score = row.get("score_json")
+    if not isinstance(score, dict) or "total" not in score or "categories" not in score:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "report_unavailable",
+                    "detail": "this audit has no complete score to render a "
+                               "report from (score_json is missing or malformed)"},
+        )
+    result = {"score": score, "findings": row.get("findings_json") or []}
     html = render_report(result, project_name=f"audit {audit_id[:8]}")
     return HTMLResponse(content=html)
 
