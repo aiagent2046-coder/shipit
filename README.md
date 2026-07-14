@@ -165,9 +165,11 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
 - `llm: {prompts: 0, ...}` is ambiguous for API consumers: it means
   "ran, no rubric-relevant files" — while "didn't run" is a separate
   string. Worth a `skipped_reason` field.
-- The auth and security rubrics can report the same finding twice
-  (seen in production: the same JWT issue at two severities). Needs
-  cross-rubric dedup.
+- Cross-rubric dedup collapses a finding reported by both the auth and
+  security rubrics at the same file+line into one (most severe wins, the
+  other rubric noted on the survivor). It matches on exact file+line, so
+  the same issue reported at *different* lines by each rubric still
+  double-counts.
 - LLM client surfaces only the HTTP status on provider errors; log the
   response body for 4xx to make the next 400 diagnosable without curl.
 - Next.js Deploy Pack still deferred; RLS still off on the Supabase

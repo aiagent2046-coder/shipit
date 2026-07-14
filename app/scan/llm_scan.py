@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.llm.client import LLMClient
+from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import ScoredFinding
 
 MAX_FILE_CHARS = 24_000          # per-file cap in prompt
@@ -233,22 +234,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   explanation=str(f.get("explanation", ""))[:600],
                   fix_hint=str(f.get("fix_hint", ""))[:300],
               ))
-    return _dedup_across_rubrics(findings), stats
-
-
-_SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-
-
-def _dedup_across_rubrics(findings: list[ScoredFinding]) -> list[ScoredFinding]:
-    """Both rubrics read overlapping file sets and can report the same
-    issue at the same (file, line) — seen for real: one hardcoded cron
-    secret reported twice, once per rubric, double-penalizing the
-    score. Keep the most severe (then most confident) instance."""
-    best: dict[tuple[str, int], ScoredFinding] = {}
-    for f in findings:
-        key = (f.file, f.line)
-        cur = best.get(key)
-        if cur is None or (_SEV_RANK[f.severity], -f.confidence) < (
-                _SEV_RANK[cur.severity], -cur.confidence):
-            best[key] = f
-    return list(best.values())
+    # Dedup here (not in the pipeline): this is the seam where the two
+    # rubrics' outputs — and repeated passes in union-of-N mode — are
+    # combined, so same-location collisions arise and are resolved here.
+    # See app/scan/cross_rubric_dedup.py for why provenance is recorded
+    # rather than the duplicate silently dropped.
+    return dedup_cross_rubric(findings), stats
