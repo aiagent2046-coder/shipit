@@ -52,7 +52,30 @@ def test_llm_skipped_when_no_providers_configured():
     # Default get_llm_client() reads real env; CI/test env has no keys set.
     resp = post_audit()
     assert resp.status_code == 202
-    assert resp.json()["llm"] == "skipped (no providers configured)"
+    llm = resp.json()["llm"]
+    # didn't-run: stats-shaped dict with an explicit machine-readable reason
+    assert llm["skipped_reason"] == "no_providers_configured"
+    assert llm["prompts"] == 0
+
+
+def test_llm_ran_with_no_relevant_files_has_null_skipped_reason():
+    # A real run that simply matched no rubric-relevant files: prompts=0 as
+    # before, but skipped_reason is None -- distinguishable from "didn't run".
+    fake = FakeLLM(response="[]")
+    app.dependency_overrides[get_llm_client] = lambda: fake
+    try:
+        # a zip with no auth/security-relevant code -> no rubric matches
+        buf = make_zip({"package.json": NEXT_PKG, "README.md": b"# hi\n"})
+        resp = client.post(
+            "/v1/audits", files={"archive": ("app.zip", buf, "application/zip")}
+        )
+    finally:
+        app.dependency_overrides.pop(get_llm_client, None)
+
+    assert resp.status_code == 202
+    llm = resp.json()["llm"]
+    assert llm["prompts"] == 0
+    assert llm["skipped_reason"] is None
 
 
 def test_llm_findings_merged_when_providers_configured():

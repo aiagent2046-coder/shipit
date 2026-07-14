@@ -198,6 +198,29 @@ class TestAuditRepositoryWithFakePool:
         assert await repo.get("not-a-uuid") is None
         assert fake.calls == []
 
+    async def test_score_total_numeric_is_cast_to_json_number_not_string(self, monkeypatch):
+        """psycopg hands back a Postgres `numeric` as a decimal.Decimal,
+        which the default JSON encoder renders as a *string*. It must come
+        out a float so the API response matches score_json.total."""
+        import decimal
+        import json
+
+        audit_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": audit_id, "stack": "fastapi", "status": "completed",
+            "file_count": 3, "score_total": decimal.Decimal("8.5"),
+            "score_json": {"total": 8.5}, "findings_json": [],
+            "created_at": "2026-07-12T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = AuditRepository()
+        result = await repo.get(str(audit_id))
+
+        assert isinstance(result["score_total"], float)
+        assert result["score_total"] == 8.5
+        # serializes as a JSON number, consistent with score_json.total
+        assert json.loads(json.dumps(result))["score_total"] == 8.5
+
     async def test_jsonb_string_is_parsed_if_driver_hands_back_text(self, monkeypatch):
         """Defensive: handle both already-parsed dict/list and raw
         JSON text, since driver behavior here isn't guaranteed."""

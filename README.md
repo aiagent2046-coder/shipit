@@ -165,11 +165,6 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
 
 - `POST /v1/audits` accepts a zip upload only — public-repo-URL intake
   is not implemented yet.
-- `GET /v1/audits/{id}` returns `score_total` as a string (Postgres
-  `numeric` serialization); `score_json.total` is a number. Pick one.
-- `llm: {prompts: 0, ...}` is ambiguous for API consumers: it means
-  "ran, no rubric-relevant files" — while "didn't run" is a separate
-  string. Worth a `skipped_reason` field.
 - Cross-rubric dedup collapses a finding reported by both the auth and
   security rubrics at the same file+line into one (most severe wins, the
   other rubric noted on the survivor). It matches on exact file+line, so

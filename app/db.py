@@ -109,6 +109,12 @@ def _json_field(value: Any) -> Any:
 def _row_to_audit(row: dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
     d["id"] = str(d["id"])
+    # score_total is a Postgres `numeric`, which psycopg3 hands back as a
+    # decimal.Decimal -> a JSON *string* under the default encoder. Cast to
+    # float so it serializes as a number, matching score_json.total (both
+    # rounded to 1 dp -- see app/scan/scoring.py).
+    if d.get("score_total") is not None:
+        d["score_total"] = round(float(d["score_total"]), 1)
     d["score_json"] = _json_field(d["score_json"])
     d["findings_json"] = _json_field(d["findings_json"])
     return d
