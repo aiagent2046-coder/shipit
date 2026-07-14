@@ -150,6 +150,52 @@ Implemented:
   while this app's own access is untouched (it connects as the
   `postgres` role via the pooler, which owns these tables and bypasses
   RLS regardless of policies).
+- `app/accounts.py` + `migrations/0003_accounts_tiers_payments.sql` +
+  `AccountRepository`/`PaymentRepository` in `app/db.py` — **paywall
+  foundation, Stage 1 of 2** (the account/tier/entitlement layer a
+  follow-up will bolt payment providers onto). This is the first identity
+  concept in the codebase; everything stays anonymous by default. An
+  account is identified by a server-generated opaque API key
+  (`sk_live_<random>`), NOT email/password — there's no auth system, and
+  onboarding is payment-driven (Stage 2's payment flow creates the account
+  and returns the key). A request may optionally carry
+  `Authorization: Bearer sk_live_...` to be recognized as a `pro` account;
+  **no key, an unknown key, or an unconfigured database all fall back to
+  anonymous `free` — never a 401** (same graceful-degradation tone as the
+  `DatabaseNotConfigured` handling). Two tiers only (`free`/`pro`).
+  `GET /v1/account` returns the caller's tier + entitlements for either
+  case (never echoes the key back). Entitlements are deliberately short
+  and matched to what exists today:
+  - `daily_audit_limit` — **the one entitlement really enforced.**
+    `POST /v1/audits` resolves the caller's tier and passes the per-tier
+    limit into the *existing* `RateLimiter` (given an optional `limit`
+    override; the leak-fixed limiter is reused, not replaced). Free =
+    today's configured limit (`AUDIT_RATE_LIMIT_PER_DAY`, default 5), keyed
+    by client IP exactly as before — **anonymous usage is byte-for-byte
+    unchanged**; pro = 100, keyed by account id so the budget follows the
+    account, not the IP.
+  - `private_repos_allowed` (free=False, pro=True) — **a flag with no real
+    effect yet.** The check point is documented in `create_audit`'s
+    `repo_url` branch (where it would gate private-repo intake), but
+    private repos aren't fetchable at all today (`github_fetch.py` is
+    public-only), so there's nothing to gate. Not faked with an `if` that
+    can never fire.
+  - `priority_queue` (free=False, pro=True) — **a flag not wired to
+    anything**, because there is no job queue in this codebase to
+    prioritize (the scan runs inline in a threadpool). Exists so later
+    scheduling work has a defined switch.
+  No payment provider is implemented in this stage (explicitly out of
+  scope): the `payments` table + `PaymentRepository` are schema-and-CRUD
+  only, so Stage 2 has somewhere to write. There is **no** public
+  create-account endpoint (that would be a free-unlimited-pro abuse hole);
+  accounts are created only by Stage 2's payment flow or, in tests,
+  directly via `AccountRepository`. **Not yet applied to Supabase:**
+  `0003` was written and committed but this sandbox has no Supabase
+  credentials/access (and `DATABASE_URL` is a raw Postgres secret, not safe
+  to proxy in) — it needs to be applied for real against the live project
+  by whoever has access, same as `0001`/`0002` were. All the
+  repository/entitlement/rate-limit code is unit-tested against the same
+  `FakePool`/dependency-override patterns as the rest of `app/db.py`.
 
 ## Production deployment
 
@@ -188,6 +234,14 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
   alternative to a zip upload (see above). Still NOT supported by design:
   private repos, non-GitHub hosts (GitLab/Bitbucket/self-hosted), and any
   auth/OAuth flow — public github.com repos only.
+- Paywall is foundation-only (Stage 1, see the implemented entry above):
+  no payment provider is wired, so there is **no way to actually become a
+  `pro` account yet** except the test-only `AccountRepository.create`
+  path; the `private_repos_allowed` and `priority_queue` entitlements
+  exist and are reported by `GET /v1/account` but aren't enforced anywhere
+  real yet (no private-repo intake, no job queue). Only `daily_audit_limit`
+  is really enforced. `migrations/0003` still needs to be applied to the
+  live Supabase project by whoever has access.
 - Cross-rubric dedup collapses a finding reported by both the auth and
   security rubrics at the same file+line into one (most severe wins, the
   other rubric noted on the survivor). It matches on exact file+line, so

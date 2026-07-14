@@ -127,6 +127,24 @@ def _row_to_fixpack_job(row: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
+def _row_to_account(row: dict[str, Any]) -> dict[str, Any]:
+    d = dict(row)
+    d["id"] = str(d["id"])
+    return d
+
+
+def _row_to_payment(row: dict[str, Any]) -> dict[str, Any]:
+    d = dict(row)
+    d["id"] = str(d["id"])
+    d["account_id"] = str(d["account_id"]) if d["account_id"] else None
+    # amount is a Postgres `numeric` -> decimal.Decimal -> a JSON *string*
+    # under the default encoder; cast to float so it serializes as a number,
+    # same fix as score_total in _row_to_audit.
+    if d.get("amount") is not None:
+        d["amount"] = float(d["amount"])
+    return d
+
+
 class AuditRepository:
     """Real-Postgres-backed by default. Tests use an in-memory fake
     with the same method signatures instead of this class -- see
@@ -247,3 +265,102 @@ class FixpackJobRepository:
             )
             row = await cur.fetchone()
         return _row_to_fixpack_job(row) if row else None
+
+
+class AccountRepository:
+    """Accounts for the paywall foundation (see app/accounts.py). Same
+    real/fake split and not-configured contract as AuditRepository: when
+    DATABASE_URL isn't set, create/get_by_api_key return None instead of
+    failing, so a request carrying an API key on an unconfigured
+    deployment simply falls back to anonymous/free.
+
+    No public create-account endpoint exists (that would be an abuse
+    hole) -- create() is used by Stage 2's payment flow and by tests."""
+
+    async def create(self, *, api_key: str, tier: str) -> dict[str, Any] | None:
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into accounts (api_key, tier)
+                values (%s, %s)
+                returning id, api_key, tier, created_at
+                """,
+                (api_key, tier),
+            )
+            row = await cur.fetchone()
+        return _row_to_account(row)
+
+    async def get_by_api_key(self, api_key: str) -> dict[str, Any] | None:
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, api_key, tier, created_at
+                from accounts where api_key = %s
+                """,
+                (api_key,),
+            )
+            row = await cur.fetchone()
+        return _row_to_account(row) if row else None
+
+
+class PaymentRepository:
+    """Generic purchase records for the paywall foundation. Schema only in
+    Stage 1 -- no payment provider writes here yet; this exists so Stage
+    2's providers have a place to record attempts/completions. Minimal
+    create/get pair, matching AuditRepository's shape and not-configured
+    contract."""
+
+    async def create(
+        self, *, account_id: str | None, provider: str,
+        external_ref: str | None, amount: float | None, currency: str | None,
+        status: str, tier_granted: str | None,
+    ) -> dict[str, Any] | None:
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        parsed_account_id = uuid.UUID(account_id) if account_id else None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into payments
+                    (account_id, provider, external_ref, amount, currency,
+                     status, tier_granted)
+                values (%s, %s, %s, %s, %s, %s, %s)
+                returning id, account_id, provider, external_ref, amount,
+                          currency, status, tier_granted, created_at
+                """,
+                (parsed_account_id, provider, external_ref, amount, currency,
+                 status, tier_granted),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row)
+
+    async def get(self, payment_id: str) -> dict[str, Any] | None:
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(payment_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, provider, external_ref, amount,
+                       currency, status, tier_granted, created_at
+                from payments where id = %s
+                """,
+                (parsed_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
