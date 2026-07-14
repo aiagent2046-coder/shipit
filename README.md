@@ -268,9 +268,10 @@ Implemented:
   successful_payment → account + idempotent retry, webhook secret
   rejection, USDT unique-amount pending invoice, poll matches a mocked
   transfer + completes + reveals key, poll bearer auth, expired invoice
-  not matched. **`migrations/0004` still needs applying to the live
-  Supabase project** by whoever has access (this sandbox has no Supabase
-  credentials), same as `0003`.
+  not matched. **Applied to Supabase 2026-07-14:** `migrations/0004`
+  was applied for real against the live `shipit` project via the
+  Supabase migration tool, right after `0003` — same session, same
+  method.
 
 ## Production deployment
 
@@ -317,9 +318,10 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
   (only the TronGrid *read* is provable). The matching/granting logic is
   covered only by mocked tests. Closing this needs the operator to run
   the two `scripts/verify_*_locally.py` scripts and then take one real
-  payment through each. Also still pending: `migrations/0003` **and**
-  `0004` need applying to the live Supabase project by whoever has access
-  (this sandbox has no Supabase credentials). The
+  payment through each. `migrations/0003` and `0004` are both applied to
+  the live Supabase project already (see the entries above) — what's
+  still pending is exercising the two providers against a real bot token
+  and a real on-chain transfer, not schema. The
   `private_repos_allowed` and `priority_queue` entitlements still aren't
   enforced anywhere real (no private-repo intake, no job queue); only
   `daily_audit_limit` is.
