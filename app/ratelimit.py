@@ -51,8 +51,15 @@ class RateLimiter:
         self._windows: dict[str, _Window] = {}
         self._lock = threading.Lock()
 
-    def check(self, key: str) -> None:
-        """Raise RateLimitExceeded if `key` is over budget; else record the call."""
+    def check(self, key: str, limit: int | None = None) -> None:
+        """Raise RateLimitExceeded if `key` is over budget; else record the call.
+
+        `limit` overrides this limiter's default budget for THIS call only,
+        which is how tier-aware limits are enforced without a second limiter:
+        the caller passes the resolved per-tier limit (see app/accounts.py).
+        Omitted -> the limiter's own `limit` (today's behavior, unchanged).
+        """
+        effective = self.limit if limit is None else limit
         now = self._clock()
         with self._lock:
             self._evict_expired(now)
@@ -60,7 +67,7 @@ class RateLimiter:
             if window is None or now - window.start >= self.window_seconds:
                 self._windows[key] = _Window(start=now, count=1)
                 return
-            if window.count >= self.limit:
+            if window.count >= effective:
                 retry_after = int(self.window_seconds - (now - window.start)) + 1
                 raise RateLimitExceeded(retry_after)
             window.count += 1

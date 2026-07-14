@@ -19,7 +19,13 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.db import AuditRepository, FixpackJobRepository
+from app.accounts import (
+    TIER_FREE,
+    entitlements_dict,
+    entitlements_for_tier,
+    resolve_account,
+)
+from app.db import AccountRepository, AuditRepository, FixpackJobRepository
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.github_app import (
@@ -78,6 +84,15 @@ def get_preview_registry() -> PreviewRegistry:
 
 _audit_repo = AuditRepository()
 _fixpack_repo = FixpackJobRepository()
+_account_repo = AccountRepository()
+
+
+def get_account_repo() -> AccountRepository:
+    """FastAPI dependency indirection — overridable in tests. No-ops
+    (returns None) when DATABASE_URL isn't set, so a request carrying an
+    API key on an unconfigured deployment falls back to anonymous/free —
+    see app/db.py and app/accounts.py."""
+    return _account_repo
 
 
 def get_audit_repo() -> AuditRepository:
@@ -223,6 +238,32 @@ async def get_audit_report(
     return HTMLResponse(content=html)
 
 
+@app.get("/v1/account")
+async def get_account(
+    request: Request,
+    limiter: RateLimiter = Depends(get_rate_limiter),
+    account_repo: AccountRepository = Depends(get_account_repo),
+) -> dict:
+    """The caller's tier and entitlements, resolved from an optional
+    `Authorization: Bearer <api_key>` header. No key / unknown key /
+    unconfigured database all return the anonymous free set — this never
+    401s, matching the rest of this codebase's graceful-degradation tone
+    (there's no "invalid session", only "not recognized as paying").
+
+    Never echoes the API key back. `authenticated` says whether a real
+    account was matched, so a caller can tell "my key worked" from "fell
+    back to free" without the endpoint leaking which keys exist.
+    """
+    account = await resolve_account(request, account_repo)
+    tier = account["tier"] if account else TIER_FREE
+    entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
+    return {
+        "tier": tier,
+        "authenticated": account is not None,
+        "entitlements": entitlements_dict(entitlements),
+    }
+
+
 @app.post("/v1/audits", status_code=202)
 async def create_audit(
     request: Request,
@@ -237,6 +278,7 @@ async def create_audit(
     limiter: RateLimiter = Depends(get_rate_limiter),
     llm_client: LLMClient = Depends(get_llm_client),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    account_repo: AccountRepository = Depends(get_account_repo),
     repo_fetcher=Depends(get_repo_fetcher),
 ) -> dict:
     # Exactly one intake method: not both, not neither. Both-None and
@@ -249,9 +291,24 @@ async def create_audit(
                               "or 'repo_url' (public GitHub repo URL)"},
         )
 
+    # Resolve the caller's tier from an optional API key. No key -> None ->
+    # free, with no DB call, so anonymous traffic is byte-for-byte unchanged.
+    # The only entitlement enforced here is daily_audit_limit (below).
+    account = await resolve_account(request, account_repo)
+    tier = account["tier"] if account else TIER_FREE
+    entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
+
     if archive is not None:
         raw = await archive.read(MAX_ARCHIVE_BYTES + 1)
     else:
+        # `entitlements.private_repos_allowed` (free=False, pro=True) is the
+        # flag that WOULD gate private-repo intake here — but private repos
+        # aren't fetchable at all yet (github_fetch.py is public-only, no
+        # auth), so there is nothing private to reach and the flag has no
+        # visible effect until private-repo support is built. Not enforced
+        # with a fake `if` that can never fire; wire the real gate here when
+        # private intake exists.
+        #
         # SSRF guard: validate the URL to a clean github.com owner/repo
         # BEFORE any network call. Only the two validated segments reach
         # the fetch; the host it hits is the fixed api.github.com.
@@ -300,10 +357,20 @@ async def create_audit(
 
     # Consume quota only after the upload proves to be real work: validation
     # and stack detection are free, so a garbage/hostile zip (or probing for
-    # validation bypasses) can't burn a client's 5-audits-a-day budget for a
-    # request that never produced an audit.
+    # validation bypasses) can't burn a client's daily budget for a request
+    # that never produced an audit.
+    #
+    # Tier-aware: an anonymous/free caller is keyed and limited exactly as
+    # before (by client IP, at the limiter's configured limit — passing that
+    # same limit explicitly is a no-op). A pro account is keyed by its own id
+    # (so its budget follows the account, not whatever IP it calls from) and
+    # gets the higher pro limit.
+    if account is not None:
+        quota_key = f"account:{account['id']}"
+    else:
+        quota_key = _client_key(request)
     try:
-        limiter.check(_client_key(request))
+        limiter.check(quota_key, limit=entitlements.daily_audit_limit)
     except RateLimitExceeded as exc:
         raise HTTPException(
             status_code=429,

@@ -13,7 +13,13 @@ import uuid
 import pytest
 
 import app.db as db_mod
-from app.db import AuditRepository, DatabaseNotConfigured, FixpackJobRepository
+from app.db import (
+    AccountRepository,
+    AuditRepository,
+    DatabaseNotConfigured,
+    FixpackJobRepository,
+    PaymentRepository,
+)
 
 
 class FakeCursor:
@@ -290,6 +296,125 @@ class TestFixpackJobRepositoryWithFakePool:
         query, params = fake.calls[0]
         assert "update fixpack_jobs" in query
         assert params == ("https://github.com/a/b/pull/1", uuid.UUID(job_id))
+
+
+class TestAccountRepositoryNotConfigured:
+    async def test_create_returns_none(self):
+        repo = AccountRepository()
+        result = await repo.create(api_key="sk_live_x", tier="pro")
+        assert result is None
+
+    async def test_get_by_api_key_returns_none(self):
+        repo = AccountRepository()
+        assert await repo.get_by_api_key("sk_live_x") is None
+
+
+class TestAccountRepositoryWithFakePool:
+    async def test_create_inserts_and_returns_row(self, monkeypatch):
+        account_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": account_id, "api_key": "sk_live_x", "tier": "pro",
+            "created_at": "2026-07-14T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = AccountRepository()
+        result = await repo.create(api_key="sk_live_x", tier="pro")
+
+        assert result["id"] == str(account_id)
+        assert result["tier"] == "pro"
+        query, params = fake.calls[0]
+        assert "insert into accounts" in query
+        assert params == ("sk_live_x", "pro")
+
+    async def test_get_by_api_key_returns_row(self, monkeypatch):
+        account_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": account_id, "api_key": "sk_live_x", "tier": "pro",
+            "created_at": "2026-07-14T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = AccountRepository()
+        result = await repo.get_by_api_key("sk_live_x")
+        assert result["id"] == str(account_id)
+        query, params = fake.calls[0]
+        assert "from accounts where api_key" in query
+        assert params == ("sk_live_x",)
+
+    async def test_get_by_api_key_returns_none_for_missing_row(self, monkeypatch):
+        fake = FakePool(fetchone_result=None)
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = AccountRepository()
+        assert await repo.get_by_api_key("sk_live_absent") is None
+
+
+class TestPaymentRepositoryNotConfigured:
+    async def test_create_returns_none(self):
+        repo = PaymentRepository()
+        result = await repo.create(
+            account_id=None, provider="telegram_stars", external_ref="ch_1",
+            amount=9.99, currency="USD", status="pending", tier_granted="pro",
+        )
+        assert result is None
+
+    async def test_get_returns_none(self):
+        repo = PaymentRepository()
+        assert await repo.get(str(uuid.uuid4())) is None
+
+
+class TestPaymentRepositoryWithFakePool:
+    async def test_create_inserts_with_correct_param_order(self, monkeypatch):
+        payment_id = uuid.uuid4()
+        account_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": payment_id, "account_id": account_id,
+            "provider": "usdt_trc20", "external_ref": "0xabc", "amount": 9.99,
+            "currency": "USD", "status": "completed", "tier_granted": "pro",
+            "created_at": "2026-07-14T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = PaymentRepository()
+        result = await repo.create(
+            account_id=str(account_id), provider="usdt_trc20",
+            external_ref="0xabc", amount=9.99, currency="USD",
+            status="completed", tier_granted="pro",
+        )
+
+        assert result["id"] == str(payment_id)
+        assert result["account_id"] == str(account_id)
+        query, params = fake.calls[0]
+        assert "insert into payments" in query
+        assert params == (account_id, "usdt_trc20", "0xabc", 9.99, "USD",
+                          "completed", "pro")
+
+    async def test_amount_numeric_is_cast_to_json_number_not_string(self, monkeypatch):
+        """Postgres `numeric` -> decimal.Decimal renders as a JSON *string*
+        under the default encoder; it must come out a float, same fix as
+        audits.score_total."""
+        import decimal
+        import json
+
+        payment_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": payment_id, "account_id": None, "provider": "telegram_stars",
+            "external_ref": None, "amount": decimal.Decimal("9.99"),
+            "currency": "USD", "status": "pending", "tier_granted": "pro",
+            "created_at": "2026-07-14T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = PaymentRepository()
+        result = await repo.get(str(payment_id))
+        assert isinstance(result["amount"], float)
+        assert json.loads(json.dumps(result))["amount"] == 9.99
+        assert result["account_id"] is None
+
+    async def test_get_rejects_malformed_id_without_querying(self, monkeypatch):
+        fake = FakePool()
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = PaymentRepository()
+        assert await repo.get("not-a-uuid") is None
+        assert fake.calls == []
 
 
 async def _async_return(value):
