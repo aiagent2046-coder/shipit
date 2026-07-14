@@ -87,6 +87,11 @@ class LLMScanStats:
     raw_findings: int = 0
     verified: int = 0
     discarded: int = 0
+    # None when the stage ran (even if prompts=0, i.e. no rubric-relevant
+    # files); a machine-readable string when it never ran at all (e.g. no
+    # providers configured). Lets a consumer tell those two apart without
+    # inspecting the field's type -- see app/scan/pipeline.py.
+    skipped_reason: str | None = None
 
 
 def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:

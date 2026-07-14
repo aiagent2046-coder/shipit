@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 
 from app.llm.client import LLMClient, LLMError
-from app.scan.llm_scan import run_llm_scan
+from app.scan.llm_scan import LLMScanStats, run_llm_scan
 from app.scan.collapse import collapse_repeats
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
@@ -23,12 +23,16 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
     """Returns {"score": {...}, "findings": [...], "llm": <stats | status>}.
 
-    `llm` is a stats dict when the stage ran, or one of two honest
-    strings: "skipped (no providers configured)" / "failed: <reason>".
+    `llm` is a stats dict when the stage ran, and also a stats-shaped dict
+    (all-zero, with `skipped_reason` set) when it never ran because no
+    providers are configured -- so `skipped_reason` distinguishes that from
+    a real run that matched no rubric-relevant files (prompts=0,
+    skipped_reason=None). A hard provider failure stays the honest string
+    "failed: <reason>".
     """
     static = run_static_scan(io.BytesIO(data))
     findings = static["findings"]
-    llm_summary: object = "skipped (no providers configured)"
+    llm_summary: object = vars(LLMScanStats(skipped_reason="no_providers_configured"))
 
     if llm_client.providers:
         try:
@@ -52,7 +56,9 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
             # The basis travels inside score_json so it persists to the
             # DB and reaches every consumer of the score, not just ones
             # that also read `llm`.
-            "basis": "static+llm" if isinstance(llm_summary, dict) else "static_only",
+            "basis": "static+llm" if (isinstance(llm_summary, dict)
+                                      and llm_summary.get("skipped_reason") is None)
+            else "static_only",
         },
         "findings": findings,
         "llm": llm_summary,
