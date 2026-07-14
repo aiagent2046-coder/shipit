@@ -142,7 +142,16 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
     """
     rid = str(finding.get("rule_id", ""))
     if rid in PLAIN:
-        return PLAIN[rid]
+        what, risk, fix = PLAIN[rid]
+        # collapse_repeats appends an occurrence note ("This appears in N
+        # files: ...") to a collapsed finding's explanation. The static
+        # translation above replaces explanation wholesale, so surface that
+        # note here instead of dropping it from the HTML report. Static
+        # findings carry no base explanation, so this is exactly the note.
+        note = str(finding.get("explanation", "")).strip()
+        if note:
+            risk = f"{risk} {note}"
+        return what, risk, fix
     what = str(finding.get("title", ""))
     risk = str(finding.get("explanation", ""))
     fix = str(finding.get("fix_hint", ""))
