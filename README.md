@@ -189,13 +189,14 @@ Implemented:
   only, so Stage 2 has somewhere to write. There is **no** public
   create-account endpoint (that would be a free-unlimited-pro abuse hole);
   accounts are created only by Stage 2's payment flow or, in tests,
-  directly via `AccountRepository`. **Not yet applied to Supabase:**
-  `0003` was written and committed but this sandbox has no Supabase
-  credentials/access (and `DATABASE_URL` is a raw Postgres secret, not safe
-  to proxy in) — it needs to be applied for real against the live project
-  by whoever has access, same as `0001`/`0002` were. All the
-  repository/entitlement/rate-limit code is unit-tested against the same
-  `FakePool`/dependency-override patterns as the rest of `app/db.py`.
+  directly via `AccountRepository`. **Applied to Supabase 2026-07-14:**
+  `0003` was written in the sandbox that couldn't reach Supabase directly,
+  then applied for real against the live `shipit` project via the Supabase
+  migration tool — confirmed both tables exist with `rls_enabled: true`
+  and no new ERROR-level advisories (same expected `rls_enabled_no_policy`
+  INFO notice as `0001`/`0002`). All the repository/entitlement/rate-limit
+  code is also unit-tested against the same `FakePool`/dependency-override
+  patterns as the rest of `app/db.py`.
 
 ## Production deployment
 
