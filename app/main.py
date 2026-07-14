@@ -29,6 +29,7 @@ from app.deploypack.github_app import (
 )
 from app.deploypack.pipeline import run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
+from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
 from app.report.html import render_report
@@ -60,6 +61,12 @@ def get_pr_opener():
     return open_pull_request
 
 
+def get_repo_fetcher():
+    """FastAPI dependency indirection — overridable in tests so the URL
+    intake path never makes a real network call under pytest."""
+    return fetch_repo_zip
+
+
 _preview_registry = PreviewRegistry()
 
 
@@ -89,6 +96,26 @@ def get_fixpack_repo() -> FixpackJobRepository:
 # Permissive-but-safe guard so a user-supplied deliver_to can't smuggle
 # extra path segments (extra "/" or "..") into a GitHub REST API path.
 _VALID_OWNER_REPO_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Shape guard for the repo_url intake path. Host must be EXACTLY
+# github.com (the literal `github.com/` right after the scheme rejects
+# userinfo tricks like https://github.com@evil.com/... and any
+# subdomain or :port), scheme must be https. The two path segments are
+# then re-validated with _VALID_OWNER_REPO_SEGMENT — same rule as
+# deliver_to, no second charset — so nothing but a clean owner/repo can
+# reach the fetch. This runs before any network call: it is the SSRF guard.
+_GITHUB_REPO_URL = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$")
+
+
+def _parse_github_repo_url(repo_url: str) -> tuple[str, str] | None:
+    m = _GITHUB_REPO_URL.match(repo_url.strip())
+    if not m:
+        return None
+    owner, repo = m.group(1), m.group(2)
+    if not (_VALID_OWNER_REPO_SEGMENT.match(owner)
+            and _VALID_OWNER_REPO_SEGMENT.match(repo)):
+        return None
+    return owner, repo
 
 
 def _reap_token() -> str | None:
@@ -198,13 +225,60 @@ async def get_audit_report(
 
 @app.post("/v1/audits", status_code=202)
 async def create_audit(
-    archive: UploadFile,
     request: Request,
+    archive: UploadFile | None = None,
+    repo_url: str | None = Form(
+        None,
+        description="Alternative to `archive`: a public github.com repo URL "
+                    "(https://github.com/<owner>/<repo>). Provide exactly one "
+                    "of `archive` or `repo_url`. Public GitHub repos only — no "
+                    "private repos, no other hosts.",
+    ),
     limiter: RateLimiter = Depends(get_rate_limiter),
     llm_client: LLMClient = Depends(get_llm_client),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    repo_fetcher=Depends(get_repo_fetcher),
 ) -> dict:
-    raw = await archive.read(MAX_ARCHIVE_BYTES + 1)
+    # Exactly one intake method: not both, not neither. Both-None and
+    # both-present are the two cases where the equality holds.
+    if (archive is None) == (repo_url is None):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_intake",
+                    "detail": "provide exactly one of 'archive' (file upload) "
+                              "or 'repo_url' (public GitHub repo URL)"},
+        )
+
+    if archive is not None:
+        raw = await archive.read(MAX_ARCHIVE_BYTES + 1)
+    else:
+        # SSRF guard: validate the URL to a clean github.com owner/repo
+        # BEFORE any network call. Only the two validated segments reach
+        # the fetch; the host it hits is the fixed api.github.com.
+        parsed = _parse_github_repo_url(repo_url)
+        if parsed is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"reason": "bad_repo_url",
+                        "detail": "repo_url must be "
+                                  "https://github.com/<owner>/<repo> "
+                                  "(public GitHub repos only)"},
+            )
+        owner, repo = parsed
+        # Off the event loop: fetch_repo_zip does blocking network I/O.
+        try:
+            raw = await run_in_threadpool(repo_fetcher, owner, repo)
+        except RepoFetchError as exc:
+            # Caller's fault (bad/missing/too-big repo) -> 422; GitHub's or
+            # the network's fault -> 502, same split the LLM client draws
+            # between "our request is wrong" and "upstream is down".
+            status = 422 if exc.reason in (
+                "repo_not_found", "too_large") else 502
+            raise HTTPException(
+                status_code=status,
+                detail={"reason": exc.reason, "detail": exc.detail},
+            ) from exc
+
     buf = io.BytesIO(raw)
 
     try:
