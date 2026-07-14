@@ -63,14 +63,17 @@ Implemented:
   `scripts/smoke_verify_preview.py`. Does NOT include the public
   `{job_id}.preview.shipit.app` URL (needs a real domain + Caddy on a
   real server, neither of which exist yet — see the module docstring).
-- `POST /internal/preview/reap` + `.github/workflows/preview-reaper.yml`
-  — bearer-token-protected endpoint plus an hourly scheduled workflow
-  that calls it. **Confirmed end-to-end**: the endpoint's auth and
-  wiring were proven for real over HTTP against a live uvicorn process
-  (`scripts/smoke_verify_reap_endpoint.py`); the schedule itself needs
-  `PREVIEW_BASE_URL` / `PREVIEW_REAP_TOKEN` repo secrets pointing at a
-  real deployment, which doesn't exist yet — every scheduled run fails
-  loudly with that exact message until it does.
+- `POST /internal/preview/reap` — bearer-token-protected endpoint.
+  **Confirmed end-to-end**: auth and wiring proven for real over HTTP
+  against a live uvicorn process (`scripts/smoke_verify_reap_endpoint.py`).
+  Scheduling is `shipit-reap.timer` on the production VPS (see
+  "Production deployment" below) — there used to also be a
+  `.github/workflows/preview-reaper.yml` calling this same endpoint
+  hourly, but it never had `PREVIEW_BASE_URL` / `PREVIEW_REAP_TOKEN`
+  repo secrets configured (every one of its 21 scheduled runs failed
+  loudly with that exact message), and once the VPS timer existed it
+  was a redundant second mechanism for one job anyway. Removed
+  2026-07-14 rather than configured — one reaper, not two.
 - `POST /v1/fixpacks` — Deploy Pack, free/unpaid preview (no payment
   gate yet). Optional `deliver_to="owner/repo"` form field opens a real
   PR once verified; refuses to deliver an unverified Pack.

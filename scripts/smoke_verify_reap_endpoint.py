@@ -3,8 +3,9 @@ server, proving the reap endpoint's mechanism works end to end.
 
 Runs only on a host with Docker (see other scripts/smoke_verify_*.py
 in this directory for why). Does NOT prove the *scheduled* part of
-"cron reaper" -- that requires an actual persistent deployment, which
-doesn't exist yet (see .github/workflows/preview-reaper.yml). What
+"cron reaper" -- that's shipit-reap.timer on the production VPS now
+(a former GitHub Actions workflow doing the same hourly call was
+removed 2026-07-14, never had its repo secrets configured). What
 this DOES prove for real: the endpoint's auth check, its wiring to the
 same PreviewRegistry the API uses, and that reap_expired() over real
 HTTP actually stops a real running container -- not a fake-runner

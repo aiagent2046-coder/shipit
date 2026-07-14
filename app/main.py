@@ -121,9 +121,12 @@ async def reap_previews(
     request: Request,
     preview_registry: PreviewRegistry = Depends(get_preview_registry),
 ) -> dict:
-    """Operational endpoint for the scheduled reaper — see
-    .github/workflows/preview-reaper.yml. Not part of the public API
-    surface; there's no user-facing reason to call this directly.
+    """Operational endpoint for the scheduled reaper — called hourly by
+    shipit-reap.timer on the production VPS (a former GitHub Actions
+    workflow doing the same thing was removed 2026-07-14: it never had
+    its repo secrets configured and was redundant once the VPS timer
+    existed). Not part of the public API surface; there's no
+    user-facing reason to call this directly.
 
     Requires `Authorization: Bearer <PREVIEW_REAP_TOKEN>`. Returns 503
     if the token isn't configured on this deployment at all, rather

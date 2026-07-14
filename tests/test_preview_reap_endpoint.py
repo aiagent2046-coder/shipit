@@ -1,5 +1,5 @@
-"""Tests for POST /internal/preview/reap \u2014 the endpoint the scheduled
-reaper workflow calls. See .github/workflows/preview-reaper.yml."""
+"""Tests for POST /internal/preview/reap \u2014 the endpoint shipit-reap.timer
+on the production VPS calls hourly."""
 
 from fastapi.testclient import TestClient
 
