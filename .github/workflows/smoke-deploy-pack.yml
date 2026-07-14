@@ -20,7 +20,7 @@ jobs:
       - name: Install shipit
         run: pip install -e ".[dev]"
 
-      - name: Real docker build + run + curl for both stacks
+      - name: Real docker build + run + curl for all three stacks
         run: python scripts/smoke_verify_deploy_pack.py
 
       - name: "Real preview: keep-alive container, curl, reap"

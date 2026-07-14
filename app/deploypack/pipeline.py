@@ -25,6 +25,7 @@ from app.ingest.stack_detect import Stack
 _PORTS: dict[Stack, tuple[int, int]] = {
     Stack.FASTAPI: (8000, 8000),
     Stack.VITE_REACT: (8080, 80),
+    Stack.NEXTJS: (3000, 3000),
 }
 
 

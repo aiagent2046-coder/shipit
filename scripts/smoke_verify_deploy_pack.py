@@ -6,10 +6,10 @@ Actions runner (has Docker pre-installed) via
 of the regular pytest suite, which runs in sandboxes that mostly don't
 have a docker binary at all.
 
-Zips up smoke/fastapi_sample and smoke/vite_sample (minimal but
-genuinely bootable apps — real routes, real build scripts) and runs
-them through the exact same app.deploypack.pipeline.run_deploy_pack
-the API uses. Exits non-zero if either fails to verify.
+Zips up smoke/fastapi_sample, smoke/vite_sample and smoke/next_sample
+(minimal but genuinely bootable apps — real routes, real build scripts)
+and runs them through the exact same app.deploypack.pipeline.run_deploy_pack
+the API uses. Exits non-zero if any fails to verify.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def zip_dir(root: Path) -> bytes:
 
 def main() -> int:
     all_ok = True
-    for name in ("fastapi_sample", "vite_sample"):
+    for name in ("fastapi_sample", "vite_sample", "next_sample"):
         root = REPO_ROOT / "smoke" / name
         raw = zip_dir(root)
         stack = detect_stack(io.BytesIO(raw))

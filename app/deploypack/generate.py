@@ -2,16 +2,17 @@
 
 Generates Dockerfile / docker-compose.yml / .env.example / a CI workflow
 for a detected stack. Deterministic and template-based — no agents, no
-LLM call. Two stacks only, both validated against real repos in the
-6-repo test pass:
+LLM call. Three stacks:
 
   - fastapi:    WhiskyToad/fastapi-starter, kumarsonu676's starter
   - vite-react: what Lovable/Bolt actually export (4 of 6 test repos)
+  - nextjs:     output:"standalone" builds (see _nextjs_pack)
 
-Next.js is NOT covered yet — detect_stack recognizes it, but we have
-zero real Next.js exports in hand to validate a template against, so
-generating one now would be guessing. Deliberately deferred, not an
-oversight.
+Next.js support is gated on the app having `output: "standalone"` set in
+its next.config — that mode produces the self-contained `server.js` the
+generated image runs. Without it there is nothing to boot, so rather
+than emit a Dockerfile that builds green and then fails to serve (worse
+than none, see below), we refuse and tell the user exactly what to add.
 
 Output correctness matters more than output existence: a generated
 Dockerfile that builds but doesn't actually boot the app is worse than
@@ -32,6 +33,13 @@ from app.ingest.stack_detect import Stack
 
 _DB_MARKERS = re.compile(r"asyncpg|psycopg2|psycopg\b", re.I)
 _VITE_ENV_VAR = re.compile(r"import\.meta\.env\.(VITE_[A-Z0-9_]+)")
+_NEXT_PUBLIC_ENV_VAR = re.compile(r"process\.env\.(NEXT_PUBLIC_[A-Z0-9_]+)")
+# output: "standalone" — the only next.config shape we can containerize
+# into a minimal self-contained runtime. Tolerates single/double quotes
+# and arbitrary spacing; deliberately not a full JS parser.
+_NEXT_STANDALONE = re.compile(r"""output\s*:\s*['"]standalone['"]""")
+_NEXT_CONFIG_NAMES = ("next.config.js", "next.config.mjs",
+                      "next.config.cjs", "next.config.ts")
 
 
 class UnsupportedForDeployPack(Exception):
@@ -252,6 +260,104 @@ def _vite_react_pack(files: dict[str, str]) -> dict[str, str]:
     }
 
 
+def _node_install(files: dict[str, str]) -> tuple[str, str, str]:
+    """(copy_manifest, install_cmd, build_cmd) keyed off which lockfile
+    the repo ships — real Lovable/Bolt/v0 Next.js exports pin npm, yarn,
+    or pnpm and the wrong installer errors on a foreign lockfile. Falls
+    back to `npm install` when no lockfile is present (nothing to be
+    `ci`-strict against). corepack ships with the node image and pins
+    the yarn/pnpm version the lockfile was written by."""
+    if "pnpm-lock.yaml" in files:
+        return ("COPY package.json pnpm-lock.yaml ./",
+                "RUN corepack enable && pnpm install --frozen-lockfile",
+                "pnpm run build")
+    if "yarn.lock" in files:
+        return ("COPY package.json yarn.lock ./",
+                "RUN corepack enable && yarn install --frozen-lockfile",
+                "yarn build")
+    if "package-lock.json" in files:
+        return ("COPY package.json package-lock.json ./",
+                "RUN npm ci",
+                "npm run build")
+    return ("COPY package.json ./",
+            "RUN npm install",
+            "npm run build")
+
+
+def _next_is_standalone(files: dict[str, str]) -> bool:
+    return any(
+        _NEXT_STANDALONE.search(files[name])
+        for name in _NEXT_CONFIG_NAMES if name in files
+    )
+
+
+def _nextjs_pack(files: dict[str, str]) -> dict[str, str]:
+    if not _next_is_standalone(files):
+        raise UnsupportedForDeployPack(
+            'Next.js Deploy Pack needs output: "standalone" in your '
+            "next.config (js/mjs/cjs/ts) — add it and re-run. Without it "
+            "the build produces no self-contained server.js for the image "
+            "to run, so a Pack generated now would build but never boot."
+        )
+
+    copy_manifest, install_cmd, build_cmd = _node_install(files)
+
+    # NEXT_PUBLIC_* is inlined into the client bundle at build time (same
+    # class as Vite's VITE_*), so it must be a Docker build arg, not a
+    # runtime env var — mirrors _vite_react_pack.
+    env_vars = sorted({
+        m for text in files.values() for m in _NEXT_PUBLIC_ENV_VAR.findall(text)
+    })
+    build_args_block = "".join(f"ARG {v}\nENV {v}=${{{v}}}\n" for v in env_vars)
+
+    dockerfile = (
+        "FROM node:20-slim AS build\n"
+        "WORKDIR /app\n"
+        f"{copy_manifest}\n"
+        f"{install_cmd}\n"
+        "COPY . .\n"
+        f"{build_args_block}"
+        f"RUN {build_cmd}\n"
+        # public/ is optional in a Next.js app; guarantee it exists so the
+        # run stage's COPY can't fail on a repo that doesn't ship one.
+        "RUN mkdir -p public\n"
+        "\n"
+        "FROM node:20-slim AS run\n"
+        "WORKDIR /app\n"
+        "ENV NODE_ENV=production\n"
+        # server.js binds to HOSTNAME (defaults to localhost inside the
+        # container -> unreachable from the host). Force 0.0.0.0 here, in
+        # the generated image, not in sandbox.py: it's how this image must
+        # run, and it must ship in the Pack the user gets.
+        "ENV HOSTNAME=0.0.0.0\n"
+        "ENV PORT=3000\n"
+        "COPY --from=build /app/.next/standalone ./\n"
+        "COPY --from=build /app/.next/static ./.next/static\n"
+        "COPY --from=build /app/public ./public\n"
+        "EXPOSE 3000\n"
+        'CMD ["node", "server.js"]\n'
+    )
+
+    build_args_yaml = "".join(f"        {v}: ${{{v}}}\n" for v in env_vars)
+    compose = (
+        "services:\n"
+        "  app:\n"
+        "    build:\n"
+        "      context: .\n"
+        + ("      args:\n" + build_args_yaml if env_vars else "")
+        + '    ports: ["3000:3000"]\n'
+    )
+
+    env_extra = "".join(f"{v}=\n" for v in env_vars)
+    ci = _boot_check_ci_workflow(port=3000)
+    return {
+        "Dockerfile": dockerfile,
+        "docker-compose.yml": compose,
+        ".env.example": _merge_env_example(files, env_extra),
+        ".github/workflows/deploy-pack-ci.yml": ci,
+    }
+
+
 def _merge_env_example(files: dict[str, str], extra: str) -> str:
     """Keep whatever the repo already documents; append only new keys."""
     existing = files.get(".env.example", "").rstrip()
@@ -297,13 +403,15 @@ def _boot_check_ci_workflow(port: int, container_port: int | None = None) -> str
 def generate_deploy_pack(stack: Stack, files: dict[str, str]) -> dict[str, str]:
     """Returns {relative_path: content} for every file the Pack adds.
 
-    Raises UnsupportedForDeployPack for any stack other than fastapi
-    and vite-react (see module docstring for why nextjs is excluded).
+    Raises UnsupportedForDeployPack for a stack with no template, or for
+    a Next.js app missing output:"standalone" (see _nextjs_pack).
     """
     if stack is Stack.FASTAPI:
         return _fastapi_pack(files)
     if stack is Stack.VITE_REACT:
         return _vite_react_pack(files)
+    if stack is Stack.NEXTJS:
+        return _nextjs_pack(files)
     raise UnsupportedForDeployPack(
         f"no Deploy Pack template for stack={stack.value!r} yet"
     )
