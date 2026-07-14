@@ -1,0 +1,27 @@
+-- Close the "RLS Disabled in Public" security advisory (ERROR level)
+-- flagged by Supabase on both tables from migration 0001.
+--
+-- No permissive policies are added: there's no user/auth model yet
+-- (see 0001's comment -- Auth comes after Deploy in this project's own
+-- ordering), so there's nothing real to write a per-row ownership
+-- policy against. Enabling RLS with zero policies means default-deny
+-- for any role RLS applies to (anon/authenticated via PostgREST) --
+-- exactly closes the gap README described ("if the project's
+-- anon/publishable key is ever used elsewhere ... these tables would
+-- be fully readable/writable through PostgREST").
+--
+-- Does NOT affect this app's own access path: app/db.py connects as
+-- the `postgres` role via the Supavisor pooler (`postgres.<ref>`
+-- username), and `postgres` is the owner of these tables and a
+-- superuser-equivalent role in Supabase -- RLS never applies to a
+-- table's owner unless the table also has FORCE ROW LEVEL SECURITY
+-- set, which this migration deliberately does not set.
+--
+-- Applied for real against the live shipit Supabase project
+-- (ytrcwipdgffxtpatrnns) on 2026-07-14 via the Supabase migration
+-- tool; confirmed the ERROR-level advisories are gone afterward
+-- (replaced by an expected INFO-level "RLS enabled, no policy exists"
+-- notice, which is exactly the default-deny posture this migration
+-- intends).
+alter table audits enable row level security;
+alter table fixpack_jobs enable row level security;

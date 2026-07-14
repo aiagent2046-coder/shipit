@@ -117,13 +117,18 @@ Implemented:
   further isolation (e.g. a throwaway VPS in the same region) until
   real deployment, rather than keep debugging against an unreliable
   local network. (That re-run happened — see "Resolved" above.)
-  **Known gap:** Row Level
-  Security is off on both tables in Supabase — fine for this app's own
-  direct Postgres connection, but if the project's anon/publishable
-  key is ever used elsewhere (a frontend, Supabase client libraries),
-  these tables would be fully readable/writable through PostgREST. Not
-  auto-fixed; enabling RLS needs real policies decided first, see
-  Supabase's advisory.
+  **Resolved 2026-07-14:** Row Level Security is now enabled on both
+  tables (`migrations/0002_enable_rls_default_deny.sql`), applied for
+  real against the live Supabase project and confirmed via Supabase's
+  own advisor that the ERROR-level "RLS Disabled in Public" notices
+  are gone. No permissive policies were added — there's no user/auth
+  model yet to write real per-row ownership policies against (Auth
+  comes after Deploy in this project's own phase ordering), so this is
+  a deliberate default-deny: PostgREST via the anon/publishable key
+  now gets zero rows from either table, closing the exposure gap,
+  while this app's own access is untouched (it connects as the
+  `postgres` role via the pooler, which owns these tables and bypasses
+  RLS regardless of policies).
 
 ## Production deployment
 
@@ -172,8 +177,7 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
   double-counts.
 - LLM client surfaces only the HTTP status on provider errors; log the
   response body for 4xx to make the next 400 diagnosable without curl.
-- Next.js Deploy Pack still deferred; RLS still off on the Supabase
-  tables (see above).
+- Next.js Deploy Pack still deferred.
 
 ## Dev
 
