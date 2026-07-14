@@ -25,7 +25,13 @@ from app.accounts import (
     entitlements_for_tier,
     resolve_account,
 )
-from app.db import AccountRepository, AuditRepository, FixpackJobRepository
+from app.billing import telegram_stars, usdt_trc20
+from app.db import (
+    AccountRepository,
+    AuditRepository,
+    FixpackJobRepository,
+    PaymentRepository,
+)
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.github_app import (
@@ -85,6 +91,21 @@ def get_preview_registry() -> PreviewRegistry:
 _audit_repo = AuditRepository()
 _fixpack_repo = FixpackJobRepository()
 _account_repo = AccountRepository()
+_payment_repo = PaymentRepository()
+
+
+def get_payment_repo() -> PaymentRepository:
+    """FastAPI dependency indirection — overridable in tests. No-ops
+    (returns None/[]) when DATABASE_URL isn't set — see app/db.py."""
+    return _payment_repo
+
+
+def get_billing_transport():
+    """Outbound HTTP transport for the billing providers (Telegram Bot
+    API, TronGrid). None -> httpx's real transport in production;
+    overridden in tests with an httpx.MockTransport so the suite never
+    touches the network, same idea as get_repo_fetcher."""
+    return None
 
 
 def get_account_repo() -> AccountRepository:
@@ -262,6 +283,140 @@ async def get_account(
         "authenticated": account is not None,
         "entitlements": entitlements_dict(entitlements),
     }
+
+
+@app.post("/v1/webhooks/telegram")
+async def telegram_webhook(
+    request: Request,
+    account_repo: AccountRepository = Depends(get_account_repo),
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    transport=Depends(get_billing_transport),
+) -> dict:
+    """Telegram Bot API webhook for Stars payments. Handles the
+    pre_checkout_query (approve within 10s) and successful_payment
+    (grant pro, DM the API key) update types; ignores everything else.
+
+    Authenticity is Telegram's secret_token: setWebhook is called with a
+    secret, echoed back in X-Telegram-Bot-Api-Secret-Token on every
+    delivery. Constant-time compared here, same posture as the reap
+    endpoint's bearer token. 503 if the bot token or webhook secret
+    isn't configured — an unconfigured payment webhook is an operational
+    gap to notice, not a silent no-op. See app/billing/telegram_stars.py.
+    """
+    token = telegram_stars.bot_token_from_env()
+    secret = telegram_stars.webhook_secret_from_env()
+    if not token or not secret:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "telegram_not_configured",
+                    "detail": "TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET "
+                              "must both be set on this deployment"},
+        )
+    provided = request.headers.get("x-telegram-bot-api-secret-token", "")
+    if not hmac.compare_digest(provided, secret):
+        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
+
+    update = await request.json()
+    return await telegram_stars.handle_update(
+        update, account_repo=account_repo, payment_repo=payment_repo,
+        token=token, transport=transport,
+    )
+
+
+@app.post("/v1/billing/usdt/invoice", status_code=201)
+async def create_usdt_invoice(
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+) -> dict:
+    """Open a USDT/TRC20 invoice: returns the fixed receiving address and
+    a unique amount to send (base price + sub-cent nonce, so incoming
+    transfers can be matched back to invoices without per-invoice
+    addresses). Poll GET /v1/billing/usdt/invoice/{id} to collect the API
+    key once the on-chain transfer is seen. See app/billing/usdt_trc20.py.
+
+    503 if the receiving address isn't configured, or if DATABASE_URL
+    isn't set (the pending invoice row can't be persisted, so there'd be
+    nothing to match a later payment against).
+    """
+    address = usdt_trc20.receiving_address_from_env()
+    if not address:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "usdt_not_configured",
+                    "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
+        )
+    invoice = await usdt_trc20.create_invoice(payment_repo, address=address)
+    if invoice is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_persisted",
+                    "detail": "USDT invoices require DATABASE_URL (a pending "
+                              "payment row is created to match payment against)"},
+        )
+    return invoice
+
+
+@app.get("/v1/billing/usdt/invoice/{invoice_id}")
+async def get_usdt_invoice(
+    invoice_id: str,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    account_repo: AccountRepository = Depends(get_account_repo),
+) -> dict:
+    """Poll one USDT invoice. Reveals the API key only once the invoice is
+    `completed` (payment confirmed on-chain by the poller); pending or
+    expired invoices never leak a key. 404 if no such invoice."""
+    address = usdt_trc20.receiving_address_from_env() or ""
+    status = await usdt_trc20.invoice_status(
+        payment_repo, account_repo, invoice_id, address=address
+    )
+    if status is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no USDT invoice with this id, or persistence "
+                               "isn't configured on this deployment (see app/db.py)"},
+        )
+    return status
+
+
+@app.post("/internal/billing/poll-usdt")
+async def poll_usdt(
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    account_repo: AccountRepository = Depends(get_account_repo),
+    transport=Depends(get_billing_transport),
+) -> dict:
+    """Operational endpoint: read incoming USDT transfers from TronGrid and
+    complete any pending invoice whose exact amount arrived. Meant for a
+    scheduled caller (a systemd timer like shipit-reap.timer — this repo
+    ships no unit file, same as the reaper; see the README). Not part of
+    the public API.
+
+    Requires `Authorization: Bearer <USDT_POLL_TOKEN>`, constant-time
+    compared, exactly like the reap endpoint. 503 if the token or the
+    receiving address isn't configured.
+    """
+    token = usdt_trc20.poll_token_from_env()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "poll_not_configured",
+                    "detail": "USDT_POLL_TOKEN is not set on this deployment"},
+        )
+    provided = request.headers.get("authorization", "")
+    if not hmac.compare_digest(provided, f"Bearer {token}"):
+        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
+
+    address = usdt_trc20.receiving_address_from_env()
+    if not address:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "usdt_not_configured",
+                    "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
+        )
+    return await usdt_trc20.poll_and_match(
+        payment_repo, account_repo, address=address,
+        api_key=usdt_trc20.trongrid_api_key_from_env(), transport=transport,
+    )
 
 
 @app.post("/v1/audits", status_code=202)

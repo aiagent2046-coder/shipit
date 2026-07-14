@@ -197,6 +197,80 @@ Implemented:
   INFO notice as `0001`/`0002`). All the repository/entitlement/rate-limit
   code is also unit-tested against the same `FakePool`/dependency-override
   patterns as the rest of `app/db.py`.
+- `app/billing/` + `migrations/0004_payments_external_ref_unique.sql` —
+  **paywall Stage 2 of 2: two payment providers.** Both take completely
+  different paths to the *same* outcome — a completed `payments` row plus
+  an `accounts` row with `tier='pro'`, and the account's API key handed
+  back to whoever paid. That converging step ("a confirmed payment
+  becomes a pro account with a key") is factored into one shared
+  `grant_pro_tier()` in `app/billing/__init__.py`, idempotent on the
+  provider's charge/transaction id, so neither provider reimplements it.
+  New repo methods back it: `AccountRepository.get_by_id`,
+  `PaymentRepository.{get_by_external_ref,list_pending,mark_completed}`.
+  Migration `0004` adds a partial unique index on `(provider,
+  external_ref)` (where `external_ref` is not null) — the DB-level
+  backstop for the check-then-write idempotency race; pending USDT
+  invoices carry a null `external_ref` so several may coexist.
+  - **Telegram Stars** (`app/billing/telegram_stars.py`,
+    `POST /v1/webhooks/telegram`). Stars is the simpler flow: invoice
+    currency is the literal `"XTR"` and `provider_token` is an **empty
+    string** (no third-party provider to register — confirmed at
+    [core.telegram.org/bots/payments-stars](https://core.telegram.org/bots/payments-stars)).
+    `sendInvoice` takes `prices=[{label, amount}]` where `amount` is the
+    integer star count. The webhook handles two update types: a
+    `pre_checkout_query` (approved within Telegram's 10s deadline via
+    `answerPreCheckoutQuery`) and a `message.successful_payment` (grants
+    pro, DMs the key via `sendMessage`). Idempotency key is
+    `telegram_payment_charge_id` (Telegram retries the webhook until it
+    gets 200, so the same charge can arrive twice — the retry re-delivers
+    the *same* key, mints no second account). Authenticity is Telegram's
+    own `secret_token`: `setWebhook` is called with a secret, echoed in
+    the `X-Telegram-Bot-Api-Secret-Token` header, constant-time compared
+    (`hmac.compare_digest`) exactly like the reap endpoint's bearer token.
+    Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`,
+    `TELEGRAM_PRO_STARS` (default 250). **Not exercised live** — this
+    sandbox has no bot token and can't receive a real webhook; run
+    `scripts/verify_telegram_stars_locally.py` with your own token to
+    prove the real `sendInvoice` (it does `getMe` then sends a real
+    Pay-with-Stars button). The webhook half only truly closes on a real
+    payment.
+  - **USDT/TRC20, self-hosted** (`app/billing/usdt_trc20.py`,
+    `POST /v1/billing/usdt/invoice`, `GET /v1/billing/usdt/invoice/{id}`,
+    `POST /internal/billing/poll-usdt`). No third-party gateway: ONE
+    fixed receiving address (`USDT_TRC20_ADDRESS`, public, not a secret),
+    invoices disambiguated by a **unique amount** (base price + a random
+    sub-cent nonce — TRC20 USDT has 6 decimals, a million micro-slots per
+    dollar) rather than per-invoice addresses. Matching is on **exact
+    base units**, not a float tolerance: TronGrid returns the transfer
+    `value` as an integer string of micro-USDT and we derive each
+    invoice's expected micros from its stored amount, so `==` is both
+    simpler and stricter (can't match a neighbouring invoice a cent
+    away). Invoices expire after `INVOICE_TTL_SECONDS` (30 min); an
+    expired unpaid invoice is never auto-matched even if its exact amount
+    arrives later. The poll endpoint is bearer-protected (`USDT_POLL_TOKEN`,
+    `hmac.compare_digest`, same as the reaper) and meant for a scheduled
+    caller — **this repo ships no timer/cron unit**, same as the reaper
+    (see "Production deployment"); wire a `shipit-poll-usdt.timer` to it.
+    TronGrid REST: `GET /v1/accounts/{address}/transactions/trc20`; an API
+    key is **optional** (only raises rate limits — sent as the
+    `TRON-PRO-API-KEY` header when `TRONGRID_API_KEY` is set).
+    **Reachability confirmed for real from this sandbox**: an
+    unauthenticated `GET` to `api.trongrid.io` for the mainnet USDT
+    contract address returned HTTP 200 with the documented shape
+    (`data[].value` as an integer-string of base units,
+    `token_info.decimals: 6`, `block_timestamp` in ms). That was a raw
+    reachability probe, **not** the feature working end to end — no real
+    invoice was paid on-chain. Run `scripts/verify_usdt_trc20_locally.py`
+    to exercise the actual `fetch_transfers()` code against live TronGrid.
+  Tests (`tests/test_billing_telegram.py`, `tests/test_billing_usdt.py`,
+  17 new): all outbound HTTP is faked with `httpx.MockTransport` (no real
+  network in the suite) — invoice payload shape, pre_checkout approval,
+  successful_payment → account + idempotent retry, webhook secret
+  rejection, USDT unique-amount pending invoice, poll matches a mocked
+  transfer + completes + reveals key, poll bearer auth, expired invoice
+  not matched. **`migrations/0004` still needs applying to the live
+  Supabase project** by whoever has access (this sandbox has no Supabase
+  credentials), same as `0003`.
 
 ## Production deployment
 
@@ -235,14 +309,20 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
   alternative to a zip upload (see above). Still NOT supported by design:
   private repos, non-GitHub hosts (GitLab/Bitbucket/self-hosted), and any
   auth/OAuth flow — public github.com repos only.
-- Paywall is foundation-only (Stage 1, see the implemented entry above):
-  no payment provider is wired, so there is **no way to actually become a
-  `pro` account yet** except the test-only `AccountRepository.create`
-  path; the `private_repos_allowed` and `priority_queue` entitlements
-  exist and are reported by `GET /v1/account` but aren't enforced anywhere
-  real yet (no private-repo intake, no job queue). Only `daily_audit_limit`
-  is really enforced. `migrations/0003` still needs to be applied to the
-  live Supabase project by whoever has access.
+- Paywall Stage 2 (both payment providers) is now implemented in code
+  (see the implemented entry above), but **neither provider has been
+  exercised against a real payment**: Telegram Stars has no bot token and
+  no real webhook here (only `sendInvoice` is provable, via the verify
+  script), and USDT/TRC20 has no funded address or real on-chain transfer
+  (only the TronGrid *read* is provable). The matching/granting logic is
+  covered only by mocked tests. Closing this needs the operator to run
+  the two `scripts/verify_*_locally.py` scripts and then take one real
+  payment through each. Also still pending: `migrations/0003` **and**
+  `0004` need applying to the live Supabase project by whoever has access
+  (this sandbox has no Supabase credentials). The
+  `private_repos_allowed` and `priority_queue` entitlements still aren't
+  enforced anywhere real (no private-repo intake, no job queue); only
+  `daily_audit_limit` is.
 - Cross-rubric dedup collapses a finding reported by both the auth and
   security rubrics at the same file+line into one (most severe wins, the
   other rubric noted on the survivor). It matches on exact file+line, so

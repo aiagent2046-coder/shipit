@@ -310,6 +310,30 @@ class AccountRepository:
             row = await cur.fetchone()
         return _row_to_account(row) if row else None
 
+    async def get_by_id(self, account_id: str) -> dict[str, Any] | None:
+        """Look up an account by its uuid. Used by Stage 2's billing flow
+        to re-fetch the just-granted account (and its api_key) for
+        delivery -- e.g. re-sending the key on a duplicate Telegram
+        webhook, or revealing it from the USDT invoice-status endpoint."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(account_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, api_key, tier, created_at
+                from accounts where id = %s
+                """,
+                (parsed_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_account(row) if row else None
+
 
 class PaymentRepository:
     """Generic purchase records for the paywall foundation. Schema only in
@@ -364,3 +388,71 @@ class PaymentRepository:
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
+
+    async def get_by_external_ref(
+        self, provider: str, external_ref: str
+    ) -> dict[str, Any] | None:
+        """Idempotency lookup for Stage 2: a provider's charge/transaction
+        id resolves to at most one payment (see migration 0004's partial
+        unique index). Used to avoid double-granting on a retried Telegram
+        webhook or a TRC20 transfer seen on more than one poll."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, provider, external_ref, amount,
+                       currency, status, tier_granted, created_at
+                from payments where provider = %s and external_ref = %s
+                """,
+                (provider, external_ref),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
+
+    async def list_pending(self, provider: str) -> list[dict[str, Any]]:
+        """Open (unpaid) invoices for a provider, newest first. Used by the
+        USDT poller to match incoming on-chain transfers to invoices it
+        hasn't seen paid yet. Returns [] when DATABASE_URL isn't set, same
+        not-configured contract as create/get (an empty list, not None, so
+        callers can iterate without a guard)."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return []
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, provider, external_ref, amount,
+                       currency, status, tier_granted, created_at
+                from payments
+                where provider = %s and status = 'pending'
+                order by created_at desc
+                """,
+                (provider,),
+            )
+            rows = await cur.fetchall()
+        return [_row_to_payment(r) for r in rows]
+
+    async def mark_completed(
+        self, payment_id: str, *, account_id: str, external_ref: str
+    ) -> None:
+        """Transition a pending invoice to completed and link the account
+        it granted. The USDT flow's counterpart to Telegram creating a
+        completed row outright -- see app/billing/grant_pro_tier. No-op
+        when DATABASE_URL isn't set, matching mark_delivered."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                update payments
+                set status = 'completed', account_id = %s, external_ref = %s
+                where id = %s
+                """,
+                (uuid.UUID(account_id), external_ref, uuid.UUID(payment_id)),
+            )
