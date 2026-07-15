@@ -1,0 +1,43 @@
+import type { Metadata } from "next";
+import { Inter, JetBrains_Mono } from "next/font/google";
+import "./globals.css";
+import { Providers } from "@/components/providers";
+import { Header } from "@/components/Header";
+
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
+
+export const metadata: Metadata = {
+  title: "ShipIt — production-readiness audits for vibe-coded apps",
+  description:
+    "Paste a GitHub URL or upload a zip. ShipIt audits your app for the things that keep it from being safe to ship — leaked secrets, missing auth, no tests — and generates Fix Packs.",
+};
+
+// Set the theme class before hydration so there's no flash of the wrong
+// theme. Dark is the default identity; a stored choice or system light
+// preference overrides it.
+const themeScript = `(function(){try{var t=localStorage.getItem('shipit-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.classList.toggle('dark',t!=='light');document.documentElement.style.colorScheme=t;}catch(e){document.documentElement.classList.add('dark');}})();`;
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en" className={`${inter.variable} ${mono.variable}`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-screen bg-bg font-sans text-text antialiased">
+        <Providers>
+          <Header />
+          <main>{children}</main>
+        </Providers>
+      </body>
+    </html>
+  );
+}
