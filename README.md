@@ -304,6 +304,30 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
 - After `systemctl restart shipit`, hit `/healthz` before sending real
   requests — a request racing the restart gets Caddy's 502.
 
+### CORS (browser frontend on Vercel)
+
+The API talks to a separately-deployed Next.js frontend, so browser
+cross-origin calls are gated by env, configured in `app/main.py`'s
+`configure_cors()` (Starlette `CORSMiddleware`). It is **deny-by-default**:
+with nothing set, no cross-origin browser access is allowed — deliberately
+NOT `"*"`, because this API now takes an `Authorization: Bearer` key and a
+wildcard combined with credentials would let any site make credentialed
+calls.
+
+- `CORS_ALLOWED_ORIGINS` — comma-separated exact origins (scheme included,
+  no trailing slash), e.g. `https://shipit-web.vercel.app,https://shipit.app`.
+  Unset/empty allows no origins.
+- `CORS_ALLOW_VERCEL_PREVIEWS` — set `true` to also allow Vercel preview
+  deploys (per-deploy `https://<name>-<hash>-<team>.vercel.app` subdomains,
+  matched by regex `^https://[a-z0-9-]+\.vercel\.app$`). Explicit opt-in,
+  default off.
+
+Credentials (`allow_credentials`) are enabled only when at least one
+explicit origin is listed or previews are on — never alongside `"*"` (which
+is never passed), so the disallowed wildcard+credentials combination can't
+occur. Allowed methods are `GET, POST` (the only methods the API uses);
+allowed request headers are `Authorization` and `Content-Type`.
+
 ## Known gaps (honest list, post-deploy)
 
 - `POST /v1/audits` intake now accepts a public GitHub `repo_url` as an

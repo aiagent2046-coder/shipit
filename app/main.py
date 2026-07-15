@@ -16,6 +16,7 @@ import re
 import uuid
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -54,6 +55,51 @@ from app.ingest.validators import (
 )
 
 app = FastAPI(title="ShipIt", version="0.1.0")
+
+
+# Vercel preview deploys get unpredictable per-deploy subdomains
+# (https://shipit-web-<hash>-<team>.vercel.app), so they can't be listed
+# explicitly. Starlette matches this with fullmatch().
+_VERCEL_PREVIEW_ORIGIN_REGEX = r"^https://[a-z0-9-]+\.vercel\.app$"
+
+
+def configure_cors(target: FastAPI) -> None:
+    """Register CORS from env so the browser frontend (separate Vercel
+    deployment) can call this API. Env-driven, never hardcoded, and
+    deny-by-default: an unset CORS_ALLOWED_ORIGINS allows NO cross-origin
+    browser access rather than "*", because this API now takes an
+    `Authorization: Bearer` key and a wildcard + credentials would let any
+    site make credentialed calls.
+
+    Reads env at call time (not import), so tests build a throwaway app
+    with monkeypatched env and get a fresh config.
+
+    - CORS_ALLOWED_ORIGINS: comma-separated exact origins (default none).
+    - CORS_ALLOW_VERCEL_PREVIEWS: "true" opts in to matching any
+      *.vercel.app origin via regex (default false — explicit, not
+      silently always-on).
+
+    Credentials are enabled only when at least one explicit origin exists
+    or the Vercel-preview regex is on; never with "*". "*" is never passed
+    to allow_origins, so Starlette always echoes the specific matched
+    origin and the disallowed wildcard+credentials combination can't occur.
+    """
+    raw = os.environ.get("CORS_ALLOWED_ORIGINS") or ""
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    allow_previews = (os.environ.get("CORS_ALLOW_VERCEL_PREVIEWS") or "").lower() == "true"
+    origin_regex = _VERCEL_PREVIEW_ORIGIN_REGEX if allow_previews else None
+
+    target.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_origin_regex=origin_regex,
+        allow_credentials=bool(origins) or allow_previews,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
+
+configure_cors(app)
 
 _limiter = limiter_from_env()
 
