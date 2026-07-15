@@ -350,10 +350,15 @@ allowed request headers are `Authorization` and `Content-Type`.
   enforced anywhere real (no private-repo intake, no job queue); only
   `daily_audit_limit` is.
 - Cross-rubric dedup collapses a finding reported by both the auth and
-  security rubrics at the same file+line into one (most severe wins, the
-  other rubric noted on the survivor). It matches on exact file+line, so
-  the same issue reported at *different* lines by each rubric still
-  double-counts.
+  security rubrics into one (most severe wins, the other rubric noted on
+  the survivor). It matches on same file + line numbers within a small
+  window (3 lines) + similar titles (difflib ratio ≥ 0.5), so the same
+  issue anchored to *adjacent* lines of one multi-line statement by each
+  rubric now merges instead of double-counting. Still a real limit: the
+  same issue reported *far apart* in the same file (beyond the window),
+  in genuinely different files, or with dissimilar titles won't merge —
+  the similarity gate is deliberately conservative to avoid dropping
+  distinct findings that happen to sit near each other.
 - The secret scanner damps (never drops) findings in contexts where a
   credential-shaped string is far more likely fabricated than leaked, so one
   tutorial or test file can't zero out a real score: `docs/`/`blog/`/`.md` and
