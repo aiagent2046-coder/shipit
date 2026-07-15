@@ -221,10 +221,12 @@ def test_cross_rubric_dedup_keeps_most_severe():
     assert len(out) == 1
     assert out[0].severity == "high"
 
-    # different lines are different findings — not collapsed
+    # lines far apart (beyond the nearby-line window) are different
+    # findings — not collapsed. (Adjacent same-issue lines now DO merge;
+    # see tests/test_cross_rubric_dedup.py.)
     from dataclasses import replace
     out2 = dedup_cross_rubric([f("auth", "high", 0.9),
-                               replace(f("security", "high", 0.9), line=7)])
+                               replace(f("security", "high", 0.9), line=40)])
     assert len(out2) == 2
 
 
