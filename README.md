@@ -354,6 +354,17 @@ allowed request headers are `Authorization` and `Content-Type`.
   other rubric noted on the survivor). It matches on exact file+line, so
   the same issue reported at *different* lines by each rubric still
   double-counts.
+- The secret scanner damps (never drops) findings in contexts where a
+  credential-shaped string is far more likely fabricated than leaked, so one
+  tutorial or test file can't zero out a real score: `docs/`/`blog/`/`.md` and
+  example/fixture paths are capped at medium on path alone, and test-setup
+  files (`jest.setup.ts`, `__tests__/`, `*.test.ts`/`*.spec.ts`, …) are capped
+  the same way **only when the matched value itself carries a placeholder
+  marker** (`placeholder`, `not-real`, `fake`, `dummy`, …). This is a
+  deliberate recall tradeoff: a genuine secret in a test file with no such
+  marker is still flagged critically, and a placeholder-looking value in a
+  production path is still flagged — but a real leaked key pasted into a test
+  file *and* renamed to look like a placeholder would be under-reported.
 - LLM client surfaces only the HTTP status on provider errors; log the
   response body for 4xx to make the next 400 diagnosable without curl.
 - Next.js Deploy Pack is implemented (requires `output: "standalone"`)

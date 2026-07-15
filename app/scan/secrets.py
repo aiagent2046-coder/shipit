@@ -51,9 +51,49 @@ _DOC_SEVERITY_CAP = {"critical": "medium", "high": "medium"}
 _MIGRATION_SEGMENTS = frozenset(("migrations", "migration"))
 _MIGRATION_MIN_CONFIDENCE = 0.9
 
+# Test-fixture context: a credential-shaped string in a test-setup file
+# that *also* self-labels as a placeholder (seen for real: a jest.setup.ts
+# with `ANTHROPIC_API_KEY: ... || 'sk-ant-api03-test-placeholder-not-real-key'`
+# and a `...placeholder_sig_for_unit_tests` JWT). Damped exactly like doc
+# context — capped, not dropped — because a test file is NOT inherently
+# safe: a real leaked key can live there too. So unlike doc context (path
+# alone), this requires BOTH a test path AND the value itself carrying a
+# placeholder marker, so a genuine secret in a test file stays flagged.
+_TEST_PATH_SEGMENTS = frozenset(("__tests__", "__mocks__", "test", "tests"))
+_TEST_SETUP_FILENAMES = frozenset(("jest.setup.ts", "jest.setup.js"))
+_TEST_FILE_SUFFIXES = (".test.ts", ".test.js", ".spec.ts", ".spec.js")
+_PLACEHOLDER_MARKERS = (
+    "placeholder",
+    "not-real",
+    "not_real",
+    "fake",
+    "dummy",
+    "test-only",
+    "test_only",
+)
+
 
 def _is_migration_context(name: str) -> bool:
     return any(seg.lower() in _MIGRATION_SEGMENTS for seg in name.split("/")[:-1])
+
+
+def _is_test_fixture_path(name: str) -> bool:
+    lower = name.lower()
+    base = lower.rsplit("/", 1)[-1]
+    if base in _TEST_SETUP_FILENAMES or lower.endswith(_TEST_FILE_SUFFIXES):
+        return True
+    return any(seg in _TEST_PATH_SEGMENTS for seg in lower.split("/")[:-1])
+
+
+def _value_has_placeholder_marker(value: str) -> bool:
+    low = value.lower()
+    return any(marker in low for marker in _PLACEHOLDER_MARKERS)
+
+
+def _is_test_fixture_context(name: str, value: str) -> bool:
+    # AND, not OR: the path signal narrows to test files, the value signal
+    # confirms the match is a deliberate placeholder rather than a real leak.
+    return _is_test_fixture_path(name) and _value_has_placeholder_marker(value)
 
 
 def _is_doc_context(name: str) -> bool:
@@ -206,6 +246,10 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
                         severity = _DOC_SEVERITY_CAP.get(severity, severity)
                         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
                         title = f"{title} (documentation/example context)"
+                    elif _is_test_fixture_context(name, m.group(0)) and not is_anon:
+                        severity = _DOC_SEVERITY_CAP.get(severity, severity)
+                        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
+                        title = f"{title} (test fixture/placeholder context)"
                     findings.append(SecretFinding(
                         rule_id=effective_rule_id,
                         title=title,
