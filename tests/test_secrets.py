@@ -191,3 +191,60 @@ def test_migration_context_wins_over_doc_context():
     assert len(findings) >= 1
     assert all("(committed database migration)" in f.title for f in findings)
     assert all(f.confidence >= 0.9 for f in findings)
+
+
+# --- Test-fixture / placeholder damping ------------------------------------
+# Real-world false positives from auditing aiagent2046-coder/devtools-aggregator:
+# a jest.setup.ts whose Anthropic key and JWT are clearly-labelled placeholders.
+# Damped like doc context (capped at medium + confidence damped), never dropped.
+
+# Minimal equivalents of the two manually-confirmed placeholders. Both carry a
+# self-describing marker inside the matched VALUE itself.
+FIXTURE_ANTHROPIC = "sk-ant-api03-test-placeholder-not-real-key"
+FIXTURE_JWT = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJ0ZXN0Ijp0cnVlfQ.placeholder_sig_for_unit_tests"
+)
+
+
+def test_jest_setup_placeholder_anthropic_key_is_damped():
+    zf = make_zip({
+        "jest.setup.ts":
+            (f"  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY "
+             f"|| '{FIXTURE_ANTHROPIC}',\n").encode(),
+    })
+    f = next(f for f in scan_secrets(zf) if f.rule_id == "anthropic-api-key")
+    assert f.severity == "medium"        # capped down from critical
+    assert f.confidence < 0.4            # damped
+    assert "(test fixture/placeholder context)" in f.title
+
+
+def test_jest_setup_placeholder_jwt_is_damped():
+    zf = make_zip({"jest.setup.ts": f"const t = '{FIXTURE_JWT}';\n".encode()})
+    f = next(f for f in scan_secrets(zf) if f.rule_id == "jwt-in-code")
+    assert f.severity not in ("critical", "high")  # capped to medium
+    assert f.severity == "medium"
+    assert "(test fixture/placeholder context)" in f.title
+
+
+def test_real_secret_in_test_path_still_flagged():
+    # REGRESSION: a genuine, non-placeholder-looking secret sitting in a test
+    # file must NOT be silenced. Test paths aren't inherently safe; only the
+    # path+placeholder-value combination is treated as a fixture.
+    zf = make_zip({"src/config.test.ts": f"const k = '{FAKE_AWS}';\n".encode()})
+    findings = scan_secrets(zf)
+    assert len(findings) == 1
+    assert findings[0].severity == "critical"
+    assert findings[0].confidence >= 0.9
+    assert "(test fixture" not in findings[0].title
+
+
+def test_placeholder_value_outside_test_path_still_flagged():
+    # The AND logic in action: a placeholder-labelled value in a real
+    # production file is NOT damped (path signal absent), so it stays critical.
+    zf = make_zip({"src/config.ts": f"const k = '{FIXTURE_ANTHROPIC}';\n".encode()})
+    findings = scan_secrets(zf)
+    f = next(f for f in findings if f.rule_id == "anthropic-api-key")
+    assert f.severity == "critical"
+    assert f.confidence >= 0.9
+    assert "(test fixture" not in f.title
