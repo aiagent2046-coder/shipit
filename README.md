@@ -54,10 +54,12 @@ Implemented:
   it. **Confirmed end-to-end** on a real GitHub Actions runner (this
   dev sandbox has no `docker` binary itself) — see
   `.github/workflows/smoke-deploy-pack.yml` / `scripts/smoke_verify_deploy_pack.py`.
-  `fastapi_sample` and `vite_sample` verified=True. `next_sample`
-  (standalone Next.js) is wired into the same smoke script but its real
-  docker build+run is **not yet confirmed** — pending the next
-  workflow_dispatch run of smoke-deploy-pack.yml.
+  `fastapi_sample`, `vite_sample`, and `next_sample` (standalone
+  Next.js) all `verified=True` — confirmed 2026-07-15 via a real
+  `workflow_dispatch` run of `smoke-deploy-pack.yml`
+  ([run 29421963371](https://github.com/aiagent2046-coder/shipit/actions/runs/29421963371)):
+  `next_sample` built and served real HTTP 200 on `/` from an actual
+  booted container, not a mock.
 - `app/deploypack/delivery.py` — opens a real PR (branch + commit via
   the Git Data API) for a verified Pack, auth-agnostic (accepts
   whatever token it's given). **Confirmed end-to-end**: dogfooded on
@@ -372,10 +374,6 @@ allowed request headers are `Authorization` and `Content-Type`.
   file *and* renamed to look like a placeholder would be under-reported.
 - LLM client surfaces only the HTTP status on provider errors; log the
   response body for 4xx to make the next 400 diagnosable without curl.
-- Next.js Deploy Pack is implemented (requires `output: "standalone"`)
-  but its real docker build+run is not yet confirmed on CI — the
-  generation logic is unit-tested; the smoke workflow needs a
-  workflow_dispatch run to verify the `next_sample` end to end.
 
 ## Dev
 
