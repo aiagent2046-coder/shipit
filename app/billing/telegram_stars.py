@@ -170,11 +170,16 @@ async def handle_update(
     verified the secret-token header, so this trusts the update is really
     from Telegram.
 
-    Two update types matter; anything else is acknowledged and ignored
+    Update types that matter; anything else is acknowledged and ignored
     (Telegram sends many kinds to the same webhook URL):
       * pre_checkout_query -> approve it (10s deadline).
       * message.successful_payment -> grant pro, DM the key. Idempotent
         on telegram_payment_charge_id via grant_pro_tier.
+      * message.text "/mykey" -> resend the delivery message for the
+        account already linked to this chat_id (key recovery).
+      * message.text "/link <tx_hash>" -> a USDT payer claims a credited
+        on-chain payment by its tx hash, linking it to this chat_id so
+        /mykey can recover it thereafter.
     """
     from app.billing import grant_pro_tier
 
@@ -206,10 +211,157 @@ async def handle_update(
                 token=token, transport=transport,
             )
             return {"ok": True, "handled": "successful_payment", "persisted": False}
+        # Stamp the payer's chat_id onto the just-granted payment so /mykey
+        # can recover this key later. Additive to the Stars flow -- the
+        # grant and delivery above are unchanged; this only records the
+        # association that was previously used once and thrown away.
+        paid = await payment_repo.get_by_external_ref(
+            PROVIDER, sp["telegram_payment_charge_id"]
+        )
+        if paid is not None:
+            await payment_repo.link_telegram_chat_id(paid["id"], str(chat_id))
         await send_message(
             chat_id, _delivery_text(account["api_key"]),
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "successful_payment", "persisted": True}
 
+    text = (message.get("text") or "").strip()
+    if text.split(maxsplit=1)[:1] == ["/mykey"]:
+        return await _handle_mykey(
+            message, account_repo=account_repo, payment_repo=payment_repo,
+            token=token, transport=transport,
+        )
+    if text.split(maxsplit=1)[:1] == ["/link"]:
+        return await _handle_link(
+            message, text, account_repo=account_repo, payment_repo=payment_repo,
+            token=token, transport=transport,
+        )
+
     return {"ok": True, "handled": "ignored"}
+
+
+_NO_ACCOUNT_TEXT = (
+    "No Drydock pro account is linked to this Telegram chat yet.\n\n"
+    "If you paid with Telegram Stars, your key is linked automatically at "
+    "purchase — if you don't see it, make sure you're messaging from the "
+    "same Telegram account you paid with.\n\n"
+    "If you paid with USDT (TRC20), send `/link <tx_hash>` with your "
+    "payment's transaction hash to link it to this chat, then run /mykey "
+    "again."
+)
+
+
+async def _handle_mykey(
+    message: dict[str, Any], *, account_repo: Any, payment_repo: Any,
+    token: str, transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    chat_id = message["chat"]["id"]
+    paid = await payment_repo.get_completed_by_telegram_chat_id(str(chat_id))
+    account = (
+        await account_repo.get_by_id(paid["account_id"])
+        if paid and paid.get("account_id") else None
+    )
+    if account is None:
+        await send_message(
+            chat_id, _NO_ACCOUNT_TEXT, token=token, transport=transport
+        )
+        return {"ok": True, "handled": "mykey", "found": False}
+    await send_message(
+        chat_id, _delivery_text(account["api_key"]),
+        token=token, transport=transport,
+    )
+    return {"ok": True, "handled": "mykey", "found": True}
+
+
+async def _handle_link(
+    message: dict[str, Any], text: str, *, account_repo: Any, payment_repo: Any,
+    token: str, transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # Anti-hijacking, documented residual risk (honest note, same spirit as
+    # app/db.py's "what is NOT proven" and README's "known gaps"): a TRC20
+    # transaction hash and the receiving address are both PUBLIC on-chain
+    # data, so anyone watching the wallet can see a legitimate payer's tx
+    # hash and could race them to run /link first and claim the key. We do
+    # NOT try to fully solve this (no time-window, no extra identity proof);
+    # the only mitigation is first-successful-link-wins, then permanently
+    # locked -- once a payment carries a chat_id it can never be re-linked to
+    # a different one (enforced atomically in
+    # PaymentRepository.link_telegram_chat_id's WHERE clause). This is an
+    # accepted MVP-level residual risk, not a bug to eliminate here.
+    from app.billing import usdt_trc20
+
+    chat_id = message["chat"]["id"]
+    parts = text.split(maxsplit=1)
+    tx_hash = parts[1].strip() if len(parts) > 1 else ""
+    if not tx_hash:
+        await send_message(
+            chat_id,
+            "Usage: `/link <tx_hash>` — send the transaction hash of your "
+            "USDT (TRC20) payment.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "link", "result": "missing_hash"}
+
+    row = await payment_repo.get_by_external_ref(usdt_trc20.PROVIDER, tx_hash)
+    if row is None:
+        await send_message(
+            chat_id,
+            "That transaction hash wasn't found. If you just sent the "
+            "payment, the poller runs on an interval — wait a few minutes "
+            "and try `/link` again.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "link", "result": "not_found"}
+
+    # "completed" is the credited/matched state the USDT poller sets (via
+    # grant_pro_tier -> mark_completed); reuse it rather than invent a new
+    # status. Anything else means the poller hasn't credited it yet.
+    if row.get("status") != "completed":
+        await send_message(
+            chat_id,
+            "That payment is still pending confirmation. The poller runs on "
+            "an interval — please retry `/link` shortly.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "link", "result": "pending"}
+
+    existing = row.get("telegram_chat_id")
+    if existing is not None and str(existing) != str(chat_id):
+        # Already claimed by someone else. Do NOT reveal which chat_id owns
+        # it (tx hashes are public; leaking the owner would help an attacker).
+        await send_message(
+            chat_id,
+            "That payment has already been linked to another Telegram "
+            "account and can't be re-linked.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "link", "result": "already_claimed"}
+
+    # Unlinked, or already linked to THIS chat (idempotent): claim it and
+    # hand back the key. The conditional update is the first-wins guard.
+    linked = await payment_repo.link_telegram_chat_id(row["id"], str(chat_id))
+    if linked is not None and str(linked.get("telegram_chat_id")) != str(chat_id):
+        # Lost a concurrent race between the status check and the claim.
+        await send_message(
+            chat_id,
+            "That payment has already been linked to another Telegram "
+            "account and can't be re-linked.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "link", "result": "already_claimed"}
+
+    account = await account_repo.get_by_id(row["account_id"]) if row.get("account_id") else None
+    if account is None:
+        await send_message(
+            chat_id,
+            "That payment is linked to this chat, but its account could not "
+            "be loaded. Please contact support with your transaction hash.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "link", "result": "no_account"}
+    await send_message(
+        chat_id, _delivery_text(account["api_key"]),
+        token=token, transport=transport,
+    )
+    return {"ok": True, "handled": "link", "result": "linked"}

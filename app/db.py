@@ -360,7 +360,7 @@ class PaymentRepository:
                      status, tier_granted)
                 values (%s, %s, %s, %s, %s, %s, %s)
                 returning id, account_id, provider, external_ref, amount,
-                          currency, status, tier_granted, created_at
+                          currency, status, tier_granted, telegram_chat_id, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
                  status, tier_granted),
@@ -381,7 +381,7 @@ class PaymentRepository:
             cur = await conn.execute(
                 """
                 select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, created_at
+                       currency, status, tier_granted, telegram_chat_id, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -404,7 +404,7 @@ class PaymentRepository:
             cur = await conn.execute(
                 """
                 select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, created_at
+                       currency, status, tier_granted, telegram_chat_id, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
@@ -426,7 +426,7 @@ class PaymentRepository:
             cur = await conn.execute(
                 """
                 select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, created_at
+                       currency, status, tier_granted, telegram_chat_id, created_at
                 from payments
                 where provider = %s and status = 'pending'
                 order by created_at desc
@@ -456,3 +456,66 @@ class PaymentRepository:
                 """,
                 (uuid.UUID(account_id), external_ref, uuid.UUID(payment_id)),
             )
+
+    async def get_completed_by_telegram_chat_id(
+        self, telegram_chat_id: str
+    ) -> dict[str, Any] | None:
+        """The completed payment linked to this Telegram chat_id, if any
+        (newest first). Backs /mykey: a chat_id has an account -- and thus
+        a recoverable key -- exactly when a completed payment carries it
+        (Stars stamps it at purchase, USDT via /link). Returns None when
+        DATABASE_URL isn't set, same not-configured contract as get."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, provider, external_ref, amount,
+                       currency, status, tier_granted, telegram_chat_id, created_at
+                from payments
+                where telegram_chat_id = %s and status = 'completed'
+                order by created_at desc
+                limit 1
+                """,
+                (telegram_chat_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
+
+    async def link_telegram_chat_id(
+        self, payment_id: str, telegram_chat_id: str
+    ) -> dict[str, Any] | None:
+        """First-successful-link-wins: stamp telegram_chat_id onto a payment
+        ONLY if it has none yet (WHERE telegram_chat_id is null). This is the
+        atomic guard behind /link's anti-hijack rule -- two racing callers
+        can't both claim the same on-chain payment, the second's update
+        touches zero rows. Idempotent for the same claimer via the OR clause.
+        Always returns the row's CURRENT state (whoever owns it now), so the
+        caller can tell whether it won the claim or lost to an earlier one.
+        No-op-safe when DATABASE_URL isn't set (returns None)."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        pid = uuid.UUID(payment_id)
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                update payments set telegram_chat_id = %s
+                where id = %s
+                  and (telegram_chat_id is null or telegram_chat_id = %s)
+                """,
+                (telegram_chat_id, pid, telegram_chat_id),
+            )
+            cur = await conn.execute(
+                """
+                select id, account_id, provider, external_ref, amount,
+                       currency, status, tier_granted, telegram_chat_id, created_at
+                from payments where id = %s
+                """,
+                (pid,),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
