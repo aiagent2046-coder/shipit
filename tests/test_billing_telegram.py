@@ -382,3 +382,26 @@ async def test_link_without_hash_shows_usage():
     result = await _send(_text_update("/link", 555), accounts, payments, calls)
     assert result["result"] == "missing_hash"
     assert "Usage" in _last_text(calls)
+
+
+# --- 7. /upgrade sends a Stars invoice ---
+
+async def test_upgrade_sends_stars_invoice(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_PRO_STARS", raising=False)
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    result = await _send(_text_update("/upgrade", 888), accounts, payments, calls)
+    assert result == {"ok": True, "handled": "upgrade"}
+    # Exactly one sendInvoice call, carrying the verified Pro invoice params.
+    invoices = [c for c in calls if c[0] == "sendInvoice"]
+    assert len(invoices) == 1
+    body = invoices[0][1]
+    assert body["chat_id"] == 888
+    assert body["title"] == telegram_stars.PRO_TITLE
+    assert body["description"] == telegram_stars.PRO_DESCRIPTION
+    assert body["payload"] == telegram_stars.PRO_PAYLOAD
+    assert body["currency"] == "XTR"
+    assert body["provider_token"] == ""
+    assert body["prices"] == [
+        {"label": telegram_stars.PRO_TITLE,
+         "amount": telegram_stars.pro_stars_price()}
+    ]

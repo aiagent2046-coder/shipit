@@ -50,6 +50,13 @@ CURRENCY = "XTR"
 # integer star count for XTR (no minor-unit multiplier, unlike fiat).
 _DEFAULT_PRO_STARS = 250
 
+# Invoice copy for the Pro tier. Kept as module constants so the /upgrade
+# command and scripts/verify_telegram_stars_locally.py mint the exact same
+# invoice the operator already verified against the live Bot API.
+PRO_TITLE = "Drydock Pro"
+PRO_DESCRIPTION = "Drydock pro tier — higher audit limits and more."
+PRO_PAYLOAD = "pro"
+
 
 def bot_token_from_env() -> str | None:
     """Same env-var-or-None pattern as GITHUB_PR_TOKEN / PREVIEW_REAP_TOKEN.
@@ -175,6 +182,8 @@ async def handle_update(
       * pre_checkout_query -> approve it (10s deadline).
       * message.successful_payment -> grant pro, DM the key. Idempotent
         on telegram_payment_charge_id via grant_pro_tier.
+      * message.text "/upgrade" -> send a Stars invoice for the pro tier
+        (the Pay button that /pricing tells users to expect).
       * message.text "/mykey" -> resend the delivery message for the
         account already linked to this chat_id (key recovery).
       * message.text "/link <tx_hash>" -> a USDT payer claims a credited
@@ -227,6 +236,10 @@ async def handle_update(
         return {"ok": True, "handled": "successful_payment", "persisted": True}
 
     text = (message.get("text") or "").strip()
+    if text.split(maxsplit=1)[:1] == ["/upgrade"]:
+        return await _handle_upgrade(
+            message, token=token, transport=transport,
+        )
     if text.split(maxsplit=1)[:1] == ["/mykey"]:
         return await _handle_mykey(
             message, account_repo=account_repo, payment_repo=payment_repo,
@@ -250,6 +263,22 @@ _NO_ACCOUNT_TEXT = (
     "payment's transaction hash to link it to this chat, then run /mykey "
     "again."
 )
+
+
+async def _handle_upgrade(
+    message: dict[str, Any], *, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # The /pricing page tells users to run /upgrade to pay with Stars; this
+    # sends the invoice that produces the Pay button. Reuses send_invoice and
+    # the same PRO_* copy / pro_stars_price() the verify script proved live.
+    chat_id = message["chat"]["id"]
+    await send_invoice(
+        chat_id=chat_id, title=PRO_TITLE, description=PRO_DESCRIPTION,
+        payload=PRO_PAYLOAD, stars=pro_stars_price(),
+        token=token, transport=transport,
+    )
+    return {"ok": True, "handled": "upgrade"}
 
 
 async def _handle_mykey(
