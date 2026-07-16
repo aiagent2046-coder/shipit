@@ -109,12 +109,12 @@ def _successful_payment_update(charge_id: str, chat_id: int = 555):
 
 def test_build_invoice_payload_is_a_stars_invoice():
     body = telegram_stars.build_invoice_payload(
-        chat_id=42, title="ShipIt Pro", description="pro tier",
+        chat_id=42, title="Drydock Pro", description="pro tier",
         payload="pro", stars=250,
     )
     assert body["currency"] == "XTR"
     assert body["provider_token"] == ""          # empty => Stars, not fiat
-    assert body["prices"] == [{"label": "ShipIt Pro", "amount": 250}]
+    assert body["prices"] == [{"label": "Drydock Pro", "amount": 250}]
     assert body["chat_id"] == 42
     assert body["payload"] == "pro"
 

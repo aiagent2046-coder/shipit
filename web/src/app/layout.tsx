@@ -12,9 +12,9 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ShipIt — production-readiness audits for vibe-coded apps",
+  title: "Drydock — production-readiness audits for vibe-coded apps",
   description:
-    "Paste a GitHub URL or upload a zip. ShipIt audits your app for the things that keep it from being safe to ship — leaked secrets, missing auth, no tests — and generates Fix Packs.",
+    "Paste a GitHub URL or upload a zip. Drydock audits your app for the things that keep it from being safe to ship — leaked secrets, missing auth, no tests — and generates Fix Packs.",
 };
 
 // Set the theme class before hydration so there's no flash of the wrong

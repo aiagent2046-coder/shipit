@@ -17,7 +17,7 @@ export default function LandingPage() {
             <span className="text-accent">ready to ship?</span>
           </h1>
           <p className="mx-auto mt-5 max-w-2xl text-lg text-muted">
-            Built it with Lovable, Bolt, or v0? ShipIt scans your code for the
+            Built it with Lovable, Bolt, or v0? Drydock scans your code for the
             things that keep it from being safe in production — leaked secrets,
             missing auth, no tests — scores it out of 10, and generates the
             fixes as a pull request.

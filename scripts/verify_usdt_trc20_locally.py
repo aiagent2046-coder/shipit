@@ -16,7 +16,7 @@ matching logic is covered by the mocked tests in
 tests/test_billing_usdt.py and only truly closes when a real transfer of
 an invoice's exact amount lands and a real poll picks it up.
 
-Note on scope: the ShipIt dev sandbox reached api.trongrid.io
+Note on scope: the Drydock dev sandbox reached api.trongrid.io
 unauthenticated and got HTTP 200 with the documented response shape
 during development (recorded in the README) — but that was a raw curl,
 not this code path. This script is how you exercise the actual

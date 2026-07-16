@@ -16,7 +16,7 @@ error) on the very first parameterized query through Supabase's
 Supavisor pooler, in BOTH session (5432) and transaction (6543) modes,
 confirmed by hand across two networks. That's a documented, open
 Supabase-side bug (github.com/supabase/supabase/issues/39227), not a
-ShipIt bug or a network issue -- `psql`'s \\bind (same wire-level
+Drydock bug or a network issue -- `psql`'s \\bind (same wire-level
 extended protocol, different client implementation) worked fine over
 the identical connection, which is what pointed at the client library
 rather than the network. `prepare_threshold=None` below disables

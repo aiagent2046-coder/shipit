@@ -6,13 +6,13 @@ Why this exists: shipit-architecture.md 2.1 marks the GitHub App
 scope) can only open PRs on repos the PAT's owner has write access to
 — a real stranger's repo can never receive a PR that way. Once a
 stranger installs this App on their own repo, GitHub issues a token
-scoped to exactly that installation, regardless of who operates ShipIt.
+scoped to exactly that installation, regardless of who operates Drydock.
 
 Real, unavoidable manual step this module cannot do for you: creating
 the App itself. GitHub requires someone to click through
 https://github.com/settings/apps/new (or the manifest flow) — there is
 no API that creates an App from nothing without that click, and no
-ShipIt operator credential can substitute for it. Once created, this
+Drydock operator credential can substitute for it. Once created, this
 module only needs:
 
   GITHUB_APP_ID          — the App's Client ID (e.g. "Iv23..."), which

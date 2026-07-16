@@ -1,6 +1,6 @@
-# ShipIt — Web Frontend
+# Drydock — Web Frontend
 
-A standalone [Next.js](https://nextjs.org) (App Router) frontend for ShipIt,
+A standalone [Next.js](https://nextjs.org) (App Router) frontend for Drydock,
 the production-readiness auditor for vibe-coded apps. It is a **pure API
 client**: it has no backend or database of its own and talks over HTTP to the
 existing FastAPI backend (the `app/` package at the repo root, deployed

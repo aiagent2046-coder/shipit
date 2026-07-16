@@ -1,4 +1,4 @@
-"""ShipIt API gateway — MVP phase 1 surface.
+"""Drydock API gateway — MVP phase 1 surface.
 
 Only what exists today: health check and archive intake with validation,
 rate limiting, stack detection, static scan, and (when providers are
@@ -54,7 +54,7 @@ from app.ingest.validators import (
     validate_zip,
 )
 
-app = FastAPI(title="ShipIt", version="0.1.0")
+app = FastAPI(title="Drydock", version="0.1.0")
 
 
 # Vercel preview deploys get unpredictable per-deploy subdomains
