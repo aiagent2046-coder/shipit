@@ -70,20 +70,21 @@ def fetch_repo_zip(owner: str, repo: str,
                         "github_error", f"GitHub returned {resp.status_code}"
                     )
 
+                _too_large_msg = (
+                    "Repository too large — the free scan supports repos "
+                    f"up to {MAX_ARCHIVE_BYTES // (1024 * 1024)}MB. "
+                    "This one is bigger."
+                )
+
                 declared = resp.headers.get("content-length")
                 if declared is not None and int(declared) > MAX_ARCHIVE_BYTES:
-                    raise RepoFetchError(
-                        "too_large", f"{declared} > {MAX_ARCHIVE_BYTES}"
-                    )
+                    raise RepoFetchError("too_large", _too_large_msg)
 
                 chunks = bytearray()
                 for chunk in resp.iter_bytes(_READ_CHUNK):
                     chunks += chunk
                     if len(chunks) > MAX_ARCHIVE_BYTES:
-                        raise RepoFetchError(
-                            "too_large",
-                            f"download exceeded {MAX_ARCHIVE_BYTES} bytes",
-                        )
+                        raise RepoFetchError("too_large", _too_large_msg)
                 return bytes(chunks)
     except httpx.HTTPError as exc:
         raise RepoFetchError("github_unreachable", str(exc)) from exc
