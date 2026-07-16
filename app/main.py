@@ -518,6 +518,40 @@ async def create_fixpack_usdt_invoice(
     return invoice
 
 
+@app.get("/v1/audits/{audit_id}/fixpack-status")
+async def get_fixpack_status(
+    audit_id: str,
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+) -> dict:
+    """Lightweight poll target for the audit results page: the outcome of a
+    Fix Pack purchase for this audit, without needing the job id up front.
+
+    Returns the most recent Fix Pack job's status and pr_url. status is one
+    of the fixpack_jobs states — 'paid' (bought, generating), 'delivered'
+    (PR opened, pr_url set), 'no_fix_needed', or 'failed'. When no Fix Pack
+    has been purchased yet (or persistence isn't configured), status is null
+    so the frontend can poll a stable shape rather than treat "no job" as an
+    error. 404 only when the audit itself doesn't exist.
+    """
+    audit = await audit_repo.get(audit_id)
+    if audit is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "audit_not_found",
+                    "detail": "no audit with this id, or persistence isn't "
+                              "configured on this deployment (see app/db.py)"},
+        )
+    job = await fixpack_repo.get_by_audit(audit_id)
+    if job is None:
+        return {"audit_id": audit_id, "status": None, "pr_url": None}
+    return {
+        "audit_id": audit_id,
+        "status": job.get("status"),
+        "pr_url": job.get("pr_url"),
+    }
+
+
 @app.post("/internal/billing/poll-usdt")
 async def poll_usdt(
     request: Request,
@@ -820,6 +854,7 @@ async def create_audit(
         "file_count": report.file_count,
         "score": scan["score"],
         "findings": scan["findings"],
+        "repo_url": source_url,
         "llm": scan["llm"],
     }
 

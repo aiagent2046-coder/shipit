@@ -9,6 +9,7 @@ import { RESULT_PREFIX } from "@/components/AuditForm";
 import { ScoreRing, CategoryBars } from "@/components/ScoreRing";
 import { FindingsList, SeveritySummary } from "@/components/FindingsList";
 import { Spinner } from "@/components/Spinner";
+import { FixpackPurchase } from "@/components/FixpackPurchase";
 
 interface View {
   id: string;
@@ -16,6 +17,7 @@ interface View {
   fileCount: number | null;
   score: Score;
   findings: Finding[];
+  repoUrl: string | null;
 }
 
 function fromResult(r: AuditResult): View {
@@ -25,6 +27,7 @@ function fromResult(r: AuditResult): View {
     fileCount: r.file_count,
     score: r.score,
     findings: r.findings ?? [],
+    repoUrl: r.repo_url ?? null,
   };
 }
 
@@ -70,6 +73,7 @@ export default function AuditPage() {
             fileCount: row.file_count,
             score: row.score_json,
             findings: row.findings_json ?? [],
+            repoUrl: row.repo_url ?? null,
           });
           setLoading(false);
           return;
@@ -164,14 +168,10 @@ export default function AuditPage() {
               >
                 View full HTML report ↗
               </a>
-              <Link
-                href="/pricing"
-                className="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-accent-fg hover:opacity-90"
-              >
-                Get a Fix Pack for these issues →
-              </Link>
             </div>
           </div>
+
+          <FixpackPurchase auditId={view.id} repoUrl={view.repoUrl} />
 
           <div className="mt-8">
             <h2 className="mb-3 text-lg font-semibold">

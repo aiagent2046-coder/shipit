@@ -31,7 +31,7 @@ export default function LandingPage() {
         <p className="mt-6 text-center text-sm text-muted">
           No signup to run a free audit.{" "}
           <Link href="/pricing" className="text-accent hover:underline">
-            See Fix Pack pricing →
+            See Pro pricing →
           </Link>
         </p>
       </section>

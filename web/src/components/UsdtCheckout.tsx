@@ -6,6 +6,13 @@ import { createUsdtInvoice, getUsdtInvoice, ApiError } from "@/lib/api";
 import { useApiKey } from "./providers";
 import { Spinner } from "./Spinner";
 
+type CompletedStatus = Extract<UsdtInvoiceStatus, { status: "completed" }>;
+
+interface CopyHelpers {
+  copy: (text: string, label: string) => void;
+  copied: string | null;
+}
+
 function useCountdown(expiresAt: string | null): number | null {
   const [remaining, setRemaining] = useState<number | null>(null);
   useEffect(() => {
@@ -29,14 +36,31 @@ function fmt(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export function UsdtCheckout() {
-  const { setKey } = useApiKey();
+/**
+ * The shared USDT/TRC20 invoice flow: a "generate address" button, then the
+ * address/amount/expiry/countdown card, polling the same
+ * GET /v1/billing/usdt/invoice/{id} endpoint until the invoice completes or
+ * expires. What differs per product — how the invoice is created and what to
+ * show once it's paid — is injected via props, so both the Pro-tier upgrade
+ * (pricing page) and per-audit Fix Pack (audit results page) reuse this exact
+ * flow rather than duplicating the polling + countdown + cleanup logic.
+ */
+export function UsdtCheckout({
+  title = "Pay with USDT (TRC20)",
+  description,
+  createInvoice,
+  renderCompleted,
+}: {
+  title?: string;
+  description: React.ReactNode;
+  createInvoice: () => Promise<UsdtInvoice>;
+  renderCompleted: (completed: CompletedStatus, helpers: CopyHelpers) => React.ReactNode;
+}) {
   const [invoice, setInvoice] = useState<UsdtInvoice | null>(null);
   const [status, setStatus] = useState<UsdtInvoiceStatus | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const remaining = useCountdown(
@@ -57,7 +81,7 @@ export function UsdtCheckout() {
     setError(null);
     setStatus(null);
     try {
-      const inv = await createUsdtInvoice();
+      const inv = await createInvoice();
       setInvoice(inv);
       poll(inv.invoice_id);
     } catch (e) {
@@ -88,7 +112,7 @@ export function UsdtCheckout() {
     }, 8000);
   }
 
-  async function copy(text: string, label: string) {
+  const copy = useCallback(async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(label);
@@ -96,18 +120,15 @@ export function UsdtCheckout() {
     } catch {
       /* clipboard unavailable */
     }
-  }
+  }, []);
 
   const completed = status?.status === "completed" ? status : null;
   const expired = status?.status === "expired";
 
   return (
     <div className="rounded-xl border border-border bg-elevated p-5">
-      <h3 className="text-lg font-semibold">Pay with USDT (TRC20)</h3>
-      <p className="mt-1 text-sm text-muted">
-        Send an exact amount on the TRON network. Your API key unlocks
-        automatically once the transfer is confirmed on-chain.
-      </p>
+      <h3 className="text-lg font-semibold">{title}</h3>
+      <p className="mt-1 text-sm text-muted">{description}</p>
 
       {!invoice && (
         <button
@@ -184,52 +205,89 @@ export function UsdtCheckout() {
         </div>
       )}
 
-      {completed && (
-        <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
-          <p className="font-semibold text-accent">Payment confirmed — you&apos;re Pro.</p>
-          {completed.api_key ? (
-            <>
-              <p className="mt-2 text-sm text-muted">Your API key:</p>
-              <code className="mt-1 block break-all rounded bg-surface p-2 font-mono text-sm">
-                {completed.api_key}
-              </code>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => copy(completed.api_key!, "key")}
-                  className="rounded-md border border-border px-3 py-1.5 text-sm hover:border-accent"
-                >
-                  {copied === "key" ? "Copied!" : "Copy key"}
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await setKey(completed.api_key!);
-                    setSaved(true);
-                  }}
-                  className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg"
-                >
-                  {saved ? "Saved to this browser" : "Use this key now"}
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-muted">
-                Keep it secret — anyone with it has your pro access.
-              </p>
-            </>
-          ) : (
-            <p className="mt-2 text-sm text-muted">
-              Payment recorded, but the key wasn&apos;t returned. Contact the
-              operator with invoice id{" "}
-              <span className="font-mono">{completed.invoice_id}</span>.
-            </p>
-          )}
-        </div>
+      {completed && renderCompleted(completed, { copy, copied })}
+    </div>
+  );
+}
+
+/**
+ * The Pro-tier USDT card used on /pricing. Creates a Pro invoice and, once
+ * paid, reveals + lets you save the returned API key. Behaviour identical to
+ * the original UsdtCheckout — it's just now expressed on top of the shared
+ * flow above.
+ */
+export function ProUsdtCheckout() {
+  return (
+    <UsdtCheckout
+      description={
+        <>
+          Send an exact amount on the TRON network. Your API key unlocks
+          automatically once the transfer is confirmed on-chain.
+        </>
+      }
+      createInvoice={createUsdtInvoice}
+      renderCompleted={(completed, { copy, copied }) => (
+        <ProCompleted completed={completed} copy={copy} copied={copied} />
+      )}
+    />
+  );
+}
+
+function ProCompleted({
+  completed,
+  copy,
+  copied,
+}: {
+  completed: CompletedStatus;
+  copy: (text: string, label: string) => void;
+  copied: string | null;
+}) {
+  const { setKey } = useApiKey();
+  const [saved, setSaved] = useState(false);
+  return (
+    <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
+      <p className="font-semibold text-accent">Payment confirmed — you&apos;re Pro.</p>
+      {completed.api_key ? (
+        <>
+          <p className="mt-2 text-sm text-muted">Your API key:</p>
+          <code className="mt-1 block break-all rounded bg-surface p-2 font-mono text-sm">
+            {completed.api_key}
+          </code>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => copy(completed.api_key!, "key")}
+              className="rounded-md border border-border px-3 py-1.5 text-sm hover:border-accent"
+            >
+              {copied === "key" ? "Copied!" : "Copy key"}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await setKey(completed.api_key!);
+                setSaved(true);
+              }}
+              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg"
+            >
+              {saved ? "Saved to this browser" : "Use this key now"}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Keep it secret — anyone with it has your pro access.
+          </p>
+        </>
+      ) : (
+        <p className="mt-2 text-sm text-muted">
+          Payment recorded, but the key wasn&apos;t returned. Contact the
+          operator with invoice id{" "}
+          <span className="font-mono">{completed.invoice_id}</span>.
+        </p>
       )}
     </div>
   );
 }
 
-function Field({
+export function Field({
   label,
   value,
   mono,

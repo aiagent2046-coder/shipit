@@ -45,6 +45,9 @@ export interface AuditResult {
   file_count: number;
   score: Score;
   findings: Finding[];
+  // The GitHub URL the audit was run from, or null for zip uploads. Fix Pack
+  // is only available when this is present (there's a repo to open a PR on).
+  repo_url: string | null;
   llm: unknown;
 }
 
@@ -57,6 +60,7 @@ export interface PersistedAudit {
   score_total: number | null;
   score_json: Score | null;
   findings_json: Finding[] | null;
+  repo_url: string | null;
   created_at: string;
 }
 
@@ -93,3 +97,24 @@ export type UsdtInvoiceStatus =
     }
   | { invoice_id: string; status: "completed"; tier: "pro"; api_key: string | null }
   | { invoice_id: string; status: "expired" };
+
+// POST /v1/audits/{audit_id}/fixpack/usdt-invoice — same shape as UsdtInvoice
+// plus the audit this Fix Pack is scoped to. Polled via the same
+// GET /v1/billing/usdt/invoice/{id} endpoint as the Pro invoice.
+export interface FixpackUsdtInvoice extends UsdtInvoice {
+  audit_id: string;
+}
+
+// fixpack_jobs status progression (app/db.py). null = no purchase yet.
+export type FixpackJobStatus =
+  | "paid"
+  | "delivered"
+  | "no_fix_needed"
+  | "failed";
+
+// GET /v1/audits/{audit_id}/fixpack-status
+export interface FixpackStatus {
+  audit_id: string;
+  status: FixpackJobStatus | null;
+  pr_url: string | null;
+}
