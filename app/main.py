@@ -336,6 +336,8 @@ async def telegram_webhook(
     request: Request,
     account_repo: AccountRepository = Depends(get_account_repo),
     payment_repo: PaymentRepository = Depends(get_payment_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     transport=Depends(get_billing_transport),
 ) -> dict:
     """Telegram Bot API webhook for Stars payments. Handles the
@@ -365,6 +367,7 @@ async def telegram_webhook(
     update = await request.json()
     return await telegram_stars.handle_update(
         update, account_repo=account_repo, payment_repo=payment_repo,
+        audit_repo=audit_repo, fixpack_repo=fixpack_repo,
         token=token, transport=transport,
     )
 
@@ -438,11 +441,70 @@ async def get_usdt_invoice(
     return status
 
 
+@app.post("/v1/audits/{audit_id}/fixpack/usdt-invoice", status_code=201)
+async def create_fixpack_usdt_invoice(
+    audit_id: str,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+) -> dict:
+    """Open a USDT/TRC20 invoice to buy a Fix Pack for one specific audit.
+    Mirrors POST /v1/billing/usdt/invoice (fixed address + unique amount so
+    transfers match without per-invoice addresses; poll the same GET
+    /v1/billing/usdt/invoice/{id} to watch it), but at the Fix Pack price
+    and scoped to this audit.
+
+    V1 supports GitHub-URL audits only: an audit created from a zip upload
+    has no repository to open a fix PR against, so this returns 422 with a
+    clear explanation rather than sell a Fix Pack that can't be fulfilled.
+
+    404 if no such audit. 503 if the receiving address isn't configured, or
+    if DATABASE_URL isn't set (the pending invoice row can't be persisted).
+    """
+    audit = await audit_repo.get(audit_id)
+    if audit is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "audit_not_found",
+                    "detail": "no audit with this id, or persistence isn't "
+                              "configured on this deployment (see app/db.py)"},
+        )
+    if not audit.get("repo_url"):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "not_github_audit",
+                    "detail": "Fix Pack currently only supports audits run "
+                              "from a public GitHub URL. This audit was created "
+                              "from an uploaded zip, so there's no repository to "
+                              "open a fix PR against — re-run the audit with your "
+                              "GitHub repo URL, then buy a Fix Pack for it."},
+        )
+    address = _usdt_receiving_address()
+    if not address:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "usdt_not_configured",
+                    "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
+        )
+    invoice = await usdt_trc20.create_fixpack_invoice(
+        payment_repo, address=address, audit_id=audit_id
+    )
+    if invoice is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_persisted",
+                    "detail": "USDT invoices require DATABASE_URL (a pending "
+                              "payment row is created to match payment against)"},
+        )
+    return invoice
+
+
 @app.post("/internal/billing/poll-usdt")
 async def poll_usdt(
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     account_repo: AccountRepository = Depends(get_account_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     transport=Depends(get_billing_transport),
 ) -> dict:
     """Operational endpoint: read incoming USDT transfers from TronGrid and
@@ -476,6 +538,7 @@ async def poll_usdt(
     return await usdt_trc20.poll_and_match(
         payment_repo, account_repo, address=address,
         api_key=usdt_trc20.trongrid_api_key_from_env(), transport=transport,
+        fixpack_repo=fixpack_repo, audit_repo=audit_repo,
     )
 
 

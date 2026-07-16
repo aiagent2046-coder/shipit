@@ -1,0 +1,430 @@
+"""Tests for the Fix Pack purchase flow (paywall Stage 2, second product).
+
+A Fix Pack is bought per-audit and is entirely separate from the Pro tier:
+it grants no account/tier and mints no API key -- a successful payment just
+creates a paid `fixpack_jobs` row for the audit (generation is a separate
+follow-up). V1 offers it only for audits run from a GitHub URL (repo_url
+not null); a zip-upload audit has no repo to open a fix PR against.
+
+Same no-real-Telegram / no-real-chain / no-real-Postgres posture as
+tests/test_billing_telegram.py and tests/test_billing_usdt.py: Bot API and
+TronGrid calls are faked with httpx.MockTransport and the repositories are
+in-memory fakes.
+"""
+
+from __future__ import annotations
+
+import datetime
+import re
+import uuid
+
+import httpx
+from fastapi.testclient import TestClient
+
+from app.billing import telegram_stars, usdt_trc20
+from app.main import (
+    app,
+    get_audit_repo,
+    get_account_repo,
+    get_billing_transport,
+    get_fixpack_repo,
+    get_payment_repo,
+)
+
+client = TestClient(app)
+
+ADDRESS = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"
+USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+REPO_URL = "https://github.com/acme/widget"
+
+
+# --- in-memory repo fakes ---
+
+class FakeAuditRepo:
+    def __init__(self):
+        self.by_id: dict[str, dict] = {}
+
+    def add(self, *, stack="fastapi", repo_url=REPO_URL):
+        row = {"id": str(uuid.uuid4()), "stack": stack, "repo_url": repo_url}
+        self.by_id[row["id"]] = row
+        return row
+
+    async def get(self, audit_id: str):
+        return self.by_id.get(audit_id)
+
+
+class FakeFixpackRepo:
+    def __init__(self):
+        self.rows: list[dict] = []
+
+    async def create_paid(self, *, audit_id, stack):
+        row = {
+            "id": str(uuid.uuid4()), "audit_id": audit_id, "pack": "fixpack",
+            "stack": stack, "status": "paid", "verified": None, "detail": None,
+            "pr_url": None, "pr_delivered": False,
+            "created_at": datetime.datetime.now(datetime.timezone.utc),
+        }
+        self.rows.append(row)
+        return row
+
+
+class FakeAccountRepo:
+    def __init__(self):
+        self.by_id: dict[str, dict] = {}
+
+    async def create(self, *, api_key, tier):
+        row = {"id": str(uuid.uuid4()), "api_key": api_key, "tier": tier}
+        self.by_id[row["id"]] = row
+        return row
+
+    async def get_by_id(self, account_id):
+        return self.by_id.get(account_id)
+
+
+class FakePaymentRepo:
+    def __init__(self):
+        self.rows: dict[str, dict] = {}
+
+    async def create(self, *, account_id, provider, external_ref, amount,
+                     currency, status, tier_granted, product="pro_tier",
+                     audit_id=None, created_at=None):
+        row = {
+            "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
+            "external_ref": external_ref, "amount": amount, "currency": currency,
+            "status": status, "tier_granted": tier_granted, "product": product,
+            "audit_id": audit_id,
+            "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
+        }
+        self.rows[row["id"]] = row
+        return row
+
+    async def get(self, payment_id):
+        return self.rows.get(payment_id)
+
+    async def get_by_external_ref(self, provider, external_ref):
+        for r in self.rows.values():
+            if r["provider"] == provider and r["external_ref"] == external_ref:
+                return r
+        return None
+
+    async def list_pending(self, provider):
+        return [r for r in self.rows.values()
+                if r["provider"] == provider and r["status"] == "pending"]
+
+    async def mark_completed(self, payment_id, *, account_id, external_ref):
+        self.rows[payment_id].update(
+            status="completed", account_id=account_id, external_ref=external_ref)
+
+    async def mark_completed_fixpack(self, payment_id, *, external_ref):
+        self.rows[payment_id].update(status="completed", external_ref=external_ref)
+
+
+def _telegram_transport(calls: list):
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+        method = request.url.path.rsplit("/", 1)[-1]
+        calls.append((method, json.loads(request.content) if request.content else {}))
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+    return httpx.MockTransport(handler)
+
+
+def _trongrid_transport(transfers: list, *, success: bool = True):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": success, "data": transfers})
+    return httpx.MockTransport(handler)
+
+
+def _transfer(value_micros: int, *, tx_id: str, to: str = ADDRESS):
+    return {
+        "transaction_id": tx_id, "type": "Transfer", "from": "TSenderXYZ",
+        "to": to, "value": str(value_micros),
+        "token_info": {"symbol": "USDT", "address": USDT_CONTRACT, "decimals": 6},
+        "block_timestamp": 1784040468000,
+    }
+
+
+def _text_update(text: str, chat_id: int = 555):
+    return {"update_id": 1, "message": {
+        "chat": {"id": chat_id}, "from": {"id": chat_id}, "text": text}}
+
+
+async def _send(update, *, audits, payments, fixpacks, accounts, calls):
+    return await telegram_stars.handle_update(
+        update, account_repo=accounts, payment_repo=payments,
+        audit_repo=audits, fixpack_repo=fixpacks,
+        token="t", transport=_telegram_transport(calls),
+    )
+
+
+# =========================================================================
+# 1. Telegram /fixpack <audit_id>
+# =========================================================================
+
+async def test_fixpack_command_github_audit_sends_invoice(monkeypatch):
+    monkeypatch.delenv("FIXPACK_STARS_PRICE", raising=False)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(repo_url=REPO_URL)
+
+    result = await _send(_text_update(f"/fixpack {audit['id']}"),
+                         audits=audits, payments=payments,
+                         fixpacks=fixpacks, accounts=accounts, calls=calls)
+    assert result == {"ok": True, "handled": "fixpack", "result": "invoice_sent"}
+
+    invoices = [c for c in calls if c[0] == "sendInvoice"]
+    assert len(invoices) == 1
+    body = invoices[0][1]
+    assert body["title"] == telegram_stars.FIXPACK_TITLE
+    assert body["currency"] == "XTR"
+    assert body["provider_token"] == ""
+    # Payload encodes which audit this purchase is for.
+    assert body["payload"] == f"fixpack:{audit['id']}"
+    # 600 Stars by default.
+    assert body["prices"] == [{"label": telegram_stars.FIXPACK_TITLE, "amount": 600}]
+
+
+async def test_fixpack_command_env_overrides_price(monkeypatch):
+    monkeypatch.setenv("FIXPACK_STARS_PRICE", "750")
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(repo_url=REPO_URL)
+    await _send(_text_update(f"/fixpack {audit['id']}"),
+               audits=audits, payments=payments,
+               fixpacks=fixpacks, accounts=accounts, calls=calls)
+    body = [c for c in calls if c[0] == "sendInvoice"][0][1]
+    assert body["prices"][0]["amount"] == 750
+
+
+async def test_fixpack_command_zip_audit_is_rejected_no_invoice():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(repo_url=None)  # zip-upload audit
+
+    result = await _send(_text_update(f"/fixpack {audit['id']}"),
+                         audits=audits, payments=payments,
+                         fixpacks=fixpacks, accounts=accounts, calls=calls)
+    assert result["result"] == "not_github_audit"
+    # No invoice sent, just an explanatory message.
+    assert not [c for c in calls if c[0] == "sendInvoice"]
+    msg = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+    assert "GitHub" in msg
+
+
+async def test_fixpack_command_unknown_audit_is_rejected_no_invoice():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+
+    result = await _send(_text_update(f"/fixpack {uuid.uuid4()}"),
+                         audits=audits, payments=payments,
+                         fixpacks=fixpacks, accounts=accounts, calls=calls)
+    assert result["result"] == "audit_not_found"
+    assert not [c for c in calls if c[0] == "sendInvoice"]
+
+
+async def test_fixpack_command_without_audit_id_shows_usage():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    result = await _send(_text_update("/fixpack"),
+                         audits=audits, payments=payments,
+                         fixpacks=fixpacks, accounts=accounts, calls=calls)
+    assert result["result"] == "missing_audit_id"
+    assert not [c for c in calls if c[0] == "sendInvoice"]
+    assert "Usage" in [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+
+
+# =========================================================================
+# 2. Telegram successful_payment for a Fix Pack
+# =========================================================================
+
+def _fixpack_payment_update(charge_id: str, audit_id: str, chat_id: int = 555):
+    return {"update_id": 1, "message": {
+        "chat": {"id": chat_id}, "from": {"id": chat_id},
+        "successful_payment": {
+            "currency": "XTR", "total_amount": 600,
+            "invoice_payload": f"fixpack:{audit_id}",
+            "telegram_payment_charge_id": charge_id,
+            "provider_payment_charge_id": "prov_1",
+        }}}
+
+
+async def test_fixpack_payment_creates_job_and_not_a_pro_account():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(stack="fastapi", repo_url=REPO_URL)
+
+    result = await _send(_fixpack_payment_update("charge_fp", audit["id"]),
+                         audits=audits, payments=payments,
+                         fixpacks=fixpacks, accounts=accounts, calls=calls)
+    assert result == {"ok": True, "handled": "fixpack_payment", "persisted": True}
+
+    # Exactly one paid fixpack job, linked to the right audit, right stack.
+    assert len(fixpacks.rows) == 1
+    job = fixpacks.rows[0]
+    assert job["audit_id"] == audit["id"]
+    assert job["status"] == "paid"
+    assert job["stack"] == "fastapi"
+
+    # Payment recorded as a completed fixpack purchase.
+    assert len(payments.rows) == 1
+    pay = next(iter(payments.rows.values()))
+    assert pay["product"] == "fixpack"
+    assert pay["audit_id"] == audit["id"]
+    assert pay["status"] == "completed"
+
+    # Crucially: NO account/tier was granted (that's grant_pro_tier's job).
+    assert accounts.by_id == {}
+    # And the confirmation DM leaks no API key.
+    dm = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+    assert "sk_live_" not in dm
+
+
+async def test_duplicate_fixpack_payment_is_idempotent():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(repo_url=REPO_URL)
+
+    for _ in range(2):  # Telegram retries the webhook until it gets 200
+        await _send(_fixpack_payment_update("charge_dup_fp", audit["id"]),
+                    audits=audits, payments=payments,
+                    fixpacks=fixpacks, accounts=accounts, calls=calls)
+    # No second job, no second payment for the same charge id.
+    assert len(fixpacks.rows) == 1
+    assert len(payments.rows) == 1
+
+
+# =========================================================================
+# 3. USDT fixpack invoice endpoint
+# =========================================================================
+
+_TRON_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+
+
+def _override(*, audits, payments):
+    app.dependency_overrides[get_audit_repo] = lambda: audits
+    app.dependency_overrides[get_payment_repo] = lambda: payments
+
+
+def _clear():
+    for dep in (get_audit_repo, get_payment_repo, get_account_repo,
+                get_fixpack_repo, get_billing_transport):
+        app.dependency_overrides.pop(dep, None)
+
+
+def test_usdt_fixpack_invoice_github_audit(monkeypatch):
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    monkeypatch.delenv("FIXPACK_USDT_PRICE", raising=False)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    _override(audits=audits, payments=payments)
+    try:
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
+        assert r.status_code == 201
+        body = r.json()
+        assert body["address"] == ADDRESS
+        assert _TRON_ADDR_RE.match(body["address"])
+        assert body["audit_id"] == audit["id"]
+        # 12 USDT base price + sub-dollar nonce.
+        assert 12.0 <= body["amount"] < 13.0
+        # A pending fixpack payment row scoped to the audit was persisted.
+        row = next(iter(payments.rows.values()))
+        assert row["product"] == "fixpack"
+        assert row["audit_id"] == audit["id"]
+        assert row["status"] == "pending"
+    finally:
+        _clear()
+
+
+def test_usdt_fixpack_invoice_env_overrides_price(monkeypatch):
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    monkeypatch.setenv("FIXPACK_USDT_PRICE", "20")
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    _override(audits=audits, payments=payments)
+    try:
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
+        assert r.status_code == 201
+        assert 20.0 <= r.json()["amount"] < 21.0
+    finally:
+        _clear()
+
+
+def test_usdt_fixpack_invoice_zip_audit_is_422(monkeypatch):
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    audit = audits.add(repo_url=None)
+    _override(audits=audits, payments=payments)
+    try:
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
+        assert r.status_code == 422
+        assert r.json()["detail"]["reason"] == "not_github_audit"
+        # No invoice/payment created.
+        assert payments.rows == {}
+    finally:
+        _clear()
+
+
+def test_usdt_fixpack_invoice_unknown_audit_is_404(monkeypatch):
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    _override(audits=audits, payments=payments)
+    try:
+        r = client.post(f"/v1/audits/{uuid.uuid4()}/fixpack/usdt-invoice")
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "audit_not_found"
+    finally:
+        _clear()
+
+
+# =========================================================================
+# 4. USDT poll completing a fixpack invoice
+# =========================================================================
+
+async def test_usdt_poll_matches_fixpack_and_creates_job_not_account():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts = FakeFixpackRepo(), FakeAccountRepo()
+    audit = audits.add(stack="vite-react", repo_url=REPO_URL)
+
+    inv = await usdt_trc20.create_fixpack_invoice(
+        payments, address=ADDRESS, audit_id=audit["id"])
+    micros = usdt_trc20.amount_to_micros(inv["amount"])
+    transport = _trongrid_transport([_transfer(micros, tx_id="0xfixpack")])
+
+    result = await usdt_trc20.poll_and_match(
+        payments, accounts, address=ADDRESS, transport=transport,
+        fixpack_repo=fixpacks, audit_repo=audits)
+    assert result["matched"] == 1
+
+    # Invoice row completed, still no account.
+    row = payments.rows[inv["invoice_id"]]
+    assert row["status"] == "completed"
+    assert row["external_ref"] == "0xfixpack"
+    assert row["account_id"] is None
+    assert accounts.by_id == {}
+
+    # A paid fixpack job for the audit exists, with the audit's stack.
+    assert len(fixpacks.rows) == 1
+    job = fixpacks.rows[0]
+    assert job["audit_id"] == audit["id"]
+    assert job["status"] == "paid"
+    assert job["stack"] == "vite-react"
+
+
+async def test_usdt_poll_fixpack_is_idempotent():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts = FakeFixpackRepo(), FakeAccountRepo()
+    audit = audits.add(repo_url=REPO_URL)
+
+    inv = await usdt_trc20.create_fixpack_invoice(
+        payments, address=ADDRESS, audit_id=audit["id"])
+    micros = usdt_trc20.amount_to_micros(inv["amount"])
+    transport = _trongrid_transport([_transfer(micros, tx_id="0xsamefp")])
+
+    first = await usdt_trc20.poll_and_match(
+        payments, accounts, address=ADDRESS, transport=transport,
+        fixpack_repo=fixpacks, audit_repo=audits)
+    second = await usdt_trc20.poll_and_match(
+        payments, accounts, address=ADDRESS, transport=transport,
+        fixpack_repo=fixpacks, audit_repo=audits)
+    assert first["matched"] == 1
+    assert second["matched"] == 0        # same tx, already applied
+    assert len(fixpacks.rows) == 1       # no second job

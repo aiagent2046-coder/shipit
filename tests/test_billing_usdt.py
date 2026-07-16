@@ -58,11 +58,13 @@ class FakePaymentRepo:
         self.rows: dict[str, dict] = {}
 
     async def create(self, *, account_id, provider, external_ref, amount,
-                     currency, status, tier_granted, created_at=None):
+                     currency, status, tier_granted, product="pro_tier",
+                     audit_id=None, created_at=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
-            "status": status, "tier_granted": tier_granted,
+            "status": status, "tier_granted": tier_granted, "product": product,
+            "audit_id": audit_id,
             "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows[row["id"]] = row
@@ -84,6 +86,9 @@ class FakePaymentRepo:
     async def mark_completed(self, payment_id, *, account_id, external_ref):
         self.rows[payment_id].update(
             status="completed", account_id=account_id, external_ref=external_ref)
+
+    async def mark_completed_fixpack(self, payment_id, *, external_ref):
+        self.rows[payment_id].update(status="completed", external_ref=external_ref)
 
 
 def _trongrid_transport(transfers: list, *, success: bool = True):
