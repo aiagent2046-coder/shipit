@@ -276,6 +276,69 @@ class FixpackJobRepository:
                 (pr_url, uuid.UUID(job_id)),
             )
 
+    async def list_paid(self) -> list[dict[str, Any]]:
+        """The purchased-but-not-yet-generated Fix Pack jobs (status
+        'paid'), oldest first so the processor works through the backlog
+        in purchase order. Returns [] when DATABASE_URL isn't set, same
+        not-configured contract as PaymentRepository.list_pending (an
+        empty list, not None, so the processor can iterate without a
+        guard)."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return []
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, audit_id, pack, stack, verified, detail,
+                       preview_local_url, preview_expires_at,
+                       pr_url, pr_delivered, status, created_at
+                from fixpack_jobs
+                where status = 'paid'
+                order by created_at asc
+                """,
+            )
+            rows = await cur.fetchall()
+        return [_row_to_fixpack_job(r) for r in rows]
+
+    async def mark_fixpack_delivered(self, job_id: str, pr_url: str) -> None:
+        """A paid Fix Pack job whose fix PR was successfully opened: record
+        the PR url and advance status to 'delivered'. 'delivered' is the
+        terminal success state for the Fix Pack flow, deliberately distinct
+        from the Deploy Pack rows' default 'generated' (migration 0007) and
+        from the 'paid' a purchase inserts — a status query can tell a
+        finished Fix Pack from one still waiting to be processed. No-op when
+        DATABASE_URL isn't set, matching mark_delivered."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                update fixpack_jobs
+                set pr_url = %s, pr_delivered = true, status = 'delivered'
+                where id = %s
+                """,
+                (pr_url, uuid.UUID(job_id)),
+            )
+
+    async def mark_status(self, job_id: str, status: str) -> None:
+        """Advance a Fix Pack job to a non-delivered terminal state:
+        'no_fix_needed' (nothing eligible to fix, so no PR was opened) or
+        'failed' (generation/delivery errored — left visible for retry/ops
+        rather than silently stuck on 'paid'). No-op when DATABASE_URL isn't
+        set, matching mark_delivered."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                "update fixpack_jobs set status = %s where id = %s",
+                (status, uuid.UUID(job_id)),
+            )
+
     async def get(self, job_id: str) -> dict[str, Any] | None:
         try:
             pool = await get_pool()
@@ -290,7 +353,7 @@ class FixpackJobRepository:
                 """
                 select id, audit_id, pack, stack, verified, detail,
                        preview_local_url, preview_expires_at,
-                       pr_url, pr_delivered, created_at
+                       pr_url, pr_delivered, status, created_at
                 from fixpack_jobs where id = %s
                 """,
                 (parsed_id,),

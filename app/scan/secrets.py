@@ -223,8 +223,59 @@ def _jwt_severity(token: str) -> tuple[str, float, str]:
     return "high", 0.6, "JWT committed to code"
 
 
-def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
-    findings: list[SecretFinding] = []
+def _classify_match(name: str, lineno: int, rule: SecretRule,
+                    matched: str) -> SecretFinding:
+    """Turn one rule hit into a SecretFinding, applying the same
+    context-damping and effective-rule-id logic scan_secrets has always
+    used. Extracted so iter_secret_matches and scan_secrets share one
+    definition of "what a finding is" (the Fix Pack relocation path must
+    reproduce the exact rule_id/context the audit persisted)."""
+    severity, confidence, title = rule.severity, rule.confidence, rule.title
+    if rule.id == "jwt-in-code":
+        severity, confidence, title = _jwt_severity(matched)
+    # Supabase anon key is public by design; migration context must NOT
+    # re-escalate it (that produced a wall of 40+ scary-but-false "admin
+    # login" rows in a real report). Tag it with its own rule_id so the
+    # report can collapse and translate it correctly.
+    is_anon = title.startswith("Supabase anon key")
+    effective_rule_id = "supabase-anon-key" if is_anon else rule.id
+    context: str | None = None
+    if _is_migration_context(name) and not is_anon:
+        confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
+        title = f"{title} (committed database migration)"
+    elif _is_doc_context(name) and not is_anon:
+        severity = _DOC_SEVERITY_CAP.get(severity, severity)
+        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
+        title = f"{title} (documentation/example context)"
+    elif _is_test_fixture_context(name, matched) and not is_anon:
+        severity = _DOC_SEVERITY_CAP.get(severity, severity)
+        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
+        title = f"{title} (test fixture/placeholder context)"
+        context = "test_fixture"
+    return SecretFinding(
+        rule_id=effective_rule_id,
+        title=title,
+        severity=severity,
+        confidence=confidence,
+        file=name,
+        line=lineno,
+        masked=_mask(matched),
+        context=context,
+    )
+
+
+def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]]:
+    """Like scan_secrets, but also yields the RAW matched text alongside
+    each finding.
+
+    SECURITY: the second tuple element IS the real secret (or the raw
+    assignment span containing it). SecretFinding itself deliberately
+    never stores it (only a mask) so findings can be persisted/logged
+    safely — this generator is the one place the value is exposed, for
+    the Fix Pack generator which must know the literal to scrub it out of
+    source. Callers MUST NOT persist, log, or echo the raw value; it may
+    only be written OUT of a file, never back into any artifact.
+    """
     with zipfile.ZipFile(fileobj) as zf:
         for name, text in _iter_text_files(zf):
             for lineno, line in enumerate(text.splitlines(), start=1):
@@ -232,39 +283,8 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
                     m = rule.pattern.search(line)
                     if not m:
                         continue
-                    severity, confidence, title = (
-                        rule.severity, rule.confidence, rule.title
-                    )
-                    if rule.id == "jwt-in-code":
-                        severity, confidence, title = _jwt_severity(m.group(0))
-                    # Supabase anon key is public by design; migration
-                    # context must NOT re-escalate it (that produced a
-                    # wall of 40+ scary-but-false "admin login" rows in
-                    # a real report). Tag it with its own rule_id so the
-                    # report can collapse and translate it correctly.
-                    is_anon = title.startswith("Supabase anon key")
-                    effective_rule_id = "supabase-anon-key" if is_anon else rule.id
-                    context: str | None = None
-                    if _is_migration_context(name) and not is_anon:
-                        confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
-                        title = f"{title} (committed database migration)"
-                    elif _is_doc_context(name) and not is_anon:
-                        severity = _DOC_SEVERITY_CAP.get(severity, severity)
-                        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
-                        title = f"{title} (documentation/example context)"
-                    elif _is_test_fixture_context(name, m.group(0)) and not is_anon:
-                        severity = _DOC_SEVERITY_CAP.get(severity, severity)
-                        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
-                        title = f"{title} (test fixture/placeholder context)"
-                        context = "test_fixture"
-                    findings.append(SecretFinding(
-                        rule_id=effective_rule_id,
-                        title=title,
-                        severity=severity,
-                        confidence=confidence,
-                        file=name,
-                        line=lineno,
-                        masked=_mask(m.group(0)),
-                        context=context,
-                    ))
-    return findings
+                    yield _classify_match(name, lineno, rule, m.group(0)), m.group(0)
+
+
+def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
+    return [finding for finding, _ in iter_secret_matches(fileobj)]

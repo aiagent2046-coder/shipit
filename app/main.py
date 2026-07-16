@@ -42,6 +42,11 @@ from app.deploypack.github_app import (
 )
 from app.deploypack.pipeline import run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
+from app.fixpack.generate import (
+    build_fixpack_plan,
+    render_pr_body as render_fixpack_pr_body,
+    render_pr_title as render_fixpack_pr_title,
+)
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
@@ -207,6 +212,23 @@ def _reap_token() -> str | None:
     return os.environ.get("PREVIEW_REAP_TOKEN") or None
 
 
+def _fixpack_process_token() -> str | None:
+    """Bearer token protecting POST /internal/fixpack/process-paid, same
+    env-var pattern as PREVIEW_REAP_TOKEN / USDT_POLL_TOKEN. Unset -> the
+    endpoint 503s rather than accept a no-op auth check."""
+    return os.environ.get("FIXPACK_PROCESS_TOKEN") or None
+
+
+def _require_bearer_token(request: Request, token: str) -> None:
+    """Constant-time check of `Authorization: Bearer <token>`, raising 401
+    on mismatch. The single implementation shared by every internal
+    operational endpoint (reaper, USDT poller, Fix Pack processor) so the
+    comparison stays constant-time in one place and can't drift."""
+    provided = request.headers.get("authorization", "")
+    if not hmac.compare_digest(provided, f"Bearer {token}"):
+        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
+
+
 def _client_key(request: Request) -> str:
     """Client IP, honoring one reverse-proxy hop (Caddy in prod).
 
@@ -250,9 +272,7 @@ async def reap_previews(
                     "detail": "PREVIEW_REAP_TOKEN is not set on this deployment"},
         )
     # Constant-time compare so response latency doesn't leak the token.
-    provided = request.headers.get("authorization", "")
-    if not hmac.compare_digest(provided, f"Bearer {token}"):
-        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
+    _require_bearer_token(request, token)
 
     reaped = await run_in_threadpool(preview_registry.reap_expired)
     return {"reaped": reaped, "active": preview_registry.active_count()}
@@ -524,9 +544,7 @@ async def poll_usdt(
             detail={"reason": "poll_not_configured",
                     "detail": "USDT_POLL_TOKEN is not set on this deployment"},
         )
-    provided = request.headers.get("authorization", "")
-    if not hmac.compare_digest(provided, f"Bearer {token}"):
-        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
+    _require_bearer_token(request, token)
 
     address = _usdt_receiving_address()
     if not address:
@@ -540,6 +558,125 @@ async def poll_usdt(
         api_key=usdt_trc20.trongrid_api_key_from_env(), transport=transport,
         fixpack_repo=fixpack_repo, audit_repo=audit_repo,
     )
+
+
+async def _resolve_pr_token(owner: str, repo: str) -> str | None:
+    """The token delivery.open_pull_request should use for owner/repo: a
+    GitHub App installation token when the App is configured (works for any
+    repo the App is installed on), else None so delivery falls back to the
+    single-operator GITHUB_PR_TOKEN. Same resolution the Deploy Pack flow
+    does inline in create_fixpack — kept identical so both PR paths behave
+    the same."""
+    app_creds = app_credentials_from_env()
+    if app_creds is None:
+        return None
+    app_id, private_key = app_creds
+    return await run_in_threadpool(
+        installation_token_for_repo, owner, repo,
+        app_id=app_id, private_key=private_key,
+    )
+
+
+async def _process_one_paid_job(
+    job: dict, *, audit_repo: AuditRepository,
+    fixpack_repo: FixpackJobRepository, repo_fetcher, pr_opener,
+) -> str:
+    """Generate + deliver one paid Fix Pack job. Returns the outcome:
+    'delivered', 'no_fix_needed', or 'failed'. Advances the job's status to
+    match so a re-run of the processor doesn't pick it up again (a 'failed'
+    job stays visible for a human to retry rather than silently stuck on
+    'paid')."""
+    job_id = job["id"]
+    audit = await audit_repo.get(job["audit_id"]) if job.get("audit_id") else None
+    if audit is None or not audit.get("repo_url"):
+        await fixpack_repo.mark_status(job_id, "failed")
+        return "failed"
+
+    parsed = _parse_github_repo_url(audit["repo_url"])
+    if parsed is None:
+        await fixpack_repo.mark_status(job_id, "failed")
+        return "failed"
+    owner, repo = parsed
+
+    try:
+        zip_bytes = await run_in_threadpool(repo_fetcher, owner, repo)
+    except RepoFetchError:
+        await fixpack_repo.mark_status(job_id, "failed")
+        return "failed"
+
+    findings = audit.get("findings_json") or []
+    plan = await run_in_threadpool(build_fixpack_plan, zip_bytes, findings)
+
+    if not plan.has_changes:
+        # Everything was a test fixture, already fixed, or absent on
+        # re-fetch: don't open an empty PR, record why the job produced no PR.
+        await fixpack_repo.mark_status(job_id, "no_fix_needed")
+        return "no_fix_needed"
+
+    title = render_fixpack_pr_title(plan)
+    body = render_fixpack_pr_body(plan)
+    try:
+        token = await _resolve_pr_token(owner, repo)
+        opened = await run_in_threadpool(
+            pr_opener, owner, repo, plan.files,
+            title=title, body=body, branch_prefix="drydock/fix-pack",
+            deletions=plan.deletions, token=token,
+        )
+    except (DeliveryError, GitHubAppError):
+        await fixpack_repo.mark_status(job_id, "failed")
+        return "failed"
+
+    await fixpack_repo.mark_fixpack_delivered(job_id, opened.html_url)
+    return "delivered"
+
+
+@app.post("/internal/fixpack/process-paid")
+async def process_paid_fixpacks(
+    request: Request,
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    repo_fetcher=Depends(get_repo_fetcher),
+    pr_opener=Depends(get_pr_opener),
+) -> dict:
+    """Operational endpoint: find every paid-but-not-yet-generated Fix Pack
+    job (fixpack_jobs.status = 'paid') and turn each into a real fix PR —
+    re-fetch the audited repo, remove hardcoded secrets, harden config, open
+    the PR, and advance the job to 'delivered'. Meant for a scheduled caller
+    (a systemd timer, same as the reaper and the USDT poller — this repo
+    ships no unit file). Not part of the public API.
+
+    Requires `Authorization: Bearer <FIXPACK_PROCESS_TOKEN>`, constant-time
+    compared via the same helper the reaper and USDT poller use. 503 if the
+    token isn't configured on this deployment — an unconfigured processor is
+    an operational gap to notice, not a silent no-op.
+
+    Returns a summary the scheduler can log: how many jobs were processed,
+    delivered (PR opened), skipped (nothing eligible to fix), and failed.
+    """
+    token = _fixpack_process_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "fixpack_process_not_configured",
+                    "detail": "FIXPACK_PROCESS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    jobs = await fixpack_repo.list_paid()
+    summary = {"processed": 0, "delivered": 0, "skipped": 0, "failed": 0}
+    for job in jobs:
+        summary["processed"] += 1
+        outcome = await _process_one_paid_job(
+            job, audit_repo=audit_repo, fixpack_repo=fixpack_repo,
+            repo_fetcher=repo_fetcher, pr_opener=pr_opener,
+        )
+        if outcome == "delivered":
+            summary["delivered"] += 1
+        elif outcome == "no_fix_needed":
+            summary["skipped"] += 1
+        else:
+            summary["failed"] += 1
+    return summary
 
 
 @app.post("/v1/audits", status_code=202)

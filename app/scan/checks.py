@@ -30,6 +30,29 @@ def _strip_root(names: list[str]) -> list[str]:
     return names
 
 
+def find_committed_env_files(files: list[str]) -> list[str]:
+    """The committed env files a repo should never track: `.env` itself
+    and any `.env.<something>` except `.env.example`. Shared by run_checks
+    (to fire env-file-committed) and the Fix Pack generator (to know which
+    files to untrack), so both agree on exactly what counts."""
+    return [
+        n for n in files
+        if n == ".env" or n.endswith("/.env")
+        or (n.rsplit("/", 1)[-1].startswith(".env.")
+            and not n.endswith(".env.example"))
+    ]
+
+
+def gitignore_covers_env(gitignore_body: str) -> bool:
+    """Whether a .gitignore's text already ignores .env. Same predicate
+    run_checks uses to decide gitignore-missing-secrets, exposed so the
+    Fix Pack generator can avoid appending a pattern that's already there."""
+    return any(
+        line.strip() in (".env", ".env*", "*.env", ".env.*")
+        for line in gitignore_body.splitlines()
+    )
+
+
 def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     with zipfile.ZipFile(fileobj) as zf:
         raw_names = zf.namelist()
@@ -49,12 +72,7 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     findings: list[CheckFinding] = []
     files = [n for n in names if not n.endswith("/")]
 
-    committed_env = [
-        n for n in files
-        if n == ".env" or n.endswith("/.env")
-        or (n.rsplit("/", 1)[-1].startswith(".env.")
-            and not n.endswith(".env.example"))
-    ]
+    committed_env = find_committed_env_files(files)
     if committed_env:
         findings.append(CheckFinding(
             "env-file-committed", "Environment file committed to repository",
@@ -67,10 +85,7 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     # sweeps secret-bearing files back in. Fire when there's no
     # .gitignore at all, or one that doesn't ignore .env.
     gitignore = next((n for n in files if n == ".gitignore"), None)
-    covers_env = any(
-        line.strip() in (".env", ".env*", "*.env", ".env.*")
-        for line in gitignore_body.splitlines()
-    )
+    covers_env = gitignore_covers_env(gitignore_body)
     if not covers_env:
         findings.append(CheckFinding(
             "gitignore-missing-secrets",

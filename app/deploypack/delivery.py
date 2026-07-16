@@ -69,8 +69,19 @@ def open_pull_request(
     title: str = "Drydock: add Deploy Pack (Dockerfile, compose, CI)",
     body: str = "",
     token: str | None = None,
+    deletions: list[str] | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> PullRequestResult:
+    """Open a PR that adds/updates `files` and, optionally, untracks the
+    paths in `deletions`.
+
+    A deletion is a tree entry with `sha: null` against the base tree —
+    the Git Data API's way to drop a path from the new commit's tree. That
+    is exactly `git rm --cached` semantics: the file stops being tracked
+    from this commit forward, but history is untouched (no rewrite, no
+    force-push) and the owner's local working copy is never deleted. Used
+    by the Fix Pack flow to untrack a committed `.env`.
+    """
     token = token or token_from_env()
     if not token:
         raise DeliveryError("no GitHub token configured (GITHUB_PR_TOKEN)")
@@ -96,6 +107,13 @@ def open_pull_request(
             tree_entries.append({
                 "path": path, "mode": "100644", "type": "blob",
                 "sha": blob.json()["sha"],
+            })
+
+        for path in deletions or []:
+            # sha: null against base_tree removes the path from the new
+            # tree — untrack, not history rewrite.
+            tree_entries.append({
+                "path": path, "mode": "100644", "type": "blob", "sha": None,
             })
 
         tree = client.post(
