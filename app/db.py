@@ -153,7 +153,7 @@ class AuditRepository:
     async def create(
         self, *, stack: str, file_count: int,
         score_total: float | None, score_json: dict | None,
-        findings_json: list | None,
+        findings_json: list | None, repo_url: str | None = None,
     ) -> dict[str, Any] | None:
         try:
             pool = await get_pool()
@@ -162,15 +162,17 @@ class AuditRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                insert into audits (stack, file_count, score_total, score_json, findings_json)
-                values (%s, %s, %s, %s::jsonb, %s::jsonb)
+                insert into audits (stack, file_count, score_total, score_json,
+                                    findings_json, repo_url)
+                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s)
                 returning id, stack, status, file_count, score_total,
-                          score_json, findings_json, created_at
+                          score_json, findings_json, repo_url, created_at
                 """,
                 (
                     stack, file_count, score_total,
                     json.dumps(score_json) if score_json is not None else None,
                     json.dumps(findings_json) if findings_json is not None else None,
+                    repo_url,
                 ),
             )
             row = await cur.fetchone()
@@ -189,7 +191,7 @@ class AuditRepository:
             cur = await conn.execute(
                 """
                 select id, stack, status, file_count, score_total,
-                       score_json, findings_json, created_at
+                       score_json, findings_json, repo_url, created_at
                 from audits where id = %s
                 """,
                 (parsed_id,),

@@ -17,7 +17,8 @@ from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
 
 _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
-                  "category", "file", "line", "masked", "explanation", "fix_hint")
+                  "category", "file", "line", "masked", "explanation",
+                  "fix_hint", "context")
 
 
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:

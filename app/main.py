@@ -513,6 +513,10 @@ async def create_audit(
     tier = account["tier"] if account else TIER_FREE
     entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
 
+    # The source URL to remember on the audit, so a later Fix Pack purchase
+    # can re-fetch the same repo without asking for it again. Only set on
+    # the GitHub-URL intake path; null for zip uploads (nothing to re-fetch).
+    source_url: str | None = None
     if archive is not None:
         raw = await archive.read(MAX_ARCHIVE_BYTES + 1)
     else:
@@ -537,6 +541,7 @@ async def create_audit(
                                   "(public GitHub repos only)"},
             )
         owner, repo = parsed
+        source_url = repo_url.strip()
         # Off the event loop: fetch_repo_zip does blocking network I/O.
         try:
             raw = await run_in_threadpool(repo_fetcher, owner, repo)
@@ -603,7 +608,7 @@ async def create_audit(
     persisted = await audit_repo.create(
         stack=stack.value, file_count=report.file_count,
         score_total=scan["score"]["total"], score_json=scan["score"],
-        findings_json=scan["findings"],
+        findings_json=scan["findings"], repo_url=source_url,
     )
     audit_id = persisted["id"] if persisted else str(uuid.uuid4())
 

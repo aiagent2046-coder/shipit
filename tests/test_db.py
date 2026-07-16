@@ -191,6 +191,29 @@ class TestAuditRepositoryWithFakePool:
         assert "insert into audits" in query
         assert params[0] == "fastapi"
 
+    async def test_create_persists_repo_url(self, monkeypatch):
+        audit_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": audit_id, "stack": "nextjs", "status": "completed",
+            "file_count": 1, "score_total": 8.5,
+            "score_json": {"total": 8.5}, "findings_json": [],
+            "repo_url": "https://github.com/acme/app",
+            "created_at": "2026-07-16T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = AuditRepository()
+        result = await repo.create(
+            stack="nextjs", file_count=1, score_total=8.5,
+            score_json={"total": 8.5}, findings_json=[],
+            repo_url="https://github.com/acme/app",
+        )
+
+        assert result["repo_url"] == "https://github.com/acme/app"
+        query, params = fake.calls[0]
+        assert "repo_url" in query
+        assert "https://github.com/acme/app" in params
+
     async def test_get_returns_none_for_missing_row(self, monkeypatch):
         fake = FakePool(fetchone_result=None)
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))

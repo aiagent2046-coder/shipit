@@ -32,7 +32,19 @@ def _strip_root(names: list[str]) -> list[str]:
 
 def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     with zipfile.ZipFile(fileobj) as zf:
-        names = _strip_root(zf.namelist())
+        raw_names = zf.namelist()
+        names = _strip_root(raw_names)
+        # Read the root .gitignore's bytes while the zip is open. After
+        # root-stripping it is exactly ".gitignore"; the original entry is
+        # either top-level or prefixed by the single wrapping folder.
+        gitignore_body = ""
+        gitignore_raw = next(
+            (n for n in raw_names
+             if n == ".gitignore" or n.endswith("/.gitignore")),
+            None,
+        )
+        if gitignore_raw is not None:
+            gitignore_body = zf.read(gitignore_raw).decode("utf-8", errors="ignore")
 
     findings: list[CheckFinding] = []
     files = [n for n in names if not n.endswith("/")]
@@ -48,6 +60,25 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
             "env-file-committed", "Environment file committed to repository",
             severity="critical", confidence=0.9, category="Security",
             file=committed_env[0],
+        ))
+
+    # A .gitignore that doesn't cover .env is how the committed-env leak
+    # above happens in the first place: without it, the next `git add`
+    # sweeps secret-bearing files back in. Fire when there's no
+    # .gitignore at all, or one that doesn't ignore .env.
+    gitignore = next((n for n in files if n == ".gitignore"), None)
+    covers_env = any(
+        line.strip() in (".env", ".env*", "*.env", ".env.*")
+        for line in gitignore_body.splitlines()
+    )
+    if not covers_env:
+        findings.append(CheckFinding(
+            "gitignore-missing-secrets",
+            "No .gitignore coverage for secret-bearing files"
+            if gitignore is None
+            else ".gitignore does not cover .env / secret files",
+            severity="high", confidence=0.8, category="Security",
+            file=gitignore or "",
         ))
 
     has_tests = any(

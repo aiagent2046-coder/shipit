@@ -176,6 +176,11 @@ class SecretFinding:
     file: str
     line: int
     masked: str  # e.g. "AKIA****(20 chars)" — value itself is never stored
+    # Machine-readable damping context, mirroring the title suffix so
+    # downstream code (e.g. the Fix Pack eligibility filter) can branch
+    # on it without string-matching the title. "test_fixture" when the
+    # test-fixture/placeholder path fired; None otherwise.
+    context: str | None = None
 
 
 def _mask(value: str) -> str:
@@ -239,6 +244,7 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
                     # report can collapse and translate it correctly.
                     is_anon = title.startswith("Supabase anon key")
                     effective_rule_id = "supabase-anon-key" if is_anon else rule.id
+                    context: str | None = None
                     if _is_migration_context(name) and not is_anon:
                         confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
                         title = f"{title} (committed database migration)"
@@ -250,6 +256,7 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
                         severity = _DOC_SEVERITY_CAP.get(severity, severity)
                         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
                         title = f"{title} (test fixture/placeholder context)"
+                        context = "test_fixture"
                     findings.append(SecretFinding(
                         rule_id=effective_rule_id,
                         title=title,
@@ -258,5 +265,6 @@ def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
                         file=name,
                         line=lineno,
                         masked=_mask(m.group(0)),
+                        context=context,
                     ))
     return findings

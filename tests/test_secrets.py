@@ -219,6 +219,26 @@ def test_jest_setup_placeholder_anthropic_key_is_damped():
     assert "(test fixture/placeholder context)" in f.title
 
 
+def test_test_fixture_damping_sets_structured_context():
+    # The damping is also exposed as a machine-readable field, so the
+    # future Fix Pack filter can check finding.context != "test_fixture"
+    # instead of string-matching the title suffix.
+    zf = make_zip({
+        "jest.setup.ts":
+            (f"  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY "
+             f"|| '{FIXTURE_ANTHROPIC}',\n").encode(),
+    })
+    f = next(f for f in scan_secrets(zf) if f.rule_id == "anthropic-api-key")
+    assert f.context == "test_fixture"
+
+
+def test_non_damped_finding_has_null_context():
+    zf = make_zip({"src/config.ts": f"const k = '{FAKE_AWS}';\n".encode()})
+    findings = scan_secrets(zf)
+    assert len(findings) == 1
+    assert findings[0].context is None
+
+
 def test_jest_setup_placeholder_jwt_is_damped():
     zf = make_zip({"jest.setup.ts": f"const t = '{FIXTURE_JWT}';\n".encode()})
     f = next(f for f in scan_secrets(zf) if f.rule_id == "jwt-in-code")
