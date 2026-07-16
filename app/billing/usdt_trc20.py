@@ -36,7 +36,9 @@ a caller-supplied address.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import os
+import re
 import secrets
 from typing import Any
 
@@ -47,6 +49,21 @@ PROVIDER = "usdt_trc20"
 CURRENCY = "USDT"
 _DECIMALS = 6
 _MICRO = 10 ** _DECIMALS
+
+# TRON mainnet address version byte. A TRON address is this byte followed
+# by the same 20-byte account hash Ethereum uses, then a 4-byte
+# double-SHA256 checksum, the whole 25 bytes base58check-encoded -- which
+# is what makes it render as a "T..." string. The 0x41 prefix is exactly
+# why base58check(0x41 + hash) starts with 'T' and an Ethereum "0x..."
+# (no prefix byte, hex not base58) does not.
+_TRON_MAINNET_PREFIX = 0x41
+
+# Canonical form we must always hand to a wallet: base58check, 34 chars,
+# leading 'T'. Anything else pasted into a Tron wallet is rejected (or,
+# worse, silently misinterpreted), so this is the shape we validate to.
+_TRON_BASE58_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+
+_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 # Mainnet USDT (Tether) TRC20 contract. Overridable (e.g. a testnet
 # contract) but defaulted so it works out of the box. Used to filter the
@@ -62,8 +79,93 @@ INVOICE_TTL_SECONDS = 30 * 60
 _DEFAULT_PRICE_USDT = "5"
 
 
+class InvalidTronAddressError(ValueError):
+    """The configured/supplied value is not a valid TRON address and can't
+    be safely turned into one. Raised instead of guessing, because sending
+    USDT to a malformed address is unrecoverable."""
+
+
+def _b58encode(data: bytes) -> str:
+    n = int.from_bytes(data, "big")
+    out = ""
+    while n > 0:
+        n, rem = divmod(n, 58)
+        out = _B58_ALPHABET[rem] + out
+    pad = len(data) - len(data.lstrip(b"\x00"))
+    return "1" * pad + out
+
+
+def _b58decode(s: str) -> bytes:
+    n = 0
+    for ch in s:
+        idx = _B58_ALPHABET.find(ch)
+        if idx < 0:
+            raise InvalidTronAddressError(f"non-base58 character: {ch!r}")
+        n = n * 58 + idx
+    body = n.to_bytes((n.bit_length() + 7) // 8, "big") if n else b""
+    pad = len(s) - len(s.lstrip("1"))
+    return b"\x00" * pad + body
+
+
+def _base58check_encode(payload: bytes) -> str:
+    checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+    return _b58encode(payload + checksum)
+
+
+def normalize_tron_address(value: str) -> str:
+    """Return a valid base58check TRON address ("T..."), converting from the
+    internal hex forms if necessary, or raise InvalidTronAddressError.
+
+    Fails closed on purpose: the point of this whole module is to hand a
+    payer an address to send real money to, and a wrong address loses that
+    money irrecoverably. So we accept only what we can prove is a real Tron
+    address and reject anything ambiguous rather than pass it through.
+
+    Accepted inputs:
+      * base58check "T..." -- checksum-verified, returned as-is.
+      * 21-byte TRON hex ("41" + 20-byte hash), optional "0x" -- encoded.
+      * 20-byte hash hex ("0x3917..."), the Ethereum-style / prefix-less
+        TRON hex -- the 0x41 version byte is prepended, then encoded. This
+        is the exact shape that leaked to users as a raw "0x..." string.
+    """
+    if not isinstance(value, str):
+        raise InvalidTronAddressError(f"address is not a string: {type(value)!r}")
+    v = value.strip()
+    if not v:
+        raise InvalidTronAddressError("address is empty")
+
+    if _TRON_BASE58_RE.match(v):
+        raw = _b58decode(v)
+        if len(raw) != 25 or raw[0] != _TRON_MAINNET_PREFIX:
+            raise InvalidTronAddressError(f"not a mainnet TRON address: {v}")
+        payload, checksum = raw[:21], raw[21:]
+        if hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4] != checksum:
+            raise InvalidTronAddressError(f"base58 checksum mismatch: {v}")
+        return v
+
+    hexstr = v[2:] if v[:2].lower() == "0x" else v
+    try:
+        body = bytes.fromhex(hexstr)
+    except ValueError:
+        raise InvalidTronAddressError(f"not base58 or hex TRON address: {v}")
+    if len(body) == 21 and body[0] == _TRON_MAINNET_PREFIX:
+        payload = body
+    elif len(body) == 20:
+        payload = bytes([_TRON_MAINNET_PREFIX]) + body
+    else:
+        raise InvalidTronAddressError(f"hex TRON address wrong length: {v}")
+    return _base58check_encode(payload)
+
+
 def receiving_address_from_env() -> str | None:
-    return os.environ.get("USDT_TRC20_ADDRESS") or None
+    """The configured receiving address, always as a base58check "T..."
+    string. Raises InvalidTronAddressError if USDT_TRC20_ADDRESS is set but
+    can't be turned into a valid Tron address (callers surface that as a
+    503 rather than hand a payer a bad address)."""
+    raw = os.environ.get("USDT_TRC20_ADDRESS") or None
+    if raw is None:
+        return None
+    return normalize_tron_address(raw)
 
 
 def poll_token_from_env() -> str | None:
