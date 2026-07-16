@@ -47,7 +47,7 @@ def render_pr_body(pack: str, files: dict[str, str], detail: str) -> str:
     understand what changed and why before they merge anything."""
     file_list = "\n".join(f"- `{path}`" for path in sorted(files))
     return (
-        f"## ShipIt {pack.title()} Pack\n\n"
+        f"## Drydock {pack.title()} Pack\n\n"
         f"Verified in a sandbox before this PR was opened: `docker build` "
         f"+ `docker run` + a real HTTP request confirmed the app boots.\n\n"
         f"**Verification result:** {detail}\n\n"
@@ -66,7 +66,7 @@ def open_pull_request(
     *,
     base_branch: str = "main",
     branch_prefix: str = "shipit/deploy-pack",
-    title: str = "ShipIt: add Deploy Pack (Dockerfile, compose, CI)",
+    title: str = "Drydock: add Deploy Pack (Dockerfile, compose, CI)",
     body: str = "",
     token: str | None = None,
     transport: httpx.BaseTransport | None = None,

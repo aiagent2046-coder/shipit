@@ -154,7 +154,7 @@ async def send_message(
 
 def _delivery_text(api_key: str) -> str:
     return (
-        "Payment received — your ShipIt pro access is active.\n\n"
+        "Payment received — your Drydock pro access is active.\n\n"
         f"Your API key:\n{api_key}\n\n"
         "Send it as `Authorization: Bearer <key>` on API requests. "
         "Keep it secret; anyone with it has your pro access."

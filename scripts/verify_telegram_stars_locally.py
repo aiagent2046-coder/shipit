@@ -71,8 +71,8 @@ async def main() -> int:
         print("\n=== sendInvoice (real Stars invoice) ===")
         result = await telegram_stars.send_invoice(
             chat_id=args.chat_id,
-            title="ShipIt Pro",
-            description="ShipIt pro tier — higher audit limits and more.",
+            title="Drydock Pro",
+            description="Drydock pro tier — higher audit limits and more.",
             payload="verify-script-test",
             stars=args.stars,
             token=token,

@@ -1,4 +1,4 @@
-// Thin fetch client for the ShipIt FastAPI backend. No backend of our
+// Thin fetch client for the Drydock FastAPI backend. No backend of our
 // own — every call here is a cross-origin request to NEXT_PUBLIC_API_BASE_URL.
 
 import type {

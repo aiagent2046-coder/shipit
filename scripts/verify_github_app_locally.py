@@ -89,7 +89,7 @@ def main() -> int:
           f"{body['full_name']} (private={body['private']})")
     print(
         "\nThe App auth path is genuinely working end to end. Set these two "
-        "env vars on wherever ShipIt actually runs and PR delivery will use "
+        "env vars on wherever Drydock actually runs and PR delivery will use "
         "this App instead of a PAT:\n"
         f"  GITHUB_APP_ID={args.app_id}\n"
         "  GITHUB_APP_PRIVATE_KEY=<contents of your .pem file>"

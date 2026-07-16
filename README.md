@@ -1,4 +1,4 @@
-# ShipIt
+# Drydock
 
 Autonomous rescue for vibe-coded apps: free production-readiness audit,
 paid Fix Packs executed by agents and verified in a sandbox, delivered
@@ -119,7 +119,7 @@ Implemented:
   query through Supabase's Supavisor pooler (confirmed by hand, both
   session and transaction pooler modes) — a known open Supabase-side
   bug ([supabase/supabase#39227](https://github.com/supabase/supabase/issues/39227)),
-  not a ShipIt bug. Switched to `psycopg` (libpq-based, same library
+  not a Drydock bug. Switched to `psycopg` (libpq-based, same library
   `psql` uses, which never hit this) with `prepare_threshold=None` to
   avoid the same class of pooler incompatibility. See `app/db.py`'s
   module docstring for the full diagnostic trail. **Resolved 2026-07-12:**
