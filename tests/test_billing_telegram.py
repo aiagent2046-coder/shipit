@@ -15,7 +15,7 @@ import uuid
 
 import httpx
 
-from app.billing import telegram_stars
+from app.billing import telegram_stars, usdt_trc20
 from app.main import (
     app,
     get_account_repo,
@@ -77,6 +77,22 @@ class FakePaymentRepo:
     async def mark_completed(self, payment_id, *, account_id, external_ref):
         r = self.rows[payment_id]
         r.update(status="completed", account_id=account_id, external_ref=external_ref)
+
+    async def get_completed_by_telegram_chat_id(self, telegram_chat_id: str):
+        found = [
+            r for r in self.rows.values()
+            if r["status"] == "completed"
+            and r.get("telegram_chat_id") == telegram_chat_id
+        ]
+        return found[-1] if found else None
+
+    async def link_telegram_chat_id(self, payment_id: str, telegram_chat_id: str):
+        r = self.rows[payment_id]
+        # First-wins: only stamp if unset (or already the same chat) -- mirrors
+        # the DB method's WHERE clause so tests exercise the real guard.
+        if r.get("telegram_chat_id") in (None, telegram_chat_id):
+            r["telegram_chat_id"] = telegram_chat_id
+        return r
 
 
 def _telegram_transport(calls: list):
@@ -243,3 +259,126 @@ def test_webhook_correct_secret_processes_payment(monkeypatch):
         assert len(accounts.by_id) == 1
     finally:
         _clear()
+
+
+# --- 5. /mykey key recovery ---
+
+def _text_update(text: str, chat_id: int = 555):
+    return {"update_id": 1, "message": {
+        "chat": {"id": chat_id}, "from": {"id": chat_id}, "text": text}}
+
+
+async def _send(update, accounts, payments, calls):
+    return await telegram_stars.handle_update(
+        update, account_repo=accounts, payment_repo=payments,
+        token="t", transport=_telegram_transport(calls),
+    )
+
+
+def _last_text(calls):
+    sends = [c for c in calls if c[0] == "sendMessage"]
+    return sends[-1][1]["text"] if sends else None
+
+
+async def test_mykey_returns_key_for_linked_account():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    # A Stars purchase links this chat_id (555) to the account automatically.
+    await _send(_successful_payment_update("charge_mykey", 555),
+                accounts, payments, calls)
+    account = next(iter(accounts.by_id.values()))
+
+    calls.clear()
+    result = await _send(_text_update("/mykey", 555), accounts, payments, calls)
+    assert result["handled"] == "mykey" and result["found"] is True
+    # The delivery text (same copy as purchase) carrying the exact key.
+    assert account["api_key"] in _last_text(calls)
+
+
+async def test_mykey_no_account_returns_helpful_message():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    result = await _send(_text_update("/mykey", 999), accounts, payments, calls)
+    assert result["handled"] == "mykey" and result["found"] is False
+    msg = _last_text(calls)
+    # Explains both recovery paths, leaks no key.
+    assert "Stars" in msg and "/link" in msg
+    assert "sk_live_" not in msg
+
+
+# --- 6. /link USDT payment claiming ---
+
+async def _completed_usdt_payment(payments, accounts, tx_hash, *, chat_id=None):
+    """A credited USDT payment as the poller leaves it: status completed,
+    external_ref = tx hash, linked to a real account."""
+    acct = await accounts.create(api_key="sk_live_usdtkey", tier="pro")
+    row = await payments.create(
+        account_id=acct["id"], provider=usdt_trc20.PROVIDER,
+        external_ref=tx_hash, amount=5.5, currency="USDT",
+        status="completed", tier_granted="pro",
+    )
+    if chat_id is not None:
+        row["telegram_chat_id"] = chat_id
+    return acct, row
+
+
+async def test_link_valid_unlinked_payment_links_and_returns_key():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    acct, row = await _completed_usdt_payment(payments, accounts, "0xabc")
+
+    result = await _send(_text_update("/link 0xabc", 777),
+                         accounts, payments, calls)
+    assert result["result"] == "linked"
+    assert acct["api_key"] in _last_text(calls)
+    # Persisted the association so a later /mykey works.
+    assert row["telegram_chat_id"] == "777"
+
+
+async def test_link_is_idempotent_for_same_chat():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    acct, _ = await _completed_usdt_payment(payments, accounts, "0xdup")
+    for _ in range(2):
+        result = await _send(_text_update("/link 0xdup", 777),
+                             accounts, payments, calls)
+        assert result["result"] == "linked"
+    assert acct["api_key"] in _last_text(calls)
+
+
+async def test_link_already_claimed_by_other_chat_is_rejected():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    acct, _ = await _completed_usdt_payment(
+        payments, accounts, "0xowned", chat_id="111")
+
+    result = await _send(_text_update("/link 0xowned", 222),
+                         accounts, payments, calls)
+    assert result["result"] == "already_claimed"
+    msg = _last_text(calls)
+    # No key leaked, and crucially no leak of the owning chat_id ("111").
+    assert acct["api_key"] not in msg
+    assert "111" not in msg
+
+
+async def test_link_unknown_hash_reports_not_found():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    result = await _send(_text_update("/link 0xnope", 333),
+                         accounts, payments, calls)
+    assert result["result"] == "not_found"
+    assert "wasn't found" in _last_text(calls)
+
+
+async def test_link_pending_payment_reports_pending():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    # A payment row that carries the tx hash but isn't credited yet.
+    await payments.create(
+        account_id=None, provider=usdt_trc20.PROVIDER, external_ref="0xpending",
+        amount=5.5, currency="USDT", status="pending", tier_granted="pro",
+    )
+    result = await _send(_text_update("/link 0xpending", 444),
+                         accounts, payments, calls)
+    assert result["result"] == "pending"
+    assert "pending" in _last_text(calls).lower()
+
+
+async def test_link_without_hash_shows_usage():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    result = await _send(_text_update("/link", 555), accounts, payments, calls)
+    assert result["result"] == "missing_hash"
+    assert "Usage" in _last_text(calls)
