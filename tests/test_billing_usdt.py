@@ -11,6 +11,7 @@ read path.
 from __future__ import annotations
 
 import datetime
+import re
 import uuid
 
 import httpx
@@ -26,8 +27,16 @@ from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
-ADDRESS = "TXYZreceiveExampleAddress0000000000"
+# A real, checksum-valid base58check TRON address -- the shape a wallet
+# actually accepts. Must be valid because the invoice/poll endpoints now
+# normalize+validate USDT_TRC20_ADDRESS and reject anything that isn't a
+# genuine "T..." address (see test_invoice_endpoint_rejects_non_tron_env).
+ADDRESS = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+
+# The shape any address handed to a payer must match: leading 'T', 34
+# chars, base58 alphabet only (no 0, O, I, l).
+_TRON_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
 
 
 class FakeAccountRepo:
@@ -134,10 +143,72 @@ def test_invoice_endpoint_creates_invoice(monkeypatch):
         assert r.status_code == 201
         body = r.json()
         assert body["address"] == ADDRESS
+        # Regression guard: the address handed to the payer must be valid
+        # base58check Tron ("T..."), never a "0x..." hex address a Tron
+        # wallet would reject. This is the assertion the old suite lacked.
+        assert _TRON_ADDR_RE.match(body["address"]), body["address"]
         assert body["currency"] == "USDT"
         assert "invoice_id" in body and "expires_at" in body
     finally:
         app.dependency_overrides.pop(get_payment_repo, None)
+
+
+def test_invoice_endpoint_converts_hex_env_to_base58(monkeypatch):
+    """If USDT_TRC20_ADDRESS is set to the internal 0x-hex form of a Tron
+    address (the exact live bug), the endpoint still hands the payer a
+    valid base58check "T..." address, not the raw "0x..." string."""
+    hex_form = "0x3917C3B3127F9c6fCa89E59A4acEb2B8Eb84CeE6"
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", hex_form)
+    app.dependency_overrides[get_payment_repo] = lambda: FakePaymentRepo()
+    try:
+        r = client.post("/v1/billing/usdt/invoice")
+        assert r.status_code == 201
+        addr = r.json()["address"]
+        assert not addr.startswith("0x")
+        assert _TRON_ADDR_RE.match(addr), addr
+        # deterministic: 0x41 + the 20 hex bytes, base58check-encoded
+        assert addr == "TFB5zBBVJwg8UHemGep9eGYZST4vxHYiAb"
+    finally:
+        app.dependency_overrides.pop(get_payment_repo, None)
+
+
+def test_invoice_endpoint_rejects_non_tron_env(monkeypatch):
+    """A configured value that isn't a Tron address at all is a 503
+    (misconfig), never a bad address handed to a payer."""
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", "not-an-address")
+    app.dependency_overrides[get_payment_repo] = lambda: FakePaymentRepo()
+    try:
+        r = client.post("/v1/billing/usdt/invoice")
+        assert r.status_code == 503
+        assert r.json()["detail"]["reason"] == "usdt_misconfigured"
+    finally:
+        app.dependency_overrides.pop(get_payment_repo, None)
+
+
+def test_normalize_tron_address_forms():
+    hexb = "3917C3B3127F9c6fCa89E59A4acEb2B8Eb84CeE6"
+    expected = "TFB5zBBVJwg8UHemGep9eGYZST4vxHYiAb"
+    # 20-byte Ethereum-style hex, with and without 0x
+    assert usdt_trc20.normalize_tron_address("0x" + hexb) == expected
+    assert usdt_trc20.normalize_tron_address(hexb) == expected
+    # 21-byte TRON hex (0x41 version byte + 20-byte hash)
+    assert usdt_trc20.normalize_tron_address("41" + hexb) == expected
+    # already-valid base58 passes through unchanged
+    assert usdt_trc20.normalize_tron_address(ADDRESS) == ADDRESS
+    for form in (usdt_trc20.normalize_tron_address("0x" + hexb),
+                 usdt_trc20.normalize_tron_address(ADDRESS)):
+        assert _TRON_ADDR_RE.match(form), form
+
+
+def test_normalize_tron_address_rejects_bad_input():
+    for bad in ("", "   ", "not-an-address", "0xdeadbeef",
+                "TXYZreceiveExampleAddress0000000000",  # bad base58 checksum
+                "0x3917C3B3127F9c6fCa89E59A4acEb2B8Eb84CeE6ff"):  # wrong length
+        try:
+            usdt_trc20.normalize_tron_address(bad)
+        except usdt_trc20.InvalidTronAddressError:
+            continue
+        raise AssertionError(f"expected rejection for {bad!r}")
 
 
 # --- 6. poll matches a mocked transfer and completes the invoice ---

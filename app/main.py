@@ -369,6 +369,20 @@ async def telegram_webhook(
     )
 
 
+def _usdt_receiving_address() -> str | None:
+    """Configured receiving address as a base58check "T..." string, or None
+    if unset. A set-but-malformed USDT_TRC20_ADDRESS is a 503 (misconfig)
+    rather than a 500 or, far worse, a bad address handed to a payer."""
+    try:
+        return usdt_trc20.receiving_address_from_env()
+    except usdt_trc20.InvalidTronAddressError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "usdt_misconfigured",
+                    "detail": f"USDT_TRC20_ADDRESS is not a valid TRON address: {exc}"},
+        )
+
+
 @app.post("/v1/billing/usdt/invoice", status_code=201)
 async def create_usdt_invoice(
     payment_repo: PaymentRepository = Depends(get_payment_repo),
@@ -383,7 +397,7 @@ async def create_usdt_invoice(
     isn't set (the pending invoice row can't be persisted, so there'd be
     nothing to match a later payment against).
     """
-    address = usdt_trc20.receiving_address_from_env()
+    address = _usdt_receiving_address()
     if not address:
         raise HTTPException(
             status_code=503,
@@ -410,7 +424,7 @@ async def get_usdt_invoice(
     """Poll one USDT invoice. Reveals the API key only once the invoice is
     `completed` (payment confirmed on-chain by the poller); pending or
     expired invoices never leak a key. 404 if no such invoice."""
-    address = usdt_trc20.receiving_address_from_env() or ""
+    address = _usdt_receiving_address() or ""
     status = await usdt_trc20.invoice_status(
         payment_repo, account_repo, invoice_id, address=address
     )
@@ -452,7 +466,7 @@ async def poll_usdt(
     if not hmac.compare_digest(provided, f"Bearer {token}"):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
-    address = usdt_trc20.receiving_address_from_env()
+    address = _usdt_receiving_address()
     if not address:
         raise HTTPException(
             status_code=503,
