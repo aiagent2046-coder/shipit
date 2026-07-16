@@ -137,6 +137,8 @@ def _row_to_payment(row: dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
     d["id"] = str(d["id"])
     d["account_id"] = str(d["account_id"]) if d["account_id"] else None
+    if d.get("audit_id"):
+        d["audit_id"] = str(d["audit_id"])
     # amount is a Postgres `numeric` -> decimal.Decimal -> a JSON *string*
     # under the default encoder; cast to float so it serializes as a number,
     # same fix as score_total in _row_to_audit.
@@ -227,10 +229,38 @@ class FixpackJobRepository:
                 values (%s, %s, %s, %s, %s, %s, %s)
                 returning id, audit_id, pack, stack, verified, detail,
                           preview_local_url, preview_expires_at,
-                          pr_url, pr_delivered, created_at
+                          pr_url, pr_delivered, status, created_at
                 """,
                 (parsed_audit_id, pack, stack, verified, detail,
                  preview_local_url, expires_dt),
+            )
+            row = await cur.fetchone()
+        return _row_to_fixpack_job(row)
+
+    async def create_paid(
+        self, *, audit_id: str | None, stack: str
+    ) -> dict[str, Any] | None:
+        """Insert a Fix Pack job in the 'paid' state: purchased, not yet
+        generated. Distinct from create() (the Deploy Pack flow's already-
+        generated rows, which default to status 'generated') -- a separate
+        follow-up step picks up 'paid' rows and generates the fix PR.
+        pack='fixpack' names the product; the other generation outputs
+        (verified, detail, preview_*) stay null until that step runs."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        parsed_audit_id = uuid.UUID(audit_id) if audit_id else None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into fixpack_jobs (audit_id, pack, stack, status)
+                values (%s, 'fixpack', %s, 'paid')
+                returning id, audit_id, pack, stack, verified, detail,
+                          preview_local_url, preview_expires_at,
+                          pr_url, pr_delivered, status, created_at
+                """,
+                (parsed_audit_id, stack),
             )
             row = await cur.fetchone()
         return _row_to_fixpack_job(row)
@@ -348,24 +378,27 @@ class PaymentRepository:
         self, *, account_id: str | None, provider: str,
         external_ref: str | None, amount: float | None, currency: str | None,
         status: str, tier_granted: str | None,
+        product: str = "pro_tier", audit_id: str | None = None,
     ) -> dict[str, Any] | None:
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return None
         parsed_account_id = uuid.UUID(account_id) if account_id else None
+        parsed_audit_id = uuid.UUID(audit_id) if audit_id else None
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
                 insert into payments
                     (account_id, provider, external_ref, amount, currency,
-                     status, tier_granted)
-                values (%s, %s, %s, %s, %s, %s, %s)
+                     status, tier_granted, product, audit_id)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id, account_id, provider, external_ref, amount,
-                          currency, status, tier_granted, telegram_chat_id, created_at
+                          currency, status, tier_granted, telegram_chat_id,
+                          product, audit_id, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
-                 status, tier_granted),
+                 status, tier_granted, product, parsed_audit_id),
             )
             row = await cur.fetchone()
         return _row_to_payment(row)
@@ -383,7 +416,8 @@ class PaymentRepository:
             cur = await conn.execute(
                 """
                 select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, telegram_chat_id, created_at
+                       currency, status, tier_granted, telegram_chat_id,
+                       product, audit_id, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -406,7 +440,8 @@ class PaymentRepository:
             cur = await conn.execute(
                 """
                 select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, telegram_chat_id, created_at
+                       currency, status, tier_granted, telegram_chat_id,
+                       product, audit_id, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
@@ -428,7 +463,8 @@ class PaymentRepository:
             cur = await conn.execute(
                 """
                 select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, telegram_chat_id, created_at
+                       currency, status, tier_granted, telegram_chat_id,
+                       product, audit_id, created_at
                 from payments
                 where provider = %s and status = 'pending'
                 order by created_at desc
@@ -459,6 +495,28 @@ class PaymentRepository:
                 (uuid.UUID(account_id), external_ref, uuid.UUID(payment_id)),
             )
 
+    async def mark_completed_fixpack(
+        self, payment_id: str, *, external_ref: str
+    ) -> None:
+        """Transition a pending Fix Pack invoice to completed, stamping the
+        on-chain tx as its external_ref. The Fix Pack counterpart to
+        mark_completed -- but a Fix Pack grants no account/tier, so this
+        never sets account_id (it stays null). No-op when DATABASE_URL isn't
+        set, matching mark_completed."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                update payments
+                set status = 'completed', external_ref = %s
+                where id = %s
+                """,
+                (external_ref, uuid.UUID(payment_id)),
+            )
+
     async def get_completed_by_telegram_chat_id(
         self, telegram_chat_id: str
     ) -> dict[str, Any] | None:
@@ -475,7 +533,8 @@ class PaymentRepository:
             cur = await conn.execute(
                 """
                 select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, telegram_chat_id, created_at
+                       currency, status, tier_granted, telegram_chat_id,
+                       product, audit_id, created_at
                 from payments
                 where telegram_chat_id = %s and status = 'completed'
                 order by created_at desc
@@ -514,7 +573,8 @@ class PaymentRepository:
             cur = await conn.execute(
                 """
                 select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, telegram_chat_id, created_at
+                       currency, status, tier_granted, telegram_chat_id,
+                       product, audit_id, created_at
                 from payments where id = %s
                 """,
                 (pid,),

@@ -35,6 +35,9 @@ class _PaymentStore(Protocol):
     async def mark_completed(
         self, payment_id: str, *, account_id: str, external_ref: str
     ) -> None: ...
+    async def mark_completed_fixpack(
+        self, payment_id: str, *, external_ref: str
+    ) -> None: ...
 
 
 async def grant_pro_tier(
@@ -90,6 +93,71 @@ async def grant_pro_tier(
         await payment_repo.create(
             account_id=account["id"], provider=provider, external_ref=external_ref,
             amount=amount, currency=currency, status="completed",
-            tier_granted=TIER_PRO,
+            tier_granted=TIER_PRO, product=PRODUCT_PRO,
         )
     return account
+
+
+# Product labels for the `payments.product` column (migration 0007). Kept
+# here alongside grant_pro_tier / grant_fixpack -- the two converging steps
+# that write them -- so both providers use the exact same strings.
+PRODUCT_PRO = "pro_tier"
+PRODUCT_FIXPACK = "fixpack"
+
+
+async def grant_fixpack(
+    *,
+    fixpack_repo: Any,
+    payment_repo: _PaymentStore,
+    audit_repo: Any,
+    provider: str,
+    external_ref: str,
+    amount: float | None,
+    currency: str | None,
+    audit_id: str | None,
+    invoice_payment_id: str | None = None,
+) -> dict[str, Any] | None:
+    """The Fix Pack counterpart to grant_pro_tier: idempotently turn a
+    confirmed Fix Pack payment into a paid `fixpack_jobs` row for its
+    audit, and return that row. Deliberately does NOT touch accounts or
+    tiers -- a Fix Pack is a one-off per-audit product, not an account
+    upgrade -- so it never calls grant_pro_tier and mints no API key.
+
+    Idempotency mirrors grant_pro_tier: `external_ref` (the Stars charge id
+    or the TRC20 transaction id) is the key. A retried Telegram webhook or
+    a transfer seen on two polls finds the already-completed payment and
+    returns without creating a second job (migration 0004's partial unique
+    index is the DB-level backstop for the check-then-write race).
+
+    `invoice_payment_id` distinguishes the two providers' bookkeeping, same
+    as in grant_pro_tier: USDT passes it (a pending invoice row already
+    exists -> transition it to completed), Telegram omits it (no pre-
+    existing row -> insert a completed one).
+
+    Returns None only when nothing could be persisted (DATABASE_URL not
+    configured); callers surface that as "couldn't queue", not a crash.
+    Generation of the actual fix PR is a separate follow-up step that picks
+    up the 'paid' row this creates.
+    """
+    existing = await payment_repo.get_by_external_ref(provider, external_ref)
+    if existing is not None and existing.get("status") == "completed":
+        # Already processed this charge/tx -- don't create a second job.
+        return existing
+
+    audit = await audit_repo.get(audit_id) if (audit_repo and audit_id) else None
+    stack = (audit or {}).get("stack") or "unknown"
+
+    if invoice_payment_id is not None:
+        await payment_repo.mark_completed_fixpack(
+            invoice_payment_id, external_ref=external_ref
+        )
+    else:
+        created = await payment_repo.create(
+            account_id=None, provider=provider, external_ref=external_ref,
+            amount=amount, currency=currency, status="completed",
+            tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
+        )
+        if created is None:
+            return None  # DATABASE_URL not configured -- nothing persisted.
+
+    return await fixpack_repo.create_paid(audit_id=audit_id, stack=stack)

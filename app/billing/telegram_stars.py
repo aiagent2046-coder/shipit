@@ -57,6 +57,18 @@ PRO_TITLE = "Drydock Pro"
 PRO_DESCRIPTION = "Drydock pro tier — higher audit limits and more."
 PRO_PAYLOAD = "pro"
 
+# Price of a Fix Pack, in Stars. Same env-overridable-with-default pattern
+# as _DEFAULT_PRO_STARS above -- a Fix Pack is a separate product (one
+# generated fix PR for one audit), priced independently of the Pro tier.
+_DEFAULT_FIXPACK_STARS = 600
+
+# Invoice copy for a Fix Pack. Unlike the Pro invoice, a Fix Pack is tied
+# to a specific audit, so the payload encodes that audit_id (see
+# FIXPACK_PAYLOAD_PREFIX): the successful_payment handler reads it back to
+# know which audit the purchase is for.
+FIXPACK_TITLE = "Drydock Fix Pack"
+FIXPACK_PAYLOAD_PREFIX = "fixpack:"
+
 
 def bot_token_from_env() -> str | None:
     """Same env-var-or-None pattern as GITHUB_PR_TOKEN / PREVIEW_REAP_TOKEN.
@@ -78,6 +90,38 @@ def pro_stars_price() -> int:
         except ValueError:
             pass
     return _DEFAULT_PRO_STARS
+
+
+def fixpack_stars_price() -> int:
+    raw = os.environ.get("FIXPACK_STARS_PRICE")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_FIXPACK_STARS
+
+
+def fixpack_payload(audit_id: str) -> str:
+    """Invoice payload for a Fix Pack purchase: the prefix plus the audit
+    it's for, so the successful_payment handler can recover the audit_id
+    (the invoice itself lives in Telegram, not our DB)."""
+    return f"{FIXPACK_PAYLOAD_PREFIX}{audit_id}"
+
+
+def _fixpack_description(audit_id: str) -> str:
+    return (
+        f"Drydock Fix Pack for audit {audit_id[:8]} — a generated pull "
+        "request fixing this audit's findings."
+    )
+
+
+_FIXPACK_ZIP_ONLY_TEXT = (
+    "Fix Pack currently only supports audits run from a GitHub URL. This "
+    "audit was created from an uploaded zip, so there's no repository to "
+    "open a fix PR against. Re-run the audit with your public GitHub repo "
+    "URL, then buy a Fix Pack for that audit."
+)
 
 
 def build_invoice_payload(
@@ -172,6 +216,7 @@ def _delivery_text(api_key: str) -> str:
 async def handle_update(
     update: dict[str, Any], *, account_repo: Any, payment_repo: Any,
     token: str, transport: httpx.BaseTransport | None = None,
+    audit_repo: Any = None, fixpack_repo: Any = None,
 ) -> dict[str, Any]:
     """Dispatch one webhook update. Caller (the endpoint) has already
     verified the secret-token header, so this trusts the update is really
@@ -180,10 +225,15 @@ async def handle_update(
     Update types that matter; anything else is acknowledged and ignored
     (Telegram sends many kinds to the same webhook URL):
       * pre_checkout_query -> approve it (10s deadline).
-      * message.successful_payment -> grant pro, DM the key. Idempotent
-        on telegram_payment_charge_id via grant_pro_tier.
+      * message.successful_payment -> for a Pro purchase, grant pro and DM
+        the key (idempotent on telegram_payment_charge_id via
+        grant_pro_tier); for a Fix Pack purchase (payload prefixed
+        "fixpack:"), create the paid fixpack_jobs row instead (via
+        grant_fixpack) and DM a confirmation -- no tier change, no key.
       * message.text "/upgrade" -> send a Stars invoice for the pro tier
         (the Pay button that /pricing tells users to expect).
+      * message.text "/fixpack <audit_id>" -> send a Stars invoice for a
+        Fix Pack scoped to that audit (GitHub-URL audits only).
       * message.text "/mykey" -> resend the delivery message for the
         account already linked to this chat_id (key recovery).
       * message.text "/link <tx_hash>" -> a USDT payer claims a credited
@@ -202,6 +252,13 @@ async def handle_update(
     message = update.get("message") or {}
     sp = message.get("successful_payment")
     if sp is not None:
+        payload = sp.get("invoice_payload", "") or ""
+        if payload.startswith(FIXPACK_PAYLOAD_PREFIX):
+            return await _handle_fixpack_payment(
+                message, sp, payment_repo=payment_repo,
+                audit_repo=audit_repo, fixpack_repo=fixpack_repo,
+                token=token, transport=transport,
+            )
         chat_id = message["chat"]["id"]
         account = await grant_pro_tier(
             account_repo=account_repo, payment_repo=payment_repo,
@@ -239,6 +296,11 @@ async def handle_update(
     if text.split(maxsplit=1)[:1] == ["/upgrade"]:
         return await _handle_upgrade(
             message, token=token, transport=transport,
+        )
+    if text.split(maxsplit=1)[:1] == ["/fixpack"]:
+        return await _handle_fixpack(
+            message, text, audit_repo=audit_repo,
+            token=token, transport=transport,
         )
     if text.split(maxsplit=1)[:1] == ["/mykey"]:
         return await _handle_mykey(
@@ -279,6 +341,91 @@ async def _handle_upgrade(
         token=token, transport=transport,
     )
     return {"ok": True, "handled": "upgrade"}
+
+
+async def _handle_fixpack(
+    message: dict[str, Any], text: str, *, audit_repo: Any,
+    token: str, transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # "/fixpack <audit_id>": send a Stars invoice for a Fix Pack scoped to
+    # that audit. Mirrors _handle_upgrade's shape (same send_invoice, same
+    # env-driven price), but the payload encodes the audit_id and the
+    # invoice is only offered for GitHub-URL audits (repo_url not null) --
+    # a zip-upload audit has no repo to open a fix PR against (V1 scope).
+    chat_id = message["chat"]["id"]
+    parts = text.split(maxsplit=1)
+    audit_id = parts[1].strip() if len(parts) > 1 else ""
+    if not audit_id:
+        await send_message(
+            chat_id,
+            "Usage: `/fixpack <audit_id>` — the id of a completed audit you "
+            "ran from a public GitHub URL.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "fixpack", "result": "missing_audit_id"}
+
+    audit = await audit_repo.get(audit_id) if audit_repo is not None else None
+    if audit is None:
+        await send_message(
+            chat_id,
+            "No audit with that id was found. Double-check the audit id from "
+            "your report.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "fixpack", "result": "audit_not_found"}
+
+    if not audit.get("repo_url"):
+        await send_message(
+            chat_id, _FIXPACK_ZIP_ONLY_TEXT, token=token, transport=transport
+        )
+        return {"ok": True, "handled": "fixpack", "result": "not_github_audit"}
+
+    await send_invoice(
+        chat_id=chat_id, title=FIXPACK_TITLE,
+        description=_fixpack_description(audit_id),
+        payload=fixpack_payload(audit_id), stars=fixpack_stars_price(),
+        token=token, transport=transport,
+    )
+    return {"ok": True, "handled": "fixpack", "result": "invoice_sent"}
+
+
+async def _handle_fixpack_payment(
+    message: dict[str, Any], sp: dict[str, Any], *, payment_repo: Any,
+    audit_repo: Any, fixpack_repo: Any, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # A completed Fix Pack Stars payment. Unlike the Pro flow this grants
+    # NO tier and mints NO key: it records the payment and creates the paid
+    # fixpack_jobs row (generation is a separate follow-up). Idempotent on
+    # telegram_payment_charge_id via grant_fixpack.
+    from app.billing import grant_fixpack
+
+    chat_id = message["chat"]["id"]
+    audit_id = sp["invoice_payload"][len(FIXPACK_PAYLOAD_PREFIX):]
+    job = await grant_fixpack(
+        fixpack_repo=fixpack_repo, payment_repo=payment_repo,
+        audit_repo=audit_repo, provider=PROVIDER,
+        external_ref=sp["telegram_payment_charge_id"],
+        amount=sp.get("total_amount"), currency=sp.get("currency", CURRENCY),
+        audit_id=audit_id,
+    )
+    if job is None:
+        # DATABASE_URL not configured -- payment taken but nothing persisted.
+        await send_message(
+            chat_id,
+            "Payment received, but your Fix Pack could not be queued "
+            "(server misconfiguration). Please contact support with this "
+            f"charge id: {sp['telegram_payment_charge_id']}",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "fixpack_payment", "persisted": False}
+    await send_message(
+        chat_id,
+        f"Payment received — your Drydock Fix Pack for audit {audit_id[:8]} "
+        "is queued. You'll get the pull request once it's generated.",
+        token=token, transport=transport,
+    )
+    return {"ok": True, "handled": "fixpack_payment", "persisted": True}
 
 
 async def _handle_mykey(

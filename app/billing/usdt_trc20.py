@@ -78,6 +78,14 @@ INVOICE_TTL_SECONDS = 30 * 60
 
 _DEFAULT_PRICE_USDT = "5"
 
+# Fix Pack price (USDT). Separate product from the Pro tier, priced
+# independently; same env-overridable-with-default pattern as
+# _DEFAULT_PRICE_USDT / USDT_PRICE above.
+_DEFAULT_FIXPACK_PRICE_USDT = "12"
+
+PRODUCT_PRO = "pro_tier"
+PRODUCT_FIXPACK = "fixpack"
+
 
 class InvalidTronAddressError(ValueError):
     """The configured/supplied value is not a valid TRON address and can't
@@ -190,6 +198,14 @@ def _base_price_micros() -> int:
         return int(round(float(_DEFAULT_PRICE_USDT) * _MICRO))
 
 
+def _fixpack_base_price_micros() -> int:
+    raw = os.environ.get("FIXPACK_USDT_PRICE") or _DEFAULT_FIXPACK_PRICE_USDT
+    try:
+        return int(round(float(raw) * _MICRO))
+    except ValueError:
+        return int(round(float(_DEFAULT_FIXPACK_PRICE_USDT) * _MICRO))
+
+
 def _micros_to_amount(micros: int) -> float:
     return micros / _MICRO
 
@@ -202,16 +218,12 @@ def amount_to_micros(amount: float) -> int:
     return int(round(amount * _MICRO))
 
 
-async def create_invoice(
-    payment_repo: Any, *, address: str
-) -> dict[str, Any] | None:
-    """Reserve a unique amount and persist a pending payment row (the
-    invoice). Returns the payer-facing details, or None if DATABASE_URL
-    isn't configured (the pending row can't be written, so there'd be
-    nothing to match a payment against later -- the endpoint surfaces
-    that as 503 rather than hand out an unrecorded amount).
-    """
-    base = _base_price_micros()
+async def _reserve_unique_amount(payment_repo: Any, base: int) -> float:
+    """A base price plus a sub-dollar nonce that no currently-open invoice
+    is already using, so two concurrent invoices get distinct on-chain
+    amounts and can be matched apart. Shared by the Pro and Fix Pack
+    invoice creators -- both draw from the same pending set so a Pro and a
+    Fix Pack invoice can't collide either."""
     pending = await payment_repo.list_pending(PROVIDER)
     taken = {amount_to_micros(p["amount"]) for p in pending if p.get("amount") is not None}
 
@@ -222,11 +234,23 @@ async def create_invoice(
         if micros not in taken:
             break
         micros = base + secrets.randbelow(_MICRO)
+    return _micros_to_amount(micros)
 
-    amount = _micros_to_amount(micros)
+
+async def create_invoice(
+    payment_repo: Any, *, address: str
+) -> dict[str, Any] | None:
+    """Reserve a unique amount and persist a pending payment row (the
+    invoice). Returns the payer-facing details, or None if DATABASE_URL
+    isn't configured (the pending row can't be written, so there'd be
+    nothing to match a payment against later -- the endpoint surfaces
+    that as 503 rather than hand out an unrecorded amount).
+    """
+    amount = await _reserve_unique_amount(payment_repo, _base_price_micros())
     row = await payment_repo.create(
         account_id=None, provider=PROVIDER, external_ref=None,
         amount=amount, currency=CURRENCY, status="pending", tier_granted="pro",
+        product=PRODUCT_PRO,
     )
     if row is None:
         return None
@@ -236,6 +260,35 @@ async def create_invoice(
         "address": address,
         "amount": amount,
         "currency": CURRENCY,
+        "expires_at": _expiry_of(row).isoformat(),
+    }
+
+
+async def create_fixpack_invoice(
+    payment_repo: Any, *, address: str, audit_id: str
+) -> dict[str, Any] | None:
+    """Open a USDT invoice for a Fix Pack scoped to one audit. Same unique-
+    amount disambiguation as create_invoice, but at the Fix Pack base price
+    and tagged product='fixpack' + audit_id so poll_and_match knows to
+    create a fixpack_jobs row (not grant a tier) when it's paid. Returns
+    None (endpoint -> 503) when DATABASE_URL isn't configured."""
+    amount = await _reserve_unique_amount(
+        payment_repo, _fixpack_base_price_micros()
+    )
+    row = await payment_repo.create(
+        account_id=None, provider=PROVIDER, external_ref=None,
+        amount=amount, currency=CURRENCY, status="pending", tier_granted=None,
+        product=PRODUCT_FIXPACK, audit_id=audit_id,
+    )
+    if row is None:
+        return None
+    return {
+        "invoice_id": row["id"],
+        "network": "TRC20",
+        "address": address,
+        "amount": amount,
+        "currency": CURRENCY,
+        "audit_id": audit_id,
         "expires_at": _expiry_of(row).isoformat(),
     }
 
@@ -330,12 +383,15 @@ class TronGridError(Exception):
 async def poll_and_match(
     payment_repo: Any, account_repo: Any, *, address: str,
     api_key: str | None = None, transport: httpx.BaseTransport | None = None,
+    fixpack_repo: Any = None, audit_repo: Any = None,
 ) -> dict[str, Any]:
     """Read incoming USDT transfers and complete any pending invoice whose
     exact amount arrived. Idempotent per transfer via external_ref (a tx
-    seen on a later poll is skipped). Returns a small summary for the
+    seen on a later poll is skipped). A matched Pro invoice grants pro; a
+    matched Fix Pack invoice (product='fixpack') creates the paid
+    fixpack_jobs row instead. Returns a small summary for the
     caller/scheduler to log."""
-    from app.billing import grant_pro_tier
+    from app.billing import grant_fixpack, grant_pro_tier
 
     transfers = await fetch_transfers(
         address, api_key=api_key, transport=transport
@@ -372,12 +428,20 @@ async def poll_and_match(
         seen = await payment_repo.get_by_external_ref(PROVIDER, tx_id)
         if seen is not None:
             continue
-        granted = await grant_pro_tier(
-            account_repo=account_repo, payment_repo=payment_repo,
-            provider=PROVIDER, external_ref=tx_id,
-            amount=inv["amount"], currency=CURRENCY,
-            invoice_payment_id=inv["id"],
-        )
+        if inv.get("product") == PRODUCT_FIXPACK:
+            granted = await grant_fixpack(
+                fixpack_repo=fixpack_repo, payment_repo=payment_repo,
+                audit_repo=audit_repo, provider=PROVIDER, external_ref=tx_id,
+                amount=inv["amount"], currency=CURRENCY,
+                audit_id=inv.get("audit_id"), invoice_payment_id=inv["id"],
+            )
+        else:
+            granted = await grant_pro_tier(
+                account_repo=account_repo, payment_repo=payment_repo,
+                provider=PROVIDER, external_ref=tx_id,
+                amount=inv["amount"], currency=CURRENCY,
+                invoice_payment_id=inv["id"],
+            )
         if granted is not None:
             matched += 1
             # One invoice per amount: don't let a second identical transfer
