@@ -1,0 +1,13 @@
+-- Fix Pack prep: remember where a GitHub-sourced audit came from.
+--
+-- When an audit is created from a public github.com URL, we now persist
+-- that URL on the audit row. A later Fix Pack purchase can then re-fetch
+-- the exact same source to generate and PR a fix, without asking the
+-- owner to paste the repo URL a second time.
+--
+-- Nullable because zip-upload audits have no URL to store (the bytes came
+-- straight from the client, there is nothing to re-fetch) -- same "null
+-- is the common, legitimate case" reasoning as external_ref on a pending
+-- payment. No index: the column is read by id alongside the rest of the
+-- audit row, never queried on its own.
+alter table audits add column if not exists repo_url text;

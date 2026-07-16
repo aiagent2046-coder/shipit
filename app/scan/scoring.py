@@ -48,6 +48,12 @@ class ScoredFinding:
     # LLM findings (previously dropped on the floor).
     explanation: str = ""
     fix_hint: str = ""
+    # Machine-readable damping/eligibility context, propagated from the
+    # scanner (see SecretFinding.context). "test_fixture" when a finding
+    # was damped as a test-fixture placeholder, None otherwise. Lets
+    # downstream consumers (the future Fix Pack filter) branch reliably
+    # instead of string-matching the title suffix.
+    context: str | None = None
 
 
 def _score(findings: list[ScoredFinding]) -> float:

@@ -109,6 +109,16 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "No urgent action needed for the anon key itself. Do confirm "
         "your Row Level Security is on, since the anon key relies on it.",
     ),
+    "gitignore-missing-secrets": (
+        "Your project has no .gitignore rule covering secret files like "
+        ".env, private keys, or credential files.",
+        "Without it, the next time you run `git add` it's easy to commit "
+        "your .env or a key file by accident — handing every password and "
+        "API key to anyone who can see the code. This is the most common "
+        "way secrets end up leaked.",
+        "Add a .gitignore that lists .env, .env.*, *.pem, *.key and other "
+        "credential files so they can never be committed by mistake.",
+    ),
     "no-tests": (
         "The project has no automated tests.",
         "Every change is a blind edit: things that worked yesterday can "

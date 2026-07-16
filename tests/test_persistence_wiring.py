@@ -16,7 +16,13 @@ import zipfile
 from fastapi.testclient import TestClient
 
 from app.deploypack.delivery import PullRequestResult
-from app.main import app, get_audit_repo, get_fixpack_repo, get_pr_opener
+from app.main import (
+    app,
+    get_audit_repo,
+    get_fixpack_repo,
+    get_pr_opener,
+    get_repo_fetcher,
+)
 import app.deploypack.pipeline as pipeline_mod
 from app.deploypack.sandbox import SandboxResult
 
@@ -103,6 +109,40 @@ def test_create_audit_persists_and_returns_persisted_true():
     assert body["persisted"] is True
     assert body["audit_id"] in fake.rows
     assert fake.create_calls[0]["stack"] == "fastapi"
+
+
+def test_create_audit_from_upload_stores_null_repo_url():
+    fake = FakeAuditRepo()
+    app.dependency_overrides[get_audit_repo] = lambda: fake
+    try:
+        client.post(
+            "/v1/audits",
+            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_audit_repo, None)
+
+    assert fake.create_calls[0]["repo_url"] is None
+
+
+def test_create_audit_from_github_url_persists_repo_url():
+    fake = FakeAuditRepo()
+
+    def fake_fetch(owner, repo, **kwargs):
+        return make_zip(FASTAPI_ZIP).getvalue()
+
+    app.dependency_overrides[get_audit_repo] = lambda: fake
+    app.dependency_overrides[get_repo_fetcher] = lambda: fake_fetch
+    try:
+        resp = client.post(
+            "/v1/audits", data={"repo_url": "https://github.com/acme/app"}
+        )
+    finally:
+        app.dependency_overrides.pop(get_audit_repo, None)
+        app.dependency_overrides.pop(get_repo_fetcher, None)
+
+    assert resp.status_code == 202
+    assert fake.create_calls[0]["repo_url"] == "https://github.com/acme/app"
 
 
 def test_create_audit_without_database_still_works_unpersisted():

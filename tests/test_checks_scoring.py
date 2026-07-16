@@ -24,9 +24,42 @@ def test_committed_env_detected_even_inside_root_folder():
 
 
 def test_env_example_is_allowed():
-    buf = make_zip({".env.example": b"KEY=", "tests/test_x.py": b"",
-                    "Dockerfile": b"", ".github/workflows/ci.yml": b""})
+    buf = make_zip({".env.example": b"KEY=", ".gitignore": b".env\n",
+                    "tests/test_x.py": b"", "Dockerfile": b"",
+                    ".github/workflows/ci.yml": b""})
     assert run_checks(buf) == []
+
+
+def test_gitignore_missing_entirely_is_flagged():
+    buf = make_zip({"app.py": b"", ".env.example": b"KEY="})
+    ids = {f.rule_id for f in run_checks(buf)}
+    assert "gitignore-missing-secrets" in ids
+
+
+def test_gitignore_without_env_coverage_is_flagged():
+    buf = make_zip({".gitignore": b"node_modules/\ndist/\n", "app.py": b""})
+    findings = run_checks(buf)
+    f = next(f for f in findings if f.rule_id == "gitignore-missing-secrets")
+    assert f.severity == "high"
+    assert f.category == "Security"
+
+
+def test_gitignore_covering_env_is_not_flagged():
+    buf = make_zip({".gitignore": b"node_modules/\n.env\n*.pem\n", "app.py": b""})
+    ids = {f.rule_id for f in run_checks(buf)}
+    assert "gitignore-missing-secrets" not in ids
+
+
+def test_gitignore_env_glob_coverage_is_accepted():
+    buf = make_zip({".gitignore": b".env*\n", "app.py": b""})
+    ids = {f.rule_id for f in run_checks(buf)}
+    assert "gitignore-missing-secrets" not in ids
+
+
+def test_gitignore_coverage_detected_inside_root_folder():
+    buf = make_zip({"my-app/.gitignore": b".env\n", "my-app/app.py": b""})
+    ids = {f.rule_id for f in run_checks(buf)}
+    assert "gitignore-missing-secrets" not in ids
 
 
 def test_missing_tests_dockerfile_ci_reported():
@@ -79,6 +112,19 @@ def test_static_scan_end_to_end():
     assert "aws-access-key-id" in ids and "no-tests" in ids
     assert result["score"]["total"] < 10.0
     assert result["score"]["categories"]["Security"] < 10.0
+
+
+def test_static_findings_carry_context_field():
+    # The structured context field must survive serialization into the
+    # finding dicts stored in findings_json / returned by the API.
+    buf = make_zip({
+        "src/config.ts": b"const k = 'AKIA" + b"A" * 16 + b"'",
+        "app.py": b"",
+    })
+    result = run_static_scan(buf)
+    aws = next(f for f in result["findings"] if f["rule_id"] == "aws-access-key-id")
+    assert "context" in aws
+    assert aws["context"] is None
 
 
 def test_perfect_total_impossible_with_findings():

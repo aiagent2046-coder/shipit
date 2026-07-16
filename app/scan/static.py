@@ -18,7 +18,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         findings.append(ScoredFinding(
             rule_id=s.rule_id, title=s.title, severity=s.severity,
             confidence=s.confidence, category="Security",
-            file=s.file, line=s.line, masked=s.masked,
+            file=s.file, line=s.line, masked=s.masked, context=s.context,
         ))
 
     fileobj.seek(0)
