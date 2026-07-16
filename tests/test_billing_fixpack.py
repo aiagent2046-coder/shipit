@@ -67,6 +67,12 @@ class FakeFixpackRepo:
         self.rows.append(row)
         return row
 
+    async def get_by_audit(self, audit_id):
+        matches = [r for r in self.rows if r["audit_id"] == audit_id]
+        if not matches:
+            return None
+        return max(matches, key=lambda r: r["created_at"])
+
 
 class FakeAccountRepo:
     def __init__(self):
@@ -428,3 +434,55 @@ async def test_usdt_poll_fixpack_is_idempotent():
     assert first["matched"] == 1
     assert second["matched"] == 0        # same tx, already applied
     assert len(fixpacks.rows) == 1       # no second job
+
+
+# =========================================================================
+# 5. GET /v1/audits/{audit_id}/fixpack-status — results-page poll target
+# =========================================================================
+
+def _override_status(*, audits, fixpacks):
+    app.dependency_overrides[get_audit_repo] = lambda: audits
+    app.dependency_overrides[get_fixpack_repo] = lambda: fixpacks
+
+
+def test_fixpack_status_no_job_returns_null_status():
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    _override_status(audits=audits, fixpacks=fixpacks)
+    try:
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        assert r.status_code == 200
+        assert r.json() == {"audit_id": audit["id"], "status": None, "pr_url": None}
+    finally:
+        _clear()
+
+
+async def test_fixpack_status_reports_paid_then_delivered():
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    job = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    _override_status(audits=audits, fixpacks=fixpacks)
+    try:
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        assert r.json() == {"audit_id": audit["id"], "status": "paid", "pr_url": None}
+
+        job["status"] = "delivered"
+        job["pr_url"] = "https://github.com/acme/widget/pull/7"
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        assert r.json() == {
+            "audit_id": audit["id"], "status": "delivered",
+            "pr_url": "https://github.com/acme/widget/pull/7",
+        }
+    finally:
+        _clear()
+
+
+def test_fixpack_status_unknown_audit_is_404():
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    _override_status(audits=audits, fixpacks=fixpacks)
+    try:
+        r = client.get(f"/v1/audits/{uuid.uuid4()}/fixpack-status")
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "audit_not_found"
+    finally:
+        _clear()

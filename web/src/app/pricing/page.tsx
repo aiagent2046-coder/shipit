@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { TELEGRAM_BOT_USERNAME } from "@/lib/api";
 import { useApiKey } from "@/components/providers";
-import { UsdtCheckout } from "@/components/UsdtCheckout";
+import { ProUsdtCheckout } from "@/components/UsdtCheckout";
 
 interface Row {
   label: string;
@@ -66,7 +66,9 @@ export default function PricingPage() {
         </h1>
         <p className="mt-2 max-w-2xl text-muted">
           The audit itself is free. Pro raises your daily audit limit — pay
-          once with Telegram Stars or USDT and unlock a Pro API key.
+          once with Telegram Stars or USDT and unlock a Pro API key. Pro does
+          not include a Fix Pack: those are bought per-audit from an audit&apos;s
+          results page.
         </p>
         {isPro && (
           <p className="mt-3 inline-block rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm text-accent">
@@ -136,7 +138,7 @@ export default function PricingPage() {
         </div>
 
         {/* USDT / TRC20 */}
-        <UsdtCheckout />
+        <ProUsdtCheckout />
       </section>
 
       <p className="mt-8 text-center text-sm text-muted">

@@ -4,6 +4,8 @@
 import type {
   Account,
   AuditResult,
+  FixpackStatus,
+  FixpackUsdtInvoice,
   PersistedAudit,
   UsdtInvoice,
   UsdtInvoiceStatus,
@@ -122,4 +124,23 @@ export async function getUsdtInvoice(id: string): Promise<UsdtInvoiceStatus> {
     `${API_BASE_URL}/v1/billing/usdt/invoice/${encodeURIComponent(id)}`,
   );
   return parse<UsdtInvoiceStatus>(res);
+}
+
+// Open a USDT invoice to buy a Fix Pack for one specific audit. The returned
+// invoice is polled with getUsdtInvoice, exactly like the Pro invoice.
+export async function createFixpackUsdtInvoice(
+  auditId: string,
+): Promise<FixpackUsdtInvoice> {
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/usdt-invoice`,
+    { method: "POST" },
+  );
+  return parse<FixpackUsdtInvoice>(res);
+}
+
+export async function getFixpackStatus(auditId: string): Promise<FixpackStatus> {
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack-status`,
+  );
+  return parse<FixpackStatus>(res);
 }

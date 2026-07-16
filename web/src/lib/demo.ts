@@ -100,5 +100,6 @@ export const DEMO_AUDIT: AuditResult = {
     basis: "static+llm",
   },
   findings: DEMO_FINDINGS,
+  repo_url: "https://github.com/example/demo-app",
   llm: { basis: "static+llm" },
 };

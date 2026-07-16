@@ -361,6 +361,35 @@ class FixpackJobRepository:
             row = await cur.fetchone()
         return _row_to_fixpack_job(row) if row else None
 
+    async def get_by_audit(self, audit_id: str) -> dict[str, Any] | None:
+        """The most recent Fix Pack job for an audit, so the results page can
+        poll one audit's purchase outcome (status + pr_url) without knowing a
+        job id up front. Newest first because a re-purchase after a 'failed'
+        job should surface the latest attempt. Returns None when there's no
+        job yet or DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(audit_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, audit_id, pack, stack, verified, detail,
+                       preview_local_url, preview_expires_at,
+                       pr_url, pr_delivered, status, created_at
+                from fixpack_jobs where audit_id = %s
+                order by created_at desc
+                limit 1
+                """,
+                (parsed_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_fixpack_job(row) if row else None
+
 
 class AccountRepository:
     """Accounts for the paywall foundation (see app/accounts.py). Same
