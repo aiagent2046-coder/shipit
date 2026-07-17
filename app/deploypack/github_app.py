@@ -34,6 +34,8 @@ See app/main.py for how the two are chosen between.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import os
 import time
@@ -78,12 +80,53 @@ def _normalize_pem(raw: str) -> str:
     return raw
 
 
+def _private_key_from_b64() -> str | None:
+    """Decode GITHUB_APP_PRIVATE_KEY_B64 — a base64 encoding of the raw
+    PEM (real newlines and all) — into a usable PEM string.
+
+    Why this path exists: systemd's EnvironmentFile= applies one layer of
+    C-style escape processing when it parses values, so it consumes a
+    backslash before our code ever runs. A value stored as literal
+    two-char ``\\n`` escapes (for _normalize_pem to undo) therefore loses
+    that backslash inside systemd, leaving bare letter "n" instead of
+    newlines — the PEM is then always invalid under systemd (confirmed on
+    prod: a 1700-char file value arrives as 1674 chars in /proc/<pid>/environ,
+    exactly 26 fewer — one per interior newline — with 0 real newlines seen
+    by Python). base64's alphabet contains no backslash, newline, or other
+    special characters, so it is immune to any escape processing and survives
+    systemd untouched.
+
+    Returns None (not an error) when the variable is unset/empty or cannot
+    be decoded, so the caller falls back to the escaping-based path."""
+    raw = os.environ.get("GITHUB_APP_PRIVATE_KEY_B64")
+    if not raw:
+        return None
+    try:
+        return base64.b64decode(raw, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
+        # Structure-only diagnostic: the decode failure type, never the value.
+        logger.warning(
+            "GITHUB_APP_PRIVATE_KEY_B64 could not be decoded (%s) — "
+            "falling back to GITHUB_APP_PRIVATE_KEY",
+            type(exc).__name__,
+        )
+        return None
+
+
 def app_credentials_from_env() -> tuple[str, str] | None:
     app_id = os.environ.get("GITHUB_APP_ID")
-    private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-    if not app_id or not private_key:
+    if not app_id:
         return None
-    return app_id, _normalize_pem(private_key)
+    # Prefer the base64 path (systemd-safe); fall back to the literal-\n
+    # escaping path, which still works for non-systemd delivery mechanisms
+    # that pass the secret through without escape processing.
+    private_key = _private_key_from_b64()
+    if not private_key:
+        raw = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+        private_key = _normalize_pem(raw) if raw else None
+    if not private_key:
+        return None
+    return app_id, private_key
 
 
 def mint_app_jwt(app_id: str, private_key: str, *, now: float | None = None) -> str:
