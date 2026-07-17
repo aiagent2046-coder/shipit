@@ -54,12 +54,27 @@ class GitHubAppError(Exception):
     not an error."""
 
 
+def _normalize_pem(raw: str) -> str:
+    """A flat systemd EnvironmentFile line holds one KEY=VALUE per
+    physical line and cannot carry a raw multi-line PEM block, so the
+    only way to fit a PEM into it is to store literal two-character
+    ``\\n`` escapes instead of real newlines. jwt.encode needs a real
+    PEM with actual newline characters, so undo that escaping here.
+
+    Defensive: only unescape when literal ``\\n`` is present AND no real
+    newline already is, so a correctly-formatted multi-line key set via
+    some other mechanism is passed through untouched (no double-unescape)."""
+    if "\\n" in raw and "\n" not in raw:
+        raw = raw.replace("\\n", "\n")
+    return raw
+
+
 def app_credentials_from_env() -> tuple[str, str] | None:
     app_id = os.environ.get("GITHUB_APP_ID")
     private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY")
     if not app_id or not private_key:
         return None
-    return app_id, private_key
+    return app_id, _normalize_pem(private_key)
 
 
 def mint_app_jwt(app_id: str, private_key: str, *, now: float | None = None) -> str:
@@ -69,7 +84,14 @@ def mint_app_jwt(app_id: str, private_key: str, *, now: float | None = None) -> 
     directly, which needs an installation token instead."""
     now = now if now is not None else time.time()
     payload = {"iat": int(now) - 60, "exp": int(now) + 9 * 60, "iss": app_id}
-    return jwt.encode(payload, private_key, algorithm="RS256")
+    private_key = _normalize_pem(private_key)
+    try:
+        return jwt.encode(payload, private_key, algorithm="RS256")
+    except (ValueError, jwt.exceptions.PyJWTError) as exc:
+        raise GitHubAppError(
+            "GITHUB_APP_PRIVATE_KEY is not a valid PEM private key — "
+            "check for missing newlines or truncation"
+        ) from exc
 
 
 def installation_token_for_repo(
