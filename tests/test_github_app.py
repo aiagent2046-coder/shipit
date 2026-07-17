@@ -69,6 +69,46 @@ def test_mint_app_jwt_is_really_signed_and_verifiable(keypair):
         jwt.decode(token[:-4] + "abcd", public_pem, algorithms=["RS256"])
 
 
+def test_mint_app_jwt_valid_real_newline_key_unchanged(keypair):
+    private_pem, public_pem = keypair
+    assert "\n" in private_pem  # sanity: real multi-line PEM
+    now = time.time()
+    token = mint_app_jwt("999", private_pem, now=now)
+    decoded = jwt.decode(token, public_pem, algorithms=["RS256"])
+    assert decoded["iss"] == "999"
+
+
+def test_mint_app_jwt_normalizes_literal_backslash_n(keypair):
+    """A PEM stored the only way a flat systemd EnvironmentFile can hold
+    it — real newlines replaced by literal two-char \\n escapes — must be
+    normalized and produce the same valid, verifiable JWT."""
+    private_pem, public_pem = keypair
+    escaped = private_pem.replace("\n", "\\n")
+    assert "\n" not in escaped and "\\n" in escaped
+
+    now = time.time()
+    token_escaped = mint_app_jwt("999", escaped, now=now)
+    token_real = mint_app_jwt("999", private_pem, now=now)
+    assert token_escaped == token_real
+
+    decoded = jwt.decode(token_escaped, public_pem, algorithms=["RS256"])
+    assert decoded["iss"] == "999"
+
+
+def test_app_credentials_from_env_normalizes_escaped_pem(monkeypatch, keypair):
+    private_pem, _ = keypair
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", private_pem.replace("\n", "\\n"))
+    app_id, key = app_credentials_from_env()
+    assert app_id == "12345"
+    assert key == private_pem  # real newlines restored
+
+
+def test_mint_app_jwt_garbage_key_raises_githubapperror():
+    with pytest.raises(GitHubAppError, match="not a valid PEM private key"):
+        mint_app_jwt("999", "this-is-not-a-pem-key")
+
+
 def test_installation_token_for_repo_happy_path(keypair):
     private_pem, _ = keypair
     calls = []
