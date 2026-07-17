@@ -605,19 +605,27 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
     does inline in create_fixpack — kept identical so both PR paths behave
     the same."""
     app_creds = app_credentials_from_env()
-    # Diagnostic for the "no GitHub token configured" incident: when App
-    # creds look present in the process env yet resolution still yields no
-    # token, this pins down whether os.environ actually carries them at
-    # call time. Presence/length only — never the secret values.
+    # Diagnostic for the "no GitHub token configured" incident: /proc/<pid>/
+    # environ (a snapshot from execve, never updated by in-process changes)
+    # still shows GITHUB_APP_PRIVATE_KEY, yet os.environ.get here returns
+    # nothing. No code in this repo pops/dels/unsets it, so the divergence is
+    # either (a) the inspected pid is not the worker that runs delivery
+    # (e.g. a uvicorn/gunicorn master vs. its child worker), or (b) something
+    # outside this repo removed it in-process. Logging the live pid and which
+    # GITHUB_* keys os.environ actually holds tells the two apart on the next
+    # occurrence. Presence/length and key NAMES only — never secret values.
     app_id_env = os.environ.get("GITHUB_APP_ID")
     pem_env = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+    github_keys = sorted(k for k in os.environ if k.startswith("GITHUB_"))
     logger.warning(
-        "PR token resolve for %s/%s: GITHUB_APP_ID=%s, "
-        "GITHUB_APP_PRIVATE_KEY=%s, app_credentials_from_env=%s",
-        owner, repo,
+        "PR token resolve for %s/%s: pid=%s, GITHUB_APP_ID=%s, "
+        "GITHUB_APP_PRIVATE_KEY=%s, app_credentials_from_env=%s, "
+        "GITHUB_* keys present=%s",
+        owner, repo, os.getpid(),
         len(app_id_env) if app_id_env else "MISSING",
         len(pem_env) if pem_env else "MISSING",
         "None" if app_creds is None else "present",
+        github_keys,
     )
     if app_creds is None:
         return None
