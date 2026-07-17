@@ -95,6 +95,34 @@ def test_mint_app_jwt_normalizes_literal_backslash_n(keypair):
     assert decoded["iss"] == "999"
 
 
+def test_mint_app_jwt_escaped_pem_with_trailing_real_newline(keypair):
+    """The production failure: the env value is the literal-\\n single-line
+    PEM (byte-confirmed correct: header, 27 literal \\n, footer) but the
+    loader kept a stray trailing real newline. The old normalize gate saw
+    that real newline and skipped unescaping, leaving 27 literal \\n so the
+    key was rejected. Must now normalize and mint a verifiable JWT."""
+    private_pem, public_pem = keypair
+    escaped = private_pem.replace("\n", "\\n")
+    value = escaped + "\n"                      # stray trailing real newline
+    assert "\\n" in value and "\n" in value     # both kinds present
+
+    now = time.time()
+    token = mint_app_jwt("999", value, now=now)
+    decoded = jwt.decode(token, public_pem, algorithms=["RS256"])
+    assert decoded["iss"] == "999"
+
+
+def test_mint_app_jwt_escaped_pem_with_stray_interior_newline(keypair):
+    """Same class of defect, real newline in the middle rather than the end:
+    literal \\n escapes must still be unescaped so the key parses."""
+    private_pem, public_pem = keypair
+    escaped = private_pem.replace("\n", "\\n")
+    value = escaped[:40] + "\n" + escaped[40:]
+    now = time.time()
+    token = mint_app_jwt("999", value, now=now)
+    assert jwt.decode(token, public_pem, algorithms=["RS256"])["iss"] == "999"
+
+
 def test_app_credentials_from_env_normalizes_escaped_pem(monkeypatch, keypair):
     private_pem, _ = keypair
     monkeypatch.setenv("GITHUB_APP_ID", "12345")
