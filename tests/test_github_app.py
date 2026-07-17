@@ -132,6 +132,72 @@ def test_app_credentials_from_env_normalizes_escaped_pem(monkeypatch, keypair):
     assert key == private_pem  # real newlines restored
 
 
+def test_app_credentials_from_env_uses_b64_path(monkeypatch, keypair):
+    """base64 path decodes a valid PEM and takes precedence over the
+    escaping path — the systemd-safe route."""
+    private_pem, public_pem = keypair
+    import base64
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    monkeypatch.setenv(
+        "GITHUB_APP_PRIVATE_KEY_B64",
+        base64.b64encode(private_pem.encode()).decode(),
+    )
+    monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY", raising=False)
+    app_id, key = app_credentials_from_env()
+    assert app_id == "12345"
+    assert key == private_pem
+    # And the decoded key really works end to end.
+    token = mint_app_jwt(app_id, key)
+    assert jwt.decode(token, public_pem, algorithms=["RS256"])["iss"] == "12345"
+
+
+def test_app_credentials_b64_takes_precedence_over_plain(monkeypatch, keypair):
+    private_pem, _ = keypair
+    import base64
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    monkeypatch.setenv(
+        "GITHUB_APP_PRIVATE_KEY_B64",
+        base64.b64encode(private_pem.encode()).decode(),
+    )
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "some-other-ignored-value")
+    _, key = app_credentials_from_env()
+    assert key == private_pem
+
+
+def test_app_credentials_invalid_b64_falls_back_to_plain(monkeypatch, keypair):
+    """Undecodable base64 must not break auth — fall back to the existing
+    literal-\\n escaping path."""
+    private_pem, _ = keypair
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_B64", "!!!not-valid-base64!!!")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", private_pem.replace("\n", "\\n"))
+    app_id, key = app_credentials_from_env()
+    assert app_id == "12345"
+    assert key == private_pem  # real newlines restored via the fallback
+
+
+def test_app_credentials_empty_b64_does_not_block_plain(monkeypatch, keypair):
+    private_pem, _ = keypair
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_B64", "")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", private_pem.replace("\n", "\\n"))
+    _, key = app_credentials_from_env()
+    assert key == private_pem
+
+
+def test_app_credentials_b64_non_utf8_falls_back(monkeypatch, keypair):
+    """Valid base64 that decodes to non-UTF-8 bytes falls back cleanly."""
+    private_pem, _ = keypair
+    import base64
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    monkeypatch.setenv(
+        "GITHUB_APP_PRIVATE_KEY_B64", base64.b64encode(b"\xff\xfe\xff").decode()
+    )
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", private_pem.replace("\n", "\\n"))
+    _, key = app_credentials_from_env()
+    assert key == private_pem
+
+
 def test_mint_app_jwt_garbage_key_raises_githubapperror():
     with pytest.raises(GitHubAppError, match="not a valid PEM private key"):
         mint_app_jwt("999", "this-is-not-a-pem-key")
