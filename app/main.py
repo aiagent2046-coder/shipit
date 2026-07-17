@@ -605,6 +605,20 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
     does inline in create_fixpack — kept identical so both PR paths behave
     the same."""
     app_creds = app_credentials_from_env()
+    # Diagnostic for the "no GitHub token configured" incident: when App
+    # creds look present in the process env yet resolution still yields no
+    # token, this pins down whether os.environ actually carries them at
+    # call time. Presence/length only — never the secret values.
+    app_id_env = os.environ.get("GITHUB_APP_ID")
+    pem_env = os.environ.get("GITHUB_APP_PRIVATE_KEY")
+    logger.warning(
+        "PR token resolve for %s/%s: GITHUB_APP_ID=%s, "
+        "GITHUB_APP_PRIVATE_KEY=%s, app_credentials_from_env=%s",
+        owner, repo,
+        len(app_id_env) if app_id_env else "MISSING",
+        len(pem_env) if pem_env else "MISSING",
+        "None" if app_creds is None else "present",
+    )
     if app_creds is None:
         return None
     app_id, private_key = app_creds
