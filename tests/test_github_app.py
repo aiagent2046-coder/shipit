@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.deploypack.github_app import (
     GitHubAppError,
+    _public_key_fingerprint,
     app_credentials_from_env,
     installation_token_for_repo,
     mint_app_jwt,
@@ -196,6 +197,59 @@ def test_app_credentials_b64_non_utf8_falls_back(monkeypatch, keypair):
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", private_pem.replace("\n", "\\n"))
     _, key = app_credentials_from_env()
     assert key == private_pem
+
+
+def test_mint_app_jwt_iss_is_string_and_stripped(keypair):
+    """PyJWT (>=2, issue #1039) forbids a non-string iss, so iss is always
+    a string. A stray whitespace/newline around the App ID (e.g. from a
+    sloppy env value) is stripped so GitHub sees a clean digit string."""
+    private_pem, public_pem = keypair
+    token = mint_app_jwt("  4278482\n", private_pem)
+    iss = jwt.decode(token, public_pem, algorithms=["RS256"])["iss"]
+    assert iss == "4278482"
+    assert isinstance(iss, str)
+
+
+def test_public_key_fingerprint_matches_independent_computation(keypair):
+    import hashlib
+    from cryptography.hazmat.primitives import serialization
+
+    private_pem, _ = keypair
+    key = serialization.load_pem_private_key(private_pem.encode(), password=None)
+    der = key.public_key().public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    expected = "sha256:" + hashlib.sha256(der).hexdigest()[:16]
+    assert _public_key_fingerprint(private_pem) == expected
+    # Same fingerprint whether the key is real-newline or literal-\n form.
+    assert _public_key_fingerprint(private_pem.replace("\n", "\\n")) == expected
+
+
+def test_public_key_fingerprint_unavailable_on_garbage_key():
+    assert _public_key_fingerprint("not-a-pem").startswith("unavailable")
+
+
+def test_installation_token_401_logs_keypair_fingerprint(keypair, caplog):
+    """A 401 on the App JWT (GitHub's "could not be decoded") must emit a
+    structural, secret-free diagnostic including the keypair fingerprint so
+    an operator can tell a wrong-key from a clock-skew cause."""
+    private_pem, _ = keypair
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="A JSON web token could not be decoded")
+
+    with caplog.at_level("WARNING"):
+        with pytest.raises(GitHubAppError, match="resolve installation failed: 401"):
+            installation_token_for_repo(
+                "acme", "app", app_id="4278482", private_key=private_pem,
+                transport=httpx.MockTransport(handler),
+            )
+    msg = caplog.text
+    assert "App JWT rejected (401)" in msg
+    assert "app_id(iss)='4278482'" in msg
+    assert "public key sha256:" in msg
+    assert private_pem not in msg  # never logs the secret
 
 
 def test_mint_app_jwt_garbage_key_raises_githubapperror():

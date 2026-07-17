@@ -20,10 +20,11 @@ module only needs:
                             claim over the older numeric App ID (see
                             https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
                             The numeric App ID still works — not
-                            deprecated, just no longer recommended.
-                            Either is a plain string here; no branching
-                            needed since `iss` is just a string per the
-                            JWT spec.
+                            deprecated, just no longer recommended. Both
+                            are sent as a string `iss` (PyJWT forbids a
+                            non-string `iss`); GitHub accepts a digit
+                            string App ID fine, so `iss` type is not a
+                            cause of "could not be decoded" 401s.
   GITHUB_APP_PRIVATE_KEY — the full PEM private key GitHub generates
                             when you create the App
 
@@ -36,12 +37,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import logging
 import os
 import time
 
 import httpx
 import jwt
+from cryptography.hazmat.primitives import serialization
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +136,16 @@ def mint_app_jwt(app_id: str, private_key: str, *, now: float | None = None) -> 
     """Short-lived (9 min, under GitHub's 10 min cap) JWT identifying
     the App itself. Used only to look up installations and mint
     installation tokens below — never to call the Git Data API
-    directly, which needs an installation token instead."""
+    directly, which needs an installation token instead.
+
+    ``iss`` is sent as a string: PyJWT (>=2, issue #1039) raises
+    TypeError for a non-string ``iss``, so it CANNOT be a JSON number
+    here. GitHub accepts a digit-string App ID ("4278482") as ``iss``
+    fine, so this is not the cause of a "could not be decoded" 401 —
+    that verdict is signature/structure level (wrong keypair or clock
+    skew), never the ``iss`` type."""
     now = now if now is not None else time.time()
-    payload = {"iat": int(now) - 60, "exp": int(now) + 9 * 60, "iss": app_id}
+    payload = {"iat": int(now) - 60, "exp": int(now) + 9 * 60, "iss": app_id.strip()}
     private_key = _normalize_pem(private_key)
     try:
         return jwt.encode(payload, private_key, algorithm="RS256")
@@ -155,6 +165,29 @@ def mint_app_jwt(app_id: str, private_key: str, *, now: float | None = None) -> 
             "GITHUB_APP_PRIVATE_KEY is not a valid PEM private key — "
             "check for missing newlines or truncation"
         ) from exc
+
+
+def _public_key_fingerprint(private_key: str) -> str:
+    """A short, NON-secret SHA-256 fingerprint of the *public* half of the
+    loaded private key. Lets an operator confirm whether the key actually
+    in use matches the one registered for a given App: download the App's
+    .pem, run
+    ``openssl rsa -in app.pem -pubout -outform DER | openssl dgst -sha256``
+    and compare. A "could not be decoded" 401 with a fingerprint that does
+    NOT match the App means the wrong keypair is loaded — the single most
+    likely cause of that error, and invisible without this. Public-key
+    material only; the private key never leaves the process."""
+    try:
+        key = serialization.load_pem_private_key(
+            _normalize_pem(private_key).encode(), password=None
+        )
+        der = key.public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return "sha256:" + hashlib.sha256(der).hexdigest()[:16]
+    except (ValueError, TypeError) as exc:
+        return f"unavailable ({type(exc).__name__})"
 
 
 def installation_token_for_repo(
@@ -179,6 +212,20 @@ def installation_token_for_repo(
     with httpx.Client(base_url=GITHUB_API, headers=headers, timeout=30,
                        transport=transport) as client:
         resp = client.get(f"/repos/{owner}/{repo}/installation")
+        if resp.status_code == 401:
+            # GitHub rejected the App JWT itself (e.g. "A JSON web token
+            # could not be decoded"). That is a signature/structure verdict,
+            # never the iss type \u2014 so surface the structural facts that
+            # distinguish its causes: which App ID we claimed, the token
+            # shape, and a NON-secret fingerprint of the loaded keypair to
+            # check against the App's registered key. No secret is logged.
+            logger.warning(
+                "App JWT rejected (401) resolving %s/%s: %s | app_id(iss)=%r | "
+                "jwt segments=%d | jwt len=%d | public key %s",
+                owner, repo, resp.text[:200], app_id.strip(),
+                app_jwt.count(".") + 1, len(app_jwt),
+                _public_key_fingerprint(private_key),
+            )
         if resp.status_code == 404:
             raise GitHubAppError(
                 f"GitHub App is not installed on {owner}/{repo} \u2014 "
