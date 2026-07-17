@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_mod
 from app.deploypack.delivery import DeliveryError, PullRequestResult
+from app.deploypack.github_app import GitHubAppError
 from app.main import (
     app,
     get_audit_repo,
@@ -48,6 +49,7 @@ class FakeFixpackRepo:
         self._jobs = jobs
         self.delivered: dict[str, str] = {}
         self.statuses: dict[str, str] = {}
+        self.details: dict[str, str | None] = {}
 
     async def list_paid(self):
         return list(self._jobs)
@@ -55,8 +57,9 @@ class FakeFixpackRepo:
     async def mark_fixpack_delivered(self, job_id, pr_url):
         self.delivered[job_id] = pr_url
 
-    async def mark_status(self, job_id, status):
+    async def mark_status(self, job_id, status, detail=None):
         self.statuses[job_id] = status
+        self.details[job_id] = detail
 
 
 def fake_fetcher_returning(zip_bytes: bytes):
@@ -231,6 +234,172 @@ def test_missing_audit_marks_job_failed(monkeypatch):
 
     assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0, "failed": 1}
     assert fixpack_repo.statuses["j1"] == "failed"
+
+
+# --- observability: a failed job must never be silent ---------------------
+
+def test_delivery_error_records_detail_and_logs(monkeypatch, caplog):
+    """Regression for the silent-failure incident: when delivery raises, the
+    job's `detail` must be populated and a full traceback logged — not a
+    'failed' row with null detail and nothing in the logs."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    audits = {"a1": {
+        "repo_url": "https://github.com/acme/app",
+        "findings_json": [
+            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
+             "title": "AWS Access Key ID", "context": None},
+        ],
+    }}
+    jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"}]
+
+    def failing_opener(*a, **k):
+        raise DeliveryError("open pull request failed: 422 base branch main not found")
+
+    fixpack_repo = FakeFixpackRepo(jobs)
+    override(FakeAuditRepo(audits), fixpack_repo,
+             fake_fetcher_returning(zip_bytes), failing_opener)
+    try:
+        with caplog.at_level("ERROR"):
+            resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["failed"] == 1
+    assert fixpack_repo.statuses["j1"] == "failed"
+
+    detail = fixpack_repo.details["j1"]
+    assert detail is not None and detail != ""
+    assert "DeliveryError" in detail
+    assert "base branch main not found" in detail
+
+    # A full traceback reached the logs (logger.exception attaches exc_info).
+    assert any(
+        rec.exc_info is not None and "j1" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+def test_github_app_token_error_marks_failed_with_detail(monkeypatch, caplog):
+    """The App-not-installed / token-exchange failure path (a prime suspect
+    for the production incident) must also record a detail and log, instead
+    of failing silently."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    # App IS configured, so _resolve_pr_token tries the installation-token
+    # exchange — which raises for a repo the App isn't installed on.
+    monkeypatch.setattr(main_mod, "app_credentials_from_env",
+                        lambda: ("Iv23appid", "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"))
+
+    def raising_token(owner, repo, *, app_id, private_key):
+        raise GitHubAppError(
+            f"GitHub App is not installed on {owner}/{repo} — "
+            "the repo owner needs to install it first"
+        )
+
+    monkeypatch.setattr(main_mod, "installation_token_for_repo", raising_token)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    audits = {"a1": {
+        "repo_url": "https://github.com/donjonson-hash/drydock-fixpack-e2e-test",
+        "findings_json": [
+            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
+             "title": "AWS Access Key ID", "context": None},
+        ],
+    }}
+    jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"}]
+
+    fixpack_repo = FakeFixpackRepo(jobs)
+    override(FakeAuditRepo(audits), fixpack_repo,
+             fake_fetcher_returning(zip_bytes),
+             lambda *a, **k: PullRequestResult(html_url="x", branch="y"))
+    try:
+        with caplog.at_level("ERROR"):
+            resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["failed"] == 1
+    assert fixpack_repo.statuses["j1"] == "failed"
+    detail = fixpack_repo.details["j1"]
+    assert detail is not None and "GitHubAppError" in detail
+    assert "not installed" in detail
+
+
+def test_missing_audit_records_detail(monkeypatch):
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    jobs = [{"id": "j1", "audit_id": "gone", "status": "paid"}]
+    fixpack_repo = FakeFixpackRepo(jobs)
+    override(FakeAuditRepo({}), fixpack_repo,
+             fake_fetcher_returning(b""), lambda *a, **k: None)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["failed"] == 1
+    assert fixpack_repo.details["j1"]  # non-empty reason recorded
+
+
+def test_committed_env_with_secret_is_untracked_not_committed(monkeypatch):
+    """Regression: a committed `.env` that ALSO holds a hardcoded secret —
+    the exact planted e2e scenario — must be UNTRACKED (deletion), never
+    emitted as a scrubbed file. Otherwise the PR would carry two tree
+    entries for `.env` (a blob and a deletion), a self-contradictory
+    changeset."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    stripe_key = "sk_live_" + "a" * 30
+    zip_bytes = make_zip({
+        "app/api/checkout/route.ts": f'const key = "{stripe_key}";\n',
+        ".env": f"STRIPE_SECRET_KEY={stripe_key}\n",
+        # no .gitignore
+    })
+    audits = {"a1": {
+        "repo_url": "https://github.com/donjonson-hash/drydock-fixpack-e2e-test",
+        # Persisted paths carry the zipball wrapper (see make_zip).
+        "findings_json": [
+            {"rule_id": "stripe-live-key",
+             "file": "acme-app-deadbeef/app/api/checkout/route.ts",
+             "line": 1, "title": "Stripe live secret key", "context": None},
+            {"rule_id": "stripe-live-key", "file": "acme-app-deadbeef/.env",
+             "line": 1, "title": "Stripe live secret key", "context": None},
+            {"rule_id": "env-file-committed", "file": "acme-app-deadbeef/.env",
+             "line": 0, "title": "Environment file committed", "context": None},
+            {"rule_id": "gitignore-missing-secrets", "file": "", "line": 0,
+             "title": "No .gitignore coverage", "context": None},
+        ],
+    }}
+    jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"}]
+
+    captured = {}
+
+    def fake_opener(owner, repo, files, *, title, body, branch_prefix,
+                    deletions=None, token=None):
+        captured.update(files=files, deletions=deletions or [])
+        return PullRequestResult(html_url="https://github.com/x/y/pull/1",
+                                 branch="b")
+
+    fixpack_repo = FakeFixpackRepo(jobs)
+    override(FakeAuditRepo(audits), fixpack_repo,
+             fake_fetcher_returning(zip_bytes), fake_opener)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["delivered"] == 1
+    # .env is untracked, and NOT also present as a committed file.
+    assert ".env" in captured["deletions"]
+    assert ".env" not in captured["files"]
+    # The route.ts secret is still scrubbed and delivered.
+    assert "app/api/checkout/route.ts" in captured["files"]
+    # And the value never leaks anywhere.
+    assert stripe_key not in captured["files"]["app/api/checkout/route.ts"]
+    for text in captured["files"].values():
+        assert stripe_key not in text
 
 
 def test_no_paid_jobs_returns_zero_summary(monkeypatch):

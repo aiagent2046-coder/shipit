@@ -323,21 +323,36 @@ class FixpackJobRepository:
                 (pr_url, uuid.UUID(job_id)),
             )
 
-    async def mark_status(self, job_id: str, status: str) -> None:
+    async def mark_status(
+        self, job_id: str, status: str, detail: str | None = None
+    ) -> None:
         """Advance a Fix Pack job to a non-delivered terminal state:
         'no_fix_needed' (nothing eligible to fix, so no PR was opened) or
         'failed' (generation/delivery errored — left visible for retry/ops
         rather than silently stuck on 'paid'). No-op when DATABASE_URL isn't
-        set, matching mark_delivered."""
+        set, matching mark_delivered.
+
+        When `detail` is given (the failure path always passes one), it is
+        written to the `detail` column so a failed job is diagnosable from a
+        status query — a 'failed' row with a null detail is exactly the
+        silent failure this was hardened against. Omitting it leaves the
+        column untouched, so the 'no_fix_needed' path doesn't clobber it."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return
         async with pool.connection() as conn:
-            await conn.execute(
-                "update fixpack_jobs set status = %s where id = %s",
-                (status, uuid.UUID(job_id)),
-            )
+            if detail is None:
+                await conn.execute(
+                    "update fixpack_jobs set status = %s where id = %s",
+                    (status, uuid.UUID(job_id)),
+                )
+            else:
+                await conn.execute(
+                    "update fixpack_jobs set status = %s, detail = %s "
+                    "where id = %s",
+                    (status, detail, uuid.UUID(job_id)),
+                )
 
     async def get(self, job_id: str) -> dict[str, Any] | None:
         try:

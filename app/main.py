@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hmac
 import io
+import logging
 import os
 import re
 import uuid
@@ -58,6 +59,8 @@ from app.ingest.validators import (
     ArchiveValidationError,
     validate_zip,
 )
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Drydock", version="0.1.0")
 
@@ -611,6 +614,15 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
     )
 
 
+def _failure_detail(exc: BaseException, *, limit: int = 300) -> str:
+    """A short, secret-free description of a failure for the fixpack_jobs
+    `detail` column: exception type + message, truncated. Never carries a
+    secret value — the generation pipeline never puts one in an exception,
+    but truncation is a second guard against an over-long message."""
+    detail = f"{type(exc).__name__}: {exc}".strip()
+    return detail[:limit]
+
+
 async def _process_one_paid_job(
     job: dict, *, audit_repo: AuditRepository,
     fixpack_repo: FixpackJobRepository, repo_fetcher, pr_opener,
@@ -619,49 +631,61 @@ async def _process_one_paid_job(
     'delivered', 'no_fix_needed', or 'failed'. Advances the job's status to
     match so a re-run of the processor doesn't pick it up again (a 'failed'
     job stays visible for a human to retry rather than silently stuck on
-    'paid')."""
+    'paid').
+
+    Every failure is made visible: the full traceback is logged and a short
+    reason is written to the job's `detail` column. A job must never land on
+    'failed' with a null detail and nothing in the logs — that makes a real
+    production failure impossible to diagnose (see the silent-failure
+    incident this path was hardened for)."""
     job_id = job["id"]
-    audit = await audit_repo.get(job["audit_id"]) if job.get("audit_id") else None
-    if audit is None or not audit.get("repo_url"):
-        await fixpack_repo.mark_status(job_id, "failed")
-        return "failed"
-
-    parsed = _parse_github_repo_url(audit["repo_url"])
-    if parsed is None:
-        await fixpack_repo.mark_status(job_id, "failed")
-        return "failed"
-    owner, repo = parsed
-
     try:
+        audit = await audit_repo.get(job["audit_id"]) if job.get("audit_id") else None
+        if audit is None or not audit.get("repo_url"):
+            detail = "audit missing or has no repo_url to re-fetch"
+            logger.error("Fix Pack job %s failed: %s", job_id, detail)
+            await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+            return "failed"
+
+        parsed = _parse_github_repo_url(audit["repo_url"])
+        if parsed is None:
+            detail = f"unparseable repo_url: {audit['repo_url']!r}"
+            logger.error("Fix Pack job %s failed: %s", job_id, detail)
+            await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+            return "failed"
+        owner, repo = parsed
+
         zip_bytes = await run_in_threadpool(repo_fetcher, owner, repo)
-    except RepoFetchError:
-        await fixpack_repo.mark_status(job_id, "failed")
-        return "failed"
 
-    findings = audit.get("findings_json") or []
-    plan = await run_in_threadpool(build_fixpack_plan, zip_bytes, findings)
+        findings = audit.get("findings_json") or []
+        plan = await run_in_threadpool(build_fixpack_plan, zip_bytes, findings)
 
-    if not plan.has_changes:
-        # Everything was a test fixture, already fixed, or absent on
-        # re-fetch: don't open an empty PR, record why the job produced no PR.
-        await fixpack_repo.mark_status(job_id, "no_fix_needed")
-        return "no_fix_needed"
+        if not plan.has_changes:
+            # Everything was a test fixture, already fixed, or absent on
+            # re-fetch: don't open an empty PR, record why there was no PR.
+            await fixpack_repo.mark_status(job_id, "no_fix_needed")
+            return "no_fix_needed"
 
-    title = render_fixpack_pr_title(plan)
-    body = render_fixpack_pr_body(plan)
-    try:
+        title = render_fixpack_pr_title(plan)
+        body = render_fixpack_pr_body(plan)
         token = await _resolve_pr_token(owner, repo)
         opened = await run_in_threadpool(
             pr_opener, owner, repo, plan.files,
             title=title, body=body, branch_prefix="drydock/fix-pack",
             deletions=plan.deletions, token=token,
         )
-    except (DeliveryError, GitHubAppError):
-        await fixpack_repo.mark_status(job_id, "failed")
+        await fixpack_repo.mark_fixpack_delivered(job_id, opened.html_url)
+        return "delivered"
+    except Exception as exc:  # noqa: BLE001 — every failure must be recorded
+        # Any error in fetch, generation, token exchange, or PR delivery
+        # lands here. Log the full traceback (logger.exception attaches it)
+        # and persist a short reason so the failure is diagnosable from both
+        # the logs and a `select ... from fixpack_jobs` query.
+        logger.exception("Fix Pack job %s failed during processing", job_id)
+        await fixpack_repo.mark_status(
+            job_id, "failed", detail=_failure_detail(exc)
+        )
         return "failed"
-
-    await fixpack_repo.mark_fixpack_delivered(job_id, opened.html_url)
-    return "delivered"
 
 
 @app.post("/internal/fixpack/process-paid")

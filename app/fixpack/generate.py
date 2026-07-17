@@ -381,6 +381,17 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
         if new_gitignore != gitignore_body:
             plan.files[".gitignore"] = new_gitignore
 
+    # A path we're untracking must never also be emitted as a file. This
+    # collides for the exact real case of a committed `.env` that ALSO holds
+    # a hardcoded secret: the secret pass scrubs it into plan.files[".env"]
+    # while env-file-committed puts ".env" in plan.deletions — a
+    # self-contradictory changeset (commit a modified `.env` and untrack it
+    # in the same tree). Untracking wins: the file is leaving version
+    # control, so a scrubbed copy is pointless and would produce two tree
+    # entries for one path in the PR.
+    for path in plan.deletions:
+        plan.files.pop(path, None)
+
     # --- .env.example: record every substituted var (placeholder only). --
     if env_vars_used:
         example_entry = _find_entry(raw_names, ".env.example")

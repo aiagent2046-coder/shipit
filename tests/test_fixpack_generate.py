@@ -91,6 +91,39 @@ def test_committed_env_gets_untracked_and_gitignored():
     assert plan.config_fixes[0].rule_id == "env-file-committed"
 
 
+def test_committed_env_with_secret_is_deleted_not_emitted_as_file():
+    """A committed `.env` that ALSO contains a hardcoded secret: the secret
+    pass would scrub it into plan.files[".env"] while env-file-committed
+    untracks it. The two collide — a scrubbed file AND a deletion for one
+    path. Untracking wins: `.env` must be in deletions and absent from
+    files, so the delivered PR never carries two tree entries for it."""
+    stripe_key = "sk_live_" + "b" * 30
+    zip_bytes = make_zip({
+        ".env": f"STRIPE_SECRET_KEY={stripe_key}\n",
+        "app/api/checkout/route.ts": f'const key = "{stripe_key}";\n',
+    })
+    # Persisted finding paths carry the GitHub zipball wrapper folder, the
+    # same as make_zip's entries — _repo_relative strips it on both sides.
+    findings = [
+        finding(rule_id="stripe-live-key",
+                file="acme-app-deadbeef/.env", line=1),
+        finding(rule_id="stripe-live-key",
+                file="acme-app-deadbeef/app/api/checkout/route.ts", line=1),
+        finding(rule_id="env-file-committed",
+                file="acme-app-deadbeef/.env", line=0),
+    ]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert ".env" in plan.deletions
+    assert ".env" not in plan.files          # not both written and deleted
+    # The other file's secret is still scrubbed and shipped.
+    assert "app/api/checkout/route.ts" in plan.files
+    for text in plan.files.values():
+        assert stripe_key not in text
+    assert stripe_key not in render_pr_body(plan)
+
+
 def test_missing_gitignore_case_creates_gitignore():
     zip_bytes = make_zip({"app.py": "print('hi')\n"})
     findings = [finding(rule_id="gitignore-missing-secrets", file=".gitignore", line=0)]
