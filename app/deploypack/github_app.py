@@ -34,11 +34,14 @@ See app/main.py for how the two are chosen between.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
 import httpx
 import jwt
+
+logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 _HEADERS_BASE = {
@@ -61,10 +64,16 @@ def _normalize_pem(raw: str) -> str:
     ``\\n`` escapes instead of real newlines. jwt.encode needs a real
     PEM with actual newline characters, so undo that escaping here.
 
-    Defensive: only unescape when literal ``\\n`` is present AND no real
-    newline already is, so a correctly-formatted multi-line key set via
-    some other mechanism is passed through untouched (no double-unescape)."""
-    if "\\n" in raw and "\n" not in raw:
+    Unescape whenever literal ``\\n`` is present. A correctly-formatted
+    multi-line PEM contains real newlines but NO literal ``\\n`` sequences,
+    so this replace is a no-op on it — the "no double-unescape" guarantee
+    holds without gating on the absence of real newlines. The old
+    ``and "\\n" not in raw`` gate caused the production failure this fixes:
+    when the env value carried literal ``\\n`` escapes AND even one stray
+    real newline (e.g. a trailing newline the loader kept), the gate skipped
+    unescaping entirely, leaving the 27 literal ``\\n`` intact so the PEM
+    parser rejected the key ("not a valid PEM private key")."""
+    if "\\n" in raw:
         raw = raw.replace("\\n", "\n")
     return raw
 
@@ -88,6 +97,17 @@ def mint_app_jwt(app_id: str, private_key: str, *, now: float | None = None) -> 
     try:
         return jwt.encode(payload, private_key, algorithm="RS256")
     except (ValueError, jwt.exceptions.PyJWTError) as exc:
+        # Structure-only diagnostics for PEM parse failures: the exact
+        # underlying library error, the real-newline count after normalize,
+        # and the first/last 15 chars (PEM boundary markers, never key
+        # material). Enough to tell a truncated/mis-escaped key from a
+        # genuinely wrong one without ever logging the secret.
+        logger.warning(
+            "PEM parse failed: %s: %s | real newlines after normalize=%d | "
+            "head=%r | tail=%r",
+            type(exc).__name__, exc, private_key.count("\n"),
+            private_key[:15], private_key[-15:],
+        )
         raise GitHubAppError(
             "GITHUB_APP_PRIVATE_KEY is not a valid PEM private key — "
             "check for missing newlines or truncation"
