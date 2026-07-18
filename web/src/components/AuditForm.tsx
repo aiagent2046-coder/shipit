@@ -49,7 +49,14 @@ export function AuditForm() {
       } catch {
         /* sessionStorage may be unavailable; results page falls back to GET */
       }
-      router.push(`/audit/${encodeURIComponent(result.audit_id)}`);
+      // Carry the ownership token in the URL so the results page (and any
+      // link the user copies) can read the audit — it's 404 without it.
+      const tokenQuery = result.access_token
+        ? `?token=${encodeURIComponent(result.access_token)}`
+        : "";
+      router.push(
+        `/audit/${encodeURIComponent(result.audit_id)}${tokenQuery}`,
+      );
     } catch (e) {
       const msg =
         e instanceof ApiError

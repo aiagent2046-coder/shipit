@@ -39,6 +39,10 @@ export interface Finding {
 // POST /v1/audits — completes inline (up to ~2 min) and returns the full result.
 export interface AuditResult {
   audit_id: string;
+  // Per-audit ownership token, delivered once at creation. Required as
+  // ?token=... to read the audit or its report later. Null on an
+  // unpersisted (no-DATABASE_URL) backend, where there's no stored row.
+  access_token: string | null;
   persisted: boolean;
   status: string;
   stack: string;
