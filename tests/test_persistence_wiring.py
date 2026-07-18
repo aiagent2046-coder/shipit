@@ -58,6 +58,9 @@ class FakeAuditRepo:
     async def get(self, audit_id):
         return self.rows.get(audit_id)
 
+    async def get_by_content_hash(self, content_hash):
+        return None
+
 
 class FakeFixpackRepo:
     def __init__(self):

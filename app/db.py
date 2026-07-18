@@ -156,6 +156,7 @@ class AuditRepository:
         self, *, stack: str, file_count: int,
         score_total: float | None, score_json: dict | None,
         findings_json: list | None, repo_url: str | None = None,
+        content_hash: str | None = None,
     ) -> dict[str, Any] | None:
         try:
             pool = await get_pool()
@@ -165,20 +166,50 @@ class AuditRepository:
             cur = await conn.execute(
                 """
                 insert into audits (stack, file_count, score_total, score_json,
-                                    findings_json, repo_url)
-                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                                    findings_json, repo_url, content_hash)
+                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
                 returning id, stack, status, file_count, score_total,
-                          score_json, findings_json, repo_url, created_at
+                          score_json, findings_json, repo_url, content_hash,
+                          created_at
                 """,
                 (
                     stack, file_count, score_total,
                     json.dumps(score_json) if score_json is not None else None,
                     json.dumps(findings_json) if findings_json is not None else None,
-                    repo_url,
+                    repo_url, content_hash,
                 ),
             )
             row = await cur.fetchone()
         return _row_to_audit(row)
+
+    async def get_by_content_hash(self, content_hash: str) -> dict[str, Any] | None:
+        """Most recent completed audit for this exact content, or None.
+
+        The reproducibility backstop: an identical re-audit reuses this
+        row instead of re-running the LLM scan, which returns a different
+        findings set -- and thus a different score -- run to run even at
+        temperature=0 (see app/scan/llm_scan.py, app/scan/scoring.py).
+        Returns None when DATABASE_URL isn't set, same not-configured
+        contract as get()."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, stack, status, file_count, score_total,
+                       score_json, findings_json, repo_url, content_hash,
+                       created_at
+                from audits
+                where content_hash = %s and status = 'completed'
+                order by created_at desc
+                limit 1
+                """,
+                (content_hash,),
+            )
+            row = await cur.fetchone()
+        return _row_to_audit(row) if row else None
 
     async def get(self, audit_id: str) -> dict[str, Any] | None:
         try:

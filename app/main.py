@@ -53,7 +53,7 @@ from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
 from app.report.html import render_report
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
-from app.scan.pipeline import run_scan
+from app.scan.pipeline import content_digest, run_scan
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
@@ -873,6 +873,29 @@ async def create_audit(
             headers={"Retry-After": str(exc.retry_after)},
         ) from exc
 
+    # Reproducibility: byte-identical content that was already audited reuses
+    # the stored result rather than re-running the scan. The LLM stage is
+    # non-deterministic even at temperature=0 (see app/scan/llm_scan.py), so a
+    # re-scan of the same commit yields a different findings set and thus a
+    # different score (observed in prod: 8.9/9.9/9.9 for one unchanged repo).
+    # The score math itself is already deterministic (app/scan/scoring.py) --
+    # this closes the loop by not recomputing it from fresh, variable findings.
+    digest = content_digest(raw)
+    cached = await audit_repo.get_by_content_hash(digest)
+    if cached is not None:
+        return {
+            "audit_id": cached["id"],
+            "persisted": True,
+            "status": "completed",
+            "stack": cached["stack"],
+            "file_count": cached["file_count"],
+            "score": cached["score_json"],
+            "findings": cached["findings_json"] or [],
+            "repo_url": cached.get("repo_url"),
+            "llm": {"reused_from_prior_audit": True},
+            "reused": True,
+        }
+
     # Off the event loop: the LLM stage does real network I/O and can
     # take up to ~2 minutes. Moves to the arq worker + queue in phase 2.
     scan = await run_in_threadpool(run_scan, raw, llm_client)
@@ -881,6 +904,7 @@ async def create_audit(
         stack=stack.value, file_count=report.file_count,
         score_total=scan["score"]["total"], score_json=scan["score"],
         findings_json=scan["findings"], repo_url=source_url,
+        content_hash=digest,
     )
     audit_id = persisted["id"] if persisted else str(uuid.uuid4())
 
