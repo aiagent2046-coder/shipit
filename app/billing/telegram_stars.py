@@ -41,6 +41,11 @@ import httpx
 
 TELEGRAM_API = "https://api.telegram.org"
 
+# Public site base. Audit reports live at {SITE_URL}/audit/{audit_id}
+# (web/src/app/audit/[id]/page.tsx); the bare site root is the "run an
+# audit" landing page.
+SITE_URL = "https://drydock.co"
+
 PROVIDER = "telegram_stars"
 CURRENCY = "XTR"
 
@@ -209,7 +214,11 @@ def _delivery_text(api_key: str) -> str:
         f"Your API key:\n{api_key}\n\n"
         "Send it as `Authorization: Bearer <key>` on API requests. "
         "Keep it secret; anyone with it has your pro access.\n\n"
-        "Open your report: https://drydock.co"
+        # Pro is a general subscription, not tied to any one audit (see
+        # grant_pro_tier -- the payment carries no audit_id), so there is
+        # no specific "report" to link. Point at the run-an-audit landing
+        # page instead of a bare, report-less homepage link.
+        f"Run an audit: {SITE_URL}"
     )
 
 
@@ -422,7 +431,10 @@ async def _handle_fixpack_payment(
     await send_message(
         chat_id,
         f"Payment received — your Drydock Fix Pack for audit {audit_id[:8]} "
-        "is queued. You'll get the pull request once it's generated.",
+        "is queued. You'll get the pull request once it's generated.\n\n"
+        # A Fix Pack IS bought for one specific audit, so link that audit's
+        # report directly (the /audit/{id} route), not the bare site root.
+        f"View this audit: {SITE_URL}/audit/{audit_id}",
         token=token, transport=transport,
     )
     return {"ok": True, "handled": "fixpack_payment", "persisted": True}
