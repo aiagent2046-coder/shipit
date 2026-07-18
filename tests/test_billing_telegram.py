@@ -159,6 +159,71 @@ async def test_pre_checkout_query_is_approved():
                       {"pre_checkout_query_id": "pcq_1", "ok": True})]
 
 
+class _ExplodingRepo:
+    """A repo whose every awaited method raises. Stands in for a slow or
+    broken DB (Supabase latency, pool exhaustion): if the pre_checkout path
+    consulted a repo before answering Telegram, that round trip is exactly
+    what would blow the ~10s deadline in production -- here it raises loudly
+    so the regression is caught deterministically instead of as a flaky
+    timeout."""
+
+    def __getattr__(self, name):
+        async def _boom(*args, **kwargs):
+            raise AssertionError(
+                f"pre_checkout must not touch the DB before answering "
+                f"(called {name})"
+            )
+        return _boom
+
+
+async def test_fixpack_pre_checkout_is_approved_without_touching_db():
+    # The incident: a Fix Pack pre_checkout timed out (BOT_PRECHECKOUT_TIMEOUT)
+    # while the Pro one was fine. Guard the fix: a Fix Pack pre_checkout
+    # (payload "fixpack:<audit_id>") must be answered ok=True the same as Pro,
+    # WITHOUT consulting audit_repo/fixpack_repo -- validating fixpack state
+    # here is what a slow DB would stall on. Exploding repos prove no repo is
+    # touched on this path.
+    calls: list = []
+    transport = _telegram_transport(calls)
+    update = {"update_id": 1, "pre_checkout_query": {
+        "id": "pcq_fp", "from": {"id": 555}, "currency": "XTR",
+        "total_amount": 600, "invoice_payload": "fixpack:aud_deadbeef"}}
+
+    result = await telegram_stars.handle_update(
+        update, account_repo=_ExplodingRepo(), payment_repo=_ExplodingRepo(),
+        audit_repo=_ExplodingRepo(), fixpack_repo=_ExplodingRepo(),
+        token="t", transport=transport,
+    )
+    assert result["handled"] == "pre_checkout_query"
+    assert calls == [("answerPreCheckoutQuery",
+                      {"pre_checkout_query_id": "pcq_fp", "ok": True})]
+
+
+async def test_pre_checkout_answer_uses_timeout_under_telegram_deadline(monkeypatch):
+    # The outbound answerPreCheckoutQuery must be bounded well under Telegram's
+    # ~10s deadline; the generic 30s _call timeout would let a slow Bot API
+    # response sail past it and cancel the charge. Fails on the old code
+    # (answer used the default 30s), passes on the new (short bound).
+    seen: dict = {}
+
+    async def spy_call(method, body, *, token, transport=None, timeout=30):
+        seen["method"] = method
+        seen["timeout"] = timeout
+        return {"ok": True}
+
+    monkeypatch.setattr(telegram_stars, "_call", spy_call)
+    update = {"update_id": 1, "pre_checkout_query": {
+        "id": "pcq_2", "from": {"id": 555}, "currency": "XTR",
+        "total_amount": 600, "invoice_payload": "fixpack:aud_x"}}
+
+    await telegram_stars.handle_update(
+        update, account_repo=FakeAccountRepo(), payment_repo=FakePaymentRepo(),
+        token="t",
+    )
+    assert seen["method"] == "answerPreCheckoutQuery"
+    assert seen["timeout"] < 10
+
+
 # --- 3. successful_payment grants pro + is idempotent on retry ---
 
 async def test_successful_payment_grants_pro_and_dms_key():
