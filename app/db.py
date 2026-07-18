@@ -160,6 +160,11 @@ class AuditRepository:
         findings_json: list | None, repo_url: str | None = None,
         content_hash: str | None = None,
     ) -> dict[str, Any] | None:
+        # access_token is not inserted here: the column default
+        # (migration 0010, encode(gen_random_bytes(16),'hex')) mints a
+        # per-row token, and RETURNING hands it back so the API can deliver
+        # it to the creator exactly once. It is the ownership secret for
+        # GET /v1/audits/{id} and /report -- see get_authorized().
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -172,7 +177,7 @@ class AuditRepository:
                 values (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
                 returning id, stack, status, file_count, score_total,
                           score_json, findings_json, repo_url, content_hash,
-                          created_at
+                          access_token, created_at
                 """,
                 (
                     stack, file_count, score_total,
@@ -202,7 +207,7 @@ class AuditRepository:
                 """
                 select id, stack, status, file_count, score_total,
                        score_json, findings_json, repo_url, content_hash,
-                       created_at
+                       access_token, created_at
                 from audits
                 where content_hash = %s and status = 'completed'
                 order by created_at desc
@@ -230,6 +235,41 @@ class AuditRepository:
                 from audits where id = %s
                 """,
                 (parsed_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_audit(row) if row else None
+
+    async def get_authorized(
+        self, audit_id: str, access_token: str | None
+    ) -> dict[str, Any] | None:
+        """Ownership-checked fetch for the public report endpoints: return
+        the audit only if `access_token` matches the row's per-row token
+        (migration 0010). A missing/wrong token, an unknown id, a malformed
+        id, and an unconfigured DB all return None -- so the endpoint answers
+        404 uniformly and never confirms an id's existence to a caller who
+        doesn't hold its token. The token is matched in SQL and is NOT in the
+        selected columns, so it never rides back out in the response body.
+
+        Distinct from get(), which is the trusted server-side lookup (fixpack
+        processing) with no token gate."""
+        if not access_token:
+            return None
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(audit_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, stack, status, file_count, score_total,
+                       score_json, findings_json, repo_url, created_at
+                from audits where id = %s and access_token = %s
+                """,
+                (parsed_id, access_token),
             )
             row = await cur.fetchone()
         return _row_to_audit(row) if row else None
