@@ -109,6 +109,105 @@ def test_401_when_wrong_token(monkeypatch):
     assert resp.status_code == 401
 
 
+# --- semantic-check regression gate ---------------------------------------
+
+def test_semantic_regression_blocks_pr_and_marks_job(monkeypatch):
+    """When the semantic check reports a regression, the PR must be withheld
+    and the job parked as 'blocked' with the reason in detail — never
+    auto-delivered."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    from app.fixpack.semantic_check import RunResult, SemanticCheckResult
+
+    def fake_check(zip_bytes, plan):
+        return SemanticCheckResult(
+            ran=True, ecosystem="python",
+            original=RunResult(5, 0, False, None),
+            patched=RunResult(3, 2, False, None),
+            regression=True,
+            detail="patch introduced 2 new test failure(s)",
+            pr_note=None,
+        )
+    monkeypatch.setattr(main_mod, "run_semantic_check", fake_check)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    audits = {"a1": {
+        "repo_url": "https://github.com/acme/app",
+        "findings_json": [
+            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
+             "title": "AWS Access Key ID", "context": None},
+        ],
+    }}
+    jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"}]
+
+    opened = {"n": 0}
+
+    def fake_opener(*a, **k):
+        opened["n"] += 1
+        return PullRequestResult(html_url="x", branch="y")
+
+    fixpack_repo = FakeFixpackRepo(jobs)
+    override(FakeAuditRepo(audits), fixpack_repo,
+             fake_fetcher_returning(zip_bytes), fake_opener)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0,
+                           "blocked": 1, "failed": 0}
+    assert opened["n"] == 0                       # PR withheld
+    assert fixpack_repo.statuses["j1"] == "blocked"
+    assert "2 new test failure" in fixpack_repo.details["j1"]
+
+
+def test_semantic_note_is_appended_to_pr_body(monkeypatch):
+    """No client suite -> not a regression, but a soft recommendation note is
+    appended to the PR body."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    from app.fixpack.semantic_check import SemanticCheckResult
+
+    def fake_check(zip_bytes, plan):
+        return SemanticCheckResult(
+            ran=False, ecosystem=None, original=None, patched=None,
+            regression=False, detail="no client test suite detected",
+            pr_note="> **Note:** add tests.",
+        )
+    monkeypatch.setattr(main_mod, "run_semantic_check", fake_check)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    audits = {"a1": {
+        "repo_url": "https://github.com/acme/app",
+        "findings_json": [
+            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
+             "title": "AWS Access Key ID", "context": None},
+        ],
+    }}
+    jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"}]
+
+    captured = {}
+
+    def fake_opener(owner, repo, files, *, title, body, branch_prefix,
+                    deletions=None, token=None):
+        captured["body"] = body
+        return PullRequestResult(html_url="https://github.com/acme/app/pull/9",
+                                 branch="drydock/fix-pack-x")
+
+    fixpack_repo = FakeFixpackRepo(jobs)
+    override(FakeAuditRepo(audits), fixpack_repo,
+             fake_fetcher_returning(zip_bytes), fake_opener)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["delivered"] == 1
+    assert "> **Note:** add tests." in captured["body"]
+
+
 # --- the happy path + outcome accounting ----------------------------------
 
 def test_paid_job_opens_pr_and_marks_delivered(monkeypatch):
@@ -145,7 +244,7 @@ def test_paid_job_opens_pr_and_marks_delivered(monkeypatch):
         clear_overrides()
 
     assert resp.status_code == 200
-    assert resp.json() == {"processed": 1, "delivered": 1, "skipped": 0, "failed": 0}
+    assert resp.json() == {"processed": 1, "delivered": 1, "skipped": 0, "blocked": 0, "failed": 0}
     assert fixpack_repo.delivered["j1"] == "https://github.com/acme/app/pull/5"
 
     # The safety invariant end-to-end: the real value never reaches the PR.
@@ -185,7 +284,7 @@ def test_zero_eligible_findings_does_not_open_pr(monkeypatch):
     finally:
         clear_overrides()
 
-    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 1, "failed": 0}
+    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 1, "blocked": 0, "failed": 0}
     assert called["n"] == 0  # never opened a PR
     assert fixpack_repo.statuses["j1"] == "no_fix_needed"
 
@@ -215,7 +314,7 @@ def test_delivery_error_marks_job_failed(monkeypatch):
     finally:
         clear_overrides()
 
-    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0, "failed": 1}
+    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0, "blocked": 0, "failed": 1}
     assert fixpack_repo.statuses["j1"] == "failed"
 
 
@@ -232,7 +331,7 @@ def test_missing_audit_marks_job_failed(monkeypatch):
     finally:
         clear_overrides()
 
-    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0, "failed": 1}
+    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0, "blocked": 0, "failed": 1}
     assert fixpack_repo.statuses["j1"] == "failed"
 
 
@@ -412,4 +511,4 @@ def test_no_paid_jobs_returns_zero_summary(monkeypatch):
     finally:
         clear_overrides()
 
-    assert resp.json() == {"processed": 0, "delivered": 0, "skipped": 0, "failed": 0}
+    assert resp.json() == {"processed": 0, "delivered": 0, "skipped": 0, "blocked": 0, "failed": 0}
