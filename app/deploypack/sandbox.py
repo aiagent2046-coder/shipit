@@ -70,6 +70,7 @@ def verify_deploy_pack(
     poll_interval_s: float = 1.0,
     keep_alive_on_success: bool = False,
     memory_limit: str | None = None,
+    labels: dict[str, str] | None = None,
     run: Runner = subprocess.run,
 ) -> SandboxResult:
     """Build the image in `build_dir`, run it, poll `path` until it
@@ -117,6 +118,13 @@ def verify_deploy_pack(
                    *_RUN_HARDENING]
         if memory_limit:
             run_cmd += ["--memory", memory_limit]
+        if labels:
+            # The container's own name IS its job identity, so always stamp
+            # it as shipit.job_id (caller may override). These labels are how
+            # reconcile_previews finds and ages out orphan containers from
+            # Docker itself after a process restart — see preview.py.
+            for key, value in {"shipit.job_id": container, **labels}.items():
+                run_cmd += ["--label", f"{key}={value}"]
         run_cmd.append(tag)
         try:
             run(run_cmd, capture_output=True, text=True, timeout=30, check=True)

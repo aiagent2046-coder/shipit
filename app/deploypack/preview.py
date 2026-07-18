@@ -21,6 +21,8 @@ to plug in.
 
 from __future__ import annotations
 
+import datetime
+import logging
 import random
 import subprocess
 import threading
@@ -28,11 +30,43 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.deploypack.sandbox import Runner, verify_deploy_pack
+from app.deploypack.sandbox import Runner, docker_available, verify_deploy_pack
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TTL_SECONDS = 24 * 60 * 60   # 24h, per architecture doc
 DEFAULT_MEMORY_LIMIT = "256m"        # per architecture doc
 PORT_RANGE = range(20000, 30000)
+
+# Docker label keys stamped on every preview container (see verify_deploy_pack
+# and PreviewRegistry.start). These are what reconcile_previews queries so it
+# can reap orphans straight from Docker, not from this process's memory.
+PREVIEW_LABEL = "shipit.preview"
+EXPIRES_LABEL = "shipit.expires_at"
+JOB_ID_LABEL = "shipit.job_id"
+
+
+def _iso_utc(epoch: float) -> str:
+    """UTC ISO-8601 for a Unix timestamp, e.g. '2026-07-18T12:00:00+00:00'."""
+    return datetime.datetime.fromtimestamp(
+        epoch, tz=datetime.timezone.utc
+    ).isoformat()
+
+
+def _parse_iso_utc(text: str) -> float | None:
+    """Parse an ISO-8601 timestamp back to a Unix epoch, or None if it is
+    missing/unparseable. A tz-naive value is assumed UTC (that's what we
+    write). None means 'don't trust this label' — callers must not reap on it."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.timestamp()
 
 
 @dataclass
@@ -101,20 +135,28 @@ class PreviewRegistry:
             host_port = self._allocate_port()
             self._reserved.add(host_port)
 
+        # Compute expiry up front so the SAME value goes onto the container
+        # as a Docker label and into the in-memory registry — the label is
+        # the source of truth reconcile_previews trusts after a restart.
+        now = time.time()
+        expires_at = now + ttl_seconds
         try:
             result = verify_deploy_pack(
                 build_dir, host_port, container_port, path=path,
                 keep_alive_on_success=True, memory_limit=memory_limit,
+                labels={
+                    PREVIEW_LABEL: "true",
+                    EXPIRES_LABEL: _iso_utc(expires_at),
+                },
                 run=self._run,
             )
             if not result.ok:
                 return PreviewResult(ok=False, detail=result.detail, build_log=result.build_log)
 
-            now = time.time()
             info = PreviewInfo(
                 job_id=result.container, owner_key=owner_key,
                 container=result.container, image_tag=result.image_tag,
-                host_port=host_port, started_at=now, expires_at=now + ttl_seconds,
+                host_port=host_port, started_at=now, expires_at=expires_at,
             )
             with self._lock:
                 self._by_owner[owner_key] = info
@@ -165,3 +207,73 @@ class PreviewRegistry:
     def list_active(self) -> list[PreviewInfo]:
         with self._lock:
             return list(self._by_owner.values())
+
+
+def reconcile_previews(
+    run: Runner = subprocess.run, now: float | None = None
+) -> dict:
+    """Docker-truth orphan reaper for expired preview containers.
+
+    `PreviewRegistry.reap_expired` only knows what is in THIS process's
+    memory, so a restart wipes the map while the real containers keep
+    running (especially keep_alive_on_success=True ones) — they would never
+    be reaped. This function instead asks Docker directly: it lists every
+    container carrying `shipit.preview=true` and force-removes any whose
+    `shipit.expires_at` label is already in the past, regardless of whether
+    any registry/DB row remembers it.
+
+    Injectable `run` (defaults to subprocess.run) so tests can fake Docker.
+    Returns a summary dict: how many preview containers were seen, and the
+    orphans removed (each {container, job_id, expires_at}).
+    """
+    if not docker_available():
+        return {"docker": False, "checked": 0, "removed": []}
+
+    now = now if now is not None else time.time()
+    ps = run(
+        ["docker", "ps",
+         "--filter", f"label={PREVIEW_LABEL}=true",
+         "--format",
+         '{{.ID}}\t{{.Label "shipit.job_id"}}\t{{.Label "shipit.expires_at"}}'],
+        capture_output=True, text=True, timeout=15,
+    )
+
+    checked = 0
+    removed: list[dict] = []
+    for line in (ps.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        container_id = parts[0].strip()
+        job_id = parts[1].strip() if len(parts) > 1 else ""
+        expires_raw = parts[2].strip() if len(parts) > 2 else ""
+        if not container_id:
+            continue
+        checked += 1
+
+        expires_at = _parse_iso_utc(expires_raw)
+        if expires_at is None:
+            # A preview-labelled container with no parseable expiry: don't
+            # guess — leave it alone and flag it for a human to look at.
+            logger.warning(
+                "reconcile_previews: preview container %s has no valid "
+                "%s label (%r); leaving it running",
+                container_id, EXPIRES_LABEL, expires_raw,
+            )
+            continue
+        if expires_at > now:
+            continue  # still within TTL — not ours to kill yet
+
+        run(["docker", "rm", "-f", container_id],
+            capture_output=True, text=True, timeout=15)
+        removed.append({
+            "container": container_id, "job_id": job_id,
+            "expires_at": expires_raw,
+        })
+        logger.info(
+            "reconcile_previews: removed orphan preview container %s "
+            "(job_id=%s, expired at %s)",
+            container_id, job_id or "?", expires_raw,
+        )
+
+    return {"docker": True, "checked": checked, "removed": removed}
