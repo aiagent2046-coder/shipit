@@ -2,6 +2,7 @@
 Docker involved. See app/deploypack/sandbox.py and preview.py
 docstrings for what's genuinely real vs. what needs a real host."""
 
+import datetime
 import subprocess
 import threading
 
@@ -9,7 +10,7 @@ import pytest
 
 import app.deploypack.preview as preview
 import app.deploypack.sandbox as sandbox
-from app.deploypack.preview import PreviewRegistry
+from app.deploypack.preview import PreviewRegistry, reconcile_previews
 
 
 class FakeRunner:
@@ -208,3 +209,115 @@ def test_reap_expired_with_controlled_clock(monkeypatch):
     reaped = registry.reap_expired(now=time.time() + 20)  # only ttl=10 has expired
     assert reaped == 1
     assert registry.active_count() == 1
+
+
+# --- preview labels stamped at creation ------------------------------------
+
+def test_start_stamps_preview_labels_on_the_container(monkeypatch):
+    # The Docker-truth reconciler can only find/age-out orphans if every
+    # preview container carries shipit.preview / shipit.expires_at labels.
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner(base_script())
+    registry = PreviewRegistry(run=runner)
+
+    registry.start(".", 8000, owner_key="1.2.3.4", ttl_seconds=3600)
+
+    run_call = next(c for c in runner.calls if c[:2] == ["docker", "run"])
+    labels = [run_call[i + 1] for i, a in enumerate(run_call) if a == "--label"]
+    assert "shipit.preview=true" in labels
+    assert any(l.startswith("shipit.job_id=") for l in labels)
+    expires = next(l for l in labels if l.startswith("shipit.expires_at="))
+    # The stamped value must be a parseable ISO-8601 UTC timestamp.
+    _, _, raw = expires.partition("=")
+    assert preview._parse_iso_utc(raw) is not None
+
+
+# --- reconcile_previews (Docker-truth orphan reaper) -----------------------
+
+def _iso(offset_s: float, now: float) -> str:
+    return datetime.datetime.fromtimestamp(
+        now + offset_s, tz=datetime.timezone.utc
+    ).isoformat()
+
+
+def _ps_line(container_id, job_id, expires_iso):
+    return f"{container_id}\t{job_id}\t{expires_iso}"
+
+
+def test_reconcile_removes_expired_orphan(monkeypatch):
+    monkeypatch.setattr(preview, "docker_available", lambda: True)
+    now = 1_000_000.0
+    runner = FakeRunner({
+        "docker:ps": [cp(stdout=_ps_line("abc123", "job-a", _iso(-60, now)))],
+        "docker:rm": [cp(returncode=0)],
+    })
+
+    result = reconcile_previews(run=runner, now=now)
+
+    assert result["docker"] is True
+    assert result["checked"] == 1
+    assert [r["container"] for r in result["removed"]] == ["abc123"]
+    assert any(c[:3] == ["docker", "rm", "-f"] for c in runner.calls)
+
+
+def test_reconcile_leaves_future_container_running(monkeypatch):
+    monkeypatch.setattr(preview, "docker_available", lambda: True)
+    now = 1_000_000.0
+    runner = FakeRunner({
+        "docker:ps": [cp(stdout=_ps_line("fresh1", "job-b", _iso(3600, now)))],
+    })
+
+    result = reconcile_previews(run=runner, now=now)
+
+    assert result["checked"] == 1
+    assert result["removed"] == []
+    assert not any(c[:2] == ["docker", "rm"] for c in runner.calls)
+
+
+def test_reconcile_leaves_container_with_no_valid_expiry_label(monkeypatch):
+    # A preview-labelled container whose expires_at is missing/unparseable
+    # must NOT be guessed-and-killed — leave it for a human to look at.
+    monkeypatch.setattr(preview, "docker_available", lambda: True)
+    now = 1_000_000.0
+    runner = FakeRunner({
+        "docker:ps": [cp(stdout=_ps_line("weird1", "job-c", ""))],
+    })
+
+    result = reconcile_previews(run=runner, now=now)
+
+    assert result["checked"] == 1
+    assert result["removed"] == []
+    assert not any(c[:2] == ["docker", "rm"] for c in runner.calls)
+
+
+def test_reconcile_short_circuits_when_docker_missing(monkeypatch):
+    monkeypatch.setattr(preview, "docker_available", lambda: False)
+
+    def boom(*a, **k):
+        raise AssertionError("docker must not be invoked when unavailable")
+
+    result = reconcile_previews(run=boom, now=1_000_000.0)
+    assert result == {"docker": False, "checked": 0, "removed": []}
+
+
+def test_reconcile_handles_mixed_batch(monkeypatch):
+    monkeypatch.setattr(preview, "docker_available", lambda: True)
+    now = 1_000_000.0
+    stdout = "\n".join([
+        _ps_line("expired1", "job-1", _iso(-10, now)),
+        _ps_line("fresh1", "job-2", _iso(600, now)),
+        _ps_line("expired2", "job-3", _iso(-1, now)),
+        "",  # blank line must be skipped
+    ])
+    runner = FakeRunner({
+        "docker:ps": [cp(stdout=stdout)],
+        "docker:rm": [cp(returncode=0), cp(returncode=0)],
+    })
+
+    result = reconcile_previews(run=runner, now=now)
+
+    assert result["checked"] == 3
+    removed_ids = {r["container"] for r in result["removed"]}
+    assert removed_ids == {"expired1", "expired2"}
+    rm_targets = [c[3] for c in runner.calls if c[:3] == ["docker", "rm", "-f"]]
+    assert set(rm_targets) == {"expired1", "expired2"}
