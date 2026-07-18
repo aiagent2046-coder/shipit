@@ -17,6 +17,7 @@ const POLL_MS = 10_000;
 const TERMINAL: ReadonlySet<string> = new Set([
   "delivered",
   "no_fix_needed",
+  "blocked",
   "failed",
 ]);
 
@@ -212,6 +213,16 @@ function FixpackStatusArea({ auditId }: { auditId: string }) {
         {status.status === "no_fix_needed" && (
           <p className="rounded-md border border-border bg-surface p-3 text-sm text-muted">
             Nothing to auto-fix — see the recommendations above.
+          </p>
+        )}
+
+        {status.status === "blocked" && (
+          <p className="rounded-md border border-high/40 bg-high/10 p-3 text-sm text-high">
+            An automated check found a potential problem in the generated fix
+            (it made the repository&apos;s tests worse), so the pull request was
+            not opened and the change is held for manual review by our team.
+            Your payment was received — please contact the operator and we&apos;ll
+            sort it out.
           </p>
         )}
 

@@ -110,6 +110,7 @@ export type FixpackJobStatus =
   | "paid"
   | "delivered"
   | "no_fix_needed"
+  | "blocked"
   | "failed";
 
 // GET /v1/audits/{audit_id}/fixpack-status
