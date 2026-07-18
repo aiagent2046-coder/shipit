@@ -309,15 +309,20 @@ async def reap_previews(
 @app.get("/v1/audits/{audit_id}")
 async def get_audit(
     audit_id: str,
+    token: str | None = None,
     audit_repo: AuditRepository = Depends(get_audit_repo),
 ) -> dict:
-    row = await audit_repo.get(audit_id)
+    # Ownership check: the audit is readable only by presenting its per-row
+    # access_token (?token=...), delivered once at creation. A leaked id is
+    # not enough. A missing/wrong token is answered 404 (not 403) so this
+    # never confirms an id exists to someone who doesn't hold its token.
+    row = await audit_repo.get_authorized(audit_id, token)
     if row is None:
         raise HTTPException(
             status_code=404,
             detail={"reason": "not_found",
-                    "detail": "no audit with this id, or persistence isn't "
-                               "configured on this deployment (see app/db.py)"},
+                    "detail": "no audit with this id and token, or persistence "
+                               "isn't configured on this deployment (see app/db.py)"},
         )
     return row
 
@@ -325,17 +330,19 @@ async def get_audit(
 @app.get("/v1/audits/{audit_id}/report")
 async def get_audit_report(
     audit_id: str,
+    token: str | None = None,
     audit_repo: AuditRepository = Depends(get_audit_repo),
 ) -> HTMLResponse:
     """The shareable artifact: the same persisted audit rendered as a
-    self-contained, plain-language HTML page."""
-    row = await audit_repo.get(audit_id)
+    self-contained, plain-language HTML page. Requires the audit's
+    access_token (?token=...) -- same ownership check as GET /v1/audits/{id}."""
+    row = await audit_repo.get_authorized(audit_id, token)
     if row is None:
         raise HTTPException(
             status_code=404,
             detail={"reason": "not_found",
-                    "detail": "no audit with this id, or persistence isn't "
-                               "configured on this deployment (see app/db.py)"},
+                    "detail": "no audit with this id and token, or persistence "
+                               "isn't configured on this deployment (see app/db.py)"},
         )
     # render_report expects a well-formed score dict; guard at the API
     # boundary so a partially-written/backfilled row (null or malformed
@@ -931,6 +938,10 @@ async def create_audit(
     if cached is not None:
         return {
             "audit_id": cached["id"],
+            # The reused audit's own token, so the client can open its page.
+            # Safe to hand over here: the caller proved possession of the
+            # identical content that produced this audit (see content_digest).
+            "access_token": cached.get("access_token"),
             "persisted": True,
             "status": "completed",
             "stack": cached["stack"],
@@ -956,6 +967,10 @@ async def create_audit(
 
     return {
         "audit_id": audit_id,
+        # The ownership token for this audit, delivered exactly once here.
+        # None on an unpersisted (no-DATABASE_URL) deployment, where there is
+        # no stored row to protect and the id is ephemeral anyway.
+        "access_token": persisted.get("access_token") if persisted else None,
         "persisted": persisted is not None,
         "status": "completed",
         "stack": stack.value,

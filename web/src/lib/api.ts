@@ -103,13 +103,23 @@ export async function createAudit(
   return parse<AuditResult>(res);
 }
 
-export async function getAudit(id: string): Promise<PersistedAudit> {
-  const res = await request(`${API_BASE_URL}/v1/audits/${encodeURIComponent(id)}`);
+// The audit and its report are ownership-gated by a per-row access token
+// (delivered once at creation). It travels as a ?token=... query param so a
+// shareable link carries it; without it the backend answers 404.
+export async function getAudit(
+  id: string,
+  token?: string | null,
+): Promise<PersistedAudit> {
+  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(id)}${q}`,
+  );
   return parse<PersistedAudit>(res);
 }
 
-export function reportUrl(id: string): string {
-  return `${API_BASE_URL}/v1/audits/${encodeURIComponent(id)}/report`;
+export function reportUrl(id: string, token?: string | null): string {
+  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${API_BASE_URL}/v1/audits/${encodeURIComponent(id)}/report${q}`;
 }
 
 export async function createUsdtInvoice(): Promise<UsdtInvoice> {

@@ -83,6 +83,8 @@ export const DEMO_FINDINGS: Finding[] = [
 
 export const DEMO_AUDIT: AuditResult = {
   audit_id: "example-0000-demo",
+  // Demo is a canned, unpersisted result -- no real row, so no token.
+  access_token: null,
   persisted: false,
   status: "completed",
   stack: "nextjs",

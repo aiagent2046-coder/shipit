@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { AuditResult, Finding, Score } from "@/lib/types";
 import { getAudit, reportUrl, ApiError } from "@/lib/api";
@@ -31,9 +31,22 @@ function fromResult(r: AuditResult): View {
   };
 }
 
+// useSearchParams() must sit under a Suspense boundary or `next build` fails
+// prerendering this route ("useSearchParams() should be wrapped in a suspense
+// boundary"). The inner component holds all the logic; this wrapper supplies it.
 export default function AuditPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-4xl px-4 py-10" />}>
+      <AuditPageInner />
+    </Suspense>
+  );
+}
+
+function AuditPageInner() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+  const searchParams = useSearchParams();
+  const token = searchParams.get("token");
   const [view, setView] = useState<View | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +73,7 @@ export default function AuditPage() {
       setError(null);
       for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
         try {
-          const row = await getAudit(id);
+          const row = await getAudit(id, token);
           if (cancelled) return;
           if (!row.score_json) {
             setError("This audit has no complete score to display yet.");
@@ -86,7 +99,7 @@ export default function AuditPage() {
           setError(
             e instanceof ApiError
               ? e.status === 404
-                ? "No audit found with this id. It may not have been persisted (the backend needs DATABASE_URL configured), or the link is wrong."
+                ? "No audit found for this link. It may not have been persisted (the backend needs DATABASE_URL configured), or the link is missing/using the wrong access token."
                 : e.message
               : "Could not load this audit.",
           );
@@ -99,7 +112,7 @@ export default function AuditPage() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, token]);
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
@@ -161,7 +174,7 @@ export default function AuditPage() {
 
             <div className="mt-6 flex flex-wrap gap-3">
               <a
-                href={reportUrl(view.id)}
+                href={reportUrl(view.id, token)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:border-accent"
