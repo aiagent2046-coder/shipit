@@ -321,7 +321,7 @@ async def test_mykey_no_account_returns_helpful_message():
 async def _completed_usdt_payment(payments, accounts, tx_hash, *, chat_id=None):
     """A credited USDT payment as the poller leaves it: status completed,
     external_ref = tx hash, linked to a real account."""
-    acct = await accounts.create(api_key=os.environ["APP_SECRET"], tier="pro")
+    acct = await accounts.create(api_key="sk_live_usdtkey", tier="pro")
     row = await payments.create(
         account_id=acct["id"], provider=usdt_trc20.PROVIDER,
         external_ref=tx_hash, amount=5.5, currency="USDT",

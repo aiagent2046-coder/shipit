@@ -53,7 +53,7 @@ _MIGRATION_MIN_CONFIDENCE = 0.9
 
 # Test-fixture context: a credential-shaped string in a test-setup file
 # that *also* self-labels as a placeholder (seen for real: a jest.setup.ts
-# with `ANTHROPIC_API_KEY: ... || os.environ["ANTHROPIC_API_KEY"]`
+# with `ANTHROPIC_API_KEY: ... || 'sk-ant-api03-test-placeholder-not-real-key'`
 # and a `...placeholder_sig_for_unit_tests` JWT). Damped exactly like doc
 # context — capped, not dropped — because a test file is NOT inherently
 # safe: a real leaked key can live there too. So unlike doc context (path
@@ -146,7 +146,7 @@ RULES: tuple[SecretRule, ...] = (
     SecretRule(
         # Systemic Lovable-export pattern, confirmed on real repos:
         # migrations declare PL/pgSQL variables like
-        #   v_cron_secret text := os.environ["DATABASE_SECRET"];
+        #   v_cron_secret text := 'hunter2...';
         # The generic-assignment rule misses these because a type
         # annotation sits between the name and the assignment.
         "sql-secret-assignment", "Hardcoded secret in SQL/PLpgSQL assignment",
