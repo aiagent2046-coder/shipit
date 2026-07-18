@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +27,7 @@ from app.accounts import (
     entitlements_dict,
     entitlements_for_tier,
     resolve_account,
+    validate_api_key_pepper_configured,
 )
 from app.billing import telegram_stars, usdt_trc20
 from app.db import (
@@ -33,6 +35,7 @@ from app.db import (
     AuditRepository,
     FixpackJobRepository,
     PaymentRepository,
+    database_url_from_env,
 )
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
@@ -63,7 +66,19 @@ from app.ingest.validators import (
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Drydock", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Fail fast if a DB-backed deployment is missing API_KEY_PEPPER: with the
+    # DB configured, accounts are live and key hashing/lookup would be broken
+    # (all Pro users locked out) without the pepper. A DB-less deployment
+    # needs no pepper -- accounts are unusable there anyway.
+    validate_api_key_pepper_configured(
+        database_configured=bool(database_url_from_env())
+    )
+    yield
+
+
+app = FastAPI(title="Drydock", version="0.1.0", lifespan=lifespan)
 
 
 # Vercel preview deploys get unpredictable per-deploy subdomains
