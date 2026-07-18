@@ -152,6 +152,63 @@ def test_memory_limit_is_passed_to_docker_run(monkeypatch):
     assert "--memory" in run_call and "256m" in run_call
 
 
+def test_published_port_is_bound_to_loopback_only(monkeypatch):
+    # Security: the preview must not be reachable from other interfaces.
+    # The -p arg has to carry the 127.0.0.1: prefix, not a bare host:container
+    # (which Docker binds on 0.0.0.0).
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner({
+        "docker:build": [cp(returncode=0)],
+        "docker:run": [cp(returncode=0)],
+        "curl": [cp(stdout="200")],
+        "docker:stop": [cp(returncode=0)],
+        "docker:rmi": [cp(returncode=0)],
+    })
+    verify_deploy_pack(".", 8000, 8080, poll_interval_s=0.01, run=runner)
+    run_call = next(c for c in runner.calls if c[:2] == ["docker", "run"])
+    assert "-p" in run_call
+    pub = run_call[run_call.index("-p") + 1]
+    assert pub == "127.0.0.1:8000:8080"
+    assert not pub.startswith("8000:")  # never a bare 0.0.0.0 bind
+
+
+def test_run_applies_resource_and_privilege_limits(monkeypatch):
+    # Security: the preview container runs untrusted client code, so the
+    # run command must carry the fork-bomb / CPU / privilege guards.
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner({
+        "docker:build": [cp(returncode=0)],
+        "docker:run": [cp(returncode=0)],
+        "curl": [cp(stdout="200")],
+        "docker:stop": [cp(returncode=0)],
+        "docker:rmi": [cp(returncode=0)],
+    })
+    verify_deploy_pack(".", 8000, 8000, poll_interval_s=0.01, run=runner)
+    run_call = next(c for c in runner.calls if c[:2] == ["docker", "run"])
+    assert "--pids-limit=256" in run_call
+    assert "--cpus=1" in run_call
+    assert "--security-opt=no-new-privileges" in run_call
+    assert "--cap-drop=ALL" in run_call
+
+
+def test_no_host_env_is_injected_into_the_preview_container(monkeypatch):
+    # `docker run` doesn't forward host env into the container without -e/--env.
+    # We never pass one, so host secrets can't reach untrusted client code;
+    # guard against a future -e leak.
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner({
+        "docker:build": [cp(returncode=0)],
+        "docker:run": [cp(returncode=0)],
+        "curl": [cp(stdout="200")],
+        "docker:stop": [cp(returncode=0)],
+        "docker:rmi": [cp(returncode=0)],
+    })
+    verify_deploy_pack(".", 8000, 8000, poll_interval_s=0.01, run=runner)
+    run_call = next(c for c in runner.calls if c[:2] == ["docker", "run"])
+    assert "-e" not in run_call
+    assert not any(a.startswith("--env") for a in run_call)
+
+
 def test_never_boots_reports_failure_and_still_stops_container(monkeypatch):
     monkeypatch.setattr(sandbox, "docker_available", lambda: True)
     runner = FakeRunner({
