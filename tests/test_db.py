@@ -333,27 +333,56 @@ class TestAccountRepositoryNotConfigured:
 
 
 class TestAccountRepositoryWithFakePool:
-    async def test_create_inserts_and_returns_row(self, monkeypatch):
+    async def test_create_stores_prefix_and_hash_not_plaintext(self, monkeypatch):
+        # A made-up test pepper, never the real one.
+        monkeypatch.setenv("API_KEY_PEPPER", "test-pepper-not-real")
         account_id = uuid.uuid4()
         fake = FakePool(fetchone_result={
-            "id": account_id, "api_key": "sk_live_x", "tier": "pro",
-            "created_at": "2026-07-14T10:00:00Z",
+            "id": account_id, "api_key": None,
+            "key_prefix": "sk_live_x", "key_hash": "unused-in-return",
+            "tier": "pro", "created_at": "2026-07-14T10:00:00Z",
         })
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
 
         repo = AccountRepository()
-        result = await repo.create(api_key="sk_live_x", tier="pro")
+        result = await repo.create(api_key="sk_live_secretvalue", tier="pro")
 
         assert result["id"] == str(account_id)
         assert result["tier"] == "pro"
+        # Plaintext is returned in-memory for one-time delivery...
+        assert result["api_key"] == "sk_live_secretvalue"
+
         query, params = fake.calls[0]
         assert "insert into accounts" in query
-        assert params == ("sk_live_x", "pro")
+        # ...but what is WRITTEN is prefix + hash + tier, never the plaintext.
+        assert "key_prefix" in query and "key_hash" in query
+        assert "sk_live_secretvalue" not in query
+        assert params[2] == "pro"
+        assert params[0] == "sk_live_secr"  # prefix (KEY_PREFIX_LEN=12)
+        assert params[1] != "sk_live_secretvalue"  # a hash, not the key
+        assert len(params[1]) == 64  # sha256 hex digest
 
-    async def test_get_by_api_key_returns_row(self, monkeypatch):
+    async def test_get_by_key_hash_returns_row(self, monkeypatch):
         account_id = uuid.uuid4()
         fake = FakePool(fetchone_result={
-            "id": account_id, "api_key": "sk_live_x", "tier": "pro",
+            "id": account_id, "api_key": None, "key_prefix": "sk_live_x",
+            "key_hash": "deadbeef", "tier": "pro",
+            "created_at": "2026-07-14T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = AccountRepository()
+        result = await repo.get_by_key_hash("deadbeef")
+        assert result["id"] == str(account_id)
+        query, params = fake.calls[0]
+        assert "from accounts where key_hash" in query
+        assert params == ("deadbeef",)
+
+    async def test_get_by_api_key_fallback_returns_row(self, monkeypatch):
+        # Transitional plaintext fallback for pre-0009 keys.
+        account_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": account_id, "api_key": "sk_live_x", "key_prefix": None,
+            "key_hash": None, "tier": "pro",
             "created_at": "2026-07-14T10:00:00Z",
         })
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
