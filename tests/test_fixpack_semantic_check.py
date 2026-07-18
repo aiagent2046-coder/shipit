@@ -314,6 +314,19 @@ def test_test_argv_has_resource_and_privilege_limits():
     assert "--read-only" not in argv
 
 
+def test_no_host_env_is_injected_into_the_container():
+    # `docker run` does not forward host env into the container unless -e/--env
+    # is given. We never pass one (host secrets like GITHUB_APP_PRIVATE_KEY_B64
+    # must never reach untrusted client code); guard against a future -e leak.
+    for argv in (
+        _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
+        _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
+    ):
+        assert "-e" not in argv
+        assert "--env" not in argv
+        assert not any(a.startswith("--env") for a in argv)
+
+
 # --- build_patched_zip -----------------------------------------------------
 
 def test_build_patched_zip_applies_files_deletions_and_additions():

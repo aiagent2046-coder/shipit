@@ -191,6 +191,24 @@ def test_run_applies_resource_and_privilege_limits(monkeypatch):
     assert "--cap-drop=ALL" in run_call
 
 
+def test_no_host_env_is_injected_into_the_preview_container(monkeypatch):
+    # `docker run` doesn't forward host env into the container without -e/--env.
+    # We never pass one, so host secrets can't reach untrusted client code;
+    # guard against a future -e leak.
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner({
+        "docker:build": [cp(returncode=0)],
+        "docker:run": [cp(returncode=0)],
+        "curl": [cp(stdout="200")],
+        "docker:stop": [cp(returncode=0)],
+        "docker:rmi": [cp(returncode=0)],
+    })
+    verify_deploy_pack(".", 8000, 8000, poll_interval_s=0.01, run=runner)
+    run_call = next(c for c in runner.calls if c[:2] == ["docker", "run"])
+    assert "-e" not in run_call
+    assert not any(a.startswith("--env") for a in run_call)
+
+
 def test_never_boots_reports_failure_and_still_stops_container(monkeypatch):
     monkeypatch.setattr(sandbox, "docker_available", lambda: True)
     runner = FakeRunner({
