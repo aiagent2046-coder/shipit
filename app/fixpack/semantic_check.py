@@ -189,6 +189,10 @@ _PYTEST_FAILED_RE = re.compile(r"(\d+)\s+(?:failed|error|errors)")
 # jest: "Tests:       1 failed, 7 passed, 8 total"
 _JEST_PASSED_RE = re.compile(r"(\d+)\s+passing|(\d+)\s+passed")
 _JEST_FAILED_RE = re.compile(r"(\d+)\s+failing|(\d+)\s+failed")
+# node --test (Node 18+ built-in runner, TAP-13 summary): the count follows
+# the word, e.g. "# pass 1" / "# fail 0" — the opposite order from jest/mocha.
+_NODE_TAP_PASSED_RE = re.compile(r"^#\s*pass\s+(\d+)", re.MULTILINE)
+_NODE_TAP_FAILED_RE = re.compile(r"^#\s*fail\s+(\d+)", re.MULTILINE)
 
 
 def _sum_matches(pattern: re.Pattern, text: str) -> int:
@@ -206,12 +210,16 @@ def parse_pytest_counts(output: str) -> tuple[int, int]:
 
 
 def parse_node_counts(output: str) -> tuple[int, int]:
-    """(passed, failed) from `npm test` stdout. Covers the two dominant
-    reporters (jest 'passed'/'failed', mocha 'passing'/'failing'). Node's
-    reporter zoo is unbounded, so this is best-effort and the exit code is
-    used as the authoritative pass/fail signal by the caller."""
-    return (_sum_matches(_JEST_PASSED_RE, output),
-            _sum_matches(_JEST_FAILED_RE, output))
+    """(passed, failed) from `npm test` stdout. Covers the three dominant
+    reporters: jest ('passed'/'failed'), mocha ('passing'/'failing'), and the
+    built-in `node --test` TAP runner ('# pass N'/'# fail N'). Node's reporter
+    zoo is unbounded, so this is best-effort and the exit code is used as the
+    authoritative pass/fail signal by the caller."""
+    passed = (_sum_matches(_JEST_PASSED_RE, output)
+              + _sum_matches(_NODE_TAP_PASSED_RE, output))
+    failed = (_sum_matches(_JEST_FAILED_RE, output)
+              + _sum_matches(_NODE_TAP_FAILED_RE, output))
+    return (passed, failed)
 
 
 def _parse_counts(ecosystem: str, output: str) -> tuple[int, int]:
