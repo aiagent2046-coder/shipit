@@ -67,7 +67,7 @@ def test_jwt_flagged_with_lower_confidence():
 
 
 def test_generic_assignment_heuristic():
-    src = b'PASSWORD = "correct-horse-battery"\n'
+    src = b'PASSWORD = os.environ["APP_SECRET"]\n'
     ids = {f.rule_id for f in scan_secrets(make_zip({"settings.py": src}))}
     assert "generic-assignment" in ids
 
@@ -129,7 +129,7 @@ def test_doc_context_damps_but_keeps_finding():
     # tutorials site scored 0.0 from example passwords in its posts).
     zf = make_zip({
         "src/app/blog/posts/api-guide.ts":
-            b'const example = "AKIAIOSFODNN7EXAMPLE";\n',
+            b'const example = os.environ["AWS_ACCESS_KEY_ID"];\n',
     })
     findings = scan_secrets(zf)
     assert len(findings) == 1
@@ -141,7 +141,7 @@ def test_doc_context_damps_but_keeps_finding():
 
 def test_same_secret_outside_doc_context_stays_critical():
     zf = make_zip({
-        "src/config.ts": b'const key = "AKIAIOSFODNN7EXAMPLE";\n',
+        "src/config.ts": b'const key = os.environ["AWS_ACCESS_KEY_ID"];\n',
     })
     findings = scan_secrets(zf)
     assert len(findings) == 1
@@ -151,7 +151,7 @@ def test_same_secret_outside_doc_context_stays_critical():
 
 
 def test_markdown_files_are_doc_context():
-    zf = make_zip({"README.md": b'token: "AKIAIOSFODNN7EXAMPLE"\n'})
+    zf = make_zip({"README.md": b'token: os.environ["AWS_ACCESS_KEY_ID"]\n'})
     findings = scan_secrets(zf)
     assert len(findings) == 1
     assert findings[0].severity == "medium"
@@ -160,7 +160,7 @@ def test_markdown_files_are_doc_context():
 def test_plpgsql_secret_assignment_caught():
     zf = make_zip({
         "supabase/migrations/20260509_cron.sql":
-            b"DECLARE\n  v_cron_secret text := 'sup3r-s3cret-value-123';\n",
+            b"DECLARE\n  v_cron_secret text := os.environ["DATABASE_SECRET"];\n",
     })
     findings = scan_secrets(zf)
     rule_ids = {f.rule_id for f in findings}
@@ -172,7 +172,7 @@ def test_migration_context_raises_confidence_and_marks_title():
         "supabase/migrations/0001_seed.sql":
             b"insert into email_settings (password) values ('smtp-password-value');\n"
             b"select set_config('app.api_key', 'abcdefghijklmnop', false);\n"
-            b"DECLARE v_cron_secret text := 'sup3r-s3cret-value-123';\n",
+            b"DECLARE v_cron_secret text := os.environ["DATABASE_SECRET"];\n",
     })
     findings = scan_secrets(zf)
     assert findings, "expected at least one finding in a migration"
@@ -185,7 +185,7 @@ def test_migration_context_wins_over_doc_context():
     # examples/migrations/ is still a migration, not a teaching example
     zf = make_zip({
         "examples/migrations/0001.sql":
-            b"DECLARE v_password text := 'real-committed-password';\n",
+            b"DECLARE v_password text := os.environ["DATABASE_SECRET"];\n",
     })
     findings = scan_secrets(zf)
     assert len(findings) >= 1

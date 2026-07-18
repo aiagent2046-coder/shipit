@@ -25,7 +25,7 @@ from app.main import (
 
 client = TestClient(app)
 
-AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
+AWS_KEY = os.environ["AWS_ACCESS_KEY_ID"]
 
 
 def make_zip(entries: dict[str, str]) -> bytes:
@@ -290,7 +290,7 @@ def test_github_app_token_error_marks_failed_with_detail(monkeypatch, caplog):
     # App IS configured, so _resolve_pr_token tries the installation-token
     # exchange — which raises for a repo the App isn't installed on.
     monkeypatch.setattr(main_mod, "app_credentials_from_env",
-                        lambda: ("Iv23appid", "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"))
+                        lambda: ("Iv23appid", "os.environ["PRIVATE_KEY"]"))
 
     def raising_token(owner, repo, *, app_id, private_key):
         raise GitHubAppError(

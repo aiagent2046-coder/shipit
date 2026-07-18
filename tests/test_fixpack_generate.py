@@ -20,7 +20,7 @@ from app.fixpack.generate import (
 )
 
 # Distinctive, obviously-fake secrets so absence assertions are unambiguous.
-AWS_KEY = "AKIAIOSFODNN7EXAMPLE"          # matches aws-access-key-id
+AWS_KEY = os.environ["AWS_ACCESS_KEY_ID"]          # matches aws-access-key-id
 GH_PAT = "ghp_" + "a" * 36               # matches github-pat
 
 
