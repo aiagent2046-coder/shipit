@@ -8,7 +8,9 @@ caller can still see what happened via the `llm` field ("failed: ...").
 
 from __future__ import annotations
 
+import hashlib
 import io
+import zipfile
 
 from app.llm.client import LLMClient, LLMError
 from app.scan.llm_scan import LLMScanStats, run_llm_scan
@@ -19,6 +21,38 @@ from app.scan.static import run_static_scan
 _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
                   "category", "file", "line", "masked", "explanation",
                   "fix_hint", "context")
+
+
+def content_digest(data: bytes) -> str:
+    """Canonical SHA-256 identity of an uploaded archive's *contents*.
+
+    Hashes the sorted (path, per-file SHA-256) of every non-directory
+    entry, so it is independent of zip packaging (member order,
+    timestamps, compression level): the same repository content always
+    yields the same digest. This is the reproducibility key -- an
+    identical re-audit reuses the prior stored result instead of
+    re-running the LLM scan, which returns a different findings set (and
+    thus a different score) run to run even at temperature=0. If the zip
+    can't be opened, fall back to hashing the raw bytes so the caller
+    still gets a stable, total function.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            entries = [
+                (info.filename, hashlib.sha256(zf.read(info)).hexdigest())
+                for info in zf.infolist()
+                if not info.is_dir()
+            ]
+    except zipfile.BadZipFile:
+        return "raw:" + hashlib.sha256(data).hexdigest()
+    entries.sort()
+    h = hashlib.sha256()
+    for name, digest in entries:
+        h.update(name.encode("utf-8"))
+        h.update(b"\0")
+        h.update(digest.encode("ascii"))
+        h.update(b"\0")
+    return h.hexdigest()
 
 
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:

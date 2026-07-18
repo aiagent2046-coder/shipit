@@ -131,3 +131,25 @@ def test_perfect_total_impossible_with_findings():
     # weighted mean can round up to 10.0 past one tiny finding
     assert compute_scores([_f("low", 0.1, "Deploy")])["total"] == 9.9
     assert compute_scores([])["total"] == 10.0
+
+
+def test_score_is_deterministic_regardless_of_finding_order():
+    """The core reproducibility invariant: the SAME findings must always
+    produce the SAME score, independent of the order they arrive in. The
+    score formula has no LLM call and no randomness -- so if the finding
+    set is fixed, the number is fixed. (The prod 8.9/9.9/9.9 variance came
+    from the LLM producing a *different* finding set each run, not from
+    this formula; see app/scan/scoring.py and app/scan/llm_scan.py.)"""
+    import random
+
+    findings = [
+        _f("critical", 1.0, "Security"), _f("high", 0.5, "Auth"),
+        _f("medium", 0.7, "Correctness"), _f("low", 0.3, "Config"),
+        _f("high", 0.9, "Testing"), _f("medium", 0.4, "Deploy"),
+        _f("low", 0.2, "Security"), _f("high", 0.6, "Auth"),
+    ]
+    baseline = compute_scores(findings)
+    for _ in range(100):
+        shuffled = findings[:]
+        random.shuffle(shuffled)
+        assert compute_scores(shuffled) == baseline
