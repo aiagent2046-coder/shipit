@@ -107,6 +107,79 @@ def test_parse_node_counts_jest_and_mocha():
     assert parse_node_counts("  10 passing\n  2 failing") == (10, 2)
 
 
+# Real, verbatim `node --test` output (Node 20 TAP-13 reporter, the format
+# emitted by node:20-slim / NODE_IMAGE). Captured live: `npm test` with
+# {"scripts":{"test":"node --test"}} and a single test file. The summary uses
+# "# pass N" / "# fail N" — count AFTER the word — which the jest/mocha
+# regexes miss, hence the production bug where a passing suite parsed as
+# passed=0. See tests below pinning both the passing and failing shapes.
+NODE_TEST_PASSING_OUTPUT = """\
+
+> test
+> node --test
+
+TAP version 13
+# Subtest: one plus one
+ok 1 - one plus one
+  ---
+  duration_ms: 1.189812
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 51.418485
+"""
+
+NODE_TEST_FAILING_OUTPUT = """\
+
+> test
+> node --test
+
+TAP version 13
+# Subtest: one plus one wrong
+not ok 1 - one plus one wrong
+  ---
+  duration_ms: 2.135618
+  location: '/tmp/nodetest/test/sample.test.js:3:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+
+    2 !== 3
+
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 3
+  actual: 2
+  operator: 'strictEqual'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 46.244892
+"""
+
+
+def test_parse_node_counts_node_test_runner_passing():
+    # Regression: `node --test` TAP summary is "# pass 1" / "# fail 0";
+    # a fully-passing suite must parse as (1, 0), not (0, 0).
+    assert parse_node_counts(NODE_TEST_PASSING_OUTPUT) == (1, 0)
+
+
+def test_parse_node_counts_node_test_runner_failing():
+    assert parse_node_counts(NODE_TEST_FAILING_OUTPUT) == (0, 1)
+
+
 # --- is_regression decision ------------------------------------------------
 
 def test_regression_when_patched_has_more_failures():
