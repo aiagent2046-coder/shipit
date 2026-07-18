@@ -20,6 +20,10 @@ not hardcoded strings — see SECRET_RULE_IDS):
   2. env-file-committed (checks.py) — untrack the committed .env.
   3. gitignore-missing-secrets (checks.py) — add secret-file patterns.
 Any finding with context == "test_fixture" is excluded regardless of type.
+Any finding whose file lives under a test directory (tests/, test/,
+__tests__/, spec/ anywhere in the path) is also excluded regardless of
+context -- test files intentionally hold literal secret patterns as
+detector fixtures, and rewriting that code is unsafe (see _is_test_path).
 """
 
 from __future__ import annotations
@@ -136,6 +140,23 @@ def _repo_relative(name: str) -> str:
     return name.split("/", 1)[1] if "/" in name else name
 
 
+_TEST_DIR_SEGMENTS = frozenset(("tests", "test", "__tests__", "spec"))
+
+
+def _is_test_path(path: str) -> bool:
+    """True if any directory segment of `path` is a conventional test dir.
+
+    Applied to the raw finding path (not the repo-relative one, whose first
+    segment gets stripped): matches "tests/x.py", "wrapper/tests/x.py" and
+    "src/__tests__/foo.ts" alike. Fix Pack never rewrites files here --
+    test files deliberately embed literal secret *patterns* as detector
+    fixtures, and mechanically editing that code is unsafe for any client,
+    not just this repo. Broader than the context="test_fixture" marker,
+    which only fires when the value self-labels as a placeholder."""
+    segments = path.lower().split("/")[:-1]
+    return any(seg in _TEST_DIR_SEGMENTS for seg in segments)
+
+
 def _env_reference(path: str, env_var: str) -> str:
     """The idiomatic way to read an env var in this file's language."""
     lower = path.lower()
@@ -247,6 +268,7 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     eligible = [
         f for f in findings
         if f.get("context") != "test_fixture"
+        and not _is_test_path(f.get("file", ""))
         and f.get("rule_id") in (SECRET_RULE_IDS | _CHECK_RULE_IDS)
     ]
     if not eligible:

@@ -14,6 +14,7 @@ import io
 import zipfile
 
 from app.fixpack.generate import (
+    _is_test_path,
     build_fixpack_plan,
     render_pr_body,
     render_pr_title,
@@ -148,6 +149,61 @@ def test_test_fixture_context_finding_is_skipped():
     assert not plan.has_changes
     assert plan.files == {}
     assert plan.secret_fixes == []
+
+
+def test_secret_in_test_path_is_skipped_regardless_of_context():
+    # A finding under tests/ with NO test_fixture marker (realistic-looking
+    # fake value): the marker guard would NOT catch it, but the path guard
+    # must. This is exactly what broke shipit's own suite in Fix Pack #32.
+    zip_bytes = make_zip({"tests/test_secrets.py": f'API_KEY = "{AWS_KEY}"\n'})
+    findings = [
+        finding(rule_id="aws-access-key-id", file="tests/test_secrets.py",
+                line=1, context=None),
+    ]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert not plan.has_changes
+    assert plan.files == {}
+    assert plan.secret_fixes == []
+
+
+def test_secret_in_nested_test_dir_is_skipped():
+    zip_bytes = make_zip({"src/__tests__/foo.ts": f'const k = "{AWS_KEY}"\n'})
+    findings = [
+        finding(rule_id="aws-access-key-id", file="src/__tests__/foo.ts",
+                line=1),
+    ]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert not plan.has_changes
+
+
+def test_is_test_path_matches_conventional_dirs_only():
+    assert _is_test_path("tests/test_x.py")
+    assert _is_test_path("test/foo.py")
+    assert _is_test_path("src/__tests__/foo.ts")
+    assert _is_test_path("packages/api/spec/bar_spec.rb")
+    assert _is_test_path("acme-app-deadbeef/tests/test_x.py")  # zipball wrapper
+    # Not a test dir: a filename that merely contains "test", or prod code.
+    assert not _is_test_path("app/latest_config.py")
+    assert not _is_test_path("src/config.ts")
+    assert not _is_test_path("contest/app.py")
+
+
+def test_non_test_path_secret_is_still_fixed():
+    # Control: the guard must not over-reach and skip real production code.
+    # Finding path carries the zipball wrapper (as real stored findings do)
+    # so it lines up with the fresh re-scan after _repo_relative strips it.
+    zip_bytes = make_zip({"src/config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    findings = [finding(rule_id="aws-access-key-id",
+                        file="acme-app-deadbeef/src/config.py", line=1)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert plan.has_changes
+    assert AWS_KEY not in plan.files["src/config.py"]
 
 
 def test_zero_eligible_findings_produces_empty_plan():
