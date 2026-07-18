@@ -48,6 +48,7 @@ from app.fixpack.generate import (
     render_pr_body as render_fixpack_pr_body,
     render_pr_title as render_fixpack_pr_title,
 )
+from app.fixpack.semantic_check import run_semantic_check
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
@@ -642,10 +643,13 @@ async def _process_one_paid_job(
     fixpack_repo: FixpackJobRepository, repo_fetcher, pr_opener,
 ) -> str:
     """Generate + deliver one paid Fix Pack job. Returns the outcome:
-    'delivered', 'no_fix_needed', or 'failed'. Advances the job's status to
-    match so a re-run of the processor doesn't pick it up again (a 'failed'
-    job stays visible for a human to retry rather than silently stuck on
-    'paid').
+    'delivered', 'no_fix_needed', 'blocked', or 'failed'. Advances the job's
+    status to match so a re-run of the processor doesn't pick it up again (a
+    'failed' or 'blocked' job stays visible for a human to retry/review
+    rather than silently stuck on 'paid'). 'blocked' means the generated
+    fix passed syntax validation but the semantic check (running the
+    client's own tests against the patched tree) found a regression, so the
+    PR was withheld for manual review.
 
     Every failure is made visible: the full traceback is logged and a short
     reason is written to the job's `detail` column. A job must never land on
@@ -680,8 +684,23 @@ async def _process_one_paid_job(
             await fixpack_repo.mark_status(job_id, "no_fix_needed")
             return "no_fix_needed"
 
+        # Semantic safety net: run the client's own tests against the patched
+        # tree (in Docker) and refuse to ship if we introduced a regression.
+        # Synchronous and slow (real Docker), so off the event loop like the
+        # scan. A blocked job is parked for a human, never auto-delivered.
+        semantic = await run_in_threadpool(run_semantic_check, zip_bytes, plan)
+        if semantic.regression:
+            logger.warning(
+                "Fix Pack job %s blocked by semantic check: %s",
+                job_id, semantic.detail,
+            )
+            await fixpack_repo.mark_status(job_id, "blocked", detail=semantic.detail)
+            return "blocked"
+
         title = render_fixpack_pr_title(plan)
         body = render_fixpack_pr_body(plan)
+        if semantic.pr_note:
+            body = f"{body}\n\n{semantic.pr_note}"
         token = await _resolve_pr_token(owner, repo)
         opened = await run_in_threadpool(
             pr_opener, owner, repo, plan.files,
@@ -735,7 +754,8 @@ async def process_paid_fixpacks(
     _require_bearer_token(request, token)
 
     jobs = await fixpack_repo.list_paid()
-    summary = {"processed": 0, "delivered": 0, "skipped": 0, "failed": 0}
+    summary = {"processed": 0, "delivered": 0, "skipped": 0,
+               "blocked": 0, "failed": 0}
     for job in jobs:
         summary["processed"] += 1
         outcome = await _process_one_paid_job(
@@ -746,6 +766,8 @@ async def process_paid_fixpacks(
             summary["delivered"] += 1
         elif outcome == "no_fix_needed":
             summary["skipped"] += 1
+        elif outcome == "blocked":
+            summary["blocked"] += 1
         else:
             summary["failed"] += 1
     return summary
