@@ -42,7 +42,7 @@ from app.deploypack.github_app import (
     installation_token_for_repo,
 )
 from app.deploypack.pipeline import run_deploy_pack
-from app.deploypack.preview import PreviewRegistry
+from app.deploypack.preview import PreviewRegistry, reconcile_previews
 from app.fixpack.generate import (
     build_fixpack_plan,
     render_pr_body as render_fixpack_pr_body,
@@ -279,7 +279,16 @@ async def reap_previews(
     _require_bearer_token(request, token)
 
     reaped = await run_in_threadpool(preview_registry.reap_expired)
-    return {"reaped": reaped, "active": preview_registry.active_count()}
+    # In-memory reap only knows this process's containers; after a restart the
+    # registry is empty while real preview containers may still be running.
+    # reconcile_previews asks Docker directly and ages out orphans by their
+    # shipit.expires_at label, regardless of what this process remembers.
+    reconciled = await run_in_threadpool(reconcile_previews)
+    return {
+        "reaped": reaped,
+        "active": preview_registry.active_count(),
+        "reconciled": reconciled,
+    }
 
 
 @app.get("/v1/audits/{audit_id}")

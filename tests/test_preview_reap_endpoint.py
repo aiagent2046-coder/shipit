@@ -55,5 +55,10 @@ def test_200_and_reaps_with_correct_token(monkeypatch):
         app.dependency_overrides.pop(get_preview_registry, None)
 
     assert resp.status_code == 200
-    assert resp.json() == {"reaped": 3, "active": 1}
+    body = resp.json()
+    assert body["reaped"] == 3
+    assert body["active"] == 1
+    # Docker isn't available in this test sandbox, so the Docker-truth
+    # reconciler short-circuits rather than shelling out.
+    assert body["reconciled"] == {"docker": False, "checked": 0, "removed": []}
     assert fake.reap_calls == 1
