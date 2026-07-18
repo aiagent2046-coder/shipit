@@ -12,25 +12,46 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
+import pytest
+
 from app.accounts import (
+    API_KEY_PEPPER_ENV,
     PRO_DAILY_AUDIT_LIMIT,
     Entitlements,
     api_key_from_request,
+    api_key_prefix,
     entitlements_for_tier,
     generate_api_key,
+    hash_api_key,
+    require_pepper,
+    resolve_account,
+    validate_api_key_pepper_configured,
 )
 from app.main import app, get_account_repo, get_rate_limiter
 from app.ratelimit import RateLimiter
 
 client = TestClient(app)
 
+# A made-up pepper for tests only — never a real production value.
+TEST_PEPPER = "test-pepper-not-a-real-secret"
+
 
 class FakeAccountRepo:
-    """In-memory AccountRepository stand-in keyed by api_key. Unknown key
-    -> None, exactly like the real repo's miss / not-configured contract."""
+    """In-memory AccountRepository stand-in. Indexes accounts by both the
+    HMAC key_hash (primary lookup) and the plaintext api_key (transitional
+    fallback), so it exercises whichever path resolve_account takes.
+    Unknown key -> None, like the real repo's miss / not-configured
+    contract."""
 
     def __init__(self, by_key: dict | None = None):
         self._by_key = by_key or {}
+        self._by_hash: dict = {}
+        for acct in self._by_key.values():
+            if acct.get("key_hash"):
+                self._by_hash[acct["key_hash"]] = acct
+
+    async def get_by_key_hash(self, key_hash: str):
+        return self._by_hash.get(key_hash)
 
     async def get_by_api_key(self, api_key: str):
         return self._by_key.get(api_key)
@@ -85,6 +106,112 @@ def test_generated_api_key_shape():
     assert key.startswith("sk_live_")
     assert len(key) > len("sk_live_")
     assert generate_api_key() != generate_api_key()  # random
+
+
+# --- key hashing + pepper (server-side HMAC) ---
+
+def test_hash_is_deterministic_and_key_specific(monkeypatch):
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
+    h1 = hash_api_key("sk_live_aaa")
+    # same key + same pepper -> same hash (so lookup is possible)
+    assert hash_api_key("sk_live_aaa") == h1
+    # different keys -> different hashes
+    assert hash_api_key("sk_live_bbb") != h1
+    # it's a hash, not the key, and hex sha256 length
+    assert "sk_live_aaa" not in h1
+    assert len(h1) == 64
+
+
+def test_hash_depends_on_pepper(monkeypatch):
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, "pepper-one")
+    a = hash_api_key("sk_live_same")
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, "pepper-two")
+    b = hash_api_key("sk_live_same")
+    assert a != b  # a DB leak without the pepper can't reproduce the hash
+
+
+def test_require_pepper_raises_clearly_when_unset(monkeypatch):
+    monkeypatch.delenv(API_KEY_PEPPER_ENV, raising=False)
+    with pytest.raises(RuntimeError) as exc:
+        require_pepper()
+    assert API_KEY_PEPPER_ENV in str(exc.value)
+
+
+def test_hash_refuses_empty_default_when_pepper_unset(monkeypatch):
+    # No silent fallback to an empty/default pepper.
+    monkeypatch.delenv(API_KEY_PEPPER_ENV, raising=False)
+    with pytest.raises(RuntimeError):
+        hash_api_key("sk_live_x")
+
+
+def test_startup_guard_raises_when_db_set_but_pepper_missing(monkeypatch):
+    monkeypatch.delenv(API_KEY_PEPPER_ENV, raising=False)
+    with pytest.raises(RuntimeError) as exc:
+        validate_api_key_pepper_configured(database_configured=True)
+    assert API_KEY_PEPPER_ENV in str(exc.value)
+
+
+def test_startup_guard_ok_when_pepper_present(monkeypatch):
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
+    validate_api_key_pepper_configured(database_configured=True)  # no raise
+
+
+def test_startup_guard_ok_when_db_not_configured(monkeypatch):
+    # DB-less deployment: accounts unusable anyway, pepper not required.
+    monkeypatch.delenv(API_KEY_PEPPER_ENV, raising=False)
+    validate_api_key_pepper_configured(database_configured=False)  # no raise
+
+
+def test_api_key_prefix_is_short_and_nonrevealing():
+    key = "sk_live_abcdefghijklmnop"
+    assert api_key_prefix(key) == "sk_live_abcd"  # KEY_PREFIX_LEN=12
+    assert len(api_key_prefix(key)) < len(key)
+
+
+# --- resolve_account: hashed lookup + backward-compat fallback ---
+
+class _Request:
+    def __init__(self, key: str | None):
+        self.headers = {"authorization": f"Bearer {key}"} if key else {}
+
+
+async def test_resolve_account_finds_by_hash(monkeypatch):
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
+    key = "sk_live_realkey"
+    acct = {"id": "acct-1", "api_key": None,
+            "key_hash": hash_api_key(key), "tier": "pro"}
+    repo = FakeAccountRepo({"ignored": acct})  # indexed by key_hash
+
+    found = await resolve_account(_Request(key), repo)
+    assert found is acct
+
+
+async def test_resolve_account_wrong_key_not_found(monkeypatch):
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
+    good = "sk_live_realkey"
+    acct = {"id": "acct-1", "api_key": None,
+            "key_hash": hash_api_key(good), "tier": "pro"}
+    repo = FakeAccountRepo({"ignored": acct})
+
+    assert await resolve_account(_Request("sk_live_wrongkey"), repo) is None
+
+
+async def test_resolve_account_falls_back_to_plaintext_for_prebackfill_key(monkeypatch):
+    # Account issued before migration 0009: key_hash is NULL, only plaintext
+    # api_key exists. The hashed lookup misses; the fallback finds it.
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
+    key = "sk_live_legacykey"
+    acct = {"id": "acct-legacy", "api_key": key, "key_hash": None, "tier": "pro"}
+    repo = FakeAccountRepo({key: acct})  # only plaintext-indexed (no key_hash)
+
+    found = await resolve_account(_Request(key), repo)
+    assert found is acct
+
+
+async def test_resolve_account_no_key_is_anonymous(monkeypatch):
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
+    repo = _pro_repo()
+    assert await resolve_account(_Request(None), repo) is None
 
 
 # --- api_key extraction from the header ---
