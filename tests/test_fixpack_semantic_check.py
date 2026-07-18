@@ -15,6 +15,8 @@ import app.fixpack.semantic_check as sc
 from app.fixpack.generate import FixpackPlan
 from app.fixpack.semantic_check import (
     RunResult,
+    _docker_install_argv,
+    _docker_test_argv,
     build_patched_zip,
     detect_test_runner,
     is_regression,
@@ -285,6 +287,31 @@ def test_run_suite_unknown_reporter_falls_back_to_exit_code(monkeypatch):
 
     res = run_suite(_python_zip(), detect_test_runner(_python_zip()))
     assert res.failed == 1  # exit-code signal preserved
+
+
+# --- container hardening flags ---------------------------------------------
+
+_HARDENING = {
+    "--pids-limit=256",
+    "--cpus=1",
+    "--security-opt=no-new-privileges",
+    "--cap-drop=ALL",
+}
+
+
+def test_install_argv_has_resource_and_privilege_limits():
+    argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
+    assert _HARDENING.issubset(set(argv))
+    assert "--memory" in argv          # existing cap kept
+    # --read-only would break pip/npm writes; must NOT be present (see NOTE).
+    assert "--read-only" not in argv
+
+
+def test_test_argv_has_resource_and_privilege_limits():
+    argv = _docker_test_argv("node:20-slim", "/tmp/work", "npm test")
+    assert _HARDENING.issubset(set(argv))
+    assert "--network" in argv and "none" in argv   # existing net-off kept
+    assert "--read-only" not in argv
 
 
 # --- build_patched_zip -----------------------------------------------------

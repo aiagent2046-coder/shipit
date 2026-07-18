@@ -255,11 +255,34 @@ def _extract_repo_relative(zip_bytes: bytes, dest: str) -> None:
                 shutil.copyfileobj(src, out)
 
 
+# Hardening flags applied to every container that executes untrusted client
+# code, on top of --memory:
+#   --pids-limit=256                 fork-bomb guard (cap process count)
+#   --cpus=1                         one CPU max, so a client can't peg the host
+#   --security-opt=no-new-privileges block setuid privilege escalation inside
+#   --cap-drop=ALL                   drop all Linux capabilities (none are
+#                                    needed to install deps or run a test)
+# NOTE: --read-only is deliberately NOT added. Both the install step
+# (pip --target / npm writing node_modules into /work) and the test step
+# (pytest caches, /tmp) need to write, and pip/npm also write outside the
+# mounted /work (into the image's own site dirs, ~/.cache, /tmp). A correct
+# read-only setup would need a writable /work plus an explicit `--tmpfs /tmp`
+# and possibly more tmpfs carve-outs, which risks silently breaking installs;
+# left as a follow-up rather than added blindly here.
+_CONTAINER_HARDENING = [
+    "--pids-limit=256",
+    "--cpus=1",
+    "--security-opt=no-new-privileges",
+    "--cap-drop=ALL",
+]
+
+
 def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
     """Step 1: network ON, deps installed into the mounted work dir."""
     return [
         "docker", "run", "--rm",
         "--memory", MEMORY_LIMIT,
+        *_CONTAINER_HARDENING,
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
     ]
@@ -271,6 +294,7 @@ def _docker_test_argv(image: str, workdir: str, script: str) -> list[str]:
         "docker", "run", "--rm",
         "--network", "none",
         "--memory", MEMORY_LIMIT,
+        *_CONTAINER_HARDENING,
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
     ]

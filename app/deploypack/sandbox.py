@@ -28,6 +28,22 @@ from typing import Callable
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
+# Hardening flags for the container running untrusted client code, on top
+# of --memory:
+#   --pids-limit=256                 fork-bomb guard (cap process count)
+#   --cpus=1                         one CPU max, so a client can't peg the host
+#   --security-opt=no-new-privileges block setuid privilege escalation inside
+#   --cap-drop=ALL                   drop all Linux capabilities
+# NOTE: --read-only is intentionally omitted — a generated web app may need
+# to write (caches, sqlite, tmp) at its own rootfs, and locking that down
+# per-Dockerfile is out of scope for this guard.
+_RUN_HARDENING = [
+    "--pids-limit=256",
+    "--cpus=1",
+    "--security-opt=no-new-privileges",
+    "--cap-drop=ALL",
+]
+
 
 @dataclass
 class SandboxResult:
@@ -97,7 +113,8 @@ def verify_deploy_pack(
         # network despite the `local_url` naming — pin it to 127.0.0.1 so it
         # is reachable only from the host running this process.
         run_cmd = ["docker", "run", "-d", "--rm", "--name", container,
-                   "-p", f"127.0.0.1:{host_port}:{container_port}"]
+                   "-p", f"127.0.0.1:{host_port}:{container_port}",
+                   *_RUN_HARDENING]
         if memory_limit:
             run_cmd += ["--memory", memory_limit]
         run_cmd.append(tag)
