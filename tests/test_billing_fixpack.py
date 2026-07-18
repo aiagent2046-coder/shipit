@@ -282,6 +282,9 @@ async def test_fixpack_payment_creates_job_and_not_a_pro_account():
     # And the confirmation DM leaks no API key.
     dm = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
     assert "sk_live_" not in dm
+    # A Fix Pack is bought for one audit, so the DM links that audit's
+    # report directly (the /audit/{id} route) -- not a bare homepage link.
+    assert f"https://drydock.co/audit/{audit['id']}" in dm
 
 
 async def test_duplicate_fixpack_payment_is_idempotent():

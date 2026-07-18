@@ -178,7 +178,13 @@ async def test_successful_payment_grants_pro_and_dms_key():
     assert account["tier"] == "pro"
     send_calls = [c for c in calls if c[0] == "sendMessage"]
     assert len(send_calls) == 1
-    assert account["api_key"] in send_calls[0][1]["text"]
+    text = send_calls[0][1]["text"]
+    assert account["api_key"] in text
+    # Pro is a general subscription, not tied to any one audit, so the DM
+    # must NOT dangle a report link (there is no report for this purchase);
+    # it points at the run-an-audit landing page instead.
+    assert "Open your report" not in text
+    assert "Run an audit: https://drydock.co" in text
     # one completed payment recorded, keyed by the charge id
     assert len(payments.rows) == 1
     pay = next(iter(payments.rows.values()))
