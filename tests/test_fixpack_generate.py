@@ -10,11 +10,14 @@ ORIGINAL file it is being edited out of. Every secret test asserts the
 raw value is gone from the new file AND absent from the PR body.
 """
 
+import ast
 import io
+import json
 import zipfile
 
 from app.fixpack.generate import (
     _is_test_path,
+    _validate_syntax,
     build_fixpack_plan,
     render_pr_body,
     render_pr_title,
@@ -259,3 +262,99 @@ def test_multiple_secrets_on_one_file_applied_together():
     assert 'os.environ["AWS_ACCESS_KEY_ID"]' in new_text
     assert 'os.environ["GITHUB_TOKEN"]' in new_text
     assert len(plan.secret_fixes) == 2
+
+
+# --- Syntax-validation safety net -------------------------------------
+# THE ROOT-CAUSE class behind Fix Pack #32: the value-span replacement can
+# land *inside* a larger literal (a PEM in a quoted string, a secret inside
+# an f-string, a JSON value), leaving surrounding quotes and injecting an
+# env reference that itself contains quotes -> a broken file. This must be
+# caught by syntax validation and the whole file dropped from the Fix Pack,
+# INDEPENDENT of the test-path exclusion (these are all production paths).
+
+
+def _skipped_reason_for(plan, file):
+    return [s.reason for s in plan.skipped if s.file == file]
+
+
+def test_pem_inside_python_string_literal_is_excluded_not_broken():
+    # Exactly the shape that broke tests/test_fixpack_process_endpoint.py:293
+    # but on a *production* path: a PEM inside a double-quoted Python string.
+    # _PEM_BLOCK_RE matches the block WITHOUT its surrounding quotes, so the
+    # env ref `os.environ["PRIVATE_KEY"]` gets injected between the quotes ->
+    #   KEY = "os.environ["PRIVATE_KEY"]"   -> SyntaxError.
+    pem = "-----BEGIN PRIVATE KEY-----\\nMIICdummy\\n-----END PRIVATE KEY-----"
+    source = f'KEY = "{pem}"\n'
+    ast.parse(source)  # the ORIGINAL file is valid Python
+    zip_bytes = make_zip({"config.py": source})
+    findings = [finding(rule_id="private-key-block", file="config.py", line=1)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert not plan.has_changes
+    assert "config.py" not in plan.files
+    reasons = _skipped_reason_for(plan, "config.py")
+    assert any("invalid syntax" in r for r in reasons)
+
+
+def test_secret_inside_fstring_is_excluded_not_broken():
+    # The AWS token is embedded inside an f-string, not individually quoted,
+    # so the wrapped-literal replace misses and the BARE fallback fires,
+    # dropping `os.environ["AWS_ACCESS_KEY_ID"]` (with quotes) inside the
+    # f-string's own quotes -> SyntaxError. Must be excluded, not shipped.
+    source = f'TOKEN = f"env-{{stage}}-{AWS_KEY}"\n'
+    ast.parse(source)  # original valid
+    zip_bytes = make_zip({"config.py": source})
+    findings = [finding(rule_id="aws-access-key-id", file="config.py", line=1)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert not plan.has_changes
+    assert "config.py" not in plan.files
+    assert any("invalid syntax" in r for r in _skipped_reason_for(plan, "config.py"))
+    # Never-leak still holds on the excluded path.
+    assert AWS_KEY not in render_pr_body(plan)
+
+
+def test_secret_in_json_value_left_unquoted_is_excluded():
+    # For an unknown-language value the env ref is `${NAME}` (no quotes).
+    # Replacing the quoted JSON value `"AKIA..."` with the bare `${...}`
+    # produces `{"api_key": ${AWS_ACCESS_KEY_ID}}` -> invalid JSON.
+    source = f'{{"api_key": "{AWS_KEY}"}}\n'
+    json.loads(source)  # original valid JSON
+    zip_bytes = make_zip({"config.json": source})
+    findings = [finding(rule_id="aws-access-key-id", file="config.json", line=1)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert not plan.has_changes
+    assert "config.json" not in plan.files
+    assert any("invalid syntax" in r for r in _skipped_reason_for(plan, "config.json"))
+
+
+def test_valid_python_edit_passes_syntax_gate_and_is_shipped():
+    # Control: a clean single-line assignment produces valid Python and must
+    # NOT be dropped -- the gate must not over-reach and block good fixes.
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    findings = [finding(rule_id="aws-access-key-id", file="config.py", line=1)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert plan.has_changes
+    new_text = plan.files["config.py"]
+    ast.parse(new_text)  # the shipped file is valid Python
+    assert not any("invalid syntax" in r for r in _skipped_reason_for(plan, "config.py"))
+
+
+def test_validate_syntax_helper_py_json_and_heuristic():
+    # .py -> ast.parse authority
+    assert _validate_syntax("a.py", "x = 1\n", "x = 2\n")
+    assert not _validate_syntax("a.py", "x = 1\n", 'x = "a"b"\n')
+    # .json -> json.loads authority
+    assert _validate_syntax("a.json", '{"a": 1}', '{"a": 2}')
+    assert not _validate_syntax("a.json", '{"a": "x"}', '{"a": ${X}}')
+    # unknown language -> conservative bracket-balance: reject only when a
+    # balanced original became unbalanced; accept anything already unbalanced.
+    assert _validate_syntax("a.go", "f(a)\n", "f(b)\n")
+    assert not _validate_syntax("a.go", "f(a)\n", "f(b\n")
+    assert _validate_syntax("a.go", "f(a\n", "still f(b\n")  # already broken -> not our fault

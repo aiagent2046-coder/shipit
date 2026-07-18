@@ -28,13 +28,18 @@ detector fixtures, and rewriting that code is unsafe (see _is_test_path).
 
 from __future__ import annotations
 
+import ast
 import io
+import json
+import logging
 import re
 import zipfile
 from dataclasses import dataclass, field
 
 from app.scan.checks import find_committed_env_files, gitignore_covers_env
 from app.scan.secrets import RULES, iter_secret_matches
+
+logger = logging.getLogger(__name__)
 
 # The secret rule_ids we will auto-fix: every rule secrets.py defines,
 # minus the ones that are unsafe/pointless to rewrite. Derived from RULES
@@ -219,6 +224,60 @@ def _verify_scrubbed(text: str, sensitive: list[str]) -> bool:
     return all(secret not in text for secret in sensitive)
 
 
+def _brackets_balanced(text: str) -> bool:
+    """True if (), [], {} are properly nested. A cheap, language-agnostic
+    heuristic (it ignores quotes/comments, so it is only ever used as a
+    *relative* before/after check, never as absolute truth)."""
+    pairs = {")": "(", "]": "[", "}": "{"}
+    openers = set(pairs.values())
+    stack: list[str] = []
+    for ch in text:
+        if ch in openers:
+            stack.append(ch)
+        elif ch in pairs:
+            if not stack or stack.pop() != pairs[ch]:
+                return False
+    return not stack
+
+
+def _validate_syntax(path: str, original: str, new: str) -> bool:
+    """Best-effort guard that our edit left the file syntactically valid.
+
+    This is the ROOT-CAUSE safety net, independent of the test-path
+    exclusion: a value-span replacement can land *inside* a larger string
+    literal (a PEM block, an f-string, a concatenation, a JSON value),
+    leaving the surrounding quotes and injecting an env reference that
+    itself contains quotes — a SyntaxError. We refuse to ship such a file.
+
+    Authoritative for the languages the standard library can parse:
+      * .py            -> ast.parse
+      * .json / .jsonc -> json.loads
+
+    For every other language there is NO zero-dependency parser available,
+    and we deliberately do not invent one. We fall back to a conservative
+    delimiter check: reject only when our edit turned a bracket-balanced
+    file into an unbalanced one. Anything we cannot judge, we accept — the
+    never-leak post-check (`_verify_scrubbed`) has already run, so the worst
+    case for an unparseable-language file is a semantically-odd but
+    non-secret-leaking edit, not a broken secret removal.
+    """
+    lower = path.lower()
+    if lower.endswith(".py"):
+        try:
+            ast.parse(new)
+            return True
+        except (SyntaxError, ValueError):
+            return False
+    if lower.endswith((".json", ".jsonc")):
+        try:
+            json.loads(new)
+            return True
+        except (json.JSONDecodeError, ValueError):
+            return False
+    # Unknown language: only fail if we demonstrably broke bracket balance.
+    return _brackets_balanced(new) or not _brackets_balanced(original)
+
+
 def _append_missing(body: str, patterns: tuple[str, ...] | list[str]) -> str:
     """Append any of `patterns` not already present (line-exact) to a
     file body, keeping the existing content untouched."""
@@ -333,6 +392,23 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                     rule_id=f["rule_id"], file=repo_rel, line=f.get("line", 0),
                     reason="could not safely remove the value; file left unchanged",
                 ))
+            continue
+
+        # Root-cause safety net: never ship a file our edit made
+        # unparseable. A value-span replacement can corrupt the surrounding
+        # literal (PEM/f-string/JSON value); drop the file instead of
+        # emitting a PR that breaks the client's code.
+        if not _validate_syntax(repo_rel, text, new_text):
+            for f, _ in applied:
+                plan.skipped.append(SkippedFinding(
+                    rule_id=f["rule_id"], file=repo_rel, line=f.get("line", 0),
+                    reason="edit produced invalid syntax; file excluded from Fix Pack",
+                ))
+            logger.warning(
+                "fixpack: syntax validation failed for %s after applying "
+                "%d fix(es); excluding file from Fix Pack",
+                repo_rel, len(applied),
+            )
             continue
 
         plan.files[repo_rel] = new_text
