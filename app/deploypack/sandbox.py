@@ -91,8 +91,13 @@ def verify_deploy_pack(
     container_started = False
     keep_container = False
     try:
+        # Bind the published port to loopback only. Docker's default
+        # `-p host:container` binds 0.0.0.0 (every interface), which would
+        # expose an unpaid preview of untrusted client code to the whole
+        # network despite the `local_url` naming — pin it to 127.0.0.1 so it
+        # is reachable only from the host running this process.
         run_cmd = ["docker", "run", "-d", "--rm", "--name", container,
-                   "-p", f"{host_port}:{container_port}"]
+                   "-p", f"127.0.0.1:{host_port}:{container_port}"]
         if memory_limit:
             run_cmd += ["--memory", memory_limit]
         run_cmd.append(tag)
