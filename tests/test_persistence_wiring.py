@@ -51,12 +51,26 @@ class FakeAuditRepo:
     async def create(self, **fields):
         self.create_calls.append(fields)
         row_id = str(uuid.uuid4())
-        row = {"id": row_id, "status": "completed", **fields}
+        # Mint a per-row token like the real DB default (migration 0010).
+        row = {"id": row_id, "status": "completed",
+               "access_token": f"tok-{row_id}", **fields}
         self.rows[row_id] = row
         return row
 
     async def get(self, audit_id):
         return self.rows.get(audit_id)
+
+    async def get_authorized(self, audit_id, access_token):
+        # Mirrors AuditRepository.get_authorized: only returns the row when the
+        # token matches; unknown id or missing/wrong token -> None (-> 404).
+        # Like the real SQL, the returned row does NOT carry access_token
+        # (it's matched in the query, never selected), so it can't leak out.
+        row = self.rows.get(audit_id)
+        if row is None or not access_token:
+            return None
+        if access_token != row.get("access_token"):
+            return None
+        return {k: v for k, v in row.items() if k != "access_token"}
 
     async def get_by_content_hash(self, content_hash):
         return None
@@ -86,7 +100,7 @@ class FakeFixpackRepo:
 
 
 def test_get_audit_404_when_not_found():
-    resp = client.get(f"/v1/audits/{uuid.uuid4()}")
+    resp = client.get(f"/v1/audits/{uuid.uuid4()}?token=whatever")
     assert resp.status_code == 404
     assert resp.json()["detail"]["reason"] == "not_found"
 
@@ -159,6 +173,22 @@ def test_create_audit_without_database_still_works_unpersisted():
     uuid.UUID(body["audit_id"])  # still a valid random id, just not stored
 
 
+def test_create_audit_returns_access_token():
+    fake = FakeAuditRepo()
+    app.dependency_overrides[get_audit_repo] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/audits",
+            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_audit_repo, None)
+
+    body = resp.json()
+    audit_id = body["audit_id"]
+    assert body["access_token"] == fake.rows[audit_id]["access_token"]
+
+
 def test_get_audit_after_create_round_trips():
     fake = FakeAuditRepo()
     app.dependency_overrides[get_audit_repo] = lambda: fake
@@ -167,13 +197,36 @@ def test_get_audit_after_create_round_trips():
             "/v1/audits",
             files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
         )
-        audit_id = create_resp.json()["audit_id"]
-        get_resp = client.get(f"/v1/audits/{audit_id}")
+        created = create_resp.json()
+        audit_id = created["audit_id"]
+        token = created["access_token"]
+        get_resp = client.get(f"/v1/audits/{audit_id}?token={token}")
     finally:
         app.dependency_overrides.pop(get_audit_repo, None)
 
     assert get_resp.status_code == 200
     assert get_resp.json()["id"] == audit_id
+    # The ownership token is never echoed back in the audit body.
+    assert "access_token" not in get_resp.json()
+
+
+def test_get_audit_without_token_is_404():
+    fake = FakeAuditRepo()
+    app.dependency_overrides[get_audit_repo] = lambda: fake
+    try:
+        create_resp = client.post(
+            "/v1/audits",
+            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+        )
+        audit_id = create_resp.json()["audit_id"]
+        # A caller who knows only the id (leaked UUID) gets 404, not the report.
+        no_token = client.get(f"/v1/audits/{audit_id}")
+        wrong_token = client.get(f"/v1/audits/{audit_id}?token=not-the-token")
+    finally:
+        app.dependency_overrides.pop(get_audit_repo, None)
+
+    assert no_token.status_code == 404
+    assert wrong_token.status_code == 404
 
 
 def test_fixpack_bad_audit_id_is_422():
