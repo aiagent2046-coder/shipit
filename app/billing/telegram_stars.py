@@ -149,6 +149,18 @@ def build_invoice_payload(
     }
 
 
+# Telegram cancels the charge if we don't answerPreCheckoutQuery within
+# ~10s of the Pay tap ("within 10 seconds",
+# https://core.telegram.org/bots/api#answerprecheckoutquery). Bound the
+# outbound answer well under that: a slow Bot API response then fails fast
+# and surfaces, instead of the generic 30s _call timeout silently sailing
+# past the deadline and producing a BOT_PRECHECKOUT_TIMEOUT on Telegram's
+# side. The pre_checkout branch (see handle_update) does NO DB work, so
+# this single outbound call is the only thing that can spend the budget --
+# keep its ceiling short.
+PRE_CHECKOUT_TIMEOUT_S = 8.0
+
+
 def _base_url(token: str) -> str:
     return f"{TELEGRAM_API}/bot{token}"
 
@@ -156,9 +168,10 @@ def _base_url(token: str) -> str:
 async def _call(
     method: str, body: dict[str, Any], *, token: str,
     transport: httpx.BaseTransport | None = None,
+    timeout: float = 30,
 ) -> dict[str, Any]:
     async with httpx.AsyncClient(
-        base_url=_base_url(token), timeout=30, transport=transport
+        base_url=_base_url(token), timeout=timeout, transport=transport
     ) as client:
         resp = await client.post(f"/{method}", json=body)
         data = resp.json()
@@ -191,11 +204,15 @@ async def answer_pre_checkout_query(
     query_id: str, *, ok: bool, token: str,
     error_message: str | None = None,
     transport: httpx.BaseTransport | None = None,
+    timeout: float = PRE_CHECKOUT_TIMEOUT_S,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"pre_checkout_query_id": query_id, "ok": ok}
     if not ok and error_message:
         body["error_message"] = error_message
-    return await _call("answerPreCheckoutQuery", body, token=token, transport=transport)
+    return await _call(
+        "answerPreCheckoutQuery", body, token=token,
+        transport=transport, timeout=timeout,
+    )
 
 
 async def send_message(
@@ -253,6 +270,15 @@ async def handle_update(
 
     pcq = update.get("pre_checkout_query")
     if pcq is not None:
+        # Answer FIRST, before any repo is consulted, and identically for
+        # every product (Pro and Fix Pack alike -- the payload is not even
+        # read here): there is nothing to reserve or oversell, so approving
+        # is unconditional. Doing a DB round-trip (e.g. re-checking the audit
+        # or an existing fixpack_job) before answering is exactly what would
+        # blow Telegram's ~10s deadline under Supabase latency and cancel the
+        # charge -- real state validation belongs in the successful_payment
+        # handlers below, never on this path. The short PRE_CHECKOUT_TIMEOUT_S
+        # bounds the one outbound call so even Bot API slowness fails fast.
         await answer_pre_checkout_query(
             pcq["id"], ok=True, token=token, transport=transport
         )
