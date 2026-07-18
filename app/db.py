@@ -45,6 +45,8 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from app.accounts import api_key_prefix, hash_api_key
+
 DATABASE_URL_ENV = "DATABASE_URL"
 
 _pool: AsyncConnectionPool | None = None
@@ -448,23 +450,40 @@ class AccountRepository:
     hole) -- create() is used by Stage 2's payment flow and by tests."""
 
     async def create(self, *, api_key: str, tier: str) -> dict[str, Any] | None:
+        """Mint an account for a freshly generated `api_key`. Stores only
+        the safe prefix and the HMAC hash -- NEVER the plaintext key -- so a
+        DB leak yields no usable keys. The plaintext is returned in the
+        result dict for one-time delivery to the buyer (it can never be
+        recovered afterward; there is no plaintext at rest to re-send)."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return None
+        # Compute only once the DB is actually configured, so the
+        # not-configured contract (return None) doesn't require a pepper.
+        # hash_api_key raises loudly if the pepper is missing on a DB-backed
+        # deployment -- never a silent empty-pepper hash.
+        key_prefix = api_key_prefix(api_key)
+        key_hash = hash_api_key(api_key)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                insert into accounts (api_key, tier)
-                values (%s, %s)
-                returning id, api_key, tier, created_at
+                insert into accounts (key_prefix, key_hash, tier)
+                values (%s, %s, %s)
+                returning id, api_key, key_prefix, key_hash, tier, created_at
                 """,
-                (api_key, tier),
+                (key_prefix, key_hash, tier),
             )
             row = await cur.fetchone()
-        return _row_to_account(row)
+        account = _row_to_account(row)
+        # api_key is NOT persisted (column left NULL). Surface the plaintext
+        # in-memory so the caller can deliver it exactly once.
+        account["api_key"] = api_key
+        return account
 
-    async def get_by_api_key(self, api_key: str) -> dict[str, Any] | None:
+    async def get_by_key_hash(self, key_hash: str) -> dict[str, Any] | None:
+        """Primary authenticated lookup: match the HMAC hash of the
+        presented key. See app/accounts.resolve_account."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -472,7 +491,26 @@ class AccountRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select id, api_key, tier, created_at
+                select id, api_key, key_prefix, key_hash, tier, created_at
+                from accounts where key_hash = %s
+                """,
+                (key_hash,),
+            )
+            row = await cur.fetchone()
+        return _row_to_account(row) if row else None
+
+    async def get_by_api_key(self, api_key: str) -> dict[str, Any] | None:
+        """Transitional plaintext lookup for keys issued before migration
+        0009 (key_hash still NULL until the backfill runs). REMOVE after
+        backfill + deprecation window, together with the api_key column."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, api_key, key_prefix, key_hash, tier, created_at
                 from accounts where api_key = %s
                 """,
                 (api_key,),
@@ -482,9 +520,11 @@ class AccountRepository:
 
     async def get_by_id(self, account_id: str) -> dict[str, Any] | None:
         """Look up an account by its uuid. Used by Stage 2's billing flow
-        to re-fetch the just-granted account (and its api_key) for
-        delivery -- e.g. re-sending the key on a duplicate Telegram
-        webhook, or revealing it from the USDT invoice-status endpoint."""
+        to re-fetch the just-granted account for delivery -- e.g. on a
+        duplicate Telegram webhook, or the USDT invoice-status endpoint.
+        Note: for accounts minted after migration 0009 the plaintext
+        api_key is NULL (only the hash is stored), so re-delivery of the
+        key text is not possible -- the key is shown once, at creation."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -496,7 +536,7 @@ class AccountRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select id, api_key, tier, created_at
+                select id, api_key, key_prefix, key_hash, tier, created_at
                 from accounts where id = %s
                 """,
                 (parsed_id,),
