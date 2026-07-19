@@ -20,9 +20,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.deploypack.github_app import (
+    GITHUB_APP_SLUG_DEFAULT,
     GitHubAppError,
     _public_key_fingerprint,
     app_credentials_from_env,
+    app_slug_from_env,
+    build_install_url,
+    installation_exists_for_repo,
     installation_token_for_repo,
     mint_app_jwt,
 )
@@ -318,3 +322,64 @@ def test_installation_token_mint_error(keypair):
             "acme", "app", app_id="999", private_key=private_pem,
             transport=httpx.MockTransport(handler),
         )
+
+
+def test_installation_exists_true_on_200(keypair):
+    private_pem, _ = keypair
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        assert request.headers["authorization"].startswith("Bearer ")
+        return httpx.Response(200, json={"id": 4242})
+
+    assert installation_exists_for_repo(
+        "acme", "app", app_id="999", private_key=private_pem,
+        transport=httpx.MockTransport(handler),
+    ) is True
+    # Status check only: it must NOT go on to mint an installation token.
+    assert calls == ["/repos/acme/app/installation"]
+
+
+def test_installation_exists_false_on_404(keypair):
+    private_pem, _ = keypair
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    assert installation_exists_for_repo(
+        "acme", "app", app_id="999", private_key=private_pem,
+        transport=httpx.MockTransport(handler),
+    ) is False
+
+
+def test_installation_exists_raises_on_other_error(keypair):
+    """A non-404 error (bad App JWT, GitHub down) must raise rather than be
+    silently reported as "not installed" — the caller can't tell those apart
+    otherwise."""
+    private_pem, _ = keypair
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="internal error")
+
+    with pytest.raises(GitHubAppError, match="resolve installation failed: 500"):
+        installation_exists_for_repo(
+            "acme", "app", app_id="999", private_key=private_pem,
+            transport=httpx.MockTransport(handler),
+        )
+
+
+def test_app_slug_default_and_env_override(monkeypatch):
+    monkeypatch.delenv("GITHUB_APP_SLUG", raising=False)
+    assert app_slug_from_env() == GITHUB_APP_SLUG_DEFAULT == "aiagent2046-coder-shipit"
+    monkeypatch.setenv("GITHUB_APP_SLUG", "some-other-app")
+    assert app_slug_from_env() == "some-other-app"
+
+
+def test_build_install_url_encodes_state(monkeypatch):
+    monkeypatch.delenv("GITHUB_APP_SLUG", raising=False)
+    url = build_install_url("acme/app")
+    assert url == (
+        "https://github.com/apps/aiagent2046-coder-shipit/installations/new"
+        "?state=acme%2Fapp"
+    )

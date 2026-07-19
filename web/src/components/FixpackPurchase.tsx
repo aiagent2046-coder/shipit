@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FixpackStatus } from "@/lib/types";
+import type { ReactNode } from "react";
+import type { FixpackStatus, InstallationStatus } from "@/lib/types";
 import {
   TELEGRAM_BOT_USERNAME,
   createFixpackUsdtInvoice,
   getFixpackStatus,
+  getInstallationStatus,
 } from "@/lib/api";
 import { UsdtCheckout } from "./UsdtCheckout";
 import { Spinner } from "./Spinner";
@@ -13,6 +15,23 @@ import { Spinner } from "./Spinner";
 const STARS_PRICE = "600 Stars";
 const USDT_PRICE = "12 USDT";
 const POLL_MS = 10_000;
+
+// Survives the round trip to github.com and back to /github/installed, so the
+// receiver page can send the user straight back to this audit. sessionStorage
+// (not query state) because it's same-tab and we don't want it in a URL.
+const INSTALL_RETURN_KEY = "drydock:github-install-return";
+
+// Pull owner/repo out of a github.com URL for the installation check. The
+// backend re-validates both segments, so this is only about extracting them.
+function parseOwnerRepo(
+  repoUrl: string,
+): { owner: string; repo: string } | null {
+  const m = repoUrl
+    .trim()
+    .match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  if (!m) return null;
+  return { owner: m[1], repo: m[2] };
+}
 
 const TERMINAL: ReadonlySet<string> = new Set([
   "delivered",
@@ -56,33 +75,132 @@ export function FixpackPurchase({
         </p>
       </header>
 
-      <div className="mt-5 grid gap-5 md:grid-cols-2">
-        <StarsCard auditId={auditId} />
-        <UsdtCheckout
-          description={
-            <>
-              Send an exact amount on the TRON network. Once the transfer is
-              confirmed on-chain your Fix Pack is generated automatically —
-              watch the status below.
-            </>
-          }
-          createInvoice={() => createFixpackUsdtInvoice(auditId)}
-          renderCompleted={() => (
-            <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
-              <p className="font-semibold text-accent">
-                Payment confirmed — generating your Fix Pack.
-              </p>
-              <p className="mt-2 text-sm text-muted">
-                No further action needed. The fix PR is opened automatically —
-                its status appears below.
-              </p>
-            </div>
-          )}
-        />
-      </div>
+      <InstallGate repoUrl={repoUrl}>
+        <div className="mt-5 grid gap-5 md:grid-cols-2">
+          <StarsCard auditId={auditId} />
+          <UsdtCheckout
+            description={
+              <>
+                Send an exact amount on the TRON network. Once the transfer is
+                confirmed on-chain your Fix Pack is generated automatically —
+                watch the status below.
+              </>
+            }
+            createInvoice={() => createFixpackUsdtInvoice(auditId)}
+            renderCompleted={() => (
+              <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
+                <p className="font-semibold text-accent">
+                  Payment confirmed — generating your Fix Pack.
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  No further action needed. The fix PR is opened automatically —
+                  its status appears below.
+                </p>
+              </div>
+            )}
+          />
+        </div>
+      </InstallGate>
 
       <FixpackStatusArea auditId={auditId} />
     </section>
+  );
+}
+
+// A Fix Pack opens a real PR, which needs the GitHub App installed on the
+// target repo. Until it is, we show an "Install GitHub App" button instead of
+// the pay cards, so no one pays for a Fix Pack that can't be delivered. When
+// the App isn't configured on this deployment at all (app_configured=false),
+// or the check can't complete, we don't strand the user — the pay cards show.
+function InstallGate({
+  repoUrl,
+  children,
+}: {
+  repoUrl: string;
+  children: ReactNode;
+}) {
+  const [status, setStatus] = useState<InstallationStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  const parsed = parseOwnerRepo(repoUrl);
+
+  useEffect(() => {
+    if (!parsed) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setFailed(false);
+    getInstallationStatus(parsed.owner, parsed.repo)
+      .then((s) => {
+        if (!cancelled) setStatus(s);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // parsed is derived from repoUrl; keying on repoUrl avoids a new object
+    // each render retriggering the effect.
+  }, [repoUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (loading) {
+    return (
+      <p className="mt-5 flex items-center gap-2 text-sm text-muted">
+        <Spinner /> Checking GitHub App installation…
+      </p>
+    );
+  }
+
+  // Couldn't parse the repo, the App isn't configured here, it's already
+  // installed, or the check failed — in every one of these the honest move is
+  // to let the purchase proceed rather than block on an unknown.
+  const blocked =
+    status !== null &&
+    status.app_configured &&
+    status.installed === false &&
+    !failed;
+
+  if (!blocked) return <>{children}</>;
+
+  function rememberReturn() {
+    try {
+      sessionStorage.setItem(INSTALL_RETURN_KEY, window.location.href);
+    } catch {
+      /* sessionStorage unavailable — /github/installed falls back to home */
+    }
+  }
+
+  return (
+    <div className="mt-5 rounded-xl border border-high/40 bg-high/10 p-5">
+      <h3 className="text-base font-semibold text-high">
+        Install the GitHub App first
+      </h3>
+      <p className="mt-2 max-w-2xl text-sm text-muted">
+        A Fix Pack opens a real pull request against{" "}
+        <span className="font-mono text-text">
+          {status!.owner}/{status!.repo}
+        </span>
+        , so our GitHub App has to be installed on that repository before you
+        can buy one. Install it (you choose which repos it can access), and
+        you&apos;ll be brought right back here to continue.
+      </p>
+      {status!.install_url && (
+        <a
+          href={status!.install_url}
+          onClick={rememberReturn}
+          className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90"
+        >
+          Install GitHub App ↗
+        </a>
+      )}
+    </div>
   );
 }
 

@@ -123,3 +123,15 @@ export interface FixpackStatus {
   status: FixpackJobStatus | null;
   pr_url: string | null;
 }
+
+// GET /v1/github/installation-status?owner=&repo=
+// A Fix Pack opens a real PR, which needs the GitHub App installed on the
+// target repo. `app_configured=false` means this deployment has no App at
+// all (installed is null) — the frontend shouldn't gate in that case.
+export interface InstallationStatus {
+  owner: string;
+  repo: string;
+  app_configured: boolean;
+  installed: boolean | null;
+  install_url: string | null;
+}

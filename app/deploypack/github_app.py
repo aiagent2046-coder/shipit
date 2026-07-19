@@ -41,6 +41,7 @@ import hashlib
 import logging
 import os
 import time
+import urllib.parse
 
 import httpx
 import jwt
@@ -53,6 +54,13 @@ _HEADERS_BASE = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
 }
+
+# Public slug of the GitHub App as it appears in its install URL
+# (https://github.com/apps/<slug>). This App was flipped Private -> Public
+# in the GitHub UI, so any account can now install it. Overridable via env
+# for a differently-named App, but the default is the real one so a stock
+# deployment builds a working install link with no extra config.
+GITHUB_APP_SLUG_DEFAULT = "aiagent2046-coder-shipit"
 
 
 class GitHubAppError(Exception):
@@ -244,3 +252,54 @@ def installation_token_for_repo(
                 f"{token_resp.text[:300]}"
             )
         return token_resp.json()["token"]
+
+
+def installation_exists_for_repo(
+    owner: str,
+    repo: str,
+    *,
+    app_id: str,
+    private_key: str,
+    transport: httpx.BaseTransport | None = None,
+) -> bool:
+    """Does the App have an installation covering owner/repo?
+
+    The same per-repo lookup installation_token_for_repo does (GET
+    /repos/{owner}/{repo}/installation with an App JWT), minus the token
+    mint — a status check has no reason to spend an installation token.
+    Returns False for GitHub's 404 (the App simply isn't installed on that
+    repo, the one answer a "should we show the install button?" caller
+    needs) and True for a 200. Any other non-2xx is a real fault (bad App
+    JWT, GitHub down) and raises GitHubAppError, so the caller can tell
+    "not installed" apart from "could not check" instead of conflating
+    both into a misleading False.
+    """
+    app_jwt = mint_app_jwt(app_id, private_key)
+    headers = {**_HEADERS_BASE, "Authorization": f"Bearer {app_jwt}"}
+    with httpx.Client(base_url=GITHUB_API, headers=headers, timeout=30,
+                      transport=transport) as client:
+        resp = client.get(f"/repos/{owner}/{repo}/installation")
+        if resp.status_code == 404:
+            return False
+        if resp.status_code >= 300:
+            raise GitHubAppError(
+                f"resolve installation failed: {resp.status_code} {resp.text[:300]}"
+            )
+        return True
+
+
+def app_slug_from_env() -> str:
+    """The App's public slug, env-overridable but defaulting to the real
+    one so a stock deployment needs no extra config to build install links."""
+    return os.environ.get("GITHUB_APP_SLUG") or GITHUB_APP_SLUG_DEFAULT
+
+
+def build_install_url(state: str) -> str:
+    """The public "install this App" URL for a stranger's browser. `state`
+    is echoed back verbatim to the App's Setup URL after install (we pass
+    owner/repo through it), url-encoded so a "/" survives the round trip."""
+    slug = app_slug_from_env()
+    return (
+        f"https://github.com/apps/{slug}/installations/new"
+        f"?state={urllib.parse.quote(state, safe='')}"
+    )
