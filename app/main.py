@@ -1189,14 +1189,20 @@ async def create_audit(
 @app.get("/v1/fixpacks/{job_id}")
 async def get_fixpack(
     job_id: str,
+    token: str | None = None,
     fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
 ) -> dict:
-    row = await fixpack_repo.get(job_id)
+    # Ownership check: the job is readable only by presenting its per-row
+    # access_token (?token=...), delivered once at creation. A leaked id is
+    # not enough. A missing/wrong token is answered 404 (not 403) so this
+    # never confirms an id exists to someone who doesn't hold its token --
+    # same model as GET /v1/audits/{id} (migration 0012 mirrors 0010).
+    row = await fixpack_repo.get_authorized(job_id, token)
     if row is None:
         raise HTTPException(
             status_code=404,
             detail={"reason": "not_found",
-                    "detail": "no fixpack job with this id, or persistence "
+                    "detail": "no fixpack job with this id and token, or persistence "
                                "isn't configured on this deployment (see app/db.py)"},
         )
     return row
@@ -1358,6 +1364,10 @@ async def create_fixpack(
     return {
         "fixpack_id": job_id,
         "persisted": persisted_job is not None,
+        # The ownership token for this job, delivered exactly once here so the
+        # creator can read it back via GET /v1/fixpacks/{id}?token=. None when
+        # the row wasn't persisted (DATABASE_URL unset) -- same as audits.
+        "access_token": persisted_job.get("access_token") if persisted_job else None,
         "pack": "deploy",
         "stack": stack.value,
         "verified": result["verified"],

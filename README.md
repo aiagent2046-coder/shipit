@@ -108,7 +108,14 @@ Implemented:
   and `POST /v1/fixpacks` persist when `DATABASE_URL` is set
   (`"persisted": true/false` in the response either way, same request
   still works unpersisted); `GET /v1/audits/{id}` and
-  `GET /v1/fixpacks/{id}` read them back. **Confirmed end-to-end**: a
+  `GET /v1/fixpacks/{id}` read them back. Both read endpoints are
+  ownership-gated by a per-row `access_token` (`?token=...`), delivered
+  once in the create response and minted by a DB column default
+  (`migrations/0010_audits_access_token.sql`,
+  `migrations/0012_fixpack_jobs_access_token.sql`): a leaked id alone is
+  not enough, and a missing/wrong token answers **404 (not 403)** so the
+  endpoint never confirms an id exists to a caller who doesn't hold its
+  token. **Confirmed end-to-end**: a
   real Supabase Postgres 17 project now backs this (schema applied via
   migration, verified with real INSERT/SELECT round trips including
   the `audits` -> `fixpack_jobs` foreign key). The actual `psycopg`

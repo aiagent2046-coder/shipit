@@ -85,12 +85,26 @@ class FakeFixpackRepo:
     async def create(self, **fields):
         self.create_calls.append(fields)
         row_id = str(uuid.uuid4())
-        row = {"id": row_id, "pr_url": None, "pr_delivered": False, **fields}
+        # Mint a per-row token like the real DB default (migration 0012).
+        row = {"id": row_id, "pr_url": None, "pr_delivered": False,
+               "access_token": f"tok-{row_id}", **fields}
         self.rows[row_id] = row
         return row
 
     async def get(self, job_id):
         return self.rows.get(job_id)
+
+    async def get_authorized(self, job_id, access_token):
+        # Mirrors FixpackJobRepository.get_authorized: only returns the row when
+        # the token matches; unknown id or missing/wrong token -> None (-> 404).
+        # Like the real SQL, the returned row does NOT carry access_token
+        # (it's matched in the query, never selected), so it can't leak out.
+        row = self.rows.get(job_id)
+        if row is None or not access_token:
+            return None
+        if access_token != row.get("access_token"):
+            return None
+        return {k: v for k, v in row.items() if k != "access_token"}
 
     async def mark_delivered(self, job_id, pr_url):
         self.delivered[job_id] = pr_url
@@ -292,6 +306,26 @@ def test_create_fixpack_marks_delivered_after_real_pr_open(monkeypatch):
     assert fake_repo.rows[job_id]["pr_delivered"] is True
 
 
+def test_create_fixpack_returns_access_token(monkeypatch):
+    monkeypatch.setattr(
+        pipeline_mod, "verify_deploy_pack",
+        lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
+    )
+    fake = FakeFixpackRepo()
+    app.dependency_overrides[get_fixpack_repo] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/fixpacks",
+            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_fixpack_repo, None)
+
+    body = resp.json()
+    job_id = body["fixpack_id"]
+    assert body["access_token"] == fake.rows[job_id]["access_token"]
+
+
 def test_get_fixpack_after_create_round_trips(monkeypatch):
     monkeypatch.setattr(
         pipeline_mod, "verify_deploy_pack",
@@ -304,10 +338,37 @@ def test_get_fixpack_after_create_round_trips(monkeypatch):
             "/v1/fixpacks",
             files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
         )
-        job_id = create_resp.json()["fixpack_id"]
-        get_resp = client.get(f"/v1/fixpacks/{job_id}")
+        created = create_resp.json()
+        job_id = created["fixpack_id"]
+        token = created["access_token"]
+        get_resp = client.get(f"/v1/fixpacks/{job_id}?token={token}")
     finally:
         app.dependency_overrides.pop(get_fixpack_repo, None)
 
     assert get_resp.status_code == 200
     assert get_resp.json()["id"] == job_id
+    # The ownership token is never echoed back in the job body.
+    assert "access_token" not in get_resp.json()
+
+
+def test_get_fixpack_without_token_is_404(monkeypatch):
+    monkeypatch.setattr(
+        pipeline_mod, "verify_deploy_pack",
+        lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
+    )
+    fake = FakeFixpackRepo()
+    app.dependency_overrides[get_fixpack_repo] = lambda: fake
+    try:
+        create_resp = client.post(
+            "/v1/fixpacks",
+            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+        )
+        job_id = create_resp.json()["fixpack_id"]
+        # A caller who knows only the id (leaked UUID) gets 404, not the job.
+        no_token = client.get(f"/v1/fixpacks/{job_id}")
+        wrong_token = client.get(f"/v1/fixpacks/{job_id}?token=not-the-token")
+    finally:
+        app.dependency_overrides.pop(get_fixpack_repo, None)
+
+    assert no_token.status_code == 404
+    assert wrong_token.status_code == 404
