@@ -905,7 +905,7 @@ async def _process_one_paid_job(
         opened = await run_in_threadpool(
             pr_opener, owner, repo, plan.files,
             title=title, body=body, branch_prefix="drydock/fix-pack",
-            deletions=plan.deletions, token=token,
+            deletions=plan.deletions, token=token, job_id=job_id,
         )
         await fixpack_repo.mark_fixpack_delivered(job_id, opened.html_url)
         return "delivered"
@@ -1344,7 +1344,8 @@ async def create_fixpack(
                         app_id=app_id, private_key=private_key,
                     )
                 opened = await run_in_threadpool(
-                    pr_opener, owner, repo, result["files"], body=body, token=token,
+                    pr_opener, owner, repo, result["files"], body=body,
+                    token=token, job_id=job_id,
                 )
             except (DeliveryError, GitHubAppError) as exc:
                 pr = {"delivered": False, "reason": str(exc)}

@@ -212,7 +212,7 @@ def test_semantic_note_is_appended_to_pr_body(monkeypatch):
     captured = {}
 
     def fake_opener(owner, repo, files, *, title, body, branch_prefix,
-                    deletions=None, token=None):
+                    deletions=None, token=None, job_id=None):
         captured["body"] = body
         return PullRequestResult(html_url="https://github.com/acme/app/pull/9",
                                  branch="drydock/fix-pack-x")
@@ -248,7 +248,7 @@ def test_paid_job_opens_pr_and_marks_delivered(monkeypatch):
     captured = {}
 
     def fake_opener(owner, repo, files, *, title, body, branch_prefix,
-                    deletions=None, token=None):
+                    deletions=None, token=None, job_id=None):
         captured.update(owner=owner, repo=repo, files=files,
                         title=title, body=body, branch_prefix=branch_prefix)
         return PullRequestResult(
@@ -502,7 +502,7 @@ def test_committed_env_with_secret_is_untracked_not_committed(monkeypatch):
     captured = {}
 
     def fake_opener(owner, repo, files, *, title, body, branch_prefix,
-                    deletions=None, token=None):
+                    deletions=None, token=None, job_id=None):
         captured.update(files=files, deletions=deletions or [])
         return PullRequestResult(html_url="https://github.com/x/y/pull/1",
                                  branch="b")
