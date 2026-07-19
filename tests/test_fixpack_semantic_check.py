@@ -314,17 +314,58 @@ def test_test_argv_has_resource_and_privilege_limits():
     assert "--read-only" not in argv
 
 
-def test_no_host_env_is_injected_into_the_container():
-    # `docker run` does not forward host env into the container unless -e/--env
-    # is given. We never pass one (host secrets like GITHUB_APP_PRIVATE_KEY_B64
-    # must never reach untrusted client code); guard against a future -e leak.
+def test_install_argv_routes_egress_through_the_proxy():
+    # The install step needs the network, but only via the host's allowlisting
+    # forward proxy. Assert the container is pointed at host.docker.internal
+    # and every proxy env var (both casings) carries the configured URL.
+    argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
+    assert "--add-host=host.docker.internal:host-gateway" in argv
+    proxy = sc.FIXPACK_INSTALL_PROXY_URL
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        assert f"{var}={proxy}" in argv
+    for var in ("NO_PROXY", "no_proxy"):
+        assert f"{var}=localhost,127.0.0.1" in argv
+
+
+def test_test_argv_has_no_proxy_and_stays_offline():
+    # The test step is fully offline (--network none); a proxy is neither
+    # needed nor reachable there, so it must carry none of the proxy plumbing.
+    argv = _docker_test_argv("node:20-slim", "/tmp/work", "npm test")
+    assert "--network" in argv and "none" in argv
+    assert not any(a.startswith("--add-host") for a in argv)
+    assert not any("PROXY" in a or "proxy" in a for a in argv)
+    assert "-e" not in argv
+    assert "--env" not in argv
+
+
+def test_no_host_env_is_forwarded_into_the_container():
+    # `docker run` only forwards an env var when -e NAME (no '=') is given;
+    # -e NAME=VALUE sets a literal value instead. Host secrets like
+    # GITHUB_APP_PRIVATE_KEY_B64 must never reach untrusted client code, so
+    # every -e we pass MUST be a literal assignment (contains '='), never a
+    # bare passthrough. The install step legitimately sets the proxy vars this
+    # way; the test step passes no -e at all.
     for argv in (
         _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
         _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
     ):
-        assert "-e" not in argv
-        assert "--env" not in argv
         assert not any(a.startswith("--env") for a in argv)
+        for i, tok in enumerate(argv):
+            if tok == "-e":
+                assert "=" in argv[i + 1], f"bare host-env passthrough: {argv[i + 1]}"
+
+
+def test_install_proxy_is_configurable_and_optional(monkeypatch):
+    # The URL is env-configurable so prod can change the port/address without a
+    # code edit; explicitly clearing it disables the proxy (network stays open).
+    monkeypatch.setattr(sc, "FIXPACK_INSTALL_PROXY_URL", "http://proxy.example:9999")
+    argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
+    assert "HTTP_PROXY=http://proxy.example:9999" in argv
+
+    monkeypatch.setattr(sc, "FIXPACK_INSTALL_PROXY_URL", "")
+    argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
+    assert not any(a.startswith("--add-host") for a in argv)
+    assert "-e" not in argv
 
 
 # --- build_patched_zip -----------------------------------------------------
