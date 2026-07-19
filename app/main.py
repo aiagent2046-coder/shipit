@@ -35,7 +35,9 @@ from app.db import (
     AuditRepository,
     FixpackJobRepository,
     PaymentRepository,
+    ProcessorLockBusy,
     database_url_from_env,
+    fixpack_processor_lock,
 )
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
@@ -231,6 +233,16 @@ def _reap_token() -> str | None:
     default — the endpoint below refuses to run rather than accept an
     empty/no-op auth check."""
     return os.environ.get("PREVIEW_REAP_TOKEN") or None
+
+
+# Fix Pack processor lease tuning. A 'running' job whose lease is older
+# than STALE_LEASE_MINUTES is treated as a crashed worker and reaped; a
+# real generation (repo fetch + plan + Docker semantic check + PR) is
+# minutes, so 15 is comfortably above the worst case. MAX_JOB_ATTEMPTS
+# bounds re-queues so a poison-pill job that crashes the worker every time
+# lands in 'failed' rather than looping forever. See PHASE3_QUEUE_PLAN.md.
+STALE_LEASE_MINUTES = 15
+MAX_JOB_ATTEMPTS = 3
 
 
 def _fixpack_process_token() -> str | None:
@@ -818,12 +830,19 @@ async def process_paid_fixpacks(
     repo_fetcher=Depends(get_repo_fetcher),
     pr_opener=Depends(get_pr_opener),
 ) -> dict:
-    """Operational endpoint: find every paid-but-not-yet-generated Fix Pack
-    job (fixpack_jobs.status = 'paid') and turn each into a real fix PR —
-    re-fetch the audited repo, remove hardcoded secrets, harden config, open
-    the PR, and advance the job to 'delivered'. Meant for a scheduled caller
-    (a systemd timer, same as the reaper and the USDT poller — this repo
-    ships no unit file). Not part of the public API.
+    """Operational endpoint: drain the paid-but-not-yet-generated Fix Pack
+    backlog and turn each job into a real fix PR — re-fetch the audited
+    repo, remove hardcoded secrets, harden config, open the PR, and advance
+    the job to 'delivered'. Meant for a scheduled caller (a systemd timer,
+    same as the reaper and the USDT poller — this repo ships no unit file).
+    Not part of the public API.
+
+    Durable-processing model (see PHASE3_QUEUE_PLAN.md): the run takes a
+    session advisory lock so two overlapping timer firings don't stampede;
+    it first reaps stale 'running' leases (a crashed worker's job) back to
+    'paid' (bounded by attempts) or to 'failed'; then it claims jobs one at
+    a time, each atomically leased 'paid' -> 'running' so a single job can
+    never be processed by two runs at once (no duplicate PR per payment).
 
     Requires `Authorization: Bearer <FIXPACK_PROCESS_TOKEN>`, constant-time
     compared via the same helper the reaper and USDT poller use. 503 if the
@@ -831,7 +850,9 @@ async def process_paid_fixpacks(
     an operational gap to notice, not a silent no-op.
 
     Returns a summary the scheduler can log: how many jobs were processed,
-    delivered (PR opened), skipped (nothing eligible to fix), and failed.
+    delivered (PR opened), skipped (nothing eligible to fix), blocked,
+    failed, and requeued (stale leases put back for retry). If another run
+    already holds the lock, returns {"skipped_locked": true} instead.
     """
     token = _fixpack_process_token()
     if not token:
@@ -842,23 +863,49 @@ async def process_paid_fixpacks(
         )
     _require_bearer_token(request, token)
 
-    jobs = await fixpack_repo.list_paid()
     summary = {"processed": 0, "delivered": 0, "skipped": 0,
-               "blocked": 0, "failed": 0}
-    for job in jobs:
-        summary["processed"] += 1
-        outcome = await _process_one_paid_job(
-            job, audit_repo=audit_repo, fixpack_repo=fixpack_repo,
-            repo_fetcher=repo_fetcher, pr_opener=pr_opener,
-        )
-        if outcome == "delivered":
-            summary["delivered"] += 1
-        elif outcome == "no_fix_needed":
-            summary["skipped"] += 1
-        elif outcome == "blocked":
-            summary["blocked"] += 1
-        else:
-            summary["failed"] += 1
+               "blocked": 0, "failed": 0, "requeued": 0}
+    try:
+        # One processor run at a time (advisory lock), so two overlapping
+        # timer firings can't both work the backlog. The per-job claim below
+        # already prevents double-processing a single job; this makes the
+        # "one run" invariant explicit.
+        async with fixpack_processor_lock():
+            # Recover crashed leases first: a 'running' job older than the
+            # stale threshold is re-queued (bounded by attempts) or failed,
+            # so a mid-job restart never leaves a job stuck 'running'.
+            reaped = await fixpack_repo.reap_stale_running(
+                max_age_minutes=STALE_LEASE_MINUTES,
+                max_attempts=MAX_JOB_ATTEMPTS,
+            )
+            summary["requeued"] = reaped["requeued"]
+            summary["failed"] += reaped["failed"]
+
+            # Claim-process-claim until the backlog is drained. Each claim
+            # atomically leases one 'paid' job into 'running' (see
+            # claim_one_paid), so a re-queued or newly purchased job is
+            # picked up in the same run.
+            while True:
+                job = await fixpack_repo.claim_one_paid()
+                if job is None:
+                    break
+                summary["processed"] += 1
+                outcome = await _process_one_paid_job(
+                    job, audit_repo=audit_repo, fixpack_repo=fixpack_repo,
+                    repo_fetcher=repo_fetcher, pr_opener=pr_opener,
+                )
+                if outcome == "delivered":
+                    summary["delivered"] += 1
+                elif outcome == "no_fix_needed":
+                    summary["skipped"] += 1
+                elif outcome == "blocked":
+                    summary["blocked"] += 1
+                else:
+                    summary["failed"] += 1
+    except ProcessorLockBusy:
+        # Another run holds the lock — benign, not an error. The scheduler
+        # can log this and move on; the other run is draining the backlog.
+        return {"skipped_locked": True}
     return summary
 
 

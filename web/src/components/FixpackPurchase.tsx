@@ -301,7 +301,7 @@ function FixpackStatusArea({ auditId }: { auditId: string }) {
     <div className="mt-5 border-t border-border pt-5">
       <h3 className="text-sm font-semibold text-muted">Fix Pack status</h3>
       <div className="mt-2">
-        {status.status === "paid" && (
+        {(status.status === "paid" || status.status === "running") && (
           <p className="flex items-center gap-2 text-sm text-muted">
             <Spinner /> Generating your fix… this opens a pull request
             automatically and can take a couple of minutes.

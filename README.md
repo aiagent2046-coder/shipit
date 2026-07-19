@@ -290,6 +290,17 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
 - `shipit-reap.timer` (systemd, hourly) replaces the GitHub Actions
   reaper cron on this deployment — the endpoint is the same
   `POST /internal/preview/reap` with the bearer token from `.env`.
+- `shipit-fixpack.timer` (systemd) should call
+  `POST /internal/fixpack/process-paid` (bearer token `FIXPACK_PROCESS_TOKEN`
+  from `.env`) on a short interval (2–5 min) to drain paid Fix Pack jobs into
+  fix PRs. Like the reaper/USDT poller, **this repo ships no unit file** —
+  wire one up. The endpoint is safe to fire on a timer even while a previous
+  run is still working: it takes a Postgres advisory lock (a second firing
+  returns `{"skipped_locked": true}`) and claims each job atomically into a
+  `running` lease, so overlapping runs never open a duplicate PR. A run also
+  reaps `running` leases older than 15 min (a crashed worker) — re-queuing up
+  to 3 attempts, then failing — so `systemctl restart shipit` mid-job never
+  loses or wedges a job (see `PHASE3_QUEUE_PLAN.md`).
 
 Deployment gotchas found the hard way (all encoded in `.env.example`):
 
