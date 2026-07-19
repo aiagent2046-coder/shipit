@@ -19,9 +19,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from app.alerts import notify_operator
 from app.accounts import (
     TIER_FREE,
     entitlements_dict,
@@ -70,8 +71,32 @@ from app.ingest.validators import (
 
 logger = logging.getLogger(__name__)
 
+
+_VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
+
+
+def configure_logging() -> None:
+    """Make log level/format explicit instead of inherited-by-accident.
+
+    Until now nothing called basicConfig, so app loggers rode on Python's
+    last-resort handler (WARNING-only, bare format) — INFO lines never
+    showed and there was no timestamp/level/name prefix to grep in
+    journalctl. This sets one plain-text (NOT JSON — deliberate at this log
+    volume) format and an env-overridable level. basicConfig is a no-op if a
+    handler is already installed, so it never fights uvicorn's own loggers or
+    double-configures across test app instances."""
+    level = (os.environ.get("LOG_LEVEL") or "INFO").upper()
+    if level not in _VALID_LOG_LEVELS:
+        level = "INFO"
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    configure_logging()
     # Fail fast if a DB-backed deployment is missing API_KEY_PEPPER: with the
     # DB configured, accounts are live and key hashing/lookup would be broken
     # (all Pro users locked out) without the pepper. A DB-less deployment
@@ -278,6 +303,65 @@ def _client_key(request: Request) -> str:
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/health")
+async def health(
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+) -> dict:
+    """Richer, still-public health probe. Unlike the static /healthz (kept
+    for the race-after-restart liveness check the README documents), this
+    reports two things that actually fail in this system:
+
+      * `db` — is the database reachable at all (distinguishes "process up"
+        from "process up but the Supabase pooler is unreachable");
+      * `fixpack_backlog` / `oldest_paid_seconds` — is the Fix Pack processor
+        timer draining the queue, or is a paid job stuck (see
+        FixpackJobRepository.backlog_stats).
+
+    Deliberately leak-free: only booleans and coarse counts/ages — never ids,
+    urls, or error text — so it's safe to expose to a dumb uptime pinger or
+    the systemd timer without a token. Always 200: an unconfigured or
+    unreachable DB is reported as db:false (a live process honestly saying
+    it's degraded), not a transport-level failure the pinger can't read."""
+    stats = await fixpack_repo.backlog_stats()
+    if stats is None:
+        # DATABASE_URL unset, or the pool couldn't be built — either way the
+        # DB isn't usable. Report degraded rather than 503 (see docstring).
+        return {"db": False, "fixpack_backlog": None, "oldest_paid_seconds": None}
+    return {
+        "db": True,
+        "fixpack_backlog": stats["backlog"],
+        "oldest_paid_seconds": stats["oldest_paid_seconds"],
+    }
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Single catch-all for genuinely *unhandled* server errors (a bug, not
+    control flow). Starlette routes only exceptions that aren't an
+    HTTPException here, so the intentional 422/404/503/401 responses raised
+    across the API stay normal control flow and never alert.
+
+    This is the one place the request-id correlation gap gets its minimal
+    fix: mint a short id, put it in the 500 log line, the operator alert, and
+    the response body, so a user's report ("I got error abc123") ties to an
+    exact log line and alert without full structured logging. The alert is
+    best-effort and deduped so a crash-loop can't spam the operator."""
+    request_id = uuid.uuid4().hex[:12]
+    logger.exception(
+        "unhandled error [request_id=%s] %s %s",
+        request_id, request.method, request.url.path,
+    )
+    await notify_operator(
+        f"Drydock: unhandled 5xx [{request_id}] on {request.method} "
+        f"{request.url.path} — {type(exc).__name__}",
+        dedupe_key=f"unhandled-5xx:{request.url.path}:{type(exc).__name__}",
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": {"reason": "internal_error", "request_id": request_id}},
+    )
 
 
 @app.post("/internal/preview/reap")
@@ -739,6 +823,19 @@ def _failure_detail(exc: BaseException, *, limit: int = 300) -> str:
     return detail[:limit]
 
 
+async def _alert_fixpack_failed(job_id, detail: str) -> None:
+    """Push one best-effort operator alert for a Fix Pack job that landed on
+    'failed' (a paying customer's PR silently not opening is exactly the
+    "learn about it manually" pain this phase targets). The detail is already
+    secret-free (see `_failure_detail`). Per-job dedupe key so a crash-loop on
+    one job can't spam, but distinct jobs each notify. Never raises —
+    `notify_operator` swallows its own errors."""
+    await notify_operator(
+        f"Drydock: Fix Pack job {job_id} failed — {detail}",
+        dedupe_key=f"fixpack-failed:{job_id}",
+    )
+
+
 async def _process_one_paid_job(
     job: dict, *, audit_repo: AuditRepository,
     fixpack_repo: FixpackJobRepository, repo_fetcher, pr_opener,
@@ -764,6 +861,7 @@ async def _process_one_paid_job(
             detail = "audit missing or has no repo_url to re-fetch"
             logger.error("Fix Pack job %s failed: %s", job_id, detail)
             await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+            await _alert_fixpack_failed(job_id, detail)
             return "failed"
 
         parsed = _parse_github_repo_url(audit["repo_url"])
@@ -771,6 +869,7 @@ async def _process_one_paid_job(
             detail = f"unparseable repo_url: {audit['repo_url']!r}"
             logger.error("Fix Pack job %s failed: %s", job_id, detail)
             await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+            await _alert_fixpack_failed(job_id, detail)
             return "failed"
         owner, repo = parsed
 
@@ -816,9 +915,9 @@ async def _process_one_paid_job(
         # and persist a short reason so the failure is diagnosable from both
         # the logs and a `select ... from fixpack_jobs` query.
         logger.exception("Fix Pack job %s failed during processing", job_id)
-        await fixpack_repo.mark_status(
-            job_id, "failed", detail=_failure_detail(exc)
-        )
+        detail = _failure_detail(exc)
+        await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+        await _alert_fixpack_failed(job_id, detail)
         return "failed"
 
 

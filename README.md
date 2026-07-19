@@ -315,7 +315,58 @@ Deployment gotchas found the hard way (all encoded in `.env.example`):
   (`claude-sonnet-4.6` on AITunnel vs `claude-sonnet-4-6` on the
   direct Anthropic API) — the mismatch is a bare 400.
 - After `systemctl restart shipit`, hit `/healthz` before sending real
-  requests — a request racing the restart gets Caddy's 502.
+  requests — a request racing the restart gets Caddy's 502. `/healthz` stays
+  a static `{"status":"ok"}` liveness probe for exactly this race; use
+  `/health` (below) for the richer readiness signal.
+
+### Observability (Phase 3)
+
+Single VPS, single uvicorn process — so no Prometheus/Grafana/ELK/Sentry.
+Everything rides Postgres and the Telegram bot that already exist (see
+`PHASE3_OBSERVABILITY_PLAN.md`).
+
+- **`GET /health`** (public, unauthenticated, leak-free) reports what
+  actually fails here: `{"db": <bool>, "fixpack_backlog": <n|null>,
+  "oldest_paid_seconds": <secs|null>}`. `db:false` means the database is
+  unset or unreachable (a live process honestly reporting degraded — still
+  `200`, so a dumb uptime pinger can read it). A growing `oldest_paid_seconds`
+  past the `shipit-fixpack.timer` interval means the processor isn't draining.
+  Returns only booleans/coarse counts — no ids, urls, or error text — so it's
+  safe to expose without a token, unlike the side-effecting `/internal/*`
+  endpoints.
+- **Operator alerts** push a short Telegram message on high-signal failures:
+  a Fix Pack job landing on `failed`, and any unhandled `5xx` (with a short
+  `request_id` echoed in the response body and log line so a user report ties
+  to a log line). Intentional `HTTPException`s (422/404/503/401) are normal
+  control flow and never alert. Alerts are best-effort (never break a request
+  or job), self-throttled (a crash-loop can't spam), and a silent no-op
+  unless both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_CHAT_ID` are set.
+- **Service crash/restart alert** — reuse the same code path from systemd
+  without a new agent, endpoint, or token. Add an `OnFailure=` companion to
+  `shipit.service`:
+
+  ```ini
+  # shipit.service
+  [Unit]
+  OnFailure=shipit-alert@%n.service
+  ```
+
+  ```ini
+  # shipit-alert@.service (templated on the failed unit name %i)
+  [Unit]
+  Description=Push an operator alert when %i fails
+  [Service]
+  Type=oneshot
+  EnvironmentFile=/opt/shipit/.env
+  WorkingDirectory=/opt/shipit
+  ExecStart=/opt/shipit/.venv/bin/python -m app.alerts "Drydock: systemd unit %i failed/restarted on the VPS"
+  ```
+
+  `python -m app.alerts "<msg>"` formats and sends the alert in Python (same
+  bot, same `.env`, no direct `curl` to the Bot API), and exits `0` even if
+  the send fails so it never turns a service failure into a failing
+  `OnFailure` unit. Matching the reaper/USDT/fixpack convention, **no unit
+  file is committed** — the snippets above are the recipe.
 
 ### CORS (browser frontend on Vercel)
 

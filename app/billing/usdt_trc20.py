@@ -37,12 +37,15 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import logging
 import os
 import re
 import secrets
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 TRONGRID_API = "https://api.trongrid.io"
 PROVIDER = "usdt_trc20"
@@ -417,6 +420,13 @@ async def poll_and_match(
         try:
             value = int(tr["value"])
         except (KeyError, ValueError, TypeError):
+            # A single malformed transfer is skipped, not fatal; but a
+            # systematically bad TronGrid response would otherwise look
+            # like "nothing to match" forever with no trace.
+            logger.warning(
+                "skipping USDT transfer with unparseable value (tx=%s)",
+                tr.get("transaction_id"),
+            )
             continue
         inv = by_micros.get(value)
         if inv is None:

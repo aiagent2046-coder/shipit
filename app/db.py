@@ -499,6 +499,39 @@ class FixpackJobRepository:
             failed = len(await failed_cur.fetchall())
         return {"requeued": requeued, "failed": failed}
 
+    async def backlog_stats(self) -> dict[str, Any] | None:
+        """Health signal for the Fix Pack processor: how many jobs are still
+        'paid' (purchased, not yet generated) and how old the oldest one is,
+        in seconds. Since fixpack_jobs has no delivered_at/updated_at, the age
+        of the oldest still-queued 'paid' job is the honest, zero-schema
+        proxy for "is the processor timer draining the backlog" — if it grows
+        past the timer interval, the processor isn't running.
+
+        Returns {'backlog': n, 'oldest_paid_seconds': float | None} (the age
+        is None when the backlog is empty), or None when DATABASE_URL isn't
+        set so /health can report db:false without guessing."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select count(*) as backlog,
+                       extract(epoch from (now() - min(created_at)))
+                           as oldest_paid_seconds
+                  from fixpack_jobs
+                 where status = 'paid'
+                """,
+            )
+            row = await cur.fetchone()
+        backlog = int(row["backlog"]) if row else 0
+        oldest = row["oldest_paid_seconds"] if row else None
+        return {
+            "backlog": backlog,
+            "oldest_paid_seconds": float(oldest) if oldest is not None else None,
+        }
+
     async def mark_fixpack_delivered(self, job_id: str, pr_url: str) -> None:
         """A paid Fix Pack job whose fix PR was successfully opened: record
         the PR url and advance status to 'delivered'. 'delivered' is the
