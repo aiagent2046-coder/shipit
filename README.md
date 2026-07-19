@@ -352,13 +352,26 @@ rationale.
 - **`security-audit.yml`** (`.github/workflows/`) runs on pushes to `main`
   touching dep files, on dep-touching PRs, and weekly. Per ecosystem it
   generates a CycloneDX SBOM artifact ("what is actually deployed") and runs a
-  free audit: `pip-audit` **blocks** (the locked set is clean today, so this
-  catches regressions), while `npm audit --audit-level=high` is **report-only**
-  because the current `next` advisories only fix with a breaking major.
+  free audit: both `pip-audit` and `npm audit --audit-level=high` now **block**.
+  The frontend cleared its `next` high advisories in the 14→16 upgrade (see
+  "Frontend framework" below), so a new high on either side is a regression to
+  fail on. One **moderate** remains that the gate ignores by design: `next`
+  pins `postcss@8.4.31` internally (GHSA-qx2v-qp2m-jg93), a build-time-only XSS
+  in postcss's CSS stringifier that no attacker input reaches at runtime and
+  that we can't move without overriding `next`'s own pinned dep.
+
+- **Frontend framework.** `web/` runs **Next.js 16 on React 19** (upgraded from
+  Next 14 / React 18 to clear the `next@14` advisory cluster incl. the RSC RCE
+  CVE-2025-55182 / CVE-2025-66478). Future-upgrader notes: Next 16 needs
+  **Node ≥ 20.9** (pinned via `web/package.json` `engines`; check the Vercel
+  project's Node version on deploy), **Turbopack is now the default builder**
+  for `next build` (no custom webpack config here, so no action; `--webpack` is
+  the escape hatch), and `next lint` was removed (the vestigial `lint` script
+  was dropped — use ESLint/Biome directly if a lint gate is wanted).
 
 - **Dependabot** (`.github/dependabot.yml`) opens weekly PRs for `pip`, `npm`
-  (`web/`), and `github-actions` — including the breaking `next` 14→16 upgrade
-  — so patches land as reviewable PRs with no new infrastructure.
+  (`web/`), and `github-actions` — so patches land as reviewable PRs with no
+  new infrastructure.
 
 ### Observability (Phase 3)
 

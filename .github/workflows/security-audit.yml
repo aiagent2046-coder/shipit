@@ -3,10 +3,10 @@ name: security-audit
 # Supply-chain visibility for ShipIt's OWN dependencies (backend
 # pyproject.toml lock + web/package.json). Two cheap things per ecosystem:
 # generate a CycloneDX SBOM artifact ("what is actually deployed") and run a
-# free vulnerability audit. pip-audit BLOCKS (the locked set is clean today,
-# so this catches regressions); npm audit is REPORT-ONLY for now because the
-# only fix for the current next.js advisories is a breaking major — Dependabot
-# opens that as its own PR (see .github/dependabot.yml). No paid scanners.
+# free vulnerability audit. Both audits BLOCK: pip-audit (the locked set is
+# clean today, so this catches regressions) and `npm audit --audit-level=high`
+# (the frontend cleared its high advisories in the next 14->16 upgrade, so a
+# new high is a regression to fail on). No paid scanners.
 
 on:
   push:
@@ -75,8 +75,8 @@ jobs:
       - name: "npm ci — lockfile-exact install (also a lock-sync check)"
         run: npm ci
 
-      - name: "npm audit (REPORT-ONLY) — high and above"
-        run: npm audit --audit-level=high || true
+      - name: "npm audit (BLOCKING) — high and above"
+        run: npm audit --audit-level=high
 
       - name: Generate CycloneDX SBOM (frontend)
         run: npm sbom --sbom-format cyclonedx > sbom-web.json

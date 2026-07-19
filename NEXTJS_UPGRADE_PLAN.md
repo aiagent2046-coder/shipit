@@ -1,7 +1,18 @@
 # Next.js 14 → 16 security upgrade: reconnaissance + plan
 
-**Status: Step 1 (recon + plan) only. No implementation code in this PR.**
-Awaiting review/approval before Step 2.
+**Status: Step 2 (implementation) done — this doc is the original Step-1 plan.**
+
+> **Step-2 correction (post-implementation):** one prediction below was
+> half-wrong. Upgrading to `next@16.2.10` cleared **all high** advisories (0
+> high/critical, verified), but **not** the moderate `postcss` one — `next@16`
+> still pins `postcss@8.4.31` as its own internal dependency, so
+> GHSA-qx2v-qp2m-jg93 persists regardless of our top-level `postcss@8.5.10`.
+> It's build-time-only (postcss stringifies our own CSS during build; no
+> attacker input reaches it at runtime) and can't be moved without overriding
+> `next`'s pinned dep, so we accept + document it. The CI gate is
+> `--audit-level=high`, which stays green. Final pins: `next@16.2.10`,
+> `react`/`react-dom@19.2.7` (≥ the CVE-2025-55182 fix `19.2.1` and the
+> requested `19.2.4` floor), `@types/react@19.2.17`, `@types/react-dom@19.2.3`.
 
 Scope: `web/` — the production Next.js (App Router) frontend deployed on Vercel
 (alias `drydock.co`). Goal is to clear the known `next@14.2.35` advisories, whose
