@@ -1,0 +1,87 @@
+name: security-audit
+
+# Supply-chain visibility for ShipIt's OWN dependencies (backend
+# pyproject.toml lock + web/package.json). Two cheap things per ecosystem:
+# generate a CycloneDX SBOM artifact ("what is actually deployed") and run a
+# free vulnerability audit. pip-audit BLOCKS (the locked set is clean today,
+# so this catches regressions); npm audit is REPORT-ONLY for now because the
+# only fix for the current next.js advisories is a breaking major — Dependabot
+# opens that as its own PR (see .github/dependabot.yml). No paid scanners.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+      - "web/package.json"
+      - "web/package-lock.json"
+      - ".github/workflows/security-audit.yml"
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "requirements-dev.txt"
+      - "web/package.json"
+      - "web/package-lock.json"
+      - ".github/workflows/security-audit.yml"
+  schedule:
+    # Weekly, Monday 04:17 UTC (off the :00 mark on purpose).
+    - cron: "17 4 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install audit + SBOM tools
+        run: pip install pip-audit cyclonedx-bom
+
+      - name: "pip-audit (BLOCKING) — locked runtime deps"
+        run: pip-audit --require-hashes -r requirements.txt
+
+      - name: Generate CycloneDX SBOM (backend)
+        run: cyclonedx-py requirements requirements.txt -o sbom-python.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-python
+          path: sbom-python.json
+
+  node:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: "npm ci — lockfile-exact install (also a lock-sync check)"
+        run: npm ci
+
+      - name: "npm audit (REPORT-ONLY) — high and above"
+        run: npm audit --audit-level=high || true
+
+      - name: Generate CycloneDX SBOM (frontend)
+        run: npm sbom --sbom-format cyclonedx > sbom-web.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-web
+          path: web/sbom-web.json
