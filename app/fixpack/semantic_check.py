@@ -53,6 +53,14 @@ RUN_TIMEOUT_SECONDS = 180
 MEMORY_LIMIT = "512m"
 PYTHON_IMAGE = "python:3.12-slim"
 NODE_IMAGE = "node:20-slim"
+# Docker runtime for the containers that execute untrusted client code.
+# Default "runc" is Docker's standard runtime (shared host kernel). Set to
+# "runsc" (gVisor) on a host that has it registered to gain a second,
+# user-space kernel boundary against unknown container-escape bugs in
+# runc/host kernel. Explicit + reversible by design: when this is "runc"
+# (the default) we emit NO --runtime flag, so argv is byte-for-byte identical
+# to the pre-gVisor behaviour and prod cannot be changed by merging this.
+FIXPACK_DOCKER_RUNTIME = os.environ.get("FIXPACK_DOCKER_RUNTIME", "runc")
 # Where installed deps live inside the mounted work dir so they survive
 # between the (separate) install and test containers.
 _PY_DEPS_DIR = ".shipit_pydeps"
@@ -321,11 +329,25 @@ def _install_proxy_argv() -> list[str]:
     ]
 
 
+def _runtime_argv() -> list[str]:
+    """docker-run flag selecting the container runtime, or empty for the
+    default. "runc" is Docker's default, so we emit nothing for it -- keeping
+    argv unchanged when gVisor is off. A non-default value (e.g. "runsc" for
+    gVisor, or later "kata") becomes `--runtime <name>`. If the named runtime
+    is not registered on the host the daemon rejects the `docker run` with a
+    non-zero exit *before* any client code runs; that failure is symmetric
+    across the original and patched runs, so is_regression treats it as
+    "could not verify", never a false regression."""
+    rt = FIXPACK_DOCKER_RUNTIME
+    return ["--runtime", rt] if rt and rt != "runc" else []
+
+
 def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
     """Step 1: network ON *but only through the egress-allowlist proxy*; deps
     installed into the mounted work dir. See _install_proxy_argv."""
     return [
         "docker", "run", "--rm",
+        *_runtime_argv(),
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,
         *_install_proxy_argv(),
@@ -338,6 +360,7 @@ def _docker_test_argv(image: str, workdir: str, script: str) -> list[str]:
     """Step 2: network OFF, tests run against the persisted deps."""
     return [
         "docker", "run", "--rm",
+        *_runtime_argv(),
         "--network", "none",
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,

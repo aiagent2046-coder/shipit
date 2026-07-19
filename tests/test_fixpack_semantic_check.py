@@ -368,6 +368,50 @@ def test_install_proxy_is_configurable_and_optional(monkeypatch):
     assert "-e" not in argv
 
 
+# --- container runtime selection (gVisor opt-in) ---------------------------
+
+def test_default_runtime_emits_no_runtime_flag():
+    # Default "runc" is Docker's own default -> we emit NO --runtime flag, so
+    # argv is byte-for-byte identical to the pre-gVisor behaviour. Merging the
+    # capability cannot change prod until FIXPACK_DOCKER_RUNTIME is set.
+    assert sc.FIXPACK_DOCKER_RUNTIME == "runc"
+    for argv in (
+        _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
+        _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
+    ):
+        assert "--runtime" not in argv
+        assert sc._runtime_argv() == []
+
+
+def test_runsc_runtime_flag_present_in_both_builders(monkeypatch):
+    monkeypatch.setattr(sc, "FIXPACK_DOCKER_RUNTIME", "runsc")
+    for argv in (
+        _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
+        _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
+    ):
+        # exact "--runtime" "runsc" pair, and it comes right after "docker run"
+        assert argv[:3] == ["docker", "run", "--rm"]
+        assert argv[3:5] == ["--runtime", "runsc"]
+        # existing flags still present -- runtime is additive, not a rewrite
+        assert _HARDENING.issubset(set(argv))
+        assert "--memory" in argv
+
+
+def test_test_builder_keeps_network_none_under_runsc(monkeypatch):
+    # gVisor must not disturb the offline test step's --network none.
+    monkeypatch.setattr(sc, "FIXPACK_DOCKER_RUNTIME", "runsc")
+    argv = _docker_test_argv("node:20-slim", "/tmp/work", "npm test")
+    assert "--network" in argv and "none" in argv
+
+
+def test_empty_runtime_is_treated_as_default(monkeypatch):
+    # An empty value must not produce a broken `--runtime ` with no name.
+    monkeypatch.setattr(sc, "FIXPACK_DOCKER_RUNTIME", "")
+    assert sc._runtime_argv() == []
+    argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
+    assert "--runtime" not in argv
+
+
 # --- build_patched_zip -----------------------------------------------------
 
 def test_build_patched_zip_applies_files_deletions_and_additions():
