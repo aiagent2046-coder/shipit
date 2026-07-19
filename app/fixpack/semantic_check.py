@@ -276,13 +276,59 @@ _CONTAINER_HARDENING = [
     "--cap-drop=ALL",
 ]
 
+# Egress allowlist for the install step. The install container needs the
+# network (pip/npm fetch packages), but "the network" should mean the package
+# registries and nothing else -- a malicious postinstall script in a client's
+# third-party dep must not be able to reach arbitrary hosts (exfiltration, or
+# an attack on our internal network). We enforce that with a forward proxy:
+# the container's ONLY route out is an HTTP(S) proxy that allows just the
+# registry hosts (registry.npmjs.org, pypi.org, files.pythonhosted.org, and
+# npm CDN subdomains) and blocks everything else.
+#
+# The proxy itself (Squid) is configured SEPARATELY on the host, not here --
+# this module only points the container at it. The container reaches a service
+# on the host via the special DNS name host.docker.internal, which on Linux we
+# must wire up explicitly with --add-host=...:host-gateway (Docker 20.10+).
+#
+# pip and npm both honour HTTP_PROXY/HTTPS_PROXY/NO_PROXY from the environment.
+# We pass UPPERCASE (some tools only read those) AND lowercase mirrors (curl
+# and some libraries prefer lowercase) so the allowlist can't be bypassed by a
+# tool that happens to read only one casing.
+#
+# Only the URL is configurable (the prod port/address can change without a code
+# change); the allowlist policy lives in the host's Squid config.
+FIXPACK_INSTALL_PROXY_URL = os.environ.get(
+    "FIXPACK_INSTALL_PROXY_URL", "http://host.docker.internal:3128"
+)
+
+
+def _install_proxy_argv() -> list[str]:
+    """docker-run flags routing the install container's egress through the
+    host's allowlisting forward proxy. Empty if the proxy URL is explicitly
+    unset, so a deployment without a proxy still installs (network open)."""
+    proxy = FIXPACK_INSTALL_PROXY_URL
+    if not proxy:
+        return []
+    no_proxy = "localhost,127.0.0.1"
+    return [
+        "--add-host=host.docker.internal:host-gateway",
+        "-e", f"HTTP_PROXY={proxy}",
+        "-e", f"HTTPS_PROXY={proxy}",
+        "-e", f"NO_PROXY={no_proxy}",
+        "-e", f"http_proxy={proxy}",
+        "-e", f"https_proxy={proxy}",
+        "-e", f"no_proxy={no_proxy}",
+    ]
+
 
 def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
-    """Step 1: network ON, deps installed into the mounted work dir."""
+    """Step 1: network ON *but only through the egress-allowlist proxy*; deps
+    installed into the mounted work dir. See _install_proxy_argv."""
     return [
         "docker", "run", "--rm",
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,
+        *_install_proxy_argv(),
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
     ]
