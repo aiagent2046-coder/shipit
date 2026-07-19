@@ -6,6 +6,7 @@ import type {
   AuditResult,
   FixpackStatus,
   FixpackUsdtInvoice,
+  InstallationStatus,
   PersistedAudit,
   UsdtInvoice,
   UsdtInvoiceStatus,
@@ -153,4 +154,18 @@ export async function getFixpackStatus(auditId: string): Promise<FixpackStatus> 
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack-status`,
   );
   return parse<FixpackStatus>(res);
+}
+
+// Is the GitHub App installed on owner/repo? Checked before offering a Fix
+// Pack, which opens a real PR and so needs the App on the target repo. When
+// not installed, the response carries a ready-built install_url.
+export async function getInstallationStatus(
+  owner: string,
+  repo: string,
+): Promise<InstallationStatus> {
+  const q = `?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`;
+  const res = await request(
+    `${API_BASE_URL}/v1/github/installation-status${q}`,
+  );
+  return parse<InstallationStatus>(res);
 }
