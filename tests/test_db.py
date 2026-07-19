@@ -347,6 +347,7 @@ class TestFixpackJobRepositoryWithFakePool:
             "verified": True, "detail": "HTTP 200 on /",
             "preview_local_url": "http://localhost:20000/",
             "preview_expires_at": None, "pr_url": None, "pr_delivered": False,
+            "access_token": "deadbeefdeadbeefdeadbeefdeadbeef",
             "created_at": "2026-07-12T10:00:00Z",
         })
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
@@ -361,9 +362,80 @@ class TestFixpackJobRepositoryWithFakePool:
 
         assert result["id"] == str(job_id)
         assert result["audit_id"] is None
-        _, params = fake.calls[0]
+        # The per-row token is returned (RETURNING access_token) so the API can
+        # deliver it once at creation. It is not an INSERT param -- the DB
+        # column default mints it (migration 0012).
+        assert result["access_token"] == "deadbeefdeadbeefdeadbeefdeadbeef"
+        query, params = fake.calls[0]
+        assert "access_token" in query  # in the RETURNING clause
+        assert "access_token" not in [str(p) for p in params]  # not an insert param
         assert params == (None, "deploy", "fastapi", True, "HTTP 200 on /",
                            "http://localhost:20000/", None)
+
+    async def test_create_paid_returns_access_token(self, monkeypatch):
+        job_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": job_id, "audit_id": None, "pack": "fixpack", "stack": "fastapi",
+            "verified": None, "detail": None, "preview_local_url": None,
+            "preview_expires_at": None, "pr_url": None, "pr_delivered": False,
+            "status": "paid", "access_token": "cafebabecafebabecafebabecafebabe",
+            "created_at": "2026-07-19T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        result = await FixpackJobRepository().create_paid(
+            audit_id=None, stack="fastapi",
+        )
+
+        assert result["access_token"] == "cafebabecafebabecafebabecafebabe"
+        query, params = fake.calls[0]
+        assert "access_token" in query  # in the RETURNING clause
+        assert "access_token" not in [str(p) for p in params]  # not an insert param
+
+    async def test_get_authorized_matches_id_and_token_in_sql(self, monkeypatch):
+        job_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": job_id, "audit_id": None, "pack": "deploy", "stack": "fastapi",
+            "verified": True, "detail": "HTTP 200 on /",
+            "preview_local_url": None, "preview_expires_at": None,
+            "pr_url": None, "pr_delivered": False, "status": "generated",
+            "created_at": "2026-07-19T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = FixpackJobRepository()
+        result = await repo.get_authorized(str(job_id), "sekret-token")
+
+        assert result["id"] == str(job_id)
+        # Never selects the token, so it can't ride out in the response body.
+        assert "access_token" not in result
+        query, params = fake.calls[0]
+        assert "where id = %s and access_token = %s" in query
+        assert "access_token" not in query.split("where")[0]  # not in select list
+        assert params == (job_id, "sekret-token")
+
+    async def test_get_authorized_without_token_never_queries(self, monkeypatch):
+        # No token -> None, and crucially no DB round-trip: a caller who knows
+        # only a leaked id can't even probe.
+        fake = FakePool()
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = FixpackJobRepository()
+        assert await repo.get_authorized(str(uuid.uuid4()), None) is None
+        assert await repo.get_authorized(str(uuid.uuid4()), "") is None
+        assert fake.calls == []
+
+    async def test_get_authorized_rejects_malformed_id_without_querying(self, monkeypatch):
+        fake = FakePool()
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = FixpackJobRepository()
+        assert await repo.get_authorized("not-a-uuid", "tok") is None
+        assert fake.calls == []
+
+    async def test_get_authorized_wrong_token_returns_none(self, monkeypatch):
+        # The SQL filter (id AND token) yields no row -> fetchone None -> None.
+        fake = FakePool(fetchone_result=None)
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = FixpackJobRepository()
+        assert await repo.get_authorized(str(uuid.uuid4()), "wrong") is None
 
     async def test_mark_delivered_executes_update(self, monkeypatch):
         fake = FakePool()

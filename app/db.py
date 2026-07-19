@@ -330,6 +330,11 @@ class FixpackJobRepository:
         verified: bool | None, detail: str,
         preview_local_url: str | None, preview_expires_at: float | None,
     ) -> dict[str, Any] | None:
+        # access_token is not inserted here: the column default
+        # (migration 0012, encode(gen_random_bytes(16),'hex')) mints a
+        # per-row token, and RETURNING hands it back so the API can deliver
+        # it to the creator exactly once. It is the ownership secret for
+        # GET /v1/fixpacks/{job_id} -- see get_authorized().
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -349,7 +354,7 @@ class FixpackJobRepository:
                 values (%s, %s, %s, %s, %s, %s, %s)
                 returning id, audit_id, pack, stack, verified, detail,
                           preview_local_url, preview_expires_at,
-                          pr_url, pr_delivered, status, created_at
+                          pr_url, pr_delivered, status, access_token, created_at
                 """,
                 (parsed_audit_id, pack, stack, verified, detail,
                  preview_local_url, expires_dt),
@@ -378,7 +383,7 @@ class FixpackJobRepository:
                 values (%s, 'fixpack', %s, 'paid')
                 returning id, audit_id, pack, stack, verified, detail,
                           preview_local_url, preview_expires_at,
-                          pr_url, pr_delivered, status, created_at
+                          pr_url, pr_delivered, status, access_token, created_at
                 """,
                 (parsed_audit_id, stack),
             )
@@ -603,6 +608,42 @@ class FixpackJobRepository:
                 from fixpack_jobs where id = %s
                 """,
                 (parsed_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_fixpack_job(row) if row else None
+
+    async def get_authorized(
+        self, job_id: str, access_token: str | None
+    ) -> dict[str, Any] | None:
+        """Ownership-checked fetch for the public GET /v1/fixpacks/{job_id}
+        endpoint: return the job only if `access_token` matches the row's
+        per-row token (migration 0012). A missing/wrong token, an unknown id, a
+        malformed id, and an unconfigured DB all return None -- so the endpoint
+        answers 404 uniformly and never confirms an id's existence to a caller
+        who doesn't hold its token. The token is matched in SQL and is NOT in
+        the selected columns, so it never rides back out in the response body.
+
+        Mirrors AuditRepository.get_authorized. Distinct from get(), the trusted
+        server-side lookup with no token gate."""
+        if not access_token:
+            return None
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(job_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, audit_id, pack, stack, verified, detail,
+                       preview_local_url, preview_expires_at,
+                       pr_url, pr_delivered, status, created_at
+                from fixpack_jobs where id = %s and access_token = %s
+                """,
+                (parsed_id, access_token),
             )
             row = await cur.fetchone()
         return _row_to_fixpack_job(row) if row else None
