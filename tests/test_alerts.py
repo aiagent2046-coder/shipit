@@ -125,3 +125,51 @@ def test_distinct_dedupe_keys_do_not_share_window(monkeypatch):
         "y", dedupe_key="job-2", throttle_seconds=60.0, transport=t, now=101.0))
     assert a is True and b is True  # different keys, both fire
     assert len(calls) == 2
+
+
+# --- CLI entrypoint (`python -m app.alerts`, the systemd OnFailure path) ----
+
+class _AsyncRecorder:
+    """Async stand-in for notify_operator: records (text, dedupe_key) and
+    returns a fixed result, so _main can be tested without any network."""
+    def __init__(self, result: bool):
+        self.result = result
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def __call__(self, text, *, dedupe_key=None, **kwargs):
+        self.calls.append((text, dedupe_key))
+        return self.result
+
+
+def test_main_returns_zero_when_unconfigured(monkeypatch):
+    """The exact systemd OnFailure case on a box without alert env set: the
+    real notify_operator returns early (no network), and _main must still
+    exit 0 so it never turns a service failure into a failing OnFailure unit."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    alerts._last_sent.clear()
+    assert alerts._main(["app.alerts", "service down"]) == 0
+
+
+def test_main_returns_zero_and_forwards_message_when_sent(monkeypatch):
+    rec = _AsyncRecorder(result=True)
+    monkeypatch.setattr(alerts, "notify_operator", rec)
+    rc = alerts._main(["app.alerts", "unit", "shipit.service", "failed"])
+    assert rc == 0
+    assert rec.calls == [("unit shipit.service failed", "systemd-onfailure")]
+
+
+def test_main_returns_zero_even_when_send_fails(monkeypatch):
+    # sent=False (Telegram down / bad chat id already swallowed inside
+    # notify_operator) must not change the exit code.
+    rec = _AsyncRecorder(result=False)
+    monkeypatch.setattr(alerts, "notify_operator", rec)
+    assert alerts._main(["app.alerts", "boom"]) == 0
+    assert rec.calls == [("boom", "systemd-onfailure")]
+
+
+def test_main_uses_default_message_when_no_args(monkeypatch):
+    rec = _AsyncRecorder(result=True)
+    monkeypatch.setattr(alerts, "notify_operator", rec)
+    assert alerts._main(["app.alerts"]) == 0
+    assert rec.calls == [("shipit: service OnFailure alert", "systemd-onfailure")]

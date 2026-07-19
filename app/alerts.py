@@ -14,10 +14,19 @@ Two invariants make this safe to sprinkle into failure paths:
     error is logged and swallowed — an alert must never turn a handled
     failure (a `failed` job, a caught 5xx) into a NEW unhandled one, and
     must never recurse into the 5xx handler that called it.
-  * **It self-throttles.** A crash-loop firing the same alert every few
-    seconds would spam the operator and hit Telegram's rate limits, so a
-    tiny in-process, per-key time window suppresses duplicates. In-memory
-    only (single VPS, single process) — no external store.
+  * **It self-throttles — but only within one long-lived process.** A
+    crash-loop firing the same alert every few seconds would spam the
+    operator and hit Telegram's rate limits, so a tiny in-process, per-key
+    time window suppresses duplicates. In-memory only (single VPS, single
+    uvicorn process) — no external store. This covers the server-side
+    callers (the Fix Pack `failed` handler, the 5xx handler), which all
+    share that one process. It deliberately does **not** cover the CLI path
+    below: each `python -m app.alerts` invocation is a fresh process with an
+    empty `_last_sent`, so the throttle cannot dedupe across invocations.
+    That path is instead rate-limited by systemd itself — `RestartSec` plus
+    `StartLimitBurst`/`StartLimitIntervalSec` on `shipit.service` bound how
+    often a restart (and thus the `OnFailure=` alert) can fire. See the
+    README for the recommended values.
 
 Also runnable as a module (`python -m app.alerts "<message>"`) so a systemd
 `OnFailure=` unit can push a service-restart/crash alert using the same

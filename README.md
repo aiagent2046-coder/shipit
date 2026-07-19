@@ -339,8 +339,12 @@ Everything rides Postgres and the Telegram bot that already exist (see
   `request_id` echoed in the response body and log line so a user report ties
   to a log line). Intentional `HTTPException`s (422/404/503/401) are normal
   control flow and never alert. Alerts are best-effort (never break a request
-  or job), self-throttled (a crash-loop can't spam), and a silent no-op
-  unless both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_CHAT_ID` are set.
+  or job), self-throttled *within the uvicorn process* (an in-memory per-key
+  window, so a crash-loop hitting the same server-side path can't spam), and a
+  silent no-op unless both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_CHAT_ID`
+  are set. The in-process throttle does **not** span the CLI path below (each
+  invocation is a fresh process) — that path is rate-limited by systemd
+  instead (see the restart-alert note).
 - **Service crash/restart alert** — reuse the same code path from systemd
   without a new agent, endpoint, or token. Add an `OnFailure=` companion to
   `shipit.service`:
@@ -367,6 +371,25 @@ Everything rides Postgres and the Telegram bot that already exist (see
   the send fails so it never turns a service failure into a failing
   `OnFailure` unit. Matching the reaper/USDT/fixpack convention, **no unit
   file is committed** — the snippets above are the recipe.
+
+  **Throttling this path is systemd's job, not the code's.** Each
+  `python -m app.alerts` run is a fresh process, so the in-process throttle
+  (which only dedupes the long-lived server's own alerts) can't suppress
+  repeats here — a fast crash-loop would otherwise fire one Telegram message
+  per restart. Bound it on `shipit.service` with systemd's own start-rate
+  limiter (these are not set by default — add them):
+
+  ```ini
+  # shipit.service, [Unit]
+  StartLimitIntervalSec=300
+  StartLimitBurst=5
+  # shipit.service, [Service]
+  RestartSec=3
+  ```
+
+  With `RestartSec=3` a flapping service can restart at most a handful of
+  times before systemd gives up for the interval, which caps the `OnFailure=`
+  alerts to that same handful rather than an unbounded stream.
 
 ### CORS (browser frontend on Vercel)
 
