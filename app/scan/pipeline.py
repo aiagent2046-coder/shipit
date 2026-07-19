@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import zipfile
 
 from app.llm.client import LLMClient, LLMError
+
+logger = logging.getLogger(__name__)
 from app.scan.llm_scan import LLMScanStats, run_llm_scan
 from app.scan.collapse import collapse_repeats
 from app.scan.scoring import ScoredFinding, compute_scores
@@ -74,6 +77,11 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
             llm_findings, stats = run_llm_scan(io.BytesIO(data), llm_client,
                                                passes=llm_passes)
         except LLMError as exc:
+            # A provider failure mid-audit silently degrades the score to
+            # static-only (a real 402-mid-run once turned a 0.0 into a 9.2).
+            # Record it in the log so the next occurrence is visible without
+            # diffing scores — the caller still sees it in the `llm` field.
+            logger.warning("LLM scan stage failed, degrading to static-only: %s", exc)
             llm_summary = f"failed: {exc}"
         else:
             findings = findings + [vars(f) for f in llm_findings]
