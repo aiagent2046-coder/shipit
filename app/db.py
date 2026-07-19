@@ -205,7 +205,7 @@ class AuditRepository:
         self, *, stack: str, file_count: int,
         score_total: float | None, score_json: dict | None,
         findings_json: list | None, repo_url: str | None = None,
-        content_hash: str | None = None,
+        content_hash: str | None = None, engine_version: str | None = None,
     ) -> dict[str, Any] | None:
         # access_token is not inserted here: the column default
         # (migration 0010, encode(gen_random_bytes(16),'hex')) mints a
@@ -220,31 +220,40 @@ class AuditRepository:
             cur = await conn.execute(
                 """
                 insert into audits (stack, file_count, score_total, score_json,
-                                    findings_json, repo_url, content_hash)
-                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
+                                    findings_json, repo_url, content_hash,
+                                    engine_version)
+                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
                 returning id, stack, status, file_count, score_total,
                           score_json, findings_json, repo_url, content_hash,
-                          access_token, created_at
+                          engine_version, access_token, created_at
                 """,
                 (
                     stack, file_count, score_total,
                     json.dumps(score_json) if score_json is not None else None,
                     json.dumps(findings_json) if findings_json is not None else None,
-                    repo_url, content_hash,
+                    repo_url, content_hash, engine_version,
                 ),
             )
             row = await cur.fetchone()
         return _row_to_audit(row)
 
-    async def get_by_content_hash(self, content_hash: str) -> dict[str, Any] | None:
-        """Most recent completed audit for this exact content, or None.
+    async def get_by_content_hash(
+        self, content_hash: str, engine_version: str
+    ) -> dict[str, Any] | None:
+        """Most recent completed audit for this exact content produced by
+        this exact engine version, or None.
 
         The reproducibility backstop: an identical re-audit reuses this
         row instead of re-running the LLM scan, which returns a different
         findings set -- and thus a different score -- run to run even at
         temperature=0 (see app/scan/llm_scan.py, app/scan/scoring.py).
-        Returns None when DATABASE_URL isn't set, same not-configured
-        contract as get()."""
+
+        The engine_version filter (migration 0013) is what keeps that reuse
+        from freezing a stale result across an engine change: a row written
+        under an older AUDIT_ENGINE_VERSION no longer matches, so it falls
+        through to None -- a cache miss that recomputes under the current
+        engine, exactly as if content_hash hadn't matched. Returns None when
+        DATABASE_URL isn't set, same not-configured contract as get()."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -254,13 +263,14 @@ class AuditRepository:
                 """
                 select id, stack, status, file_count, score_total,
                        score_json, findings_json, repo_url, content_hash,
-                       access_token, created_at
+                       engine_version, access_token, created_at
                 from audits
-                where content_hash = %s and status = 'completed'
+                where content_hash = %s and engine_version = %s
+                      and status = 'completed'
                 order by created_at desc
                 limit 1
                 """,
-                (content_hash,),
+                (content_hash, engine_version),
             )
             row = await cur.fetchone()
         return _row_to_audit(row) if row else None

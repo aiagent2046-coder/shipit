@@ -226,6 +226,55 @@ class TestAuditRepositoryWithFakePool:
         assert "repo_url" in query
         assert "https://github.com/acme/app" in params
 
+    async def test_create_persists_engine_version(self, monkeypatch):
+        # engine_version is a real INSERT param (unlike access_token, which the
+        # column default mints): the app supplies the current
+        # AUDIT_ENGINE_VERSION so the row records which engine produced it.
+        audit_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": audit_id, "stack": "fastapi", "status": "completed",
+            "file_count": 1, "score_total": 8.5,
+            "score_json": {"total": 8.5}, "findings_json": [],
+            "content_hash": "abc123", "engine_version": "2026-07-19-1",
+            "created_at": "2026-07-19T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = AuditRepository()
+        result = await repo.create(
+            stack="fastapi", file_count=1, score_total=8.5,
+            score_json={"total": 8.5}, findings_json=[],
+            content_hash="abc123", engine_version="2026-07-19-1",
+        )
+
+        assert result["engine_version"] == "2026-07-19-1"
+        query, params = fake.calls[0]
+        assert "engine_version" in query
+        assert "2026-07-19-1" in params
+
+    async def test_get_by_content_hash_filters_on_engine_version(self, monkeypatch):
+        # The cache lookup keys on BOTH content_hash and engine_version, so a
+        # row written under an older engine version no longer matches -- the
+        # miss that recomputes across an engine change (migration 0013).
+        audit_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": audit_id, "stack": "fastapi", "status": "completed",
+            "file_count": 1, "score_total": 8.5,
+            "score_json": {"total": 8.5}, "findings_json": [],
+            "content_hash": "abc123", "engine_version": "2026-07-19-1",
+            "access_token": "deadbeefdeadbeefdeadbeefdeadbeef",
+            "created_at": "2026-07-19T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = AuditRepository()
+        result = await repo.get_by_content_hash("abc123", "2026-07-19-1")
+
+        assert result["id"] == str(audit_id)
+        query, params = fake.calls[0]
+        assert "content_hash = %s and engine_version = %s" in query
+        assert params == ("abc123", "2026-07-19-1")
+
     async def test_get_returns_none_for_missing_row(self, monkeypatch):
         fake = FakePool(fetchone_result=None)
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
