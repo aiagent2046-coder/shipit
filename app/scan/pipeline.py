@@ -26,6 +26,23 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
                   "fix_hint", "context")
 
 
+# Bump when any part of the audit engine changes in a way that should
+# invalidate cached results: the LLM prompt (app/scan/llm_scan.py), the
+# scoring formula (app/scan/scoring.py), the static rules
+# (app/scan/secrets.py, app/scan/checks.py), or the LLM model. The model is
+# a RUNTIME value (DEFAULT_MODEL / the LLM_MODEL env override in
+# app/llm/client.py), NOT a code constant, so changing LLM_MODEL alone will
+# not change this string -- an operator who switches models must bump this
+# by hand, or the cache will keep serving pre-switch results.
+#
+# Folded into the audit cache key alongside content_digest (see
+# AuditRepository.get_by_content_hash): a bump makes the next audit of
+# byte-identical content recompute instead of reusing a now-stale row,
+# which is what stops an engine improvement (or bug fix) from being frozen
+# out by a result produced under the old engine.
+AUDIT_ENGINE_VERSION = "2026-07-19-1"
+
+
 def content_digest(data: bytes) -> str:
     """Canonical SHA-256 identity of an uploaded archive's *contents*.
 

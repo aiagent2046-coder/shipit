@@ -71,19 +71,22 @@ class FakeAuditRepo:
         self.rows: list[dict] = []
 
     async def create(self, *, stack, file_count, score_total, score_json,
-                     findings_json, repo_url=None, content_hash=None):
+                     findings_json, repo_url=None, content_hash=None,
+                     engine_version=None):
         row = {
             "id": str(uuid.uuid4()), "stack": stack, "status": "completed",
             "file_count": file_count, "score_total": score_total,
             "score_json": score_json, "findings_json": findings_json,
             "repo_url": repo_url, "content_hash": content_hash,
+            "engine_version": engine_version,
         }
         self.rows.append(row)
         return row
 
-    async def get_by_content_hash(self, content_hash):
+    async def get_by_content_hash(self, content_hash, engine_version):
         matches = [r for r in self.rows
                    if r["content_hash"] == content_hash
+                   and r["engine_version"] == engine_version
                    and r["status"] == "completed"]
         return matches[-1] if matches else None
 
@@ -175,3 +178,38 @@ def test_different_content_is_not_served_from_cache():
     assert first.json().get("reused") is not True
     assert second.json().get("reused") is not True
     assert len(repo.rows) == 2
+
+
+def test_engine_version_bump_invalidates_cache(monkeypatch):
+    """Same content, but the audit engine changed: a row cached under the old
+    AUDIT_ENGINE_VERSION must NOT be reused -- the audit recomputes under the
+    new version. This is the complement to reproducibility: PR #31 pins the
+    result for a FIXED engine; this keeps a stale result from being frozen in
+    across an engine change (migration 0013)."""
+    import app.main as main_mod
+
+    repo = FakeAuditRepo()
+    # LLM returns nothing on both runs, so any score difference here comes from
+    # the engine-version gate, not LLM variance.
+    llm = ScriptedLLM(["[]", "[]"])
+    app.dependency_overrides[get_audit_repo] = lambda: repo
+    app.dependency_overrides[get_llm_client] = lambda: llm
+    entries = {"package.json": NEXT_PKG, "a.ts": b"const x=1\n"}
+    try:
+        monkeypatch.setattr(main_mod, "AUDIT_ENGINE_VERSION", "v-old")
+        first = _post(make_zip(entries))
+        # Engine changed between the two identical-content requests.
+        monkeypatch.setattr(main_mod, "AUDIT_ENGINE_VERSION", "v-new")
+        second = _post(make_zip(entries))  # byte-for-byte identical content
+    finally:
+        app.dependency_overrides.pop(get_audit_repo, None)
+        app.dependency_overrides.pop(get_llm_client, None)
+
+    assert first.status_code == 202 and second.status_code == 202
+    # The second request is a cache MISS despite identical content: it recomputed
+    # and persisted a fresh row stamped with the new engine version.
+    assert first.json().get("reused") is not True
+    assert second.json().get("reused") is not True
+    assert len(repo.rows) == 2
+    assert repo.rows[0]["engine_version"] == "v-old"
+    assert repo.rows[1]["engine_version"] == "v-new"

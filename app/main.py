@@ -62,7 +62,7 @@ from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
 from app.report.html import render_report
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
-from app.scan.pipeline import content_digest, run_scan
+from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest, run_scan
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
@@ -1137,8 +1137,12 @@ async def create_audit(
     # different score (observed in prod: 8.9/9.9/9.9 for one unchanged repo).
     # The score math itself is already deterministic (app/scan/scoring.py) --
     # this closes the loop by not recomputing it from fresh, variable findings.
+    # The cache key is (content, engine version): identical content reuses a
+    # prior result only if it was produced by the current audit engine, so an
+    # engine change (AUDIT_ENGINE_VERSION bump) recomputes rather than serving
+    # a stale row. See app/scan/pipeline.py and AuditRepository.get_by_content_hash.
     digest = content_digest(raw)
-    cached = await audit_repo.get_by_content_hash(digest)
+    cached = await audit_repo.get_by_content_hash(digest, AUDIT_ENGINE_VERSION)
     if cached is not None:
         return {
             "audit_id": cached["id"],
@@ -1165,7 +1169,7 @@ async def create_audit(
         stack=stack.value, file_count=report.file_count,
         score_total=scan["score"]["total"], score_json=scan["score"],
         findings_json=scan["findings"], repo_url=source_url,
-        content_hash=digest,
+        content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
     )
     audit_id = persisted["id"] if persisted else str(uuid.uuid4())
 
