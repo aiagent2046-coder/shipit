@@ -110,8 +110,11 @@ export interface FixpackUsdtInvoice extends UsdtInvoice {
 }
 
 // fixpack_jobs status progression (app/db.py). null = no purchase yet.
+// "paid" = purchased, waiting in the backlog; "running" = the processor
+// has claimed it and is generating the fix (both shown as in-progress).
 export type FixpackJobStatus =
   | "paid"
+  | "running"
   | "delivered"
   | "no_fix_needed"
   | "blocked"

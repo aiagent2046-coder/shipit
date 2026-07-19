@@ -7,8 +7,10 @@ tests), and the repo fetcher / audit+fixpack repos are fakes too, so the
 suite never touches the network or a database.
 """
 
+import asyncio
 import io
 import zipfile
+from contextlib import asynccontextmanager
 
 from fastapi.testclient import TestClient
 
@@ -45,17 +47,36 @@ class FakeAuditRepo:
 
 
 class FakeFixpackRepo:
-    def __init__(self, jobs: list[dict]):
-        self._jobs = jobs
+    """In-memory stand-in modelling the durable-lease processing model: a
+    backlog of 'paid' jobs claimed one at a time into 'running', plus a
+    stale-lease reaper. `reap` fixes what reap_stale_running reports for the
+    run (default: nothing stale)."""
+
+    def __init__(self, jobs: list[dict], reap: dict[str, int] | None = None):
+        self._paid = list(jobs)
         self.delivered: dict[str, str] = {}
         self.statuses: dict[str, str] = {}
         self.details: dict[str, str | None] = {}
+        self.claimed: list[str] = []
+        self._reap = reap or {"requeued": 0, "failed": 0}
 
-    async def list_paid(self):
-        return list(self._jobs)
+    async def reap_stale_running(self, *, max_age_minutes, max_attempts):
+        return self._reap
+
+    async def claim_one_paid(self):
+        # Atomic-claim analogue: hand back each paid job exactly once, leased
+        # into 'running'. A second claim of the same job returns None, which
+        # is how the real FOR UPDATE SKIP LOCKED query stops two overlapping
+        # runs from both processing one job.
+        if not self._paid:
+            return None
+        job = self._paid.pop(0)
+        self.claimed.append(job["id"])
+        return {**job, "status": "running"}
 
     async def mark_fixpack_delivered(self, job_id, pr_url):
         self.delivered[job_id] = pr_url
+        self.statuses[job_id] = "delivered"
 
     async def mark_status(self, job_id, status, detail=None):
         self.statuses[job_id] = status
@@ -156,7 +177,7 @@ def test_semantic_regression_blocks_pr_and_marks_job(monkeypatch):
         clear_overrides()
 
     assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0,
-                           "blocked": 1, "failed": 0}
+                           "blocked": 1, "failed": 0, "requeued": 0}
     assert opened["n"] == 0                       # PR withheld
     assert fixpack_repo.statuses["j1"] == "blocked"
     assert "2 new test failure" in fixpack_repo.details["j1"]
@@ -244,8 +265,10 @@ def test_paid_job_opens_pr_and_marks_delivered(monkeypatch):
         clear_overrides()
 
     assert resp.status_code == 200
-    assert resp.json() == {"processed": 1, "delivered": 1, "skipped": 0, "blocked": 0, "failed": 0}
+    assert resp.json() == {"processed": 1, "delivered": 1, "skipped": 0,
+                           "blocked": 0, "failed": 0, "requeued": 0}
     assert fixpack_repo.delivered["j1"] == "https://github.com/acme/app/pull/5"
+    assert fixpack_repo.claimed == ["j1"]  # leased 'paid' -> 'running' once
 
     # The safety invariant end-to-end: the real value never reaches the PR.
     assert AWS_KEY not in captured["title"]
@@ -284,7 +307,8 @@ def test_zero_eligible_findings_does_not_open_pr(monkeypatch):
     finally:
         clear_overrides()
 
-    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 1, "blocked": 0, "failed": 0}
+    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 1,
+                           "blocked": 0, "failed": 0, "requeued": 0}
     assert called["n"] == 0  # never opened a PR
     assert fixpack_repo.statuses["j1"] == "no_fix_needed"
 
@@ -314,7 +338,8 @@ def test_delivery_error_marks_job_failed(monkeypatch):
     finally:
         clear_overrides()
 
-    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0, "blocked": 0, "failed": 1}
+    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0,
+                           "blocked": 0, "failed": 1, "requeued": 0}
     assert fixpack_repo.statuses["j1"] == "failed"
 
 
@@ -331,7 +356,8 @@ def test_missing_audit_marks_job_failed(monkeypatch):
     finally:
         clear_overrides()
 
-    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0, "blocked": 0, "failed": 1}
+    assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0,
+                           "blocked": 0, "failed": 1, "requeued": 0}
     assert fixpack_repo.statuses["j1"] == "failed"
 
 
@@ -511,4 +537,195 @@ def test_no_paid_jobs_returns_zero_summary(monkeypatch):
     finally:
         clear_overrides()
 
-    assert resp.json() == {"processed": 0, "delivered": 0, "skipped": 0, "blocked": 0, "failed": 0}
+    assert resp.json() == {"processed": 0, "delivered": 0, "skipped": 0,
+                           "blocked": 0, "failed": 0, "requeued": 0}
+
+
+# --- durable lease / restart recovery -------------------------------------
+
+class LeaseFixpackRepo:
+    """Stateful lease model so reap + claim behave like the real Postgres
+    primitives: jobs carry status/attempts, and `age_minutes` stands in for
+    how long ago a 'running' lease was taken. A single processor run reaps
+    stale leases, then claims each 'paid' job exactly once into 'running'."""
+
+    def __init__(self, jobs: list[dict]):
+        self.jobs = {j["id"]: dict(j) for j in jobs}
+        self.order = [j["id"] for j in jobs]
+        self.delivered: dict[str, str] = {}
+        self.claims = 0
+
+    async def reap_stale_running(self, *, max_age_minutes, max_attempts):
+        requeued = failed = 0
+        for j in self.jobs.values():
+            if j["status"] == "running" and j.get("age_minutes", 0) >= max_age_minutes:
+                if j["attempts"] < max_attempts:
+                    j["status"], j["age_minutes"] = "paid", 0
+                    requeued += 1
+                else:
+                    j["status"], j["detail"] = "failed", "stale lease reaped"
+                    failed += 1
+        return {"requeued": requeued, "failed": failed}
+
+    async def claim_one_paid(self):
+        for jid in self.order:
+            j = self.jobs[jid]
+            if j["status"] == "paid":
+                j["status"], j["age_minutes"] = "running", 0
+                j["attempts"] += 1
+                self.claims += 1
+                return dict(j)
+        return None
+
+    async def mark_fixpack_delivered(self, job_id, pr_url):
+        self.jobs[job_id]["status"] = "delivered"
+        self.delivered[job_id] = pr_url
+
+    async def mark_status(self, job_id, status, detail=None):
+        self.jobs[job_id]["status"] = status
+        if detail is not None:
+            self.jobs[job_id]["detail"] = detail
+
+
+def _aws_audit():
+    return {"a1": {
+        "repo_url": "https://github.com/acme/app",
+        "findings_json": [
+            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
+             "title": "AWS Access Key ID", "context": None},
+        ],
+    }}
+
+
+def test_happy_path_paid_running_delivered(monkeypatch):
+    """(a) The clean state transition: a 'paid' job is leased into 'running'
+    (attempts 0 -> 1), processed, and lands on 'delivered'."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    repo = LeaseFixpackRepo(
+        [{"id": "j1", "audit_id": "a1", "status": "paid", "attempts": 0}]
+    )
+    opened = {"n": 0}
+
+    def fake_opener(*a, **k):
+        opened["n"] += 1
+        return PullRequestResult(html_url="https://github.com/acme/app/pull/7",
+                                 branch="b")
+
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(zip_bytes), fake_opener)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json() == {"processed": 1, "delivered": 1, "skipped": 0,
+                           "blocked": 0, "failed": 0, "requeued": 0}
+    assert opened["n"] == 1
+    assert repo.jobs["j1"]["status"] == "delivered"
+    assert repo.jobs["j1"]["attempts"] == 1
+
+
+def test_stale_running_job_requeued_then_delivered_once(monkeypatch):
+    """(b) Restart recovery without a duplicate PR: a job left 'running' by a
+    crashed worker (old lease) is reaped back to 'paid', re-claimed, and
+    delivered — and the PR opener fires exactly once, not once per run."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    # attempts=1 (< MAX), lease taken 30m ago (> 15m stale threshold).
+    repo = LeaseFixpackRepo([{
+        "id": "j1", "audit_id": "a1", "status": "running",
+        "attempts": 1, "age_minutes": 30,
+    }])
+    opened = {"n": 0}
+
+    def fake_opener(*a, **k):
+        opened["n"] += 1
+        return PullRequestResult(html_url="https://github.com/acme/app/pull/8",
+                                 branch="b")
+
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(zip_bytes), fake_opener)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    body = resp.json()
+    assert body["requeued"] == 1        # stale lease recovered
+    assert body["delivered"] == 1
+    assert body["processed"] == 1
+    assert opened["n"] == 1             # exactly ONE PR despite the crash
+    assert repo.jobs["j1"]["status"] == "delivered"
+    assert repo.jobs["j1"]["attempts"] == 2  # one retry after the crash
+
+
+def test_poison_pill_fails_after_max_attempts(monkeypatch):
+    """A job that has already exhausted its attempts and is found stale is
+    failed (not re-queued forever) — bounded retries. No PR is opened."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+
+    # attempts already at MAX (3), stale lease -> reap must fail it.
+    repo = LeaseFixpackRepo([{
+        "id": "j1", "audit_id": "a1", "status": "running",
+        "attempts": 3, "age_minutes": 30,
+    }])
+    opened = {"n": 0}
+
+    def fake_opener(*a, **k):
+        opened["n"] += 1
+        return PullRequestResult(html_url="x", branch="y")
+
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(b""), fake_opener)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    body = resp.json()
+    assert body["failed"] == 1
+    assert body["processed"] == 0       # nothing left to claim
+    assert opened["n"] == 0             # never opened a PR
+    assert repo.jobs["j1"]["status"] == "failed"
+
+
+def test_claim_hands_back_each_job_once():
+    """The atomic-claim contract that stops double-processing: once a 'paid'
+    job is claimed it is 'running', so a second claim of the same backlog
+    returns None. Two overlapping runs therefore split work, never overlap."""
+    repo = FakeFixpackRepo([{"id": "j1", "audit_id": "a1", "status": "paid"}])
+    first = asyncio.run(repo.claim_one_paid())
+    second = asyncio.run(repo.claim_one_paid())
+    assert first is not None and first["id"] == "j1"
+    assert first["status"] == "running"
+    assert second is None
+    assert repo.claimed == ["j1"]
+
+
+def test_lock_busy_returns_skipped_locked(monkeypatch):
+    """When another run already holds the advisory lock, the processor does
+    no work and reports skipped_locked rather than stampeding the backlog."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+
+    @asynccontextmanager
+    async def busy_lock():
+        raise main_mod.ProcessorLockBusy()
+        yield  # unreachable, keeps this a valid async context manager
+
+    monkeypatch.setattr(main_mod, "fixpack_processor_lock", busy_lock)
+
+    repo = FakeFixpackRepo([{"id": "j1", "audit_id": "a1", "status": "paid"}])
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(b""), lambda *a, **k: None)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json() == {"skipped_locked": True}
+    assert repo.claimed == []           # nothing was claimed/processed

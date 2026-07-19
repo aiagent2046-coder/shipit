@@ -40,6 +40,7 @@ import datetime
 import json
 import os
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -97,6 +98,52 @@ async def close_pool() -> None:
     if _pool is not None:
         await _pool.close()
         _pool = None
+
+
+# Arbitrary but fixed key for the Fix Pack processor's session advisory
+# lock -- ascii "FIXP". Any value works as long as it is stable and not
+# shared with another advisory-lock user in this database.
+_FIXPACK_PROCESSOR_LOCK_KEY = 0x46495850
+
+
+class ProcessorLockBusy(Exception):
+    """Another Fix Pack processor run already holds the advisory lock, so
+    this run must not proceed -- returned to the caller as a benign
+    skipped-because-locked outcome, not an error."""
+
+
+@asynccontextmanager
+async def fixpack_processor_lock():
+    """Serialize Fix Pack processor runs with a session-level Postgres
+    advisory lock. Belt-and-suspenders on top of the atomic per-job claim
+    (claim_one_paid): the claim already makes double-processing of a single
+    job impossible, this makes "one processor run at a time" explicit and
+    observable so overlapping timer firings don't stampede the backlog.
+
+    Acquired on a dedicated pooled connection held for the whole run and
+    released on exit (both on success and on error). Raises
+    ProcessorLockBusy if the lock is already held. When DATABASE_URL isn't
+    configured there is nothing to serialize, so it yields without a lock --
+    same not-configured contract as the repositories."""
+    try:
+        pool = await get_pool()
+    except DatabaseNotConfigured:
+        yield
+        return
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "select pg_try_advisory_lock(%s) as locked",
+            (_FIXPACK_PROCESSOR_LOCK_KEY,),
+        )
+        row = await cur.fetchone()
+        if not (row and row["locked"]):
+            raise ProcessorLockBusy()
+        try:
+            yield
+        finally:
+            await conn.execute(
+                "select pg_advisory_unlock(%s)", (_FIXPACK_PROCESSOR_LOCK_KEY,)
+            )
 
 
 def _json_field(value: Any) -> Any:
@@ -349,30 +396,108 @@ class FixpackJobRepository:
                 (pr_url, uuid.UUID(job_id)),
             )
 
-    async def list_paid(self) -> list[dict[str, Any]]:
-        """The purchased-but-not-yet-generated Fix Pack jobs (status
-        'paid'), oldest first so the processor works through the backlog
-        in purchase order. Returns [] when DATABASE_URL isn't set, same
-        not-configured contract as PaymentRepository.list_pending (an
-        empty list, not None, so the processor can iterate without a
-        guard)."""
+    async def claim_one_paid(self) -> dict[str, Any] | None:
+        """Atomically claim the oldest purchased-but-not-yet-generated Fix
+        Pack job (status 'paid') into a 'running' lease, and return it --
+        or None when there is nothing to claim (or DATABASE_URL isn't set).
+
+        This is the concurrency guard. The inner SELECT ... FOR UPDATE SKIP
+        LOCKED LIMIT 1 row-locks exactly one candidate and skips any a
+        concurrent run already locked, and the surrounding single-row UPDATE
+        flips it 'paid' -> 'running' in the same statement. So two
+        overlapping processor runs can never both claim the same job -- the
+        loser's SELECT skips the locked row and moves on -- which is what
+        stops one payment from producing two fix PRs. started_at stamps the
+        lease (the stale-lease reaper reads it) and attempts is incremented
+        so retries are bounded.
+
+        The processor calls this in a loop (claim -> process -> claim next)
+        until it returns None, instead of listing all 'paid' rows up front,
+        so a job purchased mid-run is still picked up and nothing is held in
+        memory across the slow Docker/PR work."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
-            return []
+            return None
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select id, audit_id, pack, stack, verified, detail,
-                       preview_local_url, preview_expires_at,
-                       pr_url, pr_delivered, status, created_at
-                from fixpack_jobs
-                where status = 'paid'
-                order by created_at asc
+                update fixpack_jobs
+                   set status = 'running',
+                       started_at = now(),
+                       attempts = attempts + 1
+                 where id = (
+                     select id from fixpack_jobs
+                      where status = 'paid'
+                      order by created_at asc
+                      for update skip locked
+                      limit 1
+                 )
+                returning id, audit_id, pack, stack, verified, detail,
+                          preview_local_url, preview_expires_at,
+                          pr_url, pr_delivered, status, created_at
                 """,
             )
-            rows = await cur.fetchall()
-        return [_row_to_fixpack_job(r) for r in rows]
+            row = await cur.fetchone()
+        return _row_to_fixpack_job(row) if row else None
+
+    async def reap_stale_running(
+        self, *, max_age_minutes: int, max_attempts: int
+    ) -> dict[str, int]:
+        """Recover Fix Pack jobs whose worker crashed mid-run: a 'running'
+        lease older than max_age_minutes means no process is still working
+        it (a real generation is minutes, not tens of minutes). Run at the
+        start of each processor pass, before claiming.
+
+        Two outcomes, bounded by attempts (incremented at each claim):
+          - attempts < max_attempts -> back to 'paid' (started_at cleared)
+            so the next claim retries it;
+          - attempts >= max_attempts -> 'failed' with a diagnosable detail,
+            so a poison-pill job that crashes the worker every time stops
+            re-queuing forever and stays visible for a human.
+
+        Returns {'requeued': n, 'failed': m}. No-op ({'requeued': 0,
+        'failed': 0}) when DATABASE_URL isn't set, matching the other
+        not-configured contracts. This is the required counterpart to
+        introducing the 'running' lease: without it, a crashed lease would
+        be exactly the zombie-forever state the durable design set out to
+        avoid."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return {"requeued": 0, "failed": 0}
+        async with pool.connection() as conn:
+            requeued_cur = await conn.execute(
+                """
+                update fixpack_jobs
+                   set status = 'paid', started_at = null
+                 where status = 'running'
+                   and started_at < now() - make_interval(mins => %s)
+                   and attempts < %s
+                returning id
+                """,
+                (max_age_minutes, max_attempts),
+            )
+            requeued = len(await requeued_cur.fetchall())
+            failed_cur = await conn.execute(
+                """
+                update fixpack_jobs
+                   set status = 'failed',
+                       detail = %s
+                 where status = 'running'
+                   and started_at < now() - make_interval(mins => %s)
+                   and attempts >= %s
+                returning id
+                """,
+                (
+                    f"stale lease reaped: no completion after {max_attempts} "
+                    f"attempt(s), last lease older than {max_age_minutes}m",
+                    max_age_minutes,
+                    max_attempts,
+                ),
+            )
+            failed = len(await failed_cur.fetchall())
+        return {"requeued": requeued, "failed": failed}
 
     async def mark_fixpack_delivered(self, job_id: str, pr_url: str) -> None:
         """A paid Fix Pack job whose fix PR was successfully opened: record

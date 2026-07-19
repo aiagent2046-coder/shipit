@@ -29,6 +29,11 @@ class FakeCursor:
     async def fetchone(self):
         return self._result
 
+    async def fetchall(self):
+        if self._result is None:
+            return []
+        return list(self._result) if isinstance(self._result, list) else [self._result]
+
 
 class FakeConnection:
     def __init__(self, pool):
@@ -370,6 +375,91 @@ class TestFixpackJobRepositoryWithFakePool:
         query, params = fake.calls[0]
         assert "update fixpack_jobs" in query
         assert params == ("https://github.com/a/b/pull/1", uuid.UUID(job_id))
+
+
+class TestFixpackLeaseNotConfigured:
+    """The durable-lease primitives honor the same not-configured contract
+    as the rest of the repository: no DATABASE_URL -> a benign default, never
+    an exception."""
+
+    async def test_claim_one_paid_returns_none(self):
+        assert await FixpackJobRepository().claim_one_paid() is None
+
+    async def test_reap_returns_zero_counts(self):
+        result = await FixpackJobRepository().reap_stale_running(
+            max_age_minutes=15, max_attempts=3
+        )
+        assert result == {"requeued": 0, "failed": 0}
+
+    async def test_processor_lock_is_a_silent_noop(self):
+        # No pool to lock against, so it just yields -- nothing to serialize.
+        async with db_mod.fixpack_processor_lock():
+            pass
+
+
+class TestFixpackLeaseWithFakePool:
+    async def test_claim_uses_skip_locked_and_leases_running(self, monkeypatch):
+        job_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": job_id, "audit_id": None, "pack": "fixpack", "stack": "fastapi",
+            "verified": None, "detail": None, "preview_local_url": None,
+            "preview_expires_at": None, "pr_url": None, "pr_delivered": False,
+            "status": "running", "created_at": "2026-07-19T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        result = await FixpackJobRepository().claim_one_paid()
+
+        assert result["id"] == str(job_id)
+        assert result["status"] == "running"
+        query, _ = fake.calls[0]
+        # The concurrency guard: atomic paid->running claim, skipping rows a
+        # concurrent run already locked.
+        assert "for update skip locked" in query
+        assert "status = 'running'" in query
+        assert "attempts = attempts + 1" in query
+
+    async def test_claim_returns_none_when_backlog_empty(self, monkeypatch):
+        fake = FakePool(fetchone_result=None)  # UPDATE matched no row
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        assert await FixpackJobRepository().claim_one_paid() is None
+
+    async def test_reap_passes_thresholds_as_params(self, monkeypatch):
+        fake = FakePool(fetchone_result=[])  # no stale rows either query
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        result = await FixpackJobRepository().reap_stale_running(
+            max_age_minutes=15, max_attempts=3
+        )
+
+        assert result == {"requeued": 0, "failed": 0}
+        requeue_q, requeue_p = fake.calls[0]
+        assert "set status = 'paid'" in requeue_q
+        assert "make_interval(mins => %s)" in requeue_q
+        assert requeue_p == (15, 3)
+        fail_q, fail_p = fake.calls[1]
+        assert "set status = 'failed'" in fail_q
+        assert fail_p[1:] == (15, 3)  # (detail, max_age_minutes, max_attempts)
+
+    async def test_processor_lock_acquires_and_releases(self, monkeypatch):
+        fake = FakePool(fetchone_result={"locked": True})
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        async with db_mod.fixpack_processor_lock():
+            pass
+
+        assert "pg_try_advisory_lock" in fake.calls[0][0]
+        assert "pg_advisory_unlock" in fake.calls[1][0]
+
+    async def test_processor_lock_busy_raises(self, monkeypatch):
+        fake = FakePool(fetchone_result={"locked": False})
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        with pytest.raises(db_mod.ProcessorLockBusy):
+            async with db_mod.fixpack_processor_lock():
+                pass
+        # Never unlocked something it didn't hold.
+        assert all("pg_advisory_unlock" not in q for q, _ in fake.calls)
 
 
 class TestAccountRepositoryNotConfigured:
