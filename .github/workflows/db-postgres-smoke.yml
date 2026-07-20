@@ -1,0 +1,79 @@
+name: db-postgres-smoke
+
+# Real-Postgres schema + SQL smoke test. Applies EVERY migration in
+# migrations/ (in order) to a fresh Postgres 17 service container, then
+# exercises the write path of every repository in app/db.py against it with
+# real SQL. This catches the class of bug the fake-based unit suite
+# structurally cannot: a mismatch between a Python value's type and a real
+# column type (e.g. passing a Unix int into the timestamptz `expires_at`
+# column -> psycopg DatatypeMismatch), a missing column, or otherwise invalid
+# SQL. The whole test suite runs with DATABASE_URL unset (tests/conftest.py),
+# so those repository writes normally take the not-configured None path and
+# never touch a database -- see POSTGRES_CI_SMOKE_TEST_PLAN.md.
+#
+# Postgres 17 matches the real Supabase major version (app/db.py's module
+# docstring). Only fires on changes that can affect the schema/SQL contract.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "migrations/**"
+      - "app/db.py"
+      - "tests/test_db_postgres_smoke.py"
+      - "scripts/apply_migrations.sh"
+      - ".github/workflows/db-postgres-smoke.yml"
+  pull_request:
+    paths:
+      - "migrations/**"
+      - "app/db.py"
+      - "tests/test_db_postgres_smoke.py"
+      - "scripts/apply_migrations.sh"
+      - ".github/workflows/db-postgres-smoke.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shipit_smoke
+        ports:
+          - 5432:5432
+        # Wait until Postgres is actually accepting connections before the
+        # steps run, so the migration step doesn't race the container.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Seen by both psql (the migration step) and pytest (which captures it at
+      # import time; conftest deletes it at runtime, and the smoke test
+      # re-injects the captured value -- see the test's module docstring).
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/shipit_smoke
+      # AccountRepository.create hashes the API key and requires a pepper.
+      # A throwaway CI value -- nothing here verifies a real key.
+      API_KEY_PEPPER: ci-smoke-pepper-not-a-real-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install shipit (locked, hash-verified deps)
+        run: |
+          pip install --require-hashes -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Apply all migrations in order
+        run: bash scripts/apply_migrations.sh
+
+      - name: "Real-Postgres repository write-path smoke"
+        run: pytest -q tests/test_db_postgres_smoke.py

@@ -448,6 +448,40 @@ rationale.
   (`web/`), and `github-actions` — so patches land as reviewable PRs with no
   new infrastructure.
 
+- **`db-postgres-smoke.yml`** (`.github/workflows/`) is the real-Postgres schema
+  + SQL smoke test. The whole unit suite runs with `DATABASE_URL` unset
+  (`tests/conftest.py` strips it in an autouse fixture), so every `app/db.py`
+  repository write takes the not-configured `None` path and never touches a
+  database; `tests/test_db.py` stands in a `FakePool` that records query
+  text/params but never sends them to real Postgres. That is fast and catches
+  wiring/param-order bugs, but it **cannot** catch a mismatch between a Python
+  value's type and a real column type — which is exactly what took `/subscribe`
+  down twice (a Telegram Unix-int `expires_at` bound straight into the
+  `timestamptz` column → `psycopg.errors.DatatypeMismatch`), all while 517 tests
+  stayed green. This job closes that gap: it spins up a **Postgres 17** service
+  container (matching the real Supabase major version), applies **every**
+  migration in order via `scripts/apply_migrations.sh`, then runs
+  `tests/test_db_postgres_smoke.py`, which calls the **write path of every
+  repository** in `app/db.py` once against the live schema and asserts the rows
+  read back with the right types. A future migration that adds a column or
+  changes a type without updating the matching write method makes one of those
+  calls raise. It runs on PRs/pushes touching `migrations/**`, `app/db.py`, the
+  smoke test, or the runner script (plus `workflow_dispatch`).
+
+  Run it locally against a throwaway Postgres (the file self-skips when
+  `DATABASE_URL` is unset, so a normal `pytest -q` is unaffected):
+
+  ```sh
+  export DATABASE_URL="postgresql://postgres@localhost:5432/shipit_smoke"
+  bash scripts/apply_migrations.sh          # apply all migrations in order
+  pytest -q tests/test_db_postgres_smoke.py # exercise every repo write path
+  ```
+
+  The test is proven load-bearing, not decorative: reverting the `expires_at`
+  timestamptz conversion in `app/db.py` makes it fail with the exact prod
+  `DatatypeMismatch` (verified via a temporary local revert on a real
+  Postgres — see the job's PR for the captured red→green output).
+
 ### Observability (Phase 3)
 
 Single VPS, single uvicorn process — so no Prometheus/Grafana/ELK/Sentry.
