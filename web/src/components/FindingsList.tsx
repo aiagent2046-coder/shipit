@@ -14,6 +14,19 @@ function SeverityBadge({ severity }: { severity: Severity }) {
   );
 }
 
+// Findings whose suggested fix is delivered by an Enterprise-tier capability
+// (e.g. the no-Dockerfile fix references the Deploy Pack). The audit still
+// surfaces the finding on every tier; only the automated fix is Enterprise.
+const ENTERPRISE_FIX_RULES = new Set<string>(["no-dockerfile"]);
+
+function EnterpriseBadge() {
+  return (
+    <span className="inline-flex items-center whitespace-nowrap rounded-full border border-border bg-surface px-2 py-0.5 text-xs font-medium text-muted">
+      Enterprise
+    </span>
+  );
+}
+
 export function SeveritySummary({ findings }: { findings: Finding[] }) {
   const counts = severityCounts(findings);
   const order: Severity[] = ["critical", "high", "medium", "low"];
@@ -49,9 +62,12 @@ function FindingCard({ finding }: { finding: Finding }) {
       </div>
       {risk && <p className="mb-2 text-sm text-muted">{risk}</p>}
       {fix && (
-        <p className="mb-2 text-sm text-accent">
-          <span aria-hidden="true">→ </span>
-          {fix}
+        <p className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-accent">
+          <span>
+            <span aria-hidden="true">→ </span>
+            {fix}
+          </span>
+          {ENTERPRISE_FIX_RULES.has(finding.rule_id) && <EnterpriseBadge />}
         </p>
       )}
       {tech && (
