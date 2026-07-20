@@ -207,6 +207,13 @@ def _row_to_payment(row: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
+def _row_to_subscription(row: dict[str, Any]) -> dict[str, Any]:
+    d = dict(row)
+    d["id"] = str(d["id"])
+    d["account_id"] = str(d["account_id"]) if d.get("account_id") else None
+    return d
+
+
 class AuditRepository:
     """Real-Postgres-backed by default. Tests use an in-memory fake
     with the same method signatures instead of this class -- see
@@ -1082,3 +1089,160 @@ class PaymentRepository:
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
+
+
+class SubscriptionRepository:
+    """Recurring Stars subscriptions (migration 0015). Same real/fake split
+    and not-configured contract as the other repositories: when DATABASE_URL
+    isn't set every method no-ops (returns None) instead of failing, so the
+    Telegram webhook still answers even on a deployment without a database.
+
+    The natural key is (telegram_user_id, invoice_payload): a
+    BotSubscriptionUpdated update (Bot API `subscription` field) carries only
+    those two fields, never a charge id, so they are the only stable way to
+    resolve a state change back to a row. upsert_first / renew / set_status
+    all pivot on it. See migration 0015 for the full rationale."""
+
+    async def get_by_user_and_payload(
+        self, telegram_user_id: str, invoice_payload: str
+    ) -> dict[str, Any] | None:
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, telegram_user_id, telegram_chat_id,
+                       tier, invoice_payload, telegram_payment_charge_id,
+                       status, expires_at, created_at, updated_at
+                from subscriptions
+                where telegram_user_id = %s and invoice_payload = %s
+                """,
+                (telegram_user_id, invoice_payload),
+            )
+            row = await cur.fetchone()
+        return _row_to_subscription(row) if row else None
+
+    async def get_active_by_user(
+        self, telegram_user_id: str
+    ) -> dict[str, Any] | None:
+        """The most recent still-charging subscription for a user (status
+        'active'), newest first. Backs /unsubscribe, which needs the stored
+        telegram_payment_charge_id to call editUserStarSubscription."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, telegram_user_id, telegram_chat_id,
+                       tier, invoice_payload, telegram_payment_charge_id,
+                       status, expires_at, created_at, updated_at
+                from subscriptions
+                where telegram_user_id = %s and status = 'active'
+                order by created_at desc
+                limit 1
+                """,
+                (telegram_user_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_subscription(row) if row else None
+
+    async def upsert_first(
+        self, *, telegram_user_id: str, invoice_payload: str, tier: str,
+        telegram_chat_id: str | None, telegram_payment_charge_id: str | None,
+        expires_at: Any,
+    ) -> dict[str, Any] | None:
+        """Record the first payment of a subscription (is_first_recurring).
+        Upsert on the natural key so a retried first-payment webhook lands on
+        the same row (idempotent) and re-enabling a previously canceled/expired
+        subscription reactivates its row rather than colliding. Sets status
+        back to 'active'."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into subscriptions
+                    (telegram_user_id, invoice_payload, tier, telegram_chat_id,
+                     telegram_payment_charge_id, status, expires_at)
+                values (%s, %s, %s, %s, %s, 'active', %s)
+                on conflict (telegram_user_id, invoice_payload) do update
+                   set tier = excluded.tier,
+                       telegram_chat_id = excluded.telegram_chat_id,
+                       telegram_payment_charge_id =
+                           excluded.telegram_payment_charge_id,
+                       status = 'active',
+                       expires_at = excluded.expires_at,
+                       updated_at = now()
+                returning id, account_id, telegram_user_id, telegram_chat_id,
+                          tier, invoice_payload, telegram_payment_charge_id,
+                          status, expires_at, created_at, updated_at
+                """,
+                (telegram_user_id, invoice_payload, tier, telegram_chat_id,
+                 telegram_payment_charge_id, expires_at),
+            )
+            row = await cur.fetchone()
+        return _row_to_subscription(row) if row else None
+
+    async def renew(
+        self, subscription_id: str, *, expires_at: Any,
+        telegram_payment_charge_id: str | None,
+    ) -> dict[str, Any] | None:
+        """A recurring renewal (is_recurring, not first): push expires_at out
+        and rotate telegram_payment_charge_id to this period's charge (the id
+        editUserStarSubscription needs is the latest one). Never creates a row.
+        Also clears any failed/canceled status back to active, since a
+        successful charge means the subscription is charging again."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update subscriptions
+                   set expires_at = %s,
+                       telegram_payment_charge_id = %s,
+                       status = 'active',
+                       updated_at = now()
+                 where id = %s
+                returning id, account_id, telegram_user_id, telegram_chat_id,
+                          tier, invoice_payload, telegram_payment_charge_id,
+                          status, expires_at, created_at, updated_at
+                """,
+                (expires_at, telegram_payment_charge_id,
+                 uuid.UUID(subscription_id)),
+            )
+            row = await cur.fetchone()
+        return _row_to_subscription(row) if row else None
+
+    async def set_status(
+        self, subscription_id: str, status: str
+    ) -> dict[str, Any] | None:
+        """Update only the renewal status (canceled/active/failed/expired).
+        expires_at is deliberately untouched -- access is expires_at-based, and
+        a canceled or failed-renewal subscription keeps the period it paid
+        for. See migration 0015."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update subscriptions
+                   set status = %s, updated_at = now()
+                 where id = %s
+                returning id, account_id, telegram_user_id, telegram_chat_id,
+                          tier, invoice_payload, telegram_payment_charge_id,
+                          status, expires_at, created_at, updated_at
+                """,
+                (status, uuid.UUID(subscription_id)),
+            )
+            row = await cur.fetchone()
+        return _row_to_subscription(row) if row else None

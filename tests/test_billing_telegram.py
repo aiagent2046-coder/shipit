@@ -482,3 +482,263 @@ async def test_upgrade_sends_stars_invoice(monkeypatch):
         {"label": telegram_stars.PRO_TITLE,
          "amount": telegram_stars.pro_stars_price()}
     ]
+
+
+# --- 8. recurring subscriptions (Telegram Stars) ---
+
+class FakeSubscriptionRepo:
+    """In-memory stand-in for SubscriptionRepository, mirroring the natural-key
+    (telegram_user_id, invoice_payload) behavior of the real repo so tests
+    exercise the same upsert/renew/status logic."""
+
+    def __init__(self):
+        self.rows: dict[str, dict] = {}
+
+    def _find(self, telegram_user_id, invoice_payload):
+        for r in self.rows.values():
+            if (r["telegram_user_id"] == telegram_user_id
+                    and r["invoice_payload"] == invoice_payload):
+                return r
+        return None
+
+    async def get_by_user_and_payload(self, telegram_user_id, invoice_payload):
+        return self._find(telegram_user_id, invoice_payload)
+
+    async def get_active_by_user(self, telegram_user_id):
+        active = [
+            r for r in self.rows.values()
+            if r["telegram_user_id"] == telegram_user_id and r["status"] == "active"
+        ]
+        return active[-1] if active else None
+
+    async def upsert_first(self, *, telegram_user_id, invoice_payload, tier,
+                           telegram_chat_id, telegram_payment_charge_id, expires_at):
+        existing = self._find(telegram_user_id, invoice_payload)
+        if existing is not None:
+            existing.update(
+                tier=tier, telegram_chat_id=telegram_chat_id,
+                telegram_payment_charge_id=telegram_payment_charge_id,
+                status="active", expires_at=expires_at,
+            )
+            return existing
+        row = {
+            "id": str(uuid.uuid4()), "account_id": None,
+            "telegram_user_id": telegram_user_id,
+            "telegram_chat_id": telegram_chat_id, "tier": tier,
+            "invoice_payload": invoice_payload,
+            "telegram_payment_charge_id": telegram_payment_charge_id,
+            "status": "active", "expires_at": expires_at,
+        }
+        self.rows[row["id"]] = row
+        return row
+
+    async def renew(self, subscription_id, *, expires_at, telegram_payment_charge_id):
+        r = self.rows[subscription_id]
+        r.update(expires_at=expires_at,
+                 telegram_payment_charge_id=telegram_payment_charge_id,
+                 status="active")
+        return r
+
+    async def set_status(self, subscription_id, status):
+        r = self.rows[subscription_id]
+        r["status"] = status
+        return r
+
+
+async def _send_sub(update, *, accounts=None, payments=None, subs=None, calls=None):
+    calls = calls if calls is not None else []
+    return await telegram_stars.handle_update(
+        update, account_repo=accounts or FakeAccountRepo(),
+        payment_repo=payments or FakePaymentRepo(),
+        subscription_repo=subs if subs is not None else FakeSubscriptionRepo(),
+        token="t", transport=_telegram_transport(calls),
+    )
+
+
+def _sub_payment_update(charge_id, *, chat_id=555, user_id=555,
+                        expires_at=1000, is_first=False, is_recurring=True):
+    sp = {
+        "currency": "XTR", "total_amount": 1,
+        "invoice_payload": telegram_stars.SUBSCRIPTION_PAYLOAD,
+        "telegram_payment_charge_id": charge_id,
+        "subscription_expiration_date": expires_at,
+        "is_recurring": is_recurring,
+    }
+    if is_first:
+        sp["is_first_recurring"] = True
+    return {"update_id": 1, "message": {
+        "chat": {"id": chat_id}, "from": {"id": user_id},
+        "successful_payment": sp}}
+
+
+def _sub_updated_update(state, *, user_id=555,
+                        invoice_payload=None):
+    return {"update_id": 1, "subscription": {
+        "user": {"id": user_id},
+        "invoice_payload": invoice_payload or telegram_stars.SUBSCRIPTION_PAYLOAD,
+        "state": state}}
+
+
+def test_build_invoice_payload_adds_subscription_period():
+    body = telegram_stars.build_invoice_payload(
+        chat_id=1, title="t", description="d", payload="sub:x", stars=1,
+        subscription_period=telegram_stars.SUBSCRIPTION_PERIOD_SECONDS,
+    )
+    assert body["subscription_period"] == 2592000
+    # Omitting it leaves the one-shot body identical (no such key).
+    one_shot = telegram_stars.build_invoice_payload(
+        chat_id=1, title="t", description="d", payload="p", stars=1)
+    assert "subscription_period" not in one_shot
+
+
+async def test_subscribe_sends_recurring_invoice(monkeypatch):
+    monkeypatch.delenv("SUBSCRIPTION_STARS", raising=False)
+    calls: list = []
+    result = await _send_sub(_text_update("/subscribe", 888), calls=calls)
+    assert result == {"ok": True, "handled": "subscribe"}
+    invoices = [c for c in calls if c[0] == "sendInvoice"]
+    assert len(invoices) == 1
+    body = invoices[0][1]
+    assert body["payload"] == telegram_stars.SUBSCRIPTION_PAYLOAD
+    assert body["subscription_period"] == 2592000
+    assert body["currency"] == "XTR"
+    assert body["provider_token"] == ""
+    assert body["prices"] == [
+        {"label": telegram_stars.SUBSCRIPTION_TITLE,
+         "amount": telegram_stars.subscription_stars_price()}]
+
+
+# (a) first payment -> creates one subscriptions row with the right expires_at
+async def test_subscription_first_payment_creates_row():
+    subs, payments, calls = FakeSubscriptionRepo(), FakePaymentRepo(), []
+    result = await _send_sub(
+        _sub_payment_update("charge_1", expires_at=1234, is_first=True),
+        subs=subs, payments=payments, calls=calls)
+    assert result["handled"] == "subscription_payment"
+    assert result["persisted"] is True and result["first"] is True
+    assert len(subs.rows) == 1
+    row = next(iter(subs.rows.values()))
+    assert row["status"] == "active"
+    assert row["expires_at"] == 1234
+    assert row["telegram_payment_charge_id"] == "charge_1"
+    assert row["tier"] == telegram_stars.SUBSCRIPTION_TIER
+    # First charge DMs a confirmation; a completed payment row is recorded.
+    assert any(c[0] == "sendMessage" for c in calls)
+    assert len(payments.rows) == 1
+    assert next(iter(payments.rows.values()))["product"] == "subscription"
+
+
+# (b) renewal -> extends the SAME row's expires_at, no second row
+async def test_subscription_renewal_extends_same_row():
+    subs, payments, calls = FakeSubscriptionRepo(), FakePaymentRepo(), []
+    await _send_sub(_sub_payment_update("charge_1", expires_at=1000, is_first=True),
+                    subs=subs, payments=payments, calls=calls)
+    result = await _send_sub(
+        _sub_payment_update("charge_2", expires_at=2000, is_first=False),
+        subs=subs, payments=payments, calls=calls)
+    assert result["first"] is False
+    assert len(subs.rows) == 1                       # no new row
+    row = next(iter(subs.rows.values()))
+    assert row["expires_at"] == 2000                 # extended
+    assert row["telegram_payment_charge_id"] == "charge_2"  # rotated
+    # Renewal does NOT re-DM the payer (only the first charge does).
+    assert sum(1 for c in calls if c[0] == "sendMessage") == 1
+    assert len(payments.rows) == 2                   # both charges recorded
+
+
+async def test_duplicate_subscription_charge_records_one_payment():
+    subs, payments, calls = FakeSubscriptionRepo(), FakePaymentRepo(), []
+    upd = _sub_payment_update("charge_dup", expires_at=1000, is_first=True)
+    await _send_sub(upd, subs=subs, payments=payments, calls=calls)
+    await _send_sub(upd, subs=subs, payments=payments, calls=calls)
+    assert len(subs.rows) == 1
+    assert len(payments.rows) == 1                   # idempotent on external_ref
+
+
+# (c) BotSubscriptionUpdated state=canceled -> status updated, access kept
+async def test_subscription_updated_canceled_sets_status_keeps_access():
+    subs, calls = FakeSubscriptionRepo(), []
+    await _send_sub(_sub_payment_update("c1", expires_at=5000, is_first=True),
+                    subs=subs, calls=calls)
+    result = await _send_sub(_sub_updated_update("canceled"), subs=subs)
+    assert result == {"ok": True, "handled": "subscription_updated",
+                      "state": "canceled", "status": "canceled", "updated": True}
+    row = next(iter(subs.rows.values()))
+    assert row["status"] == "canceled"
+    assert row["expires_at"] == 5000                 # access boundary untouched
+
+
+# (d) state=failed -> status updated, access NOT revoked immediately
+async def test_subscription_updated_failed_does_not_revoke_access():
+    subs = FakeSubscriptionRepo()
+    await _send_sub(_sub_payment_update("c1", expires_at=5000, is_first=True),
+                    subs=subs)
+    result = await _send_sub(_sub_updated_update("failed"), subs=subs)
+    assert result["status"] == "failed" and result["updated"] is True
+    row = next(iter(subs.rows.values()))
+    assert row["status"] == "failed"
+    assert row["expires_at"] == 5000                 # NOT revoked
+
+
+async def test_subscription_updated_active_reenables():
+    subs = FakeSubscriptionRepo()
+    await _send_sub(_sub_payment_update("c1", expires_at=5000, is_first=True),
+                    subs=subs)
+    await _send_sub(_sub_updated_update("canceled"), subs=subs)
+    result = await _send_sub(_sub_updated_update("active"), subs=subs)
+    assert result["status"] == "active"
+    assert next(iter(subs.rows.values()))["status"] == "active"
+
+
+async def test_subscription_updated_unknown_row_is_benign():
+    subs = FakeSubscriptionRepo()
+    result = await _send_sub(_sub_updated_update("canceled", user_id=999), subs=subs)
+    assert result["updated"] is False
+
+
+async def test_unsubscribe_cancels_and_flips_status():
+    subs, calls = FakeSubscriptionRepo(), []
+    await _send_sub(_sub_payment_update("c1", chat_id=777, user_id=777,
+                                        expires_at=9000, is_first=True),
+                    subs=subs, calls=calls)
+    calls.clear()
+    result = await _send_sub(_text_update("/unsubscribe", 777), subs=subs, calls=calls)
+    assert result == {"ok": True, "handled": "unsubscribe", "found": True}
+    # editUserStarSubscription called with is_canceled=True and the stored charge.
+    edits = [c for c in calls if c[0] == "editUserStarSubscription"]
+    assert len(edits) == 1
+    assert edits[0][1] == {"user_id": "777",
+                           "telegram_payment_charge_id": "c1",
+                           "is_canceled": True}
+    assert next(iter(subs.rows.values()))["status"] == "canceled"
+
+
+async def test_unsubscribe_without_active_subscription():
+    subs, calls = FakeSubscriptionRepo(), []
+    result = await _send_sub(_text_update("/unsubscribe", 111), subs=subs, calls=calls)
+    assert result == {"ok": True, "handled": "unsubscribe", "found": False}
+    assert not any(c[0] == "editUserStarSubscription" for c in calls)
+
+
+async def test_subscription_pre_checkout_is_approved():
+    calls: list = []
+    update = {"update_id": 1, "pre_checkout_query": {
+        "id": "pcq_sub", "from": {"id": 555}, "currency": "XTR",
+        "total_amount": 1, "invoice_payload": telegram_stars.SUBSCRIPTION_PAYLOAD}}
+    result = await _send_sub(update, calls=calls)
+    assert result["handled"] == "pre_checkout_query"
+    assert calls == [("answerPreCheckoutQuery",
+                      {"pre_checkout_query_id": "pcq_sub", "ok": True})]
+
+
+async def test_subscription_payment_not_configured_reports_gracefully():
+    class NoneSubs(FakeSubscriptionRepo):
+        async def upsert_first(self, **kwargs):
+            return None
+    calls: list = []
+    result = await _send_sub(
+        _sub_payment_update("c1", is_first=True),
+        subs=NoneSubs(), calls=calls)
+    assert result == {"ok": True, "handled": "subscription_payment",
+                      "persisted": False}
+    assert any(c[0] == "sendMessage" for c in calls)

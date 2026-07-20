@@ -48,6 +48,11 @@ async def main() -> int:
                         help="Telegram chat id to send the test invoice to")
     parser.add_argument("--stars", type=int, default=telegram_stars.pro_stars_price(),
                         help="Star price for the test invoice")
+    parser.add_argument("--subscription", action="store_true",
+                        help="Send a RECURRING subscription invoice "
+                             "(subscription_period=30 days) instead of the "
+                             "one-shot Pro invoice. Uses the test-monitoring "
+                             "tier; --stars defaults to 1 in this mode.")
     args = parser.parse_args()
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -68,21 +73,40 @@ async def main() -> int:
             return 1
         print(f"OK: authenticated as @{data['result'].get('username')}")
 
-        print("\n=== sendInvoice (real Stars invoice) ===")
-        result = await telegram_stars.send_invoice(
-            chat_id=args.chat_id,
-            title="Drydock Pro",
-            description="Drydock pro tier — higher audit limits and more.",
-            payload="verify-script-test",
-            stars=args.stars,
-            token=token,
-        )
-        msg_id = result["result"].get("message_id")
-        print(f"OK: invoice sent (message_id={msg_id}). Open that chat in "
-              f"Telegram — you should see a Pay {args.stars} ⭐ button.")
+        if args.subscription:
+            stars = 1 if args.stars == telegram_stars.pro_stars_price() else args.stars
+            print("\n=== sendInvoice (real RECURRING Stars invoice) ===")
+            result = await telegram_stars.send_invoice(
+                chat_id=args.chat_id,
+                title=telegram_stars.SUBSCRIPTION_TITLE,
+                description=telegram_stars.SUBSCRIPTION_DESCRIPTION,
+                payload=telegram_stars.SUBSCRIPTION_PAYLOAD,
+                stars=stars,
+                subscription_period=telegram_stars.SUBSCRIPTION_PERIOD_SECONDS,
+                token=token,
+            )
+            msg_id = result["result"].get("message_id")
+            print(f"OK: subscription invoice sent (message_id={msg_id}). Open "
+                  f"that chat — you should see a Subscribe {stars} ⭐/month "
+                  "button (30-day period).")
+        else:
+            stars = args.stars
+            print("\n=== sendInvoice (real Stars invoice) ===")
+            result = await telegram_stars.send_invoice(
+                chat_id=args.chat_id,
+                title="Drydock Pro",
+                description="Drydock pro tier — higher audit limits and more.",
+                payload="verify-script-test",
+                stars=stars,
+                token=token,
+            )
+            msg_id = result["result"].get("message_id")
+            print(f"OK: invoice sent (message_id={msg_id}). Open that chat in "
+                  f"Telegram — you should see a Pay {stars} ⭐ button.")
         print("\nThe send half is proven against the real API. The webhook "
-              "half (pre_checkout_query / successful_payment) only fires on a "
-              "real payment to a registered HTTPS webhook — not testable here.")
+              "half (pre_checkout_query / successful_payment / subscription) "
+              "only fires on a real payment to a registered HTTPS webhook — "
+              "not testable here.")
         return 0
     except telegram_stars.TelegramError as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
