@@ -128,15 +128,53 @@ _FIXPACK_ZIP_ONLY_TEXT = (
     "URL, then buy a Fix Pack for that audit."
 )
 
+# --- Recurring subscriptions (Telegram Stars) ---
+# The Bot API allows exactly ONE subscription period: 30 days, expressed in
+# seconds. createInvoiceLink/sendInvoice reject any other value
+# (https://core.telegram.org/bots/api#createinvoicelink). Not env-overridable
+# -- it is a fixed protocol constant, not a tuning knob.
+SUBSCRIPTION_PERIOD_SECONDS = 2592000
+
+# Throwaway tier that exists only to prove the subscription plumbing end to
+# end (a real Stars charge that renews and can be canceled). It is NOT the
+# Phase C monitoring price; 1 Star keeps the live test cheap. The invoice
+# payload is prefixed "sub:" so the successful_payment handler routes it the
+# same way "fixpack:" routes a Fix Pack purchase.
+SUBSCRIPTION_PAYLOAD_PREFIX = "sub:"
+SUBSCRIPTION_TIER = "test-monitoring"
+SUBSCRIPTION_PAYLOAD = f"{SUBSCRIPTION_PAYLOAD_PREFIX}{SUBSCRIPTION_TIER}"
+SUBSCRIPTION_TITLE = "Drydock Monitoring (test)"
+SUBSCRIPTION_DESCRIPTION = (
+    "Test subscription for Drydock continuous monitoring — billing "
+    "verification only, not the final product price."
+)
+_DEFAULT_SUBSCRIPTION_STARS = 1
+
+
+def subscription_stars_price() -> int:
+    raw = os.environ.get("SUBSCRIPTION_STARS")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_SUBSCRIPTION_STARS
+
 
 def build_invoice_payload(
     *, chat_id: int | str, title: str, description: str,
-    payload: str, stars: int,
+    payload: str, stars: int, subscription_period: int | None = None,
 ) -> dict[str, Any]:
     """The JSON body for sendInvoice, for Stars specifically. Pure and
     separate from the HTTP call so the exact shape (XTR, empty
-    provider_token, LabeledPrice) is unit-testable without a network."""
-    return {
+    provider_token, LabeledPrice) is unit-testable without a network.
+
+    subscription_period (optional): when set, makes this a recurring Stars
+    subscription invoice charged every that-many seconds -- must be exactly
+    SUBSCRIPTION_PERIOD_SECONDS (the only value the Bot API accepts). Omitted
+    (the default) leaves the body identical to a one-shot invoice, so every
+    existing caller is unchanged."""
+    body: dict[str, Any] = {
         "chat_id": chat_id,
         "title": title,
         "description": description,
@@ -147,6 +185,9 @@ def build_invoice_payload(
         "currency": CURRENCY,
         "prices": [{"label": title, "amount": stars}],
     }
+    if subscription_period is not None:
+        body["subscription_period"] = subscription_period
+    return body
 
 
 # Telegram cancels the charge if we don't answerPreCheckoutQuery within
@@ -189,13 +230,35 @@ class TelegramError(Exception):
 async def send_invoice(
     *, chat_id: int | str, title: str, description: str, payload: str,
     stars: int, token: str, transport: httpx.BaseTransport | None = None,
+    subscription_period: int | None = None,
 ) -> dict[str, Any]:
     return await _call(
         "sendInvoice",
         build_invoice_payload(
             chat_id=chat_id, title=title, description=description,
             payload=payload, stars=stars,
+            subscription_period=subscription_period,
         ),
+        token=token, transport=transport,
+    )
+
+
+async def edit_user_star_subscription(
+    *, user_id: int | str, telegram_payment_charge_id: str, is_canceled: bool,
+    token: str, transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    """Cancel (is_canceled=True) or re-enable (False) the auto-renewal of a
+    Stars subscription. Cancellation does NOT revoke access immediately -- the
+    payer keeps access until the current paid period ends
+    (https://core.telegram.org/bots/api#edituserstarsubscription). Returns the
+    Bot API envelope ({"ok": True, "result": true} on success)."""
+    return await _call(
+        "editUserStarSubscription",
+        {
+            "user_id": user_id,
+            "telegram_payment_charge_id": telegram_payment_charge_id,
+            "is_canceled": is_canceled,
+        },
         token=token, transport=transport,
     )
 
@@ -243,6 +306,7 @@ async def handle_update(
     update: dict[str, Any], *, account_repo: Any, payment_repo: Any,
     token: str, transport: httpx.BaseTransport | None = None,
     audit_repo: Any = None, fixpack_repo: Any = None,
+    subscription_repo: Any = None,
 ) -> dict[str, Any]:
     """Dispatch one webhook update. Caller (the endpoint) has already
     verified the secret-token header, so this trusts the update is really
@@ -250,14 +314,26 @@ async def handle_update(
 
     Update types that matter; anything else is acknowledged and ignored
     (Telegram sends many kinds to the same webhook URL):
-      * pre_checkout_query -> approve it (10s deadline).
+      * pre_checkout_query -> approve it (10s deadline). Product-agnostic: a
+        subscription's first charge also emits one, approved unconditionally
+        like every other product.
       * message.successful_payment -> for a Pro purchase, grant pro and DM
         the key (idempotent on telegram_payment_charge_id via
         grant_pro_tier); for a Fix Pack purchase (payload prefixed
         "fixpack:"), create the paid fixpack_jobs row instead (via
-        grant_fixpack) and DM a confirmation -- no tier change, no key.
+        grant_fixpack) and DM a confirmation -- no tier change, no key; for a
+        subscription (payload prefixed "sub:"), upsert/renew the subscriptions
+        row (via grant_subscription) -- no account, no key.
+      * subscription (BotSubscriptionUpdated) -> a renewal state change
+        (canceled/active/failed); update the subscriptions row's status. This
+        is the field key the Bot API uses for BotSubscriptionUpdated.
       * message.text "/upgrade" -> send a Stars invoice for the pro tier
         (the Pay button that /pricing tells users to expect).
+      * message.text "/subscribe" -> send a recurring Stars invoice for the
+        test-monitoring subscription tier.
+      * message.text "/unsubscribe" -> cancel the caller's active
+        subscription's auto-renewal (editUserStarSubscription); access
+        continues until the current period ends.
       * message.text "/fixpack <audit_id>" -> send a Stars invoice for a
         Fix Pack scoped to that audit (GitHub-URL audits only).
       * message.text "/mykey" -> resend the delivery message for the
@@ -284,6 +360,16 @@ async def handle_update(
         )
         return {"ok": True, "handled": "pre_checkout_query"}
 
+    # BotSubscriptionUpdated: a renewal state change (canceled/active/failed).
+    # The Bot API delivers it under the `subscription` field of an Update. It
+    # carries only the user + invoice_payload + state -- no charge id -- so it
+    # is matched on the (telegram_user_id, invoice_payload) natural key.
+    bsu = update.get("subscription")
+    if bsu is not None:
+        return await _handle_subscription_updated(
+            bsu, subscription_repo=subscription_repo,
+        )
+
     message = update.get("message") or {}
     sp = message.get("successful_payment")
     if sp is not None:
@@ -292,6 +378,12 @@ async def handle_update(
             return await _handle_fixpack_payment(
                 message, sp, payment_repo=payment_repo,
                 audit_repo=audit_repo, fixpack_repo=fixpack_repo,
+                token=token, transport=transport,
+            )
+        if payload.startswith(SUBSCRIPTION_PAYLOAD_PREFIX):
+            return await _handle_subscription_payment(
+                message, sp, payment_repo=payment_repo,
+                subscription_repo=subscription_repo,
                 token=token, transport=transport,
             )
         chat_id = message["chat"]["id"]
@@ -331,6 +423,15 @@ async def handle_update(
     if text.split(maxsplit=1)[:1] == ["/upgrade"]:
         return await _handle_upgrade(
             message, token=token, transport=transport,
+        )
+    if text.split(maxsplit=1)[:1] == ["/subscribe"]:
+        return await _handle_subscribe(
+            message, token=token, transport=transport,
+        )
+    if text.split(maxsplit=1)[:1] == ["/unsubscribe"]:
+        return await _handle_unsubscribe(
+            message, subscription_repo=subscription_repo,
+            token=token, transport=transport,
         )
     if text.split(maxsplit=1)[:1] == ["/fixpack"]:
         return await _handle_fixpack(
@@ -376,6 +477,160 @@ async def _handle_upgrade(
         token=token, transport=transport,
     )
     return {"ok": True, "handled": "upgrade"}
+
+
+async def _handle_subscribe(
+    message: dict[str, Any], *, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # Mirrors _handle_upgrade, but sends a *recurring* invoice: the
+    # subscription_period makes Telegram charge every 30 days and emit
+    # is_recurring successful_payments plus BotSubscriptionUpdated on state
+    # changes. Same send_invoice path the one-shot flow uses.
+    chat_id = message["chat"]["id"]
+    await send_invoice(
+        chat_id=chat_id, title=SUBSCRIPTION_TITLE,
+        description=SUBSCRIPTION_DESCRIPTION, payload=SUBSCRIPTION_PAYLOAD,
+        stars=subscription_stars_price(),
+        subscription_period=SUBSCRIPTION_PERIOD_SECONDS,
+        token=token, transport=transport,
+    )
+    return {"ok": True, "handled": "subscribe"}
+
+
+def _subscription_confirmation_text(expires_at: Any) -> str:
+    when = str(expires_at) if expires_at is not None else "the next billing date"
+    return (
+        "Subscription active — thanks! This is a billing test of Drydock "
+        "continuous monitoring (not the final price).\n\n"
+        f"Next renewal / access through: {when}\n\n"
+        "It renews automatically every 30 days. Send /unsubscribe to stop "
+        "auto-renewal; you keep access until the current period ends."
+    )
+
+
+async def _handle_subscription_payment(
+    message: dict[str, Any], sp: dict[str, Any], *, payment_repo: Any,
+    subscription_repo: Any, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # A completed subscription Stars charge (first or renewal). Grants NO
+    # account and mints NO key (the test-monitoring tier unlocks nothing yet):
+    # it upserts/renews the subscriptions row and records the charge. Which
+    # path is taken is decided by is_first_recurring / is_recurring.
+    from app.billing import grant_subscription
+
+    chat_id = message["chat"]["id"]
+    # message.from carries the payer; fall back to chat id for private chats
+    # where they coincide.
+    user_id = str((message.get("from") or {}).get("id") or chat_id)
+    is_first = bool(sp.get("is_first_recurring"))
+    subscription = await grant_subscription(
+        subscription_repo=subscription_repo, payment_repo=payment_repo,
+        provider=PROVIDER, external_ref=sp["telegram_payment_charge_id"],
+        amount=sp.get("total_amount"), currency=sp.get("currency", CURRENCY),
+        telegram_user_id=user_id, telegram_chat_id=str(chat_id),
+        invoice_payload=sp.get("invoice_payload", "") or "",
+        tier=SUBSCRIPTION_TIER,
+        expires_at=sp.get("subscription_expiration_date"),
+        is_first_recurring=is_first,
+    )
+    if subscription is None:
+        # DATABASE_URL not configured -- charge taken but nothing persisted.
+        await send_message(
+            chat_id,
+            "Payment received, but your subscription could not be recorded "
+            "(server misconfiguration). Please contact support with this "
+            f"charge id: {sp['telegram_payment_charge_id']}",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "subscription_payment", "persisted": False}
+    # DM only on the first charge -- silent auto-renewals shouldn't spam the
+    # payer every 30 days (Telegram already shows its own receipt).
+    if is_first:
+        await send_message(
+            chat_id,
+            _subscription_confirmation_text(subscription.get("expires_at")),
+            token=token, transport=transport,
+        )
+    return {
+        "ok": True, "handled": "subscription_payment", "persisted": True,
+        "first": is_first,
+    }
+
+
+# BotSubscriptionUpdated.state -> our plain-text subscriptions.status. Only
+# these three states arrive; any other is ignored (acknowledged, no update).
+_SUBSCRIPTION_STATE_TO_STATUS = {
+    "canceled": "canceled",
+    "active": "active",
+    "failed": "failed",
+}
+
+
+async def _handle_subscription_updated(
+    bsu: dict[str, Any], *, subscription_repo: Any,
+) -> dict[str, Any]:
+    # A renewal state change. Match the row on (telegram_user_id,
+    # invoice_payload) -- the only identifiers BotSubscriptionUpdated carries
+    # -- and update status only. expires_at is deliberately NOT touched:
+    # access is expires_at-based, and a canceled/failed subscription keeps the
+    # period it already paid for (see migration 0015). 'failed' therefore does
+    # NOT revoke access immediately; the paid period is honored to its end.
+    state = bsu.get("state", "")
+    status = _SUBSCRIPTION_STATE_TO_STATUS.get(state)
+    if status is None:
+        return {"ok": True, "handled": "subscription_updated", "state": state,
+                "updated": False}
+    user_id = str((bsu.get("user") or {}).get("id") or "")
+    invoice_payload = bsu.get("invoice_payload", "") or ""
+    if subscription_repo is None or not user_id:
+        return {"ok": True, "handled": "subscription_updated", "state": state,
+                "updated": False}
+    row = await subscription_repo.get_by_user_and_payload(user_id, invoice_payload)
+    if row is None:
+        return {"ok": True, "handled": "subscription_updated", "state": state,
+                "updated": False}
+    await subscription_repo.set_status(row["id"], status)
+    return {"ok": True, "handled": "subscription_updated", "state": state,
+            "status": status, "updated": True}
+
+
+async def _handle_unsubscribe(
+    message: dict[str, Any], *, subscription_repo: Any, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # Cancel the caller's active subscription's auto-renewal. Needs the payer's
+    # user_id (which the message carries) and the subscription's latest
+    # telegram_payment_charge_id (which we stored). editUserStarSubscription
+    # does NOT revoke access -- the payer keeps it until the period ends -- so
+    # we set status='canceled' but leave expires_at as the access boundary.
+    chat_id = message["chat"]["id"]
+    user_id = str((message.get("from") or {}).get("id") or chat_id)
+    row = (
+        await subscription_repo.get_active_by_user(user_id)
+        if subscription_repo is not None else None
+    )
+    if row is None or not row.get("telegram_payment_charge_id"):
+        await send_message(
+            chat_id,
+            "No active subscription is linked to this Telegram account.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "unsubscribe", "found": False}
+    await edit_user_star_subscription(
+        user_id=user_id,
+        telegram_payment_charge_id=row["telegram_payment_charge_id"],
+        is_canceled=True, token=token, transport=transport,
+    )
+    await subscription_repo.set_status(row["id"], "canceled")
+    await send_message(
+        chat_id,
+        "Auto-renewal canceled. You keep access until the end of the current "
+        f"paid period ({row.get('expires_at') or 'the current period'}).",
+        token=token, transport=transport,
+    )
+    return {"ok": True, "handled": "unsubscribe", "found": True}
 
 
 async def _handle_fixpack(

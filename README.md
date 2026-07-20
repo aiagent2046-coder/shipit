@@ -243,6 +243,42 @@ Implemented:
     prove the real `sendInvoice` (it does `getMe` then sends a real
     Pay-with-Stars button). The webhook half only truly closes on a real
     payment.
+  - **Recurring subscriptions (Telegram Stars).** Stars is the *only*
+    provider that can auto-charge (crypto has no allowance-free auto-debit,
+    so USDT stays one-time). A subscription invoice is an ordinary
+    `sendInvoice` with one extra field, `subscription_period`, which **must**
+    equal `SUBSCRIPTION_PERIOD_SECONDS = 2592000` (30 days — the only value
+    the Bot API accepts). The webhook grows two behaviours:
+    - `message.successful_payment` for a `sub:`-prefixed payload →
+      `grant_subscription` upserts/renews the `subscriptions` row
+      (migration 0015). `is_first_recurring` inserts the row; `is_recurring`
+      renews it — pushing `expires_at` (from `subscription_expiration_date`)
+      out and rotating `telegram_payment_charge_id` to the latest period.
+      Unlike Pro, this mints **no account and no API key** (the current
+      `test-monitoring` tier unlocks nothing yet; it exists only to prove the
+      billing).
+    - **`subscription`** — the new `BotSubscriptionUpdated` update type (this
+      is the exact Update field key per the Bot API). It carries `user`,
+      `invoice_payload`, and `state` (`canceled` / `active` / `failed`) but
+      **no charge id**, so it is matched to a row on the
+      `(telegram_user_id, invoice_payload)` natural key and updates only
+      `status`. It is the sole signal for a **failed renewal** — without it,
+      a failed charge is just silence at `expires_at`.
+
+    **Access rule:** access is `expires_at`-based, *not* status-based. A
+    `canceled` or `failed` subscription keeps the period it already paid for
+    (matches Telegram: cancelling never revokes access immediately). `status`
+    is the *renewal* state (will it charge again?); `expires_at` is the
+    *access* boundary. A `failed` renewal therefore does **not** revoke
+    access — the paid period is honoured to its end.
+
+    Bot commands: `/subscribe` sends the recurring invoice; `/unsubscribe`
+    calls `editUserStarSubscription(is_canceled=True)` with the stored charge
+    id and flips the row to `canceled` (access continues to `expires_at`).
+    Env: `SUBSCRIPTION_STARS` (default 1). **Not exercised live** here (same
+    reason as one-shot Stars) — proven end to end only by a real Stars
+    subscription: `/subscribe` → pay → confirm the row is `active`, then
+    `/unsubscribe` → confirm it flips to `canceled`.
   - **USDT/TRC20, self-hosted** (`app/billing/usdt_trc20.py`,
     `POST /v1/billing/usdt/invoice`, `GET /v1/billing/usdt/invoice/{id}`,
     `POST /internal/billing/poll-usdt`). No third-party gateway: ONE

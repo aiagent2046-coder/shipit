@@ -110,11 +110,10 @@ For recurring it gains `subscription_expiration_date`, `is_recurring`,
   `bot_subscription_updated` update arrives on the same URL with the same secret
   header, so `handle_update` just needs a new branch.
 - The new update type is `BotSubscriptionUpdated`. Its **Update field key** is
-  taken to be `bot_subscription_updated` (snake_case of the type name, matching
-  every existing Update field: `pre_checkout_query`, `my_chat_member`, etc.).
-  This is the one thing not provable from the sandbox; it is called out in the
-  live-test checklist below and is the first thing to confirm against a real
-  delivery.
+  `subscription` (confirmed against the official Bot API Update-object table:
+  "subscription | BotSubscriptionUpdated | Optional. User payment subscription
+  has changed"). The live test now only *confirms* the flow, it no longer has to
+  guess this name.
 - The `BotSubscriptionUpdated` payload carries `user`, `invoice_payload`, and
   `state ∈ {"canceled", "active", "failed"}`. **Crucially it does NOT carry a
   `telegram_payment_charge_id`** — so the only stable way to match it back to a
@@ -204,7 +203,7 @@ feature can link an account without a migration.
 New branch in `handle_update`:
 
 ```python
-bsu = update.get("bot_subscription_updated")
+bsu = update.get("subscription")   # BotSubscriptionUpdated, per Bot API Update table
 if bsu is not None:
     return await _handle_subscription_updated(bsu, subscription_repo=...)
 ```
@@ -344,9 +343,8 @@ already configured for this session's bot):
 3. Confirm the webhook received `successful_payment` with `is_first_recurring=
    true` and `subscription_expiration_date`, and that a `subscriptions` row
    exists with `status='active'` and the right `expires_at`.
-4. **Confirm the `bot_subscription_updated` Update field key** against the real
-   delivery (the one assumption in this plan) — adjust the branch key if
-   Telegram names it differently.
+4. Confirm the `subscription` (BotSubscriptionUpdated) delivery is handled as
+   expected against the real delivery.
 5. DM `/unsubscribe` → verify `editUserStarSubscription` returns `True`, the row
    flips to `status='canceled'`, and a `bot_subscription_updated` with
    `state="canceled"` arrives and is handled; access (`expires_at`) is unchanged.

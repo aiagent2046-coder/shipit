@@ -161,3 +161,88 @@ async def grant_fixpack(
             return None  # DATABASE_URL not configured -- nothing persisted.
 
     return await fixpack_repo.create_paid(audit_id=audit_id, stack=stack)
+
+
+# Product label for the `payments.product` column on a subscription charge --
+# distinct from PRODUCT_PRO / PRODUCT_FIXPACK so revenue bookkeeping can tell a
+# recurring subscription charge apart from the one-shot products.
+PRODUCT_SUBSCRIPTION = "subscription"
+
+
+async def grant_subscription(
+    *,
+    subscription_repo: Any,
+    payment_repo: _PaymentStore,
+    provider: str,
+    external_ref: str,
+    amount: float | None,
+    currency: str | None,
+    telegram_user_id: str,
+    telegram_chat_id: str | None,
+    invoice_payload: str,
+    tier: str,
+    expires_at: Any,
+    is_first_recurring: bool,
+) -> dict[str, Any] | None:
+    """The subscription counterpart to grant_pro_tier / grant_fixpack:
+    idempotently turn a confirmed recurring Stars charge into an up-to-date
+    `subscriptions` row, and return that row.
+
+    Deliberately mints NO account and NO API key: the throwaway
+    'test-monitoring' tier unlocks nothing today (the Phase C monitoring
+    feature that will consume it doesn't exist yet), so a key would be dead
+    plumbing. The subscription is keyed off telegram_user_id; the nullable
+    subscriptions.account_id is left for Phase C to link.
+
+    Two paths, chosen by the successful_payment flags:
+      * is_first_recurring -> upsert_first on the natural key
+        (telegram_user_id, invoice_payload): a new subscription, or the
+        reactivation of a previously canceled/expired one. Idempotent -- a
+        retried first-payment webhook lands on the same row.
+      * otherwise (is_recurring) -> renew the existing row: push expires_at
+        out and rotate telegram_payment_charge_id to this period's charge.
+
+    Each charge is also recorded as a completed `payments` row (each renewal
+    is a real charge with its own telegram_payment_charge_id), idempotent on
+    (provider, external_ref) via migration 0004's partial unique index --
+    same revenue bookkeeping as the other products. A retried webhook whose
+    charge is already recorded skips the second payment insert.
+
+    Returns None only when nothing could be persisted (DATABASE_URL not
+    configured -- subscription_repo can't write); callers surface that as
+    "couldn't persist", not a crash.
+    """
+    # Record the charge for revenue bookkeeping, idempotently. A retried
+    # webhook finds the charge already recorded and does not double-insert.
+    existing_payment = await payment_repo.get_by_external_ref(provider, external_ref)
+    if existing_payment is None:
+        await payment_repo.create(
+            account_id=None, provider=provider, external_ref=external_ref,
+            amount=amount, currency=currency, status="completed",
+            tier_granted=None, product=PRODUCT_SUBSCRIPTION,
+        )
+
+    if is_first_recurring:
+        return await subscription_repo.upsert_first(
+            telegram_user_id=telegram_user_id, invoice_payload=invoice_payload,
+            tier=tier, telegram_chat_id=telegram_chat_id,
+            telegram_payment_charge_id=external_ref, expires_at=expires_at,
+        )
+
+    existing = await subscription_repo.get_by_user_and_payload(
+        telegram_user_id, invoice_payload
+    )
+    if existing is None:
+        # A renewal for a subscription we never recorded the first payment of
+        # (e.g. rows predating this feature, or a missed first webhook). Treat
+        # it as a first payment so the row exists and stays correct, rather
+        # than dropping the renewal on the floor.
+        return await subscription_repo.upsert_first(
+            telegram_user_id=telegram_user_id, invoice_payload=invoice_payload,
+            tier=tier, telegram_chat_id=telegram_chat_id,
+            telegram_payment_charge_id=external_ref, expires_at=expires_at,
+        )
+    return await subscription_repo.renew(
+        existing["id"], expires_at=expires_at,
+        telegram_payment_charge_id=external_ref,
+    )

@@ -40,6 +40,7 @@ from app.db import (
     FixpackJobRepository,
     PaymentRepository,
     ProcessorLockBusy,
+    SubscriptionRepository,
     database_url_from_env,
     fixpack_processor_lock,
 )
@@ -195,6 +196,7 @@ _fixpack_repo = FixpackJobRepository()
 _fix_outcome_repo = FixOutcomeRepository()
 _account_repo = AccountRepository()
 _payment_repo = PaymentRepository()
+_subscription_repo = SubscriptionRepository()
 
 
 def get_payment_repo() -> PaymentRepository:
@@ -234,6 +236,11 @@ def get_fixpack_repo() -> FixpackJobRepository:
 def get_fix_outcome_repo() -> FixOutcomeRepository:
     """Same as get_audit_repo, for the fix_outcomes knowledge base."""
     return _fix_outcome_repo
+
+
+def get_subscription_repo() -> SubscriptionRepository:
+    """Same as get_audit_repo, for recurring Stars subscriptions."""
+    return _subscription_repo
 
 
 # GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
@@ -500,11 +507,13 @@ async def telegram_webhook(
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
     fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    subscription_repo: SubscriptionRepository = Depends(get_subscription_repo),
     transport=Depends(get_billing_transport),
 ) -> dict:
     """Telegram Bot API webhook for Stars payments. Handles the
-    pre_checkout_query (approve within 10s) and successful_payment
-    (grant pro, DM the API key) update types; ignores everything else.
+    pre_checkout_query (approve within 10s), successful_payment (grant pro /
+    Fix Pack / subscription), and subscription (BotSubscriptionUpdated
+    renewal state changes) update types; ignores everything else.
 
     Authenticity is Telegram's secret_token: setWebhook is called with a
     secret, echoed back in X-Telegram-Bot-Api-Secret-Token on every
@@ -530,6 +539,7 @@ async def telegram_webhook(
     return await telegram_stars.handle_update(
         update, account_repo=account_repo, payment_repo=payment_repo,
         audit_repo=audit_repo, fixpack_repo=fixpack_repo,
+        subscription_repo=subscription_repo,
         token=token, transport=transport,
     )
 
