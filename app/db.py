@@ -214,6 +214,21 @@ def _row_to_subscription(row: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
+def _expires_at_to_timestamptz(expires_at: Any) -> datetime.datetime | None:
+    """Telegram's successful_payment.subscription_expiration_date is Unix time
+    (an int, seconds since the epoch), but subscriptions.expires_at is
+    timestamptz and psycopg does no implicit int->timestamptz cast -- passing
+    the raw int raises DatatypeMismatch. Convert at the DB boundary, the same
+    way FixpackJobRepository.create handles preview_expires_at. None passes
+    through (no expiry known); an already-converted datetime passes through
+    unchanged."""
+    if expires_at is None:
+        return None
+    if isinstance(expires_at, (int, float)):
+        return datetime.datetime.fromtimestamp(expires_at, tz=datetime.timezone.utc)
+    return expires_at
+
+
 class AuditRepository:
     """Real-Postgres-backed by default. Tests use an in-memory fake
     with the same method signatures instead of this class -- see
@@ -1164,6 +1179,7 @@ class SubscriptionRepository:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return None
+        expires_dt = _expires_at_to_timestamptz(expires_at)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
@@ -1184,7 +1200,7 @@ class SubscriptionRepository:
                           status, expires_at, created_at, updated_at
                 """,
                 (telegram_user_id, invoice_payload, tier, telegram_chat_id,
-                 telegram_payment_charge_id, expires_at),
+                 telegram_payment_charge_id, expires_dt),
             )
             row = await cur.fetchone()
         return _row_to_subscription(row) if row else None
@@ -1202,6 +1218,7 @@ class SubscriptionRepository:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return None
+        expires_dt = _expires_at_to_timestamptz(expires_at)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
@@ -1215,7 +1232,7 @@ class SubscriptionRepository:
                           tier, invoice_payload, telegram_payment_charge_id,
                           status, expires_at, created_at, updated_at
                 """,
-                (expires_at, telegram_payment_charge_id,
+                (expires_dt, telegram_payment_charge_id,
                  uuid.UUID(subscription_id)),
             )
             row = await cur.fetchone()

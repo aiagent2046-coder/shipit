@@ -8,6 +8,7 @@ working by hand during this migration from asyncpg -- see app/db.py's
 module docstring for why asyncpg was replaced).
 """
 
+import datetime
 import uuid
 
 import pytest
@@ -19,6 +20,7 @@ from app.db import (
     DatabaseNotConfigured,
     FixpackJobRepository,
     PaymentRepository,
+    SubscriptionRepository,
 )
 
 
@@ -729,6 +731,90 @@ class TestPaymentRepositoryWithFakePool:
         repo = PaymentRepository()
         assert await repo.get("not-a-uuid") is None
         assert fake.calls == []
+
+
+def _subscription_row(sub_id):
+    """A fetchone_result shaped like the RETURNING clause of the subscription
+    writes, enough for _row_to_subscription."""
+    return {
+        "id": sub_id, "account_id": None, "telegram_user_id": "42",
+        "telegram_chat_id": "42", "tier": "test-monitoring",
+        "invoice_payload": "sub_test", "telegram_payment_charge_id": "ch_1",
+        "status": "active", "expires_at": "2026-08-19T10:00:00Z",
+        "created_at": "2026-07-20T10:00:00Z", "updated_at": "2026-07-20T10:00:00Z",
+    }
+
+
+class TestSubscriptionRepositoryExpiresAtType:
+    """Regression tests for the prod incident where Telegram's
+    successful_payment.subscription_expiration_date (Unix int) was passed
+    straight into the timestamptz expires_at column, raising
+    psycopg DatatypeMismatch. These assert the *type* of the SQL param --
+    the exact thing the in-memory FakeSubscriptionRepo in the billing tests
+    cannot catch, since it never touches real SQL types."""
+
+    # 2026-08-19T10:00:00+00:00 as Unix seconds -- the shape Telegram sends.
+    UNIX_TS = 1787133600
+
+    async def test_upsert_first_passes_datetime_not_int(self, monkeypatch):
+        sub_id = uuid.uuid4()
+        fake = FakePool(fetchone_result=_subscription_row(sub_id))
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = SubscriptionRepository()
+        await repo.upsert_first(
+            telegram_user_id="42", invoice_payload="sub_test",
+            tier="test-monitoring", telegram_chat_id="42",
+            telegram_payment_charge_id="ch_1", expires_at=self.UNIX_TS,
+        )
+
+        query, params = fake.calls[0]
+        assert "insert into subscriptions" in query
+        expires_param = params[-1]
+        # The bug: a bare int reached the timestamptz column. It must now be a
+        # tz-aware datetime, matching the Unix timestamp interpreted as UTC.
+        assert isinstance(expires_param, datetime.datetime)
+        assert not isinstance(expires_param, bool)
+        assert expires_param.tzinfo is not None
+        assert expires_param == datetime.datetime.fromtimestamp(
+            self.UNIX_TS, tz=datetime.timezone.utc
+        )
+
+    async def test_renew_passes_datetime_not_int(self, monkeypatch):
+        sub_id = uuid.uuid4()
+        fake = FakePool(fetchone_result=_subscription_row(sub_id))
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = SubscriptionRepository()
+        await repo.renew(
+            str(sub_id), expires_at=self.UNIX_TS,
+            telegram_payment_charge_id="ch_2",
+        )
+
+        query, params = fake.calls[0]
+        assert "update subscriptions" in query
+        expires_param = params[0]
+        assert isinstance(expires_param, datetime.datetime)
+        assert expires_param.tzinfo is not None
+        assert expires_param == datetime.datetime.fromtimestamp(
+            self.UNIX_TS, tz=datetime.timezone.utc
+        )
+
+    async def test_upsert_first_none_expires_at_passes_through(self, monkeypatch):
+        """No expiry known -> None must survive as None (not 0 / epoch)."""
+        sub_id = uuid.uuid4()
+        fake = FakePool(fetchone_result=_subscription_row(sub_id))
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = SubscriptionRepository()
+        await repo.upsert_first(
+            telegram_user_id="42", invoice_payload="sub_test",
+            tier="test-monitoring", telegram_chat_id="42",
+            telegram_payment_charge_id="ch_1", expires_at=None,
+        )
+
+        _query, params = fake.calls[0]
+        assert params[-1] is None
 
 
 async def _async_return(value):
