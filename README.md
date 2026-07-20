@@ -309,6 +309,32 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   to 3 attempts, then failing — so `systemctl restart shipit` mid-job never
   loses or wedges a job (see `PHASE3_QUEUE_PLAN.md`).
 
+### GitHub webhook — Fix Pack merge signal (`pr_merged`)
+
+`POST /v1/webhooks/github` records whether a delivered Fix Pack PR was actually
+merged — the real-world signal for whether a fix was good enough to ship — into
+`fix_outcomes.pr_merged` (migration 0014). This is **collection only**: nothing
+scores or acts on the data yet (see `PHASE_B_KNOWLEDGE_BASE_PLAN.md`). Each
+terminal Fix Pack outcome (delivered / blocked / failed / no_fix_needed) is
+recorded when the processor finishes a job; the webhook backfills `pr_merged`
+later, matched by the PR's `html_url`.
+
+Authenticity uses the standard GitHub scheme: the delivery carries
+`X-Hub-Signature-256: sha256=<hex>`, where `<hex>` is
+`HMAC-SHA256(GITHUB_APP_WEBHOOK_SECRET, <raw body>)`, verified constant-time over
+the raw bytes. Only `pull_request` / `action: "closed"` deliveries do work;
+everything else (and any PR not opened by a Fix Pack) is a 200 no-op. The
+endpoint 503s until `GITHUB_APP_WEBHOOK_SECRET` is set — an unconfigured webhook
+is an operational gap, not a silent no-op (same posture as the Telegram webhook).
+
+**Manual, one-time GitHub-UI setup (not code-configurable, done by the
+operator):** in the GitHub App's settings, set the **Webhook URL** to
+`https://<host>/v1/webhooks/github`, set the **Webhook secret** to the same value
+as `GITHUB_APP_WEBHOOK_SECRET` in `.env`, and subscribe the App to the **Pull
+request** event. Until the App is subscribed to that event, no deliveries arrive
+and `pr_merged` simply stays `null` — the rest of the Fix Pack flow is
+unaffected.
+
 Deployment gotchas found the hard way (all encoded in `.env.example`):
 
 - systemd `EnvironmentFile` keeps inline comments as part of the value

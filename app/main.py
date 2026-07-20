@@ -9,8 +9,10 @@ since the LLM call alone can take up to ~2 minutes.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import io
+import json
 import logging
 import os
 import re
@@ -34,6 +36,7 @@ from app.billing import telegram_stars, usdt_trc20
 from app.db import (
     AccountRepository,
     AuditRepository,
+    FixOutcomeRepository,
     FixpackJobRepository,
     PaymentRepository,
     ProcessorLockBusy,
@@ -189,6 +192,7 @@ def get_preview_registry() -> PreviewRegistry:
 
 _audit_repo = AuditRepository()
 _fixpack_repo = FixpackJobRepository()
+_fix_outcome_repo = FixOutcomeRepository()
 _account_repo = AccountRepository()
 _payment_repo = PaymentRepository()
 
@@ -225,6 +229,11 @@ def get_audit_repo() -> AuditRepository:
 def get_fixpack_repo() -> FixpackJobRepository:
     """Same as get_audit_repo, for fixpack_jobs."""
     return _fixpack_repo
+
+
+def get_fix_outcome_repo() -> FixOutcomeRepository:
+    """Same as get_audit_repo, for the fix_outcomes knowledge base."""
+    return _fix_outcome_repo
 
 
 # GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
@@ -523,6 +532,84 @@ async def telegram_webhook(
         audit_repo=audit_repo, fixpack_repo=fixpack_repo,
         token=token, transport=transport,
     )
+
+
+def _github_webhook_secret() -> str | None:
+    """The GitHub App's configured webhook secret, or None if unset. Used to
+    verify X-Hub-Signature-256 on incoming deliveries. Must equal the secret
+    set in the App's webhook settings on GitHub."""
+    return os.environ.get("GITHUB_APP_WEBHOOK_SECRET") or None
+
+
+def _verify_github_signature(secret: str, body: bytes, header: str) -> bool:
+    """Verify a GitHub webhook delivery: header is X-Hub-Signature-256, of the
+    form 'sha256=<hex>', where <hex> = HMAC-SHA256(secret, raw_body). Compared
+    constant-time. GitHub also sends the older 'sha1' X-Hub-Signature, which we
+    deliberately ignore -- sha256 is required and sha1 is deprecated."""
+    if not header.startswith("sha256="):
+        return False
+    expected = hmac.new(
+        secret.encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+    provided = header.split("=", 1)[1]
+    return hmac.compare_digest(provided, expected)
+
+
+@app.post("/v1/webhooks/github")
+async def github_webhook(
+    request: Request,
+    fix_outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
+) -> dict:
+    """GitHub App webhook. Its one job this phase: when a Fix Pack PR is
+    closed, record whether it was merged (fix_outcomes.pr_merged) -- the
+    real-world signal for whether our fix was good enough to ship. Collection
+    only; nothing acts on it yet (see PHASE_B_KNOWLEDGE_BASE_PLAN.md).
+
+    Authenticity is the standard GitHub scheme: X-Hub-Signature-256 =
+    'sha256=' + HMAC-SHA256(GITHUB_APP_WEBHOOK_SECRET, raw body), compared
+    constant-time over the *raw* bytes (not re-serialized JSON). 503 if the
+    secret isn't configured -- an unconfigured webhook is an operational gap to
+    notice, same posture as the Telegram webhook. 401 on a missing/invalid
+    signature.
+
+    Only pull_request/closed deliveries do work; everything else is a 200 ack
+    so GitHub stops retrying. The matching outcome is found by the PR's
+    html_url (stored at delivery). An unknown PR -- any PR not opened by a Fix
+    Pack, e.g. a hand-opened one on the same repo -- matches no row and is a
+    benign no-op ({"updated": 0}).
+
+    NOTE: the App must be subscribed to the 'Pull request' event in its GitHub
+    settings for these deliveries to arrive at all -- a manual, one-time UI
+    step (see README)."""
+    secret = _github_webhook_secret()
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "github_webhook_not_configured",
+                    "detail": "GITHUB_APP_WEBHOOK_SECRET is not set on this "
+                              "deployment"},
+        )
+    body = await request.body()
+    signature = request.headers.get("x-hub-signature-256", "")
+    if not _verify_github_signature(secret, body, signature):
+        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
+
+    event = request.headers.get("x-github-event", "")
+    if event != "pull_request":
+        return {"ignored": True, "reason": "event_not_handled"}
+
+    payload = json.loads(body) if body else {}
+    if payload.get("action") != "closed":
+        return {"ignored": True, "reason": "action_not_handled"}
+
+    pr = payload.get("pull_request") or {}
+    pr_url = pr.get("html_url")
+    if not pr_url:
+        return {"ignored": True, "reason": "no_pull_request_url"}
+
+    merged = bool(pr.get("merged"))
+    updated = await fix_outcome_repo.set_pr_merged_by_pr_url(pr_url, merged)
+    return {"updated": updated, "merged": merged}
 
 
 def _usdt_receiving_address() -> str | None:
@@ -836,9 +923,49 @@ async def _alert_fixpack_failed(job_id, detail: str) -> None:
     )
 
 
+def _rule_ids_from_plan(plan) -> list[str]:
+    """The deduplicated, sorted rule_ids a Fix Pack plan actually fixes --
+    across both secret_fixes and config_fixes (one plan fixes many findings).
+    Skipped findings (no longer matching on re-fetch) are not "fixed" and are
+    excluded. Empty when there is no plan or nothing to fix."""
+    if plan is None:
+        return []
+    return sorted(
+        {f.rule_id for f in plan.secret_fixes}
+        | {f.rule_id for f in plan.config_fixes}
+    )
+
+
+async def _record_fix_outcome(
+    fix_outcome_repo: FixOutcomeRepository, *, job: dict, outcome: str,
+    rule_ids: list[str], is_regression: bool, pr_url: str | None,
+) -> None:
+    """Best-effort write to the fix_outcomes knowledge base. Analytics is
+    strictly secondary to the product: a failure here (bad connection, schema
+    drift) must be logged, never raised into the delivery path, so a bookkeeping
+    error can't turn a delivered PR into a 'failed' job. No-ops silently when
+    DATABASE_URL isn't set (the repo returns None)."""
+    try:
+        await fix_outcome_repo.record(
+            fixpack_job_id=job.get("id"),
+            audit_id=job.get("audit_id"),
+            rule_ids=rule_ids,
+            stack=job.get("stack") or "unknown",
+            outcome=outcome,
+            is_regression=is_regression,
+            pr_url=pr_url,
+        )
+    except Exception:  # noqa: BLE001 — analytics must never break delivery
+        logger.exception(
+            "Failed to record fix_outcome for job %s (outcome=%s)",
+            job.get("id"), outcome,
+        )
+
+
 async def _process_one_paid_job(
     job: dict, *, audit_repo: AuditRepository,
-    fixpack_repo: FixpackJobRepository, repo_fetcher, pr_opener,
+    fixpack_repo: FixpackJobRepository, fix_outcome_repo: FixOutcomeRepository,
+    repo_fetcher, pr_opener,
 ) -> str:
     """Generate + deliver one paid Fix Pack job. Returns the outcome:
     'delivered', 'no_fix_needed', 'blocked', or 'failed'. Advances the job's
@@ -861,6 +988,10 @@ async def _process_one_paid_job(
             detail = "audit missing or has no repo_url to re-fetch"
             logger.error("Fix Pack job %s failed: %s", job_id, detail)
             await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+            await _record_fix_outcome(
+                fix_outcome_repo, job=job, outcome="failed",
+                rule_ids=[], is_regression=False, pr_url=None,
+            )
             await _alert_fixpack_failed(job_id, detail)
             return "failed"
 
@@ -869,6 +1000,10 @@ async def _process_one_paid_job(
             detail = f"unparseable repo_url: {audit['repo_url']!r}"
             logger.error("Fix Pack job %s failed: %s", job_id, detail)
             await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+            await _record_fix_outcome(
+                fix_outcome_repo, job=job, outcome="failed",
+                rule_ids=[], is_regression=False, pr_url=None,
+            )
             await _alert_fixpack_failed(job_id, detail)
             return "failed"
         owner, repo = parsed
@@ -882,6 +1017,10 @@ async def _process_one_paid_job(
             # Everything was a test fixture, already fixed, or absent on
             # re-fetch: don't open an empty PR, record why there was no PR.
             await fixpack_repo.mark_status(job_id, "no_fix_needed")
+            await _record_fix_outcome(
+                fix_outcome_repo, job=job, outcome="no_fix_needed",
+                rule_ids=[], is_regression=False, pr_url=None,
+            )
             return "no_fix_needed"
 
         # Semantic safety net: run the client's own tests against the patched
@@ -895,6 +1034,11 @@ async def _process_one_paid_job(
                 job_id, semantic.detail,
             )
             await fixpack_repo.mark_status(job_id, "blocked", detail=semantic.detail)
+            await _record_fix_outcome(
+                fix_outcome_repo, job=job, outcome="blocked",
+                rule_ids=_rule_ids_from_plan(plan), is_regression=True,
+                pr_url=None,
+            )
             return "blocked"
 
         title = render_fixpack_pr_title(plan)
@@ -908,6 +1052,11 @@ async def _process_one_paid_job(
             deletions=plan.deletions, token=token, job_id=job_id,
         )
         await fixpack_repo.mark_fixpack_delivered(job_id, opened.html_url)
+        await _record_fix_outcome(
+            fix_outcome_repo, job=job, outcome="delivered",
+            rule_ids=_rule_ids_from_plan(plan), is_regression=False,
+            pr_url=opened.html_url,
+        )
         return "delivered"
     except Exception as exc:  # noqa: BLE001 — every failure must be recorded
         # Any error in fetch, generation, token exchange, or PR delivery
@@ -917,6 +1066,10 @@ async def _process_one_paid_job(
         logger.exception("Fix Pack job %s failed during processing", job_id)
         detail = _failure_detail(exc)
         await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+        await _record_fix_outcome(
+            fix_outcome_repo, job=job, outcome="failed",
+            rule_ids=[], is_regression=False, pr_url=None,
+        )
         await _alert_fixpack_failed(job_id, detail)
         return "failed"
 
@@ -926,6 +1079,7 @@ async def process_paid_fixpacks(
     request: Request,
     audit_repo: AuditRepository = Depends(get_audit_repo),
     fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    fix_outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
     repo_fetcher=Depends(get_repo_fetcher),
     pr_opener=Depends(get_pr_opener),
 ) -> dict:
@@ -991,6 +1145,7 @@ async def process_paid_fixpacks(
                 summary["processed"] += 1
                 outcome = await _process_one_paid_job(
                     job, audit_repo=audit_repo, fixpack_repo=fixpack_repo,
+                    fix_outcome_repo=fix_outcome_repo,
                     repo_fetcher=repo_fetcher, pr_opener=pr_opener,
                 )
                 if outcome == "delivered":
