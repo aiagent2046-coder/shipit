@@ -100,31 +100,33 @@ async def close_pool() -> None:
         _pool = None
 
 
-# Arbitrary but fixed key for the Fix Pack processor's session advisory
-# lock -- ascii "FIXP". Any value works as long as it is stable and not
-# shared with another advisory-lock user in this database.
+# Arbitrary but fixed keys for the processors' session advisory locks -- ascii
+# "FIXP" and "MONI". Any value works as long as it is stable and not shared with
+# another advisory-lock user in this database; the two processors use distinct
+# keys so a Fix Pack run and a monitoring run never serialize against each other.
 _FIXPACK_PROCESSOR_LOCK_KEY = 0x46495850
+_MONITORING_PROCESSOR_LOCK_KEY = 0x4D4F4E49
 
 
 class ProcessorLockBusy(Exception):
-    """Another Fix Pack processor run already holds the advisory lock, so
-    this run must not proceed -- returned to the caller as a benign
-    skipped-because-locked outcome, not an error."""
+    """Another processor run already holds the advisory lock, so this run must
+    not proceed -- returned to the caller as a benign skipped-because-locked
+    outcome, not an error. Shared by the Fix Pack and monitoring processors."""
 
 
 @asynccontextmanager
-async def fixpack_processor_lock():
-    """Serialize Fix Pack processor runs with a session-level Postgres
-    advisory lock. Belt-and-suspenders on top of the atomic per-job claim
-    (claim_one_paid): the claim already makes double-processing of a single
+async def _advisory_processor_lock(key: int):
+    """Serialize processor runs with a session-level Postgres advisory lock on
+    `key`. Belt-and-suspenders on top of the atomic per-job claim (claim_one_paid
+    / claim_one_pending): the claim already makes double-processing of a single
     job impossible, this makes "one processor run at a time" explicit and
     observable so overlapping timer firings don't stampede the backlog.
 
-    Acquired on a dedicated pooled connection held for the whole run and
-    released on exit (both on success and on error). Raises
-    ProcessorLockBusy if the lock is already held. When DATABASE_URL isn't
-    configured there is nothing to serialize, so it yields without a lock --
-    same not-configured contract as the repositories."""
+    Acquired on a dedicated pooled connection held for the whole run and released
+    on exit (both on success and on error). Raises ProcessorLockBusy if the lock
+    is already held. When DATABASE_URL isn't configured there is nothing to
+    serialize, so it yields without a lock -- same not-configured contract as the
+    repositories."""
     try:
         pool = await get_pool()
     except DatabaseNotConfigured:
@@ -132,8 +134,7 @@ async def fixpack_processor_lock():
         return
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "select pg_try_advisory_lock(%s) as locked",
-            (_FIXPACK_PROCESSOR_LOCK_KEY,),
+            "select pg_try_advisory_lock(%s) as locked", (key,)
         )
         row = await cur.fetchone()
         if not (row and row["locked"]):
@@ -141,9 +142,18 @@ async def fixpack_processor_lock():
         try:
             yield
         finally:
-            await conn.execute(
-                "select pg_advisory_unlock(%s)", (_FIXPACK_PROCESSOR_LOCK_KEY,)
-            )
+            await conn.execute("select pg_advisory_unlock(%s)", (key,))
+
+
+def fixpack_processor_lock():
+    """The Fix Pack processor's advisory lock (see _advisory_processor_lock)."""
+    return _advisory_processor_lock(_FIXPACK_PROCESSOR_LOCK_KEY)
+
+
+def monitoring_processor_lock():
+    """The continuous-monitoring processor's advisory lock, on a distinct key so
+    it never serializes against a Fix Pack run (see _advisory_processor_lock)."""
+    return _advisory_processor_lock(_MONITORING_PROCESSOR_LOCK_KEY)
 
 
 def _json_field(value: Any) -> Any:
@@ -211,6 +221,12 @@ def _row_to_subscription(row: dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
     d["id"] = str(d["id"])
     d["account_id"] = str(d["account_id"]) if d.get("account_id") else None
+    return d
+
+
+def _row_to_monitoring_run(row: dict[str, Any]) -> dict[str, Any]:
+    d = dict(row)
+    d["id"] = str(d["id"])
     return d
 
 
@@ -1373,3 +1389,164 @@ class SubscriptionRepository:
             )
             row = await cur.fetchone()
         return _row_to_subscription(row) if row else None
+
+
+class MonitoringRunRepository:
+    """The async continuous-monitoring job queue (migration 0017). Directly
+    analogous to FixpackJobRepository's durable-lease model: the push webhook
+    enqueues one 'pending' run per won claim, and the processor claims each into
+    a 'running' lease, runs the audit+diff+notify, and marks it terminal.
+
+    Same real/fake split and not-configured contract as the other repositories:
+    when DATABASE_URL isn't set every method no-ops (returns None / a zero
+    result) instead of failing, so an enqueue on a DB-less deployment simply does
+    nothing rather than breaking the fast webhook ACK."""
+
+    async def enqueue(self, repo_full_name: str) -> dict[str, Any] | None:
+        """Insert one 'pending' monitoring run for a repo whose push just won the
+        claim_for_monitoring gate. Fast INSERT (no audit) so the webhook can ACK
+        200 immediately. Returns None when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into monitoring_runs (repo_full_name, status)
+                values (%s, 'pending')
+                returning id, repo_full_name, status, attempts, started_at,
+                          error, created_at, completed_at
+                """,
+                (repo_full_name,),
+            )
+            row = await cur.fetchone()
+        return _row_to_monitoring_run(row) if row else None
+
+    async def claim_one_pending(self) -> dict[str, Any] | None:
+        """Atomically claim the oldest 'pending' monitoring run into a 'running'
+        lease, and return it -- or None when there is nothing to claim (or
+        DATABASE_URL isn't set).
+
+        Same concurrency guard as FixpackJobRepository.claim_one_paid: the inner
+        SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1 row-locks exactly one candidate
+        and skips any a concurrent run already locked, and the surrounding UPDATE
+        flips it 'pending' -> 'running' in the same statement, so two overlapping
+        processor runs can never both claim the same run. started_at stamps the
+        lease (the reaper reads it) and attempts is incremented so crash-requeues
+        are bounded."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update monitoring_runs
+                   set status = 'running',
+                       started_at = now(),
+                       attempts = attempts + 1
+                 where id = (
+                     select id from monitoring_runs
+                      where status = 'pending'
+                      order by created_at asc
+                      for update skip locked
+                      limit 1
+                 )
+                returning id, repo_full_name, status, attempts, started_at,
+                          error, created_at, completed_at
+                """,
+            )
+            row = await cur.fetchone()
+        return _row_to_monitoring_run(row) if row else None
+
+    async def mark_done(self, run_id: str) -> None:
+        """Advance a run to the terminal 'done' state (audit+diff+notify finished,
+        whether or not it found new findings). No-op when DATABASE_URL isn't
+        set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                update monitoring_runs
+                   set status = 'done', completed_at = now()
+                 where id = %s
+                """,
+                (uuid.UUID(run_id),),
+            )
+
+    async def mark_failed(self, run_id: str, error: str) -> None:
+        """Advance a run to the terminal 'failed' state with a diagnosable
+        reason. The `error` is always written so a 'failed' row is never a silent
+        failure (same hardening as fixpack_jobs.detail). No-op when DATABASE_URL
+        isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                update monitoring_runs
+                   set status = 'failed', error = %s, completed_at = now()
+                 where id = %s
+                """,
+                (error, uuid.UUID(run_id)),
+            )
+
+    async def reap_stale_running(
+        self, *, max_age_minutes: int, max_attempts: int
+    ) -> dict[str, int]:
+        """Recover monitoring runs whose worker crashed mid-audit: a 'running'
+        lease older than max_age_minutes means no process is still working it.
+        Run at the start of each processor pass, before claiming. Identical
+        pattern to FixpackJobRepository.reap_stale_running:
+
+          - attempts < max_attempts -> back to 'pending' (started_at cleared) so
+            the next claim retries it;
+          - attempts >= max_attempts -> 'failed' with a diagnosable error, so a
+            poison-pill run that crashes the worker every time stops re-queuing
+            forever and stays visible for a human.
+
+        Returns {'requeued': n, 'failed': m}. No-op ({'requeued': 0, 'failed': 0})
+        when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return {"requeued": 0, "failed": 0}
+        async with pool.connection() as conn:
+            requeued_cur = await conn.execute(
+                """
+                update monitoring_runs
+                   set status = 'pending', started_at = null
+                 where status = 'running'
+                   and started_at < now() - make_interval(mins => %s)
+                   and attempts < %s
+                returning id
+                """,
+                (max_age_minutes, max_attempts),
+            )
+            requeued = len(await requeued_cur.fetchall())
+            failed_cur = await conn.execute(
+                """
+                update monitoring_runs
+                   set status = 'failed',
+                       error = %s,
+                       completed_at = now()
+                 where status = 'running'
+                   and started_at < now() - make_interval(mins => %s)
+                   and attempts >= %s
+                returning id
+                """,
+                (
+                    f"stale lease reaped: no completion after {max_attempts} "
+                    f"attempt(s), last lease older than {max_age_minutes}m",
+                    max_age_minutes,
+                    max_attempts,
+                ),
+            )
+            failed = len(await failed_cur.fetchall())
+        return {"requeued": requeued, "failed": failed}

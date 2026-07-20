@@ -350,6 +350,18 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   reaps `running` leases older than 15 min (a crashed worker) — re-queuing up
   to 3 attempts, then failing — so `systemctl restart shipit` mid-job never
   loses or wedges a job (see `PHASE3_QUEUE_PLAN.md`).
+- `shipit-monitoring.timer` (systemd) should call
+  `POST /internal/monitoring/process-pending` (bearer token
+  `MONITORING_PROCESS_TOKEN` from `.env`) to drain the continuous-monitoring
+  backlog: each pending run re-audits its repo, diffs the findings, and DMs
+  subscribers. Same durable-queue shape as `shipit-fixpack.timer` (advisory
+  lock → `{"skipped_locked": true}` on overlap, atomic per-run claim, 15 min /
+  3-attempt stale-lease reaper) and **no unit file is shipped** — wire one up. A
+  **longer interval than Fix Pack** is right (~5 min, `OnUnitActiveSec=5min`): a
+  repo is re-audited at most once per 24h and a pending run only needs to drain
+  within a few minutes of a push. The push webhook only enqueues the run and
+  ACKs immediately, so nothing gets audited until this timer fires (see
+  `MONITORING_ASYNC_PLAN.md`).
 
 ### GitHub webhook — two jobs (`pr_merged` + continuous monitoring)
 
@@ -375,18 +387,27 @@ a Fix Pack) is a 200 no-op.
 a public repo from its audit page (the `/monitor <auditId>` bot command → a
 recurring Stars subscription whose payload binds the repo; see
 `PHASE_C_MONITORING_PLAN.md`). On a push **to that repo's default branch**, the
-webhook re-audits the repo — reusing the same pipeline and content-hash cache as
-the URL intake path, so a push that didn't change the audited content costs no
-LLM call — and DMs every active subscriber the **new** critical/high findings.
-"New" means a `(rule_id, file)` key absent from the previous audit of the same
-repo (line numbers are excluded, so incidental line drift isn't a false alarm; a
-medium→high re-score of the same key isn't flagged either — that's a deliberate
-non-goal). Cost is capped at **one re-audit per repo per 24h**
-(`subscriptions.last_monitored_at`, migration 0016), stamped even when the
-re-audit finds nothing or the repo can't be fetched, so a burst of pushes can't
-bypass the cap. Pushes to non-default branches, and repos with no active
-subscription, are 200 no-ops. Monitoring is public-repo-only (the fetcher uses no
-auth); a repo that goes private simply stops producing findings.
+webhook does only the fast half — it claims the repo and **enqueues** a durable
+`monitoring_runs` row (migration 0017), then ACKs 200 immediately. The slow work
+(re-audit + diff + notify) runs later on the `shipit-monitoring.timer` processor,
+off the HTTP path. This is deliberate: the audit takes ~10 s–2 min, longer than
+GitHub's webhook-response timeout, so doing it inline made GitHub's *Recent
+Deliveries* mark successful deliveries "timed out" and left the work
+un-restartable on a crash (see `MONITORING_ASYNC_PLAN.md`).
+
+The processor re-audits the repo — reusing the same pipeline and content-hash
+cache as the URL intake path, so a push that didn't change the audited content
+costs no LLM call — and DMs every active subscriber the **new** critical/high
+findings. "New" means a `(rule_id, file)` key absent from the previous audit of
+the same repo (line numbers are excluded, so incidental line drift isn't a false
+alarm; a medium→high re-score of the same key isn't flagged either — that's a
+deliberate non-goal). Cost is capped at **one enqueue per repo per 24h**
+(`subscriptions.last_monitored_at`, migration 0016), stamped at enqueue time even
+when the later re-audit finds nothing or the repo can't be fetched, so a burst of
+pushes can't bypass the cap. Pushes to non-default branches, and repos with no
+active subscription, are 200 no-ops that enqueue nothing. Monitoring is
+public-repo-only (the fetcher uses no auth); a repo that goes private simply
+stops producing findings.
 
 The push side and the stored `audits.repo_url` are matched through a single
 normalization (`app/monitor.normalize_repo_full_name`) to a canonical lowercased
