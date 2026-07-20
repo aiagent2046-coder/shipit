@@ -1278,25 +1278,42 @@ class SubscriptionRepository:
             rows = await cur.fetchall()
         return [_row_to_subscription(r) for r in rows]
 
-    async def mark_monitored(
+    async def claim_for_monitoring(
         self, repo_full_name: str, at: datetime.datetime
-    ) -> None:
-        """Stamp last_monitored_at on every subscription for this repo. The 24h
-        throttle is per repo, so all of a repo's subscribers share one run and
-        one timestamp. No-op when DATABASE_URL isn't set."""
+    ) -> bool:
+        """Atomically claim this repo for a monitoring run and report whether the
+        claim was won. In one write it stamps last_monitored_at = `at` on the
+        repo's subscription rows IFF none has been monitored within the last 24h
+        -- so this is BOTH the 24h-per-repo cost cap AND the concurrency guard.
+
+        Two near-simultaneous default-branch pushes race on this UPDATE: the
+        first commits and stamps the rows; the second, under READ COMMITTED,
+        re-checks its WHERE against the freshly-committed rows, finds them no
+        longer eligible, updates nothing, and returns an empty set -- so exactly
+        one push re-audits and notifies. Same idea as the Fix Pack processor's
+        FOR UPDATE SKIP LOCKED job claim, expressed as a conditional UPDATE.
+
+        Returns False (nothing claimed) when DATABASE_URL isn't set. Callers must
+        claim BEFORE the audit, not after, so the stamp also throttles retries of
+        a dead/unfetchable repo."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
-            return
+            return False
         async with pool.connection() as conn:
-            await conn.execute(
+            cur = await conn.execute(
                 """
                 update subscriptions
                    set last_monitored_at = %s, updated_at = now()
                  where repo_full_name = %s
+                   and (last_monitored_at is null
+                        or last_monitored_at < %s - interval '24 hours')
+                returning id
                 """,
-                (at, repo_full_name),
+                (at, repo_full_name, at),
             )
+            rows = await cur.fetchall()
+        return len(rows) > 0
 
     async def renew(
         self, subscription_id: str, *, expires_at: Any,

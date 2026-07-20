@@ -147,13 +147,27 @@ def _post_push(body: bytes, *, secret="whsecret"):
 class FakeSubscriptionRepo:
     def __init__(self, subs):
         self._subs = subs
-        self.marked: list[tuple[str, datetime.datetime]] = []
+        self.claims: list[tuple[str, datetime.datetime]] = []
 
     async def list_active_for_repo(self, repo_full_name):
         return [s for s in self._subs if s.get("repo_full_name") == repo_full_name]
 
-    async def mark_monitored(self, repo_full_name, at):
-        self.marked.append((repo_full_name, at))
+    async def claim_for_monitoring(self, repo_full_name, at):
+        # Mirrors the real conditional UPDATE...RETURNING: eligible iff no row for
+        # this repo was monitored within the last 24h. On success stamps all the
+        # repo's rows and reports the win; otherwise no-op and reports the loss.
+        rows = [s for s in self._subs if s.get("repo_full_name") == repo_full_name]
+        cutoff = at - datetime.timedelta(hours=24)
+        recent = any(
+            s.get("last_monitored_at") is not None and s["last_monitored_at"] >= cutoff
+            for s in rows
+        )
+        if recent:
+            return False
+        for s in rows:
+            s["last_monitored_at"] = at
+        self.claims.append((repo_full_name, at))
+        return True
 
 
 class FakeAuditRepo:
@@ -231,7 +245,7 @@ def test_push_scenario_a_no_subscription_no_reaudit(monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["reason"] == "no_active_subscription"
     assert audits.created == []       # no re-audit ran
-    assert subs.marked == []          # nothing stamped
+    assert subs.claims == []          # nothing claimed/stamped
 
 
 def test_push_scenario_b_within_24h_no_reaudit(monkeypatch):
@@ -282,7 +296,7 @@ def test_push_scenario_c_new_critical_notifies(monkeypatch):
     assert body["new_findings"] == 1
     assert body["notified"] == 2                 # both subscribers DM'd
     assert len(audits.created) == 1              # a fresh audit ran
-    assert len(subs.marked) == 1 and subs.marked[0][0] == "acme/app"
+    assert len(subs.claims) == 1 and subs.claims[0][0] == "acme/app"
     assert len(sent) == 2
     assert "b.py" in sent[0][1] and "r2" in sent[0][1]
 
@@ -310,7 +324,7 @@ def test_push_scenario_d_no_new_findings_is_silent(monkeypatch):
     assert body["new_findings"] == 0
     assert body["notified"] == 0
     assert sent == []                    # silent
-    assert len(subs.marked) == 1         # but the run is still stamped (cost cap)
+    assert len(subs.claims) == 1         # but the run is still claimed (cost cap)
 
 
 def test_push_non_default_branch_ignored(monkeypatch):
@@ -331,7 +345,7 @@ def test_push_non_default_branch_ignored(monkeypatch):
 
     assert resp.json()["reason"] == "not_default_branch"
     assert audits.created == []
-    assert subs.marked == []
+    assert subs.claims == []
 
 
 def test_push_repo_matched_case_insensitively(monkeypatch):
@@ -359,3 +373,33 @@ def test_push_repo_matched_case_insensitively(monkeypatch):
     assert body["monitored"] is True
     assert body["notified"] == 1
     assert len(sent) == 1
+
+
+def test_push_second_push_within_24h_is_claimed_out(monkeypatch):
+    """The atomic-claim guard, end-to-end: two back-to-back pushes (no time
+    passes between them, as with two near-simultaneous pushes racing on the same
+    UPDATE). The first wins the claim, re-audits and notifies; the second finds
+    the row already stamped and no-ops -- exactly one re-audit, one notification,
+    no double-charge of the LLM budget or the subscriber's inbox."""
+    monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
+    sent = _capture_dms(monkeypatch)
+    _install_fakes(monkeypatch, findings=[_f("r2", "b.py", "critical")])
+
+    subs = FakeSubscriptionRepo([
+        {"repo_full_name": "acme/app", "telegram_chat_id": "111",
+         "telegram_user_id": "111", "last_monitored_at": None},
+    ])
+    audits = FakeAuditRepo(previous=None)
+    _override(subscription_repo=subs, audit_repo=audits)
+    try:
+        first = _post_push(_push_payload())
+        second = _post_push(_push_payload())
+    finally:
+        _clear()
+
+    assert first.json()["monitored"] is True
+    assert first.json()["notified"] == 1
+    assert second.json()["reason"] == "within_interval"
+    assert len(subs.claims) == 1        # only the first push claimed the run
+    assert len(audits.created) == 1     # only one re-audit ran
+    assert len(sent) == 1               # subscriber notified exactly once

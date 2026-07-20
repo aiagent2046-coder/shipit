@@ -703,20 +703,6 @@ async def github_webhook(
     return {"ignored": True, "reason": "event_not_handled"}
 
 
-_MONITOR_INTERVAL = datetime.timedelta(hours=24)
-
-
-def _as_aware_utc(value) -> datetime.datetime | None:
-    """A timestamptz from the DB may come back naive (no tzinfo) depending on
-    the driver/adapter; treat a naive value as UTC so the 24h math never raises
-    on a naive/aware comparison."""
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=datetime.timezone.utc)
-    return value
-
-
 async def _handle_monitoring_push(
     payload: dict, *, subscription_repo: SubscriptionRepository,
     audit_repo: AuditRepository, llm_client: LLMClient, repo_fetcher, transport,
@@ -724,14 +710,21 @@ async def _handle_monitoring_push(
     """Continuous-monitoring core (see PHASE_C_MONITORING_PLAN.md). Only a push
     to the repo's OWN default branch counts -- a push to a feature branch isn't
     what ships, and re-auditing every branch push would burn the LLM budget for
-    noise. The 24h gate (subscriptions.last_monitored_at) caps cost at one
-    re-audit per repo per day regardless of how many subscribers or pushes.
+    noise.
+
+    The 24h cost cap and the concurrency guard are one and the same atomic
+    write: claim_for_monitoring stamps last_monitored_at up front, iff the repo
+    hasn't been monitored in the last 24h, and reports whether THIS call won the
+    claim. Two near-simultaneous default-branch pushes (well within the ~2-minute
+    LLM window) race on that single UPDATE; exactly one wins and re-audits, the
+    other is a no-op -- so a subscriber is neither double-audited nor
+    double-notified. Same posture as the Fix Pack processor's atomic job claim.
+    Stamping BEFORE the audit (not after) is also what makes a dead/private repo
+    stop retrying every push.
 
     The diff is taken against the latest completed audit of the SAME repo
     captured BEFORE this run, so a subscriber is told only about findings that
-    are newly present (new_high_severity_findings, keyed on rule_id+file). We
-    always stamp last_monitored_at, even when the re-audit yields nothing or the
-    repo can't be fetched, so a burst of pushes can't bypass the daily cap."""
+    are newly present (new_high_severity_findings, keyed on rule_id+file)."""
     repository = payload.get("repository") or {}
     default_branch = repository.get("default_branch")
     ref = payload.get("ref") or ""
@@ -749,9 +742,8 @@ async def _handle_monitoring_push(
         return {"ignored": True, "reason": "no_active_subscription"}
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    last = [_as_aware_utc(s.get("last_monitored_at")) for s in subs]
-    most_recent = max((t for t in last if t is not None), default=None)
-    if most_recent is not None and now - most_recent < _MONITOR_INTERVAL:
+    if not await subscription_repo.claim_for_monitoring(repo_full_name, now):
+        # Within 24h of the last run, or lost the race to a concurrent push.
         return {"ignored": True, "reason": "within_interval"}
 
     previous = await audit_repo.get_latest_by_repo_url(repo_full_name)
@@ -763,13 +755,12 @@ async def _handle_monitoring_push(
             audit_repo=audit_repo, repo_fetcher=repo_fetcher,
         )
     except RepoFetchError:
-        # Repo went private/was deleted (404, indistinguishable by design).
-        # Stamp the attempt so we don't retry the same dead repo every push.
-        await subscription_repo.mark_monitored(repo_full_name, now)
+        # Repo went private/was deleted (404, indistinguishable by design). The
+        # claim above already stamped this attempt, so the dead repo won't be
+        # retried on every subsequent push for the next 24h.
         return {"monitored": True, "reason": "repo_unfetchable", "notified": 0}
 
     if result is None:
-        await subscription_repo.mark_monitored(repo_full_name, now)
         return {"monitored": True, "reason": "unauditable", "notified": 0}
 
     new_findings = new_high_severity_findings(previous_findings, result["findings"])
@@ -789,7 +780,6 @@ async def _handle_monitoring_push(
             except Exception:  # noqa: BLE001 -- one bad DM must not abort the rest
                 logger.warning("monitoring alert send failed", exc_info=True)
 
-    await subscription_repo.mark_monitored(repo_full_name, now)
     return {
         "monitored": True, "audit_id": result["audit_id"],
         "new_findings": len(new_findings), "notified": notified,
