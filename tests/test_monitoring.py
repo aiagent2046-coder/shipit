@@ -10,11 +10,13 @@ Three layers, all in-memory (no DB, no network):
      explicit ask): a push payload's `owner/repo` and an audit's full repo_url
      must resolve to the same key across casing, a trailing '.git', and a
      trailing slash, or the whole diff is silently buried.
-  3. POST /v1/webhooks/github `push` event -- the four end-to-end scenarios:
-     (a) no active subscription -> no re-audit; (b) within 24h -> no re-audit;
-     (c) >=24h + a new critical -> subscriber notified; (d) >=24h + nothing new
-     -> silent. Re-uses the same TestClient + dependency-override pattern as
-     tests/test_fix_outcomes.py.
+  3. POST /v1/webhooks/github `push` event -- now the FAST half only (see
+     MONITORING_ASYNC_PLAN.md): (a) no active subscription -> no enqueue;
+     (b) within 24h -> no enqueue; (c) eligible -> claim + enqueue one 'pending'
+     run + ACK 200, with run_repo_audit booby-trapped to prove the audit never
+     runs on the HTTP path. The slow half (audit + diff + notify) is covered in
+     tests/test_monitoring_process_endpoint.py. Re-uses the same TestClient +
+     dependency-override pattern as tests/test_fix_outcomes.py.
 """
 
 import datetime
@@ -25,15 +27,11 @@ import json
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app.ingest.stack_detect import Stack
 from app.monitor import normalize_repo_full_name, repo_url_from_full_name
 from app.monitor.diff import new_high_severity_findings
 from app.main import (
     app,
-    get_audit_repo,
-    get_billing_transport,
-    get_llm_client,
-    get_repo_fetcher,
+    get_monitoring_repo,
     get_subscription_repo,
 )
 
@@ -170,73 +168,47 @@ class FakeSubscriptionRepo:
         return True
 
 
-class FakeAuditRepo:
-    def __init__(self, previous=None):
-        self._previous = previous
-        self.created: list[dict] = []
+class FakeMonitoringRepo:
+    """In-memory stand-in for MonitoringRunRepository. The webhook only touches
+    enqueue: it records each 'pending' run so a test can assert the push
+    enqueued exactly one (or zero) run without any audit."""
 
-    async def get_latest_by_repo_url(self, repo_full_name):
-        return self._previous
+    def __init__(self):
+        self.enqueued: list[str] = []
 
-    async def get_by_content_hash(self, digest, engine_version):
-        return None  # always a cache miss -> run the (faked) scan
-
-    async def create(self, **kwargs):
-        row = {"id": "audit-new", **kwargs}
-        self.created.append(row)
-        return row
+    async def enqueue(self, repo_full_name):
+        run_id = f"run-{len(self.enqueued) + 1}"
+        self.enqueued.append(repo_full_name)
+        return {"id": run_id, "repo_full_name": repo_full_name,
+                "status": "pending"}
 
 
-class FakeTransport:
-    pass
+def _fail_if_audited(monkeypatch):
+    """Assert the fast webhook path never runs the audit: run_repo_audit is the
+    slow work that moved to the processor, so a call from the webhook is a bug."""
+    async def _boom(*a, **k):
+        raise AssertionError("run_repo_audit must NOT run on the webhook path")
+
+    monkeypatch.setattr(main_mod, "run_repo_audit", _boom)
 
 
-def _install_fakes(monkeypatch, *, findings):
-    """Make run_repo_audit deterministic without a real zip/scan/LLM."""
-    monkeypatch.setattr(main_mod, "validate_zip",
-                        lambda buf, size_bytes: type("R", (), {"file_count": 1})())
-    monkeypatch.setattr(main_mod, "detect_stack", lambda buf: Stack.FASTAPI)
-    monkeypatch.setattr(
-        main_mod, "run_scan",
-        lambda raw, llm: {"findings": findings,
-                          "score": {"total": 50, "categories": {}}})
-
-
-def _override(*, subscription_repo, audit_repo):
+def _override(*, subscription_repo, monitoring_repo):
     app.dependency_overrides[get_subscription_repo] = lambda: subscription_repo
-    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
-    app.dependency_overrides[get_repo_fetcher] = lambda: (lambda o, r: b"zipbytes")
-    app.dependency_overrides[get_llm_client] = lambda: object()
-    app.dependency_overrides[get_billing_transport] = lambda: FakeTransport()
+    app.dependency_overrides[get_monitoring_repo] = lambda: monitoring_repo
 
 
 def _clear():
-    for dep in (get_subscription_repo, get_audit_repo, get_repo_fetcher,
-                get_llm_client, get_billing_transport):
+    for dep in (get_subscription_repo, get_monitoring_repo):
         app.dependency_overrides.pop(dep, None)
 
 
-def _capture_dms(monkeypatch):
-    sent: list[tuple[str, str]] = []
-
-    async def fake_send(chat_id, text, *, token, transport=None, reply_markup=None):
-        sent.append((str(chat_id), text))
-        return {"ok": True}
-
-    monkeypatch.setattr(main_mod.telegram_stars, "send_message", fake_send)
-    monkeypatch.setattr(main_mod.telegram_stars, "bot_token_from_env",
-                        lambda: "bot-token")
-    return sent
-
-
-def test_push_scenario_a_no_subscription_no_reaudit(monkeypatch):
+def test_push_scenario_a_no_subscription_no_enqueue(monkeypatch):
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
-    _capture_dms(monkeypatch)
-    _install_fakes(monkeypatch, findings=[_f("r1", "a.py", "critical")])
+    _fail_if_audited(monkeypatch)
 
     subs = FakeSubscriptionRepo([])  # nobody subscribed to acme/app
-    audits = FakeAuditRepo(previous=None)
-    _override(subscription_repo=subs, audit_repo=audits)
+    runs = FakeMonitoringRepo()
+    _override(subscription_repo=subs, monitoring_repo=runs)
     try:
         resp = _post_push(_push_payload())
     finally:
@@ -244,125 +216,92 @@ def test_push_scenario_a_no_subscription_no_reaudit(monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["reason"] == "no_active_subscription"
-    assert audits.created == []       # no re-audit ran
+    assert runs.enqueued == []        # nothing queued
     assert subs.claims == []          # nothing claimed/stamped
 
 
-def test_push_scenario_b_within_24h_no_reaudit(monkeypatch):
+def test_push_scenario_b_within_24h_no_enqueue(monkeypatch):
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
-    sent = _capture_dms(monkeypatch)
-    _install_fakes(monkeypatch, findings=[_f("r1", "a.py", "critical")])
+    _fail_if_audited(monkeypatch)
 
     recent = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": recent},
     ])
-    audits = FakeAuditRepo(previous=None)
-    _override(subscription_repo=subs, audit_repo=audits)
+    runs = FakeMonitoringRepo()
+    _override(subscription_repo=subs, monitoring_repo=runs)
     try:
         resp = _post_push(_push_payload())
     finally:
         _clear()
 
     assert resp.json()["reason"] == "within_interval"
-    assert audits.created == []   # the 24h gate blocked the re-audit
-    assert sent == []
+    assert runs.enqueued == []    # the 24h gate blocked the enqueue
 
 
-def test_push_scenario_c_new_critical_notifies(monkeypatch):
+def test_push_eligible_enqueues_and_acks_fast(monkeypatch):
+    """The core async change: an eligible push claims the repo and enqueues a
+    single 'pending' run, then ACKs 200 immediately -- no audit, no diff, no DM
+    on the HTTP path (run_repo_audit is booby-trapped to fail if called). The
+    real work is drained later by /internal/monitoring/process-pending."""
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
-    sent = _capture_dms(monkeypatch)
-    # Previous audit had r1; the re-audit surfaces a brand-new critical r2.
-    _install_fakes(monkeypatch, findings=[
-        _f("r1", "a.py", "critical"), _f("r2", "b.py", "critical")])
+    _fail_if_audited(monkeypatch)
 
     old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": old},
-        {"repo_full_name": "acme/app", "telegram_chat_id": "222",
-         "telegram_user_id": "222", "last_monitored_at": None},
     ])
-    audits = FakeAuditRepo(previous={"findings_json": [_f("r1", "a.py", "critical")]})
-    _override(subscription_repo=subs, audit_repo=audits)
+    runs = FakeMonitoringRepo()
+    _override(subscription_repo=subs, monitoring_repo=runs)
     try:
         resp = _post_push(_push_payload())
     finally:
         _clear()
 
     body = resp.json()
-    assert body["monitored"] is True
-    assert body["new_findings"] == 1
-    assert body["notified"] == 2                 # both subscribers DM'd
-    assert len(audits.created) == 1              # a fresh audit ran
+    assert body["queued"] is True
+    assert body["repo_full_name"] == "acme/app"
+    assert body["run_id"] == "run-1"
+    assert runs.enqueued == ["acme/app"]         # exactly one run queued
     assert len(subs.claims) == 1 and subs.claims[0][0] == "acme/app"
-    assert len(sent) == 2
-    assert "b.py" in sent[0][1] and "r2" in sent[0][1]
-
-
-def test_push_scenario_d_no_new_findings_is_silent(monkeypatch):
-    monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
-    sent = _capture_dms(monkeypatch)
-    # Re-audit surfaces the SAME findings as before (only line drifted) -> nothing new.
-    _install_fakes(monkeypatch, findings=[_f("r1", "a.py", "critical", line=99)])
-
-    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
-    subs = FakeSubscriptionRepo([
-        {"repo_full_name": "acme/app", "telegram_chat_id": "111",
-         "telegram_user_id": "111", "last_monitored_at": old},
-    ])
-    audits = FakeAuditRepo(previous={"findings_json": [_f("r1", "a.py", "critical", line=1)]})
-    _override(subscription_repo=subs, audit_repo=audits)
-    try:
-        resp = _post_push(_push_payload())
-    finally:
-        _clear()
-
-    body = resp.json()
-    assert body["monitored"] is True
-    assert body["new_findings"] == 0
-    assert body["notified"] == 0
-    assert sent == []                    # silent
-    assert len(subs.claims) == 1         # but the run is still claimed (cost cap)
 
 
 def test_push_non_default_branch_ignored(monkeypatch):
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
-    _capture_dms(monkeypatch)
-    _install_fakes(monkeypatch, findings=[])
+    _fail_if_audited(monkeypatch)
 
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": None},
     ])
-    audits = FakeAuditRepo(previous=None)
-    _override(subscription_repo=subs, audit_repo=audits)
+    runs = FakeMonitoringRepo()
+    _override(subscription_repo=subs, monitoring_repo=runs)
     try:
         resp = _post_push(_push_payload(ref="refs/heads/feature-x"))
     finally:
         _clear()
 
     assert resp.json()["reason"] == "not_default_branch"
-    assert audits.created == []
+    assert runs.enqueued == []
     assert subs.claims == []
 
 
 def test_push_repo_matched_case_insensitively(monkeypatch):
     """The founder's concern, exercised end-to-end: a push whose repository name
-    is differently-cased than the stored subscription still matches, re-audits,
-    and notifies. (list_active_for_repo is keyed on the normalized name, so the
-    push side must normalize identically.)"""
+    is differently-cased than the stored subscription still matches and enqueues
+    under the canonical name. (list_active_for_repo is keyed on the normalized
+    name, so the push side must normalize identically.)"""
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
-    sent = _capture_dms(monkeypatch)
-    _install_fakes(monkeypatch, findings=[_f("r2", "b.py", "critical")])
+    _fail_if_audited(monkeypatch)
 
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": None},
     ])
-    audits = FakeAuditRepo(previous=None)
-    _override(subscription_repo=subs, audit_repo=audits)
+    runs = FakeMonitoringRepo()
+    _override(subscription_repo=subs, monitoring_repo=runs)
     try:
         # Push payload carries mixed-case owner/repo.
         resp = _post_push(_push_payload(full_name="Acme/App"))
@@ -370,36 +309,32 @@ def test_push_repo_matched_case_insensitively(monkeypatch):
         _clear()
 
     body = resp.json()
-    assert body["monitored"] is True
-    assert body["notified"] == 1
-    assert len(sent) == 1
+    assert body["queued"] is True
+    assert runs.enqueued == ["acme/app"]         # canonical, not "Acme/App"
 
 
 def test_push_second_push_within_24h_is_claimed_out(monkeypatch):
     """The atomic-claim guard, end-to-end: two back-to-back pushes (no time
     passes between them, as with two near-simultaneous pushes racing on the same
-    UPDATE). The first wins the claim, re-audits and notifies; the second finds
-    the row already stamped and no-ops -- exactly one re-audit, one notification,
-    no double-charge of the LLM budget or the subscriber's inbox."""
+    UPDATE). The first wins the claim and enqueues one run; the second finds the
+    row already stamped and no-ops -- exactly one queued run per repo per 24h, no
+    double-audit and no double-notify downstream."""
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
-    sent = _capture_dms(monkeypatch)
-    _install_fakes(monkeypatch, findings=[_f("r2", "b.py", "critical")])
+    _fail_if_audited(monkeypatch)
 
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": None},
     ])
-    audits = FakeAuditRepo(previous=None)
-    _override(subscription_repo=subs, audit_repo=audits)
+    runs = FakeMonitoringRepo()
+    _override(subscription_repo=subs, monitoring_repo=runs)
     try:
         first = _post_push(_push_payload())
         second = _post_push(_push_payload())
     finally:
         _clear()
 
-    assert first.json()["monitored"] is True
-    assert first.json()["notified"] == 1
+    assert first.json()["queued"] is True
     assert second.json()["reason"] == "within_interval"
     assert len(subs.claims) == 1        # only the first push claimed the run
-    assert len(audits.created) == 1     # only one re-audit ran
-    assert len(sent) == 1               # subscriber notified exactly once
+    assert runs.enqueued == ["acme/app"]  # exactly one run queued

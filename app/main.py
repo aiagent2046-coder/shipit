@@ -39,11 +39,13 @@ from app.db import (
     AuditRepository,
     FixOutcomeRepository,
     FixpackJobRepository,
+    MonitoringRunRepository,
     PaymentRepository,
     ProcessorLockBusy,
     SubscriptionRepository,
     database_url_from_env,
     fixpack_processor_lock,
+    monitoring_processor_lock,
 )
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
@@ -200,6 +202,7 @@ _fix_outcome_repo = FixOutcomeRepository()
 _account_repo = AccountRepository()
 _payment_repo = PaymentRepository()
 _subscription_repo = SubscriptionRepository()
+_monitoring_repo = MonitoringRunRepository()
 
 
 def get_payment_repo() -> PaymentRepository:
@@ -244,6 +247,11 @@ def get_fix_outcome_repo() -> FixOutcomeRepository:
 def get_subscription_repo() -> SubscriptionRepository:
     """Same as get_audit_repo, for recurring Stars subscriptions."""
     return _subscription_repo
+
+
+def get_monitoring_repo() -> MonitoringRunRepository:
+    """Same as get_audit_repo, for the async continuous-monitoring queue."""
+    return _monitoring_repo
 
 
 # GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
@@ -361,6 +369,13 @@ def _fixpack_process_token() -> str | None:
     env-var pattern as PREVIEW_REAP_TOKEN / USDT_POLL_TOKEN. Unset -> the
     endpoint 503s rather than accept a no-op auth check."""
     return os.environ.get("FIXPACK_PROCESS_TOKEN") or None
+
+
+def _monitoring_process_token() -> str | None:
+    """Bearer token protecting POST /internal/monitoring/process-pending, same
+    env-var pattern as FIXPACK_PROCESS_TOKEN. Unset -> the endpoint 503s rather
+    than accept a no-op auth check."""
+    return os.environ.get("MONITORING_PROCESS_TOKEN") or None
 
 
 def _require_bearer_token(request: Request, token: str) -> None:
@@ -640,10 +655,7 @@ async def github_webhook(
     request: Request,
     fix_outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
     subscription_repo: SubscriptionRepository = Depends(get_subscription_repo),
-    audit_repo: AuditRepository = Depends(get_audit_repo),
-    llm_client: LLMClient = Depends(get_llm_client),
-    repo_fetcher=Depends(get_repo_fetcher),
-    transport=Depends(get_billing_transport),
+    monitoring_repo: MonitoringRunRepository = Depends(get_monitoring_repo),
 ) -> dict:
     """GitHub App webhook. Two independent jobs, dispatched by X-GitHub-Event:
 
@@ -651,8 +663,10 @@ async def github_webhook(
         merged (fix_outcomes.pr_merged) -- the real-world signal for whether
         our fix shipped. Collection only (see PHASE_B_KNOWLEDGE_BASE_PLAN.md).
       * push: continuous monitoring (Phase C). A push to a repo's default
-        branch re-audits it (at most once per 24h per repo) and DMs every
-        active subscriber the NEW critical/high findings, if any.
+        branch ENQUEUES a monitoring run (at most once per 24h per repo) and
+        ACKs immediately; the re-audit + diff + DM run later on the
+        /internal/monitoring/process-pending processor (see
+        MONITORING_ASYNC_PLAN.md).
 
     Authenticity is the standard GitHub scheme: X-Hub-Signature-256 =
     'sha256=' + HMAC-SHA256(GITHUB_APP_WEBHOOK_SECRET, raw body), compared
@@ -696,8 +710,8 @@ async def github_webhook(
 
     if event == "push":
         return await _handle_monitoring_push(
-            payload, subscription_repo=subscription_repo, audit_repo=audit_repo,
-            llm_client=llm_client, repo_fetcher=repo_fetcher, transport=transport,
+            payload, subscription_repo=subscription_repo,
+            monitoring_repo=monitoring_repo,
         )
 
     return {"ignored": True, "reason": "event_not_handled"}
@@ -705,26 +719,27 @@ async def github_webhook(
 
 async def _handle_monitoring_push(
     payload: dict, *, subscription_repo: SubscriptionRepository,
-    audit_repo: AuditRepository, llm_client: LLMClient, repo_fetcher, transport,
+    monitoring_repo: MonitoringRunRepository,
 ) -> dict:
-    """Continuous-monitoring core (see PHASE_C_MONITORING_PLAN.md). Only a push
-    to the repo's OWN default branch counts -- a push to a feature branch isn't
-    what ships, and re-auditing every branch push would burn the LLM budget for
-    noise.
+    """Fast half of continuous monitoring (see MONITORING_ASYNC_PLAN.md): decide
+    whether a push warrants a monitoring run and, if so, ENQUEUE it and ACK 200
+    immediately -- the real work (audit + diff + notify) runs later in
+    POST /internal/monitoring/process-pending. Doing the audit inline used to
+    make GitHub mark the delivery "timed out" (its webhook-response timeout is
+    shorter than a ~10s-2min audit) even when the work succeeded.
 
-    The 24h cost cap and the concurrency guard are one and the same atomic
-    write: claim_for_monitoring stamps last_monitored_at up front, iff the repo
-    hasn't been monitored in the last 24h, and reports whether THIS call won the
-    claim. Two near-simultaneous default-branch pushes (well within the ~2-minute
-    LLM window) race on that single UPDATE; exactly one wins and re-audits, the
-    other is a no-op -- so a subscriber is neither double-audited nor
-    double-notified. Same posture as the Fix Pack processor's atomic job claim.
-    Stamping BEFORE the audit (not after) is also what makes a dead/private repo
-    stop retrying every push.
+    Only a push to the repo's OWN default branch counts -- a push to a feature
+    branch isn't what ships, and re-auditing every branch push would burn the LLM
+    budget for noise.
 
-    The diff is taken against the latest completed audit of the SAME repo
-    captured BEFORE this run, so a subscriber is told only about findings that
-    are newly present (new_high_severity_findings, keyed on rule_id+file)."""
+    The 24h cost cap and the enqueue-dedup are one and the same atomic write:
+    claim_for_monitoring stamps last_monitored_at up front, iff the repo hasn't
+    been monitored in the last 24h, and reports whether THIS call won the claim.
+    Two near-simultaneous default-branch pushes race on that single UPDATE;
+    exactly one wins and enqueues a run, the other is a no-op -- so a subscriber
+    is neither double-audited nor double-notified. Stamping at enqueue (not after
+    the audit) is also what makes a dead/private repo stop re-enqueuing on every
+    push."""
     repository = payload.get("repository") or {}
     default_branch = repository.get("default_branch")
     ref = payload.get("ref") or ""
@@ -746,45 +761,95 @@ async def _handle_monitoring_push(
         # Within 24h of the last run, or lost the race to a concurrent push.
         return {"ignored": True, "reason": "within_interval"}
 
-    previous = await audit_repo.get_latest_by_repo_url(repo_full_name)
-    previous_findings = (previous or {}).get("findings_json") or []
-
-    try:
-        result = await run_repo_audit(
-            repo_url_from_full_name(repo_full_name), llm_client=llm_client,
-            audit_repo=audit_repo, repo_fetcher=repo_fetcher,
-        )
-    except RepoFetchError:
-        # Repo went private/was deleted (404, indistinguishable by design). The
-        # claim above already stamped this attempt, so the dead repo won't be
-        # retried on every subsequent push for the next 24h.
-        return {"monitored": True, "reason": "repo_unfetchable", "notified": 0}
-
-    if result is None:
-        return {"monitored": True, "reason": "unauditable", "notified": 0}
-
-    new_findings = new_high_severity_findings(previous_findings, result["findings"])
-    notified = 0
-    if new_findings:
-        token = telegram_stars.bot_token_from_env()
-        text = _monitoring_alert_text(repo_full_name, new_findings)
-        for sub in subs:
-            chat_id = sub.get("telegram_chat_id") or sub.get("telegram_user_id")
-            if not (chat_id and token):
-                continue
-            try:
-                await telegram_stars.send_message(
-                    str(chat_id), text, token=token, transport=transport
-                )
-                notified += 1
-            except Exception:  # noqa: BLE001 -- one bad DM must not abort the rest
-                logger.warning("monitoring alert send failed", exc_info=True)
-
+    # Won the claim: enqueue a durable 'pending' run and ACK immediately. The
+    # processor drains it off the HTTP path.
+    run = await monitoring_repo.enqueue(repo_full_name)
     return {
-        "monitored": True, "audit_id": result["audit_id"],
-        "new_findings": len(new_findings), "notified": notified,
-        "reused": result["reused"],
+        "queued": True, "repo_full_name": repo_full_name,
+        "run_id": run["id"] if run else None,
     }
+
+
+async def _process_one_monitoring_run(
+    run: dict, *, monitoring_repo: MonitoringRunRepository,
+    subscription_repo: SubscriptionRepository, audit_repo: AuditRepository,
+    llm_client: LLMClient, repo_fetcher, transport,
+) -> str:
+    """Do the real monitoring work for one claimed run: re-audit the repo, diff
+    against its previous audit, and DM every active subscriber the NEW
+    critical/high findings. Returns the outcome ('notified', 'no_new',
+    'unfetchable', 'unauditable', 'no_subscription', or 'failed') and advances
+    the run to a terminal state so a re-run of the processor doesn't pick it up
+    again.
+
+    This is the slow half lifted verbatim from the old synchronous
+    _handle_monitoring_push, now off the HTTP path. The diff is taken against
+    the latest completed audit of the SAME repo captured BEFORE run_repo_audit
+    persists this run's audit, so a subscriber is told only about findings that
+    are newly present (new_high_severity_findings, keyed on rule_id+file).
+
+    Every failure is made visible (mark_failed with a diagnosable error + a
+    logged traceback), the same hardening as _process_one_paid_job -- a 'failed'
+    run must never be silent. A caught failure is terminal; only a true crash
+    (the run left stuck 'running') is recovered by the stale-lease reaper."""
+    run_id = run["id"]
+    repo_full_name = run["repo_full_name"]
+    try:
+        subs = await subscription_repo.list_active_for_repo(repo_full_name)
+        if not subs:
+            # Every subscription lapsed between enqueue and now -- nothing to
+            # notify. Benign; close the run out.
+            await monitoring_repo.mark_done(run_id)
+            return "no_subscription"
+
+        # Baseline BEFORE the new audit persists, so the diff reflects only what
+        # this push introduced.
+        previous = await audit_repo.get_latest_by_repo_url(repo_full_name)
+        previous_findings = (previous or {}).get("findings_json") or []
+
+        try:
+            result = await run_repo_audit(
+                repo_url_from_full_name(repo_full_name), llm_client=llm_client,
+                audit_repo=audit_repo, repo_fetcher=repo_fetcher,
+            )
+        except RepoFetchError:
+            # Repo went private/was deleted (404, indistinguishable by design).
+            # Benign terminal state; the 24h claim already stopped re-enqueues.
+            await monitoring_repo.mark_done(run_id)
+            return "unfetchable"
+
+        if result is None:
+            await monitoring_repo.mark_done(run_id)
+            return "unauditable"
+
+        new_findings = new_high_severity_findings(
+            previous_findings, result["findings"]
+        )
+        notified = 0
+        if new_findings:
+            token = telegram_stars.bot_token_from_env()
+            text = _monitoring_alert_text(repo_full_name, new_findings)
+            for sub in subs:
+                chat_id = sub.get("telegram_chat_id") or sub.get("telegram_user_id")
+                if not (chat_id and token):
+                    continue
+                try:
+                    await telegram_stars.send_message(
+                        str(chat_id), text, token=token, transport=transport
+                    )
+                    notified += 1
+                except Exception:  # noqa: BLE001 -- one bad DM must not abort the rest
+                    logger.warning("monitoring alert send failed", exc_info=True)
+
+        await monitoring_repo.mark_done(run_id)
+        return "notified" if new_findings else "no_new"
+    except Exception as exc:  # noqa: BLE001 -- every failure must be recorded
+        # Fetch/audit/persist/notify errors land here. Log the full traceback
+        # and persist a short reason so the failure is diagnosable from both the
+        # logs and a `select ... from monitoring_runs` query -- never silent.
+        logger.exception("monitoring run %s failed during processing", run_id)
+        await monitoring_repo.mark_failed(run_id, _failure_detail(exc))
+        return "failed"
 
 
 def _monitoring_alert_text(repo_full_name: str, new_findings: list[dict]) -> str:
@@ -1355,6 +1420,77 @@ async def process_paid_fixpacks(
     except ProcessorLockBusy:
         # Another run holds the lock — benign, not an error. The scheduler
         # can log this and move on; the other run is draining the backlog.
+        return {"skipped_locked": True}
+    return summary
+
+
+@app.post("/internal/monitoring/process-pending")
+async def process_pending_monitoring(
+    request: Request,
+    subscription_repo: SubscriptionRepository = Depends(get_subscription_repo),
+    monitoring_repo: MonitoringRunRepository = Depends(get_monitoring_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+    llm_client: LLMClient = Depends(get_llm_client),
+    repo_fetcher=Depends(get_repo_fetcher),
+    transport=Depends(get_billing_transport),
+) -> dict:
+    """Operational endpoint: drain the pending continuous-monitoring backlog.
+    The GitHub push webhook enqueues one 'pending' run per eligible push and
+    ACKs immediately (see MONITORING_ASYNC_PLAN.md); this drains those runs off
+    the HTTP path -- re-audit the repo, diff against its previous audit, and DM
+    subscribers the new critical/high findings. Meant for a scheduled caller (a
+    systemd timer, same as the Fix Pack processor and the reaper -- this repo
+    ships no unit file).
+
+    Mirrors POST /internal/fixpack/process-paid exactly: a session advisory lock
+    so two overlapping timer firings don't stampede; a stale-lease reap first (a
+    crashed worker's run back to 'pending', bounded by attempts, else 'failed');
+    then claim runs one at a time, each atomically leased 'pending' -> 'running'
+    so a single run can never be processed by two passes at once.
+
+    Requires `Authorization: Bearer <MONITORING_PROCESS_TOKEN>`, constant-time
+    compared. 503 if the token isn't configured on this deployment -- an
+    unconfigured processor is an operational gap to notice, not a silent no-op.
+
+    Returns a summary the scheduler can log. If another run already holds the
+    lock, returns {"skipped_locked": true} instead."""
+    token = _monitoring_process_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "monitoring_process_not_configured",
+                    "detail": "MONITORING_PROCESS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    summary = {"processed": 0, "notified": 0, "no_new": 0, "unfetchable": 0,
+               "unauditable": 0, "no_subscription": 0, "failed": 0, "requeued": 0}
+    try:
+        async with monitoring_processor_lock():
+            reaped = await monitoring_repo.reap_stale_running(
+                max_age_minutes=STALE_LEASE_MINUTES,
+                max_attempts=MAX_JOB_ATTEMPTS,
+            )
+            summary["requeued"] = reaped["requeued"]
+            summary["failed"] += reaped["failed"]
+
+            while True:
+                run = await monitoring_repo.claim_one_pending()
+                if run is None:
+                    break
+                summary["processed"] += 1
+                outcome = await _process_one_monitoring_run(
+                    run, monitoring_repo=monitoring_repo,
+                    subscription_repo=subscription_repo, audit_repo=audit_repo,
+                    llm_client=llm_client, repo_fetcher=repo_fetcher,
+                    transport=transport,
+                )
+                if outcome in summary:
+                    summary[outcome] += 1
+                else:
+                    summary["failed"] += 1
+    except ProcessorLockBusy:
+        # Another run holds the lock — benign. The scheduler logs and moves on.
         return {"skipped_locked": True}
     return summary
 

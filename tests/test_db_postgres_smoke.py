@@ -46,6 +46,7 @@ from app.db import (
     AuditRepository,
     FixOutcomeRepository,
     FixpackJobRepository,
+    MonitoringRunRepository,
     PaymentRepository,
     SubscriptionRepository,
 )
@@ -95,6 +96,7 @@ async def test_all_repository_write_paths(real_db):
     account_repo = AccountRepository()
     payment_repo = PaymentRepository()
     sub_repo = SubscriptionRepository()
+    monitoring_repo = MonitoringRunRepository()
 
     # ---- AuditRepository.create -----------------------------------------
     audit = await audit_repo.create(
@@ -242,3 +244,61 @@ async def test_all_repository_write_paths(real_db):
     # set_status: renewal-state update only.
     canceled = await sub_repo.set_status(sub_id, "canceled")
     assert canceled["status"] == "canceled"
+
+    # ---- MonitoringRunRepository (async monitoring queue, migration 0017) ---
+    # The push webhook's durable queue. Same real-Postgres write-path coverage
+    # the other queue (fixpack_jobs) gets above: enqueue -> claim_one_pending
+    # (atomic pending->running) -> mark_done, then a second run driven to the
+    # 'failed' terminal state, plus reap_stale_running and the processor lock.
+    # This repository stamps every timestamp via SQL now() (no Python-side Unix
+    # conversion), so it can't hit the subscription DatatypeMismatch class of
+    # bug -- but the point of this file is that EVERY repository is exercised
+    # against real Postgres, not only the ones present when it was written.
+    mon_repo_name = f"acme/monitor-smoke-{run}"
+
+    enq = await monitoring_repo.enqueue(mon_repo_name)
+    assert enq is not None, "DATABASE_URL not reaching get_pool -- false green"
+    assert enq["status"] == "pending"
+    assert enq["repo_full_name"] == mon_repo_name
+    uuid.UUID(enq["id"])  # a real uuid string
+    assert isinstance(enq["created_at"], datetime.datetime)  # timestamptz round-trip
+
+    # claim_one_pending returns exactly the row we just enqueued (oldest pending;
+    # this run terminalizes every row it creates, so no leftovers precede it),
+    # leased pending -> running with started_at stamped and attempts bumped.
+    claimed_run = await monitoring_repo.claim_one_pending()
+    assert claimed_run is not None
+    assert claimed_run["id"] == enq["id"]
+    assert claimed_run["status"] == "running"
+    assert claimed_run["attempts"] == 1
+    assert isinstance(claimed_run["started_at"], datetime.datetime)
+    await monitoring_repo.mark_done(claimed_run["id"])
+
+    # A second run taken to 'failed' with a diagnosable error. Read the row back
+    # via raw SQL (the repository has no getter) to prove the terminal write
+    # landed with the error text intact -- the assertion the FakePool can't make.
+    enq2 = await monitoring_repo.enqueue(mon_repo_name)
+    claimed2 = await monitoring_repo.claim_one_pending()
+    assert claimed2 is not None and claimed2["id"] == enq2["id"]
+    await monitoring_repo.mark_failed(claimed2["id"], "smoke failure detail")
+
+    pool = await db_mod.get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "select status, error, completed_at from monitoring_runs where id = %s",
+            (uuid.UUID(claimed2["id"]),),
+        )
+        failed_row = await cur.fetchone()
+    assert failed_row["status"] == "failed"
+    assert failed_row["error"] == "smoke failure detail"
+    assert isinstance(failed_row["completed_at"], datetime.datetime)
+
+    # reap_stale_running: the make_interval(...) SQL executes and returns counts.
+    mon_reap = await monitoring_repo.reap_stale_running(
+        max_age_minutes=15, max_attempts=3
+    )
+    assert set(mon_reap) == {"requeued", "failed"}
+
+    # monitoring_processor_lock: the advisory-lock SQL round-trips.
+    async with db_mod.monitoring_processor_lock():
+        pass
