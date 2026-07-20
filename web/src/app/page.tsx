@@ -10,17 +10,17 @@ export default function LandingPage() {
       <section className="pt-16 pb-12 sm:pt-24 sm:pb-16">
         <div className="mx-auto max-w-3xl text-center">
           <span className="inline-block rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted">
-            Production-readiness audits for vibe-coded apps
+            Your AI Production Engineer
           </span>
           <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight sm:text-6xl">
             Is your app{" "}
             <span className="text-accent">ready to ship?</span>
           </h1>
           <p className="mx-auto mt-5 max-w-2xl text-lg text-muted">
-            Built it with Lovable, Bolt, or v0? Drydock scans your code for the
-            things that keep it from being safe in production — leaked secrets,
-            missing auth, no tests — scores it out of 10, and generates the
-            fixes as a pull request.
+            Drydock is the AI production engineer for apps built with Lovable,
+            Bolt, or v0. It finds what&apos;s not production-ready — leaked
+            secrets, missing auth, no tests — scores it out of 10, and ships the
+            fix as a pull request.
           </p>
         </div>
 

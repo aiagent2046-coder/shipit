@@ -12,9 +12,9 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Drydock — production-readiness audits for vibe-coded apps",
+  title: "Drydock — Your AI Production Engineer",
   description:
-    "Paste a GitHub URL or upload a zip. Drydock audits your app for the things that keep it from being safe to ship — leaked secrets, missing auth, no tests — and generates Fix Packs.",
+    "Drydock is the AI production engineer for AI-generated repos. Paste a GitHub URL or upload a zip: it audits your app, scores production-readiness out of 10, and ships the fixes as a pull request.",
 };
 
 // Set the theme class before hydration so there's no flash of the wrong

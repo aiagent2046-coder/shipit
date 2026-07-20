@@ -110,6 +110,47 @@ export default function PricingPage() {
         they&apos;re on the roadmap, not live features.
       </p>
 
+      {/* Enterprise — not for sale yet. Deliberately muted (dashed border, no
+          CTA) so it reads as a roadmap tier, not a purchasable product. */}
+      <section className="mt-8 rounded-xl border border-dashed border-border bg-surface/40 p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-lg font-semibold text-muted">Enterprise</h2>
+          <span className="rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+            Coming soon
+          </span>
+        </div>
+        <p className="mt-2 max-w-2xl text-sm text-muted">
+          For teams that want Drydock to own more of the path to production.
+          These aren&apos;t live yet — no checkout, nothing to buy. Listed here
+          so you know where we&apos;re headed.
+        </p>
+        <ul className="mt-4 grid gap-4 sm:grid-cols-3">
+          <li>
+            <p className="text-sm font-medium text-text">Preview environments</p>
+            <p className="mt-1 text-sm text-muted">
+              Spin up a disposable, running copy of a branch to see the fix work
+              before it merges.
+            </p>
+          </li>
+          <li>
+            <p className="text-sm font-medium text-text">Deploy Pack</p>
+            <p className="mt-1 text-sm text-muted">
+              Generated Dockerfile and CI workflow so the app is packaged to run
+              on your own hosting.
+            </p>
+          </li>
+          <li>
+            <p className="text-sm font-medium text-text">
+              SBOM &amp; dependency scanning
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              A software bill of materials plus alerts on known vulnerabilities
+              in your dependencies.
+            </p>
+          </li>
+        </ul>
+      </section>
+
       {/* Payment options */}
       <section className="mt-10 grid gap-5 md:grid-cols-2">
         {/* Telegram Stars */}
