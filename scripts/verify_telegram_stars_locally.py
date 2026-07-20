@@ -75,9 +75,11 @@ async def main() -> int:
 
         if args.subscription:
             stars = 1 if args.stars == telegram_stars.pro_stars_price() else args.stars
-            print("\n=== sendInvoice (real RECURRING Stars invoice) ===")
-            result = await telegram_stars.send_invoice(
-                chat_id=args.chat_id,
+            # A subscription invoice CANNOT be sent with sendInvoice (Telegram
+            # returns SUBSCRIPTION_EXPORT_MISSING); it must be exported as a
+            # deep link via createInvoiceLink -- this proves that real call.
+            print("\n=== createInvoiceLink (real RECURRING Stars invoice) ===")
+            result = await telegram_stars.create_invoice_link(
                 title=telegram_stars.SUBSCRIPTION_TITLE,
                 description=telegram_stars.SUBSCRIPTION_DESCRIPTION,
                 payload=telegram_stars.SUBSCRIPTION_PAYLOAD,
@@ -85,9 +87,9 @@ async def main() -> int:
                 subscription_period=telegram_stars.SUBSCRIPTION_PERIOD_SECONDS,
                 token=token,
             )
-            msg_id = result["result"].get("message_id")
-            print(f"OK: subscription invoice sent (message_id={msg_id}). Open "
-                  f"that chat — you should see a Subscribe {stars} ⭐/month "
+            link = result["result"]
+            print(f"OK: subscription invoice link created: {link}\nOpen it in "
+                  f"Telegram — you should see a Subscribe {stars} ⭐/month "
                   "button (30-day period).")
         else:
             stars = args.stars

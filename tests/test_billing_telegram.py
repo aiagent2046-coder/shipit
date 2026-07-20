@@ -108,7 +108,14 @@ def _telegram_transport(calls: list):
         method = request.url.path.rsplit("/", 1)[-1]
         import json
         calls.append((method, json.loads(request.content) if request.content else {}))
-        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+        # createInvoiceLink returns a bare string link in `result`; every other
+        # method here returns a small object. Match the real Bot API so callers
+        # that read resp["result"] as a URL (e.g. /subscribe) work.
+        if method == "createInvoiceLink":
+            result: object = "https://t.me/$test_invoice_link"
+        else:
+            result = {"message_id": 1}
+        return httpx.Response(200, json={"ok": True, "result": result})
     return httpx.MockTransport(handler)
 
 
@@ -579,26 +586,54 @@ def _sub_updated_update(state, *, user_id=555,
         "state": state}}
 
 
-def test_build_invoice_payload_adds_subscription_period():
+def test_build_invoice_payload_never_carries_subscription_period():
+    # sendInvoice cannot create a subscription invoice (Telegram returns
+    # SUBSCRIPTION_EXPORT_MISSING), so build_invoice_payload must never emit a
+    # subscription_period -- the field is gone entirely from this one-shot path.
     body = telegram_stars.build_invoice_payload(
-        chat_id=1, title="t", description="d", payload="sub:x", stars=1,
-        subscription_period=telegram_stars.SUBSCRIPTION_PERIOD_SECONDS,
-    )
-    assert body["subscription_period"] == 2592000
-    # Omitting it leaves the one-shot body identical (no such key).
-    one_shot = telegram_stars.build_invoice_payload(
         chat_id=1, title="t", description="d", payload="p", stars=1)
-    assert "subscription_period" not in one_shot
+    assert "subscription_period" not in body
 
 
-async def test_subscribe_sends_recurring_invoice(monkeypatch):
+async def test_create_invoice_link_builds_subscription_link():
+    # A subscription invoice is minted via createInvoiceLink (NOT sendInvoice):
+    # same Stars body, WITHOUT chat_id, WITH subscription_period. resp["result"]
+    # is the shareable link string.
+    calls: list = []
+    transport = _telegram_transport(calls)
+    resp = await telegram_stars.create_invoice_link(
+        title=telegram_stars.SUBSCRIPTION_TITLE,
+        description=telegram_stars.SUBSCRIPTION_DESCRIPTION,
+        payload=telegram_stars.SUBSCRIPTION_PAYLOAD, stars=1,
+        subscription_period=telegram_stars.SUBSCRIPTION_PERIOD_SECONDS,
+        token="t", transport=transport,
+    )
+    assert resp["result"] == "https://t.me/$test_invoice_link"
+    assert len(calls) == 1 and calls[0][0] == "createInvoiceLink"
+    body = calls[0][1]
+    assert "chat_id" not in body
+    assert body["subscription_period"] == 2592000
+    assert body["currency"] == "XTR"
+    assert body["provider_token"] == ""
+    assert body["payload"] == telegram_stars.SUBSCRIPTION_PAYLOAD
+    assert body["prices"] == [{"label": telegram_stars.SUBSCRIPTION_TITLE, "amount": 1}]
+
+
+async def test_subscribe_exports_invoice_link_and_dms_it(monkeypatch):
+    # /subscribe must NOT call sendInvoice (that 400-looped in prod). It exports
+    # a link via createInvoiceLink, then DMs the link to the user.
     monkeypatch.delenv("SUBSCRIPTION_STARS", raising=False)
     calls: list = []
     result = await _send_sub(_text_update("/subscribe", 888), calls=calls)
     assert result == {"ok": True, "handled": "subscribe"}
-    invoices = [c for c in calls if c[0] == "sendInvoice"]
-    assert len(invoices) == 1
-    body = invoices[0][1]
+
+    # No sendInvoice on the subscription path -- ever.
+    assert not any(c[0] == "sendInvoice" for c in calls)
+
+    links = [c for c in calls if c[0] == "createInvoiceLink"]
+    assert len(links) == 1
+    body = links[0][1]
+    assert "chat_id" not in body
     assert body["payload"] == telegram_stars.SUBSCRIPTION_PAYLOAD
     assert body["subscription_period"] == 2592000
     assert body["currency"] == "XTR"
@@ -606,6 +641,16 @@ async def test_subscribe_sends_recurring_invoice(monkeypatch):
     assert body["prices"] == [
         {"label": telegram_stars.SUBSCRIPTION_TITLE,
          "amount": telegram_stars.subscription_stars_price()}]
+
+    # The user receives a message carrying the invoice URL, with an inline URL
+    # button pointing at the same link for one-tap payment.
+    sends = [c for c in calls if c[0] == "sendMessage"]
+    assert len(sends) == 1
+    msg = sends[0][1]
+    assert msg["chat_id"] == 888
+    assert "https://t.me/$test_invoice_link" in msg["text"]
+    button = msg["reply_markup"]["inline_keyboard"][0][0]
+    assert button["url"] == "https://t.me/$test_invoice_link"
 
 
 # (a) first payment -> creates one subscriptions row with the right expires_at
