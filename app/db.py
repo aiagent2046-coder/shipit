@@ -176,6 +176,17 @@ def _row_to_fixpack_job(row: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
+def _row_to_fix_outcome(row: dict[str, Any]) -> dict[str, Any]:
+    d = dict(row)
+    d["id"] = str(d["id"])
+    d["fixpack_job_id"] = (
+        str(d["fixpack_job_id"]) if d.get("fixpack_job_id") else None
+    )
+    d["audit_id"] = str(d["audit_id"]) if d.get("audit_id") else None
+    d["rule_ids"] = _json_field(d.get("rule_ids")) or []
+    return d
+
+
 def _row_to_account(row: dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
     d["id"] = str(d["id"])
@@ -686,6 +697,69 @@ class FixpackJobRepository:
             )
             row = await cur.fetchone()
         return _row_to_fixpack_job(row) if row else None
+
+
+class FixOutcomeRepository:
+    """The fix-outcome knowledge base (migration 0014). One row per terminal
+    Fix Pack job outcome; collection only, nothing reads it for decisions yet
+    (see PHASE_B_KNOWLEDGE_BASE_PLAN.md). Same real/fake split and
+    not-configured contract as the other repositories: when DATABASE_URL isn't
+    set, record()/set_pr_merged_by_pr_url() no-op instead of failing, so the
+    Fix Pack delivery path never breaks over a missing analytics store."""
+
+    async def record(
+        self, *, fixpack_job_id: str | None, audit_id: str | None,
+        rule_ids: list[str], stack: str, outcome: str,
+        is_regression: bool, pr_url: str | None,
+    ) -> dict[str, Any] | None:
+        """Insert one outcome row. pr_merged is left NULL -- only the
+        pull_request.closed webhook sets it, and only for delivered PRs.
+        Returns None when DATABASE_URL isn't configured."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        parsed_job_id = uuid.UUID(fixpack_job_id) if fixpack_job_id else None
+        parsed_audit_id = uuid.UUID(audit_id) if audit_id else None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into fix_outcomes
+                    (fixpack_job_id, audit_id, rule_ids, stack, outcome,
+                     is_regression, pr_url)
+                values (%s, %s, %s::jsonb, %s, %s, %s, %s)
+                returning id, fixpack_job_id, audit_id, rule_ids, stack,
+                          outcome, is_regression, pr_url, pr_merged,
+                          created_at, updated_at
+                """,
+                (
+                    parsed_job_id, parsed_audit_id, json.dumps(rule_ids),
+                    stack, outcome, is_regression, pr_url,
+                ),
+            )
+            row = await cur.fetchone()
+        return _row_to_fix_outcome(row)
+
+    async def set_pr_merged_by_pr_url(self, pr_url: str, merged: bool) -> int:
+        """Backfill pr_merged for the delivered outcome whose PR just closed,
+        matched by the PR's html_url (the exact value stored at delivery).
+        Returns the number of rows updated so the webhook can distinguish a
+        matched PR (1) from an unknown one (0) -- an unknown PR is a benign
+        no-op, not an error. Returns 0 when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return 0
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update fix_outcomes
+                   set pr_merged = %s, updated_at = now()
+                 where pr_url = %s
+                """,
+                (merged, pr_url),
+            )
+            return cur.rowcount
 
 
 class AccountRepository:
