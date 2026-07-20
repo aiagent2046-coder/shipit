@@ -163,18 +163,22 @@ def subscription_stars_price() -> int:
 
 def build_invoice_payload(
     *, chat_id: int | str, title: str, description: str,
-    payload: str, stars: int, subscription_period: int | None = None,
+    payload: str, stars: int,
 ) -> dict[str, Any]:
     """The JSON body for sendInvoice, for Stars specifically. Pure and
     separate from the HTTP call so the exact shape (XTR, empty
     provider_token, LabeledPrice) is unit-testable without a network.
 
-    subscription_period (optional): when set, makes this a recurring Stars
-    subscription invoice charged every that-many seconds -- must be exactly
-    SUBSCRIPTION_PERIOD_SECONDS (the only value the Bot API accepts). Omitted
-    (the default) leaves the body identical to a one-shot invoice, so every
-    existing caller is unchanged."""
-    body: dict[str, Any] = {
+    Deliberately has NO subscription_period: sendInvoice CANNOT create a
+    recurring subscription invoice. Telegram rejects that with
+    SUBSCRIPTION_EXPORT_MISSING -- a subscription invoice "may not be sent
+    using messages.sendMedia [= Bot API sendInvoice], only exported to
+    invoice deep links using payments.exportInvoice [= createInvoiceLink]"
+    (https://core.telegram.org/api/subscriptions). An earlier version passed
+    subscription_period through here, which shipped a 400-looping /subscribe
+    to prod; the parameter is removed so that footgun can't recur. Recurring
+    invoices go through create_invoice_link below."""
+    return {
         "chat_id": chat_id,
         "title": title,
         "description": description,
@@ -185,9 +189,36 @@ def build_invoice_payload(
         "currency": CURRENCY,
         "prices": [{"label": title, "amount": stars}],
     }
+
+
+async def create_invoice_link(
+    *, title: str, description: str, payload: str, stars: int,
+    subscription_period: int | None = None, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    """Create an invoice via createInvoiceLink and return the Bot API envelope
+    ({"ok": True, "result": "<url>"}); `result` is a shareable invoice link,
+    NOT tied to any chat (hence no chat_id, unlike build_invoice_payload).
+
+    This is the ONLY way to mint a recurring Stars subscription invoice:
+    subscription invoices cannot be sent with sendInvoice and must be exported
+    as a deep link (https://core.telegram.org/api/subscriptions). Pass
+    subscription_period=SUBSCRIPTION_PERIOD_SECONDS for a subscription; omit it
+    for an ordinary one-shot link. Body is the same Stars shape as
+    build_invoice_payload minus chat_id."""
+    body: dict[str, Any] = {
+        "title": title,
+        "description": description,
+        "payload": payload,
+        "provider_token": "",
+        "currency": CURRENCY,
+        "prices": [{"label": title, "amount": stars}],
+    }
     if subscription_period is not None:
         body["subscription_period"] = subscription_period
-    return body
+    return await _call(
+        "createInvoiceLink", body, token=token, transport=transport,
+    )
 
 
 # Telegram cancels the charge if we don't answerPreCheckoutQuery within
@@ -230,14 +261,14 @@ class TelegramError(Exception):
 async def send_invoice(
     *, chat_id: int | str, title: str, description: str, payload: str,
     stars: int, token: str, transport: httpx.BaseTransport | None = None,
-    subscription_period: int | None = None,
 ) -> dict[str, Any]:
+    # One-shot invoices only (/upgrade, /fixpack). Subscriptions must NOT use
+    # this -- see build_invoice_payload and create_invoice_link.
     return await _call(
         "sendInvoice",
         build_invoice_payload(
             chat_id=chat_id, title=title, description=description,
             payload=payload, stars=stars,
-            subscription_period=subscription_period,
         ),
         token=token, transport=transport,
     )
@@ -281,10 +312,16 @@ async def answer_pre_checkout_query(
 async def send_message(
     chat_id: int | str, text: str, *, token: str,
     transport: httpx.BaseTransport | None = None,
+    reply_markup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # reply_markup is optional and defaults to None, so every existing caller
+    # (key delivery, error notices, alerts) is unchanged. /subscribe uses it to
+    # attach an inline URL button that opens the createInvoiceLink invoice.
+    body: dict[str, Any] = {"chat_id": chat_id, "text": text}
+    if reply_markup is not None:
+        body["reply_markup"] = reply_markup
     return await _call(
-        "sendMessage", {"chat_id": chat_id, "text": text},
-        token=token, transport=transport,
+        "sendMessage", body, token=token, transport=transport,
     )
 
 
@@ -479,21 +516,38 @@ async def _handle_upgrade(
     return {"ok": True, "handled": "upgrade"}
 
 
+def _subscribe_prompt_text(url: str) -> str:
+    return (
+        "Drydock Monitoring (test) — a recurring Telegram Stars subscription "
+        "that renews every 30 days.\n\n"
+        f"Tap to subscribe:\n{url}\n\n"
+        "You can cancel auto-renewal any time with /unsubscribe."
+    )
+
+
 async def _handle_subscribe(
     message: dict[str, Any], *, token: str,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    # Mirrors _handle_upgrade, but sends a *recurring* invoice: the
-    # subscription_period makes Telegram charge every 30 days and emit
-    # is_recurring successful_payments plus BotSubscriptionUpdated on state
-    # changes. Same send_invoice path the one-shot flow uses.
+    # A recurring Stars invoice CANNOT be sent with sendInvoice -- Telegram
+    # returns 400 SUBSCRIPTION_EXPORT_MISSING (see build_invoice_payload). A
+    # subscription invoice must be exported as a deep link via createInvoiceLink
+    # and then handed to the user, who taps it to open the Pay flow. So: mint
+    # the link, then DM it (with an inline URL button for one-tap UX).
     chat_id = message["chat"]["id"]
-    await send_invoice(
-        chat_id=chat_id, title=SUBSCRIPTION_TITLE,
-        description=SUBSCRIPTION_DESCRIPTION, payload=SUBSCRIPTION_PAYLOAD,
-        stars=subscription_stars_price(),
+    resp = await create_invoice_link(
+        title=SUBSCRIPTION_TITLE, description=SUBSCRIPTION_DESCRIPTION,
+        payload=SUBSCRIPTION_PAYLOAD, stars=subscription_stars_price(),
         subscription_period=SUBSCRIPTION_PERIOD_SECONDS,
         token=token, transport=transport,
+    )
+    url = resp["result"]
+    reply_markup = {
+        "inline_keyboard": [[{"text": "Subscribe with Stars", "url": url}]]
+    }
+    await send_message(
+        chat_id, _subscribe_prompt_text(url),
+        token=token, transport=transport, reply_markup=reply_markup,
     )
     return {"ok": True, "handled": "subscribe"}
 

@@ -245,10 +245,16 @@ Implemented:
     payment.
   - **Recurring subscriptions (Telegram Stars).** Stars is the *only*
     provider that can auto-charge (crypto has no allowance-free auto-debit,
-    so USDT stays one-time). A subscription invoice is an ordinary
-    `sendInvoice` with one extra field, `subscription_period`, which **must**
-    equal `SUBSCRIPTION_PERIOD_SECONDS = 2592000` (30 days — the only value
-    the Bot API accepts). The webhook grows two behaviours:
+    so USDT stays one-time). A subscription invoice **cannot** be sent with
+    `sendInvoice` — Telegram rejects that with `SUBSCRIPTION_EXPORT_MISSING`
+    ("subscription invoices may not be sent using `messages.sendMedia`, only
+    exported to invoice deep links using `payments.exportInvoice`",
+    https://core.telegram.org/api/subscriptions). It must instead be minted
+    with `createInvoiceLink` (adding `subscription_period`, which **must**
+    equal `SUBSCRIPTION_PERIOD_SECONDS = 2592000`, 30 days — the only value the
+    Bot API accepts). `/subscribe` exports that link and DMs it to the user
+    (with an inline URL button) to open the Pay flow. The webhook grows two
+    behaviours:
     - `message.successful_payment` for a `sub:`-prefixed payload →
       `grant_subscription` upserts/renews the `subscriptions` row
       (migration 0015). `is_first_recurring` inserts the row; `is_recurring`
