@@ -183,6 +183,7 @@ async def grant_subscription(
     tier: str,
     expires_at: Any,
     is_first_recurring: bool,
+    repo_full_name: str | None = None,
 ) -> dict[str, Any] | None:
     """The subscription counterpart to grant_pro_tier / grant_fixpack:
     idempotently turn a confirmed recurring Stars charge into an up-to-date
@@ -227,6 +228,7 @@ async def grant_subscription(
             telegram_user_id=telegram_user_id, invoice_payload=invoice_payload,
             tier=tier, telegram_chat_id=telegram_chat_id,
             telegram_payment_charge_id=external_ref, expires_at=expires_at,
+            repo_full_name=repo_full_name,
         )
 
     existing = await subscription_repo.get_by_user_and_payload(
@@ -241,6 +243,7 @@ async def grant_subscription(
             telegram_user_id=telegram_user_id, invoice_payload=invoice_payload,
             tier=tier, telegram_chat_id=telegram_chat_id,
             telegram_payment_charge_id=external_ref, expires_at=expires_at,
+            repo_full_name=repo_full_name,
         )
     return await subscription_repo.renew(
         existing["id"], expires_at=expires_at,

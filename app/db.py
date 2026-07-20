@@ -308,6 +308,41 @@ class AuditRepository:
             row = await cur.fetchone()
         return _row_to_audit(row) if row else None
 
+    async def get_latest_by_repo_url(
+        self, repo_full_name: str
+    ) -> dict[str, Any] | None:
+        """Most recent completed audit for a repo, matched by a canonical
+        'owner/repo' (Phase C monitoring's diff baseline). audits.repo_url is
+        stored as typed at intake (full github URL, 0006); this normalizes it in
+        SQL -- extract owner/repo, drop a trailing '.git'/slash, lowercase -- so
+        it matches regardless of the casing/suffix the audit was created with.
+        The same normalization app/monitor.normalize_repo_full_name does in
+        Python, kept in lockstep so a push and a stored audit for the same repo
+        always join. Returns None when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, stack, status, file_count, score_total,
+                       score_json, findings_json, repo_url, created_at
+                from audits
+                where repo_url is not null
+                      and lower(regexp_replace(
+                          repo_url,
+                          '^https://github\\.com/(.+?)(\\.git)?/?$',
+                          '\\1')) = %s
+                      and status = 'completed'
+                order by created_at desc
+                limit 1
+                """,
+                (repo_full_name,),
+            )
+            row = await cur.fetchone()
+        return _row_to_audit(row) if row else None
+
     async def get(self, audit_id: str) -> dict[str, Any] | None:
         try:
             pool = await get_pool()
@@ -1168,13 +1203,18 @@ class SubscriptionRepository:
     async def upsert_first(
         self, *, telegram_user_id: str, invoice_payload: str, tier: str,
         telegram_chat_id: str | None, telegram_payment_charge_id: str | None,
-        expires_at: Any,
+        expires_at: Any, repo_full_name: str | None = None,
     ) -> dict[str, Any] | None:
         """Record the first payment of a subscription (is_first_recurring).
         Upsert on the natural key so a retried first-payment webhook lands on
         the same row (idempotent) and re-enabling a previously canceled/expired
         subscription reactivates its row rather than colliding. Sets status
-        back to 'active'."""
+        back to 'active'.
+
+        repo_full_name (Phase C) is the canonical 'owner/repo' this subscription
+        monitors, or None for the legacy no-repo tier. It rides the natural key
+        via the invoice_payload ('sub:monitor:<owner/repo>'), so a re-upsert for
+        the same payload always carries the same repo."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1185,8 +1225,9 @@ class SubscriptionRepository:
                 """
                 insert into subscriptions
                     (telegram_user_id, invoice_payload, tier, telegram_chat_id,
-                     telegram_payment_charge_id, status, expires_at)
-                values (%s, %s, %s, %s, %s, 'active', %s)
+                     telegram_payment_charge_id, status, repo_full_name,
+                     expires_at)
+                values (%s, %s, %s, %s, %s, 'active', %s, %s)
                 on conflict (telegram_user_id, invoice_payload) do update
                    set tier = excluded.tier,
                        telegram_chat_id = excluded.telegram_chat_id,
@@ -1194,16 +1235,85 @@ class SubscriptionRepository:
                            excluded.telegram_payment_charge_id,
                        status = 'active',
                        expires_at = excluded.expires_at,
+                       repo_full_name = excluded.repo_full_name,
                        updated_at = now()
                 returning id, account_id, telegram_user_id, telegram_chat_id,
                           tier, invoice_payload, telegram_payment_charge_id,
-                          status, expires_at, created_at, updated_at
+                          status, expires_at, repo_full_name, last_monitored_at,
+                          created_at, updated_at
                 """,
                 (telegram_user_id, invoice_payload, tier, telegram_chat_id,
-                 telegram_payment_charge_id, expires_dt),
+                 telegram_payment_charge_id, repo_full_name, expires_dt),
             )
             row = await cur.fetchone()
         return _row_to_subscription(row) if row else None
+
+    async def list_active_for_repo(
+        self, repo_full_name: str
+    ) -> list[dict[str, Any]]:
+        """Monitoring subscriptions with live access for a repo: expires_at in
+        the future (the access boundary from 0015, which honors a
+        canceled-but-still-in-period subscription). Matched on the canonical
+        repo_full_name (app/monitor.normalize_repo_full_name), stored
+        already-normalized, so this is an exact-equality lookup. Empty list when
+        DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return []
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, telegram_user_id, telegram_chat_id,
+                       tier, invoice_payload, telegram_payment_charge_id,
+                       status, expires_at, repo_full_name, last_monitored_at,
+                       created_at, updated_at
+                from subscriptions
+                where repo_full_name = %s
+                      and expires_at is not null and expires_at > now()
+                order by created_at asc
+                """,
+                (repo_full_name,),
+            )
+            rows = await cur.fetchall()
+        return [_row_to_subscription(r) for r in rows]
+
+    async def claim_for_monitoring(
+        self, repo_full_name: str, at: datetime.datetime
+    ) -> bool:
+        """Atomically claim this repo for a monitoring run and report whether the
+        claim was won. In one write it stamps last_monitored_at = `at` on the
+        repo's subscription rows IFF none has been monitored within the last 24h
+        -- so this is BOTH the 24h-per-repo cost cap AND the concurrency guard.
+
+        Two near-simultaneous default-branch pushes race on this UPDATE: the
+        first commits and stamps the rows; the second, under READ COMMITTED,
+        re-checks its WHERE against the freshly-committed rows, finds them no
+        longer eligible, updates nothing, and returns an empty set -- so exactly
+        one push re-audits and notifies. Same idea as the Fix Pack processor's
+        FOR UPDATE SKIP LOCKED job claim, expressed as a conditional UPDATE.
+
+        Returns False (nothing claimed) when DATABASE_URL isn't set. Callers must
+        claim BEFORE the audit, not after, so the stamp also throttles retries of
+        a dead/unfetchable repo."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update subscriptions
+                   set last_monitored_at = %s, updated_at = now()
+                 where repo_full_name = %s
+                   and (last_monitored_at is null
+                        or last_monitored_at < %s - interval '24 hours')
+                returning id
+                """,
+                (at, repo_full_name, at),
+            )
+            rows = await cur.fetchall()
+        return len(rows) > 0
 
     async def renew(
         self, subscription_id: str, *, expires_at: Any,

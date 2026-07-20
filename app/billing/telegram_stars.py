@@ -161,6 +161,43 @@ def subscription_stars_price() -> int:
     return _DEFAULT_SUBSCRIPTION_STARS
 
 
+# --- Continuous Monitoring subscription (Phase C) ---
+# A recurring Stars subscription bound to a specific repository. Same "sub:"
+# family as the test tier -- so successful_payment still routes it through
+# _handle_subscription_payment -- but the payload carries the canonical
+# owner/repo after a second "monitor:" segment: "sub:monitor:<owner/repo>".
+# That makes the natural key (telegram_user_id, invoice_payload) distinct per
+# repo per user, so one user can monitor several repos without a schema change.
+MONITOR_PAYLOAD_PREFIX = f"{SUBSCRIPTION_PAYLOAD_PREFIX}monitor:"
+MONITOR_TIER = "monitoring"
+MONITOR_TITLE = "Drydock Continuous Monitoring"
+
+
+def monitor_payload(repo_full_name: str) -> str:
+    return f"{MONITOR_PAYLOAD_PREFIX}{repo_full_name}"
+
+
+def _monitor_description(repo_full_name: str) -> str:
+    return (
+        f"Continuous monitoring for {repo_full_name} — re-audits on each push "
+        "to the default branch and alerts you here on new critical/high "
+        "findings. Renews every 30 days; cancel any time with /unsubscribe."
+    )
+
+
+def _monitor_confirmation_text(repo_full_name: str, expires_at: Any) -> str:
+    when = str(expires_at) if expires_at is not None else "the next billing date"
+    return (
+        f"Continuous monitoring is active for {repo_full_name}.\n\n"
+        "On each push to the repository's default branch we re-audit it (at "
+        "most once a day) and message you here if new critical or high findings "
+        "appear that weren't in the previous audit.\n\n"
+        f"Next renewal / access through: {when}\n\n"
+        "Renews automatically every 30 days. Send /unsubscribe to stop "
+        "auto-renewal; you keep access until the current period ends."
+    )
+
+
 def build_invoice_payload(
     *, chat_id: int | str, title: str, description: str,
     payload: str, stars: int,
@@ -475,6 +512,11 @@ async def handle_update(
             message, text, audit_repo=audit_repo,
             token=token, transport=transport,
         )
+    if text.split(maxsplit=1)[:1] == ["/monitor"]:
+        return await _handle_monitor(
+            message, text, audit_repo=audit_repo,
+            token=token, transport=transport,
+        )
     if text.split(maxsplit=1)[:1] == ["/mykey"]:
         return await _handle_mykey(
             message, account_repo=account_repo, payment_repo=payment_repo,
@@ -579,15 +621,24 @@ async def _handle_subscription_payment(
     # where they coincide.
     user_id = str((message.get("from") or {}).get("id") or chat_id)
     is_first = bool(sp.get("is_first_recurring"))
+    payload = sp.get("invoice_payload", "") or ""
+    # A monitoring subscription (sub:monitor:<owner/repo>) binds a repo and uses
+    # the 'monitoring' tier; the legacy sub:test-monitoring payload binds nothing.
+    repo_full_name: str | None = None
+    tier = SUBSCRIPTION_TIER
+    if payload.startswith(MONITOR_PAYLOAD_PREFIX):
+        repo_full_name = payload[len(MONITOR_PAYLOAD_PREFIX):] or None
+        tier = MONITOR_TIER
     subscription = await grant_subscription(
         subscription_repo=subscription_repo, payment_repo=payment_repo,
         provider=PROVIDER, external_ref=sp["telegram_payment_charge_id"],
         amount=sp.get("total_amount"), currency=sp.get("currency", CURRENCY),
         telegram_user_id=user_id, telegram_chat_id=str(chat_id),
-        invoice_payload=sp.get("invoice_payload", "") or "",
-        tier=SUBSCRIPTION_TIER,
+        invoice_payload=payload,
+        tier=tier,
         expires_at=sp.get("subscription_expiration_date"),
         is_first_recurring=is_first,
+        repo_full_name=repo_full_name,
     )
     if subscription is None:
         # DATABASE_URL not configured -- charge taken but nothing persisted.
@@ -602,10 +653,13 @@ async def _handle_subscription_payment(
     # DM only on the first charge -- silent auto-renewals shouldn't spam the
     # payer every 30 days (Telegram already shows its own receipt).
     if is_first:
+        confirmation = (
+            _monitor_confirmation_text(repo_full_name, subscription.get("expires_at"))
+            if repo_full_name
+            else _subscription_confirmation_text(subscription.get("expires_at"))
+        )
         await send_message(
-            chat_id,
-            _subscription_confirmation_text(subscription.get("expires_at")),
-            token=token, transport=transport,
+            chat_id, confirmation, token=token, transport=transport,
         )
     return {
         "ok": True, "handled": "subscription_payment", "persisted": True,
@@ -731,6 +785,86 @@ async def _handle_fixpack(
         token=token, transport=transport,
     )
     return {"ok": True, "handled": "fixpack", "result": "invoice_sent"}
+
+
+_MONITOR_ZIP_ONLY_TEXT = (
+    "Continuous monitoring watches a GitHub repository for new issues on each "
+    "push, so it only works for audits run from a public GitHub URL. This audit "
+    "was created from an uploaded zip (no repository to watch). Re-run the audit "
+    "with your public GitHub repo URL, then enable monitoring for that audit."
+)
+
+
+def _monitor_prompt_text(repo_full_name: str, url: str) -> str:
+    return (
+        f"Continuous monitoring for {repo_full_name} — a recurring Telegram "
+        "Stars subscription that renews every 30 days. We re-audit on each push "
+        "to the default branch (at most once a day) and alert you here on new "
+        "critical/high findings.\n\n"
+        f"Tap to enable:\n{url}\n\n"
+        "You can cancel auto-renewal any time with /unsubscribe."
+    )
+
+
+async def _handle_monitor(
+    message: dict[str, Any], text: str, *, audit_repo: Any,
+    token: str, transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # "/monitor <audit_id>": subscribe to continuous monitoring of the repo the
+    # audit ran against. Mirrors _handle_fixpack's audit lookup + repo_url gate,
+    # but sends a RECURRING subscription invoice (createInvoiceLink, like
+    # /subscribe -- a subscription invoice cannot be sent with sendInvoice, see
+    # build_invoice_payload) whose payload binds the repo:
+    # sub:monitor:<owner/repo>. _handle_subscription_payment records that repo on
+    # the subscriptions row.
+    from app.monitor import normalize_repo_full_name
+
+    chat_id = message["chat"]["id"]
+    parts = text.split(maxsplit=1)
+    audit_id = parts[1].strip() if len(parts) > 1 else ""
+    if not audit_id:
+        await send_message(
+            chat_id,
+            "Usage: `/monitor <audit_id>` — the id of a completed audit you ran "
+            "from a public GitHub URL. Enables continuous monitoring of that "
+            "repository.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "monitor", "result": "missing_audit_id"}
+
+    audit = await audit_repo.get(audit_id) if audit_repo is not None else None
+    if audit is None:
+        await send_message(
+            chat_id,
+            "No audit with that id was found. Double-check the audit id from "
+            "your report.",
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "monitor", "result": "audit_not_found"}
+
+    repo_full_name = normalize_repo_full_name(audit.get("repo_url"))
+    if not repo_full_name:
+        await send_message(
+            chat_id, _MONITOR_ZIP_ONLY_TEXT, token=token, transport=transport
+        )
+        return {"ok": True, "handled": "monitor", "result": "not_github_audit"}
+
+    resp = await create_invoice_link(
+        title=MONITOR_TITLE, description=_monitor_description(repo_full_name),
+        payload=monitor_payload(repo_full_name), stars=subscription_stars_price(),
+        subscription_period=SUBSCRIPTION_PERIOD_SECONDS,
+        token=token, transport=transport,
+    )
+    url = resp["result"]
+    reply_markup = {
+        "inline_keyboard": [[{"text": "Enable monitoring with Stars", "url": url}]]
+    }
+    await send_message(
+        chat_id, _monitor_prompt_text(repo_full_name, url),
+        token=token, transport=transport, reply_markup=reply_markup,
+    )
+    return {"ok": True, "handled": "monitor", "result": "invoice_sent",
+            "repo_full_name": repo_full_name}
 
 
 async def _handle_fixpack_payment(
