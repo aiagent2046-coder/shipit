@@ -9,6 +9,7 @@ since the LLM call alone can take up to ~2 minutes.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import hmac
 import io
@@ -64,6 +65,8 @@ from app.fixpack.semantic_check import run_semantic_check
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
 from app.llm.client import LLMClient
+from app.monitor import normalize_repo_full_name, repo_url_from_full_name
+from app.monitor.diff import new_high_severity_findings
 from app.report.html import render_report
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
 from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest, run_scan
@@ -267,6 +270,73 @@ def _parse_github_repo_url(repo_url: str) -> tuple[str, str] | None:
             and _VALID_OWNER_REPO_SEGMENT.match(repo)):
         return None
     return owner, repo
+
+
+async def run_repo_audit(
+    repo_url: str, *, llm_client: LLMClient, audit_repo: AuditRepository,
+    repo_fetcher,
+) -> dict | None:
+    """Fetch a public GitHub repo, audit it, and persist -- reusing the exact
+    pipeline the POST /v1/audits URL path uses: the same content-hash cache
+    (get_by_content_hash), the same run_scan, the same AUDIT_ENGINE_VERSION and
+    AuditRepository.create. Returns {audit_id, findings, repo_url, reused} or
+    None when there is nothing to audit (unfetchable-as-zip content, or a stack
+    the MVP doesn't support).
+
+    Used by the continuous-monitoring push webhook. It is a separate function
+    from create_audit rather than a shared refactor of it on purpose:
+    create_audit interleaves tier resolution, per-account daily quota, and HTTP
+    error shaping that the internal monitoring trigger has no business running.
+    What must be shared for cost and consistency -- one cache, one scan, one
+    engine version -- is shared by calling the same primitives here.
+
+    The cost guard lives in that shared cache: byte-identical repo content
+    (nothing changed since the last audit) is a cache hit that returns the prior
+    audit with NO LLM call, so a push that didn't change the audited content is
+    free and produces an empty findings diff. RepoFetchError propagates to the
+    caller (e.g. a repo that went private -> 404, indistinguishable by design;
+    see app/ingest/github_fetch.py)."""
+    parsed = _parse_github_repo_url(repo_url)
+    if parsed is None:
+        return None
+    owner, repo = parsed
+    raw = await run_in_threadpool(repo_fetcher, owner, repo)
+    buf = io.BytesIO(raw)
+    try:
+        report = validate_zip(buf, size_bytes=len(raw))
+    except ArchiveValidationError:
+        return None
+    buf.seek(0)
+    stack = detect_stack(buf)
+    if stack is Stack.UNSUPPORTED:
+        return None
+
+    digest = content_digest(raw)
+    cached = await audit_repo.get_by_content_hash(digest, AUDIT_ENGINE_VERSION)
+    if cached is not None:
+        return {
+            "audit_id": cached["id"],
+            "findings": cached["findings_json"] or [],
+            "repo_url": cached.get("repo_url"),
+            "access_token": cached.get("access_token"),
+            "reused": True,
+        }
+
+    scan = await run_in_threadpool(run_scan, raw, llm_client)
+    persisted = await audit_repo.create(
+        stack=stack.value, file_count=report.file_count,
+        score_total=scan["score"]["total"], score_json=scan["score"],
+        findings_json=scan["findings"], repo_url=repo_url,
+        content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
+    )
+    audit_id = persisted["id"] if persisted else str(uuid.uuid4())
+    return {
+        "audit_id": audit_id,
+        "findings": scan["findings"],
+        "repo_url": repo_url,
+        "access_token": persisted.get("access_token") if persisted else None,
+        "reused": False,
+    }
 
 
 def _reap_token() -> str | None:
@@ -569,11 +639,20 @@ def _verify_github_signature(secret: str, body: bytes, header: str) -> bool:
 async def github_webhook(
     request: Request,
     fix_outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
+    subscription_repo: SubscriptionRepository = Depends(get_subscription_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+    llm_client: LLMClient = Depends(get_llm_client),
+    repo_fetcher=Depends(get_repo_fetcher),
+    transport=Depends(get_billing_transport),
 ) -> dict:
-    """GitHub App webhook. Its one job this phase: when a Fix Pack PR is
-    closed, record whether it was merged (fix_outcomes.pr_merged) -- the
-    real-world signal for whether our fix was good enough to ship. Collection
-    only; nothing acts on it yet (see PHASE_B_KNOWLEDGE_BASE_PLAN.md).
+    """GitHub App webhook. Two independent jobs, dispatched by X-GitHub-Event:
+
+      * pull_request: when a Fix Pack PR is closed, record whether it was
+        merged (fix_outcomes.pr_merged) -- the real-world signal for whether
+        our fix shipped. Collection only (see PHASE_B_KNOWLEDGE_BASE_PLAN.md).
+      * push: continuous monitoring (Phase C). A push to a repo's default
+        branch re-audits it (at most once per 24h per repo) and DMs every
+        active subscriber the NEW critical/high findings, if any.
 
     Authenticity is the standard GitHub scheme: X-Hub-Signature-256 =
     'sha256=' + HMAC-SHA256(GITHUB_APP_WEBHOOK_SECRET, raw body), compared
@@ -582,15 +661,12 @@ async def github_webhook(
     notice, same posture as the Telegram webhook. 401 on a missing/invalid
     signature.
 
-    Only pull_request/closed deliveries do work; everything else is a 200 ack
-    so GitHub stops retrying. The matching outcome is found by the PR's
-    html_url (stored at delivery). An unknown PR -- any PR not opened by a Fix
-    Pack, e.g. a hand-opened one on the same repo -- matches no row and is a
-    benign no-op ({"updated": 0}).
+    Everything other than the two handled events is a 200 ack so GitHub stops
+    retrying.
 
-    NOTE: the App must be subscribed to the 'Pull request' event in its GitHub
-    settings for these deliveries to arrive at all -- a manual, one-time UI
-    step (see README)."""
+    NOTE: the App must be subscribed to BOTH the 'Pull request' AND 'Push'
+    events in its GitHub settings for these deliveries to arrive at all -- a
+    manual, one-time UI step (see README)."""
     secret = _github_webhook_secret()
     if not secret:
         raise HTTPException(
@@ -605,21 +681,141 @@ async def github_webhook(
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
     event = request.headers.get("x-github-event", "")
-    if event != "pull_request":
-        return {"ignored": True, "reason": "event_not_handled"}
-
     payload = json.loads(body) if body else {}
-    if payload.get("action") != "closed":
-        return {"ignored": True, "reason": "action_not_handled"}
 
-    pr = payload.get("pull_request") or {}
-    pr_url = pr.get("html_url")
-    if not pr_url:
-        return {"ignored": True, "reason": "no_pull_request_url"}
+    if event == "pull_request":
+        if payload.get("action") != "closed":
+            return {"ignored": True, "reason": "action_not_handled"}
+        pr = payload.get("pull_request") or {}
+        pr_url = pr.get("html_url")
+        if not pr_url:
+            return {"ignored": True, "reason": "no_pull_request_url"}
+        merged = bool(pr.get("merged"))
+        updated = await fix_outcome_repo.set_pr_merged_by_pr_url(pr_url, merged)
+        return {"updated": updated, "merged": merged}
 
-    merged = bool(pr.get("merged"))
-    updated = await fix_outcome_repo.set_pr_merged_by_pr_url(pr_url, merged)
-    return {"updated": updated, "merged": merged}
+    if event == "push":
+        return await _handle_monitoring_push(
+            payload, subscription_repo=subscription_repo, audit_repo=audit_repo,
+            llm_client=llm_client, repo_fetcher=repo_fetcher, transport=transport,
+        )
+
+    return {"ignored": True, "reason": "event_not_handled"}
+
+
+_MONITOR_INTERVAL = datetime.timedelta(hours=24)
+
+
+def _as_aware_utc(value) -> datetime.datetime | None:
+    """A timestamptz from the DB may come back naive (no tzinfo) depending on
+    the driver/adapter; treat a naive value as UTC so the 24h math never raises
+    on a naive/aware comparison."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.timezone.utc)
+    return value
+
+
+async def _handle_monitoring_push(
+    payload: dict, *, subscription_repo: SubscriptionRepository,
+    audit_repo: AuditRepository, llm_client: LLMClient, repo_fetcher, transport,
+) -> dict:
+    """Continuous-monitoring core (see PHASE_C_MONITORING_PLAN.md). Only a push
+    to the repo's OWN default branch counts -- a push to a feature branch isn't
+    what ships, and re-auditing every branch push would burn the LLM budget for
+    noise. The 24h gate (subscriptions.last_monitored_at) caps cost at one
+    re-audit per repo per day regardless of how many subscribers or pushes.
+
+    The diff is taken against the latest completed audit of the SAME repo
+    captured BEFORE this run, so a subscriber is told only about findings that
+    are newly present (new_high_severity_findings, keyed on rule_id+file). We
+    always stamp last_monitored_at, even when the re-audit yields nothing or the
+    repo can't be fetched, so a burst of pushes can't bypass the daily cap."""
+    repository = payload.get("repository") or {}
+    default_branch = repository.get("default_branch")
+    ref = payload.get("ref") or ""
+    if not default_branch or ref != f"refs/heads/{default_branch}":
+        return {"ignored": True, "reason": "not_default_branch"}
+
+    repo_full_name = normalize_repo_full_name(
+        repository.get("full_name") or repository.get("html_url")
+    )
+    if repo_full_name is None:
+        return {"ignored": True, "reason": "unparseable_repo"}
+
+    subs = await subscription_repo.list_active_for_repo(repo_full_name)
+    if not subs:
+        return {"ignored": True, "reason": "no_active_subscription"}
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    last = [_as_aware_utc(s.get("last_monitored_at")) for s in subs]
+    most_recent = max((t for t in last if t is not None), default=None)
+    if most_recent is not None and now - most_recent < _MONITOR_INTERVAL:
+        return {"ignored": True, "reason": "within_interval"}
+
+    previous = await audit_repo.get_latest_by_repo_url(repo_full_name)
+    previous_findings = (previous or {}).get("findings_json") or []
+
+    try:
+        result = await run_repo_audit(
+            repo_url_from_full_name(repo_full_name), llm_client=llm_client,
+            audit_repo=audit_repo, repo_fetcher=repo_fetcher,
+        )
+    except RepoFetchError:
+        # Repo went private/was deleted (404, indistinguishable by design).
+        # Stamp the attempt so we don't retry the same dead repo every push.
+        await subscription_repo.mark_monitored(repo_full_name, now)
+        return {"monitored": True, "reason": "repo_unfetchable", "notified": 0}
+
+    if result is None:
+        await subscription_repo.mark_monitored(repo_full_name, now)
+        return {"monitored": True, "reason": "unauditable", "notified": 0}
+
+    new_findings = new_high_severity_findings(previous_findings, result["findings"])
+    notified = 0
+    if new_findings:
+        token = telegram_stars.bot_token_from_env()
+        text = _monitoring_alert_text(repo_full_name, new_findings)
+        for sub in subs:
+            chat_id = sub.get("telegram_chat_id") or sub.get("telegram_user_id")
+            if not (chat_id and token):
+                continue
+            try:
+                await telegram_stars.send_message(
+                    str(chat_id), text, token=token, transport=transport
+                )
+                notified += 1
+            except Exception:  # noqa: BLE001 -- one bad DM must not abort the rest
+                logger.warning("monitoring alert send failed", exc_info=True)
+
+    await subscription_repo.mark_monitored(repo_full_name, now)
+    return {
+        "monitored": True, "audit_id": result["audit_id"],
+        "new_findings": len(new_findings), "notified": notified,
+        "reused": result["reused"],
+    }
+
+
+def _monitoring_alert_text(repo_full_name: str, new_findings: list[dict]) -> str:
+    """One DM summarizing the new critical/high findings from a monitored push.
+    Lists up to a handful by rule/file so the subscriber knows what changed
+    without us dumping an unbounded wall of text."""
+    n = len(new_findings)
+    lines = [
+        f"⚠️ Continuous monitoring: {n} new "
+        f"critical/high finding{'s' if n != 1 else ''} in {repo_full_name}",
+        "",
+    ]
+    shown = new_findings[:10]
+    for f in shown:
+        sev = (f.get("severity") or "").upper()
+        rule = f.get("rule_id") or "?"
+        path = f.get("file") or "?"
+        lines.append(f"• [{sev}] {rule} — {path}")
+    if n > len(shown):
+        lines.append(f"… and {n - len(shown)} more")
+    return "\n".join(lines)
 
 
 def _usdt_receiving_address() -> str | None:

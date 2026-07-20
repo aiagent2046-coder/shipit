@@ -351,31 +351,55 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   to 3 attempts, then failing — so `systemctl restart shipit` mid-job never
   loses or wedges a job (see `PHASE3_QUEUE_PLAN.md`).
 
-### GitHub webhook — Fix Pack merge signal (`pr_merged`)
+### GitHub webhook — two jobs (`pr_merged` + continuous monitoring)
 
-`POST /v1/webhooks/github` records whether a delivered Fix Pack PR was actually
-merged — the real-world signal for whether a fix was good enough to ship — into
-`fix_outcomes.pr_merged` (migration 0014). This is **collection only**: nothing
-scores or acts on the data yet (see `PHASE_B_KNOWLEDGE_BASE_PLAN.md`). Each
-terminal Fix Pack outcome (delivered / blocked / failed / no_fix_needed) is
-recorded when the processor finishes a job; the webhook backfills `pr_merged`
-later, matched by the PR's `html_url`.
-
-Authenticity uses the standard GitHub scheme: the delivery carries
-`X-Hub-Signature-256: sha256=<hex>`, where `<hex>` is
+`POST /v1/webhooks/github` is one endpoint dispatching on `X-GitHub-Event`.
+Authenticity (shared by both events) uses the standard GitHub scheme: the
+delivery carries `X-Hub-Signature-256: sha256=<hex>`, where `<hex>` is
 `HMAC-SHA256(GITHUB_APP_WEBHOOK_SECRET, <raw body>)`, verified constant-time over
-the raw bytes. Only `pull_request` / `action: "closed"` deliveries do work;
-everything else (and any PR not opened by a Fix Pack) is a 200 no-op. The
-endpoint 503s until `GITHUB_APP_WEBHOOK_SECRET` is set — an unconfigured webhook
-is an operational gap, not a silent no-op (same posture as the Telegram webhook).
+the raw bytes. The endpoint 503s until `GITHUB_APP_WEBHOOK_SECRET` is set — an
+unconfigured webhook is an operational gap, not a silent no-op (same posture as
+the Telegram webhook). Any event other than the two below is a 200 no-op.
+
+**`pull_request` — Fix Pack merge signal.** Records whether a delivered Fix Pack
+PR was actually merged — the real-world signal for whether a fix was good enough
+to ship — into `fix_outcomes.pr_merged` (migration 0014). This is **collection
+only**: nothing scores or acts on the data yet (see
+`PHASE_B_KNOWLEDGE_BASE_PLAN.md`). Each terminal Fix Pack outcome (delivered /
+blocked / failed / no_fix_needed) is recorded when the processor finishes a job;
+the webhook backfills `pr_merged` later, matched by the PR's `html_url`. Only
+`action: "closed"` deliveries do work; everything else (and any PR not opened by
+a Fix Pack) is a 200 no-op.
+
+**`push` — continuous monitoring (Phase C).** A subscriber enables monitoring of
+a public repo from its audit page (the `/monitor <auditId>` bot command → a
+recurring Stars subscription whose payload binds the repo; see
+`PHASE_C_MONITORING_PLAN.md`). On a push **to that repo's default branch**, the
+webhook re-audits the repo — reusing the same pipeline and content-hash cache as
+the URL intake path, so a push that didn't change the audited content costs no
+LLM call — and DMs every active subscriber the **new** critical/high findings.
+"New" means a `(rule_id, file)` key absent from the previous audit of the same
+repo (line numbers are excluded, so incidental line drift isn't a false alarm; a
+medium→high re-score of the same key isn't flagged either — that's a deliberate
+non-goal). Cost is capped at **one re-audit per repo per 24h**
+(`subscriptions.last_monitored_at`, migration 0016), stamped even when the
+re-audit finds nothing or the repo can't be fetched, so a burst of pushes can't
+bypass the cap. Pushes to non-default branches, and repos with no active
+subscription, are 200 no-ops. Monitoring is public-repo-only (the fetcher uses no
+auth); a repo that goes private simply stops producing findings.
+
+The push side and the stored `audits.repo_url` are matched through a single
+normalization (`app/monitor.normalize_repo_full_name`) to a canonical lowercased
+`owner/repo`, so casing, a trailing `.git`, or a trailing slash never cause a
+silent mismatch that would bury the diff.
 
 **Manual, one-time GitHub-UI setup (not code-configurable, done by the
 operator):** in the GitHub App's settings, set the **Webhook URL** to
 `https://<host>/v1/webhooks/github`, set the **Webhook secret** to the same value
-as `GITHUB_APP_WEBHOOK_SECRET` in `.env`, and subscribe the App to the **Pull
-request** event. Until the App is subscribed to that event, no deliveries arrive
-and `pr_merged` simply stays `null` — the rest of the Fix Pack flow is
-unaffected.
+as `GITHUB_APP_WEBHOOK_SECRET` in `.env`, and subscribe the App to **both** the
+**Pull request** and **Push** events. Until the App is subscribed to an event, no
+deliveries of that kind arrive — `pr_merged` stays `null` and monitoring never
+fires — while the rest of each flow is unaffected.
 
 Deployment gotchas found the hard way (all encoded in `.env.example`):
 

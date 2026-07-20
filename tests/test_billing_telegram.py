@@ -519,13 +519,15 @@ class FakeSubscriptionRepo:
         return active[-1] if active else None
 
     async def upsert_first(self, *, telegram_user_id, invoice_payload, tier,
-                           telegram_chat_id, telegram_payment_charge_id, expires_at):
+                           telegram_chat_id, telegram_payment_charge_id, expires_at,
+                           repo_full_name=None):
         existing = self._find(telegram_user_id, invoice_payload)
         if existing is not None:
             existing.update(
                 tier=tier, telegram_chat_id=telegram_chat_id,
                 telegram_payment_charge_id=telegram_payment_charge_id,
                 status="active", expires_at=expires_at,
+                repo_full_name=repo_full_name,
             )
             return existing
         row = {
@@ -535,6 +537,7 @@ class FakeSubscriptionRepo:
             "invoice_payload": invoice_payload,
             "telegram_payment_charge_id": telegram_payment_charge_id,
             "status": "active", "expires_at": expires_at,
+            "repo_full_name": repo_full_name,
         }
         self.rows[row["id"]] = row
         return row
