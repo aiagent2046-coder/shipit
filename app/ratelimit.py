@@ -1,11 +1,18 @@
-"""In-memory rate limiter for the audit endpoint.
+"""Rate limiter for the audit endpoint.
 
-MVP scope: single-process fixed-window counter keyed by client IP.
-This is intentionally the simplest thing that enforces the architecture
-doc's rule ("5 audits/day, from day one") before the endpoint runs an
-LLM stage. It resets on process restart and does not share state across
-processes — move the counter to Redis (`.env` REDIS_URL is already
-reserved for this) before running more than one worker/instance.
+Two interchangeable fixed-window implementations behind one interface
+(`check(key, limit=None)` raising `RateLimitExceeded`):
+
+- `RateLimiter`: in-memory, single-process counter keyed by client IP.
+  Simplest thing that enforces the architecture doc's rule ("5 audits/day,
+  from day one"). It resets on process restart and does not share state
+  across processes.
+- `RedisRateLimiter`: same window semantics backed by Redis, so the budget
+  survives restarts/deploys and is shared across workers/instances.
+
+`limiter_from_env()` picks Redis when `REDIS_URL` is set and falls back to
+in-memory otherwise, so a deployment without Redis infrastructure keeps
+working exactly as before (graceful degradation, no breaking change).
 """
 
 from __future__ import annotations
@@ -84,6 +91,72 @@ class RateLimiter:
             del self._windows[k]
 
 
-def limiter_from_env() -> RateLimiter:
+# Fixed-window counter in one atomic round-trip: INCR the key, and only on
+# the first hit of a window set its expiry, so the window is anchored at the
+# first request (matching RateLimiter). Returns (count, pttl_ms) so the caller
+# can compute retry_after from the real remaining TTL.
+_WINDOW_LUA = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return {current, redis.call('PTTL', KEYS[1])}
+"""
+
+
+class RedisRateLimiter:
+    """Fixed-window limiter backed by Redis: `limit` calls per `window_seconds`,
+    per key. Same interface as RateLimiter, so it drops in behind
+    `get_rate_limiter` unchanged. Unlike the in-memory limiter the budget
+    survives process restarts/deploys and is shared across workers.
+
+    `client` is any object exposing redis-py's `eval(script, numkeys, *args)`;
+    injected so tests can pass an in-process fake instead of a real server.
+    """
+
+    def __init__(
+        self,
+        client,
+        limit: int = DEFAULT_LIMIT,
+        window_seconds: int = DEFAULT_WINDOW_SECONDS,
+        key_prefix: str = "ratelimit:",
+    ):
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self._client = client
+        self._key_prefix = key_prefix
+
+    def check(self, key: str, limit: int | None = None) -> None:
+        """Raise RateLimitExceeded if `key` is over budget; else record the call.
+
+        `limit` overrides the default budget for THIS call only (tier-aware
+        limits), exactly like RateLimiter.check.
+        """
+        effective = self.limit if limit is None else limit
+        window_ms = self.window_seconds * 1000
+        count, pttl = self._client.eval(
+            _WINDOW_LUA, 1, f"{self._key_prefix}{key}", window_ms
+        )
+        if count > effective:
+            # PTTL is ms remaining; -1/-2 mean "no expiry"/"missing", which
+            # shouldn't happen right after INCR but is handled defensively.
+            remaining_ms = pttl if pttl and pttl > 0 else window_ms
+            retry_after = int(remaining_ms / 1000) + 1
+            raise RateLimitExceeded(retry_after)
+
+
+def limiter_from_env() -> RateLimiter | RedisRateLimiter:
+    """Redis-backed limiter when REDIS_URL is set, else the in-memory one.
+
+    Absence of Redis infrastructure is not a breaking change: the fallback is
+    byte-for-byte the previous behavior. Provisioning Redis and setting
+    REDIS_URL upgrades the same limiter to survive restarts.
+    """
     limit = int(os.environ.get("AUDIT_RATE_LIMIT_PER_DAY", DEFAULT_LIMIT))
+    redis_url = os.environ.get("REDIS_URL")
+    if redis_url:
+        import redis  # imported lazily so the dep is only needed when used
+
+        client = redis.Redis.from_url(redis_url)
+        return RedisRateLimiter(client, limit=limit)
     return RateLimiter(limit=limit)
