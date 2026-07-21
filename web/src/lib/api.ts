@@ -13,7 +13,7 @@ import type {
 } from "./types";
 
 export const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_BASE_URL || "https://45-10-40-169.sslip.io"
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
 ).replace(/\/+$/, "");
 
 export const TELEGRAM_BOT_USERNAME =
