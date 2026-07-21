@@ -953,6 +953,7 @@ class PaymentRepository:
         external_ref: str | None, amount: float | None, currency: str | None,
         status: str, tier_granted: str | None,
         product: str = "pro_tier", audit_id: str | None = None,
+        paypal_order_id: str | None = None,
     ) -> dict[str, Any] | None:
         try:
             pool = await get_pool()
@@ -965,14 +966,15 @@ class PaymentRepository:
                 """
                 insert into payments
                     (account_id, provider, external_ref, amount, currency,
-                     status, tier_granted, product, audit_id)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     status, tier_granted, product, audit_id, paypal_order_id)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id, account_id, provider, external_ref, amount,
                           currency, status, tier_granted, telegram_chat_id,
-                          product, audit_id, created_at
+                          product, audit_id, paypal_order_id, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
-                 status, tier_granted, product, parsed_audit_id),
+                 status, tier_granted, product, parsed_audit_id,
+                 paypal_order_id),
             )
             row = await cur.fetchone()
         return _row_to_payment(row)
@@ -991,7 +993,7 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, created_at
+                       product, audit_id, paypal_order_id, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -1015,10 +1017,37 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, created_at
+                       product, audit_id, paypal_order_id, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
+
+    async def get_by_paypal_order_id(
+        self, paypal_order_id: str
+    ) -> dict[str, Any] | None:
+        """The pending payment created at PayPal order time, keyed by the order
+        id (migration 0018's partial unique index). Backs both the webhook
+        (transition the pending row to completed via invoice_payment_id) and
+        GET /v1/paypal/orders/{id} (poll the granted key back). None when
+        DATABASE_URL isn't set or there's no such order."""
+        if not paypal_order_id:
+            return None
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, provider, external_ref, amount,
+                       currency, status, tier_granted, telegram_chat_id,
+                       product, audit_id, paypal_order_id, created_at
+                from payments where paypal_order_id = %s
+                """,
+                (paypal_order_id,),
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
@@ -1038,7 +1067,7 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, created_at
+                       product, audit_id, paypal_order_id, created_at
                 from payments
                 where provider = %s and status = 'pending'
                 order by created_at desc
@@ -1108,7 +1137,7 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, created_at
+                       product, audit_id, paypal_order_id, created_at
                 from payments
                 where telegram_chat_id = %s and status = 'completed'
                 order by created_at desc
@@ -1148,7 +1177,7 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, created_at
+                       product, audit_id, paypal_order_id, created_at
                 from payments where id = %s
                 """,
                 (pid,),
@@ -1181,7 +1210,8 @@ class SubscriptionRepository:
                 """
                 select id, account_id, telegram_user_id, telegram_chat_id,
                        tier, invoice_payload, telegram_payment_charge_id,
-                       status, expires_at, created_at, updated_at
+                       status, expires_at, payment_provider,
+                       paypal_subscription_id, created_at, updated_at
                 from subscriptions
                 where telegram_user_id = %s and invoice_payload = %s
                 """,
@@ -1205,7 +1235,8 @@ class SubscriptionRepository:
                 """
                 select id, account_id, telegram_user_id, telegram_chat_id,
                        tier, invoice_payload, telegram_payment_charge_id,
-                       status, expires_at, created_at, updated_at
+                       status, expires_at, payment_provider,
+                       paypal_subscription_id, created_at, updated_at
                 from subscriptions
                 where telegram_user_id = %s and status = 'active'
                 order by created_at desc
@@ -1256,6 +1287,7 @@ class SubscriptionRepository:
                 returning id, account_id, telegram_user_id, telegram_chat_id,
                           tier, invoice_payload, telegram_payment_charge_id,
                           status, expires_at, repo_full_name, last_monitored_at,
+                          payment_provider, paypal_subscription_id,
                           created_at, updated_at
                 """,
                 (telegram_user_id, invoice_payload, tier, telegram_chat_id,
@@ -1283,6 +1315,7 @@ class SubscriptionRepository:
                 select id, account_id, telegram_user_id, telegram_chat_id,
                        tier, invoice_payload, telegram_payment_charge_id,
                        status, expires_at, repo_full_name, last_monitored_at,
+                       payment_provider, paypal_subscription_id,
                        created_at, updated_at
                 from subscriptions
                 where repo_full_name = %s
@@ -1356,7 +1389,8 @@ class SubscriptionRepository:
                  where id = %s
                 returning id, account_id, telegram_user_id, telegram_chat_id,
                           tier, invoice_payload, telegram_payment_charge_id,
-                          status, expires_at, created_at, updated_at
+                          status, expires_at, payment_provider,
+                          paypal_subscription_id, created_at, updated_at
                 """,
                 (expires_dt, telegram_payment_charge_id,
                  uuid.UUID(subscription_id)),
@@ -1383,9 +1417,157 @@ class SubscriptionRepository:
                  where id = %s
                 returning id, account_id, telegram_user_id, telegram_chat_id,
                           tier, invoice_payload, telegram_payment_charge_id,
-                          status, expires_at, created_at, updated_at
+                          status, expires_at, payment_provider,
+                          paypal_subscription_id, created_at, updated_at
                 """,
                 (status, uuid.UUID(subscription_id)),
+            )
+            row = await cur.fetchone()
+        return _row_to_subscription(row) if row else None
+
+    # --- PayPal (migration 0018) ---
+    #
+    # PayPal monitoring subscriptions have neither a telegram_user_id nor an
+    # invoice_payload, so the Stars natural key can't identify them. These
+    # methods pivot on paypal_subscription_id instead (the 'I-XXXX' id), the
+    # PayPal-side natural key, and set payment_provider='paypal'. Exactly
+    # parallel to upsert_first / renew / get_by_user_and_payload above.
+
+    async def create_paypal(
+        self, *, paypal_subscription_id: str, tier: str,
+        repo_full_name: str | None,
+    ) -> dict[str, Any] | None:
+        """Pre-insert the subscriptions row at PayPal subscription-create time
+        (status 'approval_pending', repo bound), before the buyer approves. This
+        binds the repo while we still know it, so every later webhook just
+        updates by paypal_subscription_id. Idempotent on the partial unique
+        index: a retried create lands on the same row and leaves it untouched
+        (the webhooks own status/expires_at). None when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into subscriptions
+                    (payment_provider, paypal_subscription_id, tier,
+                     repo_full_name, status)
+                values ('paypal', %s, %s, %s, 'approval_pending')
+                on conflict (paypal_subscription_id)
+                    where paypal_subscription_id is not null do nothing
+                returning id, account_id, telegram_user_id, telegram_chat_id,
+                          tier, invoice_payload, telegram_payment_charge_id,
+                          status, expires_at, repo_full_name, last_monitored_at,
+                          payment_provider, paypal_subscription_id,
+                          created_at, updated_at
+                """,
+                (paypal_subscription_id, tier, repo_full_name),
+            )
+            row = await cur.fetchone()
+        if row is not None:
+            return _row_to_subscription(row)
+        # ON CONFLICT DO NOTHING returns no row on a retry -- re-fetch it so the
+        # caller always gets the current row rather than a spurious None.
+        return await self.get_by_paypal_subscription_id(paypal_subscription_id)
+
+    async def get_by_paypal_subscription_id(
+        self, paypal_subscription_id: str
+    ) -> dict[str, Any] | None:
+        """Resolve a PayPal webhook (ACTIVATED / SALE / CANCELLED) back to its
+        row by the 'I-XXXX' subscription id. None when DATABASE_URL isn't set or
+        there's no such subscription."""
+        if not paypal_subscription_id:
+            return None
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, telegram_user_id, telegram_chat_id,
+                       tier, invoice_payload, telegram_payment_charge_id,
+                       status, expires_at, repo_full_name, last_monitored_at,
+                       payment_provider, paypal_subscription_id,
+                       created_at, updated_at
+                from subscriptions where paypal_subscription_id = %s
+                """,
+                (paypal_subscription_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_subscription(row) if row else None
+
+    async def upsert_first_paypal(
+        self, *, paypal_subscription_id: str, tier: str, expires_at: Any,
+        repo_full_name: str | None,
+    ) -> dict[str, Any] | None:
+        """First-period activation (BILLING.SUBSCRIPTION.ACTIVATED): move the
+        row to active with expires_at, creating it if the pre-insert was skipped
+        or a SALE renewal arrived first. Upsert on paypal_subscription_id so a
+        retried ACTIVATED lands on the same row (idempotent) -- the PayPal
+        counterpart to upsert_first. Preserves the already-bound repo_full_name
+        if this event lacks one. None when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        expires_dt = _expires_at_to_timestamptz(expires_at)
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into subscriptions
+                    (payment_provider, paypal_subscription_id, tier,
+                     repo_full_name, status, expires_at)
+                values ('paypal', %s, %s, %s, 'active', %s)
+                on conflict (paypal_subscription_id)
+                    where paypal_subscription_id is not null do update
+                   set tier = excluded.tier,
+                       status = 'active',
+                       expires_at = excluded.expires_at,
+                       repo_full_name =
+                           coalesce(excluded.repo_full_name,
+                                    subscriptions.repo_full_name),
+                       updated_at = now()
+                returning id, account_id, telegram_user_id, telegram_chat_id,
+                          tier, invoice_payload, telegram_payment_charge_id,
+                          status, expires_at, repo_full_name, last_monitored_at,
+                          payment_provider, paypal_subscription_id,
+                          created_at, updated_at
+                """,
+                (paypal_subscription_id, tier, repo_full_name, expires_dt),
+            )
+            row = await cur.fetchone()
+        return _row_to_subscription(row) if row else None
+
+    async def renew_paypal(
+        self, subscription_id: str, *, expires_at: Any,
+    ) -> dict[str, Any] | None:
+        """A recurring PayPal renewal (PAYMENT.SALE.COMPLETED): push expires_at
+        out and clear any canceled/suspended status back to active, since a
+        successful charge means it's charging again. Never creates a row -- the
+        caller falls back to upsert_first_paypal when the row is missing. The
+        PayPal counterpart to renew (no charge id to rotate: PayPal keys the
+        row on paypal_subscription_id, not the sale id). None when DATABASE_URL
+        isn't set."""
+        expires_dt = _expires_at_to_timestamptz(expires_at)
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update subscriptions
+                   set expires_at = %s, status = 'active', updated_at = now()
+                 where id = %s
+                returning id, account_id, telegram_user_id, telegram_chat_id,
+                          tier, invoice_payload, telegram_payment_charge_id,
+                          status, expires_at, repo_full_name, last_monitored_at,
+                          payment_provider, paypal_subscription_id,
+                          created_at, updated_at
+                """,
+                (expires_dt, uuid.UUID(subscription_id)),
             )
             row = await cur.fetchone()
         return _row_to_subscription(row) if row else None

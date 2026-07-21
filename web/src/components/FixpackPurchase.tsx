@@ -10,6 +10,7 @@ import {
   getInstallationStatus,
 } from "@/lib/api";
 import { UsdtCheckout } from "./UsdtCheckout";
+import { PayPalOrderCard } from "./PayPalButton";
 import { Spinner } from "./Spinner";
 
 const STARS_PRICE = "600 Stars";
@@ -76,7 +77,7 @@ export function FixpackPurchase({
       </header>
 
       <InstallGate repoUrl={repoUrl}>
-        <div className="mt-5 grid gap-5 md:grid-cols-2">
+        <div className="mt-5 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
           <StarsCard auditId={auditId} />
           <UsdtCheckout
             description={
@@ -98,6 +99,17 @@ export function FixpackPurchase({
                 </p>
               </div>
             )}
+          />
+          <PayPalOrderCard
+            product="fixpack"
+            auditId={auditId}
+            description={
+              <>
+                Pay once with PayPal (card or balance). Your Fix Pack is
+                generated automatically once the payment is captured — watch the
+                status below.
+              </>
+            }
           />
         </div>
       </InstallGate>

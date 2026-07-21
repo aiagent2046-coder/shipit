@@ -314,6 +314,36 @@ Implemented:
     reachability probe, **not** the feature working end to end — no real
     invoice was paid on-chain. Run `scripts/verify_usdt_trc20_locally.py`
     to exercise the actual `fetch_transfers()` code against live TronGrid.
+  - **PayPal Checkout** (`app/billing/paypal.py`, `POST /v1/paypal/orders`,
+    `GET /v1/paypal/orders/{id}`, `POST /v1/paypal/subscriptions`,
+    `POST /v1/webhooks/paypal`). An ALTERNATIVE offered beside Stars/USDT for
+    all three products, entirely additive: with `PAYPAL_CLIENT_ID` /
+    `PAYPAL_CLIENT_SECRET` unset every PayPal endpoint 503s and the other
+    providers are byte-for-byte unchanged. One-time Pro and Fix Pack use the
+    **Orders API** (create → the browser JS SDK approves + captures → a
+    `PAYMENT.CAPTURE.COMPLETED` webhook grants); monitoring uses the
+    **Subscriptions API** against a billing plan (`PAYPAL_MONITOR_PLAN_ID`),
+    activated/renewed by `BILLING.SUBSCRIPTION.ACTIVATED` /
+    `PAYMENT.SALE.COMPLETED` webhooks and cancelled by the
+    `CANCELLED/SUSPENDED/EXPIRED` events. Routing context rides the order /
+    subscription `custom_id` (`pro` / `fixpack:<audit_id>` /
+    `monitor:<owner/repo>`), the PayPal equivalent of the Stars invoice
+    payload, so a webhook routes with **no DB round trip**. Idempotency reuses
+    the existing partial unique indexes — `(provider, external_ref)` keyed on
+    the capture/sale id for `payments`, and `paypal_subscription_id`
+    (migration 0018) for `subscriptions`. Unlike Stars/GitHub (local HMAC),
+    PayPal authenticity is verified by an **outbound** call to
+    `POST /v1/notifications/verify-webhook-signature` (needs the OAuth token +
+    `PAYPAL_WEBHOOK_ID`); an unverified event never grants. Pure `httpx`, no
+    PayPal SDK, with an injectable `transport=` seam so the whole surface is
+    faked in tests. **Not exercised against real PayPal** — this sandbox has no
+    credentials; run `scripts/verify_paypal_sandbox_locally.py` (with sandbox
+    keys in the environment) to drive a real sandbox order/subscription once
+    the founder wires them. Frontend: `web/src/components/PayPalButton.tsx`
+    loads the JS SDK with `NEXT_PUBLIC_PAYPAL_CLIENT_ID` (blank → the cards
+    show as unconfigured, exactly like the Stars button) and renders the
+    buttons beside the existing Stars/USDT cards on `/pricing` and the audit
+    results page.
   Tests (`tests/test_billing_telegram.py`, `tests/test_billing_usdt.py`,
   17 new): all outbound HTTP is faked with `httpx.MockTransport` (no real
   network in the suite) — invoice payload shape, pre_checkout approval,

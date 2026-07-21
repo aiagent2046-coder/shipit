@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { TELEGRAM_BOT_USERNAME } from "@/lib/api";
+import { PayPalSubscriptionCard } from "./PayPalButton";
 
 // Continuous monitoring re-audits the repo on each push to its default branch
 // (at most once per day) and DMs you any NEW critical/high findings. Like the
@@ -40,14 +41,26 @@ export function MonitoringPurchase({
           We re-audit the repository on each push to its default branch (at most
           once a day) and send you a Telegram message the moment a{" "}
           <span className="font-medium text-text">new</span> critical or high
-          finding appears. It&apos;s a recurring Telegram Stars subscription —
-          the bot shows the current price for confirmation before anything is
-          charged, and you can cancel anytime with{" "}
-          <code className="font-mono">/unsubscribe</code>.
+          finding appears. It&apos;s a recurring subscription — with Telegram
+          Stars the bot shows the current price for confirmation before
+          anything is charged (cancel anytime with{" "}
+          <code className="font-mono">/unsubscribe</code>), or subscribe with
+          PayPal.
         </p>
       </header>
 
-      <MonitorStarsCard auditId={auditId} />
+      <div className="mt-5 grid gap-5 md:grid-cols-2">
+        <MonitorStarsCard auditId={auditId} />
+        <PayPalSubscriptionCard
+          repoUrl={repoUrl}
+          description={
+            <>
+              Start a recurring PayPal subscription that watches this
+              repository. You can cancel anytime from your PayPal account.
+            </>
+          }
+        />
+      </div>
     </section>
   );
 }

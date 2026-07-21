@@ -168,59 +168,83 @@ async def grant_fixpack(
 # recurring subscription charge apart from the one-shot products.
 PRODUCT_SUBSCRIPTION = "subscription"
 
+# The provider string for PayPal, matching app.billing.paypal.PROVIDER. Named
+# here so grant_subscription can branch on it without importing that module
+# (paypal.py imports the grant_* functions from here, not vice versa).
+PROVIDER_PAYPAL = "paypal"
+
 
 async def grant_subscription(
     *,
     subscription_repo: Any,
     payment_repo: _PaymentStore,
     provider: str,
-    external_ref: str,
+    external_ref: str | None,
     amount: float | None,
     currency: str | None,
-    telegram_user_id: str,
-    telegram_chat_id: str | None,
-    invoice_payload: str,
+    telegram_user_id: str | None = None,
+    telegram_chat_id: str | None = None,
+    invoice_payload: str | None = None,
+    paypal_subscription_id: str | None = None,
     tier: str,
     expires_at: Any,
     is_first_recurring: bool,
     repo_full_name: str | None = None,
 ) -> dict[str, Any] | None:
     """The subscription counterpart to grant_pro_tier / grant_fixpack:
-    idempotently turn a confirmed recurring Stars charge into an up-to-date
+    idempotently turn a confirmed recurring charge into an up-to-date
     `subscriptions` row, and return that row.
 
     Deliberately mints NO account and NO API key: the throwaway
-    'test-monitoring' tier unlocks nothing today (the Phase C monitoring
+    'monitoring' tier unlocks nothing today (the Phase C monitoring
     feature that will consume it doesn't exist yet), so a key would be dead
-    plumbing. The subscription is keyed off telegram_user_id; the nullable
-    subscriptions.account_id is left for Phase C to link.
+    plumbing. The subscription is keyed off the provider's natural key; the
+    nullable subscriptions.account_id is left for Phase C to link.
 
-    Two paths, chosen by the successful_payment flags:
-      * is_first_recurring -> upsert_first on the natural key
-        (telegram_user_id, invoice_payload): a new subscription, or the
-        reactivation of a previously canceled/expired one. Idempotent -- a
-        retried first-payment webhook lands on the same row.
-      * otherwise (is_recurring) -> renew the existing row: push expires_at
-        out and rotate telegram_payment_charge_id to this period's charge.
+    Provider branches on the natural key, additively:
+      * Stars keys on (telegram_user_id, invoice_payload) -- migration 0015.
+      * PayPal keys on paypal_subscription_id -- migration 0018. PayPal rows
+        have no telegram_user_id/invoice_payload, so those go unset.
+
+    Two paths, chosen by the successful_payment / webhook flags:
+      * is_first_recurring -> upsert_first on the natural key: a new
+        subscription, or the reactivation of a previously canceled/expired
+        one. Idempotent -- a retried first-payment event lands on the same row.
+      * otherwise (renewal) -> renew the existing row: push expires_at out
+        (Stars also rotates telegram_payment_charge_id to this period's charge).
 
     Each charge is also recorded as a completed `payments` row (each renewal
-    is a real charge with its own telegram_payment_charge_id), idempotent on
-    (provider, external_ref) via migration 0004's partial unique index --
-    same revenue bookkeeping as the other products. A retried webhook whose
-    charge is already recorded skips the second payment insert.
+    is a real charge), idempotent on (provider, external_ref) via migration
+    0004's partial unique index -- same revenue bookkeeping as the other
+    products. A retried event whose charge is already recorded skips the
+    second payment insert. PayPal's first-period ACTIVATED event carries no
+    charge id (external_ref is None); no payment row is written for it -- the
+    recurring PAYMENT.SALE.COMPLETED events carry the sale ids.
 
     Returns None only when nothing could be persisted (DATABASE_URL not
     configured -- subscription_repo can't write); callers surface that as
     "couldn't persist", not a crash.
     """
     # Record the charge for revenue bookkeeping, idempotently. A retried
-    # webhook finds the charge already recorded and does not double-insert.
-    existing_payment = await payment_repo.get_by_external_ref(provider, external_ref)
-    if existing_payment is None:
-        await payment_repo.create(
-            account_id=None, provider=provider, external_ref=external_ref,
-            amount=amount, currency=currency, status="completed",
-            tier_granted=None, product=PRODUCT_SUBSCRIPTION,
+    # event finds the charge already recorded and does not double-insert.
+    # external_ref may be None (PayPal ACTIVATED has no charge id) -> skip.
+    if external_ref is not None:
+        existing_payment = await payment_repo.get_by_external_ref(
+            provider, external_ref
+        )
+        if existing_payment is None:
+            await payment_repo.create(
+                account_id=None, provider=provider, external_ref=external_ref,
+                amount=amount, currency=currency, status="completed",
+                tier_granted=None, product=PRODUCT_SUBSCRIPTION,
+            )
+
+    if provider == PROVIDER_PAYPAL:
+        return await _grant_subscription_paypal(
+            subscription_repo=subscription_repo,
+            paypal_subscription_id=paypal_subscription_id, tier=tier,
+            expires_at=expires_at, is_first_recurring=is_first_recurring,
+            repo_full_name=repo_full_name,
         )
 
     if is_first_recurring:
@@ -248,4 +272,47 @@ async def grant_subscription(
     return await subscription_repo.renew(
         existing["id"], expires_at=expires_at,
         telegram_payment_charge_id=external_ref,
+    )
+
+
+async def _grant_subscription_paypal(
+    *,
+    subscription_repo: Any,
+    paypal_subscription_id: str | None,
+    tier: str,
+    expires_at: Any,
+    is_first_recurring: bool,
+    repo_full_name: str | None,
+) -> dict[str, Any] | None:
+    """PayPal's branch of grant_subscription, keyed on paypal_subscription_id
+    (migration 0018) instead of Stars' (telegram_user_id, invoice_payload).
+
+    The subscriptions row is normally pre-inserted at create time (status
+    'approval_pending', repo bound) by create_monitor_subscription, so the
+    common path is an update-by-id. But the row is keyed on the PayPal id here
+    so the webhook path never depends on that pre-insert having happened:
+      * ACTIVATED (is_first_recurring) -> upsert_first_paypal: create the row
+        if a pre-insert was skipped, else move it to active with the new
+        expires_at. Idempotent -- a retried ACTIVATED lands on the same row.
+      * SALE renewal -> renew_paypal on the existing row; if none exists (a
+        renewal arriving before we saw ACTIVATED), fall back to upsert_first
+        so the row exists and stays correct rather than dropping the renewal.
+    """
+    if not paypal_subscription_id:
+        return None
+    if is_first_recurring:
+        return await subscription_repo.upsert_first_paypal(
+            paypal_subscription_id=paypal_subscription_id, tier=tier,
+            expires_at=expires_at, repo_full_name=repo_full_name,
+        )
+    existing = await subscription_repo.get_by_paypal_subscription_id(
+        paypal_subscription_id
+    )
+    if existing is None:
+        return await subscription_repo.upsert_first_paypal(
+            paypal_subscription_id=paypal_subscription_id, tier=tier,
+            expires_at=expires_at, repo_full_name=repo_full_name,
+        )
+    return await subscription_repo.renew_paypal(
+        existing["id"], expires_at=expires_at,
     )
