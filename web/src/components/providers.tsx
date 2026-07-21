@@ -99,10 +99,13 @@ function KeyProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // This is a real standalone Vercel deployment (not a sandboxed iframe),
-  // so localStorage is the right place to remember the key across visits.
+  // The API key lives in sessionStorage, not localStorage: it's a bearer
+  // credential, so it should not sit persisted across browser restarts where
+  // a later XSS could harvest it. sessionStorage scopes it to the tab session
+  // and clears it on close, shrinking the exposure window. The trade-off is
+  // the key is re-entered each new session (theme, below, stays persistent).
   useEffect(() => {
-    const stored = window.localStorage.getItem(KEY_STORAGE);
+    const stored = window.sessionStorage.getItem(KEY_STORAGE);
     if (stored) {
       setApiKey(stored);
       void refresh(stored);
@@ -114,7 +117,7 @@ function KeyProvider({ children }: { children: React.ReactNode }) {
   const setKey = useCallback(
     async (key: string) => {
       const trimmed = key.trim();
-      window.localStorage.setItem(KEY_STORAGE, trimmed);
+      window.sessionStorage.setItem(KEY_STORAGE, trimmed);
       setApiKey(trimmed);
       await refresh(trimmed);
     },
@@ -122,7 +125,7 @@ function KeyProvider({ children }: { children: React.ReactNode }) {
   );
 
   const clearKey = useCallback(() => {
-    window.localStorage.removeItem(KEY_STORAGE);
+    window.sessionStorage.removeItem(KEY_STORAGE);
     setApiKey(null);
     void refresh(null);
   }, [refresh]);
