@@ -8,8 +8,9 @@ Architecture: see `docs/shipit-architecture.md` (v0.2).
 
 ## Status: phase 1 (Audit Engine) done, phase 2 (Deploy Pack) mostly done, deployed to a production VPS
 
-Live deployment: `https://45-10-40-169.sslip.io` (Timeweb VPS, systemd +
-Caddy; see "Production deployment" below). Confirmed there for real on
+Live deployment: the backend host configured via `NEXT_PUBLIC_API_BASE_URL`
+(frontend) / served by Caddy on the Timeweb VPS (systemd + Caddy; see
+"Production deployment" below for the concrete host). Confirmed there for real on
 2026-07-12: healthz over TLS, full audit round trip persisted to
 Supabase and read back, LLM scan through AITunnel (2 rubric prompts, 4
 findings, all grep-verified), hourly preview reaper via systemd timer.

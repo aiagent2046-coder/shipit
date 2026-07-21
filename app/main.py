@@ -163,6 +163,27 @@ def configure_cors(target: FastAPI) -> None:
 
 configure_cors(app)
 
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Set baseline security headers on every response (JSON and HTML).
+
+    Global here is safe: there is no iframe/WebApp embed of this backend
+    anywhere, so X-Frame-Options: DENY breaks nothing. A strict CSP is
+    deliberately NOT set globally — it would break Swagger UI (/docs) and
+    ReDoc (/redoc), which load CDN JS and use inline scripts. CSP is scoped
+    per-route to the self-contained HTML audit report instead.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault(
+        "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
+    )
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
+
 _limiter = limiter_from_env()
 
 
@@ -194,6 +215,12 @@ def get_preview_registry() -> PreviewRegistry:
     """FastAPI dependency indirection — overridable in tests. In-memory,
     single-process, same caveat as get_rate_limiter."""
     return _preview_registry
+
+
+def get_preview_reconciler():
+    """FastAPI dependency indirection — overridable in tests so the reap
+    endpoint never shells out to a real `docker ps`."""
+    return reconcile_previews
 
 
 _audit_repo = AuditRepository()
@@ -469,6 +496,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 async def reap_previews(
     request: Request,
     preview_registry: PreviewRegistry = Depends(get_preview_registry),
+    reconciler=Depends(get_preview_reconciler),
 ) -> dict:
     """Operational endpoint for the scheduled reaper — called hourly by
     shipit-reap.timer on the production VPS (a former GitHub Actions
@@ -497,7 +525,7 @@ async def reap_previews(
     # registry is empty while real preview containers may still be running.
     # reconcile_previews asks Docker directly and ages out orphans by their
     # shipit.expires_at label, regardless of what this process remembers.
-    reconciled = await run_in_threadpool(reconcile_previews)
+    reconciled = await run_in_threadpool(reconciler)
     return {
         "reaped": reaped,
         "active": preview_registry.active_count(),
@@ -556,7 +584,15 @@ async def get_audit_report(
         )
     result = {"score": score, "findings": row.get("findings_json") or []}
     html = render_report(result, project_name=f"audit {audit_id[:8]}")
-    return HTMLResponse(content=html)
+    # Tight CSP scoped to this self-contained report page: it inlines a
+    # <style> block (hence style-src 'unsafe-inline') but loads no scripts,
+    # images, or any external asset, so everything else is denied. Scoped
+    # here so it never touches /docs, /redoc, or JSON responses.
+    csp = (
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+        "form-action 'none'; frame-ancestors 'none'"
+    )
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
 
 
 @app.get("/v1/account")
