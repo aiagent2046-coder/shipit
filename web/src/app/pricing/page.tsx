@@ -4,6 +4,7 @@ import Link from "next/link";
 import { TELEGRAM_BOT_USERNAME } from "@/lib/api";
 import { useApiKey } from "@/components/providers";
 import { ProUsdtCheckout } from "@/components/UsdtCheckout";
+import { PayPalOrderCard } from "@/components/PayPalButton";
 
 interface Row {
   label: string;
@@ -66,9 +67,9 @@ export default function PricingPage() {
         </h1>
         <p className="mt-2 max-w-2xl text-muted">
           The audit itself is free. Pro raises your daily audit limit — pay
-          once with Telegram Stars or USDT and unlock a Pro API key. Pro does
-          not include a Fix Pack: those are bought per-audit from an audit&apos;s
-          results page.
+          once with Telegram Stars, USDT, or PayPal and unlock a Pro API key.
+          Pro does not include a Fix Pack: those are bought per-audit from an
+          audit&apos;s results page.
         </p>
         {isPro && (
           <p className="mt-3 inline-block rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm text-accent">
@@ -152,7 +153,7 @@ export default function PricingPage() {
       </section>
 
       {/* Payment options */}
-      <section className="mt-10 grid gap-5 md:grid-cols-2">
+      <section className="mt-10 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
         {/* Telegram Stars */}
         <div className="rounded-xl border border-border bg-elevated p-5">
           <h3 className="text-lg font-semibold">Pay with Telegram Stars</h3>
@@ -180,6 +181,17 @@ export default function PricingPage() {
 
         {/* USDT / TRC20 */}
         <ProUsdtCheckout />
+
+        {/* PayPal */}
+        <PayPalOrderCard
+          product="pro"
+          description={
+            <>
+              Pay once with PayPal (card or balance). Your Pro API key unlocks
+              automatically the moment the payment is captured.
+            </>
+          }
+        />
       </section>
 
       <p className="mt-8 text-center text-sm text-muted">
