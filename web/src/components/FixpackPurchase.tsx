@@ -194,6 +194,7 @@ function InstallGate({
       {status!.install_url && (
         <a
           href={status!.install_url}
+          rel="noreferrer"
           onClick={rememberReturn}
           className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90"
         >
