@@ -114,13 +114,17 @@ def _readonly_argv() -> list[str]:
     we generate actually need at runtime. Empty when DEPLOYPACK_READONLY_ROOTFS
     is disabled.
 
-    /tmp   — general scratch (uvicorn/node).
-    /run   — the Vite Pack serves via nginx:alpine, which writes its pid to
-             /run/nginx.pid (/var/run is a symlink to /run on alpine).
-    /var/cache/nginx — nginx worker temp/cache dirs (client_temp, proxy_temp…).
-    Without these last two, nginx aborts on boot under --read-only and the
-    container exits before the boot-check curl can reach it (observed: vite
-    "never returned 200 … No such container" on smoke run 29913120507)."""
+    /tmp   — general scratch (uvicorn/node) and the Vite Pack's nginx pid
+             (nginx-unprivileged writes /tmp/nginx.pid).
+    /run   — legacy nginx pid location (/var/run→/run on alpine); harmless
+             belt-and-braces for any server that still writes there.
+    /var/cache/nginx — nginx worker temp/cache dirs (client_temp, proxy_temp…),
+             which nginx re-creates on boot.
+    Without the nginx carve-outs the Vite Pack aborts on boot under --read-only
+    and the container exits before the boot-check curl can reach it (observed:
+    vite "never returned 200 … No such container" on smoke run 29913120507).
+    The Vite Pack uses nginx-unprivileged (uid 101) precisely so it never needs
+    to chown these dirs as root under --cap-drop=ALL — see generate.py."""
     if not DEPLOYPACK_READONLY_ROOTFS:
         return []
     return [

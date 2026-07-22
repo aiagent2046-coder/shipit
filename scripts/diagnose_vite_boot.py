@@ -58,7 +58,7 @@ def main() -> int:
     # so the exited container is inspectable.
     run_cmd = [
         "docker", "run", "-d", "--name", container,
-        "-p", "127.0.0.1:8080:80",
+        "-p", "127.0.0.1:8080:8080",
         *sandbox._network_argv(), *sandbox._user_argv(), *sandbox._readonly_argv(),
         *sandbox._RUN_HARDENING, tag,
     ]

@@ -299,10 +299,10 @@ def test_preview_run_is_read_only_with_tmpfs_by_default(monkeypatch):
 
 
 def test_readonly_preview_carves_out_nginx_writable_paths(monkeypatch):
-    # The Vite Pack serves via nginx:alpine, which writes /run/nginx.pid and
-    # /var/cache/nginx/* at boot; under --read-only those need tmpfs or nginx
-    # aborts before the boot-check can reach it (regression from smoke run
-    # 29913120507).
+    # The Vite Pack serves via nginx-unprivileged, which writes its pid to
+    # /tmp/nginx.pid and worker temp to /var/cache/nginx/* at boot; under
+    # --read-only those need tmpfs or nginx aborts before the boot-check can
+    # reach it (regression from smoke run 29913120507).
     monkeypatch.setattr(sandbox, "DEPLOYPACK_READONLY_ROOTFS", True)
     _, run_call = _run_call_for(monkeypatch)
     mounts = _tmpfs_mounts(run_call)
