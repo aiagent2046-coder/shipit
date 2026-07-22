@@ -56,6 +56,9 @@ jobs:
           fi
           echo "OK: egress from shipit-preview is blocked"
 
+      - name: "DIAGNOSTIC: capture vite nginx boot error under hardened run (no --rm)"
+        run: python scripts/diagnose_vite_boot.py
+
       - name: Real docker build + run + curl for all three stacks
         run: python scripts/smoke_verify_deploy_pack.py
 
