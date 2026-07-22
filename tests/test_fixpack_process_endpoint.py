@@ -141,7 +141,7 @@ def test_semantic_regression_blocks_pr_and_marks_job(monkeypatch):
 
     from app.fixpack.semantic_check import RunResult, SemanticCheckResult
 
-    def fake_check(zip_bytes, plan):
+    def fake_check(zip_bytes, plan, **kwargs):
         return SemanticCheckResult(
             ran=True, ecosystem="python",
             original=RunResult(5, 0, False, None),
@@ -191,7 +191,7 @@ def test_semantic_note_is_appended_to_pr_body(monkeypatch):
 
     from app.fixpack.semantic_check import SemanticCheckResult
 
-    def fake_check(zip_bytes, plan):
+    def fake_check(zip_bytes, plan, **kwargs):
         return SemanticCheckResult(
             ran=False, ecosystem=None, original=None, patched=None,
             regression=False, detail="no client test suite detected",

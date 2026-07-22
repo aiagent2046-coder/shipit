@@ -10,6 +10,7 @@ since the LLM call alone can take up to ~2 minutes.
 from __future__ import annotations
 
 import datetime
+import functools
 import hashlib
 import hmac
 import io
@@ -57,7 +58,7 @@ from app.deploypack.github_app import (
     installation_token_for_repo,
 )
 from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
-from app.deploypack.preview import PreviewRegistry, reconcile_previews
+from app.deploypack.preview import PreviewRegistry
 from app.fixpack.generate import (
     build_fixpack_plan,
     render_pr_body as render_fixpack_pr_body,
@@ -66,6 +67,8 @@ from app.fixpack.generate import (
 from app.fixpack.semantic_check import run_semantic_check
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
+from app import sandbox_client
+from app.sandbox_client import SandboxRunnerUnavailable
 from app.llm.client import LLMClient
 from app.monitor import normalize_repo_full_name, repo_url_from_full_name
 from app.monitor.diff import new_high_severity_findings
@@ -227,8 +230,9 @@ def get_preview_registry() -> PreviewRegistry:
 
 def get_preview_reconciler():
     """FastAPI dependency indirection — overridable in tests so the reap
-    endpoint never shells out to a real `docker ps`."""
-    return reconcile_previews
+    endpoint never shells out to a real `docker ps`. Routes through the
+    sandbox-runner client (Variant A): the backend never execs docker itself."""
+    return sandbox_client.reconcile_previews
 
 
 _audit_repo = AuditRepository()
@@ -1614,7 +1618,13 @@ async def _process_one_paid_job(
         # tree (in Docker) and refuse to ship if we introduced a regression.
         # Synchronous and slow (real Docker), so off the event loop like the
         # scan. A blocked job is parked for a human, never auto-delivered.
-        semantic = await run_in_threadpool(run_semantic_check, zip_bytes, plan)
+        semantic = await run_in_threadpool(
+            functools.partial(
+                run_semantic_check, zip_bytes, plan,
+                suite_runner=sandbox_client.run_suite,
+                minimal_checker=sandbox_client.minimal_check,
+            )
+        )
         if semantic.regression:
             logger.warning(
                 "Fix Pack job %s blocked by semantic check: %s",
@@ -2146,6 +2156,14 @@ async def create_fixpack(
         raise HTTPException(
             status_code=413,
             detail={"reason": "workspace_too_large", "detail": str(exc)},
+        )
+    except SandboxRunnerUnavailable as exc:
+        # A live preview genuinely can't be built without the runner. The
+        # non-preview verify path degrades to verified=None inside
+        # run_deploy_pack; the preview path surfaces 503 so the caller retries.
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "sandbox_runner_unavailable", "detail": str(exc)},
         )
 
     persisted_job = await fixpack_repo.create(

@@ -637,18 +637,36 @@ def minimal_check(plan: FixpackPlan) -> RunResult:
 
 # --- Orchestration ---------------------------------------------------------
 
-def run_semantic_check(original_zip: bytes, plan: FixpackPlan) -> SemanticCheckResult:
+def run_semantic_check(
+    original_zip: bytes,
+    plan: FixpackPlan,
+    *,
+    suite_runner=None,
+    minimal_checker=None,
+) -> SemanticCheckResult:
     """Top-level gate. Detect the client's test runner; if present, run both
     versions in Docker and compare; if absent, do the minimal check and
     attach a soft recommendation note.
 
+    Orchestration and all pure steps (detect / build_patched_zip / compare)
+    run in-process; the two docker-touching seams are injectable. The backend
+    passes the sandbox-runner HTTP client (Variant A) so it never execs docker;
+    the defaults are the real local implementations, which the runner itself
+    uses.
+
     This is synchronous and may take minutes (real Docker) — callers MUST run
     it in a threadpool, exactly like `run_scan` (see main.py).
     """
+    # Resolve at call time (not as default arg values) so a module-level
+    # monkeypatch of run_suite / minimal_check still takes effect, and so the
+    # backend can inject the sandbox-runner client.
+    suite_runner = suite_runner or run_suite
+    minimal_checker = minimal_checker or minimal_check
+
     runner = detect_test_runner(original_zip)
 
     if runner is None:
-        mc = minimal_check(plan)
+        mc = minimal_checker(plan)
         if mc.failed > 0:
             return SemanticCheckResult(
                 ran=False, ecosystem=None, original=None, patched=None,
@@ -664,8 +682,8 @@ def run_semantic_check(original_zip: bytes, plan: FixpackPlan) -> SemanticCheckR
         )
 
     patched_zip = build_patched_zip(original_zip, plan)
-    original = run_suite(original_zip, runner)
-    patched = run_suite(patched_zip, runner)
+    original = suite_runner(original_zip, runner)
+    patched = suite_runner(patched_zip, runner)
     regression, detail = is_regression(original, patched)
     return SemanticCheckResult(
         ran=True, ecosystem=runner.ecosystem,

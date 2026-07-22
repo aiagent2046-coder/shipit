@@ -1,0 +1,144 @@
+name: e2e-sandbox-runner
+
+# Manual only. The ONE place the full Stage-3 Variant-A chain is exercised for
+# real: backend client → HTTP over the runner's Unix socket → sandbox-runner →
+# docker-socket-proxy → real dockerd. No function is called directly and no
+# docker call is mocked. GitHub-hosted ubuntu-latest has Docker pre-installed.
+#
+# Proves, over real HTTP:
+#   1. the proxy allowlist is live (a denied endpoint really returns 403);
+#   2. the runner sees docker ONLY through the proxy (/healthz docker:true);
+#   3. all three deploy-pack stacks build + run + boot-check through the chain;
+#   4. a fixpack install+test suite runs real containers through the chain.
+on:
+  workflow_dispatch: {}
+  # Also run when this workflow (or the chain it exercises) changes on a PR, so
+  # the full real chain is proven on the PR itself — workflow_dispatch alone
+  # can't be triggered from a non-default branch.
+  pull_request:
+    paths:
+      - "app/runner/**"
+      - "app/sandbox_client.py"
+      - "deploy/sandbox-runner/**"
+      - "scripts/e2e_fixpack_run_suite.py"
+      - "scripts/smoke_verify_*.py"
+      - ".github/workflows/e2e-sandbox-runner.yml"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      # Repo-local socket + build proxy cleared (a GitHub runner has no host
+      # Squid); both mirror what the prod host provides differently.
+      SANDBOX_RUNNER_UDS: /tmp/shipit-runner.sock
+      DEPLOYPACK_BUILD_PROXY_URL: ""
+      FIXPACK_INSTALL_PROXY_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install shipit (locked, hash-verified deps)
+        run: |
+          pip install --require-hashes -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Generate the shared runner token
+        run: echo "SANDBOX_RUNNER_TOKEN=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - name: Start docker-socket-proxy (the only thing touching the real socket)
+        run: |
+          set -euxo pipefail
+          docker compose -f deploy/sandbox-runner/docker-socket-proxy.yml up -d
+          # Wait for the proxy to answer an ALLOWED endpoint (/version, VERSION=1).
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:2375/version >/dev/null 2>&1; then
+              echo "proxy up"; break
+            fi
+            sleep 1
+            if [ "$i" = 30 ]; then
+              echo "proxy never came up — dumping state" >&2
+              docker compose -f deploy/sandbox-runner/docker-socket-proxy.yml ps -a >&2 || true
+              docker compose -f deploy/sandbox-runner/docker-socket-proxy.yml logs --no-color >&2 || true
+              exit 1
+            fi
+          done
+
+      - name: Prove the proxy allowlist is real (denied endpoint → 403)
+        run: |
+          set -uxo pipefail
+          # INFO=0, so /info must be refused by the proxy. This is the half a
+          # mock can't prove: the endpoint filter is actually enforced.
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:2375/info)
+          echo "GET /info via proxy → HTTP $code"
+          if [ "$code" != "403" ]; then
+            echo "FAIL: proxy did not deny /info (got $code, expected 403)" >&2
+            exit 1
+          fi
+          echo "OK: proxy enforces its endpoint allowlist"
+
+      - name: Create the no-egress preview network (host-configured on prod)
+        run: |
+          set -euxo pipefail
+          docker network create shipit-preview
+          SUBNET=$(docker network inspect shipit-preview \
+                   -f '{{(index .IPAM.Config 0).Subnet}}')
+          echo "preview subnet: $SUBNET"
+          sudo iptables -I DOCKER-USER -s "$SUBNET" ! -d "$SUBNET" -j DROP
+
+      - name: Start the sandbox-runner (talks to dockerd ONLY via the proxy)
+        run: |
+          set -euxo pipefail
+          # DOCKER_HOST forces the runner through the proxy even though the
+          # GitHub user could reach the real socket — that is exactly the prod
+          # constraint we are exercising. DOCKER_BUILDKIT=0: the proxy has the
+          # BuildKit grpc session endpoint disabled, so use the classic builder.
+          DOCKER_HOST=tcp://127.0.0.1:2375 \
+          DOCKER_BUILDKIT=0 \
+          SANDBOX_RUNNER_TOKEN="$SANDBOX_RUNNER_TOKEN" \
+          DEPLOYPACK_BUILD_PROXY_URL="" \
+          FIXPACK_INSTALL_PROXY_URL="" \
+          nohup python -m uvicorn app.runner.main:app \
+            --uds "$SANDBOX_RUNNER_UDS" > runner.log 2>&1 &
+          echo "runner pid $!"
+
+      - name: Wait for the runner to report docker:true over its Unix socket
+        run: |
+          set -uxo pipefail
+          for i in $(seq 1 30); do
+            body=$(curl -fsS --unix-socket "$SANDBOX_RUNNER_UDS" \
+                   http://runner/healthz 2>/dev/null || true)
+            echo "healthz: $body"
+            if echo "$body" | grep -q '"docker": *true'; then
+              echo "runner healthy, docker reachable via proxy"; break
+            fi
+            sleep 1
+            if [ "$i" = 30 ]; then
+              echo "runner never became healthy; log:" >&2
+              cat runner.log >&2
+              exit 1
+            fi
+          done
+
+      - name: Deploy-pack — all three stacks, build+run+boot through the chain
+        run: python scripts/smoke_verify_deploy_pack.py
+
+      - name: Fixpack — install+test suite through the chain
+        run: python scripts/e2e_fixpack_run_suite.py
+
+      - name: Preview — keep-alive container + curl + reap through the chain
+        run: python scripts/smoke_verify_preview.py
+
+      - name: Reap endpoint — real backend uvicorn → runner reconcile over HTTP
+        run: python scripts/smoke_verify_reap_endpoint.py
+
+      - name: Runner log (always, for debugging)
+        if: always()
+        run: cat runner.log || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f deploy/sandbox-runner/docker-socket-proxy.yml down || true

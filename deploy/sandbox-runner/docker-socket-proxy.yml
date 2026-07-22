@@ -1,0 +1,75 @@
+# docker-socket-proxy — the ONLY thing that touches the real docker socket.
+#
+# Stage-3 Variant A puts this HAProxy-based proxy (Tecnativa/docker-socket-proxy)
+# between the sandbox-runner and /var/run/docker.sock. The runner talks to it
+# over a loopback TCP port (DOCKER_HOST=tcp://127.0.0.1:2375); the `shipit-runner`
+# user is NOT in the `docker` group and never sees the real socket. Only this
+# proxy container mounts it (read-only).
+#
+# WHY Tecnativa and not something else: it is the de-facto standard for exactly
+# this job (small, HAProxy, widely deployed), and it reduces the daemon API
+# surface to the handful of endpoints the runner needs. We evaluated a Docker
+# AuthZ plugin (OPA/Casbin) — that IS the stronger control (see the honest
+# limitation below), but it is a much larger operational commitment; this proxy
+# is the pragmatic first layer and the AuthZ plugin is tracked as the real
+# Risk-#1 follow-up in STAGE3_VARIANT_A_PLAN.md.
+#
+# ── HONEST LIMITATION (do not overclaim) ─────────────────────────────────────
+# This proxy filters at the *endpoint* level (which HTTP paths/verbs are
+# allowed), NOT at the *parameter* level. Creating+running a container is
+# required for the runner to do its job, so POST /containers/create is allowed —
+# and the proxy CANNOT inspect that request body to reject `--privileged`,
+# `-v /:/host`, `--pid=host`, etc. A fully-compromised runner process could
+# therefore still craft a container that escapes to host root. What this proxy
+# DOES buy: (1) the runner cannot use `docker exec`, secrets, volumes API, swarm,
+# the build-cache prune, image push to arbitrary registries, or any other
+# endpoint left at 0 below; (2) the real socket is never exposed to the runner's
+# user/group, so a non-code compromise (stray process, leaked file perms) can't
+# reach dockerd at all. True per-parameter blocking needs a Docker AuthZ plugin;
+# that is the documented next step, not something this file can deliver.
+
+services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: shipit-docker-proxy
+    restart: unless-stopped
+    # Loopback only: nothing off-host can reach the proxied daemon API.
+    ports:
+      - "127.0.0.1:2375:2375"
+    environment:
+      # ── ALLOWED: exactly what app/deploypack/sandbox.py and
+      #    app/fixpack/semantic_check.py actually call ──────────────────────
+      POST: 1        # gate for every mutating call (create/start/stop/build/rm)
+      CONTAINERS: 1  # /containers/*  run -d/--rm, stop, rm -f, ps, inspect (reconcile)
+      IMAGES: 1      # /images/*      build output image, rmi -f, pull base images
+      BUILD: 1       # /build         docker build (classic builder; see BUILDKIT note)
+      NETWORKS: 1    # /networks/*    attach to the pre-created shipit-preview network
+      VERSION: 1     # /version       /healthz daemon-reachability probe
+      # ── DENIED: root-equivalent or simply unused by the runner ───────────
+      EXEC: 0        # no `docker exec` into a running container
+      AUTH: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      PLUGINS: 0
+      VOLUMES: 0     # no named-volume API (note: does NOT block -v bind mounts; see limitation)
+      SYSTEM: 0
+      INFO: 0
+      DISTRIBUTION: 0
+      COMMIT: 0
+      SESSION: 0     # BuildKit grpc session endpoint off → runner sets DOCKER_BUILDKIT=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # The proxy itself needs no privileges beyond the mounted socket.
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    # The entrypoint templates its generated HAProxy config to /tmp/haproxy.cfg
+    # (0.4.x moved it there precisely so the rootfs can stay read-only); /run
+    # holds the haproxy master-worker socket.
+    tmpfs:
+      - /run
+      - /tmp

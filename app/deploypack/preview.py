@@ -30,7 +30,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.deploypack.sandbox import Runner, docker_available, verify_deploy_pack
+from app.deploypack.sandbox import Runner, docker_available
+from app.sandbox_client import preview_stop as _client_preview_stop
+from app.sandbox_client import verify_deploy_pack as _client_verify_deploy_pack
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +98,13 @@ class PreviewRegistry:
     workers. Move to Redis/DB (fixpack_jobs table, per the architecture
     doc's data layer) before running more than one worker."""
 
-    def __init__(self, run: Runner = subprocess.run):
-        self._run = run
+    def __init__(self, verifier=_client_verify_deploy_pack,
+                 stopper=_client_preview_stop):
+        # Variant A: both seams go through the sandbox-runner HTTP client by
+        # default, so the backend process never execs docker. Injectable so
+        # tests can substitute fakes without a runner or a real daemon.
+        self._verify = verifier
+        self._stop_preview = stopper
         self._lock = threading.Lock()
         self._by_owner: dict[str, PreviewInfo] = {}
         # Ports picked but not yet in _by_owner: a start() holds its port
@@ -146,14 +153,13 @@ class PreviewRegistry:
         now = time.time()
         expires_at = now + ttl_seconds
         try:
-            result = verify_deploy_pack(
+            result = self._verify(
                 build_dir, host_port, container_port, path=path,
                 keep_alive_on_success=True, memory_limit=memory_limit,
                 labels={
                     PREVIEW_LABEL: "true",
                     EXPIRES_LABEL: _iso_utc(expires_at),
                 },
-                run=self._run,
             )
             if not result.ok:
                 return PreviewResult(ok=False, detail=result.detail, build_log=result.build_log)
@@ -179,11 +185,14 @@ class PreviewRegistry:
                 self._reserved.discard(host_port)
 
     def _stop_locked(self, info: PreviewInfo) -> None:
-        """Caller must hold self._lock."""
-        self._run(["docker", "stop", info.container],
-                   capture_output=True, text=True, timeout=15)
-        self._run(["docker", "rmi", "-f", info.image_tag],
-                   capture_output=True, text=True, timeout=15)
+        """Caller must hold self._lock. Docker stop+rmi happen in the runner;
+        a runner outage is swallowed (reaping is best-effort) so an unreachable
+        runner can't wedge the registry."""
+        try:
+            self._stop_preview(info.container, info.image_tag)
+        except Exception:  # noqa: BLE001 — best-effort reap, never fatal
+            logger.warning("preview stop via runner failed for %s; dropping "
+                           "registry entry anyway", info.container)
         self._by_owner.pop(info.owner_key, None)
 
     def stop(self, owner_key: str) -> bool:
