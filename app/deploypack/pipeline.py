@@ -15,8 +15,8 @@ from pathlib import Path
 
 from app.deploypack.generate import extract_repo, generate_deploy_pack, read_all_files
 from app.deploypack.preview import PreviewRegistry
-from app.deploypack.sandbox import verify_deploy_pack
 from app.ingest.stack_detect import Stack
+from app.sandbox_client import SandboxRunnerUnavailable, verify_deploy_pack
 
 # Coarse zip-bomb / disk-fill guard on the client archive before we extract it
 # into a build dir and hand it to docker build (mirrors semantic_check's
@@ -122,12 +122,20 @@ def run_deploy_pack(
                     "expires_at": preview_result.expires_at,
                 }
         else:
-            result = verify_deploy_pack(build_dir, _free_port(), container_port)
-            verified = result.ok
-            detail = result.detail
-            build_log = result.build_log
+            try:
+                result = verify_deploy_pack(build_dir, _free_port(), container_port)
+                verified = result.ok
+                detail = result.detail
+                build_log = result.build_log
+            except SandboxRunnerUnavailable as exc:
+                # Symmetric with a missing docker binary: an environment gap,
+                # not a verdict on the generated files. Return the Pack with
+                # verified=None ("could not verify") rather than a false fail.
+                verified = None
+                detail = f"sandbox runner unavailable — could not verify ({exc})"
+                build_log = ""
 
-        if not verified and "docker binary not found" in detail:
+        if verified is not None and not verified and "docker binary not found" in detail:
             verified = None
 
         return {
