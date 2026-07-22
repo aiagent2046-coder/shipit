@@ -92,6 +92,16 @@ class LLMScanStats:
     # providers configured). Lets a consumer tell those two apart without
     # inspecting the field's type -- see app/scan/pipeline.py.
     skipped_reason: str | None = None
+    # Cost-accounting totals, summed across every client.complete() call this
+    # scan made (passes x rubrics). `calls` == 0 means no LLM ran (no
+    # rubric-relevant files), which is the signal app/main.py uses to write NO
+    # llm_usage row. `model` is the last served model seen; all calls in a scan
+    # use the same configured model, so last-seen is representative. These flow
+    # out unchanged via run_scan()["llm"] to the cost recorder in main.py.
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str | None = None
 
 
 def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
@@ -220,8 +230,13 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
           if not selected:
               continue
           stats.prompts += 1
-          raw = client.complete(SYSTEM_PROMPT, build_prompt(selected, rubric),
-                                    max_tokens=8192)
+          raw, usage = client.complete(SYSTEM_PROMPT,
+                                       build_prompt(selected, rubric),
+                                       max_tokens=8192)
+          stats.calls += 1
+          stats.input_tokens += usage.input_tokens
+          stats.output_tokens += usage.output_tokens
+          stats.model = usage.model
           for f in parse_findings(raw):
               stats.raw_findings += 1
               if not verify_finding(f, files_by_name):

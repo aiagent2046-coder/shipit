@@ -40,6 +40,7 @@ from app.db import (
     AuditRepository,
     FixOutcomeRepository,
     FixpackJobRepository,
+    LlmUsageRepository,
     MonitoringRunRepository,
     PaymentRepository,
     ProcessorLockBusy,
@@ -70,6 +71,7 @@ from app.ingest.stack_detect import Stack, detect_stack
 from app import sandbox_client
 from app.sandbox_client import SandboxRunnerUnavailable
 from app.llm.client import LLMClient
+from app.llm import pricing
 from app.monitor import normalize_repo_full_name, repo_url_from_full_name
 from app.monitor.diff import new_high_severity_findings
 from app.report.html import render_report
@@ -242,6 +244,7 @@ _account_repo = AccountRepository()
 _payment_repo = PaymentRepository()
 _subscription_repo = SubscriptionRepository()
 _monitoring_repo = MonitoringRunRepository()
+_llm_usage_repo = LlmUsageRepository()
 
 
 def get_payment_repo() -> PaymentRepository:
@@ -301,6 +304,11 @@ def get_monitoring_repo() -> MonitoringRunRepository:
     return _monitoring_repo
 
 
+def get_llm_usage_repo() -> LlmUsageRepository:
+    """Same as get_audit_repo, for the llm_usage cost journal."""
+    return _llm_usage_repo
+
+
 # GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
 # Permissive-but-safe guard so a user-supplied deliver_to can't smuggle
 # extra path segments (extra "/" or "..") into a GitHub REST API path.
@@ -327,9 +335,51 @@ def _parse_github_repo_url(repo_url: str) -> tuple[str, str] | None:
     return owner, repo
 
 
+async def _record_llm_usage(
+    llm_usage_repo: LlmUsageRepository, *, job_type: str,
+    job_id: str | None, account_id: str | None, llm_stats: object,
+) -> None:
+    """Write ONE llm_usage row for a job, but only when the LLM stage actually
+    ran and spent tokens. `llm_stats` is run_scan()["llm"]: a dict of
+    LLMScanStats fields when the stage ran, a bare "failed: ..." string on a
+    provider failure, and an all-zero dict (calls=0) when it was skipped (no
+    providers configured) or matched no rubric-relevant files. Tokens were spent
+    only in the first case with calls>0, so every other case records nothing.
+
+    The reused-audit (content-hash cache hit) path never reaches this: it
+    returns before run_scan is ever called, so a cache hit costs $0 and writes
+    no row -- there is no double-charge for re-auditing identical content.
+
+    Recording is best-effort and must never break the audit it is accounting
+    for: llm_usage_repo.create no-ops (returns None) when DATABASE_URL isn't set,
+    and any unexpected write failure is logged, not raised."""
+    if not isinstance(llm_stats, dict):
+        return
+    calls = int(llm_stats.get("calls") or 0)
+    if calls <= 0:
+        return
+    input_tokens = int(llm_stats.get("input_tokens") or 0)
+    output_tokens = int(llm_stats.get("output_tokens") or 0)
+    # model is NOT NULL in the table; a job with calls>0 always set it, but fall
+    # back to a sentinel that prices at DEFAULT_PRICE (fail-safe high) rather
+    # than write a null or crash if a provider ever omitted it.
+    model = llm_stats.get("model") or "unknown"
+    cost = pricing.cost_usd(model, input_tokens, output_tokens)
+    try:
+        await llm_usage_repo.create(
+            job_type=job_type, job_id=job_id, account_id=account_id,
+            model=model, calls=calls, input_tokens=input_tokens,
+            output_tokens=output_tokens, cost_usd=cost,
+        )
+    except Exception:  # noqa: BLE001 -- accounting must never fail the audit
+        logger.warning("llm_usage recording failed for %s job %s",
+                       job_type, job_id, exc_info=True)
+
+
 async def run_repo_audit(
     repo_url: str, *, llm_client: LLMClient, audit_repo: AuditRepository,
-    repo_fetcher,
+    repo_fetcher, llm_usage_repo: LlmUsageRepository | None = None,
+    job_type: str = "audit",
 ) -> dict | None:
     """Fetch a public GitHub repo, audit it, and persist -- reusing the exact
     pipeline the POST /v1/audits URL path uses: the same content-hash cache
@@ -385,6 +435,16 @@ async def run_repo_audit(
         content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
     )
     audit_id = persisted["id"] if persisted else str(uuid.uuid4())
+    # Cost accounting. account_id is None: this path serves system re-audits
+    # (continuous monitoring), whose LLM cost is incurred once per push
+    # regardless of how many subscribers watch the repo -- attributing it to any
+    # single subscriber would be wrong, so it is recorded unattributed.
+    if llm_usage_repo is not None:
+        await _record_llm_usage(
+            llm_usage_repo, job_type=job_type,
+            job_id=persisted["id"] if persisted else None,
+            account_id=None, llm_stats=scan["llm"],
+        )
     return {
         "audit_id": audit_id,
         "findings": scan["findings"],
@@ -867,6 +927,7 @@ async def _process_one_monitoring_run(
     run: dict, *, monitoring_repo: MonitoringRunRepository,
     subscription_repo: SubscriptionRepository, audit_repo: AuditRepository,
     llm_client: LLMClient, repo_fetcher, transport,
+    llm_usage_repo: LlmUsageRepository,
 ) -> str:
     """Do the real monitoring work for one claimed run: re-audit the repo, diff
     against its previous audit, and DM every active subscriber the NEW
@@ -904,6 +965,7 @@ async def _process_one_monitoring_run(
             result = await run_repo_audit(
                 repo_url_from_full_name(repo_full_name), llm_client=llm_client,
                 audit_repo=audit_repo, repo_fetcher=repo_fetcher,
+                llm_usage_repo=llm_usage_repo, job_type="monitoring",
             )
         except RepoFetchError:
             # Repo went private/was deleted (404, indistinguishable by design).
@@ -1769,6 +1831,7 @@ async def process_pending_monitoring(
     llm_client: LLMClient = Depends(get_llm_client),
     repo_fetcher=Depends(get_repo_fetcher),
     transport=Depends(get_billing_transport),
+    llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
 ) -> dict:
     """Operational endpoint: drain the pending continuous-monitoring backlog.
     The GitHub push webhook enqueues one 'pending' run per eligible push and
@@ -1819,7 +1882,7 @@ async def process_pending_monitoring(
                     run, monitoring_repo=monitoring_repo,
                     subscription_repo=subscription_repo, audit_repo=audit_repo,
                     llm_client=llm_client, repo_fetcher=repo_fetcher,
-                    transport=transport,
+                    transport=transport, llm_usage_repo=llm_usage_repo,
                 )
                 if outcome in summary:
                     summary[outcome] += 1
@@ -1847,6 +1910,7 @@ async def create_audit(
     audit_repo: AuditRepository = Depends(get_audit_repo),
     account_repo: AccountRepository = Depends(get_account_repo),
     repo_fetcher=Depends(get_repo_fetcher),
+    llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
 ) -> dict:
     # Exactly one intake method: not both, not neither. Both-None and
     # both-present are the two cases where the equality holds.
@@ -1995,6 +2059,16 @@ async def create_audit(
         content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
     )
     audit_id = persisted["id"] if persisted else str(uuid.uuid4())
+
+    # Cost accounting: one row for the tokens this scan spent, billable to the
+    # caller's account (None for anonymous/free). The cache-hit branch above
+    # returned before run_scan, so a reused audit never reaches here.
+    await _record_llm_usage(
+        llm_usage_repo, job_type="audit",
+        job_id=persisted["id"] if persisted else None,
+        account_id=account["id"] if account else None,
+        llm_stats=scan["llm"],
+    )
 
     return {
         "audit_id": audit_id,
