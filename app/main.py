@@ -2498,3 +2498,9 @@ async def create_fixpack(
         "pr": pr,
         "preview": result["preview"],
     }
+
+
+# Production operations endpoints.
+from app.ops_endpoints import router as ops_router
+
+app.include_router(ops_router)

@@ -1,0 +1,23 @@
+[Unit]
+Description=ShipIt USDT payment poller
+After=network-online.target shipit.service
+Wants=network-online.target
+Requires=shipit.service
+OnFailure=shipit-alert@%n.service
+
+[Service]
+Type=oneshot
+User=shipit-ops
+WorkingDirectory=/opt/shipit
+EnvironmentFile=/opt/shipit/.env
+Environment=SHIPIT_INTERNAL_BASE_URL=http://127.0.0.1:8000
+ExecStart=/opt/shipit/deploy/scripts/call-internal-endpoint.sh /internal/billing/poll-usdt USDT_POLL_TOKEN 120
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+StandardOutput=journal
+StandardError=journal
