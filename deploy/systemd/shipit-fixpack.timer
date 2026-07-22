@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule ShipIt paid Fix Pack processor
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=2min
+AccuracySec=10s
+Unit=shipit-fixpack.service
+
+[Install]
+WantedBy=timers.target

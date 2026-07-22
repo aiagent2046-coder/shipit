@@ -57,3 +57,44 @@ def _no_ambient_llm_providers(monkeypatch):
     for var in ("AITUNNEL_API_KEY", "AITUNNEL_BASE_URL",
                 "ANTHROPIC_API_KEY", "LLM_MODEL"):
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_production_integrations(monkeypatch):
+    """Never let the default test suite use production integrations.
+
+    The production VPS exports real GitHub App and sandbox-runner settings.
+    Tests that need these values must set or monkeypatch them explicitly.
+    """
+    variables = (
+        "GITHUB_APP_ID",
+        "GITHUB_APP_PRIVATE_KEY",
+        "GITHUB_APP_PRIVATE_KEY_B64",
+        "GITHUB_APP_SLUG",
+        "GITHUB_PR_TOKEN",
+        "SANDBOX_RUNNER_URL",
+        "SANDBOX_RUNNER_UDS",
+        "SANDBOX_RUNNER_TOKEN",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "PAYPAL_CLIENT_ID",
+        "PAYPAL_CLIENT_SECRET",
+        "PAYPAL_WEBHOOK_ID",
+        "USDT_POLL_TOKEN",
+    )
+
+    for variable in variables:
+        monkeypatch.delenv(variable, raising=False)
+
+    # sandbox_client reads these values at import time, before pytest
+    # fixtures execute. Override the module-level values as well so a test
+    # can never contact the real production runner accidentally.
+    import app.sandbox_client as sandbox_client_mod
+
+    monkeypatch.setattr(sandbox_client_mod, "SANDBOX_RUNNER_URL", "")
+    monkeypatch.setattr(
+        sandbox_client_mod,
+        "SANDBOX_RUNNER_UDS",
+        "/tmp/shipit-pytest-no-sandbox-runner.sock",
+    )
+    monkeypatch.setattr(sandbox_client_mod, "SANDBOX_RUNNER_TOKEN", "")

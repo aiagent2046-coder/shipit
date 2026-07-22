@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule ShipIt continuous monitoring processor
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+AccuracySec=10s
+Unit=shipit-monitoring.service
+
+[Install]
+WantedBy=timers.target

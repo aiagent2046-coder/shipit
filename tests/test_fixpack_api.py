@@ -16,7 +16,6 @@ import zipfile
 from fastapi.testclient import TestClient
 
 import app.deploypack.pipeline as pipeline_mod
-import app.deploypack.sandbox as sandbox_mod
 import app.main as main_mod
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.deploypack.github_app import GitHubAppError
@@ -26,6 +25,12 @@ from app.main import app, get_pr_opener, get_preview_registry
 from app.sandbox_client import SandboxRunnerUnavailable
 
 client = TestClient(app)
+
+
+def _runner_unavailable(*args, **kwargs):
+    raise SandboxRunnerUnavailable(
+        "sandbox-runner unreachable (deterministic pytest isolation)"
+    )
 
 FASTAPI_ZIP = {
     "requirements.txt": b"fastapi\nuvicorn\n",
@@ -116,7 +121,7 @@ def test_fastapi_pack_generated_but_unverified_without_runner(monkeypatch):
 
 
 def test_vite_react_pack_generated_but_unverified_without_docker(monkeypatch):
-    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", _runner_unavailable)
     resp = post_fixpack(VITE_ZIP)
     assert resp.status_code == 202
     body = resp.json()
@@ -137,7 +142,7 @@ def test_nextjs_without_output_standalone_is_refused():
 
 
 def test_nextjs_standalone_pack_generated_but_unverified_without_docker(monkeypatch):
-    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", _runner_unavailable)
     resp = post_fixpack(NEXTJS_ZIP)
     assert resp.status_code == 202
     body = resp.json()
@@ -161,8 +166,8 @@ def test_verified_true_when_sandbox_actually_succeeds(monkeypatch):
 
 
 def test_deliver_to_skipped_when_not_verified(monkeypatch):
-    # forced no-docker path, so verified=None
-    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
+    # forced unavailable-runner path, so verified=None
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", _runner_unavailable)
     resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app")
     assert resp.status_code == 202
     body = resp.json()

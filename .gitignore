@@ -8,3 +8,7 @@ dist/
 # build artifacts
 *.egg-info/
 batch_reports/
+.release-env
+
+# Local environment backups containing secrets
+.env.bak*

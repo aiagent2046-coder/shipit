@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule ShipIt USDT payment poller
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=10s
+Unit=shipit-usdt-poller.service
+
+[Install]
+WantedBy=timers.target
