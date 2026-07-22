@@ -27,6 +27,8 @@ a clear message rather than false-failing.
 
 from __future__ import annotations
 
+import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -34,6 +36,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 UNIT = REPO_ROOT / "deploy" / "sandbox-runner" / "sandbox-runner.service"
+
+# The bug only bites a NON-root process: root has CAP_DAC_OVERRIDE and can write
+# into a 0600 dir regardless of the missing execute bit, so a root probe would
+# never reproduce it (and prod runs as shipit-runner, never root). Run the probe
+# under a dedicated unprivileged user — the CI job creates it; override with env.
+PROBE_USER = os.environ.get("RUNNER_PROBE_USER", "shipit-runner")
+
+# Use the system interpreter: it must be executable by PROBE_USER, and the probe
+# only needs the stdlib (the prod runner uses its own venv python, likewise owned
+# by / readable to shipit-runner).
+_PROBE_PYTHON = "/usr/bin/python3" if Path("/usr/bin/python3").exists() else sys.executable
 
 # The exec-sandbox directives from the unit that are (a) meaningful to the
 # filesystem behaviour we're reproducing and (b) safe to pass to a transient
@@ -84,10 +97,13 @@ def _shipped_sandbox_props() -> list[str]:
 
 
 def _run_under_systemd(props: list[str]) -> subprocess.CompletedProcess:
-    cmd = ["sudo", "systemd-run", "--wait", "--pipe", "--quiet", "--collect"]
+    # Run the scope AS the unprivileged probe user (never root) so DAC bits are
+    # actually enforced — the whole point of the reproduction.
+    cmd = ["sudo", "systemd-run", "--wait", "--pipe", "--quiet", "--collect",
+           "-p", f"User={PROBE_USER}", "-p", f"Group={PROBE_USER}"]
     for p in props:
         cmd += ["-p", p]
-    cmd += ["--", sys.executable, "-c", _PROBE]
+    cmd += ["--", _PROBE_PYTHON, "-c", _PROBE]
     print("  $ " + " ".join(cmd), flush=True)
     return subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
@@ -96,6 +112,12 @@ def main() -> int:
     if shutil.which("systemd-run") is None:
         print("SKIP: systemd-run not available on this host — cannot run the "
               "behavioural guard (the unit-file guard still runs in pytest).")
+        return 0
+    try:
+        pwd.getpwnam(PROBE_USER)
+    except KeyError:
+        print(f"SKIP: probe user {PROBE_USER!r} does not exist on this host — the "
+              f"CI job creates it; set RUNNER_PROBE_USER to reproduce locally.")
         return 0
 
     shipped = _shipped_sandbox_props()

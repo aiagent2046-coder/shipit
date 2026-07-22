@@ -37,6 +37,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Create the unprivileged shipit-runner user (matches prod)
+        # The bug only bites a NON-root process (root has CAP_DAC_OVERRIDE), so
+        # the guard runs its probe as this user — exactly as prod does.
+        run: sudo useradd --system --no-create-home --shell /usr/sbin/nologin shipit-runner
       - name: Runner build dir usable under the shipped sandbox directives
         run: python scripts/check_runner_build_dir_perms.py
 
