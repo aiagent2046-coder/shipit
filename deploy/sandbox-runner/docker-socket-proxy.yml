@@ -30,7 +30,7 @@
 
 services:
   docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.4.2
+    image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: shipit-docker-proxy
     restart: unless-stopped
     # Loopback only: nothing off-host can reach the proxied daemon API.
