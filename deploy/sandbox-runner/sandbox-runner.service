@@ -70,9 +70,26 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-# The runner extracts client zips and bind-mounts those dirs into build/test
-# containers, so it needs a writable scratch area. PrivateTmp gives it /tmp;
-# RuntimeDirectory gives it the socket dir.
+# ── Writable scratch. The runner calls tempfile.mkdtemp() to extract each
+#    client zip, then bind-mounts that dir into the build/test containers
+#    (`docker run -v <dir>:/work`). systemd creates StateDirectory below on every
+#    start — owned by this service's user, mode 0700, and OUTSIDE /tmp — and we
+#    point TMPDIR at it so every mkdtemp lands there.
+#
+# ⚠️  The scratch dir MUST live outside /tmp, and TMPDIR must keep it there.
+#     PrivateTmp=true (above) gives the runner a PRIVATE /tmp in its OWN mount
+#     namespace, invisible to dockerd (which runs in the host namespace). A path
+#     under /tmp therefore does not exist as far as dockerd is concerned, so
+#     `docker run -v /tmp/…:/work` silently mounts an EMPTY /work (docker
+#     auto-creates the missing bind source) and every fixpack install/test fails
+#     with the requirements file "missing" — even though the file is right there
+#     in the runner's own /tmp. Do NOT remove TMPDIR or repoint it at /tmp while
+#     PrivateTmp is on. Regression-guarded by
+#     scripts/check_runner_bindmount_namespace.py.
+#     (deploy-pack is immune: it streams a tar build context to `docker build`,
+#     which never asks dockerd to resolve a host path — only fixpack's -v does.)
+StateDirectory=shipit-runner
+Environment=TMPDIR=/var/lib/shipit-runner
 ReadWritePaths=/run/shipit-runner
 
 [Install]

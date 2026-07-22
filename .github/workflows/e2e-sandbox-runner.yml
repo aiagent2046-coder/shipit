@@ -10,6 +10,11 @@ name: e2e-sandbox-runner
 #   2. the runner sees docker ONLY through the proxy (/healthz docker:true);
 #   3. all three deploy-pack stacks build + run + boot-check through the chain;
 #   4. a fixpack install+test suite runs real containers through the chain.
+#
+# The runner is started UNDER the shipped mount-namespace directives
+# (PrivateTmp=true) via systemd-run, NOT as a bare `uvicorn &` — so PrivateTmp's
+# private /tmp is real in CI and the docker-bind-mount namespace bug can actually
+# reproduce here (a bare process shares the host /tmp and hid it).
 on:
   workflow_dispatch: {}
   # Also run when this workflow (or the chain it exercises) changes on a PR, so
@@ -23,6 +28,7 @@ on:
       - "scripts/e2e_fixpack_run_suite.py"
       - "scripts/smoke_verify_*.py"
       - "scripts/check_runner_build_dir_perms.py"
+      - "scripts/check_runner_bindmount_namespace.py"
       - ".github/workflows/e2e-sandbox-runner.yml"
 
 jobs:
@@ -44,12 +50,33 @@ jobs:
       - name: Runner build dir usable under the shipped sandbox directives
         run: python scripts/check_runner_build_dir_perms.py
 
+  # Behavioural guard for the SECOND incident: PrivateTmp gives the runner a
+  # private /tmp invisible to dockerd, so a build dir under /tmp bind-mounts into
+  # a fixpack container as an EMPTY /work. This job runs the runner's real
+  # mkdtemp + `docker run -v <dir>:/work` cycle under the SHIPPED PrivateTmp +
+  # StateDirectory + TMPDIR directives (via systemd-run, on a real docker host)
+  # and asserts the container SEES the file — with a TMPDIR=/tmp negative control
+  # that must come back empty. Catches a namespace split, not just permissions.
+  bindmount-namespace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pre-pull the tiny probe image (shared daemon image store)
+        run: docker pull busybox
+      - name: Runner bind mount crosses the PrivateTmp namespace
+        run: python scripts/check_runner_bindmount_namespace.py
+
   e2e:
     runs-on: ubuntu-latest
     env:
-      # Repo-local socket + build proxy cleared (a GitHub runner has no host
-      # Squid); both mirror what the prod host provides differently.
-      SANDBOX_RUNNER_UDS: /tmp/shipit-runner.sock
+      # Socket lives OUTSIDE /tmp (in a RuntimeDirectory), like prod — a socket
+      # under /tmp would be trapped in the runner's PrivateTmp namespace and the
+      # test client could not reach it. Build proxy cleared (a GitHub runner has
+      # no host Squid); this mirrors what the prod host provides differently.
+      SANDBOX_RUNNER_UDS: /run/shipit-runner/sandbox.sock
       DEPLOYPACK_BUILD_PROXY_URL: ""
       FIXPACK_INSTALL_PROXY_URL: ""
     steps:
@@ -107,21 +134,36 @@ jobs:
           echo "preview subnet: $SUBNET"
           sudo iptables -I DOCKER-USER -s "$SUBNET" ! -d "$SUBNET" -j DROP
 
-      - name: Start the sandbox-runner (talks to dockerd ONLY via the proxy)
+      - name: Start the sandbox-runner UNDER PrivateTmp (prod-faithful, via systemd-run)
         run: |
           set -euxo pipefail
-          # DOCKER_HOST forces the runner through the proxy even though the
-          # GitHub user could reach the real socket — that is exactly the prod
-          # constraint we are exercising. DOCKER_BUILDKIT=0: the proxy has the
-          # BuildKit grpc session endpoint disabled, so use the classic builder.
-          DOCKER_HOST=tcp://127.0.0.1:2375 \
-          DOCKER_BUILDKIT=0 \
-          SANDBOX_RUNNER_TOKEN="$SANDBOX_RUNNER_TOKEN" \
-          DEPLOYPACK_BUILD_PROXY_URL="" \
-          FIXPACK_INSTALL_PROXY_URL="" \
-          nohup python -m uvicorn app.runner.main:app \
-            --uds "$SANDBOX_RUNNER_UDS" > runner.log 2>&1 &
-          echo "runner pid $!"
+          # Start the runner as a TRANSIENT SYSTEMD SERVICE carrying the shipped
+          # mount-namespace directives (PrivateTmp=true) PLUS the fix
+          # (StateDirectory + TMPDIR outside /tmp). This is the whole point of the
+          # change: a bare `uvicorn &` shares the host /tmp and can NEVER reproduce
+          # the PrivateTmp namespace bug, which is exactly how it slipped through
+          # before. The namespace split is uid-independent, so running as root here
+          # is faithful. DOCKER_HOST → proxy (BuildKit off; the proxy has no grpc
+          # session endpoint). The socket goes in a RuntimeDirectory (outside /tmp)
+          # at 0755 so the non-root test client can reach it — prod uses 0710 + a
+          # root backend; socket perms aren't what this job validates, the
+          # namespace is.
+          PYBIN=$(command -v python)
+          sudo systemd-run --unit=shipit-sandbox-runner --collect \
+            -p PrivateTmp=true \
+            -p StateDirectory=shipit-runner \
+            -p RuntimeDirectory=shipit-runner \
+            -p RuntimeDirectoryMode=0755 \
+            -p "Environment=TMPDIR=/var/lib/shipit-runner" \
+            -p "Environment=DOCKER_HOST=tcp://127.0.0.1:2375" \
+            -p "Environment=DOCKER_BUILDKIT=0" \
+            -p "Environment=SANDBOX_RUNNER_TOKEN=$SANDBOX_RUNNER_TOKEN" \
+            -p "Environment=DEPLOYPACK_BUILD_PROXY_URL=" \
+            -p "Environment=FIXPACK_INSTALL_PROXY_URL=" \
+            -p "WorkingDirectory=$PWD" \
+            -- "$PYBIN" -m uvicorn app.runner.main:app \
+               --uds "$SANDBOX_RUNNER_UDS" --workers 1
+          sudo systemctl status shipit-sandbox-runner --no-pager || true
 
       - name: Wait for the runner to report docker:true over its Unix socket
         run: |
@@ -135,8 +177,8 @@ jobs:
             fi
             sleep 1
             if [ "$i" = 30 ]; then
-              echo "runner never became healthy; log:" >&2
-              cat runner.log >&2
+              echo "runner never became healthy; journal:" >&2
+              sudo journalctl -u shipit-sandbox-runner --no-pager >&2 || true
               exit 1
             fi
           done
@@ -155,9 +197,10 @@ jobs:
 
       - name: Runner log (always, for debugging)
         if: always()
-        run: cat runner.log || true
+        run: sudo journalctl -u shipit-sandbox-runner --no-pager || true
 
       - name: Tear down
         if: always()
         run: |
+          sudo systemctl stop shipit-sandbox-runner || true
           docker compose -f deploy/sandbox-runner/docker-socket-proxy.yml down || true
