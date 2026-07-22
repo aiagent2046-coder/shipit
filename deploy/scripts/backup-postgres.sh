@@ -28,6 +28,7 @@ trap cleanup EXIT
 
 "$PG_DUMP" \
     --dbname="$DATABASE_URL" \
+    --schema=public \
     --format=custom \
     --compress=9 \
     --no-owner \
