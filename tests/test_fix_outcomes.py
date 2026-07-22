@@ -157,7 +157,7 @@ def test_records_delivered_outcome(monkeypatch):
 
     from app.fixpack.semantic_check import SemanticCheckResult
 
-    def fake_check(zip_bytes, plan):
+    def fake_check(zip_bytes, plan, **kwargs):
         return SemanticCheckResult(
             ran=False, ecosystem=None, original=None, patched=None,
             regression=False, detail="no client test suite", pr_note=None,
@@ -201,7 +201,7 @@ def test_records_blocked_outcome_with_regression_flag(monkeypatch):
 
     from app.fixpack.semantic_check import RunResult, SemanticCheckResult
 
-    def fake_check(zip_bytes, plan):
+    def fake_check(zip_bytes, plan, **kwargs):
         return SemanticCheckResult(
             ran=True, ecosystem="python",
             original=RunResult(5, 0, False, None),
@@ -293,7 +293,7 @@ def test_recording_failure_does_not_break_delivery(monkeypatch):
 
     from app.fixpack.semantic_check import SemanticCheckResult
 
-    monkeypatch.setattr(main_mod, "run_semantic_check", lambda z, p: SemanticCheckResult(
+    monkeypatch.setattr(main_mod, "run_semantic_check", lambda z, p, **kwargs: SemanticCheckResult(
         ran=False, ecosystem=None, original=None, patched=None,
         regression=False, detail="no suite", pr_note=None))
 

@@ -9,12 +9,62 @@ import threading
 import pytest
 
 import app.deploypack.preview as preview
-import app.deploypack.sandbox as sandbox
 from app.deploypack.preview import PreviewRegistry, reconcile_previews
+from app.deploypack.sandbox import SandboxResult
+
+
+class FakeVerifier:
+    """Stands in for sandbox_client.verify_deploy_pack (the backend→runner
+    HTTP seam). Records every call — including the labels dict the preview
+    layer stamps — and returns a scripted SandboxResult. No docker, no HTTP."""
+
+    def __init__(self, results):
+        self._results = list(results)
+        self.calls: list[dict] = []
+
+    def __call__(self, build_dir, host_port, container_port, *, path="/",
+                 keep_alive_on_success=True, memory_limit=None, labels=None):
+        self.calls.append({
+            "build_dir": build_dir,
+            "host_port": host_port,
+            "container_port": container_port,
+            "path": path,
+            "keep_alive_on_success": keep_alive_on_success,
+            "memory_limit": memory_limit,
+            "labels": dict(labels or {}),
+        })
+        if not self._results:
+            raise AssertionError("no scripted verify result left")
+        return self._results.pop(0)
+
+
+class FakeStopper:
+    """Stands in for sandbox_client.preview_stop. Records (container, image)."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def __call__(self, container, image_tag):
+        self.calls.append((container, image_tag))
+
+
+def _ok(container="job-x", image_tag="img-x", detail="verified"):
+    return SandboxResult(ok=True, detail=detail, build_log="",
+                         container=container, image_tag=image_tag)
+
+
+def _fail(detail="boot failed"):
+    return SandboxResult(ok=False, detail=detail, build_log="boom",
+                         container=None, image_tag=None)
+
+
+def cp(returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
 class FakeRunner:
-    """Same pattern as tests/test_deploypack_sandbox.py's FakeRunner."""
+    """Docker-CLI fake, used only by the reconcile_previews tests below
+    (that module-level function still shells docker directly)."""
 
     def __init__(self, script: dict):
         self.script = {k: list(v) for k, v in script.items()}
@@ -29,24 +79,10 @@ class FakeRunner:
         return queue.pop(0)
 
 
-def cp(returncode=0, stdout="", stderr=""):
-    return subprocess.CompletedProcess([], returncode, stdout, stderr)
-
-
-def base_script(**overrides):
-    script = {
-        "docker:build": [cp(returncode=0)],
-        "docker:run": [cp(returncode=0)],
-        "curl": [cp(stdout="200")],
-    }
-    script.update(overrides)
-    return script
-
-
-def test_start_returns_local_url_and_registers(monkeypatch):
-    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
-    runner = FakeRunner(base_script())
-    registry = PreviewRegistry(run=runner)
+def test_start_returns_local_url_and_registers():
+    verifier = FakeVerifier([_ok()])
+    stopper = FakeStopper()
+    registry = PreviewRegistry(verifier=verifier, stopper=stopper)
 
     result = registry.start(".", 8000, owner_key="1.2.3.4")
 
@@ -54,59 +90,51 @@ def test_start_returns_local_url_and_registers(monkeypatch):
     assert result.local_url.startswith("http://localhost:")
     assert result.expires_at is not None
     assert registry.active_count() == 1
-    # keep_alive: no stop/rmi on a successful preview boot
-    assert not any(c[:2] == ["docker", "stop"] for c in runner.calls)
+    # keep_alive: the preview layer asks the runner to keep the container up
+    assert verifier.calls[0]["keep_alive_on_success"] is True
+    # a successful boot never stops the container it just started
+    assert stopper.calls == []
 
 
 def test_failed_boot_registers_nothing():
-    runner = FakeRunner({
-        "docker:build": [cp(returncode=1, stderr="boom")],
-    })
-    registry = PreviewRegistry(run=runner)
+    verifier = FakeVerifier([_fail()])
+    stopper = FakeStopper()
+    registry = PreviewRegistry(verifier=verifier, stopper=stopper)
 
     result = registry.start(".", 8000, owner_key="1.2.3.4")
 
     assert result.ok is False
     assert registry.active_count() == 0
+    assert stopper.calls == []
 
 
-def test_second_preview_for_same_owner_replaces_the_first(monkeypatch):
-    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
-    runner = FakeRunner(base_script(
-        **{
-            "docker:build": [cp(returncode=0), cp(returncode=0)],
-            "docker:run": [cp(returncode=0), cp(returncode=0)],
-            "curl": [cp(stdout="200"), cp(stdout="200")],
-            "docker:stop": [cp(returncode=0)],
-            "docker:rmi": [cp(returncode=0)],
-        }
-    ))
-    registry = PreviewRegistry(run=runner)
+def test_second_preview_for_same_owner_replaces_the_first():
+    verifier = FakeVerifier([_ok(container="c1", image_tag="i1"),
+                             _ok(container="c2", image_tag="i2")])
+    stopper = FakeStopper()
+    registry = PreviewRegistry(verifier=verifier, stopper=stopper)
 
     first = registry.start(".", 8000, owner_key="owner-a")
     second = registry.start(".", 8000, owner_key="owner-a")
 
     assert first.ok and second.ok
     assert registry.active_count() == 1  # replaced, not accumulated
-    assert any(c[:2] == ["docker", "stop"] for c in runner.calls)
+    # the first container was stopped before the second was registered
+    assert stopper.calls == [("c1", "i1")]
 
 
-def test_two_different_owners_get_different_ports(monkeypatch):
-    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
-    runner = FakeRunner(base_script(
-        **{
-            "docker:build": [cp(returncode=0), cp(returncode=0)],
-            "docker:run": [cp(returncode=0), cp(returncode=0)],
-            "curl": [cp(stdout="200"), cp(stdout="200")],
-        }
-    ))
-    registry = PreviewRegistry(run=runner)
+def test_two_different_owners_get_different_ports():
+    verifier = FakeVerifier([_ok(container="c1"), _ok(container="c2")])
+    stopper = FakeStopper()
+    registry = PreviewRegistry(verifier=verifier, stopper=stopper)
 
     a = registry.start(".", 8000, owner_key="owner-a")
     b = registry.start(".", 8000, owner_key="owner-b")
 
     assert registry.active_count() == 2
     assert a.local_url != b.local_url
+    # each got a distinct host port handed to the verifier
+    assert verifier.calls[0]["host_port"] != verifier.calls[1]["host_port"]
 
 
 def _port_of(result) -> int:
@@ -119,33 +147,30 @@ def test_in_flight_port_reservation_survives_a_concurrent_start(monkeypatch):
     # different owner could be handed the same port mid-build. Shrink the
     # range to exactly two ports so the collision is forced, not luck: the
     # reservation must make the second owner take the OTHER port.
-    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
     monkeypatch.setattr(preview, "PORT_RANGE", range(20000, 20002))
 
     build_started = threading.Event()
     release_build = threading.Event()
 
-    class BlockingRunner:
-        """First build blocks (owner-a, held mid-build); later ones don't."""
+    class BlockingVerifier:
+        """First verify blocks (owner-a, held mid-build); later ones don't."""
 
         def __init__(self):
-            self.calls: list[list[str]] = []
-            self._builds = 0
+            self.calls: list[dict] = []
+            self._n = 0
 
-        def __call__(self, argv, **kwargs):
-            self.calls.append(argv)
-            key = argv[0] if argv[0] != "docker" else f"docker:{argv[1]}"
-            if key == "docker:build":
-                self._builds += 1
-                if self._builds == 1:
-                    build_started.set()
-                    release_build.wait(timeout=5)
-                return cp(returncode=0)
-            if key == "curl":
-                return cp(stdout="200")
-            return cp(returncode=0)
+        def __call__(self, build_dir, host_port, container_port, *,
+                     path="/", keep_alive_on_success=True,
+                     memory_limit=None, labels=None):
+            self.calls.append({"host_port": host_port})
+            self._n += 1
+            if self._n == 1:
+                build_started.set()
+                release_build.wait(timeout=5)
+            return _ok(container=f"c{self._n}")
 
-    registry = PreviewRegistry(run=BlockingRunner())
+    verifier = BlockingVerifier()
+    registry = PreviewRegistry(verifier=verifier, stopper=FakeStopper())
 
     result_a: dict = {}
 
@@ -171,14 +196,9 @@ def test_reservation_released_after_failed_build(monkeypatch):
     # A build that fails must not leak its port reservation forever.
     # One port in range: if the failed start() leaked it, the next start()
     # would find no free port; instead it reuses the freed one.
-    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
     monkeypatch.setattr(preview, "PORT_RANGE", range(20000, 20001))
-    runner = FakeRunner({
-        "docker:build": [cp(returncode=1, stderr="boom"), cp(returncode=0)],
-        "docker:run": [cp(returncode=0)],
-        "curl": [cp(stdout="200")],
-    })
-    registry = PreviewRegistry(run=runner)
+    verifier = FakeVerifier([_fail(), _ok()])
+    registry = PreviewRegistry(verifier=verifier, stopper=FakeStopper())
 
     first = registry.start(".", 8000, owner_key="owner-a")
     assert first.ok is False
@@ -190,18 +210,10 @@ def test_reservation_released_after_failed_build(monkeypatch):
     assert registry._reserved == set()
 
 
-def test_reap_expired_with_controlled_clock(monkeypatch):
-    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
-    runner = FakeRunner(base_script(
-        **{
-            "docker:build": [cp(returncode=0), cp(returncode=0)],
-            "docker:run": [cp(returncode=0), cp(returncode=0)],
-            "curl": [cp(stdout="200"), cp(stdout="200")],
-            "docker:stop": [cp(returncode=0)],
-            "docker:rmi": [cp(returncode=0)],
-        }
-    ))
-    registry = PreviewRegistry(run=runner)
+def test_reap_expired_with_controlled_clock():
+    verifier = FakeVerifier([_ok(container="stale"), _ok(container="fresh")])
+    stopper = FakeStopper()
+    registry = PreviewRegistry(verifier=verifier, stopper=stopper)
     registry.start(".", 8000, owner_key="stale-owner", ttl_seconds=10)
     registry.start(".", 8000, owner_key="fresh-owner", ttl_seconds=10_000)
 
@@ -209,23 +221,16 @@ def test_reap_expired_with_controlled_clock(monkeypatch):
     reaped = registry.reap_expired(now=time.time() + 20)  # only ttl=10 has expired
     assert reaped == 1
     assert registry.active_count() == 1
+    assert stopper.calls == [("stale", "img-x")]
 
 
-def test_start_reaps_already_expired_previews_in_process(monkeypatch):
+def test_start_reaps_already_expired_previews_in_process():
     # In-process fallback: even if the external reap timer never fires, the
     # next start() opportunistically reaps anything already past its TTL, so
     # a stale different-owner preview is torn down without waiting.
-    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
-    runner = FakeRunner(base_script(
-        **{
-            "docker:build": [cp(returncode=0), cp(returncode=0)],
-            "docker:run": [cp(returncode=0), cp(returncode=0)],
-            "curl": [cp(stdout="200"), cp(stdout="200")],
-            "docker:stop": [cp(returncode=0)],
-            "docker:rmi": [cp(returncode=0)],
-        }
-    ))
-    registry = PreviewRegistry(run=runner)
+    verifier = FakeVerifier([_ok(container="stale"), _ok(container="fresh")])
+    stopper = FakeStopper()
+    registry = PreviewRegistry(verifier=verifier, stopper=stopper)
     # Register an already-expired preview (TTL in the past).
     registry.start(".", 8000, owner_key="stale-owner", ttl_seconds=-1)
     assert registry.active_count() == 1
@@ -234,28 +239,26 @@ def test_start_reaps_already_expired_previews_in_process(monkeypatch):
     registry.start(".", 8000, owner_key="fresh-owner", ttl_seconds=10_000)
     assert registry.active_count() == 1
     assert [i.owner_key for i in registry.list_active()] == ["fresh-owner"]
-    assert any(c[:2] == ["docker", "stop"] for c in runner.calls)
+    assert stopper.calls == [("stale", "img-x")]
 
 
 # --- preview labels stamped at creation ------------------------------------
 
-def test_start_stamps_preview_labels_on_the_container(monkeypatch):
+def test_start_stamps_preview_labels_passed_to_the_verifier():
     # The Docker-truth reconciler can only find/age-out orphans if every
     # preview container carries shipit.preview / shipit.expires_at labels.
-    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
-    runner = FakeRunner(base_script())
-    registry = PreviewRegistry(run=runner)
+    # The preview layer hands those to the verifier; the runner/sandbox then
+    # adds shipit.job_id and applies them as docker --label args.
+    verifier = FakeVerifier([_ok()])
+    registry = PreviewRegistry(verifier=verifier, stopper=FakeStopper())
 
     registry.start(".", 8000, owner_key="1.2.3.4", ttl_seconds=3600)
 
-    run_call = next(c for c in runner.calls if c[:2] == ["docker", "run"])
-    labels = [run_call[i + 1] for i, a in enumerate(run_call) if a == "--label"]
-    assert "shipit.preview=true" in labels
-    assert any(l.startswith("shipit.job_id=") for l in labels)
-    expires = next(l for l in labels if l.startswith("shipit.expires_at="))
+    labels = verifier.calls[0]["labels"]
+    assert labels.get(preview.PREVIEW_LABEL) == "true"
+    raw = labels.get(preview.EXPIRES_LABEL)
     # The stamped value must be a parseable ISO-8601 UTC timestamp.
-    _, _, raw = expires.partition("=")
-    assert preview._parse_iso_utc(raw) is not None
+    assert raw is not None and preview._parse_iso_utc(raw) is not None
 
 
 # --- reconcile_previews (Docker-truth orphan reaper) -----------------------
