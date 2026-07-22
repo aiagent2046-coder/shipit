@@ -1,0 +1,68 @@
+# systemd unit for the ShipIt sandbox-runner (Stage-3 Variant A).
+#
+# Runs as the unprivileged `shipit-runner` user from its OWN checkout
+# (/opt/shipit-runner) with its OWN reduced EnvironmentFile that holds NO prod
+# secrets (no DATABASE_URL, no billing/pepper/Telegram/admin tokens). It reaches
+# dockerd ONLY through the socket-proxy (DOCKER_HOST below) — `shipit-runner` is
+# deliberately NOT in the `docker` group.
+#
+# Install:
+#   cp deploy/sandbox-runner/sandbox-runner.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now sandbox-runner
+# See deploy/sandbox-runner/README.md for the full checklist.
+
+[Unit]
+Description=ShipIt sandbox-runner (out-of-process docker executor, Variant A)
+After=network.target docker.service
+Wants=docker.service
+# The proxy must be up first; it is a docker compose service, so we only
+# order after docker itself and health-gate at the app level (/healthz).
+
+[Service]
+Type=simple
+User=shipit-runner
+Group=shipit-runner
+
+# NOT in the docker group by design — dockerd is reached via the proxy only.
+DevicePolicy=closed
+
+WorkingDirectory=/opt/shipit-runner
+EnvironmentFile=/opt/shipit-runner/.env.runner
+# Talk to the docker-socket-proxy, never the real socket.
+Environment=DOCKER_HOST=tcp://127.0.0.1:2375
+# Classic builder: the proxy has the BuildKit grpc session endpoint disabled,
+# and BuildKit needs it. Force the classic builder so `docker build` works.
+Environment=DOCKER_BUILDKIT=0
+
+# The runner listens on a Unix socket in /run/shipit-runner (created by systemd
+# as RuntimeDirectory). UMask 0117 makes the socket 0660: owner+group only, so
+# only the runner and members of its group can connect. The backend (root)
+# bypasses this, and the token is the second line of defence (O5).
+RuntimeDirectory=shipit-runner
+RuntimeDirectoryMode=0710
+UMask=0117
+ExecStart=/opt/shipit-runner/.venv/bin/uvicorn app.runner.main:app \
+    --uds /run/shipit-runner/sandbox.sock \
+    --workers 1
+Restart=on-failure
+RestartSec=2
+
+# ── Hardening: the runner handles untrusted client code; keep its own
+#    footprint minimal even though the container flags in sandbox.py are the
+#    real isolation boundary. ──────────────────────────────────────────────
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# The runner extracts client zips and bind-mounts those dirs into build/test
+# containers, so it needs a writable scratch area. PrivateTmp gives it /tmp;
+# RuntimeDirectory gives it the socket dir.
+ReadWritePaths=/run/shipit-runner
+
+[Install]
+WantedBy=multi-user.target
