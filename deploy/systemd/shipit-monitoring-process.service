@@ -1,0 +1,8 @@
+[Unit]
+Description=Drydock Continuous Monitoring: process pending runs
+After=network.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/shipit/.env
+ExecStart=/bin/bash -c '/usr/bin/curl -sf -X POST http://127.0.0.1:8000/internal/monitoring/process-pending -H "Authorization: Bearer ${MONITORING_PROCESS_TOKEN}"'
