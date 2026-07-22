@@ -58,7 +58,12 @@ jobs:
               echo "proxy up"; break
             fi
             sleep 1
-            if [ "$i" = 30 ]; then echo "proxy never came up" >&2; exit 1; fi
+            if [ "$i" = 30 ]; then
+              echo "proxy never came up — dumping state" >&2
+              docker compose -f deploy/sandbox-runner/docker-socket-proxy.yml ps -a >&2 || true
+              docker compose -f deploy/sandbox-runner/docker-socket-proxy.yml logs --no-color >&2 || true
+              exit 1
+            fi
           done
 
       - name: Prove the proxy allowlist is real (denied endpoint → 403)
