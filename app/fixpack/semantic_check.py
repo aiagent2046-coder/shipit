@@ -65,6 +65,57 @@ FIXPACK_DOCKER_RUNTIME = os.environ.get("FIXPACK_DOCKER_RUNTIME", "runc")
 # between the (separate) install and test containers.
 _PY_DEPS_DIR = ".shipit_pydeps"
 
+# Coarse zip-bomb / disk-fill guard: cap the total UNCOMPRESSED size of a
+# client repo we will extract and bind-mount into a container, on top of the
+# per-member zip-slip check in _extract_repo_relative. A genuine client repo
+# is far under this; anything larger is not something we run synchronously.
+MAX_WORKSPACE_BYTES = 512 * 1024 * 1024  # 512 MiB uncompressed
+
+# Cap how much container stdout/stderr we pull back into this process's memory.
+# capture_output buffers the whole stream, so a hostile suite printing
+# gigabytes could otherwise blow up backend RAM. We keep only head+tail.
+MAX_CAPTURED_OUTPUT_BYTES = 64 * 1024
+
+# Read-only container rootfs (requirement 3.3). Both steps write only to the
+# bind-mounted /work (writable regardless of --read-only) plus scratch in /tmp
+# and the tool home caches (~/.npm, pip build temp); we give those as tmpfs and
+# lock the rest of the rootfs read-only. Toggle off (FIXPACK_READONLY_ROOTFS=0)
+# for an image that genuinely needs a writable rootfs, rather than deleting the
+# flag in code -- see PHASE3 plan §5.2.
+FIXPACK_READONLY_ROOTFS = (
+    os.environ.get("FIXPACK_READONLY_ROOTFS", "1").lower() not in ("0", "false", "")
+)
+
+# Fixed non-root uid:gid used inside the container when the backend itself runs
+# as root (the prod systemd unit has no User=, so os.getuid() == 0 there).
+# Mirroring root into the container would leave the untrusted code running as
+# container-root and defeat requirement 3.3, so we drop to a fixed unprivileged
+# id instead. The bind-mounted /work is chown'd to this id before the run (see
+# _chown_workdir), so the non-root process can still read/write it.
+_NONROOT_FALLBACK_UID = 1000
+_NONROOT_FALLBACK_GID = 1000
+
+
+def _default_run_as_user() -> str:
+    """The --user value when FIXPACK_RUN_AS_USER is unset. Never resolves to
+    root: if the backend runs as root (uid 0), fall back to a fixed non-root id
+    rather than mirroring 0:0 into the container; otherwise reuse the backend's
+    own uid:gid (it created /work, so no chown is needed)."""
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0:
+        return f"{_NONROOT_FALLBACK_UID}:{_NONROOT_FALLBACK_GID}"
+    return f"{uid}:{gid}"
+
+
+# Run the untrusted container as a non-root user (requirement 3.3). Defaults via
+# _default_run_as_user() (never root). Override with FIXPACK_RUN_AS_USER
+# ("1000:1000", or "" to run as the image's own default user). An explicit env
+# value of "" disables --user; only an *unset* env falls back to the default.
+_env_run_as_user = os.environ.get("FIXPACK_RUN_AS_USER")
+FIXPACK_RUN_AS_USER = (
+    _default_run_as_user() if _env_run_as_user is None else _env_run_as_user
+)
+
 
 @dataclass(frozen=True)
 class TestRunner:
@@ -108,6 +159,13 @@ _PY_MARKERS = ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg")
 def _zip_names(zip_bytes: bytes) -> list[str]:
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         return zf.namelist()
+
+
+def _zip_uncompressed_size(zip_bytes: bytes) -> int:
+    """Total uncompressed size declared by the archive's central directory.
+    Used as a coarse zip-bomb guard before extraction (see MAX_WORKSPACE_BYTES)."""
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        return sum(info.file_size for info in zf.infolist())
 
 
 def _read_package_json_scripts(zip_bytes: bytes, entry: str) -> dict:
@@ -238,12 +296,34 @@ def _parse_counts(ecosystem: str, output: str) -> tuple[int, int]:
 
 # --- Docker execution ------------------------------------------------------
 
+def _clip(text: str | None) -> str | None:
+    """Bound one captured stream to MAX_CAPTURED_OUTPUT_BYTES, keeping the head
+    and tail (both usually matter: the reporter summary is at the end, the
+    first error at the top). None/short input passes through untouched."""
+    if not text or len(text) <= MAX_CAPTURED_OUTPUT_BYTES:
+        return text
+    keep = MAX_CAPTURED_OUTPUT_BYTES // 2
+    dropped = len(text) - 2 * keep
+    return f"{text[:keep]}\n...[truncated {dropped} chars]...\n{text[-keep:]}"
+
+
+def _truncate_output(cp: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
+    """Clip a completed process's captured stdout/stderr in place, so an
+    adversarial client suite cannot balloon this process's memory via a
+    multi-gigabyte print. Counts are parsed from the clipped head+tail, which
+    still contains any real reporter summary."""
+    cp.stdout = _clip(cp.stdout)
+    cp.stderr = _clip(cp.stderr)
+    return cp
+
+
 def _run(argv: list[str], *, timeout: int) -> subprocess.CompletedProcess:
     """The single subprocess seam (mocked in tests). Captures text output;
-    never raises on non-zero exit — callers inspect returncode."""
-    return subprocess.run(
+    never raises on non-zero exit — callers inspect returncode. Captured
+    streams are clipped to bound memory (see _truncate_output)."""
+    return _truncate_output(subprocess.run(
         argv, capture_output=True, text=True, timeout=timeout, check=False,
-    )
+    ))
 
 
 def _extract_repo_relative(zip_bytes: bytes, dest: str) -> None:
@@ -270,19 +350,59 @@ def _extract_repo_relative(zip_bytes: bytes, dest: str) -> None:
 #   --security-opt=no-new-privileges block setuid privilege escalation inside
 #   --cap-drop=ALL                   drop all Linux capabilities (none are
 #                                    needed to install deps or run a test)
-# NOTE: --read-only is deliberately NOT added. Both the install step
-# (pip --target / npm writing node_modules into /work) and the test step
-# (pytest caches, /tmp) need to write, and pip/npm also write outside the
-# mounted /work (into the image's own site dirs, ~/.cache, /tmp). A correct
-# read-only setup would need a writable /work plus an explicit `--tmpfs /tmp`
-# and possibly more tmpfs carve-outs, which risks silently breaking installs;
-# left as a follow-up rather than added blindly here.
+# --ulimit nofile / fsize bound open descriptors and max file size, so a client
+#   can't exhaust host FDs or fill the disk with one giant file (complements
+#   --pids-limit / --memory). fsize is generous (1 GiB) so real installs and
+#   test artefacts are unaffected.
+# --read-only / --user are applied separately (see _readonly_argv / _user_argv)
+#   because they are conditional on env toggles.
 _CONTAINER_HARDENING = [
     "--pids-limit=256",
     "--cpus=1",
     "--security-opt=no-new-privileges",
     "--cap-drop=ALL",
+    "--ulimit", "nofile=1024:1024",
+    "--ulimit", "fsize=1073741824",
 ]
+
+
+def _readonly_argv() -> list[str]:
+    """--read-only rootfs plus the minimal writable tmpfs carve-outs both steps
+    need: /tmp (pip build temp, pytest scratch) and /root (npm's ~/.npm cache,
+    pip's ~/.cache). /work is a bind mount and stays writable regardless. Empty
+    when FIXPACK_READONLY_ROOTFS is disabled."""
+    if not FIXPACK_READONLY_ROOTFS:
+        return []
+    return ["--read-only", "--tmpfs", "/tmp", "--tmpfs", "/root"]
+
+
+def _user_argv() -> list[str]:
+    """--user <uid:gid> to run untrusted client code as non-root. Empty string
+    disables (image default user)."""
+    return ["--user", FIXPACK_RUN_AS_USER] if FIXPACK_RUN_AS_USER else []
+
+
+def _chown_workdir(workdir: str) -> None:
+    """Hand ownership of the bind-mounted /work to the container's --user, so a
+    non-root container process can read the extracted repo and write deps into
+    it. Only relevant (and only permitted) when the backend runs as root — a
+    non-root backend already owns the tempdir it created. No-op when --user is
+    disabled or its value is a named user rather than a numeric uid:gid."""
+    if os.getuid() != 0 or not FIXPACK_RUN_AS_USER:
+        return
+    parts = FIXPACK_RUN_AS_USER.split(":", 1)
+    try:
+        uid = int(parts[0])
+        gid = int(parts[1]) if len(parts) > 1 else uid
+    except ValueError:
+        return  # e.g. "node" — can't resolve a name to an id here; skip
+    os.lchown(workdir, uid, gid)
+    for root, dirs, files in os.walk(workdir):
+        for name in dirs + files:
+            try:
+                os.lchown(os.path.join(root, name), uid, gid)
+            except OSError:
+                pass
 
 # Egress allowlist for the install step. The install container needs the
 # network (pip/npm fetch packages), but "the network" should mean the package
@@ -348,8 +468,10 @@ def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
     return [
         "docker", "run", "--rm",
         *_runtime_argv(),
+        *_user_argv(),
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,
+        *_readonly_argv(),
         *_install_proxy_argv(),
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
@@ -361,9 +483,11 @@ def _docker_test_argv(image: str, workdir: str, script: str) -> list[str]:
     return [
         "docker", "run", "--rm",
         *_runtime_argv(),
+        *_user_argv(),
         "--network", "none",
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,
+        *_readonly_argv(),
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
     ]
@@ -373,9 +497,18 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
     """Install (net on) then test (net off) one version in Docker; return
     parsed counts. Any infra failure is captured as `error` (secret-free) —
     we never surface client output verbatim into a persisted field."""
+    if _zip_uncompressed_size(zip_bytes) > MAX_WORKSPACE_BYTES:
+        # Symmetric across original/patched (both are the same repo ± the
+        # patch), so is_regression treats this as "could not verify", never a
+        # false regression — same contract as a missing docker binary.
+        return RunResult(0, 0, False, "client workspace exceeds size limit")
+
     workdir = tempfile.mkdtemp(prefix="shipit-semcheck-")
     try:
         _extract_repo_relative(zip_bytes, workdir)
+        # mkdtemp is 0o700 owned by this process; if the container runs as a
+        # different (non-root) uid, hand it ownership so it can use /work.
+        _chown_workdir(workdir)
 
         install = _run(
             _docker_install_argv(runner.image, workdir, runner.install_script),

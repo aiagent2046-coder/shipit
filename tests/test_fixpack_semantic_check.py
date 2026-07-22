@@ -303,15 +303,119 @@ def test_install_argv_has_resource_and_privilege_limits():
     argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
     assert _HARDENING.issubset(set(argv))
     assert "--memory" in argv          # existing cap kept
-    # --read-only would break pip/npm writes; must NOT be present (see NOTE).
-    assert "--read-only" not in argv
 
 
 def test_test_argv_has_resource_and_privilege_limits():
     argv = _docker_test_argv("node:20-slim", "/tmp/work", "npm test")
     assert _HARDENING.issubset(set(argv))
     assert "--network" in argv and "none" in argv   # existing net-off kept
+
+
+# --- read-only rootfs, non-root user, ulimits (3.3) ------------------------
+
+def test_both_builders_are_read_only_with_tmpfs_by_default():
+    # 3.3: rootfs read-only, with the minimal writable tmpfs carve-outs the
+    # install/test steps need (/tmp scratch, /root for ~/.npm & pip cache).
+    for argv in (
+        _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
+        _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
+    ):
+        assert "--read-only" in argv
+        # each --tmpfs is followed by its mountpoint
+        tmpfs_targets = {argv[i + 1] for i, t in enumerate(argv) if t == "--tmpfs"}
+        assert {"/tmp", "/root"}.issubset(tmpfs_targets)
+
+
+def test_read_only_can_be_disabled_by_env(monkeypatch):
+    monkeypatch.setattr(sc, "FIXPACK_READONLY_ROOTFS", False)
+    argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
     assert "--read-only" not in argv
+    assert "--tmpfs" not in argv
+
+
+def test_both_builders_run_as_non_root_user_by_default():
+    # 3.3: --user <uid:gid> so untrusted client code is not container-root.
+    # Default never resolves to root (see _default_run_as_user); /work is
+    # chown'd to this id when the backend runs as root.
+    for argv in (
+        _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
+        _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
+    ):
+        assert "--user" in argv
+        user = argv[argv.index("--user") + 1]
+        assert user == sc.FIXPACK_RUN_AS_USER and ":" in user
+
+
+def test_user_can_be_disabled_by_env(monkeypatch):
+    monkeypatch.setattr(sc, "FIXPACK_RUN_AS_USER", "")
+    argv = _docker_test_argv("node:20-slim", "/tmp/work", "npm test")
+    assert "--user" not in argv
+
+
+def test_default_user_is_never_root_even_when_backend_runs_as_root(monkeypatch):
+    # On the prod VPS the systemd unit has no User=, so the backend is root
+    # (uid 0). Mirroring that into the container (--user 0:0) would leave the
+    # untrusted code as container-root and defeat requirement 3.3, so the
+    # default must fall back to a fixed non-root id instead.
+    monkeypatch.setattr(sc.os, "getuid", lambda: 0)
+    monkeypatch.setattr(sc.os, "getgid", lambda: 0)
+    default = sc._default_run_as_user()
+    assert default != "0:0"
+    assert default.split(":")[0] != "0"
+    assert default == f"{sc._NONROOT_FALLBACK_UID}:{sc._NONROOT_FALLBACK_GID}"
+
+
+def test_default_user_reuses_backend_id_when_non_root(monkeypatch):
+    # A non-root backend already owns the tempdir it creates, so reuse its
+    # uid:gid (no chown needed).
+    monkeypatch.setattr(sc.os, "getuid", lambda: 1234)
+    monkeypatch.setattr(sc.os, "getgid", lambda: 5678)
+    assert sc._default_run_as_user() == "1234:5678"
+
+
+def test_chown_workdir_gives_container_user_ownership_when_root(monkeypatch, tmp_path):
+    # When the backend is root, /work (mkdtemp'd 0o700, root-owned) must be
+    # chown'd to the non-root container uid so the container can read/write it.
+    monkeypatch.setattr(sc.os, "getuid", lambda: 0)
+    monkeypatch.setattr(sc, "FIXPACK_RUN_AS_USER", "1000:1000")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "f.txt").write_text("x")
+    chowned: list[tuple[str, int, int]] = []
+    monkeypatch.setattr(
+        sc.os, "lchown",
+        lambda p, uid, gid: chowned.append((str(p), uid, gid)),
+    )
+    sc._chown_workdir(str(tmp_path))
+    assert (str(tmp_path), 1000, 1000) in chowned
+    # recurses into contents so the extracted repo is reachable too
+    assert any(p.endswith("f.txt") and (uid, gid) == (1000, 1000)
+               for p, uid, gid in chowned)
+
+
+def test_chown_workdir_is_noop_when_backend_non_root(monkeypatch, tmp_path):
+    # A non-root backend can't chown to another uid and doesn't need to.
+    monkeypatch.setattr(sc.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(sc, "FIXPACK_RUN_AS_USER", "1000:1000")
+    called = False
+
+    def _fail(*a, **k):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(sc.os, "lchown", _fail)
+    sc._chown_workdir(str(tmp_path))
+    assert called is False
+
+
+def test_both_builders_carry_fd_and_fsize_ulimits():
+    # 3.3: cap open descriptors and max file size (complements --pids/--memory).
+    for argv in (
+        _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
+        _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
+    ):
+        ulimits = {argv[i + 1] for i, t in enumerate(argv) if t == "--ulimit"}
+        assert any(u.startswith("nofile=") for u in ulimits)
+        assert any(u.startswith("fsize=") for u in ulimits)
 
 
 def test_install_argv_routes_egress_through_the_proxy():
@@ -410,6 +514,76 @@ def test_empty_runtime_is_treated_as_default(monkeypatch):
     assert sc._runtime_argv() == []
     argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
     assert "--runtime" not in argv
+
+
+# --- workspace size limit (3.4) --------------------------------------------
+
+def test_run_suite_rejects_oversized_workspace(monkeypatch):
+    # A zip whose declared uncompressed size exceeds the cap is refused before
+    # extraction/docker — returned as a secret-free error, never a regression.
+    monkeypatch.setattr(sc, "MAX_WORKSPACE_BYTES", 10)
+
+    def boom(*a, **k):
+        raise AssertionError("docker must not run for an oversized workspace")
+    monkeypatch.setattr(sc, "_run", boom)
+
+    res = run_suite(_python_zip(), detect_test_runner(_python_zip()))
+    assert res.error is not None and "size limit" in res.error
+
+
+def test_zip_uncompressed_size_sums_members():
+    z = make_zip({"a.txt": "x" * 100, "b.txt": "y" * 50})
+    assert sc._zip_uncompressed_size(z) == 150
+
+
+# --- captured-output truncation (3.4) --------------------------------------
+
+def test_clip_leaves_short_output_untouched():
+    assert sc._clip("short") == "short"
+    assert sc._clip(None) is None
+
+
+def test_clip_truncates_and_keeps_head_and_tail():
+    big = "H" * 10 + "M" * 200_000 + "T" * 10
+    cap = sc.MAX_CAPTURED_OUTPUT_BYTES
+    clipped = sc._clip(big)
+    assert len(clipped) < len(big)
+    assert clipped.startswith("H")           # head kept
+    assert clipped.endswith("T")             # tail kept
+    assert "truncated" in clipped
+    assert len(clipped) <= cap + 64          # ~cap plus the marker line
+
+
+def test_truncate_output_clips_both_streams():
+    huge = "x" * (sc.MAX_CAPTURED_OUTPUT_BYTES * 3)
+    cp = completed(["docker"], 0, stdout=huge, stderr=huge)
+    out = sc._truncate_output(cp)
+    assert len(out.stdout) < len(huge)
+    assert len(out.stderr) < len(huge)
+
+
+# --- docker socket / host-mount regression guard (3.4) ---------------------
+
+def _all_fixpack_argvs():
+    return [
+        _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
+        _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
+    ]
+
+
+def test_no_docker_socket_is_ever_mounted():
+    for argv in _all_fixpack_argvs():
+        joined = " ".join(argv)
+        assert "docker.sock" not in joined
+        assert "/var/run/docker" not in joined
+
+
+def test_only_the_workspace_is_bind_mounted():
+    # Every -v must mount exactly the caller's workdir at /work and nothing
+    # else — no arbitrary host paths reach the untrusted container.
+    for argv in _all_fixpack_argvs():
+        mounts = [argv[i + 1] for i, t in enumerate(argv) if t == "-v"]
+        assert mounts == ["/tmp/work:/work"]
 
 
 # --- build_patched_zip -----------------------------------------------------

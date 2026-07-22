@@ -56,7 +56,7 @@ from app.deploypack.github_app import (
     installation_exists_for_repo,
     installation_token_for_repo,
 )
-from app.deploypack.pipeline import run_deploy_pack
+from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
 from app.deploypack.preview import PreviewRegistry, reconcile_previews
 from app.fixpack.generate import (
     build_fixpack_plan,
@@ -2141,6 +2141,11 @@ async def create_fixpack(
         raise HTTPException(
             status_code=422,
             detail={"reason": "unsupported_stack", "detail": str(exc)},
+        )
+    except WorkspaceTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail={"reason": "workspace_too_large", "detail": str(exc)},
         )
 
     persisted_job = await fixpack_repo.create(
