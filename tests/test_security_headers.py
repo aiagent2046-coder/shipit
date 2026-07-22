@@ -31,6 +31,15 @@ def test_json_response_carries_baseline_security_headers():
     assert resp.headers["Referrer-Policy"] == "no-referrer"
 
 
+def test_responses_are_not_cached_by_shared_caches():
+    # Every backend response is dynamic/account-scoped (no cacheable public
+    # content is served here — Vercel handles static assets), so a blanket
+    # private, no-store keeps API keys and audit reports out of shared and
+    # browser caches.
+    resp = client.get("/healthz")
+    assert resp.headers["Cache-Control"] == "private, no-store"
+
+
 def test_json_response_has_no_report_csp():
     # CSP is scoped to the HTML report only, so JSON endpoints (and /docs)
     # never carry it.

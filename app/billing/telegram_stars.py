@@ -522,6 +522,11 @@ async def handle_update(
             message, account_repo=account_repo, payment_repo=payment_repo,
             token=token, transport=transport,
         )
+    if text.split(maxsplit=1)[:1] == ["/rotatekey"]:
+        return await _handle_rotatekey(
+            message, account_repo=account_repo, payment_repo=payment_repo,
+            token=token, transport=transport,
+        )
     if text.split(maxsplit=1)[:1] == ["/link"]:
         return await _handle_link(
             message, text, account_repo=account_repo, payment_repo=payment_repo,
@@ -909,6 +914,31 @@ async def _handle_fixpack_payment(
     return {"ok": True, "handled": "fixpack_payment", "persisted": True}
 
 
+def _mykey_status_text(key_prefix: str | None, tier: str) -> str:
+    # The key text is shown exactly once, at purchase, and is never stored,
+    # so /mykey cannot re-send it. Confirm the account exists (by its safe
+    # prefix) and point at /rotatekey for a lost key -- rotation mints a new
+    # key rather than recovering the old one.
+    shown = f"{key_prefix}…" if key_prefix else "sk_live_…"
+    return (
+        f"Your Drydock account is active ({tier}).\n\n"
+        f"API key: {shown}\n\n"
+        "For security the full key is shown only once, at purchase, and is "
+        "never stored — so it can't be shown again here. Lost it? Run "
+        "/rotatekey to get a new key (the old one stops working immediately)."
+    )
+
+
+def _rotate_text(api_key: str) -> str:
+    return (
+        "Done — here is your NEW Drydock API key. Your previous key no longer "
+        f"works.\n\nYour API key:\n{api_key}\n\n"
+        "Send it as `Authorization: Bearer <key>` on API requests. Update it "
+        "anywhere you stored the old one. Keep it secret; anyone with it has "
+        "your pro access."
+    )
+
+
 async def _handle_mykey(
     message: dict[str, Any], *, account_repo: Any, payment_repo: Any,
     token: str, transport: httpx.BaseTransport | None = None,
@@ -925,10 +955,39 @@ async def _handle_mykey(
         )
         return {"ok": True, "handled": "mykey", "found": False}
     await send_message(
-        chat_id, _delivery_text(account["api_key"]),
+        chat_id,
+        _mykey_status_text(account.get("key_prefix"), account.get("tier", "pro")),
         token=token, transport=transport,
     )
     return {"ok": True, "handled": "mykey", "found": True}
+
+
+async def _handle_rotatekey(
+    message: dict[str, Any], *, account_repo: Any, payment_repo: Any,
+    token: str, transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    # Identify the account the same way /mykey does: the chat that paid owns
+    # the account. Holding this chat is the proof of ownership -- no old key
+    # is required, which is exactly what makes this a lost-key recovery path.
+    chat_id = message["chat"]["id"]
+    paid = await payment_repo.get_completed_by_telegram_chat_id(str(chat_id))
+    account_id = paid.get("account_id") if paid else None
+    if not account_id:
+        await send_message(
+            chat_id, _NO_ACCOUNT_TEXT, token=token, transport=transport
+        )
+        return {"ok": True, "handled": "rotatekey", "found": False}
+    rotated = await account_repo.rotate_key(account_id)
+    if rotated is None:
+        await send_message(
+            chat_id, _NO_ACCOUNT_TEXT, token=token, transport=transport
+        )
+        return {"ok": True, "handled": "rotatekey", "found": False}
+    await send_message(
+        chat_id, _rotate_text(rotated["api_key"]),
+        token=token, transport=transport,
+    )
+    return {"ok": True, "handled": "rotatekey", "found": True}
 
 
 async def _handle_link(

@@ -178,10 +178,24 @@ async def test_all_repository_write_paths(real_db):
     assert updated == 1  # rowcount of the matched delivered outcome
 
     # ---- AccountRepository.create (needs API_KEY_PEPPER) ----------------
-    account = await account_repo.create(api_key=generate_api_key(), tier="pro")
+    original_key = generate_api_key()
+    account = await account_repo.create(api_key=original_key, tier="pro")
     assert account is not None
     account_id = account["id"]
     assert account["tier"] == "pro"
+
+    # rotate_key: overwrite prefix+hash in place, surface a new plaintext once.
+    # The old key's hash must no longer resolve; the new one must.
+    from app.accounts import hash_api_key
+    old_hash = account["key_hash"]
+    rotated = await account_repo.rotate_key(account_id)
+    assert rotated is not None
+    assert rotated["api_key"] != original_key
+    assert rotated["tier"] == "pro"
+    assert await account_repo.get_by_key_hash(old_hash) is None
+    assert (
+        await account_repo.get_by_key_hash(hash_api_key(rotated["api_key"]))
+    )["id"] == account_id
 
     # ---- PaymentRepository ----------------------------------------------
     payment = await payment_repo.create(
