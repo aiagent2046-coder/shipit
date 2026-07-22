@@ -1,0 +1,18 @@
+-- Finish the plaintext-key removal started in 0009. That migration added
+-- key_prefix + key_hash and kept the plaintext `api_key` column alive only
+-- as a transitional crutch: (a) the backfill could read the plaintext to
+-- compute each hash, and (b) keys issued before 0009 kept working via the
+-- plaintext fallback in app/accounts.resolve_account.
+--
+-- Both reasons are now spent. Every live account already carries a key_hash
+-- (verified against prod: 0 rows with key_hash IS NULL AND api_key IS NOT
+-- NULL), so no backfill is needed and nothing depends on the plaintext
+-- column any longer. The application code drops the fallback lookup
+-- (get_by_api_key) and stops selecting the column in the same change.
+--
+-- Dropping the column is the point of the exercise: as long as the plaintext
+-- lived at rest, a DB leak handed an attacker every live key ready to use.
+-- After this, only key_prefix (safe to show) and key_hash (useless without
+-- the env-only pepper) remain. A lost key is no longer recoverable; it is
+-- rotated (accounts.rotate_key mints a new key and overwrites the hash).
+alter table accounts drop column if exists api_key;

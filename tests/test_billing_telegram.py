@@ -15,6 +15,7 @@ import uuid
 
 import httpx
 
+from app.accounts import api_key_prefix, generate_api_key
 from app.billing import telegram_stars, usdt_trc20
 from app.main import (
     app,
@@ -32,22 +33,27 @@ client = TestClient(app)
 class FakeAccountRepo:
     def __init__(self):
         self.by_id: dict[str, dict] = {}
-        self.by_key: dict[str, dict] = {}
 
     async def create(self, *, api_key: str, tier: str):
         row = {
-            "id": str(uuid.uuid4()), "api_key": api_key, "tier": tier,
+            "id": str(uuid.uuid4()), "api_key": api_key,
+            "key_prefix": api_key_prefix(api_key), "tier": tier,
             "created_at": "2026-07-14T10:00:00Z",
         }
         self.by_id[row["id"]] = row
-        self.by_key[api_key] = row
         return row
 
     async def get_by_id(self, account_id: str):
         return self.by_id.get(account_id)
 
-    async def get_by_api_key(self, api_key: str):
-        return self.by_key.get(api_key)
+    async def rotate_key(self, account_id: str):
+        row = self.by_id.get(account_id)
+        if row is None:
+            return None
+        new_key = generate_api_key()
+        row["api_key"] = new_key
+        row["key_prefix"] = api_key_prefix(new_key)
+        return row
 
 
 class FakePaymentRepo:
@@ -364,7 +370,7 @@ def _last_text(calls):
     return sends[-1][1]["text"] if sends else None
 
 
-async def test_mykey_returns_key_for_linked_account():
+async def test_mykey_shows_prefix_and_never_the_full_key():
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
     # A Stars purchase links this chat_id (555) to the account automatically.
     await _send(_successful_payment_update("charge_mykey", 555),
@@ -374,8 +380,12 @@ async def test_mykey_returns_key_for_linked_account():
     calls.clear()
     result = await _send(_text_update("/mykey", 555), accounts, payments, calls)
     assert result["handled"] == "mykey" and result["found"] is True
-    # The delivery text (same copy as purchase) carrying the exact key.
-    assert account["api_key"] in _last_text(calls)
+    msg = _last_text(calls)
+    # The full secret is never re-sent; only the safe prefix is shown, and the
+    # user is pointed at /rotatekey to recover a lost key.
+    assert account["api_key"] not in msg
+    assert account["key_prefix"] in msg
+    assert "/rotatekey" in msg
 
 
 async def test_mykey_no_account_returns_helpful_message():
@@ -386,6 +396,30 @@ async def test_mykey_no_account_returns_helpful_message():
     # Explains both recovery paths, leaks no key.
     assert "Stars" in msg and "/link" in msg
     assert "sk_live_" not in msg
+
+
+async def test_rotatekey_mints_new_key_for_linked_account():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    await _send(_successful_payment_update("charge_rot", 555),
+                accounts, payments, calls)
+    account = next(iter(accounts.by_id.values()))
+    old_key = account["api_key"]
+
+    calls.clear()
+    result = await _send(_text_update("/rotatekey", 555), accounts, payments, calls)
+    assert result["handled"] == "rotatekey" and result["found"] is True
+    msg = _last_text(calls)
+    # The freshly minted key is delivered; it is not the old one.
+    assert account["api_key"] in msg
+    assert account["api_key"] != old_key
+    assert old_key not in msg
+
+
+async def test_rotatekey_no_account_returns_helpful_message():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    result = await _send(_text_update("/rotatekey", 999), accounts, payments, calls)
+    assert result["handled"] == "rotatekey" and result["found"] is False
+    assert "sk_live_" not in _last_text(calls)
 
 
 # --- 6. /link USDT payment claiming ---

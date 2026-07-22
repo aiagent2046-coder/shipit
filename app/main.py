@@ -173,6 +173,13 @@ async def add_security_headers(request: Request, call_next):
     deliberately NOT set globally — it would break Swagger UI (/docs) and
     ReDoc (/redoc), which load CDN JS and use inline scripts. CSP is scoped
     per-route to the self-contained HTML audit report instead.
+
+    Cache-Control: private, no-store is also global. Every response this
+    backend serves is dynamic and private — audit content and reports (gated
+    by per-row access tokens), account info, and the one-time API-key reveal
+    on the payment-poll endpoints. Nothing here should be cached by browsers
+    or shared proxies. Static frontend assets are served by Vercel, not this
+    backend, so a blanket no-store breaks no legitimate caching.
     """
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -181,6 +188,7 @@ async def add_security_headers(request: Request, call_next):
         "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
     )
     response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Cache-Control", "private, no-store")
     return response
 
 
@@ -626,6 +634,43 @@ async def get_account(
         "tier": tier,
         "authenticated": account is not None,
         "entitlements": entitlements_dict(entitlements),
+    }
+
+
+@app.post("/v1/account/rotate-key")
+async def rotate_account_key(
+    request: Request,
+    account_repo: AccountRepository = Depends(get_account_repo),
+) -> dict:
+    """Issue a new API key for the authenticated account, invalidating the
+    old one. Auth is the CURRENT `Authorization: Bearer <api_key>` — this is
+    the proactive path (rotate a key you still hold, e.g. on suspected
+    leak). The lost-key path is Telegram's /rotatekey, which authenticates
+    by chat ownership instead.
+
+    Returns the new key exactly once (it is never stored). Unlike the
+    graceful-degradation of GET /v1/account, an unrecognized key here 401s:
+    there is no meaningful anonymous rotation, and echoing free-tier success
+    would mislead the caller into thinking a bad key was rotated.
+    """
+    account = await resolve_account(request, account_repo)
+    if account is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"reason": "unauthorized",
+                    "detail": "no account recognized for the presented API key"},
+        )
+    rotated = await account_repo.rotate_key(account["id"])
+    if rotated is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"reason": "unauthorized",
+                    "detail": "account could not be rotated"},
+        )
+    return {
+        "api_key": rotated["api_key"],
+        "key_prefix": rotated["key_prefix"],
+        "tier": rotated["tier"],
     }
 
 

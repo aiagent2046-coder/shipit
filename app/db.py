@@ -46,7 +46,7 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from app.accounts import api_key_prefix, hash_api_key
+from app.accounts import api_key_prefix, generate_api_key, hash_api_key
 
 DATABASE_URL_ENV = "DATABASE_URL"
 
@@ -838,8 +838,8 @@ class FixOutcomeRepository:
 class AccountRepository:
     """Accounts for the paywall foundation (see app/accounts.py). Same
     real/fake split and not-configured contract as AuditRepository: when
-    DATABASE_URL isn't set, create/get_by_api_key return None instead of
-    failing, so a request carrying an API key on an unconfigured
+    DATABASE_URL isn't set, create/get_by_key_hash/rotate_key return None
+    instead of failing, so a request carrying an API key on an unconfigured
     deployment simply falls back to anonymous/free.
 
     No public create-account endpoint exists (that would be an abuse
@@ -866,20 +866,20 @@ class AccountRepository:
                 """
                 insert into accounts (key_prefix, key_hash, tier)
                 values (%s, %s, %s)
-                returning id, api_key, key_prefix, key_hash, tier, created_at
+                returning id, key_prefix, key_hash, tier, created_at
                 """,
                 (key_prefix, key_hash, tier),
             )
             row = await cur.fetchone()
         account = _row_to_account(row)
-        # api_key is NOT persisted (column left NULL). Surface the plaintext
-        # in-memory so the caller can deliver it exactly once.
+        # api_key is never persisted. Surface the plaintext in-memory so the
+        # caller can deliver it exactly once (it cannot be recovered later).
         account["api_key"] = api_key
         return account
 
     async def get_by_key_hash(self, key_hash: str) -> dict[str, Any] | None:
-        """Primary authenticated lookup: match the HMAC hash of the
-        presented key. See app/accounts.resolve_account."""
+        """Primary (and only) authenticated lookup: match the HMAC hash of
+        the presented key. See app/accounts.resolve_account."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -887,7 +887,7 @@ class AccountRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select id, api_key, key_prefix, key_hash, tier, created_at
+                select id, key_prefix, key_hash, tier, created_at
                 from accounts where key_hash = %s
                 """,
                 (key_hash,),
@@ -895,32 +895,52 @@ class AccountRepository:
             row = await cur.fetchone()
         return _row_to_account(row) if row else None
 
-    async def get_by_api_key(self, api_key: str) -> dict[str, Any] | None:
-        """Transitional plaintext lookup for keys issued before migration
-        0009 (key_hash still NULL until the backfill runs). REMOVE after
-        backfill + deprecation window, together with the api_key column."""
+    async def rotate_key(self, account_id: str) -> dict[str, Any] | None:
+        """Issue a NEW key for an existing account, invalidating the old one.
+
+        Overwrites key_prefix/key_hash with a freshly generated key: the old
+        key's hash is gone, so it stops resolving immediately. The new
+        plaintext is returned in-memory for one-time delivery, exactly like
+        create() -- it is never persisted and cannot be recovered later.
+        Returns None if the DB isn't configured or no such account exists.
+
+        This is the recovery path for a lost key (there is no plaintext at
+        rest to re-send) and the response to a suspected leak."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return None
+        try:
+            parsed_id = uuid.UUID(account_id)
+        except ValueError:
+            return None
+        new_key = generate_api_key()
+        key_prefix = api_key_prefix(new_key)
+        key_hash = hash_api_key(new_key)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select id, api_key, key_prefix, key_hash, tier, created_at
-                from accounts where api_key = %s
+                update accounts
+                set key_prefix = %s, key_hash = %s
+                where id = %s
+                returning id, key_prefix, key_hash, tier, created_at
                 """,
-                (api_key,),
+                (key_prefix, key_hash, parsed_id),
             )
             row = await cur.fetchone()
-        return _row_to_account(row) if row else None
+        if row is None:
+            return None
+        account = _row_to_account(row)
+        account["api_key"] = new_key
+        return account
 
     async def get_by_id(self, account_id: str) -> dict[str, Any] | None:
-        """Look up an account by its uuid. Used by Stage 2's billing flow
-        to re-fetch the just-granted account for delivery -- e.g. on a
-        duplicate Telegram webhook, or the USDT invoice-status endpoint.
-        Note: for accounts minted after migration 0009 the plaintext
-        api_key is NULL (only the hash is stored), so re-delivery of the
-        key text is not possible -- the key is shown once, at creation."""
+        """Look up an account by its uuid. Used by the billing flow to
+        re-fetch the just-granted account -- e.g. on a duplicate Telegram
+        webhook, or the USDT invoice-status endpoint. The plaintext key is
+        never stored, so this cannot re-deliver the key text -- the key is
+        shown once at creation; a lost key is replaced via rotate_key, not
+        recovered. Only key_prefix is available here for identification."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -932,7 +952,7 @@ class AccountRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select id, api_key, key_prefix, key_hash, tier, created_at
+                select id, key_prefix, key_hash, tier, created_at
                 from accounts where id = %s
                 """,
                 (parsed_id,),
