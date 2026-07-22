@@ -30,7 +30,7 @@
 
 services:
   docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0
+    image: tecnativa/docker-socket-proxy:0.4.2
     container_name: shipit-docker-proxy
     restart: unless-stopped
     # Loopback only: nothing off-host can reach the proxied daemon API.
@@ -67,5 +67,9 @@ services:
     security_opt:
       - no-new-privileges:true
     read_only: true
+    # The entrypoint templates its generated HAProxy config to /tmp/haproxy.cfg
+    # (0.4.x moved it there precisely so the rootfs can stay read-only); /run
+    # holds the haproxy master-worker socket.
     tmpfs:
       - /run
+      - /tmp
