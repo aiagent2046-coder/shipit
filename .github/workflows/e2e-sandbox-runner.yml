@@ -12,6 +12,17 @@ name: e2e-sandbox-runner
 #   4. a fixpack install+test suite runs real containers through the chain.
 on:
   workflow_dispatch: {}
+  # Also run when this workflow (or the chain it exercises) changes on a PR, so
+  # the full real chain is proven on the PR itself — workflow_dispatch alone
+  # can't be triggered from a non-default branch.
+  pull_request:
+    paths:
+      - "app/runner/**"
+      - "app/sandbox_client.py"
+      - "deploy/sandbox-runner/**"
+      - "scripts/e2e_fixpack_run_suite.py"
+      - "scripts/smoke_verify_*.py"
+      - ".github/workflows/e2e-sandbox-runner.yml"
 
 jobs:
   e2e:
