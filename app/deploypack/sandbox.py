@@ -110,11 +110,25 @@ def _clip_build_log(text: str) -> str:
 
 
 def _readonly_argv() -> list[str]:
-    """--read-only rootfs + a writable /tmp tmpfs for the preview container.
-    Empty when DEPLOYPACK_READONLY_ROOTFS is disabled."""
+    """--read-only rootfs plus the writable tmpfs carve-outs the preview servers
+    we generate actually need at runtime. Empty when DEPLOYPACK_READONLY_ROOTFS
+    is disabled.
+
+    /tmp   — general scratch (uvicorn/node).
+    /run   — the Vite Pack serves via nginx:alpine, which writes its pid to
+             /run/nginx.pid (/var/run is a symlink to /run on alpine).
+    /var/cache/nginx — nginx worker temp/cache dirs (client_temp, proxy_temp…).
+    Without these last two, nginx aborts on boot under --read-only and the
+    container exits before the boot-check curl can reach it (observed: vite
+    "never returned 200 … No such container" on smoke run 29913120507)."""
     if not DEPLOYPACK_READONLY_ROOTFS:
         return []
-    return ["--read-only", "--tmpfs", "/tmp"]
+    return [
+        "--read-only",
+        "--tmpfs", "/tmp",
+        "--tmpfs", "/run",
+        "--tmpfs", "/var/cache/nginx",
+    ]
 
 
 def _user_argv() -> list[str]:

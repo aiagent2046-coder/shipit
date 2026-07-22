@@ -286,12 +286,27 @@ def test_build_proxy_can_be_disabled(monkeypatch):
     assert not any(a.startswith("--add-host") for a in build_call)
 
 
+def _tmpfs_mounts(run_call):
+    return {run_call[i + 1] for i, t in enumerate(run_call) if t == "--tmpfs"}
+
+
 def test_preview_run_is_read_only_with_tmpfs_by_default(monkeypatch):
     monkeypatch.setattr(sandbox, "DEPLOYPACK_READONLY_ROOTFS", True)
     _, run_call = _run_call_for(monkeypatch)
     assert "--read-only" in run_call
     assert "--tmpfs" in run_call
     assert run_call[run_call.index("--tmpfs") + 1] == "/tmp"
+
+
+def test_readonly_preview_carves_out_nginx_writable_paths(monkeypatch):
+    # The Vite Pack serves via nginx:alpine, which writes /run/nginx.pid and
+    # /var/cache/nginx/* at boot; under --read-only those need tmpfs or nginx
+    # aborts before the boot-check can reach it (regression from smoke run
+    # 29913120507).
+    monkeypatch.setattr(sandbox, "DEPLOYPACK_READONLY_ROOTFS", True)
+    _, run_call = _run_call_for(monkeypatch)
+    mounts = _tmpfs_mounts(run_call)
+    assert {"/tmp", "/run", "/var/cache/nginx"} <= mounts
 
 
 def test_read_only_can_be_disabled_by_env(monkeypatch):
