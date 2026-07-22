@@ -10,6 +10,13 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    # The prod host runs an egress-allowlist Squid (host.docker.internal:3128)
+    # and a pre-created `--internal shipit-preview` network; a GitHub runner has
+    # neither. Empty the build proxy so `docker build` hits the open internet,
+    # and create the isolated preview network below so `docker run --network
+    # shipit-preview` resolves. Both mirror what the deploy host provides.
+    env:
+      DEPLOYPACK_BUILD_PROXY_URL: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +28,9 @@ jobs:
         run: |
           pip install --require-hashes -r requirements-dev.txt
           pip install -e . --no-deps
+
+      - name: Create the isolated preview network (prod host has this pre-made)
+        run: docker network create --internal shipit-preview
 
       - name: Real docker build + run + curl for all three stacks
         run: python scripts/smoke_verify_deploy_pack.py

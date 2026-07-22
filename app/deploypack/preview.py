@@ -128,6 +128,11 @@ class PreviewRegistry:
     ) -> PreviewResult:
         """One live preview per owner_key: starting a new one replaces
         (stops) any previous one for the same owner."""
+        # In-process fallback for TTL enforcement: reap anything already expired
+        # before starting a new preview, so containers still age out even if the
+        # external shipit-reap.timer is misconfigured or not firing. reap_expired
+        # takes its own lock, so call it before acquiring ours below.
+        self.reap_expired()
         with self._lock:
             existing = self._by_owner.get(owner_key)
             if existing:

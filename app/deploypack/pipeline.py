@@ -18,6 +18,15 @@ from app.deploypack.preview import PreviewRegistry
 from app.deploypack.sandbox import verify_deploy_pack
 from app.ingest.stack_detect import Stack
 
+# Coarse zip-bomb / disk-fill guard on the client archive before we extract it
+# into a build dir and hand it to docker build (mirrors semantic_check's
+# MAX_WORKSPACE_BYTES). A genuine app export is far under this.
+MAX_WORKSPACE_BYTES = 512 * 1024 * 1024  # 512 MiB uncompressed
+
+
+class WorkspaceTooLarge(ValueError):
+    """Raised when the client archive's uncompressed size exceeds the cap."""
+
 # (compose_host_port, container_port) — matches what generate.py puts in
 # the Pack's own docker-compose.yml for each stack. Only the container
 # port is used for sandbox verification; the host side is picked fresh
@@ -27,6 +36,25 @@ _PORTS: dict[Stack, tuple[int, int]] = {
     Stack.VITE_REACT: (8080, 80),
     Stack.NEXTJS: (3000, 3000),
 }
+
+
+def _reject_oversized_archive(raw: bytes) -> None:
+    """Raise WorkspaceTooLarge if the archive's total uncompressed size exceeds
+    MAX_WORKSPACE_BYTES, before we spend disk extracting it or feed it to
+    docker build. A corrupt/unreadable zip is left for the existing extract
+    path to surface."""
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+    except zipfile.BadZipFile:
+        return
+    if total > MAX_WORKSPACE_BYTES:
+        raise WorkspaceTooLarge(
+            f"client archive is {total} bytes uncompressed, over the "
+            f"{MAX_WORKSPACE_BYTES}-byte limit"
+        )
 
 
 def _free_port() -> int:
@@ -67,6 +95,7 @@ def run_deploy_pack(
     way — docker build already baked its contents into the image, the
     running container doesn't read from it afterwards.
     """
+    _reject_oversized_archive(raw)
     files = read_all_files(io.BytesIO(raw))
     pack_files = generate_deploy_pack(stack, files)  # may raise
 

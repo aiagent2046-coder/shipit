@@ -211,6 +211,32 @@ def test_reap_expired_with_controlled_clock(monkeypatch):
     assert registry.active_count() == 1
 
 
+def test_start_reaps_already_expired_previews_in_process(monkeypatch):
+    # In-process fallback: even if the external reap timer never fires, the
+    # next start() opportunistically reaps anything already past its TTL, so
+    # a stale different-owner preview is torn down without waiting.
+    monkeypatch.setattr(sandbox, "docker_available", lambda: True)
+    runner = FakeRunner(base_script(
+        **{
+            "docker:build": [cp(returncode=0), cp(returncode=0)],
+            "docker:run": [cp(returncode=0), cp(returncode=0)],
+            "curl": [cp(stdout="200"), cp(stdout="200")],
+            "docker:stop": [cp(returncode=0)],
+            "docker:rmi": [cp(returncode=0)],
+        }
+    ))
+    registry = PreviewRegistry(run=runner)
+    # Register an already-expired preview (TTL in the past).
+    registry.start(".", 8000, owner_key="stale-owner", ttl_seconds=-1)
+    assert registry.active_count() == 1
+
+    # A fresh start() for a different owner must sweep the expired one first.
+    registry.start(".", 8000, owner_key="fresh-owner", ttl_seconds=10_000)
+    assert registry.active_count() == 1
+    assert [i.owner_key for i in registry.list_active()] == ["fresh-owner"]
+    assert any(c[:2] == ["docker", "stop"] for c in runner.calls)
+
+
 # --- preview labels stamped at creation ------------------------------------
 
 def test_start_stamps_preview_labels_on_the_container(monkeypatch):
