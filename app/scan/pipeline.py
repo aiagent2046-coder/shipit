@@ -75,7 +75,8 @@ def content_digest(data: bytes) -> str:
     return h.hexdigest()
 
 
-def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
+def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
+             llm_skip_reason: str | None = None) -> dict:
     """Returns {"score": {...}, "findings": [...], "llm": <stats | status>}.
 
     `llm` is a stats dict when the stage ran, and also a stats-shaped dict
@@ -84,12 +85,19 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
     a real run that matched no rubric-relevant files (prompts=0,
     skipped_reason=None). A hard provider failure stays the honest string
     "failed: <reason>".
+
+    `llm_skip_reason`, when set by the caller (e.g. "daily_spend_cap"), forces
+    the LLM stage off exactly as if no providers were configured: the scan
+    degrades to static-only with that reason recorded, and calls=0 means no
+    llm_usage row is written. This is the soft-degrade path an anon daily
+    spend cap uses -- a backstop that stops spending, not an error to the user.
     """
     static = run_static_scan(io.BytesIO(data))
     findings = static["findings"]
-    llm_summary: object = vars(LLMScanStats(skipped_reason="no_providers_configured"))
+    llm_summary: object = vars(LLMScanStats(
+        skipped_reason=llm_skip_reason or "no_providers_configured"))
 
-    if llm_client.providers:
+    if llm_client.providers and llm_skip_reason is None:
         try:
             llm_findings, stats = run_llm_scan(io.BytesIO(data), llm_client,
                                                passes=llm_passes)
