@@ -27,19 +27,24 @@ _PER_MILLION = Decimal(1_000_000)
 
 
 # USD per 1,000,000 tokens (MTok), split by input vs output. Keyed by the model
-# name the provider reports in the response body (data["model"]), so a served
-# model is matched to its own price even when it differs from what we requested.
-#
-# Only claude-sonnet-4-6 is ever requested today: app/llm/client.py sends a
-# single model per provider (DEFAULT_MODEL, overridable by the LLM_MODEL env
-# var) and there is no Opus/other model anywhere in the provider chain. Add a
-# row here (and bump PRICING_LAST_UPDATED) before putting any other model into
-# rotation, or its usage falls back to DEFAULT_PRICE below.
+# name the provider reports in the response body (data["model"]) — this is what
+# price_for() is handed, and it is PROVIDER-SPECIFIC for the same underlying
+# model. AITunnel (the primary provider) returns "claude-sonnet-4.6" (dot);
+# the direct Anthropic fallback returns "claude-sonnet-4-6" (dash). See
+# .env.example (LLM_MODEL) and README — the same 400-vs-served-name split.
+# BOTH spellings must be present, each mapped to the same price, or a served
+# model silently falls through to DEFAULT_PRICE (this exact dot/dash miss was
+# caught in a live prod run: AITunnel returned the dotted name, the table only
+# had the dashed key, and cost was only right by accident because DEFAULT_PRICE
+# equalled the single row). Add a row (and bump PRICING_LAST_UPDATED) before
+# putting any other model into rotation.
+_SONNET_4_6: dict[str, Decimal] = {
+    "input": Decimal("3.00"),
+    "output": Decimal("15.00"),
+}
 PRICE_TABLE: dict[str, dict[str, Decimal]] = {
-    "claude-sonnet-4-6": {
-        "input": Decimal("3.00"),
-        "output": Decimal("15.00"),
-    },
+    "claude-sonnet-4.6": _SONNET_4_6,   # AITunnel / OpenAI-compat response name
+    "claude-sonnet-4-6": _SONNET_4_6,   # direct Anthropic response name
 }
 
 # Fallback for a model not in the table (an unexpected served model, or a new

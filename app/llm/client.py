@@ -14,6 +14,11 @@ from dataclasses import dataclass
 
 import httpx
 
+# The model we REQUEST when LLM_MODEL is unset. This is Anthropic's canonical
+# (dashed) name, correct for the direct Anthropic fallback. AITunnel needs its
+# own spelling "claude-sonnet-4.6" (dot) set via LLM_MODEL, or /chat/completions
+# 400s (see .env.example). Note the request name and the response data["model"]
+# can differ per provider — app/llm/pricing.py keys on the RESPONSE name.
 DEFAULT_MODEL = "claude-sonnet-4-6"
 TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 TRANSIENT_RETRIES = 2      # extra attempts per provider on 5xx/transport errors

@@ -85,8 +85,11 @@ class FakeLLM(LLMClient):
         self._response = response
 
     def complete(self, system, user, max_tokens=4096):
+        # AITunnel (primary provider) reports the dotted name in data["model"];
+        # mirror that here so the accounting is exercised against the real
+        # response spelling, not the dashed request name.
         return self._response, LLMUsage(
-            model="claude-sonnet-4-6", input_tokens=1000, output_tokens=200)
+            model="claude-sonnet-4.6", input_tokens=1000, output_tokens=200)
 
 
 def _auth_zip() -> io.BytesIO:
@@ -109,22 +112,54 @@ def _clear_overrides():
 
 
 def test_pricing_cost_matches_published_sonnet_rates():
-    # 1M input @ $3.00 + 1M output @ $15.00 = $18.00 exactly.
-    assert pricing.cost_usd("claude-sonnet-4-6", 1_000_000, 1_000_000) == Decimal("18.00")
-    # Zero tokens -> zero cost.
-    assert pricing.cost_usd("claude-sonnet-4-6", 0, 0) == Decimal("0")
+    # Both provider spellings price identically: 1M in @ $3 + 1M out @ $15 = $18.
+    for model in ("claude-sonnet-4.6", "claude-sonnet-4-6"):
+        assert pricing.cost_usd(model, 1_000_000, 1_000_000) == Decimal("18.00")
+        assert pricing.cost_usd(model, 0, 0) == Decimal("0")  # zero tokens -> $0
+
+
+def test_both_provider_spellings_priced_from_real_row_not_default():
+    """The dot/dash regression guard: AITunnel returns "claude-sonnet-4.6" and
+    the direct Anthropic fallback "claude-sonnet-4-6" for the same model. Both
+    must resolve to the actual table row, not merely coincide with DEFAULT_PRICE.
+    Asserting identity with the row (not just an equal number) is what catches a
+    key that stopped matching."""
+    for name in ("claude-sonnet-4.6", "claude-sonnet-4-6"):
+        assert name in pricing.PRICE_TABLE
+        assert pricing.price_for(name) is pricing.PRICE_TABLE[name]
+
+
+def test_price_for_matches_by_key_not_accidental_default(monkeypatch):
+    """With two DIFFERENT-priced models in the table, each must resolve to ITS
+    OWN row and an unknown model to the (distinct) default. This fails if
+    price_for ever silently rode on DEFAULT_PRICE — the failure mode that hid
+    the dot/dash miss when the default happened to equal the only row."""
+    cheap = {"input": Decimal("1.00"), "output": Decimal("2.00")}
+    dear = {"input": Decimal("10.00"), "output": Decimal("40.00")}
+    default = {"input": Decimal("99.00"), "output": Decimal("99.00")}
+    monkeypatch.setattr(pricing, "PRICE_TABLE",
+                        {"cheap-model": cheap, "dear-model": dear})
+    monkeypatch.setattr(pricing, "DEFAULT_PRICE", default)
+
+    assert pricing.price_for("cheap-model") is cheap
+    assert pricing.price_for("dear-model") is dear
+    assert pricing.price_for("unknown-model") is default
+    # And the costs are all distinct, proving each matched its own row.
+    assert pricing.cost_usd("cheap-model", 1_000_000, 1_000_000) == Decimal("3.00")
+    assert pricing.cost_usd("dear-model", 1_000_000, 1_000_000) == Decimal("50.00")
+    assert pricing.cost_usd("unknown-model", 1_000_000, 1_000_000) == Decimal("198.00")
 
 
 def test_pricing_unknown_model_uses_fail_safe_high_default():
     # An unknown model must never under-count: it prices at DEFAULT_PRICE, the
     # most expensive known rates, so cost >= any known model's cost.
     unknown = pricing.cost_usd("some-future-model", 1000, 1000)
-    known = pricing.cost_usd("claude-sonnet-4-6", 1000, 1000)
+    known = pricing.cost_usd("claude-sonnet-4.6", 1000, 1000)
     assert unknown >= known
 
 
 def test_pricing_negative_tokens_clamped_to_zero():
-    assert pricing.cost_usd("claude-sonnet-4-6", -5, -5) == Decimal("0")
+    assert pricing.cost_usd("claude-sonnet-4.6", -5, -5) == Decimal("0")
 
 
 def test_audit_records_one_usage_row_with_cost():
@@ -144,7 +179,7 @@ def test_audit_records_one_usage_row_with_cost():
     row = usage_repo.rows[0]
     assert row["job_type"] == "audit"
     assert row["account_id"] is None            # anonymous caller
-    assert row["model"] == "claude-sonnet-4-6"
+    assert row["model"] == "claude-sonnet-4.6"
     # Only the 'auth' rubric matches this content, so one .complete() call.
     assert row["calls"] == 1
     assert row["input_tokens"] == 1000
