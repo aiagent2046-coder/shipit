@@ -73,6 +73,20 @@ executor.
 | **O5** | Backend↔runner channel? | **Unix-domain socket** (`/run/shipit-runner/sandbox.sock`) — access gated by the runtime **directory** mode `0710` (owner `shipit-runner` + group only; uvicorn force-chmods the socket file to 0666, so the dir is the real gate). A bearer token is the **second** line of defence. A TCP fallback (`SANDBOX_RUNNER_URL`) exists for hosts without a UDS. The unit sets **no `UMask=`** — a process-global umask breaks the runner's `mkdtemp` build dirs (see the unit comment / `scripts/check_runner_build_dir_perms.py`). |
 | **O6** | Code layout? | Separate checkout `/opt/shipit-runner` with its own venv and reduced `.env.runner`; not shared with `/opt/shipit`. |
 
+**Scratch dir must live outside `/tmp` (mount-namespace footgun).** The unit keeps
+`PrivateTmp=true`, which gives the runner a *private* `/tmp` in its own mount
+namespace that **dockerd cannot see**. The runner extracts each client zip into a
+`tempfile.mkdtemp()` dir and bind-mounts it into fixpack containers
+(`docker run -v <dir>:/work`); if that dir is under `/tmp` the daemon resolves a
+path that doesn't exist in *its* namespace and mounts an **empty** `/work`, so
+every install/test fails with the requirements file "missing". Fix: the unit sets
+`StateDirectory=shipit-runner` + `Environment=TMPDIR=/var/lib/shipit-runner`, so
+mkdtemp builds outside `/tmp` (shared with dockerd). Deploy-pack is immune (it
+streams a `docker build` context, never resolving a host path via the daemon).
+Regression-guarded by `scripts/check_runner_bindmount_namespace.py` and exercised
+by the e2e workflow, which now starts the runner **under `PrivateTmp` via
+`systemd-run`** so this class of bug actually reproduces in CI.
+
 ---
 
 ## docker-socket-proxy — choice and HONEST limitation

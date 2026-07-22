@@ -67,6 +67,18 @@ backend (root, /opt/shipit)                     runner (shipit-runner, /opt/ship
    > directory execute bit (0700 → 0600), breaking every run with EACCES. Tighten
    > the socket via the runtime-dir mode, never via `UMask`.
 
+   > Note: the runner's scratch dir lives **outside `/tmp`**. The unit sets
+   > `StateDirectory=shipit-runner` (systemd creates `/var/lib/shipit-runner`,
+   > owned by `shipit-runner`, on every start — **no manual mkdir/chown**) and
+   > `Environment=TMPDIR=/var/lib/shipit-runner`, so `tempfile.mkdtemp()` builds
+   > there. This is required because `PrivateTmp=true` gives the runner a private
+   > `/tmp` in its own mount namespace that **dockerd cannot see**; a build dir
+   > under `/tmp` would bind-mount into fixpack containers as an **empty** `/work`
+   > (docker auto-creates the missing source), failing every install/test. Do not
+   > repoint `TMPDIR` at `/tmp` while `PrivateTmp` is on. (Deploy-pack is immune —
+   > it streams a `docker build` context and never has dockerd resolve a host
+   > path.) Guarded by `scripts/check_runner_bindmount_namespace.py`.
+
 5. **Pre-create the no-egress preview network** (host admin, not the runner):
    ```
    docker network create shipit-preview

@@ -29,6 +29,25 @@ def _service_section() -> dict[str, str]:
     return dict(cp.items("Service"))
 
 
+def _environment_value(name: str) -> str | None:
+    """Value of an ``Environment=NAME=VALUE`` assignment in [Service]. Parsed
+    from raw text because the unit has several ``Environment=`` lines (configparser
+    would collapse the duplicate key to just the last one)."""
+    in_service = False
+    found: str | None = None
+    for line in UNIT.read_text().splitlines():
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            in_service = s == "[Service]"
+            continue
+        if not in_service or s.startswith("#") or not s.startswith("Environment="):
+            continue
+        for assignment in s[len("Environment="):].split():
+            if assignment.startswith(name + "="):
+                found = assignment.split("=", 1)[1]
+    return found
+
+
 def test_unit_sets_no_process_global_umask() -> None:
     """A process-global UMask strips the execute bit off mkdtemp build dirs and
     breaks the runner. Access to the socket is gated by RuntimeDirectoryMode
@@ -47,3 +66,32 @@ def test_unit_keeps_the_runtime_dir_gate() -> None:
     service = _service_section()
     assert service.get("RuntimeDirectory") == "shipit-runner"
     assert service.get("RuntimeDirectoryMode") == "0710"
+
+
+def test_scratch_dir_lives_outside_tmp() -> None:
+    """PrivateTmp gives the runner a private /tmp invisible to dockerd, so the
+    mkdtemp build dir it bind-mounts into fixpack containers MUST live outside
+    /tmp (via StateDirectory + TMPDIR) or /work mounts empty and every install
+    fails. The behavioural proof is scripts/check_runner_bindmount_namespace.py;
+    this is the cheap always-run guard."""
+    service = _service_section()
+    # PrivateTmp stays on (defence for other /tmp ops); that is precisely why the
+    # scratch dir cannot live under /tmp.
+    assert service.get("PrivateTmp") == "true"
+    assert service.get("StateDirectory"), (
+        "unit must set StateDirectory so systemd provides a writable scratch area "
+        "OUTSIDE /tmp (a build dir under /tmp is invisible to dockerd across the "
+        "PrivateTmp mount namespace)."
+    )
+    tmpdir = _environment_value("TMPDIR")
+    assert tmpdir, "unit must set Environment=TMPDIR so mkdtemp builds outside /tmp"
+    assert not tmpdir.startswith("/tmp"), (
+        f"TMPDIR={tmpdir!r} is under /tmp — with PrivateTmp on, the runner's "
+        "bind-mounted build dir would be invisible to dockerd and /work would "
+        "mount empty. Point TMPDIR at a non-/tmp path (e.g. the StateDirectory)."
+    )
+    # The StateDirectory (relative to /var/lib) should be where TMPDIR points.
+    assert tmpdir == f"/var/lib/{service['StateDirectory']}", (
+        "TMPDIR should point at the StateDirectory systemd creates "
+        f"(/var/lib/{service['StateDirectory']}), got {tmpdir!r}."
+    )
