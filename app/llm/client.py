@@ -25,6 +25,20 @@ class LLMError(Exception):
 
 
 @dataclass(frozen=True)
+class LLMUsage:
+    """Token counts for one .complete() call, read from the provider's
+    response `usage` block, plus the model the provider says it actually
+    served. This is the raw material for cost accounting (app/llm/pricing.py);
+    the provider returns tokens but never a price. A response missing `usage`
+    yields zeros rather than an error — a scan must not fail because a provider
+    omitted a bookkeeping field."""
+
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass(frozen=True)
 class Provider:
     kind: str      # "openai_compat" | "anthropic"
     base_url: str
@@ -55,7 +69,11 @@ class LLMClient:
         self.providers = providers if providers is not None else providers_from_env()
         self._transport = transport  # injectable for tests
 
-    def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
+    def complete(self, system: str, user: str,
+                 max_tokens: int = 4096) -> tuple[str, LLMUsage]:
+        """Returns (text, usage). `usage` carries the token counts and the
+        served model for cost accounting — see LLMUsage. Callers that only want
+        the text unpack `text, _ = client.complete(...)`."""
         if not self.providers:
             raise LLMError("no providers configured (check .env)")
         errors: list[str] = []
@@ -81,7 +99,8 @@ class LLMClient:
                     break
         raise LLMError("; ".join(errors))
 
-    def _call(self, p: Provider, system: str, user: str, max_tokens: int) -> str:
+    def _call(self, p: Provider, system: str, user: str,
+              max_tokens: int) -> tuple[str, LLMUsage]:
         with httpx.Client(timeout=TIMEOUT, transport=self._transport) as client:
             if p.kind == "anthropic":
                 resp = client.post(
@@ -104,9 +123,10 @@ class LLMClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                return "".join(
+                text = "".join(
                     b["text"] for b in data["content"] if b.get("type") == "text"
                 )
+                return text, _usage_anthropic(data, p.model)
 
             # openai_compat
             resp = client.post(
@@ -124,4 +144,34 @@ class LLMClient:
                 },
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"]
+            return text, _usage_openai(data, p.model)
+
+
+def _usage_int(usage: dict, key: str) -> int:
+    """A token count from a provider `usage` block, coerced to a non-negative
+    int. A missing key or a non-numeric value degrades to 0 — usage is
+    bookkeeping the scan must never fail on."""
+    try:
+        return max(0, int(usage.get(key, 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _usage_anthropic(data: dict, requested_model: str) -> LLMUsage:
+    usage = data.get("usage") or {}
+    return LLMUsage(
+        model=data.get("model") or requested_model,
+        input_tokens=_usage_int(usage, "input_tokens"),
+        output_tokens=_usage_int(usage, "output_tokens"),
+    )
+
+
+def _usage_openai(data: dict, requested_model: str) -> LLMUsage:
+    usage = data.get("usage") or {}
+    return LLMUsage(
+        model=data.get("model") or requested_model,
+        input_tokens=_usage_int(usage, "prompt_tokens"),
+        output_tokens=_usage_int(usage, "completion_tokens"),
+    )

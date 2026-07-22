@@ -165,6 +165,19 @@ def _json_field(value: Any) -> Any:
     return json.loads(value) if isinstance(value, str) else value
 
 
+def _uuid_or_none(value: str | None) -> uuid.UUID | None:
+    """Parse a uuid string for a nullable uuid column, treating a
+    missing/unparseable value as absent (NULL) rather than raising -- used where
+    the row must be written even if a linkage id is missing (see
+    LlmUsageRepository.create)."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError):
+        return None
+
+
 def _row_to_audit(row: dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
     d["id"] = str(d["id"])
@@ -959,6 +972,52 @@ class AccountRepository:
             )
             row = await cur.fetchone()
         return _row_to_account(row) if row else None
+
+
+class LlmUsageRepository:
+    """The single journal of what each LLM-backed job cost (migration
+    0020_llm_usage.sql). Same real/fake split and not-configured contract as
+    AuditRepository: when DATABASE_URL isn't set, create() returns None instead
+    of failing, so a scan on an unconfigured deployment still runs -- it just
+    doesn't record usage (there is nowhere to record it).
+
+    Write-only in this step: nothing reads it to block a request yet. The
+    per-account daily-spend aggregate a follow-up step will add is a single
+    SUM(cost_usd) over this table (see the account/created_at index), so no read
+    method is added here until that enforcement work lands and can be tested
+    against real behavior."""
+
+    async def create(
+        self, *, job_type: str, job_id: str | None,
+        account_id: str | None, model: str, calls: int,
+        input_tokens: int, output_tokens: int, cost_usd: Any,
+    ) -> dict[str, Any] | None:
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        # Both foreign-keyish columns are nullable uuids: a scan with no
+        # persisted audit row (job_id) or an anonymous/system job (account_id)
+        # must still record its cost, not be dropped. An unparseable id is
+        # treated as absent rather than raising -- the cost fact matters more
+        # than the linkage.
+        parsed_job_id = _uuid_or_none(job_id)
+        parsed_account_id = _uuid_or_none(account_id)
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into llm_usage
+                    (job_type, job_id, account_id, model, calls,
+                     input_tokens, output_tokens, cost_usd)
+                values (%s, %s, %s, %s, %s, %s, %s, %s)
+                returning id, job_type, job_id, account_id, model, calls,
+                          input_tokens, output_tokens, cost_usd, created_at
+                """,
+                (job_type, parsed_job_id, parsed_account_id, model,
+                 int(calls), int(input_tokens), int(output_tokens), cost_usd),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
 
 
 class PaymentRepository:

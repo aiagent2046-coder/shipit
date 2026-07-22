@@ -6,7 +6,7 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
-from app.llm.client import LLMClient, LLMError, Provider
+from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.main import app, get_llm_client
 
 client = TestClient(app)
@@ -23,10 +23,12 @@ class FakeLLM(LLMClient):
         self._response = response
         self._error = error
 
-    def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
+    def complete(self, system: str, user: str,
+                 max_tokens: int = 4096) -> tuple[str, LLMUsage]:
         if self._error:
             raise self._error
-        return self._response
+        return self._response, LLMUsage(
+            model="fake-model", input_tokens=100, output_tokens=20)
 
 
 def make_zip(entries: dict[str, bytes]) -> io.BytesIO:

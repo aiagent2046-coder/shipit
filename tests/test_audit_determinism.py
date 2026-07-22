@@ -23,7 +23,7 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
-from app.llm.client import LLMClient, Provider
+from app.llm.client import LLMClient, LLMUsage, Provider
 from app.main import app, get_audit_repo, get_llm_client
 from app.scan.pipeline import content_digest
 
@@ -107,7 +107,7 @@ class ScriptedLLM(LLMClient):
     def complete(self, system, user, max_tokens=4096):
         resp = self._responses[min(self._i, len(self._responses) - 1)]
         self._i += 1
-        return resp
+        return resp, LLMUsage(model="m", input_tokens=100, output_tokens=20)
 
 
 _AUTH_FINDING = json.dumps([{
