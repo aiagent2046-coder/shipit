@@ -70,7 +70,7 @@ executor.
 | **O2** | What does `/healthz` check? | `docker version` through the proxy — a fast daemon-reachability probe. No hello-world container per check. |
 | **O3** | Concurrency limit on the runner? | **2** concurrent build/run ops (`SANDBOX_RUNNER_CONCURRENCY`, = prod VPS vCPUs), enforced by an `asyncio.Semaphore` independent of the backend's threadpool. |
 | **O4** | Transport for the (multi-MB) workspace? | Raw `application/octet-stream` body for the zip; small control metadata in an `X-Sandbox-Request` JSON header. No multipart, no base64. |
-| **O5** | Backend↔runner channel? | **Unix-domain socket** (`/run/shipit-runner/sandbox.sock`, mode 0660, shared group) — access gated by file permissions. A bearer token is kept as a **second** line of defence. A TCP fallback (`SANDBOX_RUNNER_URL`) exists for environments without a UDS. |
+| **O5** | Backend↔runner channel? | **Unix-domain socket** (`/run/shipit-runner/sandbox.sock`) — access gated by the runtime **directory** mode `0710` (owner `shipit-runner` + group only; uvicorn force-chmods the socket file to 0666, so the dir is the real gate). A bearer token is the **second** line of defence. A TCP fallback (`SANDBOX_RUNNER_URL`) exists for hosts without a UDS. The unit sets **no `UMask=`** — a process-global umask breaks the runner's `mkdtemp` build dirs (see the unit comment / `scripts/check_runner_build_dir_perms.py`). |
 | **O6** | Code layout? | Separate checkout `/opt/shipit-runner` with its own venv and reduced `.env.runner`; not shared with `/opt/shipit`. |
 
 ---

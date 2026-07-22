@@ -55,8 +55,17 @@ backend (root, /opt/shipit)                     runner (shipit-runner, /opt/ship
    SANDBOX_RUNNER_TOKEN=<same value as the runner>
    SANDBOX_RUNNER_UDS=/run/shipit-runner/sandbox.sock
    ```
-   The backend runs as root, so it can always read the 0660 socket; the token is
-   the second line of defence.
+   Access to the socket is gated by its parent dir `/run/shipit-runner`
+   (`RuntimeDirectoryMode=0710`: only `shipit-runner` and its group may traverse,
+   world cannot) — not by the socket file's own mode, which uvicorn sets to 0666.
+   The backend runs as root and traverses 0710 regardless; the token is the
+   second line of defence.
+
+   > Note: the unit deliberately sets **no** `UMask=`. A process-global umask in
+   > systemd applies to every file the runner writes — including the `mkdtemp`
+   > build dirs it extracts client zips into — and a value like `0117` strips the
+   > directory execute bit (0700 → 0600), breaking every run with EACCES. Tighten
+   > the socket via the runtime-dir mode, never via `UMask`.
 
 5. **Pre-create the no-egress preview network** (host admin, not the runner):
    ```

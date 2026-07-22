@@ -34,13 +34,24 @@ Environment=DOCKER_HOST=tcp://127.0.0.1:2375
 # and BuildKit needs it. Force the classic builder so `docker build` works.
 Environment=DOCKER_BUILDKIT=0
 
-# The runner listens on a Unix socket in /run/shipit-runner (created by systemd
-# as RuntimeDirectory). UMask 0117 makes the socket 0660: owner+group only, so
-# only the runner and members of its group can connect. The backend (root)
-# bypasses this, and the token is the second line of defence (O5).
+# The runner listens on a Unix socket in /run/shipit-runner, created by systemd
+# as RuntimeDirectory. Access to the socket is gated by the DIRECTORY mode
+# 0710 (owner shipit-runner + group shipit-runner may traverse; world cannot),
+# NOT by the socket file's own mode: uvicorn force-chmods a self-created UDS to
+# 0666, so the file bits are not a control here. The backend runs as root and
+# traverses 0710 regardless; the token is the second line of defence (O5).
+#
+# ⚠️  DO NOT add a process-global `UMask=` here. UMask in a systemd unit applies
+#     to EVERY file operation the process makes, not just the socket. The runner
+#     calls tempfile.mkdtemp() (mode 0700) to build/extract untrusted client
+#     zips; a umask like 0117 turns that into 0600 — a directory WITHOUT its
+#     execute (search) bit, so the runner cannot create files inside its own
+#     build dir and every deploy/fixpack run dies with EACCES. If you need to
+#     tighten the socket, do it via the runtime-dir mode above (or a systemd
+#     .socket unit with SocketMode=), never via UMask. Regression-guarded by
+#     scripts/check_runner_build_dir_perms.py and tests/test_runner_service_unit.py.
 RuntimeDirectory=shipit-runner
 RuntimeDirectoryMode=0710
-UMask=0117
 ExecStart=/opt/shipit-runner/.venv/bin/uvicorn app.runner.main:app \
     --uds /run/shipit-runner/sandbox.sock \
     --workers 1

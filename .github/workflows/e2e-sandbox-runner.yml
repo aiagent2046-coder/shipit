@@ -22,9 +22,28 @@ on:
       - "deploy/sandbox-runner/**"
       - "scripts/e2e_fixpack_run_suite.py"
       - "scripts/smoke_verify_*.py"
+      - "scripts/check_runner_build_dir_perms.py"
       - ".github/workflows/e2e-sandbox-runner.yml"
 
 jobs:
+  # Behavioural guard for the build-dir permission incident: run the runner's
+  # own mkdtemp+extract filesystem ops under the SHIPPED systemd sandbox
+  # directives (via systemd-run) and prove they succeed — and that adding
+  # UMask=0117 back makes them fail. GitHub's ubuntu runners are systemd hosts.
+  build-dir-perms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Create the unprivileged shipit-runner user (matches prod)
+        # The bug only bites a NON-root process (root has CAP_DAC_OVERRIDE), so
+        # the guard runs its probe as this user — exactly as prod does.
+        run: sudo useradd --system --no-create-home --shell /usr/sbin/nologin shipit-runner
+      - name: Runner build dir usable under the shipped sandbox directives
+        run: python scripts/check_runner_build_dir_perms.py
+
   e2e:
     runs-on: ubuntu-latest
     env:
