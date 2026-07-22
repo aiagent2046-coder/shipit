@@ -22,9 +22,24 @@ on:
       - "deploy/sandbox-runner/**"
       - "scripts/e2e_fixpack_run_suite.py"
       - "scripts/smoke_verify_*.py"
+      - "scripts/check_runner_build_dir_perms.py"
       - ".github/workflows/e2e-sandbox-runner.yml"
 
 jobs:
+  # Behavioural guard for the build-dir permission incident: run the runner's
+  # own mkdtemp+extract filesystem ops under the SHIPPED systemd sandbox
+  # directives (via systemd-run) and prove they succeed — and that adding
+  # UMask=0117 back makes them fail. GitHub's ubuntu runners are systemd hosts.
+  build-dir-perms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Runner build dir usable under the shipped sandbox directives
+        run: python scripts/check_runner_build_dir_perms.py
+
   e2e:
     runs-on: ubuntu-latest
     env:
