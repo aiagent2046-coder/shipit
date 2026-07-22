@@ -116,7 +116,16 @@ def _user_argv() -> list[str]:
 def _network_argv() -> list[str]:
     """--network <isolated> so the preview cannot reach the internet at run
     time. Empty when runtime network is explicitly allowed or no isolated
-    network is configured (open bridge — the pre-hardening behaviour)."""
+    network is configured (open bridge — the pre-hardening behaviour).
+
+    DEPLOY PREREQUISITE: the named network must already exist on the host
+    (`docker network create --internal shipit-preview`). We deliberately do NOT
+    preflight-check it here — at this scale that's an extra docker call on every
+    run for no real benefit, since a missing network already fails loudly: the
+    `docker run` below raises and its stderr ("network shipit-preview not
+    found") is captured verbatim into SandboxResult.build_log/detail. If this
+    ever needs to auto-create or warn, do it once at service startup, not
+    per-run."""
     if DEPLOYPACK_ALLOW_RUNTIME_NETWORK or not DEPLOYPACK_PREVIEW_NETWORK:
         return []
     return ["--network", DEPLOYPACK_PREVIEW_NETWORK]

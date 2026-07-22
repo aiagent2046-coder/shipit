@@ -86,13 +86,34 @@ FIXPACK_READONLY_ROOTFS = (
     os.environ.get("FIXPACK_READONLY_ROOTFS", "1").lower() not in ("0", "false", "")
 )
 
-# Run the untrusted container as a non-root user (requirement 3.3). Defaults to
-# THIS process's uid:gid so the bind-mounted /work (created by this process)
-# stays writable while the container is non-root whenever the service itself
-# runs non-root. Override with FIXPACK_RUN_AS_USER ("1000:1000", or "" to run
-# as the image's own default user).
-FIXPACK_RUN_AS_USER = os.environ.get(
-    "FIXPACK_RUN_AS_USER", f"{os.getuid()}:{os.getgid()}"
+# Fixed non-root uid:gid used inside the container when the backend itself runs
+# as root (the prod systemd unit has no User=, so os.getuid() == 0 there).
+# Mirroring root into the container would leave the untrusted code running as
+# container-root and defeat requirement 3.3, so we drop to a fixed unprivileged
+# id instead. The bind-mounted /work is chown'd to this id before the run (see
+# _chown_workdir), so the non-root process can still read/write it.
+_NONROOT_FALLBACK_UID = 1000
+_NONROOT_FALLBACK_GID = 1000
+
+
+def _default_run_as_user() -> str:
+    """The --user value when FIXPACK_RUN_AS_USER is unset. Never resolves to
+    root: if the backend runs as root (uid 0), fall back to a fixed non-root id
+    rather than mirroring 0:0 into the container; otherwise reuse the backend's
+    own uid:gid (it created /work, so no chown is needed)."""
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0:
+        return f"{_NONROOT_FALLBACK_UID}:{_NONROOT_FALLBACK_GID}"
+    return f"{uid}:{gid}"
+
+
+# Run the untrusted container as a non-root user (requirement 3.3). Defaults via
+# _default_run_as_user() (never root). Override with FIXPACK_RUN_AS_USER
+# ("1000:1000", or "" to run as the image's own default user). An explicit env
+# value of "" disables --user; only an *unset* env falls back to the default.
+_env_run_as_user = os.environ.get("FIXPACK_RUN_AS_USER")
+FIXPACK_RUN_AS_USER = (
+    _default_run_as_user() if _env_run_as_user is None else _env_run_as_user
 )
 
 
@@ -360,6 +381,29 @@ def _user_argv() -> list[str]:
     disables (image default user)."""
     return ["--user", FIXPACK_RUN_AS_USER] if FIXPACK_RUN_AS_USER else []
 
+
+def _chown_workdir(workdir: str) -> None:
+    """Hand ownership of the bind-mounted /work to the container's --user, so a
+    non-root container process can read the extracted repo and write deps into
+    it. Only relevant (and only permitted) when the backend runs as root — a
+    non-root backend already owns the tempdir it created. No-op when --user is
+    disabled or its value is a named user rather than a numeric uid:gid."""
+    if os.getuid() != 0 or not FIXPACK_RUN_AS_USER:
+        return
+    parts = FIXPACK_RUN_AS_USER.split(":", 1)
+    try:
+        uid = int(parts[0])
+        gid = int(parts[1]) if len(parts) > 1 else uid
+    except ValueError:
+        return  # e.g. "node" — can't resolve a name to an id here; skip
+    os.lchown(workdir, uid, gid)
+    for root, dirs, files in os.walk(workdir):
+        for name in dirs + files:
+            try:
+                os.lchown(os.path.join(root, name), uid, gid)
+            except OSError:
+                pass
+
 # Egress allowlist for the install step. The install container needs the
 # network (pip/npm fetch packages), but "the network" should mean the package
 # registries and nothing else -- a malicious postinstall script in a client's
@@ -462,6 +506,9 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
     workdir = tempfile.mkdtemp(prefix="shipit-semcheck-")
     try:
         _extract_repo_relative(zip_bytes, workdir)
+        # mkdtemp is 0o700 owned by this process; if the container runs as a
+        # different (non-root) uid, hand it ownership so it can use /work.
+        _chown_workdir(workdir)
 
         install = _run(
             _docker_install_argv(runner.image, workdir, runner.install_script),

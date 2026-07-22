@@ -335,8 +335,8 @@ def test_read_only_can_be_disabled_by_env(monkeypatch):
 
 def test_both_builders_run_as_non_root_user_by_default():
     # 3.3: --user <uid:gid> so untrusted client code is not container-root.
-    # Default is this process's uid:gid, which keeps the bind-mounted /work
-    # (created by this process) writable.
+    # Default never resolves to root (see _default_run_as_user); /work is
+    # chown'd to this id when the backend runs as root.
     for argv in (
         _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x"),
         _docker_test_argv("node:20-slim", "/tmp/work", "npm test"),
@@ -350,6 +350,61 @@ def test_user_can_be_disabled_by_env(monkeypatch):
     monkeypatch.setattr(sc, "FIXPACK_RUN_AS_USER", "")
     argv = _docker_test_argv("node:20-slim", "/tmp/work", "npm test")
     assert "--user" not in argv
+
+
+def test_default_user_is_never_root_even_when_backend_runs_as_root(monkeypatch):
+    # On the prod VPS the systemd unit has no User=, so the backend is root
+    # (uid 0). Mirroring that into the container (--user 0:0) would leave the
+    # untrusted code as container-root and defeat requirement 3.3, so the
+    # default must fall back to a fixed non-root id instead.
+    monkeypatch.setattr(sc.os, "getuid", lambda: 0)
+    monkeypatch.setattr(sc.os, "getgid", lambda: 0)
+    default = sc._default_run_as_user()
+    assert default != "0:0"
+    assert default.split(":")[0] != "0"
+    assert default == f"{sc._NONROOT_FALLBACK_UID}:{sc._NONROOT_FALLBACK_GID}"
+
+
+def test_default_user_reuses_backend_id_when_non_root(monkeypatch):
+    # A non-root backend already owns the tempdir it creates, so reuse its
+    # uid:gid (no chown needed).
+    monkeypatch.setattr(sc.os, "getuid", lambda: 1234)
+    monkeypatch.setattr(sc.os, "getgid", lambda: 5678)
+    assert sc._default_run_as_user() == "1234:5678"
+
+
+def test_chown_workdir_gives_container_user_ownership_when_root(monkeypatch, tmp_path):
+    # When the backend is root, /work (mkdtemp'd 0o700, root-owned) must be
+    # chown'd to the non-root container uid so the container can read/write it.
+    monkeypatch.setattr(sc.os, "getuid", lambda: 0)
+    monkeypatch.setattr(sc, "FIXPACK_RUN_AS_USER", "1000:1000")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "f.txt").write_text("x")
+    chowned: list[tuple[str, int, int]] = []
+    monkeypatch.setattr(
+        sc.os, "lchown",
+        lambda p, uid, gid: chowned.append((str(p), uid, gid)),
+    )
+    sc._chown_workdir(str(tmp_path))
+    assert (str(tmp_path), 1000, 1000) in chowned
+    # recurses into contents so the extracted repo is reachable too
+    assert any(p.endswith("f.txt") and (uid, gid) == (1000, 1000)
+               for p, uid, gid in chowned)
+
+
+def test_chown_workdir_is_noop_when_backend_non_root(monkeypatch, tmp_path):
+    # A non-root backend can't chown to another uid and doesn't need to.
+    monkeypatch.setattr(sc.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(sc, "FIXPACK_RUN_AS_USER", "1000:1000")
+    called = False
+
+    def _fail(*a, **k):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(sc.os, "lchown", _fail)
+    sc._chown_workdir(str(tmp_path))
+    assert called is False
 
 
 def test_both_builders_carry_fd_and_fsize_ulimits():
