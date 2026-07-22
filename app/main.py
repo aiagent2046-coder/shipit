@@ -9,6 +9,7 @@ since the LLM call alone can take up to ~2 minutes.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import functools
 import hashlib
@@ -18,8 +19,10 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +47,7 @@ from app.db import (
     MonitoringRunRepository,
     PaymentRepository,
     ProcessorLockBusy,
+    ServiceFlagsRepository,
     SubscriptionRepository,
     database_url_from_env,
     fixpack_processor_lock,
@@ -245,6 +249,7 @@ _payment_repo = PaymentRepository()
 _subscription_repo = SubscriptionRepository()
 _monitoring_repo = MonitoringRunRepository()
 _llm_usage_repo = LlmUsageRepository()
+_service_flags_repo = ServiceFlagsRepository()
 
 
 def get_payment_repo() -> PaymentRepository:
@@ -307,6 +312,11 @@ def get_monitoring_repo() -> MonitoringRunRepository:
 def get_llm_usage_repo() -> LlmUsageRepository:
     """Same as get_audit_repo, for the llm_usage cost journal."""
     return _llm_usage_repo
+
+
+def get_service_flags_repo() -> ServiceFlagsRepository:
+    """Same as get_audit_repo, for the service_flags kill switches."""
+    return _service_flags_repo
 
 
 # GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
@@ -376,6 +386,102 @@ async def _record_llm_usage(
                        job_type, job_id, exc_info=True)
 
 
+# --- Stage 4 step 2: enforcement (concurrency, daily cap, emergency stop) ----
+
+# LLM calls are I/O-bound (network to the provider), not CPU-bound like the
+# Docker sandbox, so a handful in flight is fine; kept just above the sandbox
+# runner's semaphore=2. Guards run_scan everywhere it is called so a burst of
+# audits can't open unbounded concurrent provider connections on one VPS.
+AUDIT_CONCURRENCY = int(os.environ.get("AUDIT_CONCURRENCY", "4"))
+_audit_semaphore = asyncio.Semaphore(AUDIT_CONCURRENCY)
+
+# Daily USD backstop over ALL anonymous/free traffic (llm_usage rows with
+# account_id IS NULL, summed since UTC midnight). NOT per-IP -- that is the
+# request-count rate limiter's job -- and NOT a personal limit: it is a ceiling
+# on total free spend. Crossing it soft-degrades new anonymous audits to
+# static-only (same path as a provider failure), never a 402/429: an anonymous
+# caller has nothing to pay. Pro accounts are deliberately NOT subject to this;
+# their spend is bounded by PRO_DAILY_AUDIT_LIMIT (a call count) instead.
+DEFAULT_DAILY_SPEND_CAP_USD = Decimal(
+    os.environ.get("DEFAULT_DAILY_SPEND_CAP_USD", "2.00"))
+_ANON_SPEND_ALERT_FRACTION = Decimal("0.8")
+
+# Emergency-stop flag cache. The kill switch is read on the request path, so it
+# is cached for a few seconds to avoid a DB round-trip per request; a pause thus
+# takes effect within _FLAG_TTL_S, which is well inside "emergency" tolerance.
+_FLAG_TTL_S = 8.0
+_llm_paid_ops_cache: dict[str, object] = {"at": 0.0, "enabled": True, "note": None}
+
+
+def _reset_service_flag_cache() -> None:
+    """Force the next _llm_paid_ops_enabled call to re-read the DB. Used by the
+    toggle endpoint (so a just-set value is visible immediately) and by tests."""
+    _llm_paid_ops_cache["at"] = 0.0
+
+
+async def _run_scan_guarded(*args, **kwargs):
+    """run_scan on the threadpool, bounded by the audit-concurrency semaphore.
+    Every scan path routes through here so nothing can spawn unbounded provider
+    calls under load."""
+    async with _audit_semaphore:
+        return await run_in_threadpool(run_scan, *args, **kwargs)
+
+
+async def _llm_paid_ops_enabled(
+    flags_repo: ServiceFlagsRepository,
+) -> tuple[bool, str | None]:
+    """(enabled, note) for the 'llm_paid_ops' emergency stop, cached for
+    _FLAG_TTL_S. A missing row or unconfigured DB reads as enabled (fail-open):
+    the kill switch must be an explicit operator action, never the accident of a
+    missing table -- an unconfigured dev box must still run scans."""
+    now = time.monotonic()
+    if now - float(_llm_paid_ops_cache["at"]) < _FLAG_TTL_S:
+        return bool(_llm_paid_ops_cache["enabled"]), _llm_paid_ops_cache["note"]  # type: ignore[return-value]
+    flag = await flags_repo.get("llm_paid_ops")
+    if flag is None:
+        enabled, note = True, None
+    else:
+        enabled, note = bool(flag["enabled"]), flag.get("note")
+    _llm_paid_ops_cache.update(at=now, enabled=enabled, note=note)
+    return enabled, note
+
+
+async def _emergency_stop_active(
+    flags_repo: ServiceFlagsRepository,
+) -> tuple[bool, str | None]:
+    """True (with the operator note) when paid LLM ops are paused. Fires the
+    mandatory operator alert as a side effect whenever the stop is found engaged;
+    notify_operator self-throttles on the dedupe_key, so a burst of blocked
+    requests collapses to one alert."""
+    enabled, note = await _llm_paid_ops_enabled(flags_repo)
+    if enabled:
+        return False, None
+    await notify_operator(
+        f"Emergency stop ACTIVE: llm_paid_ops is OFF, rejecting paid LLM ops. "
+        f"Note: {note or '(none)'}",
+        dedupe_key="llm-paid-ops-paused",
+    )
+    return True, note
+
+
+async def _anon_daily_cap_exceeded(llm_usage_repo: LlmUsageRepository) -> bool:
+    """True when anonymous traffic has spent at least the daily cap today, so a
+    new anonymous audit must degrade to static-only. Fires the 80% operator
+    alert as a side effect. A None sum (DATABASE_URL unset) reads as False --
+    there is no journal to cap against."""
+    spend = await llm_usage_repo.sum_anon_spend_today()
+    if spend is None:
+        return False
+    if spend >= DEFAULT_DAILY_SPEND_CAP_USD * _ANON_SPEND_ALERT_FRACTION:
+        await notify_operator(
+            f"Anonymous LLM spend today is ${spend:.2f}, at/over "
+            f"{int(_ANON_SPEND_ALERT_FRACTION * 100)}% of the "
+            f"${DEFAULT_DAILY_SPEND_CAP_USD:.2f} daily cap.",
+            dedupe_key="anon-budget-80",
+        )
+    return spend >= DEFAULT_DAILY_SPEND_CAP_USD
+
+
 async def run_repo_audit(
     repo_url: str, *, llm_client: LLMClient, audit_repo: AuditRepository,
     repo_fetcher, llm_usage_repo: LlmUsageRepository | None = None,
@@ -427,7 +533,7 @@ async def run_repo_audit(
             "reused": True,
         }
 
-    scan = await run_in_threadpool(run_scan, raw, llm_client)
+    scan = await _run_scan_guarded(raw, llm_client)
     persisted = await audit_repo.create(
         stack=stack.value, file_count=report.file_count,
         score_total=scan["score"]["total"], score_json=scan["score"],
@@ -483,6 +589,13 @@ def _monitoring_process_token() -> str | None:
     env-var pattern as FIXPACK_PROCESS_TOKEN. Unset -> the endpoint 503s rather
     than accept a no-op auth check."""
     return os.environ.get("MONITORING_PROCESS_TOKEN") or None
+
+
+def _service_flags_token() -> str | None:
+    """Bearer token protecting the emergency-stop toggle endpoint, same env-var
+    pattern as MONITORING_PROCESS_TOKEN. Unset -> the endpoint 503s rather than
+    accept a no-op auth check on a switch that can halt all paid LLM ops."""
+    return os.environ.get("SERVICE_FLAGS_TOKEN") or None
 
 
 def _require_bearer_token(request: Request, token: str) -> None:
@@ -1832,6 +1945,7 @@ async def process_pending_monitoring(
     repo_fetcher=Depends(get_repo_fetcher),
     transport=Depends(get_billing_transport),
     llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
 ) -> dict:
     """Operational endpoint: drain the pending continuous-monitoring backlog.
     The GitHub push webhook enqueues one 'pending' run per eligible push and
@@ -1861,6 +1975,14 @@ async def process_pending_monitoring(
                     "detail": "MONITORING_PROCESS_TOKEN is not set on this deployment"},
         )
     _require_bearer_token(request, token)
+
+    # Emergency stop applies to monitoring too (each run is an LLM-spending
+    # re-audit). A background drain has no user to 503, so it soft-degrades:
+    # leave the backlog 'pending' and return without claiming anything. The
+    # stop's operator alert has already fired inside _emergency_stop_active.
+    paused, _note = await _emergency_stop_active(service_flags_repo)
+    if paused:
+        return {"skipped_paused": True}
 
     summary = {"processed": 0, "notified": 0, "no_new": 0, "unfetchable": 0,
                "unauditable": 0, "no_subscription": 0, "failed": 0, "requeued": 0}
@@ -1894,6 +2016,68 @@ async def process_pending_monitoring(
     return summary
 
 
+@app.post("/internal/service-flags/llm_paid_ops")
+async def set_llm_paid_ops(
+    request: Request,
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
+) -> dict:
+    """Operator-only emergency stop toggle for all paid LLM operations.
+
+    Body: JSON {"enabled": bool, "note": str?}. Setting enabled=false pauses new
+    /v1/audits (they 503 service_paused) and the monitoring drain (it no-ops,
+    leaving the backlog pending); enabled=true resumes. The note is echoed to
+    callers in the 503 detail, so use it to say who paused and why.
+
+    Requires `Authorization: Bearer <SERVICE_FLAGS_TOKEN>`, constant-time
+    compared. 503 if the token isn't configured -- a kill switch with no auth is
+    worse than none. 503 too if DATABASE_URL isn't set: there is no flag store to
+    write, so a caller must not believe a pause took effect when it didn't."""
+    token = _service_flags_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "service_flags_not_configured",
+                    "detail": "SERVICE_FLAGS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request",
+                    "detail": "body must be JSON with a boolean 'enabled'"},
+        )
+    enabled = body["enabled"]
+    note = body.get("note")
+    if note is not None and not isinstance(note, str):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request", "detail": "'note' must be a string"},
+        )
+
+    row = await service_flags_repo.set("llm_paid_ops", enabled=enabled, note=note)
+    if row is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "no flag store (DATABASE_URL is not set)"},
+        )
+    # Make the new value visible immediately rather than after the TTL, and
+    # alert the operator when the stop is engaged (mandatory on emergency stop).
+    _reset_service_flag_cache()
+    if not enabled:
+        await notify_operator(
+            f"Emergency stop ENGAGED via API: llm_paid_ops set OFF. "
+            f"Note: {note or '(none)'}",
+            dedupe_key="llm-paid-ops-paused",
+        )
+    return {"key": "llm_paid_ops", "enabled": enabled, "note": note}
+
+
 @app.post("/v1/audits", status_code=202)
 async def create_audit(
     request: Request,
@@ -1911,6 +2095,7 @@ async def create_audit(
     account_repo: AccountRepository = Depends(get_account_repo),
     repo_fetcher=Depends(get_repo_fetcher),
     llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
 ) -> dict:
     # Exactly one intake method: not both, not neither. Both-None and
     # both-present are the two cases where the equality holds.
@@ -1920,6 +2105,17 @@ async def create_audit(
             detail={"reason": "bad_intake",
                     "detail": "provide exactly one of 'archive' (file upload) "
                               "or 'repo_url' (public GitHub repo URL)"},
+        )
+
+    # Emergency stop: a direct API caller gets a clear 503 (with the operator's
+    # note) before any repo fetch or scan work is done. Checked here, at the
+    # very start, so a paused service spends nothing. The mandatory operator
+    # alert fires inside _emergency_stop_active.
+    paused, note = await _emergency_stop_active(service_flags_repo)
+    if paused:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "service_paused", "detail": note},
         )
 
     # Resolve the caller's tier from an optional API key. No key -> None ->
@@ -2048,9 +2244,21 @@ async def create_audit(
             "reused": True,
         }
 
-    # Off the event loop: the LLM stage does real network I/O and can
-    # take up to ~2 minutes. Moves to the arq worker + queue in phase 2.
-    scan = await run_in_threadpool(run_scan, raw, llm_client)
+    # Anonymous daily-spend backstop: if today's total anonymous LLM spend has
+    # hit the cap, degrade THIS anonymous audit to static-only rather than
+    # spend more. Soft-degrade, not an error -- an anonymous caller has nothing
+    # to pay, and the static scan still returns a real (basis=static_only)
+    # report. Pro/free accounts (account is not None) are exempt: their volume
+    # is bounded by the per-account daily audit-count limit already checked
+    # above, not by this shared free-traffic ceiling.
+    llm_skip_reason: str | None = None
+    if account is None and await _anon_daily_cap_exceeded(llm_usage_repo):
+        llm_skip_reason = "daily_spend_cap"
+
+    # Off the event loop: the LLM stage does real network I/O and can take up
+    # to ~2 minutes. Bounded by the audit-concurrency semaphore so a burst of
+    # requests can't open unbounded concurrent provider connections.
+    scan = await _run_scan_guarded(raw, llm_client, llm_skip_reason=llm_skip_reason)
 
     persisted = await audit_repo.create(
         stack=stack.value, file_count=report.file_count,

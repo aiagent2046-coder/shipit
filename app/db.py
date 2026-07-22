@@ -41,6 +41,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
+from decimal import Decimal
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -1015,6 +1016,80 @@ class LlmUsageRepository:
                 """,
                 (job_type, parsed_job_id, parsed_account_id, model,
                  int(calls), int(input_tokens), int(output_tokens), cost_usd),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def sum_anon_spend_today(self) -> Decimal | None:
+        """Total USD spent today (UTC) by anonymous/free traffic -- every
+        llm_usage row with account_id IS NULL since UTC midnight. This is a
+        GLOBAL backstop over all anonymous callers, not a per-IP figure
+        (account_id IS NULL can't tell two anon callers apart; per-IP is the
+        request-count rate limiter's job). The daily-spend cap in app/main.py
+        reads this before running a scan. Returns None when DATABASE_URL isn't
+        set -- an unconfigured deployment has no journal to cap against and the
+        caller treats None as "no data, don't degrade"."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select coalesce(sum(cost_usd), 0) as spend
+                from llm_usage
+                where account_id is null
+                  and created_at >= date_trunc('day', now() at time zone 'UTC')
+                """,
+            )
+            row = await cur.fetchone()
+        return Decimal(row["spend"]) if row else Decimal(0)
+
+
+class ServiceFlagsRepository:
+    """Operator-controlled kill switches (migration 0021_service_flags.sql).
+    One row per flag; the only one used today is key='llm_paid_ops', the
+    emergency stop for all LLM-spending work. Same not-configured contract as
+    the other repositories: with no DATABASE_URL, get() returns None and the
+    caller treats "no flag store" as "not paused" -- an unconfigured dev box
+    must still run scans."""
+
+    async def get(self, key: str) -> dict[str, Any] | None:
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select key, enabled, note, updated_at
+                from service_flags where key = %s
+                """,
+                (key,),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def set(self, key: str, *, enabled: bool,
+                  note: str | None = None) -> dict[str, Any] | None:
+        """Upsert a flag (used by the internal toggle endpoint). Returns the
+        stored row, or None when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into service_flags (key, enabled, note, updated_at)
+                values (%s, %s, %s, now())
+                on conflict (key) do update
+                   set enabled = excluded.enabled,
+                       note = excluded.note,
+                       updated_at = now()
+                returning key, enabled, note, updated_at
+                """,
+                (key, enabled, note),
             )
             row = await cur.fetchone()
         return dict(row) if row else None

@@ -9,18 +9,29 @@ findings are discarded, never shown.
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 import zipfile
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import BinaryIO
 
+from app.llm import pricing
 from app.llm.client import LLMClient
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import ScoredFinding
 
 MAX_FILE_CHARS = 24_000          # per-file cap in prompt
 MAX_TOTAL_CHARS = 360_000        # ~90-100K tokens per rubric prompt
+
+# Per-job spend ceiling for a single scan's sequential .complete() loop. When
+# the running cost estimate (summed from each call's returned usage, priced by
+# app/llm/pricing.py) crosses this, the loop stops and returns whatever it has
+# with stats.cost_cap_exceeded = True -- an honest partial result, never a 500.
+# A degenerate cap (<=0 from a bad env value) is ignored so a typo can't wedge
+# the loop to zero calls; the intended off-switch is a large number, not 0.
+JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "3.00"))
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "venv/")
 _CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".py", ".sql", ".toml", ".yaml", ".yml", ".json")
 
@@ -102,6 +113,11 @@ class LLMScanStats:
     input_tokens: int = 0
     output_tokens: int = 0
     model: str | None = None
+    # True when the per-job spend ceiling (JOB_COST_CAP_USD) was hit mid-loop
+    # and the scan stopped early. The findings returned are still real and
+    # verified -- just a partial set. app/scan/pipeline.py surfaces this in the
+    # response's llm block so a truncated scan is visible, not silent.
+    cost_cap_exceeded: bool = False
 
 
 def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
@@ -225,6 +241,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
 
     findings: list[ScoredFinding] = []
     for _pass in range(max(1, passes)):
+      if stats.cost_cap_exceeded:
+          break
       for rubric in rubrics:
           selected = select_files(files, rubric)
           if not selected:
@@ -254,6 +272,15 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   explanation=str(f.get("explanation", ""))[:600],
                   fix_hint=str(f.get("fix_hint", ""))[:300],
               ))
+          # Cost cap: price the tokens accumulated so far (all calls this scan
+          # used the same served model) and stop before the NEXT call if we've
+          # crossed the ceiling. Checked after the call, not before: the cap
+          # bounds total spend, and a job is allowed its first call regardless.
+          if JOB_COST_CAP_USD > 0 and pricing.cost_usd(
+                  stats.model, stats.input_tokens,
+                  stats.output_tokens) >= JOB_COST_CAP_USD:
+              stats.cost_cap_exceeded = True
+              break
     # Dedup here (not in the pipeline): this is the seam where the two
     # rubrics' outputs — and repeated passes in union-of-N mode — are
     # combined, so same-location collisions arise and are resolved here.

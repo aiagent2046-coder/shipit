@@ -78,6 +78,11 @@ class FakeUsageRepo:
         self.rows.append(kwargs)
         return {"id": str(uuid.uuid4()), **kwargs}
 
+    async def sum_anon_spend_today(self):
+        # Enforcement (Stage 4 step 2) reads this before an anonymous scan.
+        # These accounting tests stay well under any cap, so report $0.
+        return Decimal("0")
+
 
 class FakeLLM(LLMClient):
     def __init__(self, response: str):
