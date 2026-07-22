@@ -66,14 +66,23 @@ DEPLOYPACK_READONLY_ROOTFS = (
 # DEPLOYPACK_RUN_AS_USER ("1000:1000") to opt in where the image allows it.
 DEPLOYPACK_RUN_AS_USER = os.environ.get("DEPLOYPACK_RUN_AS_USER", "")
 
-# Isolated no-egress network for the running preview (requirement 3.5). The
-# preview serves untrusted client code for up to 24h; by default it must not be
-# able to make outbound connections. This names a Docker network that MUST be
-# created at deploy time as internal (no gateway to the internet), e.g.
-#   docker network create --internal shipit-preview
-# mirroring how the fixpack egress proxy (Squid) is host-configured, not built
-# here. Published ports still reach the container from the host (loopback bind).
-# Set empty to disable (open bridge). Runtime internet is opt-in via
+# No-egress network for the running preview (requirement 3.5). The preview
+# serves untrusted client code for up to 24h; by default it must not be able to
+# make outbound connections. This names a Docker network that MUST be created at
+# deploy time as a NORMAL bridge (NOT --internal) whose egress is then blocked
+# with a host iptables rule, e.g.:
+#   docker network create shipit-preview
+#   SUBNET=$(docker network inspect shipit-preview \
+#            -f '{{(index .IPAM.Config 0).Subnet}}')
+#   iptables -I DOCKER-USER -s "$SUBNET" ! -d "$SUBNET" -j DROP
+# WHY NOT --internal: an --internal network has no gateway/NAT, which also
+# breaks Docker's published-port (-p) forwarding — the host curl boot-check (and
+# the preview itself) then never gets a response even though the app booted.
+# A normal bridge keeps port publishing working; the iptables DROP cuts the
+# subnet's outbound traffic while leaving inbound/published ports intact (the
+# proxied reply's dest is the in-subnet gateway, so it isn't dropped). This
+# mirrors how the fixpack egress proxy (Squid) is host-configured, not built
+# here. Set empty to disable. Runtime internet is opt-in via
 # DEPLOYPACK_ALLOW_RUNTIME_NETWORK for the rare app that needs it at run time.
 DEPLOYPACK_PREVIEW_NETWORK = os.environ.get("DEPLOYPACK_PREVIEW_NETWORK", "shipit-preview")
 DEPLOYPACK_ALLOW_RUNTIME_NETWORK = (
@@ -118,14 +127,15 @@ def _network_argv() -> list[str]:
     time. Empty when runtime network is explicitly allowed or no isolated
     network is configured (open bridge — the pre-hardening behaviour).
 
-    DEPLOY PREREQUISITE: the named network must already exist on the host
-    (`docker network create --internal shipit-preview`). We deliberately do NOT
-    preflight-check it here — at this scale that's an extra docker call on every
-    run for no real benefit, since a missing network already fails loudly: the
-    `docker run` below raises and its stderr ("network shipit-preview not
-    found") is captured verbatim into SandboxResult.build_log/detail. If this
-    ever needs to auto-create or warn, do it once at service startup, not
-    per-run."""
+    DEPLOY PREREQUISITE: the named network must already exist on the host as a
+    normal bridge with a host iptables egress DROP (see DEPLOYPACK_PREVIEW_NETWORK
+    above and the PR deploy checklist). NOT --internal — that breaks -p port
+    publishing. We deliberately do NOT preflight-check it here — at this scale
+    that's an extra docker call on every run for no real benefit, since a missing
+    network already fails loudly: the `docker run` below raises and its stderr
+    ("network shipit-preview not found") is captured verbatim into
+    SandboxResult.build_log/detail. If this ever needs to auto-create or warn,
+    do it once at service startup, not per-run."""
     if DEPLOYPACK_ALLOW_RUNTIME_NETWORK or not DEPLOYPACK_PREVIEW_NETWORK:
         return []
     return ["--network", DEPLOYPACK_PREVIEW_NETWORK]
