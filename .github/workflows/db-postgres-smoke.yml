@@ -21,6 +21,7 @@ on:
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
       - "scripts/apply_migrations.sh"
+      - "scripts/migration_manager.py"
       - ".github/workflows/db-postgres-smoke.yml"
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
       - "scripts/apply_migrations.sh"
+      - "scripts/migration_manager.py"
       - ".github/workflows/db-postgres-smoke.yml"
   workflow_dispatch: {}
 
