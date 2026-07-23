@@ -59,34 +59,47 @@ jobs:
               ;;
           esac
 
-      - name: Scan tracked files for strong secret signatures
+      - name: Scan added lines for strong secret signatures
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          patterns=(
-            '-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'
-            'AKIA[0-9A-Z]{16}'
-            'gh[pousr]_[A-Za-z0-9_]{36,}'
-            'github_pat_[A-Za-z0-9_]{70,}'
-            'sk-(proj|svcacct)-[A-Za-z0-9_-]{32,}'
-          )
+          empty_tree="$(git hash-object -t tree /dev/null)"
 
-          failed=0
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              scan_base="$BASE_SHA"
+              scan_head="$HEAD_SHA"
+              ;;
+            push)
+              scan_head="$GITHUB_SHA"
 
-          for pattern in "${patterns[@]}"; do
-            mapfile -t files < <(
-              git grep -I -l -E -- "$pattern" -- . 2>/dev/null || true
-            )
+              if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+                scan_base="$empty_tree"
+              else
+                scan_base="$BEFORE_SHA"
+              fi
+              ;;
+            workflow_dispatch)
+              scan_head="$GITHUB_SHA"
 
-            if ((${#files[@]} > 0)); then
-              printf 'Potential secret signature detected in %s\n' \
-                "${files[@]}"
-              failed=1
-            fi
-          done
+              if git rev-parse "${GITHUB_SHA}^" >/dev/null 2>&1; then
+                scan_base="${GITHUB_SHA}^"
+              else
+                scan_base="$empty_tree"
+              fi
+              ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
 
-          exit "$failed"
+          python3 .github/scripts/scan-added-secrets.py             "$scan_base"             "$scan_head"
 
       - name: Validate shell syntax
         shell: bash
