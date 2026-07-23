@@ -179,6 +179,21 @@ jobs:
           mkdir -p .venv/bin
           ln -sf "$(command -v python)" .venv/bin/python
 
+          sudo mkdir -p /srv/shipit
+
+          if [[
+            -e /srv/shipit/current ||
+            -L /srv/shipit/current
+          ]]; then
+            test "$(
+              readlink -f /srv/shipit/current
+            )" = "$GITHUB_WORKSPACE"
+          else
+            sudo ln -s               "$GITHUB_WORKSPACE"               /srv/shipit/current
+          fi
+
+          test -x             /srv/shipit/current/.venv/bin/python
+
           if ! id shipit-ops >/dev/null 2>&1; then
             sudo useradd \
               --system \
