@@ -1,0 +1,32 @@
+[Unit]
+Description=ShipIt encrypted off-site PostgreSQL backup
+After=network-online.target shipit-db-backup.service
+Wants=network-online.target
+OnFailure=shipit-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/shipit
+Environment=RESTIC_ENV_FILE=/etc/shipit/restic.env
+Environment=BACKUP_DIR=/var/backups/shipit/postgres
+Environment=MAX_BACKUP_AGE_SECONDS=129600
+ExecStart=/opt/shipit/deploy/scripts/backup-postgres-offsite.sh
+TimeoutStartSec=3600
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+ReadOnlyPaths=/var/backups/shipit/postgres
+ReadOnlyPaths=/etc/shipit
+ReadWritePaths=/var/cache/shipit-restic
+ReadWritePaths=/run/lock
