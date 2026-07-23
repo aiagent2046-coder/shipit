@@ -28,10 +28,10 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NoReturn, Sequence
-
+from typing import NoReturn
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
@@ -274,8 +274,7 @@ def run_psql(
         command,
         input=sql,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 
@@ -718,6 +717,7 @@ def apply_migrations(
     migrations: Sequence[Migration],
     *,
     allow_destructive: bool,
+    backup_before_apply: bool = False,
 ) -> None:
     has_ledger = ledger_exists()
     has_existing_schema = existing_app_schema()
@@ -761,6 +761,27 @@ def apply_migrations(
         )
 
     revision = git_sha()
+
+    if backup_before_apply:
+        backup_script = (
+            Path(__file__).resolve().parent.parent
+            / "deploy" / "scripts" / "backup-postgres.sh"
+        )
+        if not backup_script.is_file():
+            raise MigrationError(
+                f"backup script not found: {backup_script}"
+            )
+        print("Creating pre-migration backup...")
+        result = subprocess.run(
+            [str(backup_script)],
+            capture_output=True, text=True, timeout=300, check=False,
+            env={**os.environ, "BACKUP_KEEP_DAYS": "30"},
+        )
+        if result.returncode != 0:
+            raise MigrationError(
+                f"pre-migration backup failed: {result.stderr.strip()}"
+            )
+        print(f"Backup OK: {result.stdout.splitlines()[-1]}")
 
     for migration in pending:
         print(f"Applying {migration.name}...")
@@ -829,6 +850,11 @@ def parse_args(
         action="store_true",
         help="allow pending DROP/TRUNCATE/DELETE migrations",
     )
+    apply_parser.add_argument(
+        "--backup",
+        action="store_true",
+        help="run pg_dump backup before applying migrations",
+    )
 
     baseline_parser = subparsers.add_parser(
         "baseline",
@@ -869,6 +895,7 @@ def main(
             apply_migrations(
                 migrations,
                 allow_destructive=arguments.allow_destructive,
+                backup_before_apply=arguments.backup,
             )
             return 0
 

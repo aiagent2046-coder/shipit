@@ -30,12 +30,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.accounts import (  # noqa: E402
+from app.accounts import (
     api_key_prefix,
     hash_api_key,
     require_pepper,
 )
-from app.db import DatabaseNotConfigured, get_pool  # noqa: E402
+from app.db import DatabaseNotConfigured, get_pool
 
 
 async def backfill() -> int:

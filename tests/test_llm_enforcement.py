@@ -26,19 +26,19 @@ from fastapi.testclient import TestClient
 
 import app.main as main_mod
 from app.llm.client import LLMClient, LLMUsage, Provider
-from app.scan.llm_scan import run_llm_scan
 from app.main import (
     app,
     get_account_repo,
     get_audit_repo,
+    get_billing_transport,
     get_llm_client,
     get_llm_usage_repo,
-    get_service_flags_repo,
     get_monitoring_repo,
-    get_subscription_repo,
     get_repo_fetcher,
-    get_billing_transport,
+    get_service_flags_repo,
+    get_subscription_repo,
 )
+from app.scan.llm_scan import run_llm_scan
 
 client = TestClient(app)
 
@@ -132,7 +132,7 @@ class FakeAuditRepo:
 class FakeUsageRepo:
     """Captures llm_usage writes and serves a controllable anon-spend total."""
 
-    def __init__(self, anon_spend: Decimal | None = Decimal("0")):
+    def __init__(self, anon_spend: Decimal | None = Decimal(0)):
         self.rows: list[dict] = []
         self._anon_spend = anon_spend
         self.sum_calls = 0

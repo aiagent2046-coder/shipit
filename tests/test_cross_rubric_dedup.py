@@ -2,13 +2,12 @@
 issue at the same (file, line); we keep one, note the other, and never
 double-count it in the score."""
 
-from dataclasses import replace
 
 from app.scan.cross_rubric_dedup import (
-    dedup_cross_rubric,
-    _title_ratio,
-    _TITLE_SIMILARITY_THRESHOLD,
     _NEARBY_LINE_WINDOW,
+    _TITLE_SIMILARITY_THRESHOLD,
+    _title_ratio,
+    dedup_cross_rubric,
 )
 from app.scan.scoring import ScoredFinding, compute_scores
 

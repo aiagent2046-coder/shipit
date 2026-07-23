@@ -16,7 +16,7 @@ import pytest
 
 import app.sandbox_client as sc
 from app.fixpack.generate import FixpackPlan
-from app.fixpack.semantic_check import TestRunner
+from app.fixpack.semantic_check import Runner
 
 
 def _install(monkeypatch, handler):
@@ -170,7 +170,7 @@ def test_run_suite_marshals_runner_and_zip(monkeypatch):
         })
 
     _install(monkeypatch, handler)
-    runner = TestRunner(ecosystem="node", image="node:20",
+    runner = Runner(ecosystem="node", image="node:20",
                         install_script="npm ci", test_script="npm test")
     result = sc.run_suite(b"ZIPBYTES", runner)
 
@@ -234,7 +234,7 @@ def test_run_suite_returns_error_result_on_outage(monkeypatch):
         raise httpx.ConnectError("refused", request=request)
 
     _install(monkeypatch, handler)
-    runner = TestRunner(ecosystem="node", image="node:20",
+    runner = Runner(ecosystem="node", image="node:20",
                         install_script="npm ci", test_script="npm test")
     result = sc.run_suite(b"z", runner)
     # symmetric non-regression: error set, not an exception

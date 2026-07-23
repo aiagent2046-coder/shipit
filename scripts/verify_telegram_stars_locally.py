@@ -37,9 +37,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-import httpx  # noqa: E402
+import httpx
 
-from app.billing import telegram_stars  # noqa: E402
+from app.billing import telegram_stars
 
 
 async def main() -> int:

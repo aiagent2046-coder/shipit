@@ -59,8 +59,9 @@ def test_empty_findings_render_clean_state():
 
 
 def test_report_endpoint_renders_persisted_audit():
-    import app.main as main_mod
     from fastapi.testclient import TestClient
+
+    import app.main as main_mod
 
     def _row(audit_id):
         return {
@@ -104,8 +105,9 @@ def test_report_endpoint_renders_persisted_audit():
 def test_report_endpoint_422s_on_missing_score_json():
     """A row with a null/malformed score_json must yield a clean 422,
     not an unhandled KeyError -> 500 from inside render_report."""
-    import app.main as main_mod
     from fastapi.testclient import TestClient
+
+    import app.main as main_mod
 
     class FakeRepo:
         async def get_authorized(self, audit_id, access_token):

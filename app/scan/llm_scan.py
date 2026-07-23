@@ -39,7 +39,7 @@ RUBRICS: dict[str, dict] = {
     "auth": {
         "keywords": re.compile(
             r"auth|jwt|session|password|token|login|signin|middleware|rls|cookie",
-            re.I,
+            re.IGNORECASE,
         ),
         "instructions": (
             "Review authentication and authorization. Report only concrete, "
@@ -53,7 +53,7 @@ RUBRICS: dict[str, dict] = {
     "security": {
         "keywords": re.compile(
             r"env|config|cors|csp|header|upload|exec|query|sql|fetch|axios|input",
-            re.I,
+            re.IGNORECASE,
         ),
         "instructions": (
             "Review general security. Report only concrete issues: SQL/command "

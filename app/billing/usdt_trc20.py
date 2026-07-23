@@ -196,17 +196,17 @@ def usdt_contract_from_env() -> str:
 def _base_price_micros() -> int:
     raw = os.environ.get("USDT_PRICE") or _DEFAULT_PRICE_USDT
     try:
-        return int(round(float(raw) * _MICRO))
+        return round(float(raw) * _MICRO)
     except ValueError:
-        return int(round(float(_DEFAULT_PRICE_USDT) * _MICRO))
+        return round(float(_DEFAULT_PRICE_USDT) * _MICRO)
 
 
 def _fixpack_base_price_micros() -> int:
     raw = os.environ.get("FIXPACK_USDT_PRICE") or _DEFAULT_FIXPACK_PRICE_USDT
     try:
-        return int(round(float(raw) * _MICRO))
+        return round(float(raw) * _MICRO)
     except ValueError:
-        return int(round(float(_DEFAULT_FIXPACK_PRICE_USDT) * _MICRO))
+        return round(float(_DEFAULT_FIXPACK_PRICE_USDT) * _MICRO)
 
 
 def _micros_to_amount(micros: int) -> float:
@@ -218,7 +218,7 @@ def amount_to_micros(amount: float) -> int:
     round() not int(): 5.123456 * 1e6 is 5123455.9999 in binary float, and
     int() would truncate it to ...55. Amounts have at most 6 decimals, so
     rounding lands on the exact integer."""
-    return int(round(amount * _MICRO))
+    return round(amount * _MICRO)
 
 
 async def _reserve_unique_amount(payment_repo: Any, base: int) -> float:
@@ -301,9 +301,9 @@ def _created_at(row: dict[str, Any]) -> datetime.datetime:
     datetime (real DB) or an ISO string (a fake in tests)."""
     ca = row["created_at"]
     if isinstance(ca, str):
-        ca = datetime.datetime.fromisoformat(ca.replace("Z", "+00:00"))
+        ca = datetime.datetime.fromisoformat(ca)
     if ca.tzinfo is None:
-        ca = ca.replace(tzinfo=datetime.timezone.utc)
+        ca = ca.replace(tzinfo=datetime.UTC)
     return ca
 
 
@@ -312,7 +312,7 @@ def _expiry_of(row: dict[str, Any]) -> datetime.datetime:
 
 
 def is_expired(row: dict[str, Any], *, now: datetime.datetime | None = None) -> bool:
-    now = now or datetime.datetime.now(datetime.timezone.utc)
+    now = now or datetime.datetime.now(datetime.UTC)
     return now > _expiry_of(row)
 
 
@@ -402,7 +402,7 @@ async def poll_and_match(
     usdt_contract = usdt_contract_from_env()
 
     pending = await payment_repo.list_pending(PROVIDER)
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     # Exact-base-units -> invoice, expired ones excluded so a late payment
     # to a dead invoice's amount is never auto-granted.
     by_micros: dict[int, dict[str, Any]] = {}

@@ -17,8 +17,8 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
-from app.llm.client import LLMClient, LLMUsage, Provider
 from app.llm import pricing
+from app.llm.client import LLMClient, LLMUsage, Provider
 from app.main import (
     app,
     get_audit_repo,
@@ -81,7 +81,7 @@ class FakeUsageRepo:
     async def sum_anon_spend_today(self):
         # Enforcement (Stage 4 step 2) reads this before an anonymous scan.
         # These accounting tests stay well under any cap, so report $0.
-        return Decimal("0")
+        return Decimal(0)
 
 
 class FakeLLM(LLMClient):
@@ -120,7 +120,7 @@ def test_pricing_cost_matches_published_sonnet_rates():
     # Both provider spellings price identically: 1M in @ $3 + 1M out @ $15 = $18.
     for model in ("claude-sonnet-4.6", "claude-sonnet-4-6"):
         assert pricing.cost_usd(model, 1_000_000, 1_000_000) == Decimal("18.00")
-        assert pricing.cost_usd(model, 0, 0) == Decimal("0")  # zero tokens -> $0
+        assert pricing.cost_usd(model, 0, 0) == Decimal(0)  # zero tokens -> $0
 
 
 def test_both_provider_spellings_priced_from_real_row_not_default():
@@ -164,7 +164,7 @@ def test_pricing_unknown_model_uses_fail_safe_high_default():
 
 
 def test_pricing_negative_tokens_clamped_to_zero():
-    assert pricing.cost_usd("claude-sonnet-4.6", -5, -5) == Decimal("0")
+    assert pricing.cost_usd("claude-sonnet-4.6", -5, -5) == Decimal(0)
 
 
 def test_audit_records_one_usage_row_with_cost():

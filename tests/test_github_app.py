@@ -13,8 +13,8 @@ manual step can't be automated from here.
 
 import time
 
-import jwt
 import httpx
+import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -216,6 +216,7 @@ def test_mint_app_jwt_iss_is_string_and_stripped(keypair):
 
 def test_public_key_fingerprint_matches_independent_computation(keypair):
     import hashlib
+
     from cryptography.hazmat.primitives import serialization
 
     private_pem, _ = keypair

@@ -6,9 +6,7 @@ import datetime
 import subprocess
 import threading
 
-import pytest
-
-import app.deploypack.preview as preview
+from app.deploypack import preview
 from app.deploypack.preview import PreviewRegistry, reconcile_previews
 from app.deploypack.sandbox import SandboxResult
 
@@ -265,7 +263,7 @@ def test_start_stamps_preview_labels_passed_to_the_verifier():
 
 def _iso(offset_s: float, now: float) -> str:
     return datetime.datetime.fromtimestamp(
-        now + offset_s, tz=datetime.timezone.utc
+        now + offset_s, tz=datetime.UTC
     ).isoformat()
 
 

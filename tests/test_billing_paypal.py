@@ -19,6 +19,7 @@ import uuid
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from app.billing import paypal
 from app.main import (
@@ -30,7 +31,6 @@ from app.main import (
     get_paypal_transport,
     get_subscription_repo,
 )
-from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
@@ -77,7 +77,7 @@ class FakePaymentRepo:
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
             "audit_id": audit_id, "paypal_order_id": paypal_order_id,
-            "created_at": datetime.datetime.now(datetime.timezone.utc),
+            "created_at": datetime.datetime.now(datetime.UTC),
         }
         self.rows[row["id"]] = row
         return row
@@ -428,7 +428,7 @@ async def test_subscription_activated_moves_row_active():
     row = next(iter(subs.rows.values()))
     assert row["status"] == "active"
     assert row["expires_at"] == datetime.datetime(
-        2026, 8, 20, 10, 0, tzinfo=datetime.timezone.utc)
+        2026, 8, 20, 10, 0, tzinfo=datetime.UTC)
     # ACTIVATED carries no charge id -> no payment row is recorded for it
     # (recurring SALE events carry the charges).
 

@@ -12,10 +12,10 @@ import shutil
 import subprocess
 import sys
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NoReturn, Sequence
-
+from typing import Any, NoReturn
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 METADATA_FILE = ".shipit-release.json"
@@ -32,7 +32,7 @@ def fail(message: str) -> NoReturn:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def run(
@@ -66,8 +66,7 @@ def capture(
         printable,
         cwd=cwd,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 

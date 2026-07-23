@@ -25,10 +25,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.ingest.stack_detect import detect_stack  # noqa: E402
-from app.ingest.validators import validate_zip  # noqa: E402
-from app.llm.client import LLMClient  # noqa: E402
-from app.scan.pipeline import run_scan  # noqa: E402
+from app.ingest.stack_detect import detect_stack
+from app.ingest.validators import validate_zip
+from app.llm.client import LLMClient
+from app.scan.pipeline import run_scan
 
 REPOS = [
     # (owner/repo, branch) -- selected 2026-07-12 from live GitHub search
@@ -104,7 +104,7 @@ def main() -> int:
             continue
         spread = round(max(totals) - min(totals), 2)
         med = statistics.median(totals)
-        print(f"{slug:45s} {stack:10s} {str(totals):22s} {spread:<7} {llm_v}  (median {med})")
+        print(f"{slug:45s} {stack:10s} {totals!s:22s} {spread:<7} {llm_v}  (median {med})")
     print(f"\nreports: {OUT}/  (RUNS={RUNS})")
     return 0
 

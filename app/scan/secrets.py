@@ -15,8 +15,9 @@ import json
 import re
 import stat
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import BinaryIO, Iterator
+from typing import BinaryIO
 
 MAX_SCANNED_FILE_BYTES = 1 * 1024 * 1024  # skip huge files: minified bundles etc.
 
@@ -214,7 +215,7 @@ def _jwt_severity(token: str) -> tuple[str, float, str]:
         payload += "=" * (-len(payload) % 4)
         data = json.loads(base64.urlsafe_b64decode(payload))
         role = data.get("role", "")
-    except Exception:
+    except (IndexError, ValueError, json.JSONDecodeError):
         return "high", 0.6, "JWT committed to code"
     if role == "service_role":
         return "critical", 0.95, "Supabase service_role key committed — full RLS bypass"

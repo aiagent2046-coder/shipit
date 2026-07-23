@@ -105,7 +105,7 @@ def _run_under_systemd(props: list[str]) -> subprocess.CompletedProcess:
         cmd += ["-p", p]
     cmd += ["--", _PROBE_PYTHON, "-c", _PROBE]
     print("  $ " + " ".join(cmd), flush=True)
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
 
 
 def main() -> int:

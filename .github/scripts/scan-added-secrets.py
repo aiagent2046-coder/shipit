@@ -10,7 +10,6 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-
 PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     (
         "private-key-header",
@@ -40,8 +39,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
 def run_git(arguments: Sequence[str]) -> bytes:
     completed = subprocess.run(
         ["git", *arguments],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 

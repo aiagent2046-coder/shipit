@@ -124,7 +124,7 @@ def _run(props: list[str], sentinel: str) -> subprocess.CompletedProcess:
     cmd += ["-p", f"Environment=SENTINEL={sentinel}",
             "--", _PROBE_PYTHON, "-c", _PROBE]
     print("  $ " + " ".join(cmd), flush=True)
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=180, check=False)
 
 
 def _container_view(stdout: str) -> str:

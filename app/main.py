@@ -29,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.alerts import notify_operator
+from app import sandbox_client
 from app.accounts import (
     TIER_FREE,
     entitlements_dict,
@@ -37,6 +37,7 @@ from app.accounts import (
     resolve_account,
     validate_api_key_pepper_configured,
 )
+from app.alerts import notify_operator
 from app.billing import paypal, telegram_stars, usdt_trc20
 from app.db import (
     AccountRepository,
@@ -66,26 +67,29 @@ from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
 from app.fixpack.generate import (
     build_fixpack_plan,
+)
+from app.fixpack.generate import (
     render_pr_body as render_fixpack_pr_body,
+)
+from app.fixpack.generate import (
     render_pr_title as render_fixpack_pr_title,
 )
 from app.fixpack.semantic_check import run_semantic_check
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
-from app import sandbox_client
-from app.sandbox_client import SandboxRunnerUnavailable
-from app.llm.client import LLMClient
-from app.llm import pricing
-from app.monitor import normalize_repo_full_name, repo_url_from_full_name
-from app.monitor.diff import new_high_severity_findings
-from app.report.html import render_report
-from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest, run_scan
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
     validate_zip,
 )
+from app.llm import pricing
+from app.llm.client import LLMClient
+from app.monitor import normalize_repo_full_name, repo_url_from_full_name
+from app.monitor.diff import new_high_severity_findings
+from app.ratelimit import RateLimiter, RateLimitExceeded, limiter_from_env
+from app.report.html import render_report
+from app.sandbox_client import SandboxRunnerUnavailable
+from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest, run_scan
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +127,8 @@ async def lifespan(_: FastAPI):
         database_configured=bool(database_url_from_env())
     )
     yield
+    from app.db import close_pool
+    await close_pool()
 
 
 app = FastAPI(title="Drydock", version="0.1.0", lifespan=lifespan)
@@ -263,7 +269,7 @@ def get_billing_transport():
     API, TronGrid). None -> httpx's real transport in production;
     overridden in tests with an httpx.MockTransport so the suite never
     touches the network, same idea as get_repo_fetcher."""
-    return None
+    return
 
 
 def get_paypal_transport():
@@ -271,7 +277,7 @@ def get_paypal_transport():
     subscriptions, webhook-signature verify). None -> httpx's real transport in
     production; overridden in tests with an httpx.MockTransport so the suite
     never touches PayPal, same idea as get_billing_transport."""
-    return None
+    return
 
 
 def get_account_repo() -> AccountRepository:
@@ -381,7 +387,7 @@ async def _record_llm_usage(
             model=model, calls=calls, input_tokens=input_tokens,
             output_tokens=output_tokens, cost_usd=cost,
         )
-    except Exception:  # noqa: BLE001 -- accounting must never fail the audit
+    except Exception:
         logger.warning("llm_usage recording failed for %s job %s",
                        job_type, job_id, exc_info=True)
 
@@ -1022,7 +1028,7 @@ async def _handle_monitoring_push(
     if not subs:
         return {"ignored": True, "reason": "no_active_subscription"}
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     if not await subscription_repo.claim_for_monitoring(repo_full_name, now):
         # Within 24h of the last run, or lost the race to a concurrent push.
         return {"ignored": True, "reason": "within_interval"}
@@ -1106,12 +1112,12 @@ async def _process_one_monitoring_run(
                         str(chat_id), text, token=token, transport=transport
                     )
                     notified += 1
-                except Exception:  # noqa: BLE001 -- one bad DM must not abort the rest
+                except Exception:
                     logger.warning("monitoring alert send failed", exc_info=True)
 
         await monitoring_repo.mark_done(run_id)
         return "notified" if new_findings else "no_new"
-    except Exception as exc:  # noqa: BLE001 -- every failure must be recorded
+    except Exception as exc:
         # Fetch/audit/persist/notify errors land here. Log the full traceback
         # and persist a short reason so the failure is diagnosable from both the
         # logs and a `select ... from monitoring_runs` query -- never silent.
@@ -1126,8 +1132,8 @@ def _monitoring_alert_text(repo_full_name: str, new_findings: list[dict]) -> str
     without us dumping an unbounded wall of text."""
     n = len(new_findings)
     lines = [
-        f"⚠️ Continuous monitoring: {n} new "
-        f"critical/high finding{'s' if n != 1 else ''} in {repo_full_name}",
+        (f"⚠️ Continuous monitoring: {n} new "
+        f"critical/high finding{'s' if n != 1 else ''} in {repo_full_name}"),
         "",
     ]
     shown = new_findings[:10]
@@ -1721,7 +1727,7 @@ async def _record_fix_outcome(
             is_regression=is_regression,
             pr_url=pr_url,
         )
-    except Exception:  # noqa: BLE001 — analytics must never break delivery
+    except Exception:
         logger.exception(
             "Failed to record fix_outcome for job %s (outcome=%s)",
             job.get("id"), outcome,
@@ -1830,7 +1836,7 @@ async def _process_one_paid_job(
             pr_url=opened.html_url,
         )
         return "delivered"
-    except Exception as exc:  # noqa: BLE001 — every failure must be recorded
+    except Exception as exc:
         # Any error in fetch, generation, token exchange, or PR delivery
         # lands here. Log the full traceback (logger.exception attaches it)
         # and persist a short reason so the failure is diagnosable from both

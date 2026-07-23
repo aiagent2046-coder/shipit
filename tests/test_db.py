@@ -17,7 +17,6 @@ import app.db as db_mod
 from app.db import (
     AccountRepository,
     AuditRepository,
-    DatabaseNotConfigured,
     FixpackJobRepository,
     PaymentRepository,
     SubscriptionRepository,
@@ -798,7 +797,7 @@ class TestSubscriptionRepositoryExpiresAtType:
         assert not isinstance(expires_param, bool)
         assert expires_param.tzinfo is not None
         assert expires_param == datetime.datetime.fromtimestamp(
-            self.UNIX_TS, tz=datetime.timezone.utc
+            self.UNIX_TS, tz=datetime.UTC
         )
 
     async def test_renew_passes_datetime_not_int(self, monkeypatch):
@@ -818,7 +817,7 @@ class TestSubscriptionRepositoryExpiresAtType:
         assert isinstance(expires_param, datetime.datetime)
         assert expires_param.tzinfo is not None
         assert expires_param == datetime.datetime.fromtimestamp(
-            self.UNIX_TS, tz=datetime.timezone.utc
+            self.UNIX_TS, tz=datetime.UTC
         )
 
     async def test_upsert_first_none_expires_at_passes_through(self, monkeypatch):

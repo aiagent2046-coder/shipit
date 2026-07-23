@@ -31,7 +31,7 @@ from starlette.concurrency import run_in_threadpool
 from app.deploypack.preview import reconcile_previews
 from app.deploypack.sandbox import verify_deploy_pack
 from app.fixpack.generate import FixpackPlan
-from app.fixpack.semantic_check import RunResult, TestRunner, minimal_check, run_suite
+from app.fixpack.semantic_check import Runner, RunResult, minimal_check, run_suite
 from app.runner.auth import require_sandbox_token
 
 app = FastAPI(title="shipit-sandbox-runner", version="0.1.0")
@@ -131,10 +131,12 @@ async def deploypack_preview_stop(
     def _do() -> dict:
         if container:
             subprocess.run(["docker", "stop", container],
-                           capture_output=True, text=True, timeout=15)
+                           capture_output=True, text=True, timeout=15,
+                           check=False)
         if image_tag:
             subprocess.run(["docker", "rmi", "-f", image_tag],
-                           capture_output=True, text=True, timeout=15)
+                           capture_output=True, text=True, timeout=15,
+                           check=False)
         return {"ok": True}
 
     return await _guarded(_do)
@@ -156,7 +158,7 @@ async def fixpack_run_suite(
     """Install (net on via proxy) + test (net off) one version; return counts."""
     raw = await request.body()
     r = _manifest(request)["runner"]
-    runner = TestRunner(
+    runner = Runner(
         ecosystem=r["ecosystem"], image=r["image"],
         install_script=r["install_script"], test_script=r["test_script"],
     )

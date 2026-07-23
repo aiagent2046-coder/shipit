@@ -267,7 +267,7 @@ async def test_all_repository_write_paths(real_db):
     assert isinstance(fetched_sub["expires_at"], datetime.datetime)
     assert fetched_sub["expires_at"].tzinfo is not None
     assert fetched_sub["expires_at"] == datetime.datetime.fromtimestamp(
-        unix_ts, tz=datetime.timezone.utc
+        unix_ts, tz=datetime.UTC
     )
 
     # renew: also a Unix int into the timestamptz column.
@@ -291,7 +291,7 @@ async def test_all_repository_write_paths(real_db):
     # timestamptz -- the type the FakePool can't prove.
     pp_sub_id = f"I-{run}"
     pp_repo_name = f"acme/paypal-smoke-{run}"
-    pp_expires = datetime.datetime(2026, 9, 19, 10, 0, tzinfo=datetime.timezone.utc)
+    pp_expires = datetime.datetime(2026, 9, 19, 10, 0, tzinfo=datetime.UTC)
     pp_sub = await sub_repo.upsert_first_paypal(
         paypal_subscription_id=pp_sub_id, tier="monitoring",
         expires_at=pp_expires, repo_full_name=pp_repo_name,

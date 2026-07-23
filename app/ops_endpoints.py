@@ -8,7 +8,6 @@ from fastapi.responses import JSONResponse
 
 from app.db import FixpackJobRepository
 
-
 logger = logging.getLogger(__name__)
 router = APIRouter()
 _fixpack_repo = FixpackJobRepository()

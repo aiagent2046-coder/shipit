@@ -193,7 +193,7 @@ def test_regression_when_patched_has_more_failures():
 
 def test_no_regression_when_failures_equal_even_if_already_red():
     # Suite was already red before us; same count after => not our fault.
-    reg, detail = is_regression(RunResult(4, 3, False, None),
+    reg, _detail = is_regression(RunResult(4, 3, False, None),
                                 RunResult(4, 3, False, None))
     assert reg is False
 

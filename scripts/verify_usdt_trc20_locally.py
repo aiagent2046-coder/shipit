@@ -40,7 +40,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.billing import usdt_trc20  # noqa: E402
+from app.billing import usdt_trc20
 
 
 async def main() -> int:

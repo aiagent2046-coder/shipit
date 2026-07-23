@@ -261,6 +261,7 @@ def test_transient_5xx_retried_then_succeeds(monkeypatch):
 
 def test_4xx_not_retried(monkeypatch):
     import pytest as _pytest
+
     from app.llm import client as client_mod
     from app.llm.client import LLMClient, LLMError, Provider
 
@@ -285,6 +286,7 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     kept — the paid Fix Pack completeness mode."""
     import io
     import zipfile as _zipfile
+
     from app.scan.llm_scan import run_llm_scan
 
     buf = io.BytesIO()
@@ -296,17 +298,17 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
 
     responses = iter([
         # pass 1: auth, security
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
+        ('[{"file":"src/auth.ts","line_start":1,"line_end":1,'
         '"evidence":"const token = await fetch","severity":"high",'
-        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]',
+        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]'),
         '[]',
         # pass 2: та же stable + уникальная для второго прохода
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
+        ('[{"file":"src/auth.ts","line_start":1,"line_end":1,'
         '"evidence":"const token = await fetch","severity":"high",'
-        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]',
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
+        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]'),
+        ('[{"file":"src/auth.ts","line_start":1,"line_end":1,'
         '"evidence":"const token = await fetch","severity":"low",'
-        '"confidence":0.5,"title":"pass-2-only finding","explanation":"","fix_hint":""}]',
+        '"confidence":0.5,"title":"pass-2-only finding","explanation":"","fix_hint":""}]'),
     ])
 
     class FakeClient:

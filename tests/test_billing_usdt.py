@@ -15,6 +15,7 @@ import re
 import uuid
 
 import httpx
+from fastapi.testclient import TestClient
 
 from app.billing import usdt_trc20
 from app.main import (
@@ -23,7 +24,6 @@ from app.main import (
     get_billing_transport,
     get_payment_repo,
 )
-from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
@@ -65,7 +65,7 @@ class FakePaymentRepo:
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
             "audit_id": audit_id,
-            "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
+            "created_at": created_at or datetime.datetime.now(datetime.UTC),
         }
         self.rows[row["id"]] = row
         return row
@@ -328,7 +328,7 @@ def test_poll_endpoint_503_when_token_unconfigured(monkeypatch):
 async def test_expired_invoice_is_not_matched():
     accounts, payments = FakeAccountRepo(), FakePaymentRepo()
     # An invoice created well beyond the TTL: pending but stale.
-    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+    old = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
         seconds=usdt_trc20.INVOICE_TTL_SECONDS + 60)
     inv = await payments.create(
         account_id=None, provider="usdt_trc20", external_ref=None,

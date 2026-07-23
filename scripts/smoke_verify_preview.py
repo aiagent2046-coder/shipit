@@ -31,9 +31,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.deploypack.pipeline import run_deploy_pack  # noqa: E402
-from app.deploypack.preview import PreviewRegistry  # noqa: E402
-from app.ingest.stack_detect import detect_stack  # noqa: E402
+from app.deploypack.pipeline import run_deploy_pack
+from app.deploypack.preview import PreviewRegistry
+from app.ingest.stack_detect import detect_stack
 
 
 def zip_dir(root: Path) -> bytes:
@@ -49,6 +49,7 @@ def container_is_running(name: str) -> bool:
     out = subprocess.run(
         ["docker", "ps", "-q", "-f", f"name={name}"],
         capture_output=True, text=True, timeout=10,
+        check=False,
     )
     return bool(out.stdout.strip())
 
@@ -76,6 +77,7 @@ def main() -> int:
     curl = subprocess.run(
         ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", local_url],
         capture_output=True, text=True, timeout=10,
+        check=False,
     )
     if curl.stdout.strip() != "200":
         print(f"FAIL: local_url did not return 200 after run_deploy_pack returned "

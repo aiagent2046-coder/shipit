@@ -15,10 +15,10 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-import app.runner.auth as auth
 import app.runner.main as runner_main
 from app.deploypack.sandbox import SandboxResult
 from app.fixpack.semantic_check import RunResult
+from app.runner import auth
 
 client = TestClient(runner_main.app)
 

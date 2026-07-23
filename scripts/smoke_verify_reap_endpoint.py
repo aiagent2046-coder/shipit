@@ -50,6 +50,7 @@ def container_is_running(name: str) -> bool:
     out = subprocess.run(
         ["docker", "ps", "-q", "-f", f"name={name}"],
         capture_output=True, text=True, timeout=10,
+        check=False,
     )
     return bool(out.stdout.strip())
 
@@ -99,6 +100,7 @@ def main() -> int:
                 ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
                  body["preview"]["local_url"]],
                 capture_output=True, text=True, timeout=10,
+                check=False,
             )
             if curl.stdout.strip() != "200":
                 print(f"FAIL: preview local_url not curlable ({curl.stdout!r})")
@@ -138,6 +140,7 @@ def main() -> int:
                 ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
                  body["preview"]["local_url"]],
                 capture_output=True, text=True, timeout=10,
+                check=False,
             )
             if curl_again.stdout.strip() != "200":
                 print("FAIL: preview disappeared before its TTL expired")
@@ -162,9 +165,10 @@ def _cleanup_leftover_containers() -> None:
     out = subprocess.run(
         ["docker", "ps", "-q", "--filter", "name=shipit-verify-"],
         capture_output=True, text=True, timeout=10,
+        check=False,
     )
     for container_id in out.stdout.split():
-        subprocess.run(["docker", "stop", container_id], capture_output=True, timeout=15)
+        subprocess.run(["docker", "stop", container_id], capture_output=True, timeout=15, check=False)
 
 
 if __name__ == "__main__":

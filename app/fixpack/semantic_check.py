@@ -118,7 +118,7 @@ FIXPACK_RUN_AS_USER = (
 
 
 @dataclass(frozen=True)
-class TestRunner:
+class Runner:
     """One detected way to run a client's tests. `install_argv` / `test_argv`
     are the shell commands run *inside* the container (as `sh -c`)."""
 
@@ -180,7 +180,7 @@ def _read_package_json_scripts(zip_bytes: bytes, entry: str) -> dict:
     return scripts if isinstance(scripts, dict) else {}
 
 
-def detect_test_runner(zip_bytes: bytes) -> TestRunner | None:
+def detect_test_runner(zip_bytes: bytes) -> Runner | None:
     """Pick a test runner from the repo's marker files, or None.
 
     Node is checked first: a repo can be polyglot, but a `package.json` with a
@@ -200,7 +200,7 @@ def detect_test_runner(zip_bytes: bytes) -> TestRunner | None:
         test_script = scripts.get("test", "")
         # npm's own default is a stub that exits 1; treat it as "no tests".
         if test_script and "no test specified" not in test_script:
-            return TestRunner(
+            return Runner(
                 ecosystem="node",
                 image=NODE_IMAGE,
                 install_script="npm install --no-audit --no-fund",
@@ -230,7 +230,7 @@ def detect_test_runner(zip_bytes: bytes) -> TestRunner | None:
             f"PYTHONPATH=/work/{_PY_DEPS_DIR} "
             f"python -m pytest -q --no-header -p no:cacheprovider"
         )
-        return TestRunner(
+        return Runner(
             ecosystem="python", image=PYTHON_IMAGE,
             install_script=install, test_script=test,
         )
@@ -493,7 +493,7 @@ def _docker_test_argv(image: str, workdir: str, script: str) -> list[str]:
     ]
 
 
-def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
+def run_suite(zip_bytes: bytes, runner: Runner) -> RunResult:
     """Install (net on) then test (net off) one version in Docker; return
     parsed counts. Any infra failure is captured as `error` (secret-free) —
     we never surface client output verbatim into a persisted field."""

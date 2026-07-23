@@ -23,9 +23,9 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 Runner = Callable[..., subprocess.CompletedProcess]
 

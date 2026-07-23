@@ -10,9 +10,8 @@ import io
 import json
 import zipfile
 
-from fastapi.testclient import TestClient
-
 import pytest
+from fastapi.testclient import TestClient
 
 from app.accounts import (
     API_KEY_PEPPER_ENV,

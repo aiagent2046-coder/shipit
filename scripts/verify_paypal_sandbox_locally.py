@@ -39,7 +39,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.billing import paypal  # noqa: E402
+from app.billing import paypal
 
 
 def _approve_link(resource: dict) -> str | None:

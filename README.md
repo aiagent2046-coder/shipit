@@ -301,8 +301,8 @@ Implemented:
     expired unpaid invoice is never auto-matched even if its exact amount
     arrives later. The poll endpoint is bearer-protected (`USDT_POLL_TOKEN`,
     `hmac.compare_digest`, same as the reaper) and meant for a scheduled
-    caller — **this repo ships no timer/cron unit**, same as the reaper
-    (see "Production deployment"); wire a `shipit-poll-usdt.timer` to it.
+    caller — the repo ships `shipit-usdt-poller.service` and
+    `shipit-usdt-poller.timer` (systemd, see `deploy/systemd/`).
     TronGrid REST: `GET /v1/accounts/{address}/transactions/trc20`; an API
     key is **optional** (only raises rate limits — sent as the
     `TRON-PRO-API-KEY` header when `TRONGRID_API_KEY` is set).
@@ -370,24 +370,23 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
 - `shipit-reap.timer` (systemd, hourly) replaces the GitHub Actions
   reaper cron on this deployment — the endpoint is the same
   `POST /internal/preview/reap` with the bearer token from `.env`.
-- `shipit-fixpack.timer` (systemd) should call
+- `shipit-fixpack.timer` (systemd, shipped in `deploy/systemd/`) calls
   `POST /internal/fixpack/process-paid` (bearer token `FIXPACK_PROCESS_TOKEN`
   from `.env`) on a short interval (2–5 min) to drain paid Fix Pack jobs into
-  fix PRs. Like the reaper/USDT poller, **this repo ships no unit file** —
-  wire one up. The endpoint is safe to fire on a timer even while a previous
+  fix PRs. The endpoint is safe to fire on a timer even while a previous
   run is still working: it takes a Postgres advisory lock (a second firing
   returns `{"skipped_locked": true}`) and claims each job atomically into a
   `running` lease, so overlapping runs never open a duplicate PR. A run also
   reaps `running` leases older than 15 min (a crashed worker) — re-queuing up
   to 3 attempts, then failing — so `systemctl restart shipit` mid-job never
   loses or wedges a job (see `PHASE3_QUEUE_PLAN.md`).
-- `shipit-monitoring.timer` (systemd) should call
+- `shipit-monitoring.timer` (systemd, shipped in `deploy/systemd/`) calls
   `POST /internal/monitoring/process-pending` (bearer token
   `MONITORING_PROCESS_TOKEN` from `.env`) to drain the continuous-monitoring
   backlog: each pending run re-audits its repo, diffs the findings, and DMs
   subscribers. Same durable-queue shape as `shipit-fixpack.timer` (advisory
   lock → `{"skipped_locked": true}` on overlap, atomic per-run claim, 15 min /
-  3-attempt stale-lease reaper) and **no unit file is shipped** — wire one up. A
+  3-attempt stale-lease reaper). A
   **longer interval than Fix Pack** is right (~5 min, `OnUnitActiveSec=5min`): a
   repo is re-audited at most once per 24h and a pending run only needs to drain
   within a few minutes of a push. The push webhook only enqueues the run and

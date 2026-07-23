@@ -24,7 +24,6 @@ import app.main as main_mod
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.main import app, get_fixpack_repo
 
-
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 
 

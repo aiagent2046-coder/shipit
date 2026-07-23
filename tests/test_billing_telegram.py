@@ -14,6 +14,7 @@ import datetime
 import uuid
 
 import httpx
+from fastapi.testclient import TestClient
 
 from app.accounts import api_key_prefix, generate_api_key
 from app.billing import telegram_stars, usdt_trc20
@@ -23,7 +24,6 @@ from app.main import (
     get_billing_transport,
     get_payment_repo,
 )
-from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
@@ -68,7 +68,7 @@ class FakePaymentRepo:
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
             "audit_id": audit_id,
-            "created_at": datetime.datetime.now(datetime.timezone.utc),
+            "created_at": datetime.datetime.now(datetime.UTC),
         }
         self.rows[row["id"]] = row
         return row

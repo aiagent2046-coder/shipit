@@ -27,13 +27,13 @@ import json
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app.monitor import normalize_repo_full_name, repo_url_from_full_name
-from app.monitor.diff import new_high_severity_findings
 from app.main import (
     app,
     get_monitoring_repo,
     get_subscription_repo,
 )
+from app.monitor import normalize_repo_full_name, repo_url_from_full_name
+from app.monitor.diff import new_high_severity_findings
 
 client = TestClient(app)
 
@@ -224,7 +224,7 @@ def test_push_scenario_b_within_24h_no_enqueue(monkeypatch):
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
-    recent = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
+    recent = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1)
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": recent},
@@ -248,7 +248,7 @@ def test_push_eligible_enqueues_and_acks_fast(monkeypatch):
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
-    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+    old = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=2)
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": old},

@@ -83,6 +83,7 @@ async def get_pool() -> AsyncConnectionPool:
             # Supabase's Supavisor pooler, confirmed by hand.
             pool = AsyncConnectionPool(
                 url, min_size=1, max_size=5, open=False,
+                max_lifetime=3600,
                 kwargs={"prepare_threshold": None, "row_factory": dict_row},
             )
             # Publish to _pool only after open() succeeds: a failed open
@@ -255,7 +256,7 @@ def _expires_at_to_timestamptz(expires_at: Any) -> datetime.datetime | None:
     if expires_at is None:
         return None
     if isinstance(expires_at, (int, float)):
-        return datetime.datetime.fromtimestamp(expires_at, tz=datetime.timezone.utc)
+        return datetime.datetime.fromtimestamp(expires_at, tz=datetime.UTC)
     return expires_at
 
 
@@ -451,7 +452,7 @@ class FixpackJobRepository:
         expires_dt = None
         if preview_expires_at is not None:
             expires_dt = datetime.datetime.fromtimestamp(
-                preview_expires_at, tz=datetime.timezone.utc
+                preview_expires_at, tz=datetime.UTC
             )
         async with pool.connection() as conn:
             cur = await conn.execute(
@@ -603,8 +604,8 @@ class FixpackJobRepository:
                 returning id
                 """,
                 (
-                    f"stale lease reaped: no completion after {max_attempts} "
-                    f"attempt(s), last lease older than {max_age_minutes}m",
+                    (f"stale lease reaped: no completion after {max_attempts} "
+                    f"attempt(s), last lease older than {max_age_minutes}m"),
                     max_age_minutes,
                     max_attempts,
                 ),
@@ -1878,8 +1879,8 @@ class MonitoringRunRepository:
                 returning id
                 """,
                 (
-                    f"stale lease reaped: no completion after {max_attempts} "
-                    f"attempt(s), last lease older than {max_age_minutes}m",
+                    (f"stale lease reaped: no completion after {max_attempts} "
+                    f"attempt(s), last lease older than {max_age_minutes}m"),
                     max_age_minutes,
                     max_attempts,
                 ),

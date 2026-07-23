@@ -91,7 +91,8 @@ def test_clean_project_yields_no_findings():
 
 
 def _jwt_with_role(role: str) -> str:
-    import base64, json as _json
+    import base64
+    import json as _json
     def b64(d): return base64.urlsafe_b64encode(_json.dumps(d).encode()).rstrip(b"=").decode()
     return f"{b64({'alg':'HS256'})}.{b64({'role': role, 'iss': 'supabase'})}." + "s" * 20
 

@@ -35,10 +35,9 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import time
 from typing import Any
-
-import os
 
 import httpx
 
@@ -416,13 +415,13 @@ def _parse_paypal_time(value: Any) -> datetime.datetime | None:
     if not value or not isinstance(value, str):
         return None
     try:
-        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.datetime.fromisoformat(value)
     except ValueError:
         return None
 
 
 def _period_from_now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+    return datetime.datetime.now(datetime.UTC) + datetime.timedelta(
         days=MONITOR_PERIOD_DAYS
     )
 

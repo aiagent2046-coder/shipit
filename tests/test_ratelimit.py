@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from app.main import app, get_rate_limiter
 from app.ratelimit import RateLimiter, RateLimitExceeded
 
-
 # --- unit tests: RateLimiter in isolation, no HTTP involved ---
 
 def test_allows_up_to_the_limit():

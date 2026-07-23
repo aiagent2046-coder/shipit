@@ -40,7 +40,7 @@ def test_llm_finding_uses_its_own_explanation():
 
 
 def test_unknown_rule_degrades_to_title_not_empty():
-    what, risk, fix = plain_fields({"rule_id": "future-rule", "title": "T"})
+    what, _risk, _fix = plain_fields({"rule_id": "future-rule", "title": "T"})
     assert what == "T"
 
 

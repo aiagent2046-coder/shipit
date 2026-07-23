@@ -24,8 +24,8 @@ from fastapi.testclient import TestClient
 from app.billing import telegram_stars, usdt_trc20
 from app.main import (
     app,
-    get_audit_repo,
     get_account_repo,
+    get_audit_repo,
     get_billing_transport,
     get_fixpack_repo,
     get_payment_repo,
@@ -62,7 +62,7 @@ class FakeFixpackRepo:
             "id": str(uuid.uuid4()), "audit_id": audit_id, "pack": "fixpack",
             "stack": stack, "status": "paid", "verified": None, "detail": None,
             "pr_url": None, "pr_delivered": False,
-            "created_at": datetime.datetime.now(datetime.timezone.utc),
+            "created_at": datetime.datetime.now(datetime.UTC),
         }
         self.rows.append(row)
         return row
@@ -99,7 +99,7 @@ class FakePaymentRepo:
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
             "audit_id": audit_id,
-            "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
+            "created_at": created_at or datetime.datetime.now(datetime.UTC),
         }
         self.rows[row["id"]] = row
         return row
@@ -197,7 +197,7 @@ async def test_fixpack_command_env_overrides_price(monkeypatch):
     await _send(_text_update(f"/fixpack {audit['id']}"),
                audits=audits, payments=payments,
                fixpacks=fixpacks, accounts=accounts, calls=calls)
-    body = [c for c in calls if c[0] == "sendInvoice"][0][1]
+    body = next(c for c in calls if c[0] == "sendInvoice")[1]
     assert body["prices"][0]["amount"] == 750
 
 

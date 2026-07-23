@@ -234,9 +234,8 @@ def _brackets_balanced(text: str) -> bool:
     for ch in text:
         if ch in openers:
             stack.append(ch)
-        elif ch in pairs:
-            if not stack or stack.pop() != pairs[ch]:
-                return False
+        elif ch in pairs and (not stack or stack.pop() != pairs[ch]):
+            return False
     return not stack
 
 

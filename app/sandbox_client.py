@@ -44,7 +44,7 @@ from pathlib import Path
 import httpx
 
 from app.deploypack.sandbox import SandboxResult
-from app.fixpack.semantic_check import RunResult, TestRunner
+from app.fixpack.semantic_check import Runner, RunResult
 
 # Unix socket the runner listens on. A TCP fallback (SANDBOX_RUNNER_URL) is
 # supported for environments without a UDS, but UDS is the default and the
@@ -178,7 +178,7 @@ def reconcile_previews(run=None, now: float | None = None) -> dict:
 
 # --- fixpack ---------------------------------------------------------------
 
-def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
+def run_suite(zip_bytes: bytes, runner: Runner) -> RunResult:
     """Install (net on, via proxy) + test (net off) one version, in the runner.
     Returns a RunResult with `error` set on a runner outage (symmetric across
     original/patched → treated as 'could not verify', never a regression)."""

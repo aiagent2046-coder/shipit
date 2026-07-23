@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "scripts"
@@ -220,12 +219,12 @@ def test_verify_applied_integrity_detects_checksum_drift(
 def test_verify_applied_integrity_detects_ordering_gap(
     tmp_path: Path,
 ) -> None:
-    first_path = write_migration(
+    write_migration(
         tmp_path,
         "0001_first.sql",
         "SELECT 1;\n",
     )
-    second_path = write_migration(
+    write_migration(
         tmp_path,
         "0002_second.sql",
         "SELECT 2;\n",

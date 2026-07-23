@@ -139,9 +139,7 @@ def _create_calls(calls):
     return [
         (m, p) for (m, p) in calls
         if m == "POST" and (
-            p.endswith("/git/blobs") or p.endswith("/git/trees")
-            or p.endswith("/git/commits") or p.endswith("/git/refs")
-            or p.endswith("/pulls")
+            p.endswith(("/git/blobs", "/git/trees", "/git/commits", "/git/refs", "/pulls"))
         )
     ]
 

@@ -43,7 +43,7 @@ def normalize_repo_full_name(value: str | None) -> str | None:
     if m:
         owner, repo = m.group(1), m.group(2)
     else:
-        stripped = value[:-4] if value.endswith(".git") else value
+        stripped = value.removesuffix(".git")
         stripped = stripped.strip("/")
         parts = stripped.split("/")
         if len(parts) != 2:

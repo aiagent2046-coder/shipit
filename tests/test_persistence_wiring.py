@@ -9,13 +9,14 @@ and scripts/verify_db_locally.py for real-Postgres proof.
 """
 
 import io
-import json
 import uuid
 import zipfile
 
 from fastapi.testclient import TestClient
 
+import app.deploypack.pipeline as pipeline_mod
 from app.deploypack.delivery import PullRequestResult
+from app.deploypack.sandbox import SandboxResult
 from app.main import (
     app,
     get_audit_repo,
@@ -23,8 +24,6 @@ from app.main import (
     get_pr_opener,
     get_repo_fetcher,
 )
-import app.deploypack.pipeline as pipeline_mod
-from app.deploypack.sandbox import SandboxResult
 
 client = TestClient(app)
 

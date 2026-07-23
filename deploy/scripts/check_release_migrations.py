@@ -10,9 +10,9 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, NoReturn, Sequence
-
+from typing import Any, NoReturn
 
 METADATA_FILE = ".shipit-release.json"
 CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -173,8 +173,7 @@ ORDER BY filename;
         ],
         input=sql,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 

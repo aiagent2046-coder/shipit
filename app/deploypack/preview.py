@@ -51,7 +51,7 @@ JOB_ID_LABEL = "shipit.job_id"
 def _iso_utc(epoch: float) -> str:
     """UTC ISO-8601 for a Unix timestamp, e.g. '2026-07-18T12:00:00+00:00'."""
     return datetime.datetime.fromtimestamp(
-        epoch, tz=datetime.timezone.utc
+        epoch, tz=datetime.UTC
     ).isoformat()
 
 
@@ -67,7 +67,7 @@ def _parse_iso_utc(text: str) -> float | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=datetime.timezone.utc)
+        dt = dt.replace(tzinfo=datetime.UTC)
     return dt.timestamp()
 
 

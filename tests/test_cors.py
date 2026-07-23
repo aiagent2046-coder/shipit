@@ -8,9 +8,10 @@ carrying an Origin, which is what Starlette echoes for an allowed origin.
 
 from __future__ import annotations
 
-from app.main import configure_cors
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from app.main import configure_cors
 
 
 def _app_with_cors() -> TestClient:

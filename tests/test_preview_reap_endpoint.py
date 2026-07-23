@@ -3,7 +3,7 @@ on the production VPS calls hourly."""
 
 from fastapi.testclient import TestClient
 
-from app.main import app, get_preview_registry, get_preview_reconciler
+from app.main import app, get_preview_reconciler, get_preview_registry
 
 client = TestClient(app)
 

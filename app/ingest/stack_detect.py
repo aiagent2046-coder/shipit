@@ -20,7 +20,7 @@ class Stack(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
-_FASTAPI_IMPORT = re.compile(r"^\s*(from\s+fastapi\s+import|import\s+fastapi)", re.M)
+_FASTAPI_IMPORT = re.compile(r"^\s*(from\s+fastapi\s+import|import\s+fastapi)", re.MULTILINE)
 
 
 def _root_prefix(names: list[str]) -> str:

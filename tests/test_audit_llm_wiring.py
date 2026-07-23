@@ -117,9 +117,11 @@ def test_llm_failure_degrades_to_static_only_not_500():
 
 
 def test_score_basis_static_only_when_no_providers():
+    import io
+    import zipfile
+
     from app.llm.client import LLMClient
     from app.scan.pipeline import run_scan
-    import io, zipfile
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("requirements.txt", "fastapi\n")
@@ -129,10 +131,12 @@ def test_score_basis_static_only_when_no_providers():
 
 
 def test_score_basis_static_only_when_llm_fails(monkeypatch):
+    import io
+    import zipfile
+
     from app.llm.client import LLMClient, LLMError
     from app.scan import pipeline as pipeline_mod
     from app.scan.pipeline import run_scan
-    import io, zipfile
 
     def boom(*a, **k):
         raise LLMError("provider down")
@@ -150,11 +154,13 @@ def test_score_basis_static_only_when_llm_fails(monkeypatch):
 
 
 def test_score_basis_static_plus_llm_when_stage_ran(monkeypatch):
+    import io
+    import zipfile
+
     from app.llm.client import LLMClient
     from app.scan import pipeline as pipeline_mod
     from app.scan.llm_scan import LLMScanStats
     from app.scan.pipeline import run_scan
-    import io, zipfile
 
     monkeypatch.setattr(pipeline_mod, "run_llm_scan",
                         lambda *a, **k: ([], LLMScanStats(prompts=1)))

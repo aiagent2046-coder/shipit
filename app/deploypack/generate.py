@@ -31,7 +31,7 @@ from typing import BinaryIO
 
 from app.ingest.stack_detect import Stack
 
-_DB_MARKERS = re.compile(r"asyncpg|psycopg2|psycopg\b", re.I)
+_DB_MARKERS = re.compile(r"asyncpg|psycopg2|psycopg\b", re.IGNORECASE)
 _VITE_ENV_VAR = re.compile(r"import\.meta\.env\.(VITE_[A-Z0-9_]+)")
 _NEXT_PUBLIC_ENV_VAR = re.compile(r"process\.env\.(NEXT_PUBLIC_[A-Z0-9_]+)")
 # output: "standalone" — the only next.config shape we can containerize
@@ -126,7 +126,7 @@ def _fastapi_entry_module(files: dict[str, str]) -> str:
     for path, text in files.items():
         if not path.endswith(".py"):
             continue
-        m = re.search(r"^(\w+)\s*=\s*FastAPI\(", text, re.M)
+        m = re.search(r"^(\w+)\s*=\s*FastAPI\(", text, re.MULTILINE)
         if m:
             module = path[:-3].replace("/", ".").removesuffix(".__init__")
             return f"{module}:{m.group(1)}"
