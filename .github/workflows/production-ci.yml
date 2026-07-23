@@ -1,0 +1,205 @@
+name: production-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-ci:
+    name: production-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    env:
+      API_KEY_PEPPER: ci-pepper-not-a-real-secret
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whitespace errors
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              git diff --check "$BASE_SHA" "$HEAD_SHA"
+              ;;
+            push)
+              if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+                git diff-tree --check --root -r "$GITHUB_SHA"
+              else
+                git diff --check "$BEFORE_SHA" "$GITHUB_SHA"
+              fi
+              ;;
+            workflow_dispatch)
+              git diff-tree --check --root -r HEAD
+              ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Scan tracked files for strong secret signatures
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          patterns=(
+            '-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'
+            'AKIA[0-9A-Z]{16}'
+            'gh[pousr]_[A-Za-z0-9_]{36,}'
+            'github_pat_[A-Za-z0-9_]{70,}'
+            'sk-(proj|svcacct)-[A-Za-z0-9_-]{32,}'
+          )
+
+          failed=0
+
+          for pattern in "${patterns[@]}"; do
+            mapfile -t files < <(
+              git grep -I -l -E -- "$pattern" -- . 2>/dev/null || true
+            )
+
+            if ((${#files[@]} > 0)); then
+              printf 'Potential secret signature detected in %s\n' \
+                "${files[@]}"
+              failed=1
+            fi
+          done
+
+          exit "$failed"
+
+      - name: Validate shell syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          checked=0
+
+          while IFS= read -r -d '' script; do
+            echo "Checking $script"
+            bash -n "$script"
+            checked=$((checked + 1))
+          done < <(git ls-files -z '*.sh')
+
+          ((checked > 0))
+          echo "Validated $checked shell scripts"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install locked development dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --require-hashes -r requirements-dev.txt
+          python -m pip install -e . --no-deps
+
+      - name: Validate workflow YAML
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          python - <<'PY'
+          from pathlib import Path
+
+          import yaml
+
+          paths = sorted(Path(".github/workflows").glob("*.y*ml"))
+          if not paths:
+              raise SystemExit("No workflow files found")
+
+          for path in paths:
+              with path.open("r", encoding="utf-8") as stream:
+                  document = yaml.safe_load(stream)
+
+              if not isinstance(document, dict):
+                  raise SystemExit(f"{path}: top-level YAML must be a mapping")
+
+              print(f"Validated {path}")
+          PY
+
+      - name: Prepare production-like systemd validation environment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sudo mkdir -p /opt
+
+          if [[ -e /opt/shipit || -L /opt/shipit ]]; then
+            test "$(readlink -f /opt/shipit)" = "$GITHUB_WORKSPACE"
+          else
+            sudo ln -s "$GITHUB_WORKSPACE" /opt/shipit
+          fi
+
+          touch .env
+          mkdir -p .venv/bin
+          ln -sf "$(command -v python)" .venv/bin/python
+
+          if ! id shipit-ops >/dev/null 2>&1; then
+            sudo useradd \
+              --system \
+              --no-create-home \
+              --shell /usr/sbin/nologin \
+              shipit-ops
+          fi
+
+          cat > /tmp/shipit.service <<'UNIT'
+          [Unit]
+          Description=ShipIt CI dependency stub
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/true
+          UNIT
+
+      - name: Validate systemd units
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          mapfile -t units < <(
+            find deploy/systemd \
+              -maxdepth 1 \
+              -type f \
+              \( -name '*.service' -o -name '*.timer' \) \
+              -print |
+            sort
+          )
+
+          ((${#units[@]} > 0))
+
+          printf 'Validating %d systemd units\n' "${#units[@]}"
+
+          systemd-analyze verify \
+            /tmp/shipit.service \
+            "${units[@]}"
+
+      - name: Run test suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pytest -q
