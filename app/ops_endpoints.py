@@ -18,7 +18,7 @@ async def readyz() -> JSONResponse:
     """Readiness: process can serve requests and its database is reachable."""
     try:
         stats = await _fixpack_repo.backlog_stats()
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         logger.warning("readiness database check failed: %s", type(exc).__name__)
         stats = None
 

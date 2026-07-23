@@ -73,7 +73,7 @@ _PROBE = (
     "p = subprocess.run(["
     "  'docker', 'run', '--rm', '-v', d + ':/work', '" + PROBE_IMAGE + "',"
     "  'sh', '-c', 'cat /work/sentinel 2>/dev/null; echo; echo FILES=; ls -1 /work 2>/dev/null'"
-    "], capture_output=True, text=True, timeout=120);"
+    "], capture_output=True, text=True, timeout=120, check=False);"
     "sys.stdout.write('<<<CONTAINER\\n' + p.stdout + '\\nCONTAINER>>>\\n');"
     "sys.stderr.write(p.stderr);"
     "sys.exit(0 if p.returncode == 0 else 3)"

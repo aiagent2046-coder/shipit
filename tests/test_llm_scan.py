@@ -312,7 +312,8 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     ])
 
     class FakeClient:
-        providers = [object()]
+        def __init__(self):
+            self.providers = [object()]
         def complete(self, system, user, max_tokens=4096):
             return next(responses), LLMUsage(model="fake-model")
 

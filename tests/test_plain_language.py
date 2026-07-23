@@ -9,7 +9,8 @@ def _all_static_rule_ids():
     import re
     ids = set()
     for path in ("app/scan/secrets.py", "app/scan/checks.py"):
-        src = open(path).read()
+        with open(path) as fh:
+            src = fh.read()
         # SecretRule("id", ... / CheckFinding("id", ...
         ids |= set(re.findall(r'(?:SecretRule|CheckFinding)\(\s*\n?\s*"([a-z0-9-]+)"', src))
         ids |= set(re.findall(r'"([a-z0-9-]+)", "', src))
