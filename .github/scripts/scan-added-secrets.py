@@ -34,6 +34,64 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
         "openai-project-key",
         re.compile(rb"sk-(?:proj|svcacct)-[A-Za-z0-9_-]{32,}"),
     ),
+    (
+        # Direct Anthropic fallback provider (ANTHROPIC_API_KEY, sent as the
+        # x-api-key header in app/llm/client.py). Format mirrors the project's
+        # own audit scanner, app/scan/secrets.py.
+        "anthropic-api-key",
+        re.compile(rb"sk-ant-api03-[A-Za-z0-9_-]{20,}"),
+    ),
+    (
+        # Primary LLM provider (AITUNNEL_API_KEY). The repo does not pin the
+        # key format anywhere, so this matches AITunnel's documented public
+        # "sk-aitunnel-" prefix; the prefix is specific enough to avoid false
+        # positives on ordinary code.
+        "aitunnel-api-key",
+        re.compile(rb"sk-aitunnel-[A-Za-z0-9_-]{20,}"),
+    ),
+    (
+        # Telegram bot token (TELEGRAM_BOT_TOKEN): "<8-10 digits>:<35 chars>".
+        # Boundaries keep it off ordinary "number:string" code: the leading
+        # look-behind rejects a longer digit run and the trailing look-ahead
+        # pins the secret half to exactly 35 characters. Mirrors the length
+        # bounds used in app/scan/secrets.py.
+        "telegram-bot-token",
+        re.compile(
+            rb"(?<![0-9A-Za-z_-])[0-9]{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])"
+        ),
+    ),
+    (
+        # Connection string carrying an EMBEDDED password
+        # (postgres://user:password@host, e.g. a Supabase pooler URL). Requires
+        # a non-empty "user:password@" userinfo, so a passwordless URL
+        # (postgres://user@host) or the bare DATABASE_URL variable name is not
+        # flagged -- only a real leaked password is.
+        "postgres-url-password",
+        re.compile(rb"postgres(?:ql)?://[^:/?#@\s]+:[^@/?#\s]+@"),
+    ),
+)
+
+
+# Files that BY DESIGN carry secret-format samples: the scanner itself (every
+# pattern above literally spells out a secret prefix) and its test suite (a
+# positive fixture per pattern). Scanning them flags the scanner against its own
+# definitions on every change that touches them, so they are excluded here --
+# the self-exclusion that secret scanners (gitleaks, detect-secrets) carry for
+# their own rule/fixture files. Kept next to PATTERNS so a pattern author sees
+# the allowlist in the same place they add a signature.
+#
+# Excluded WHOLE, not line-filtered: the entire purpose of these two files is to
+# enumerate secret formats, so there is no "real code" in them worth scanning
+# for the same signatures. Detection is still tested --
+# tests/test_scan_added_secrets.py exercises PATTERNS directly in-process (it
+# imports this module and calls pattern.search on synthetic blobs), NOT by
+# asking this script to git-diff-scan a file, so the exclusion does not weaken
+# the tests.
+EXCLUDED_PATHS: frozenset[str] = frozenset(
+    {
+        ".github/scripts/scan-added-secrets.py",
+        "tests/test_scan_added_secrets.py",
+    }
 )
 
 
@@ -116,7 +174,11 @@ def main() -> int:
     parser.add_argument("head")
     arguments = parser.parse_args()
 
-    files = changed_files(arguments.base, arguments.head)
+    files = [
+        path
+        for path in changed_files(arguments.base, arguments.head)
+        if path not in EXCLUDED_PATHS
+    ]
     findings: set[tuple[str, str]] = set()
 
     for path in files:
