@@ -4,10 +4,11 @@ Description=Send ShipIt operator alert for failed unit %i
 [Service]
 Type=oneshot
 User=shipit-ops
-WorkingDirectory=/opt/shipit
+WorkingDirectory=/srv/shipit/current
 EnvironmentFile=/opt/shipit/.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/opt/shipit/.venv/bin/python -m app.alerts "Drydock: systemd unit %i failed on the production VPS"
+ExecStartPre=/usr/bin/test -x /srv/shipit/current/.venv/bin/python
+ExecStart=/srv/shipit/current/.venv/bin/python -m app.alerts "Drydock: systemd unit %i failed on the production VPS"
 TimeoutStartSec=30
 NoNewPrivileges=true
 PrivateTmp=true
