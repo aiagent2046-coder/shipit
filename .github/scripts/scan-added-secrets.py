@@ -72,6 +72,29 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
 )
 
 
+# Files that BY DESIGN carry secret-format samples: the scanner itself (every
+# pattern above literally spells out a secret prefix) and its test suite (a
+# positive fixture per pattern). Scanning them flags the scanner against its own
+# definitions on every change that touches them, so they are excluded here --
+# the self-exclusion that secret scanners (gitleaks, detect-secrets) carry for
+# their own rule/fixture files. Kept next to PATTERNS so a pattern author sees
+# the allowlist in the same place they add a signature.
+#
+# Excluded WHOLE, not line-filtered: the entire purpose of these two files is to
+# enumerate secret formats, so there is no "real code" in them worth scanning
+# for the same signatures. Detection is still tested --
+# tests/test_scan_added_secrets.py exercises PATTERNS directly in-process (it
+# imports this module and calls pattern.search on synthetic blobs), NOT by
+# asking this script to git-diff-scan a file, so the exclusion does not weaken
+# the tests.
+EXCLUDED_PATHS: frozenset[str] = frozenset(
+    {
+        ".github/scripts/scan-added-secrets.py",
+        "tests/test_scan_added_secrets.py",
+    }
+)
+
+
 def run_git(arguments: Sequence[str]) -> bytes:
     completed = subprocess.run(
         ["git", *arguments],
@@ -151,7 +174,11 @@ def main() -> int:
     parser.add_argument("head")
     arguments = parser.parse_args()
 
-    files = changed_files(arguments.base, arguments.head)
+    files = [
+        path
+        for path in changed_files(arguments.base, arguments.head)
+        if path not in EXCLUDED_PATHS
+    ]
     findings: set[tuple[str, str]] = set()
 
     for path in files:
