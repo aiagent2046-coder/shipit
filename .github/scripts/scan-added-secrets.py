@@ -34,6 +34,41 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
         "openai-project-key",
         re.compile(rb"sk-(?:proj|svcacct)-[A-Za-z0-9_-]{32,}"),
     ),
+    (
+        # Direct Anthropic fallback provider (ANTHROPIC_API_KEY, sent as the
+        # x-api-key header in app/llm/client.py). Format mirrors the project's
+        # own audit scanner, app/scan/secrets.py.
+        "anthropic-api-key",
+        re.compile(rb"sk-ant-api03-[A-Za-z0-9_-]{20,}"),
+    ),
+    (
+        # Primary LLM provider (AITUNNEL_API_KEY). The repo does not pin the
+        # key format anywhere, so this matches AITunnel's documented public
+        # "sk-aitunnel-" prefix; the prefix is specific enough to avoid false
+        # positives on ordinary code.
+        "aitunnel-api-key",
+        re.compile(rb"sk-aitunnel-[A-Za-z0-9_-]{20,}"),
+    ),
+    (
+        # Telegram bot token (TELEGRAM_BOT_TOKEN): "<8-10 digits>:<35 chars>".
+        # Boundaries keep it off ordinary "number:string" code: the leading
+        # look-behind rejects a longer digit run and the trailing look-ahead
+        # pins the secret half to exactly 35 characters. Mirrors the length
+        # bounds used in app/scan/secrets.py.
+        "telegram-bot-token",
+        re.compile(
+            rb"(?<![0-9A-Za-z_-])[0-9]{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])"
+        ),
+    ),
+    (
+        # Connection string carrying an EMBEDDED password
+        # (postgres://user:password@host, e.g. a Supabase pooler URL). Requires
+        # a non-empty "user:password@" userinfo, so a passwordless URL
+        # (postgres://user@host) or the bare DATABASE_URL variable name is not
+        # flagged -- only a real leaked password is.
+        "postgres-url-password",
+        re.compile(rb"postgres(?:ql)?://[^:/?#@\s]+:[^@/?#\s]+@"),
+    ),
 )
 
 
