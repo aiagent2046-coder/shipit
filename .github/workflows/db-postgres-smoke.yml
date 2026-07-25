@@ -20,6 +20,7 @@ on:
       - "migrations/**"
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
+      - "tests/test_audit_jobs_repo.py"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
       - ".github/workflows/db-postgres-smoke.yml"
@@ -28,6 +29,7 @@ on:
       - "migrations/**"
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
+      - "tests/test_audit_jobs_repo.py"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
       - ".github/workflows/db-postgres-smoke.yml"
@@ -79,3 +81,10 @@ jobs:
 
       - name: "Real-Postgres repository write-path smoke"
         run: pytest -q tests/test_db_postgres_smoke.py
+
+      # The audit queue's claim/lease semantics (FOR UPDATE SKIP LOCKED, the
+      # partial idempotency index, the lease gate on every post-claim write) are
+      # pure Postgres behaviour, so they are only ever exercised here -- the
+      # default suite skips this file with DATABASE_URL unset.
+      - name: "Real-Postgres audit queue claim/lease tests"
+        run: pytest -q tests/test_audit_jobs_repo.py
