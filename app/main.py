@@ -40,6 +40,7 @@ from app.accounts import (
 from app.billing import paypal, telegram_stars, usdt_trc20
 from app.db import (
     AccountRepository,
+    AuditJobRepository,
     AuditRepository,
     FixOutcomeRepository,
     FixpackJobRepository,
@@ -242,6 +243,7 @@ def get_preview_reconciler():
 
 
 _audit_repo = AuditRepository()
+_audit_job_repo = AuditJobRepository()
 _fixpack_repo = FixpackJobRepository()
 _fix_outcome_repo = FixOutcomeRepository()
 _account_repo = AccountRepository()
@@ -287,6 +289,15 @@ def get_audit_repo() -> AuditRepository:
     (returns None from create/get) when DATABASE_URL isn't set — see
     app/db.py."""
     return _audit_repo
+
+
+def get_audit_job_repo() -> AuditJobRepository:
+    """Same as get_audit_repo, for the durable audit queue (migration 0022).
+
+    Registered here so the queue has one canonical, test-overridable instance
+    from the moment the schema lands. Nothing depends on it yet -- the endpoints
+    that will (enqueue + poll) arrive in PR2."""
+    return _audit_job_repo
 
 
 def get_fixpack_repo() -> FixpackJobRepository:

@@ -244,6 +244,14 @@ def _row_to_monitoring_run(row: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
+def _row_to_audit_job(row: dict[str, Any]) -> dict[str, Any]:
+    d = dict(row)
+    d["id"] = str(d["id"])
+    d["account_id"] = str(d["account_id"]) if d.get("account_id") else None
+    d["audit_id"] = str(d["audit_id"]) if d.get("audit_id") else None
+    return d
+
+
 def _expires_at_to_timestamptz(expires_at: Any) -> datetime.datetime | None:
     """Telegram's successful_payment.subscription_expiration_date is Unix time
     (an int, seconds since the epoch), but subscriptions.expires_at is
@@ -1886,3 +1894,426 @@ class MonitoringRunRepository:
             )
             failed = len(await failed_cur.fetchall())
         return {"requeued": requeued, "failed": failed}
+
+
+# Every audit_jobs column except access_token, which is the row's ownership
+# secret: it is minted by the column default, handed back exactly once from
+# enqueue()'s RETURNING, and thereafter only ever matched in SQL by
+# get_authorized() -- never re-selected into a payload. Named once because the
+# list is long enough that repeating it per statement invites drift.
+_AUDIT_JOB_COLUMNS = """
+    id, state, source_kind, source_ref, content_hash, engine_version, stack,
+    account_id, quota_key, idempotency_key, claimed_by, claimed_at,
+    lease_expires_at, attempts, max_attempts, available_at, audit_id,
+    error_code, error_message, created_at, updated_at, completed_at
+"""
+
+
+class AuditJobRepository:
+    """The durable audit queue (migration 0022) -- Stage 2's answer to an audit
+    that today runs inline in the API process and leaves no row behind if the
+    process restarts mid-scan.
+
+    Third instance of the lease model already in production here
+    (FixpackJobRepository.claim_one_paid, MonitoringRunRepository.
+    claim_one_pending), with two deliberate additions those two do not have:
+
+      - a RENEWABLE lease (lease_expires_at + renew_lease) instead of a flat
+        `started_at < now() - max_age`, because an audit's honest runtime varies
+        by an order of magnitude with repo size and provider retries; and
+      - every post-claim transition gated on `claimed_by`, so a worker whose
+        lease was already reaped cannot overwrite the row a second worker now
+        legitimately holds. Each such method returns a bool saying whether it
+        still owned the row -- False means "you lost the lease, write nothing".
+
+    Same not-configured contract as every other repository: when DATABASE_URL
+    isn't set each method returns None / False / a zero result rather than
+    failing, so a DB-less deployment degrades instead of breaking.
+
+    Nothing calls this class yet -- the API and the execution path are unchanged
+    in this PR. The worker that drives it arrives in PR2.
+    """
+
+    async def enqueue(
+        self, *, source_kind: str, source_ref: str | None,
+        content_hash: str, engine_version: str, stack: str | None,
+        account_id: str | None, quota_key: str | None,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        """Insert one claimable job, or return the live job that already covers
+        this submission.
+
+        Inserted directly as 'queued' (not 'created'): payload staging, the step
+        'created' exists to protect, lands in PR2.
+
+        The ON CONFLICT arbiter names audit_jobs_idempotency_live_idx by
+        repeating its predicate, so a duplicate submission collides only with a
+        job that is still live -- once the earlier job is terminal the same key
+        inserts a fresh row. DO UPDATE rather than DO NOTHING because only DO
+        UPDATE returns the conflicting row; the assignment is a deliberate no-op
+        (updated_at to its own value) so re-submitting does not disturb the
+        existing job's timestamps. DO NOTHING + a follow-up SELECT would be two
+        statements and could observe the row after another transaction moved it
+        on.
+
+        `inserted` distinguishes the two outcomes for the caller (a fresh job
+        vs. joining one in flight) via the xmax idiom: on a plain INSERT the new
+        tuple has no updating transaction, so xmax is 0.
+
+        Returns None when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        parsed_account_id = uuid.UUID(account_id) if account_id else None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                f"""
+                insert into audit_jobs
+                    (state, source_kind, source_ref, content_hash,
+                     engine_version, stack, account_id, quota_key,
+                     idempotency_key)
+                values ('queued', %s, %s, %s, %s, %s, %s, %s, %s)
+                on conflict (idempotency_key)
+                    where state in ('created', 'queued', 'claimed', 'running')
+                do update set updated_at = audit_jobs.updated_at
+                returning access_token, (xmax = 0) as inserted,
+                          {_AUDIT_JOB_COLUMNS}
+                """,
+                (
+                    source_kind, source_ref, content_hash, engine_version,
+                    stack, parsed_account_id, quota_key, idempotency_key,
+                ),
+            )
+            row = await cur.fetchone()
+        return _row_to_audit_job(row) if row else None
+
+    async def claim_one(
+        self, *, worker_id: str, lease_seconds: int
+    ) -> dict[str, Any] | None:
+        """Atomically lease the oldest claimable job to `worker_id`, or None
+        when there is nothing to claim (or DATABASE_URL isn't set).
+
+        Same concurrency guard as claim_one_paid / claim_one_pending: the inner
+        SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1 row-locks exactly one
+        candidate and skips any a concurrent worker already locked, and the
+        surrounding single-row UPDATE flips it 'queued' -> 'running' in the same
+        statement -- so two workers can never both claim one job, which is what
+        stops one upload from being scanned (and paid for) twice.
+
+        `available_at <= now()` is the backoff gate: a job a transient failure
+        pushed into the future is skipped until its retry is due.
+
+        Goes straight to 'running' rather than writing 'claimed' first: a
+        separate round-trip buys nothing here, and 'claimed' belongs to PR2's
+        staged-payload flow. attempts is incremented here, so the attempt is
+        counted even if the worker dies before reporting anything -- which is
+        precisely what bounds crash-requeues."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                f"""
+                update audit_jobs
+                   set state = 'running',
+                       claimed_by = %s,
+                       claimed_at = now(),
+                       lease_expires_at = now() + make_interval(secs => %s),
+                       attempts = attempts + 1,
+                       updated_at = now()
+                 where id = (
+                     select id from audit_jobs
+                      where state = 'queued'
+                        and available_at <= now()
+                      order by created_at asc
+                      for update skip locked
+                      limit 1
+                 )
+                returning {_AUDIT_JOB_COLUMNS}
+                """,
+                (worker_id, lease_seconds),
+            )
+            row = await cur.fetchone()
+        return _row_to_audit_job(row) if row else None
+
+    async def renew_lease(
+        self, *, job_id: str, worker_id: str, lease_seconds: int
+    ) -> bool:
+        """Push this worker's lease out by another `lease_seconds`. Called on a
+        heartbeat while a long audit runs.
+
+        True means the worker still holds the lease. False means it does not --
+        the reaper already requeued or dead-lettered the row, or another worker
+        holds it now -- and the caller MUST abort and write nothing, because any
+        result it produces belongs to an attempt the queue has already written
+        off. Also False when DATABASE_URL isn't set or the id is malformed."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        try:
+            parsed_id = uuid.UUID(job_id)
+        except ValueError:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update audit_jobs
+                   set lease_expires_at = now() + make_interval(secs => %s),
+                       updated_at = now()
+                 where id = %s and claimed_by = %s and state = 'running'
+                returning id
+                """,
+                (lease_seconds, parsed_id, worker_id),
+            )
+            row = await cur.fetchone()
+        return row is not None
+
+    async def finalize_succeeded(
+        self, *, job_id: str, worker_id: str, audit_id: str
+    ) -> bool:
+        """Terminal success: record which audits row this job produced.
+
+        Same lease gate and same False contract as renew_lease -- a worker that
+        lost its lease must not be able to mark the job done, or a job the
+        reaper already handed to someone else would end up with two results and
+        one of them silently orphaned."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        try:
+            parsed_id = uuid.UUID(job_id)
+            parsed_audit_id = uuid.UUID(audit_id)
+        except ValueError:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update audit_jobs
+                   set state = 'succeeded',
+                       audit_id = %s,
+                       completed_at = now(),
+                       updated_at = now()
+                 where id = %s and claimed_by = %s and state = 'running'
+                returning id
+                """,
+                (parsed_audit_id, parsed_id, worker_id),
+            )
+            row = await cur.fetchone()
+        return row is not None
+
+    async def finalize_failed(
+        self, *, job_id: str, worker_id: str, error_code: str,
+        error_message: str, permanent: bool, backoff_seconds: int = 30,
+    ) -> bool:
+        """Terminal failure, or a bounded retry -- one statement, because the
+        branch depends on `attempts`, which only the row knows.
+
+        `permanent=True` (a corrupt archive, an unsupported stack, a poison-pill
+        crash) goes straight to 'dead_letter': re-running it would fail the same
+        way and burn another worker. `permanent=False` (provider 5xx, rate
+        limit, upstream fetch failure) goes back to 'queued' with exponential
+        backoff while attempts remain, and to 'dead_letter' once they don't.
+
+        attempts is NOT touched here -- claim_one already counted this attempt.
+
+        A requeue clears the lease so the row is claimable again; a dead_letter
+        keeps claimed_by/claimed_at as the forensic record of which worker last
+        held it, and stamps completed_at. Same lease gate and False contract as
+        finalize_succeeded.
+
+        error_code/error_message are written in both branches, so on a requeued
+        row they mean "why the PREVIOUS attempt failed", not "this job failed" --
+        read them together with `state`, never alone.
+
+        Named parameters, unlike the rest of this module: the branch condition
+        appears in five assignments and repeating it positionally would make the
+        argument order the only thing keeping them in agreement."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        try:
+            parsed_id = uuid.UUID(job_id)
+        except ValueError:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update audit_jobs
+                   set state = case when %(terminal)s or attempts >= max_attempts
+                                    then 'dead_letter' else 'queued' end,
+                       error_code = %(error_code)s,
+                       error_message = %(error_message)s,
+                       claimed_by = case when %(terminal)s or attempts >= max_attempts
+                                         then claimed_by else null end,
+                       claimed_at = case when %(terminal)s or attempts >= max_attempts
+                                         then claimed_at else null end,
+                       lease_expires_at = null,
+                       available_at = case
+                           when %(terminal)s or attempts >= max_attempts
+                           then available_at
+                           else now() + make_interval(
+                               secs => %(backoff_seconds)s::double precision
+                                       * power(2, attempts))
+                       end,
+                       completed_at = case
+                           when %(terminal)s or attempts >= max_attempts
+                           then now() else null end,
+                       updated_at = now()
+                 where id = %(job_id)s
+                   and claimed_by = %(worker_id)s
+                   and state = 'running'
+                returning id
+                """,
+                {
+                    "terminal": permanent,
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "backoff_seconds": backoff_seconds,
+                    "job_id": parsed_id,
+                    "worker_id": worker_id,
+                },
+            )
+            row = await cur.fetchone()
+        return row is not None
+
+    async def reap_expired(self, *, error_message: str) -> dict[str, int]:
+        """Recover jobs whose worker died holding the lease: an expired
+        lease_expires_at means nobody is renewing it, so nobody is working it.
+        Run at the start of each worker pass, before claiming.
+
+        Two outcomes, bounded by attempts (incremented at each claim), exactly
+        as in FixpackJobRepository.reap_stale_running:
+
+          - attempts < max_attempts -> back to 'queued', lease cleared and
+            available_at reset to now() so the next pass retries it immediately.
+            No error_code is written: a requeued job is not in a failed state,
+            and a stale code would misreport the next attempt.
+          - attempts >= max_attempts -> 'dead_letter' with error_code
+            'lease_expired', so a job that kills its worker every time stops
+            re-queuing forever and stays visible for a human.
+
+        This is the required counterpart to the lease: without it a crashed
+        worker's job is the zombie-forever state the durable design exists to
+        avoid, and it is also what makes a SIGKILLed worker safe -- the job is
+        never lost, only delayed by at most the lease TTL.
+
+        Returns {'requeued': n, 'dead_lettered': m}; zeros when DATABASE_URL
+        isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return {"requeued": 0, "dead_lettered": 0}
+        async with pool.connection() as conn:
+            requeued_cur = await conn.execute(
+                """
+                update audit_jobs
+                   set state = 'queued',
+                       claimed_by = null,
+                       claimed_at = null,
+                       lease_expires_at = null,
+                       available_at = now(),
+                       updated_at = now()
+                 where state in ('claimed', 'running')
+                   and lease_expires_at < now()
+                   and attempts < max_attempts
+                returning id
+                """,
+            )
+            requeued = len(await requeued_cur.fetchall())
+            dead_cur = await conn.execute(
+                """
+                update audit_jobs
+                   set state = 'dead_letter',
+                       error_code = 'lease_expired',
+                       error_message = %s,
+                       completed_at = now(),
+                       updated_at = now()
+                 where state in ('claimed', 'running')
+                   and lease_expires_at < now()
+                   and attempts >= max_attempts
+                returning id
+                """,
+                (error_message,),
+            )
+            dead_lettered = len(await dead_cur.fetchall())
+        return {"requeued": requeued, "dead_lettered": dead_lettered}
+
+    async def get_authorized(
+        self, *, job_id: str, access_token: str | None
+    ) -> dict[str, Any] | None:
+        """Ownership-checked fetch for the future public poll endpoint: return
+        the job only if `access_token` matches the row's per-row token. A
+        missing/wrong token, an unknown id, a malformed id and an unconfigured
+        DB all return None, so the endpoint can answer 404 uniformly and never
+        confirm a job id's existence to a caller who doesn't hold its token.
+        The token is matched in SQL and is not among the selected columns, so it
+        never rides back out in a response body.
+
+        Same contract and same shape as AuditRepository.get_authorized
+        (migration 0010's pattern)."""
+        if not access_token:
+            return None
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(job_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                f"""
+                select {_AUDIT_JOB_COLUMNS}
+                  from audit_jobs
+                 where id = %s and access_token = %s
+                """,
+                (parsed_id, access_token),
+            )
+            row = await cur.fetchone()
+        return _row_to_audit_job(row) if row else None
+
+    async def backlog_stats(self) -> dict[str, Any] | None:
+        """Health signal for the audit worker: how many jobs sit in each state,
+        plus the age in seconds of the oldest still-queued job.
+
+        The age is the honest "is the worker draining the queue" signal -- if it
+        grows past the lease TTL, no worker is claiming. `states` only contains
+        states that currently have rows, so a caller reading a specific one
+        should use .get(name, 0).
+
+        Returns None when DATABASE_URL isn't set, so a health endpoint can
+        report db:false rather than guessing. Consumed by /readyz and the ops
+        endpoint in PR3; nothing calls it yet."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select state, count(*) as jobs,
+                       extract(epoch from (now() - min(created_at)))
+                           as oldest_seconds
+                  from audit_jobs
+                 group by state
+                """,
+            )
+            rows = await cur.fetchall()
+        states = {row["state"]: int(row["jobs"]) for row in rows}
+        oldest_queued = next(
+            (row["oldest_seconds"] for row in rows if row["state"] == "queued"),
+            None,
+        )
+        return {
+            "states": states,
+            "queued": states.get("queued", 0),
+            "oldest_queued_seconds": (
+                float(oldest_queued) if oldest_queued is not None else None
+            ),
+        }
