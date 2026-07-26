@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -160,3 +161,41 @@ def cleanup_staged_archive(path: str) -> None:
         resolved.unlink(missing_ok=True)
     except OSError:
         logger.warning("could not remove staged archive %s", path, exc_info=True)
+
+
+def sweep_stale_archives(*, max_age_seconds: float) -> int:
+    """Delete staged archives older than `max_age_seconds` and return the count.
+
+    The backstop for every path that ends a job without the worker being in a
+    position to clean up after it: a lease-expiry dead-letter, a reaped
+    'created' row, an API process that died between staging and mark_queued.
+    Each of those leaves a file whose job no longer exists as far as any worker
+    is concerned, and MAX_SPOOL_BYTES means leaked files eventually start
+    rejecting new uploads.
+
+    Age, rather than a join against audit_jobs, because age is the one signal
+    that covers the row-is-gone case too. The bound has to exceed the longest a
+    legitimately queued job can wait (lease TTL times its attempt budget, plus
+    any backlog), which is why the default caller passes a full day rather than
+    something tuned tight. Never raises."""
+    removed = 0
+    try:
+        entries = list(SPOOL_DIR.glob("*.zip"))
+    except OSError:
+        return 0
+    cutoff = time.time() - max_age_seconds
+    for entry in entries:
+        try:
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            entry.unlink()
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError:
+            logger.warning("could not sweep staged archive %s", entry,
+                           exc_info=True)
+    if removed:
+        logger.info("swept %s staged archive(s) older than %ss",
+                    removed, max_age_seconds)
+    return removed

@@ -176,6 +176,125 @@ async def test_enqueue_after_terminal_state_creates_a_new_job(real_db):
     assert second["state"] == "queued"
 
 
+# --- the 'created' hop: staging an uploaded archive ------------------------
+#
+# A zip job is inserted as 'created', its bytes are written to the spool, and
+# only then is it flipped to 'queued'. These cover the three ways that ends.
+
+async def test_enqueue_honours_a_caller_supplied_job_id(real_db):
+    """The spool filename IS the job id, so the API has to know the id before
+    it can stage the archive -- which is before the row may become claimable."""
+    repo = AuditJobRepository()
+    chosen = str(uuid.uuid4())
+
+    job = await repo.enqueue(**_enqueue_kwargs(job_id=chosen))
+
+    assert job["id"] == chosen
+    # And the default still applies when no id is offered.
+    other = await repo.enqueue(**_enqueue_kwargs())
+    uuid.UUID(other["id"])
+    assert other["id"] != chosen
+
+
+async def test_a_created_job_is_not_claimable(real_db):
+    """The whole point of the intermediate state: an API crash between the
+    insert and the write must not leave a claimable job whose payload does not
+    exist."""
+    repo = AuditJobRepository()
+    await repo.enqueue(**_enqueue_kwargs(source_kind="zip", source_ref=None,
+                                         initial_state="created"))
+
+    assert await repo.claim_one(worker_id="w1", lease_seconds=300) is None
+
+
+async def test_mark_queued_makes_it_claimable_and_records_the_payload(real_db):
+    repo = AuditJobRepository()
+    job = await repo.enqueue(**_enqueue_kwargs(source_kind="zip",
+                                               source_ref=None,
+                                               initial_state="created"))
+    path = f"/srv/shipit/spool/{job['id']}.zip"
+
+    assert await repo.mark_queued(job_id=job["id"], source_ref=path) is True
+
+    claimed = await repo.claim_one(worker_id="w1", lease_seconds=300)
+    assert claimed["id"] == job["id"]
+    assert claimed["source_ref"] == path
+
+
+async def test_mark_queued_fires_only_once_and_only_from_created(real_db):
+    """Gated on 'created' so a late call can never drag a job that has already
+    been claimed or finished back into the queue."""
+    repo = AuditJobRepository()
+    job = await repo.enqueue(**_enqueue_kwargs(source_kind="zip",
+                                               source_ref=None,
+                                               initial_state="created"))
+    assert await repo.mark_queued(job_id=job["id"], source_ref="/p.zip") is True
+
+    assert await repo.mark_queued(job_id=job["id"], source_ref="/other.zip") is False
+    assert (await _read_row(job["id"]))["source_ref"] == "/p.zip"
+    assert await repo.mark_queued(job_id=str(uuid.uuid4())) is False
+    assert await repo.mark_queued(job_id="not-a-uuid") is False
+
+
+async def test_abandon_created_releases_the_idempotency_key(real_db):
+    """Staging failed, so the caller gets a 503 -- and their retry has to be
+    able to queue a fresh job rather than colliding with the abandoned one."""
+    repo = AuditJobRepository()
+    kwargs = _enqueue_kwargs(source_kind="zip", source_ref=None,
+                             initial_state="created",
+                             idempotency_key="idem-staging-failed")
+    job = await repo.enqueue(**kwargs)
+
+    assert await repo.abandon_created(
+        job_id=job["id"], error_code="staging_failed",
+        error_message="OSError: No space left on device") is True
+
+    row = await _read_row(job["id"])
+    assert row["state"] == "dead_letter"
+    assert row["error_code"] == "staging_failed"
+    assert row["completed_at"] is not None
+    # The key is free again because the live-state index no longer covers it.
+    retry = await repo.enqueue(**kwargs)
+    assert retry["inserted"] is True and retry["id"] != job["id"]
+
+
+async def test_abandon_created_will_not_touch_a_queued_job(real_db):
+    repo = AuditJobRepository()
+    job = await repo.enqueue(**_enqueue_kwargs())  # inserted straight to queued
+
+    assert await repo.abandon_created(
+        job_id=job["id"], error_code="staging_failed", error_message="x") is False
+    assert (await _read_row(job["id"]))["state"] == "queued"
+
+
+async def test_reap_stuck_created_sweeps_only_the_old_ones(real_db):
+    """The case abandon_created cannot cover: the API process died between the
+    insert and either follow-up. reap_expired is no help -- a 'created' row was
+    never claimed, so it has no lease to expire."""
+    repo = AuditJobRepository()
+    fresh = await repo.enqueue(**_enqueue_kwargs(source_kind="zip",
+                                                 source_ref=None,
+                                                 initial_state="created"))
+    stale = await repo.enqueue(**_enqueue_kwargs(source_kind="zip",
+                                                 source_ref=None,
+                                                 initial_state="created"))
+    pool = await db_mod.get_pool()
+    async with pool.connection() as conn:
+        await conn.execute(
+            "update audit_jobs set created_at = now() - interval '2 hours' "
+            "where id = %s", (uuid.UUID(stale["id"]),))
+
+    swept = await repo.reap_stuck_created(
+        older_than_seconds=600, error_message="staging never completed")
+
+    assert swept == 1
+    # A large upload mid-fsync is a legitimately live 'created' row.
+    assert (await _read_row(fresh["id"]))["state"] == "created"
+    reaped = await _read_row(stale["id"])
+    assert reaped["state"] == "dead_letter"
+    assert reaped["error_code"] == "staging_incomplete"
+
+
 # --- claim ---------------------------------------------------------------
 
 async def test_claim_one_returns_none_when_queue_is_empty(real_db):
@@ -612,6 +731,48 @@ async def test_get_authorized_requires_the_right_token(real_db):
     assert await repo.get_authorized(
         job_id="not-a-uuid", access_token=job["access_token"]
     ) is None
+
+
+async def test_get_authorized_hands_over_the_audits_own_token(real_db):
+    """Since the cutover this join is the submitter's only route to their
+    result: the audits row has its own access_token, a different secret from
+    the job's, and GET /v1/audits/{id} is gated by that one. Without it a
+    caller would hold an audit_id they cannot read.
+
+    Not a widening -- the old synchronous response handed this same submitter
+    the same token in the POST body."""
+    repo = AuditJobRepository()
+    audit = await AuditRepository().create(
+        stack="fastapi", file_count=3, score_total=8.5,
+        score_json={"total": 8.5}, findings_json=[],
+        content_hash=f"c-{uuid.uuid4().hex[:8]}", engine_version="test-engine-1",
+    )
+    job = await repo.enqueue(**_enqueue_kwargs())
+    claimed = await repo.claim_one(worker_id="w1", lease_seconds=300)
+    await repo.finalize_succeeded(
+        job_id=claimed["id"], worker_id="w1", audit_id=audit["id"])
+
+    found = await repo.get_authorized(
+        job_id=job["id"], access_token=job["access_token"])
+
+    assert found["state"] == "succeeded"
+    assert found["audit_id"] == audit["id"]
+    assert found["audit_access_token"] == audit["access_token"]
+    assert found["audit_access_token"]  # not a null column read as a pass
+
+
+async def test_get_authorized_has_no_audit_token_before_success(real_db):
+    """The LEFT JOIN's other side: a job still in flight has no audits row, and
+    must report that as null rather than failing to return at all."""
+    repo = AuditJobRepository()
+    job = await repo.enqueue(**_enqueue_kwargs())
+
+    found = await repo.get_authorized(
+        job_id=job["id"], access_token=job["access_token"])
+
+    assert found["state"] == "queued"
+    assert found["audit_id"] is None
+    assert found["audit_access_token"] is None
 
 
 async def test_backlog_stats_counts_by_state(real_db):

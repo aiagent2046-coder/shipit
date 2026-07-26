@@ -48,6 +48,8 @@ def _row(**overrides):
         "error_code": None,
         "error_message": None,
         "audit_id": None,
+        # Joined in from the audits row; null until the job succeeds.
+        "audit_access_token": None,
         "attempts": 0,
         "max_attempts": 3,
         "claimed_by": None,
@@ -84,6 +86,7 @@ def test_the_right_token_returns_the_job():
         "state": "queued",
         "error_code": None,
         "audit_id": None,
+        "audit_access_token": None,
         "created_at": row["created_at"],
         "completed_at": None,
     }
@@ -106,6 +109,23 @@ def test_a_succeeded_job_points_at_its_audit():
     assert body["state"] == "succeeded"
     assert body["audit_id"] == audit_id
     assert body["completed_at"] == "2026-07-01T10:04:00+00:00"
+
+
+def test_a_succeeded_job_hands_over_the_audits_own_token():
+    # audit_id alone is useless: GET /v1/audits/{id} is gated by the AUDIT's
+    # access_token, a different secret from the job's. Since the queue cutover
+    # this join is the only way the submitter can read its own result.
+    row = _row(state="succeeded", audit_id=str(uuid.uuid4()),
+               audit_access_token="fake-audit-token-not-a-real-secret",
+               completed_at="2026-07-01T10:04:00+00:00")
+    _with_repo(FakeAuditJobRepo(row))
+    try:
+        body = client.get(f"/v1/audit-jobs/{row['id']}",
+                          params={"token": row["access_token"]}).json()
+    finally:
+        _clear()
+
+    assert body["audit_access_token"] == "fake-audit-token-not-a-real-secret"
 
 
 def test_a_dead_lettered_job_reports_its_error_code():
@@ -138,7 +158,8 @@ def test_the_response_carries_no_internals_and_no_token():
         _clear()
 
     assert set(body) == {
-        "id", "state", "error_code", "audit_id", "created_at", "completed_at"}
+        "id", "state", "error_code", "audit_id", "audit_access_token",
+        "created_at", "completed_at"}
 
 
 def test_a_wrong_token_is_a_flat_404():

@@ -1,6 +1,7 @@
 """Stage 4 step 1: LLM cost accounting is observability only.
 
-Covers the write path end to end through /v1/audits with fake repos, plus the
+Covers the write path end to end with fake repos -- through the worker, which
+is where the scan (and so the spend) happens since the queue cutover -- plus the
 two invariants the accounting must never violate:
   * a real LLM run records exactly ONE row with the summed tokens and the cost
     computed from app/llm/pricing.py;
@@ -19,12 +20,8 @@ from fastapi.testclient import TestClient
 
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.llm import pricing
-from app.main import (
-    app,
-    get_audit_repo,
-    get_llm_client,
-    get_llm_usage_repo,
-)
+from app.main import app, get_audit_repo
+from tests.conftest import drain_audit_queue, run_audit_job
 
 client = TestClient(app)
 
@@ -105,17 +102,6 @@ def _auth_zip() -> io.BytesIO:
     })
 
 
-def _override(audit_repo, usage_repo, llm):
-    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
-    app.dependency_overrides[get_llm_usage_repo] = lambda: usage_repo
-    app.dependency_overrides[get_llm_client] = lambda: llm
-
-
-def _clear_overrides():
-    for dep in (get_audit_repo, get_llm_usage_repo, get_llm_client):
-        app.dependency_overrides.pop(dep, None)
-
-
 def test_pricing_cost_matches_published_sonnet_rates():
     # Both provider spellings price identically: 1M in @ $3 + 1M out @ $15 = $18.
     for model in ("claude-sonnet-4.6", "claude-sonnet-4-6"):
@@ -167,19 +153,14 @@ def test_pricing_negative_tokens_clamped_to_zero():
     assert pricing.cost_usd("claude-sonnet-4.6", -5, -5) == Decimal("0")
 
 
-def test_audit_records_one_usage_row_with_cost():
+async def test_audit_records_one_usage_row_with_cost():
     audit_repo = FakeAuditRepo()
     usage_repo = FakeUsageRepo()
-    _override(audit_repo, usage_repo, FakeLLM("[]"))
-    try:
-        resp = client.post(
-            "/v1/audits",
-            files={"archive": ("app.zip", _auth_zip(), "application/zip")},
-        )
-    finally:
-        _clear_overrides()
+    await run_audit_job(
+        _auth_zip().getvalue(), llm_client=FakeLLM("[]"),
+        audit_repo=audit_repo, llm_usage_repo=usage_repo,
+    )
 
-    assert resp.status_code == 202
     assert len(usage_repo.rows) == 1
     row = usage_repo.rows[0]
     assert row["job_type"] == "audit"
@@ -195,17 +176,22 @@ def test_audit_records_one_usage_row_with_cost():
     assert row["job_id"] == audit_repo.rows[0]["id"]
 
 
-def test_cache_hit_records_no_usage_row():
+async def test_cache_hit_records_no_usage_row(audit_queue):
+    # Driven through the endpoint, because the cache hit IS an endpoint
+    # behaviour: it answers inline, queues no job, and so reaches no scan.
     audit_repo = FakeAuditRepo()
     usage_repo = FakeUsageRepo()
-    _override(audit_repo, usage_repo, FakeLLM("[]"))
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     try:
-        # First audit: real run -> one row.
         r1 = client.post(
             "/v1/audits",
             files={"archive": ("app.zip", _auth_zip(), "application/zip")},
         )
         assert r1.status_code == 202
+        await drain_audit_queue(
+            audit_queue, audit_repo=audit_repo, llm_client=FakeLLM("[]"),
+            llm_usage_repo=usage_repo,
+        )
         assert len(usage_repo.rows) == 1
 
         # Second audit of byte-identical content: cache hit, no LLM call.
@@ -216,28 +202,20 @@ def test_cache_hit_records_no_usage_row():
         assert r2.status_code == 202
         assert r2.json()["llm"] == {"reused_from_prior_audit": True}
     finally:
-        _clear_overrides()
+        app.dependency_overrides.pop(get_audit_repo, None)
 
     # Still exactly one row: the reused audit recorded nothing.
     assert len(usage_repo.rows) == 1
 
 
-def test_no_usage_row_when_llm_stage_skipped():
+async def test_no_usage_row_when_llm_stage_skipped():
     # No providers configured -> the stage never runs (calls=0) -> no row,
     # even though the audit itself succeeds.
-    audit_repo = FakeAuditRepo()
     usage_repo = FakeUsageRepo()
-    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
-    app.dependency_overrides[get_llm_usage_repo] = lambda: usage_repo
-    app.dependency_overrides[get_llm_client] = lambda: LLMClient(providers=[])
-    try:
-        resp = client.post(
-            "/v1/audits",
-            files={"archive": ("app.zip", _auth_zip(), "application/zip")},
-        )
-    finally:
-        _clear_overrides()
+    row = await run_audit_job(
+        _auth_zip().getvalue(), llm_client=LLMClient(providers=[]),
+        audit_repo=FakeAuditRepo(), llm_usage_repo=usage_repo,
+    )
 
-    assert resp.status_code == 202
-    assert resp.json()["llm"]["skipped_reason"] == "no_providers_configured"
+    assert row["score_json"]["basis"] == "static_only"
     assert usage_repo.rows == []

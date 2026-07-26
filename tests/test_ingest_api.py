@@ -66,18 +66,28 @@ def test_healthz():
     assert client.get("/healthz").json() == {"status": "ok"}
 
 
-def test_audit_intake_accepts_nextjs_zip():
+def test_audit_intake_accepts_nextjs_zip(audit_queue, audit_spool_dir):
     buf = make_zip({"package.json": NEXT_PKG})
     resp = client.post(
         "/v1/audits", files={"archive": ("app.zip", buf, "application/zip")}
     )
     assert resp.status_code == 202
     body = resp.json()
-    assert body["stack"] == "nextjs"
-    assert body["file_count"] == 1
-    # static scan is wired in: clean-ish project still gets presence findings
-    assert "score" in body and 0 <= body["score"]["total"] <= 10
-    assert any(f["rule_id"] == "no-tests" for f in body["findings"])
+    # The whole 202 contract: a job to poll, and the token that opens it.
+    assert set(body) == {"job_id", "access_token", "state"}
+    assert body["state"] == "queued"
+    assert body["access_token"]
+
+    # The stack was detected at intake -- an unauditable submission is rejected
+    # here rather than queued -- and recorded on the job.
+    job = audit_queue.only
+    assert job["stack"] == "nextjs"
+    assert job["source_kind"] == "zip"
+    # And the upload outlived the request: the worker is another process, so
+    # bytes that only existed in this request's memory would be unreachable.
+    staged = audit_spool_dir / f"{body['job_id']}.zip"
+    assert staged.read_bytes() == buf.getvalue()
+    assert job["source_ref"] == str(staged)
 
 
 def test_audit_intake_rejects_traversal_zip_with_reason():
@@ -128,7 +138,8 @@ def _clear_fetcher():
     app.dependency_overrides.pop(get_repo_fetcher, None)
 
 
-def test_repo_url_intake_fetches_validates_and_scans():
+def test_repo_url_intake_fetches_validates_and_queues(audit_queue,
+                                                      audit_spool_dir):
     captured = {}
 
     def fake_fetch(owner, repo, **kwargs):
@@ -144,14 +155,20 @@ def test_repo_url_intake_fetches_validates_and_scans():
         _clear_fetcher()
 
     assert resp.status_code == 202
-    body = resp.json()
-    # Same success response shape as the file-upload path.
-    assert body["stack"] == "nextjs"
-    assert body["file_count"] == 1
-    assert "score" in body and 0 <= body["score"]["total"] <= 10
-    assert any(f["rule_id"] == "no-tests" for f in body["findings"])
-    # Only the validated owner/repo reached the fetcher.
+    # Same 202 shape as the file-upload path.
+    assert set(resp.json()) == {"job_id", "access_token", "state"}
+    # Only the validated owner/repo reached the fetcher. Intake still fetches
+    # even though the worker re-fetches: it is how the archive is validated and
+    # the stack detected before anything is queued.
     assert (captured["owner"], captured["repo"]) == ("acme", "app")
+
+    # A repo_url job carries its whole payload in the row, so it is queued
+    # directly and nothing is written to the spool.
+    job = audit_queue.only
+    assert job["stack"] == "nextjs"
+    assert job["source_kind"] == "repo_url"
+    assert job["source_ref"] == "https://github.com/acme/app"
+    assert list(audit_spool_dir.glob("*.zip")) == []
 
 
 def test_repo_url_accepts_dot_git_suffix():
