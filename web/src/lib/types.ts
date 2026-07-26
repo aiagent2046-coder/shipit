@@ -173,6 +173,11 @@ export interface FixpackStatus {
   audit_id: string;
   status: FixpackJobStatus | null;
   pr_url: string | null;
+  // On "failed" only: "infrastructure" when the job never ran (sandbox-runner
+  // outage or a crashed worker), so the text can avoid implying the client's
+  // repo was at fault. null for a genuine generation failure, and for every
+  // other status.
+  failure_kind?: "infrastructure" | null;
 }
 
 // POST /v1/paypal/orders — a one-time PayPal order (Pro or Fix Pack). The

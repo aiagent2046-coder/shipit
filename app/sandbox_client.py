@@ -28,9 +28,11 @@ Degradation contract when the runner is unreachable:
     ``SandboxRunnerUnavailable`` — the caller decides (verify → "could not
     verify"; preview → 503).
   * fixpack ``run_suite`` / ``minimal_check`` return a ``RunResult`` with
-    ``error`` set instead of raising, so ``is_regression`` treats a runner
-    outage as "could not verify", never a false regression — identical to the
-    existing "docker CLI not available" behaviour.
+    ``error`` and ``unavailable=True`` set instead of raising. ``unavailable``
+    is what makes "the runner never answered" distinguishable from an error the
+    runner *reported* about the client's repo, so ``is_regression`` can return
+    "could not verify" and the processor can defer the job — never a false
+    regression, and never a silently unverified delivery.
 
 Before any of that degradation kicks in, a *connect-level* failure is retried
 (see ``SANDBOX_RUNNER_RETRY_DELAYS_S``): the runner is a systemd unit with
@@ -256,8 +258,9 @@ def reconcile_previews(run=None, now: float | None = None) -> dict:
 
 def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
     """Install (net on, via proxy) + test (net off) one version, in the runner.
-    Returns a RunResult with `error` set on a runner outage (symmetric across
-    original/patched → treated as 'could not verify', never a regression)."""
+    Returns a RunResult with `error` AND `unavailable` set on a runner outage, so
+    is_regression can tell "nothing ran" apart from a result the runner reported
+    and defer the job instead of guessing a verdict."""
     manifest = {
         "runner": {
             "ecosystem": runner.ecosystem,
@@ -269,7 +272,8 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
     try:
         data = _post("/fixpack/run-suite", content=zip_bytes, manifest=manifest)
     except SandboxRunnerUnavailable as exc:
-        return RunResult(0, 0, False, f"sandbox runner unavailable: {exc}")
+        return RunResult(0, 0, False, f"sandbox runner unavailable: {exc}",
+                         unavailable=True)
     return RunResult(
         passed=data["passed"], failed=data["failed"],
         timed_out=data["timed_out"], error=data["error"],
@@ -278,12 +282,13 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
 
 def minimal_check(plan) -> RunResult:
     """Dependency-free `node --check` over changed JS files, in the runner.
-    Same symmetric-error contract as run_suite on a runner outage."""
+    Same `unavailable` contract as run_suite on a runner outage."""
     body = {"files": dict(plan.files), "deletions": list(plan.deletions)}
     try:
         data = _post("/fixpack/minimal-check", json_body=body)
     except SandboxRunnerUnavailable as exc:
-        return RunResult(0, 0, False, f"sandbox runner unavailable: {exc}")
+        return RunResult(0, 0, False, f"sandbox runner unavailable: {exc}",
+                         unavailable=True)
     return RunResult(
         passed=data["passed"], failed=data["failed"],
         timed_out=data["timed_out"], error=data["error"],

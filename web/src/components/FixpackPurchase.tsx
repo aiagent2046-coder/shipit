@@ -357,12 +357,20 @@ function FixpackStatusArea({ auditId }: { auditId: string }) {
           </p>
         )}
 
-        {status.status === "failed" && (
-          <p className="rounded-md border border-critical/40 bg-critical/10 p-3 text-sm text-critical">
-            Fix Pack generation failed. Your payment was received but the fix PR
-            couldn&apos;t be opened — contact the operator to sort it out.
-          </p>
-        )}
+        {status.status === "failed" &&
+          (status.failure_kind === "infrastructure" ? (
+            <p className="rounded-md border border-critical/40 bg-critical/10 p-3 text-sm text-critical">
+              We couldn&apos;t run the fix on our side — our build environment
+              was unavailable, so nothing was checked against your repository.
+              This is on us, not your code. Your payment was received — contact
+              the operator and we&apos;ll re-run it.
+            </p>
+          ) : (
+            <p className="rounded-md border border-critical/40 bg-critical/10 p-3 text-sm text-critical">
+              Fix Pack generation failed. Your payment was received but the fix
+              PR couldn&apos;t be opened — contact the operator to sort it out.
+            </p>
+          ))}
       </div>
     </div>
   );

@@ -42,6 +42,7 @@ import subprocess
 import tempfile
 import zipfile
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from app.fixpack.generate import FixpackPlan, _repo_relative
 
@@ -136,6 +137,22 @@ class RunResult:
     failed: int
     timed_out: bool
     error: str | None       # infra/parse error, secret-free
+    # True only when the sandbox-runner itself could not be reached, so this
+    # suite never executed at all. Deliberately narrower than `error`: an error
+    # the runner *reports* (a failed dependency install, a missing docker CLI on
+    # its side) means the runner answered and the fact is about the client's
+    # repo, so it stays a plain `error` and keeps its existing meaning.
+    unavailable: bool = False
+
+
+class RegressionVerdict(NamedTuple):
+    """`is_regression`'s three-way outcome. The third state matters: "we could
+    not verify" is neither "clean" nor "the patch broke things", and collapsing
+    it into the bool is what let an unreachable runner deliver unverified PRs."""
+
+    regression: bool                # True => do NOT open a PR
+    detail: str
+    verification_unavailable: bool  # True => nothing ran; no verdict exists
 
 
 @dataclass(frozen=True)
@@ -149,6 +166,9 @@ class SemanticCheckResult:
     regression: bool                # True => do NOT open a PR
     detail: str                     # secret-free explanation for the job row
     pr_note: str | None             # optional line to append to the PR body
+    # The check could not be performed (sandbox-runner unreachable). Neither a
+    # pass nor a regression: the caller must defer the job, not deliver or block.
+    verification_unavailable: bool = False
 
 
 # --- Test-runner detection -------------------------------------------------
@@ -545,32 +565,57 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
 
 # --- Decision --------------------------------------------------------------
 
-def is_regression(original: RunResult, patched: RunResult) -> tuple[bool, str]:
-    """Did the patch make the suite worse? Returns (regression, detail).
+def is_regression(original: RunResult, patched: RunResult) -> RegressionVerdict:
+    """Did the patch make the suite worse? Returns a RegressionVerdict.
 
-    "Worse" means, in order:
+    Before comparing anything, either side being `unavailable` short-circuits to
+    "could not verify". That case is not a comparison at all — nothing ran:
+      * both unavailable → we have no baseline and no patched result. Reporting
+        "no regression" here would ship a PR whose only verification never
+        happened.
+      * only patched unavailable → the old code called this a regression and told
+        the customer their fix broke the tests. That is a false accusation about
+        a run that never started.
+      * only original unavailable → the patched run would be compared against
+        `original.failed == 0`, which means "no tests ran", not "tests passed",
+        making the verdict a coin flip.
+
+    Otherwise "worse" means, in order:
       1. patched errored where original ran clean (we broke the environment);
       2. patched timed out where original completed (we made it hang);
       3. patched has strictly more failures than original.
     A suite that was already red/timed-out/errored BEFORE our patch is the
     client's baseline, not our regression — we only ever compare against it.
+    An `error` the runner reported (e.g. "dependency install failed") is such a
+    baseline fact and keeps its existing meaning; only `unavailable` is special.
     """
+    if original.unavailable or patched.unavailable:
+        if original.unavailable and patched.unavailable:
+            which = "neither run"
+        else:
+            which = "the original run" if original.unavailable else "the patched run"
+        return RegressionVerdict(False, (
+            f"could not verify: the sandbox runner was unreachable, so {which} "
+            f"executed ({(patched if patched.unavailable else original).error})"
+        ), True)
     if patched.error and not original.error:
-        return True, f"patched run failed to execute: {patched.error}"
+        return RegressionVerdict(
+            True, f"patched run failed to execute: {patched.error}", False)
     if patched.timed_out and not original.timed_out:
-        return True, "patched tests timed out where the original completed"
+        return RegressionVerdict(
+            True, "patched tests timed out where the original completed", False)
     if patched.failed > original.failed:
         delta = patched.failed - original.failed
-        return True, (
+        return RegressionVerdict(True, (
             f"patch introduced {delta} new test failure(s) "
             f"(original: {original.failed} failed / {original.passed} passed, "
             f"patched: {patched.failed} failed / {patched.passed} passed)"
-        )
-    return False, (
+        ), False)
+    return RegressionVerdict(False, (
         f"no regression (original: {original.failed} failed / "
         f"{original.passed} passed, patched: {patched.failed} failed / "
         f"{patched.passed} passed)"
-    )
+    ), False)
 
 
 # --- Minimal check (no client test suite) ----------------------------------
@@ -667,6 +712,18 @@ def run_semantic_check(
 
     if runner is None:
         mc = minimal_checker(plan)
+        if mc.unavailable:
+            # Not "syntax-only verification passed": the syntax check never ran.
+            # Saying "no client test suite detected" here would report an
+            # infrastructure outage as a clean, if shallow, verification.
+            return SemanticCheckResult(
+                ran=False, ecosystem=None, original=None, patched=None,
+                regression=False,
+                detail=("could not verify: no client test suite detected, and "
+                        f"the sandbox runner was unreachable for the "
+                        f"syntax-only check ({mc.error})"),
+                pr_note=None, verification_unavailable=True,
+            )
         if mc.failed > 0:
             return SemanticCheckResult(
                 ran=False, ecosystem=None, original=None, patched=None,
@@ -684,11 +741,14 @@ def run_semantic_check(
     patched_zip = build_patched_zip(original_zip, plan)
     original = suite_runner(original_zip, runner)
     patched = suite_runner(patched_zip, runner)
-    regression, detail = is_regression(original, patched)
+    verdict = is_regression(original, patched)
     return SemanticCheckResult(
-        ran=True, ecosystem=runner.ecosystem,
+        # `ran` claims a real client suite executed, so an unreachable runner
+        # must not set it: detecting a runner is not running one.
+        ran=not verdict.verification_unavailable, ecosystem=runner.ecosystem,
         original=original, patched=patched,
-        regression=regression, detail=detail, pr_note=None,
+        regression=verdict.regression, detail=verdict.detail, pr_note=None,
+        verification_unavailable=verdict.verification_unavailable,
     )
 
 

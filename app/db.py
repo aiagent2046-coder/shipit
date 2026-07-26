@@ -193,6 +193,14 @@ def _row_to_audit(row: dict[str, Any]) -> dict[str, Any]:
     return d
 
 
+# Marks a fixpack_jobs.detail written by the stale-lease reaper rather than by the
+# delivery path. A job only lands there when it never completed -- a runner outage
+# or a crashed worker -- never because of anything in the client's code, so the
+# status endpoint uses this prefix to tell an infrastructure failure apart from a
+# generation failure.
+STALE_LEASE_DETAIL_PREFIX = "stale lease reaped:"
+
+
 def _row_to_fixpack_job(row: dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
     d["id"] = str(d["id"])
@@ -577,8 +585,11 @@ class FixpackJobRepository:
             so a poison-pill job that crashes the worker every time stops
             re-queuing forever and stays visible for a human.
 
-        Returns {'requeued': n, 'failed': m}. No-op ({'requeued': 0,
-        'failed': 0}) when DATABASE_URL isn't set, matching the other
+        Returns {'requeued': n, 'failed': m, 'failed_ids': [...]}. The ids are
+        returned because a lease reaped to 'failed' is a terminal failure the
+        processor must alert the operator about, and this row is written here
+        rather than on the delivery path. No-op (zeros, empty list) when
+        DATABASE_URL isn't set, matching the other
         not-configured contracts. This is the required counterpart to
         introducing the 'running' lease: without it, a crashed lease would
         be exactly the zombie-forever state the durable design set out to
@@ -586,7 +597,7 @@ class FixpackJobRepository:
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
-            return {"requeued": 0, "failed": 0}
+            return {"requeued": 0, "failed": 0, "failed_ids": []}
         async with pool.connection() as conn:
             requeued_cur = await conn.execute(
                 """
@@ -611,14 +622,16 @@ class FixpackJobRepository:
                 returning id
                 """,
                 (
-                    f"stale lease reaped: no completion after {max_attempts} "
+                    f"{STALE_LEASE_DETAIL_PREFIX} no completion after "
+                    f"{max_attempts} "
                     f"attempt(s), last lease older than {max_age_minutes}m",
                     max_age_minutes,
                     max_attempts,
                 ),
             )
-            failed = len(await failed_cur.fetchall())
-        return {"requeued": requeued, "failed": failed}
+            failed_ids = [str(row["id"]) for row in await failed_cur.fetchall()]
+        return {"requeued": requeued, "failed": len(failed_ids),
+                "failed_ids": failed_ids}
 
     async def backlog_stats(self) -> dict[str, Any] | None:
         """Health signal for the Fix Pack processor: how many jobs are still

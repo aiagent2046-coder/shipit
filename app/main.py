@@ -51,6 +51,7 @@ from app.db import (
     MonitoringRunRepository,
     PaymentRepository,
     ProcessorLockBusy,
+    STALE_LEASE_DETAIL_PREFIX,
     ServiceFlagsRepository,
     SubscriptionRepository,
     database_url_from_env,
@@ -1594,6 +1595,12 @@ async def get_fixpack_status(
     has been purchased yet (or persistence isn't configured), status is null
     so the frontend can poll a stable shape rather than treat "no job" as an
     error. 404 only when the audit itself doesn't exist.
+
+    On 'failed', failure_kind says whose fault it was: 'infrastructure' when the
+    job was reaped after never completing (a sandbox-runner outage or a crashed
+    worker — nothing to do with the client's code), else null for a genuine
+    generation failure. Derived from the detail the reaper writes, so it needs no
+    schema change; null for every non-failed status.
     """
     audit = await audit_repo.get(audit_id)
     if audit is None:
@@ -1605,11 +1612,18 @@ async def get_fixpack_status(
         )
     job = await fixpack_repo.get_by_audit(audit_id)
     if job is None:
-        return {"audit_id": audit_id, "status": None, "pr_url": None}
+        return {"audit_id": audit_id, "status": None, "pr_url": None,
+                "failure_kind": None}
+    status = job.get("status")
+    detail = job.get("detail") or ""
+    failure_kind = None
+    if status == "failed" and detail.startswith(STALE_LEASE_DETAIL_PREFIX):
+        failure_kind = "infrastructure"
     return {
         "audit_id": audit_id,
-        "status": job.get("status"),
+        "status": status,
         "pr_url": job.get("pr_url"),
+        "failure_kind": failure_kind,
     }
 
 
@@ -1809,13 +1823,19 @@ async def _process_one_paid_job(
     repo_fetcher, pr_opener,
 ) -> str:
     """Generate + deliver one paid Fix Pack job. Returns the outcome:
-    'delivered', 'no_fix_needed', 'blocked', or 'failed'. Advances the job's
-    status to match so a re-run of the processor doesn't pick it up again (a
-    'failed' or 'blocked' job stays visible for a human to retry/review
+    'delivered', 'no_fix_needed', 'blocked', 'deferred', or 'failed'. Advances
+    the job's status to match so a re-run of the processor doesn't pick it up
+    again (a 'failed' or 'blocked' job stays visible for a human to retry/review
     rather than silently stuck on 'paid'). 'blocked' means the generated
     fix passed syntax validation but the semantic check (running the
     client's own tests against the patched tree) found a regression, so the
     PR was withheld for manual review.
+
+    'deferred' is the one outcome that does NOT advance the status: the semantic
+    check could not run at all (sandbox runner unreachable), so there is no
+    verdict to act on and the job keeps its 'running' lease to be retried by the
+    existing stale-lease reaper. Delivering would ship an unverified PR; blocking
+    would blame the customer's fix for a test run that never happened.
 
     Every failure is made visible: the full traceback is logged and a short
     reason is written to the job's `detail` column. A job must never land on
@@ -1875,6 +1895,21 @@ async def _process_one_paid_job(
                 minimal_checker=sandbox_client.minimal_check,
             )
         )
+        if semantic.verification_unavailable:
+            # The sandbox runner was unreachable, so nothing was verified. We
+            # must neither deliver (an unverified PR to a paying customer) nor
+            # block (telling them their fix broke tests that never ran). Leave
+            # the 'running' lease alone and return: reap_stale_running puts the
+            # job back to 'paid' once the lease expires, bounded by
+            # MAX_JOB_ATTEMPTS, then fails it terminally. Deliberately no
+            # second attempts counter here — that mechanism already exists.
+            logger.warning(
+                "Fix Pack job %s deferred, verification unavailable: %s",
+                job_id, semantic.detail,
+            )
+            await fixpack_repo.mark_status(job_id, "running", detail=semantic.detail)
+            return "deferred"
+
         if semantic.regression:
             logger.warning(
                 "Fix Pack job %s blocked by semantic check: %s",
@@ -1951,8 +1986,11 @@ async def process_paid_fixpacks(
 
     Returns a summary the scheduler can log: how many jobs were processed,
     delivered (PR opened), skipped (nothing eligible to fix), blocked,
+    deferred (semantic check could not run — lease left for the reaper),
     failed, and requeued (stale leases put back for retry). If another run
-    already holds the lock, returns {"skipped_locked": true} instead.
+    already holds the lock, returns {"skipped_locked": true} instead; if the
+    sandbox runner is unhealthy, nothing is claimed and the summary carries
+    {"skipped_unhealthy_runner": true}.
     """
     token = _fixpack_process_token()
     if not token:
@@ -1964,7 +2002,7 @@ async def process_paid_fixpacks(
     _require_bearer_token(request, token)
 
     summary = {"processed": 0, "delivered": 0, "skipped": 0,
-               "blocked": 0, "failed": 0, "requeued": 0}
+               "blocked": 0, "failed": 0, "requeued": 0, "deferred": 0}
     try:
         # One processor run at a time (advisory lock), so two overlapping
         # timer firings can't both work the backlog. The per-job claim below
@@ -1980,6 +2018,32 @@ async def process_paid_fixpacks(
             )
             summary["requeued"] = reaped["requeued"]
             summary["failed"] += reaped["failed"]
+            # A lease reaped all the way to 'failed' is a paying customer whose
+            # PR will never open, which is exactly what the operator alert is
+            # for. The reaper writes the row itself, so without this the only
+            # terminal failure nobody hears about would be the reaped one.
+            for reaped_id in reaped.get("failed_ids", []):
+                await _alert_fixpack_failed(
+                    reaped_id,
+                    f"stale lease reaped after {MAX_JOB_ATTEMPTS} attempt(s) — "
+                    f"the job never completed (sandbox runner outage or a "
+                    f"crashed worker)",
+                )
+
+            # Don't claim anything while the sandbox runner is down: the
+            # semantic check would be unable to run, every claim would burn one
+            # of the job's MAX_JOB_ATTEMPTS, and a few minutes of runner
+            # downtime would fail the whole paid backlog. Skipping turns an
+            # outage into a pause — the next timer tick claims normally. Checked
+            # once per run, not per job: a mid-run outage is still handled, by
+            # the per-job 'deferred' path below.
+            if not await run_in_threadpool(sandbox_client.runner_healthy):
+                logger.warning(
+                    "Fix Pack processor: sandbox runner unhealthy, claiming "
+                    "nothing this pass (backlog is untouched, attempts unspent)"
+                )
+                summary["skipped_unhealthy_runner"] = True
+                return summary
 
             # Claim-process-claim until the backlog is drained. Each claim
             # atomically leases one 'paid' job into 'running' (see
@@ -2001,6 +2065,12 @@ async def process_paid_fixpacks(
                     summary["skipped"] += 1
                 elif outcome == "blocked":
                     summary["blocked"] += 1
+                elif outcome == "deferred":
+                    # Still 'running' on purpose; the reaper will re-queue it.
+                    # Stop draining: the runner just went down mid-run, so every
+                    # further claim would only spend another job's attempts.
+                    summary["deferred"] += 1
+                    break
                 else:
                     summary["failed"] += 1
     except ProcessorLockBusy:

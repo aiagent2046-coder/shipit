@@ -512,7 +512,7 @@ class TestFixpackLeaseNotConfigured:
         result = await FixpackJobRepository().reap_stale_running(
             max_age_minutes=15, max_attempts=3
         )
-        assert result == {"requeued": 0, "failed": 0}
+        assert result == {"requeued": 0, "failed": 0, "failed_ids": []}
 
     async def test_processor_lock_is_a_silent_noop(self):
         # No pool to lock against, so it just yields -- nothing to serialize.
@@ -555,7 +555,7 @@ class TestFixpackLeaseWithFakePool:
             max_age_minutes=15, max_attempts=3
         )
 
-        assert result == {"requeued": 0, "failed": 0}
+        assert result == {"requeued": 0, "failed": 0, "failed_ids": []}
         requeue_q, requeue_p = fake.calls[0]
         assert "set status = 'paid'" in requeue_q
         assert "make_interval(mins => %s)" in requeue_q
@@ -563,6 +563,23 @@ class TestFixpackLeaseWithFakePool:
         fail_q, fail_p = fake.calls[1]
         assert "set status = 'failed'" in fail_q
         assert fail_p[1:] == (15, 3)  # (detail, max_age_minutes, max_attempts)
+        # the detail carries the prefix the status endpoint reads to tell the
+        # customer this was our infrastructure, not their code
+        assert fail_p[0].startswith(db_mod.STALE_LEASE_DETAIL_PREFIX)
+
+    async def test_reap_returns_the_ids_it_failed(self, monkeypatch):
+        # The processor alerts an operator per reaped-to-failed id; without the
+        # ids a paying customer's dead job would be silent.
+        failed_id = uuid.uuid4()
+        fake = FakePool(fetchone_result=[{"id": failed_id}])
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        result = await FixpackJobRepository().reap_stale_running(
+            max_age_minutes=15, max_attempts=3
+        )
+
+        assert result["failed_ids"] == [str(failed_id)]
+        assert result["failed"] == 1
 
     async def test_processor_lock_acquires_and_releases(self, monkeypatch):
         fake = FakePool(fetchone_result={"locked": True})

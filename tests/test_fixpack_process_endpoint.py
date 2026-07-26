@@ -12,9 +12,11 @@ import io
 import zipfile
 from contextlib import asynccontextmanager
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.deploypack.github_app import GitHubAppError
 from app.main import (
@@ -26,6 +28,21 @@ from app.main import (
 )
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_runner_is_healthy(monkeypatch):
+    """The processor refuses to claim while the sandbox runner is unhealthy, and
+    in tests there is no runner at all. Default it to healthy so these tests keep
+    exercising the delivery path; the gate itself is covered by its own tests,
+    which override this."""
+    monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
+    # Same reason for the check itself: with no runner, sandbox_client would
+    # report "unavailable" and the processor would (correctly) defer every job.
+    # The local implementation needs no docker for the plans these tests use.
+    monkeypatch.setattr(main_mod.sandbox_client, "minimal_check",
+                        local_minimal_check)
+
 
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 
@@ -177,7 +194,7 @@ def test_semantic_regression_blocks_pr_and_marks_job(monkeypatch):
         clear_overrides()
 
     assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0,
-                           "blocked": 1, "failed": 0, "requeued": 0}
+                           "blocked": 1, "failed": 0, "requeued": 0, "deferred": 0}
     assert opened["n"] == 0                       # PR withheld
     assert fixpack_repo.statuses["j1"] == "blocked"
     assert "2 new test failure" in fixpack_repo.details["j1"]
@@ -266,7 +283,7 @@ def test_paid_job_opens_pr_and_marks_delivered(monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json() == {"processed": 1, "delivered": 1, "skipped": 0,
-                           "blocked": 0, "failed": 0, "requeued": 0}
+                           "blocked": 0, "failed": 0, "requeued": 0, "deferred": 0}
     assert fixpack_repo.delivered["j1"] == "https://github.com/acme/app/pull/5"
     assert fixpack_repo.claimed == ["j1"]  # leased 'paid' -> 'running' once
 
@@ -308,7 +325,7 @@ def test_zero_eligible_findings_does_not_open_pr(monkeypatch):
         clear_overrides()
 
     assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 1,
-                           "blocked": 0, "failed": 0, "requeued": 0}
+                           "blocked": 0, "failed": 0, "requeued": 0, "deferred": 0}
     assert called["n"] == 0  # never opened a PR
     assert fixpack_repo.statuses["j1"] == "no_fix_needed"
 
@@ -339,7 +356,7 @@ def test_delivery_error_marks_job_failed(monkeypatch):
         clear_overrides()
 
     assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0,
-                           "blocked": 0, "failed": 1, "requeued": 0}
+                           "blocked": 0, "failed": 1, "requeued": 0, "deferred": 0}
     assert fixpack_repo.statuses["j1"] == "failed"
 
 
@@ -357,7 +374,7 @@ def test_missing_audit_marks_job_failed(monkeypatch):
         clear_overrides()
 
     assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0,
-                           "blocked": 0, "failed": 1, "requeued": 0}
+                           "blocked": 0, "failed": 1, "requeued": 0, "deferred": 0}
     assert fixpack_repo.statuses["j1"] == "failed"
 
 
@@ -538,7 +555,7 @@ def test_no_paid_jobs_returns_zero_summary(monkeypatch):
         clear_overrides()
 
     assert resp.json() == {"processed": 0, "delivered": 0, "skipped": 0,
-                           "blocked": 0, "failed": 0, "requeued": 0}
+                           "blocked": 0, "failed": 0, "requeued": 0, "deferred": 0}
 
 
 # --- durable lease / restart recovery -------------------------------------
@@ -556,7 +573,7 @@ class LeaseFixpackRepo:
         self.claims = 0
 
     async def reap_stale_running(self, *, max_age_minutes, max_attempts):
-        requeued = failed = 0
+        requeued, failed = 0, []
         for j in self.jobs.values():
             if j["status"] == "running" and j.get("age_minutes", 0) >= max_age_minutes:
                 if j["attempts"] < max_attempts:
@@ -564,8 +581,9 @@ class LeaseFixpackRepo:
                     requeued += 1
                 else:
                     j["status"], j["detail"] = "failed", "stale lease reaped"
-                    failed += 1
-        return {"requeued": requeued, "failed": failed}
+                    failed.append(j["id"])
+        return {"requeued": requeued, "failed": len(failed),
+                "failed_ids": failed}
 
     async def claim_one_paid(self):
         for jid in self.order:
@@ -622,7 +640,7 @@ def test_happy_path_paid_running_delivered(monkeypatch):
         clear_overrides()
 
     assert resp.json() == {"processed": 1, "delivered": 1, "skipped": 0,
-                           "blocked": 0, "failed": 0, "requeued": 0}
+                           "blocked": 0, "failed": 0, "requeued": 0, "deferred": 0}
     assert opened["n"] == 1
     assert repo.jobs["j1"]["status"] == "delivered"
     assert repo.jobs["j1"]["attempts"] == 1
@@ -729,3 +747,197 @@ def test_lock_busy_returns_skipped_locked(monkeypatch):
 
     assert resp.json() == {"skipped_locked": True}
     assert repo.claimed == []           # nothing was claimed/processed
+
+
+# --- sandbox runner unavailable: defer, don't deliver and don't block -------
+
+def _unavailable_result():
+    from app.fixpack.semantic_check import RunResult
+    return RunResult(0, 0, False, "sandbox runner unavailable: refused",
+                     unavailable=True)
+
+
+def _runner_down(monkeypatch):
+    """Runner passes the pre-flight gate, then the check itself can't reach it —
+    the mid-run outage the per-job defer path exists for."""
+    monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
+    monkeypatch.setattr(main_mod.sandbox_client, "minimal_check",
+                        lambda plan: _unavailable_result())
+    monkeypatch.setattr(main_mod.sandbox_client, "run_suite",
+                        lambda z, r: _unavailable_result())
+
+
+def test_unverifiable_job_is_deferred_not_delivered(monkeypatch):
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    _runner_down(monkeypatch)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    repo = LeaseFixpackRepo(
+        [{"id": "j1", "audit_id": "a1", "status": "paid", "attempts": 0}]
+    )
+    opened = {"n": 0}
+
+    def fake_opener(*a, **k):
+        opened["n"] += 1
+        return PullRequestResult(html_url="x", branch="y")
+
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(zip_bytes), fake_opener)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    body = resp.json()
+    assert body["deferred"] == 1
+    assert body["delivered"] == 0
+    assert body["blocked"] == 0
+    assert body["failed"] == 0
+    # no unverified PR for a paying customer
+    assert opened["n"] == 0
+    # the lease is left alone so reap_stale_running re-queues it, bounded by
+    # MAX_JOB_ATTEMPTS -- no second retry counter of our own
+    assert repo.jobs["j1"]["status"] == "running"
+    assert repo.jobs["j1"]["attempts"] == 1
+    assert "could not verify" in repo.jobs["j1"]["detail"]
+
+
+def test_deferred_job_records_no_fix_outcome_row(monkeypatch):
+    # A deferred job is not terminal. Writing a row here is what poisoned the
+    # Phase-B analytics with is_regression=True for runs that never happened.
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    _runner_down(monkeypatch)
+
+    recorded = []
+
+    class RecordingOutcomeRepo:
+        async def create(self, **fields):
+            recorded.append(fields)
+            return None
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    repo = LeaseFixpackRepo(
+        [{"id": "j1", "audit_id": "a1", "status": "paid", "attempts": 0}]
+    )
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(zip_bytes), lambda *a, **k: None)
+    app.dependency_overrides[main_mod.get_fix_outcome_repo] = \
+        lambda: RecordingOutcomeRepo()
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+        app.dependency_overrides.pop(main_mod.get_fix_outcome_repo, None)
+
+    assert resp.json()["deferred"] == 1
+    assert recorded == []
+
+
+def test_deferred_job_eventually_fails_and_alerts_after_max_attempts(monkeypatch):
+    """Bounded by the EXISTING mechanism: a job deferred until its lease is
+    stale and its attempts are spent lands on 'failed', and the operator hears
+    about it (the reaper writes that row itself, so the processor must alert)."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    _runner_down(monkeypatch)
+
+    alerts = []
+
+    async def recorder(text, *, dedupe_key=None, **kwargs):
+        alerts.append(text)
+        return True
+
+    monkeypatch.setattr(main_mod, "notify_operator", recorder)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    repo = LeaseFixpackRepo([{
+        "id": "j1", "audit_id": "a1", "status": "paid", "attempts": 0,
+    }])
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(zip_bytes), lambda *a, **k: None)
+    try:
+        # Each pass: claim (attempts += 1) -> defer, leaving 'running'. Age the
+        # lease past the stale threshold so the next pass reaps it.
+        for _ in range(main_mod.MAX_JOB_ATTEMPTS + 1):
+            repo.jobs["j1"]["age_minutes"] = main_mod.STALE_LEASE_MINUTES + 1
+            client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert repo.jobs["j1"]["status"] == "failed"
+    assert repo.jobs["j1"]["attempts"] == main_mod.MAX_JOB_ATTEMPTS
+    assert len(alerts) == 1
+    assert "j1" in alerts[0]
+    assert "stale lease" in alerts[0]
+
+
+# --- health gate before claiming -------------------------------------------
+
+def test_unhealthy_runner_claims_nothing_and_spends_no_attempts(monkeypatch):
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: False)
+
+    repo = LeaseFixpackRepo(
+        [{"id": "j1", "audit_id": "a1", "status": "paid", "attempts": 0}]
+    )
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(b""), lambda *a, **k: None)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    body = resp.json()
+    assert body["skipped_unhealthy_runner"] is True
+    assert body["processed"] == 0
+    assert repo.claims == 0
+    # the whole point of the gate: an outage must not eat the paid backlog's
+    # attempt budget, it must pause it
+    assert repo.jobs["j1"]["status"] == "paid"
+    assert repo.jobs["j1"]["attempts"] == 0
+
+
+def test_unhealthy_runner_still_reaps_stale_leases(monkeypatch):
+    # Skipping the claim must not skip recovery: a crashed worker's lease still
+    # needs re-queueing, and that costs nothing while the runner is down.
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: False)
+
+    repo = LeaseFixpackRepo([{
+        "id": "j1", "audit_id": "a1", "status": "running",
+        "attempts": 1, "age_minutes": 30,
+    }])
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(b""), lambda *a, **k: None)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["requeued"] == 1
+    assert repo.jobs["j1"]["status"] == "paid"
+    assert repo.claims == 0
+
+
+def test_healthy_runner_claims_normally(monkeypatch):
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    repo = LeaseFixpackRepo(
+        [{"id": "j1", "audit_id": "a1", "status": "paid", "attempts": 0}]
+    )
+    override(FakeAuditRepo(_aws_audit()), repo,
+             fake_fetcher_returning(zip_bytes),
+             lambda *a, **k: PullRequestResult(html_url="u", branch="b"))
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    body = resp.json()
+    assert "skipped_unhealthy_runner" not in body
+    assert body["delivered"] == 1
