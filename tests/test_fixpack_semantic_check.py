@@ -185,44 +185,101 @@ def test_parse_node_counts_node_test_runner_failing():
 # --- is_regression decision ------------------------------------------------
 
 def test_regression_when_patched_has_more_failures():
-    reg, detail = is_regression(RunResult(5, 0, False, None),
-                                RunResult(3, 2, False, None))
+    reg, detail, unavailable = is_regression(RunResult(5, 0, False, None),
+                                             RunResult(3, 2, False, None))
     assert reg is True
     assert "2 new test failure" in detail
+    assert unavailable is False
 
 
 def test_no_regression_when_failures_equal_even_if_already_red():
     # Suite was already red before us; same count after => not our fault.
-    reg, detail = is_regression(RunResult(4, 3, False, None),
-                                RunResult(4, 3, False, None))
+    reg, detail, unavailable = is_regression(RunResult(4, 3, False, None),
+                                             RunResult(4, 3, False, None))
     assert reg is False
+    assert unavailable is False
 
 
 def test_no_regression_when_patched_fixed_some():
-    reg, _ = is_regression(RunResult(3, 2, False, None),
-                           RunResult(5, 0, False, None))
+    reg, _, unavailable = is_regression(RunResult(3, 2, False, None),
+                                        RunResult(5, 0, False, None))
     assert reg is False
+    assert unavailable is False
 
 
 def test_regression_when_patched_errors_but_original_clean():
-    reg, detail = is_regression(RunResult(5, 0, False, None),
-                                RunResult(0, 0, False, "install failed"))
+    reg, detail, unavailable = is_regression(
+        RunResult(5, 0, False, None),
+        RunResult(0, 0, False, "install failed"))
     assert reg is True
     assert "failed to execute" in detail
+    assert unavailable is False
 
 
 def test_symmetric_error_is_not_a_regression():
     # docker absent for BOTH runs => inconclusive, not "we broke it".
-    reg, _ = is_regression(RunResult(0, 0, False, "docker CLI not available"),
-                           RunResult(0, 0, False, "docker CLI not available"))
+    reg, _, unavailable = is_regression(
+        RunResult(0, 0, False, "docker CLI not available"),
+        RunResult(0, 0, False, "docker CLI not available"))
     assert reg is False
+    # An error the runner *reported* is not transport unavailability: this stays
+    # a plain non-regression, exactly as before.
+    assert unavailable is False
 
 
 def test_regression_when_patched_times_out_but_original_completed():
-    reg, detail = is_regression(RunResult(5, 0, False, None),
-                                RunResult(0, 0, True, None))
+    reg, detail, unavailable = is_regression(RunResult(5, 0, False, None),
+                                             RunResult(0, 0, True, None))
     assert reg is True
     assert "timed out" in detail
+    assert unavailable is False
+
+
+# --- is_regression: runner unavailable (nothing ran) -----------------------
+
+def _unavailable(msg="sandbox runner unavailable: refused"):
+    return RunResult(0, 0, False, msg, unavailable=True)
+
+
+def test_symmetric_unavailable_is_neither_clean_nor_regression():
+    reg, detail, unavailable = is_regression(_unavailable(), _unavailable())
+    assert unavailable is True
+    # crucially NOT a regression -> the caller must not block; and the caller
+    # must not read `regression is False` as "verified clean" either.
+    assert reg is False
+    assert "could not verify" in detail
+    assert "neither run" in detail
+
+
+def test_patched_unavailable_is_not_reported_as_a_regression():
+    # The pre-fix bug: patched.error set => "patched run failed to execute" =>
+    # blocked => the customer told their fix broke tests that never ran.
+    reg, detail, unavailable = is_regression(RunResult(5, 0, False, None),
+                                             _unavailable())
+    assert unavailable is True
+    assert reg is False
+    assert "could not verify" in detail
+    assert "the patched run" in detail
+    assert "failed to execute" not in detail
+
+
+def test_original_unavailable_is_not_a_silent_pass():
+    # Baseline never ran, so original.failed == 0 means "nothing ran", not
+    # "green" -- comparing against it would be a coin flip.
+    reg, detail, unavailable = is_regression(_unavailable(),
+                                             RunResult(0, 3, False, None))
+    assert unavailable is True
+    assert reg is False
+    assert "the original run" in detail
+
+
+def test_unavailable_wins_over_a_would_be_regression():
+    # patched has more failures AND is unavailable: unavailable is checked
+    # first, because a suite that never ran cannot have "more failures".
+    reg, _, unavailable = is_regression(RunResult(5, 0, False, None),
+                                        RunResult(0, 9, False, "x",
+                                                  unavailable=True))
+    assert (reg, unavailable) == (False, True)
 
 
 # --- run_suite (mocked docker) ---------------------------------------------
@@ -697,3 +754,75 @@ def test_run_semantic_check_no_runner_blocks_on_broken_js(monkeypatch):
     verdict = run_semantic_check(zip_bytes, plan)
     assert verdict.ran is False
     assert verdict.regression is True
+
+
+# --- run_semantic_check: sandbox runner unavailable -------------------------
+
+def test_run_semantic_check_defers_when_runner_unavailable(monkeypatch):
+    verdict = run_semantic_check(
+        _python_zip(), FixpackPlan(files={"a.py": "x=1\n"}),
+        suite_runner=lambda z, r: _unavailable(),
+    )
+    assert verdict.verification_unavailable is True
+    assert verdict.regression is False
+    # `ran` must not claim a suite executed just because one was detected.
+    assert verdict.ran is False
+    assert "could not verify" in verdict.detail
+
+
+def test_run_semantic_check_defers_when_only_patched_run_unavailable(monkeypatch):
+    results = iter([RunResult(5, 0, False, None), _unavailable()])
+    verdict = run_semantic_check(
+        _python_zip(), FixpackPlan(files={"a.py": "x=1\n"}),
+        suite_runner=lambda z, r: next(results),
+    )
+    assert verdict.verification_unavailable is True
+    assert verdict.regression is False
+
+
+def test_run_semantic_check_real_regression_is_untouched_by_the_new_flag():
+    results = iter([RunResult(5, 0, False, None), RunResult(3, 2, False, None)])
+    verdict = run_semantic_check(
+        _python_zip(), FixpackPlan(files={"a.py": "x=1\n"}),
+        suite_runner=lambda z, r: next(results),
+    )
+    assert (verdict.regression, verdict.verification_unavailable,
+            verdict.ran) == (True, False, True)
+
+
+def test_run_semantic_check_symmetric_install_failure_is_untouched():
+    # The runner answered; the client's repo genuinely can't install deps. An
+    # honest baseline fact, so: not a regression, and NOT "unavailable".
+    err = RunResult(0, 0, False, "dependency install failed (exit 1)")
+    verdict = run_semantic_check(
+        _python_zip(), FixpackPlan(files={"a.py": "x=1\n"}),
+        suite_runner=lambda z, r: err,
+    )
+    assert (verdict.regression, verdict.verification_unavailable,
+            verdict.ran) == (False, False, True)
+
+
+def test_run_semantic_check_minimal_check_unavailable_is_not_a_clean_pass():
+    zip_bytes = make_zip({"index.html": "<h1>hi</h1>\n"})  # no test runner
+    verdict = run_semantic_check(
+        zip_bytes, FixpackPlan(files={"app.js": "const x = 1;\n"}),
+        minimal_checker=lambda plan: _unavailable(),
+    )
+    assert verdict.verification_unavailable is True
+    assert verdict.regression is False
+    assert verdict.ran is False
+    assert "could not verify" in verdict.detail
+    # must not read as "there just weren't any tests, all good"
+    assert "syntax-only verification" not in verdict.detail
+    assert verdict.pr_note is None
+
+
+def test_run_semantic_check_minimal_check_clean_path_is_untouched():
+    zip_bytes = make_zip({"index.html": "<h1>hi</h1>\n"})
+    verdict = run_semantic_check(
+        zip_bytes, FixpackPlan(files={"app.js": "const x = 1;\n"}),
+        minimal_checker=lambda plan: RunResult(1, 0, False, None),
+    )
+    assert verdict.verification_unavailable is False
+    assert verdict.regression is False
+    assert "syntax-only verification" in verdict.detail

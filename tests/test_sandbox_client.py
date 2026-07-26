@@ -252,6 +252,9 @@ def test_run_suite_returns_error_result_on_outage(monkeypatch):
     # symmetric non-regression: error set, not an exception
     assert result.error and "sandbox runner unavailable" in result.error
     assert (result.passed, result.failed) == (0, 0)
+    # `unavailable` is what lets is_regression say "could not verify" instead of
+    # treating a symmetric outage as a clean run.
+    assert result.unavailable is True
 
 
 def test_minimal_check_returns_error_result_on_outage(monkeypatch):
@@ -259,6 +262,33 @@ def test_minimal_check_returns_error_result_on_outage(monkeypatch):
     plan = FixpackPlan(files={"a.js": "const x = 1;"}, deletions=[])
     result = sc.minimal_check(plan)
     assert result.error and "sandbox runner unavailable" in result.error
+    assert result.unavailable is True
+
+
+def test_successful_results_are_not_flagged_unavailable(monkeypatch):
+    _install(monkeypatch, lambda request: httpx.Response(200, json={
+        "passed": 2, "failed": 1, "timed_out": False,
+        "error": "dependency install failed (exit 1)",
+    }))
+    runner = TestRunner(ecosystem="node", image="node:20",
+                        install_script="npm ci", test_script="npm test")
+    # An error the runner *reported* is not unavailability: the runner answered,
+    # and the fact is about the client's repo.
+    assert sc.run_suite(b"z", runner).unavailable is False
+    assert sc.minimal_check(
+        FixpackPlan(files={"a.js": "1;"}, deletions=[])).unavailable is False
+
+
+def test_transport_error_after_retries_still_flags_unavailable(monkeypatch):
+    def handler(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    _install(monkeypatch, handler)
+    runner = TestRunner(ecosystem="node", image="node:20",
+                        install_script="npm ci", test_script="npm test")
+    # SandboxRunnerTransportError is a subclass, so the same handler must catch
+    # it and set the flag -- otherwise the retryable case would fail open.
+    assert sc.run_suite(b"z", runner).unavailable is True
 
 
 # --- connect-level retries -------------------------------------------------

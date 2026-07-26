@@ -158,7 +158,9 @@ async def test_all_repository_write_paths(real_db):
 
     # reap_stale_running: the make_interval(...) SQL executes and returns counts.
     reap = await fixpack_repo.reap_stale_running(max_age_minutes=15, max_attempts=3)
-    assert set(reap) == {"requeued", "failed"}
+    assert set(reap) == {"requeued", "failed", "failed_ids"}
+    # the RETURNING id the processor alerts an operator on, per reaped job
+    assert reap["failed_ids"] == []
 
     # fixpack_processor_lock: the advisory-lock SQL round-trips.
     async with db_mod.fixpack_processor_lock():

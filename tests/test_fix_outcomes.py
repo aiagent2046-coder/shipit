@@ -17,9 +17,11 @@ import io
 import json
 import zipfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import PullRequestResult
 from app.main import (
     app,
@@ -31,6 +33,21 @@ from app.main import (
 )
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_runner_is_healthy(monkeypatch):
+    """The processor refuses to claim while the sandbox runner is unhealthy, and
+    in tests there is no runner at all. Default it to healthy so these tests keep
+    exercising the delivery path; the gate itself is covered by its own tests,
+    which override this."""
+    monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
+    # Same reason for the check itself: with no runner, sandbox_client would
+    # report "unavailable" and the processor would (correctly) defer every job.
+    # The local implementation needs no docker for the plans these tests use.
+    monkeypatch.setattr(main_mod.sandbox_client, "minimal_check",
+                        local_minimal_check)
+
 
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 

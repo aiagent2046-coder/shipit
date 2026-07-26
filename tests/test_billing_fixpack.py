@@ -22,6 +22,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.billing import telegram_stars, usdt_trc20
+from app.db import STALE_LEASE_DETAIL_PREFIX
 from app.main import (
     app,
     get_audit_repo,
@@ -455,7 +456,8 @@ def test_fixpack_status_no_job_returns_null_status():
     try:
         r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
         assert r.status_code == 200
-        assert r.json() == {"audit_id": audit["id"], "status": None, "pr_url": None}
+        assert r.json() == {"audit_id": audit["id"], "status": None,
+                            "pr_url": None, "failure_kind": None}
     finally:
         _clear()
 
@@ -467,7 +469,8 @@ async def test_fixpack_status_reports_paid_then_delivered():
     _override_status(audits=audits, fixpacks=fixpacks)
     try:
         r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
-        assert r.json() == {"audit_id": audit["id"], "status": "paid", "pr_url": None}
+        assert r.json() == {"audit_id": audit["id"], "status": "paid",
+                            "pr_url": None, "failure_kind": None}
 
         job["status"] = "delivered"
         job["pr_url"] = "https://github.com/acme/widget/pull/7"
@@ -475,7 +478,39 @@ async def test_fixpack_status_reports_paid_then_delivered():
         assert r.json() == {
             "audit_id": audit["id"], "status": "delivered",
             "pr_url": "https://github.com/acme/widget/pull/7",
+            "failure_kind": None,
         }
+    finally:
+        _clear()
+
+
+async def test_fixpack_status_marks_a_reaped_failure_as_infrastructure():
+    # A 'failed' the reaper wrote means the job never ran, so the frontend must
+    # be able to say "on us", not "your fix couldn't be generated".
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    job = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    _override_status(audits=audits, fixpacks=fixpacks)
+    try:
+        job["status"] = "failed"
+        job["detail"] = (f"{STALE_LEASE_DETAIL_PREFIX} no completion after 3 "
+                         f"attempt(s), last lease older than 15m")
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        assert r.json()["failure_kind"] == "infrastructure"
+    finally:
+        _clear()
+
+
+async def test_fixpack_status_leaves_a_generation_failure_unlabelled():
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    job = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    _override_status(audits=audits, fixpacks=fixpacks)
+    try:
+        job["status"] = "failed"
+        job["detail"] = "could not open pull request: 403"
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        assert r.json()["failure_kind"] is None
     finally:
         _clear()
 
