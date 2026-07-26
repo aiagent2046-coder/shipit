@@ -1901,12 +1901,19 @@ class MonitoringRunRepository:
 # enqueue()'s RETURNING, and thereafter only ever matched in SQL by
 # get_authorized() -- never re-selected into a payload. Named once because the
 # list is long enough that repeating it per statement invites drift.
-_AUDIT_JOB_COLUMNS = """
-    id, state, source_kind, source_ref, content_hash, engine_version, stack,
-    account_id, quota_key, idempotency_key, claimed_by, claimed_at,
-    lease_expires_at, attempts, max_attempts, available_at, audit_id,
-    error_code, error_message, created_at, updated_at, completed_at
-"""
+_AUDIT_JOB_COLUMN_NAMES = (
+    "id", "state", "source_kind", "source_ref", "content_hash",
+    "engine_version", "stack", "account_id", "quota_key", "idempotency_key",
+    "claimed_by", "claimed_at", "lease_expires_at", "attempts", "max_attempts",
+    "available_at", "audit_id", "error_code", "error_message", "created_at",
+    "updated_at", "completed_at",
+)
+_AUDIT_JOB_COLUMNS = ", ".join(_AUDIT_JOB_COLUMN_NAMES)
+# The same list qualified for get_authorized's join against audits, where a
+# bare `id` would be ambiguous.
+_AUDIT_JOB_COLUMNS_QUALIFIED = ", ".join(
+    f"j.{name}" for name in _AUDIT_JOB_COLUMN_NAMES
+)
 
 
 class AuditJobRepository:
@@ -1929,22 +1936,28 @@ class AuditJobRepository:
     Same not-configured contract as every other repository: when DATABASE_URL
     isn't set each method returns None / False / a zero result rather than
     failing, so a DB-less deployment degrades instead of breaking.
-
-    Nothing calls this class yet -- the API and the execution path are unchanged
-    in this PR. The worker that drives it arrives in PR2.
     """
 
     async def enqueue(
         self, *, source_kind: str, source_ref: str | None,
         content_hash: str, engine_version: str, stack: str | None,
         account_id: str | None, quota_key: str | None,
-        idempotency_key: str,
+        idempotency_key: str, job_id: str | None = None,
+        initial_state: str = "queued",
     ) -> dict[str, Any] | None:
         """Insert one claimable job, or return the live job that already covers
         this submission.
 
-        Inserted directly as 'queued' (not 'created'): payload staging, the step
-        'created' exists to protect, lands in PR2.
+        `initial_state` defaults to 'queued' -- the right answer for a repo_url
+        job, whose whole payload is the URL already in the row. An uploaded
+        archive has to be written to the spool before any worker may claim the
+        job, so that caller passes 'created' and flips the row with
+        mark_queued() once the bytes are on disk; a crash in between leaves a
+        row no worker will ever claim rather than a claimable job pointing at a
+        payload that was never written. `job_id` exists for the same caller: the
+        spool filename is the job id, so the id has to be known before the
+        archive can be staged, which means before the INSERT. Left None, the
+        column default (gen_random_uuid()) still mints it.
 
         The ON CONFLICT arbiter names audit_jobs_idempotency_live_idx by
         repeating its predicate, so a duplicate submission collides only with a
@@ -1966,14 +1979,16 @@ class AuditJobRepository:
         except DatabaseNotConfigured:
             return None
         parsed_account_id = uuid.UUID(account_id) if account_id else None
+        parsed_job_id = uuid.UUID(job_id) if job_id else None
         async with pool.connection() as conn:
             cur = await conn.execute(
                 f"""
                 insert into audit_jobs
-                    (state, source_kind, source_ref, content_hash,
+                    (id, state, source_kind, source_ref, content_hash,
                      engine_version, stack, account_id, quota_key,
                      idempotency_key)
-                values ('queued', %s, %s, %s, %s, %s, %s, %s, %s)
+                values (coalesce(%s::uuid, gen_random_uuid()),
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 on conflict (idempotency_key)
                     where state in ('created', 'queued', 'claimed', 'running')
                 do update set updated_at = audit_jobs.updated_at
@@ -1981,12 +1996,130 @@ class AuditJobRepository:
                           {_AUDIT_JOB_COLUMNS}
                 """,
                 (
-                    source_kind, source_ref, content_hash, engine_version,
-                    stack, parsed_account_id, quota_key, idempotency_key,
+                    parsed_job_id, initial_state, source_kind, source_ref,
+                    content_hash, engine_version, stack, parsed_account_id,
+                    quota_key, idempotency_key,
                 ),
             )
             row = await cur.fetchone()
         return _row_to_audit_job(row) if row else None
+
+    async def mark_queued(
+        self, *, job_id: str, source_ref: str | None = None
+    ) -> bool:
+        """Promote a staged 'created' job to 'queued', making it claimable, and
+        record where its payload landed.
+
+        source_ref is written in the same statement rather than at insert time
+        because a spool path only becomes true once the bytes are there: a row
+        naming a file that does not exist yet is a row that lies for as long as
+        the write takes.
+
+        Gated on state = 'created' so it can only ever fire once and can never
+        drag a job that has already been claimed, finished or abandoned back
+        into the queue. False means the row was not in 'created' (or the id is
+        unknown / the DB unconfigured) -- the caller has just staged a payload
+        for a job that no longer wants it and should clean up."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        try:
+            parsed_id = uuid.UUID(job_id)
+        except ValueError:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update audit_jobs
+                   set state = 'queued', available_at = now(),
+                       source_ref = coalesce(%s, source_ref),
+                       updated_at = now()
+                 where id = %s and state = 'created'
+                returning id
+                """,
+                (source_ref, parsed_id),
+            )
+            row = await cur.fetchone()
+        return row is not None
+
+    async def abandon_created(
+        self, *, job_id: str, error_code: str, error_message: str
+    ) -> bool:
+        """Dead-letter a job whose payload staging failed, without it ever
+        having been claimable.
+
+        This is not just tidiness. audit_jobs_idempotency_live_idx covers
+        'created', so a row left there holds that submission's idempotency key
+        hostage: the caller retries, collides with a job no worker will ever
+        claim, and is told to poll a job that will never move. Marking it
+        terminal releases the key immediately, so the retry gets a fresh job.
+
+        Gated on 'created' for the same reason as mark_queued."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        try:
+            parsed_id = uuid.UUID(job_id)
+        except ValueError:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update audit_jobs
+                   set state = 'dead_letter', error_code = %s,
+                       error_message = %s, completed_at = now(),
+                       updated_at = now()
+                 where id = %s and state = 'created'
+                returning id
+                """,
+                (error_code, error_message, parsed_id),
+            )
+            row = await cur.fetchone()
+        return row is not None
+
+    async def reap_stuck_created(
+        self, *, older_than_seconds: int, error_message: str
+    ) -> int:
+        """Sweep 'created' rows whose staging never completed and never failed
+        cleanly -- i.e. the API process died between the INSERT and
+        mark_queued/abandon_created.
+
+        reap_expired cannot cover these: it looks for an expired
+        lease_expires_at, and a 'created' row has never been claimed, so it has
+        no lease. Without this sweep 'created' would be a state nothing can
+        leave, and its idempotency key would be held forever.
+
+        The age bound is what keeps this from racing a staging that is merely
+        slow: a large upload being fsynced is a live 'created' row, and only one
+        far older than any plausible write is abandoned. Straight to
+        'dead_letter', never 'queued' -- the payload was never written, so there
+        is nothing for a worker to run.
+
+        Returns the number of rows swept; 0 when DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return 0
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update audit_jobs
+                   set state = 'dead_letter',
+                       error_code = 'staging_incomplete',
+                       error_message = %s,
+                       completed_at = now(),
+                       updated_at = now()
+                 where state = 'created'
+                   and created_at < now() - make_interval(
+                       secs => %s::double precision)
+                returning id
+                """,
+                (error_message, older_than_seconds),
+            )
+            rows = await cur.fetchall()
+        return len(rows)
 
     async def claim_one(
         self, *, worker_id: str, lease_seconds: int
@@ -2303,7 +2436,15 @@ class AuditJobRepository:
         never rides back out in a response body.
 
         Same contract and same shape as AuditRepository.get_authorized
-        (migration 0010's pattern)."""
+        (migration 0010's pattern).
+
+        The join adds `audit_access_token`: the finished audit's own ownership
+        secret, which is a DIFFERENT token living on the audits row. Without it
+        a caller holding the job token could learn its audit_id and still not
+        read the audit. Handing it over is not a widening -- the job token is
+        minted for, and returned exactly once to, the same submitter that would
+        have been handed the audit token directly by the old synchronous
+        response. It is null until the job succeeds and links its audit."""
         if not access_token:
             return None
         try:
@@ -2317,9 +2458,11 @@ class AuditJobRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 f"""
-                select {_AUDIT_JOB_COLUMNS}
-                  from audit_jobs
-                 where id = %s and access_token = %s
+                select {_AUDIT_JOB_COLUMNS_QUALIFIED},
+                       a.access_token as audit_access_token
+                  from audit_jobs j
+                  left join audits a on a.id = j.audit_id
+                 where j.id = %s and j.access_token = %s
                 """,
                 (parsed_id, access_token),
             )
@@ -2336,8 +2479,8 @@ class AuditJobRepository:
         should use .get(name, 0).
 
         Returns None when DATABASE_URL isn't set, so a health endpoint can
-        report db:false rather than guessing. Consumed by /readyz and the ops
-        endpoint in PR3; nothing calls it yet."""
+        report db:false rather than guessing. Consumed by /readyz and by
+        GET /internal/audit-jobs/stats."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:

@@ -1,14 +1,10 @@
 """The audit worker: `python -m app.worker`.
 
-Stage 2, PR 2 of 3. This process drains the durable queue that migration 0022
-introduced -- claim a job, run exactly the scan `POST /v1/audits` runs today,
-persist the audits row, finalize the job -- so that an audit's execution stops
-being tied to the lifetime of an HTTP request and an API restart.
-
-Nothing enqueues yet. `POST /v1/audits` is deliberately unchanged in this PR
-and still scans inline, so on deploy this worker starts, finds an empty queue,
-and idles. That is the intended state: the worker ships, gets watched, and is
-already proven by the time PR3 flips the endpoint over to it.
+This process drains the durable queue that migration 0022 introduced -- claim a
+job, run the scan, persist the audits row, finalize the job -- so that an
+audit's execution is not tied to the lifetime of an HTTP request or an API
+restart. Since the Stage 2 cutover it is the ONLY thing that runs audit scans:
+`POST /v1/audits` validates and enqueues, and returns 202 without waiting.
 
 Shape of one slot's loop:
 
@@ -46,7 +42,12 @@ import sys
 import psycopg
 
 from app import db as db_mod
-from app.audit_spool import read_staged_archive
+from app.alerts import notify_operator
+from app.audit_spool import (
+    cleanup_staged_archive,
+    read_staged_archive,
+    sweep_stale_archives,
+)
 from app.db import (
     AuditJobRepository,
     AuditRepository,
@@ -70,14 +71,14 @@ from app.main import (  # noqa: E402  -- see comment above
     _emergency_stop_active,
     _parse_github_repo_url,
     _record_llm_usage,
-    _run_scan_guarded,
+    _run_scan_offthread,
 )
 
 logger = logging.getLogger("app.worker")
 
-# Independent asyncio slots. Defaults to the same 4 as AUDIT_CONCURRENCY, whose
-# semaphore (inside _run_scan_guarded) is the real ceiling on concurrent
-# provider calls -- this just decides how many jobs are in flight at once.
+# Independent asyncio slots. Since the API stopped scanning inline this is THE
+# ceiling on concurrent audits, and so on concurrent LLM provider calls: the
+# API-side AUDIT_CONCURRENCY semaphore it used to sit alongside is gone.
 AUDIT_WORKER_CONCURRENCY = int(os.environ.get("AUDIT_WORKER_CONCURRENCY", "4"))
 
 # Idle sleep between empty claims. Short, because it is the floor on how long a
@@ -109,6 +110,25 @@ _REAP_MESSAGE = (
     "lease expired with no heartbeat -- the worker holding this job died or "
     "was SIGKILLed"
 )
+
+_STUCK_CREATED_MESSAGE = (
+    "staging never completed -- the API process died between enqueue and "
+    "mark_queued, so this job's payload was never written"
+)
+
+# How long a 'created' row may legitimately sit mid-staging. Staging is one
+# fsync of at most MAX_ARCHIVE_BYTES on a local disk, so this is orders of
+# magnitude above the honest case and exists only so a pathologically slow
+# write is never mistaken for a dead API process.
+AUDIT_WORKER_CREATED_TTL_SECONDS = int(
+    os.environ.get("AUDIT_WORKER_CREATED_TTL_SECONDS", "600"))
+
+# Backstop for staged archives whose job ended somewhere the worker could not
+# clean up (lease-expiry dead-letter, reaped 'created', API crash). A full day
+# is far past the longest a legitimately queued job can wait -- lease TTL times
+# its attempt budget is well under an hour -- so nothing live is ever swept.
+AUDIT_SPOOL_MAX_AGE_SECONDS = float(
+    os.environ.get("AUDIT_SPOOL_MAX_AGE_SECONDS", str(24 * 3600)))
 
 
 class JobExecutionError(Exception):
@@ -261,7 +281,7 @@ async def _execute_job(
     ):
         llm_skip_reason = "daily_spend_cap"
 
-    scan = await _run_scan_guarded(
+    scan = await _run_scan_offthread(
         raw, llm_client, llm_skip_reason=llm_skip_reason)
 
     persisted = await audit_repo.create(
@@ -286,6 +306,30 @@ async def _execute_job(
         account_id=job.get("account_id"), llm_stats=scan["llm"],
     )
     return str(persisted["id"])
+
+
+def _discard_payload(job: dict) -> None:
+    """Drop a finished zip job's staged archive. No-op for repo_url jobs, whose
+    payload is a URL. Called only once the job is terminal -- a retryable
+    failure keeps its bytes, or the retry would have nothing to read."""
+    if job.get("source_kind") == "zip" and job.get("source_ref"):
+        cleanup_staged_archive(job["source_ref"])
+
+
+async def _alert_dead_letter(job_id: str, code: str, message: str) -> None:
+    """One best-effort operator alert per dead-lettered job.
+
+    Fired here rather than from a threshold check somewhere else because the
+    worker is the only thing that watches a job all the way to terminal, and a
+    dead_letter is by definition the end of the line: nothing will retry it, so
+    nobody learns about it unless someone is told. Per-job dedupe key, matching
+    _alert_fixpack_failed -- a crash-loop on one job stays one alert, but ten
+    distinct jobs dying is ten, which is the signal worth waking up for. Never
+    raises; notify_operator swallows its own errors."""
+    await notify_operator(
+        f"Drydock: audit job {job_id} dead-lettered — {code}: {message}"[:400],
+        dedupe_key=f"audit-dead-letter:{job_id}",
+    )
 
 
 async def _heartbeat(
@@ -376,6 +420,13 @@ async def _process_job(
         if not wrote:
             logger.warning(
                 "job %s failure not recorded -- lease was already gone", job_id)
+            return
+        # finalize_failed picks the branch from the row's own attempts, so the
+        # same condition is re-derived here to know whether the job is done.
+        exhausted = job.get("attempts", 0) >= job.get("max_attempts", 0)
+        if permanent or exhausted:
+            _discard_payload(job)
+            await _alert_dead_letter(job_id, code, message)
     else:
         if lease_lost.is_set():
             return
@@ -383,6 +434,7 @@ async def _process_job(
             job_id=job_id, worker_id=worker_id, audit_id=audit_id)
         if wrote:
             logger.info("job %s succeeded -> audit %s", job_id, audit_id)
+            _discard_payload(job)
         else:
             logger.warning(
                 "job %s produced audit %s but the lease was already gone -- "
@@ -450,7 +502,15 @@ async def _reaper(
 
     A background task rather than a step in each slot's loop: the slots are
     busy exactly when reaping matters most, and running it per-slot would mean
-    N identical scans per pass for one shared piece of work."""
+    N identical scans per pass for one shared piece of work.
+
+    Three sweeps, one clock. Expired leases are the crashed-worker case. Stuck
+    'created' rows are the crashed-API case: a job whose payload staging never
+    finished can never be claimed, and while it sits there it holds its
+    submission's idempotency key, so the caller's retry is turned away too. The
+    spool sweep is the disk-side backstop for both, since a row reaped by
+    either of the first two leaves bytes behind that no worker will ever read
+    and MAX_SPOOL_BYTES eventually starts rejecting new uploads."""
     while not shutting_down.is_set():
         try:
             result = await jobs.reap_expired(error_message=_REAP_MESSAGE)
@@ -459,6 +519,17 @@ async def _reaper(
                     "reaped expired leases: %s requeued, %s dead-lettered",
                     result["requeued"], result["dead_lettered"],
                 )
+            stuck = await jobs.reap_stuck_created(
+                older_than_seconds=AUDIT_WORKER_CREATED_TTL_SECONDS,
+                error_message=_STUCK_CREATED_MESSAGE,
+            )
+            if stuck:
+                logger.warning(
+                    "dead-lettered %s job(s) stuck in 'created' -- an API "
+                    "process died mid-staging", stuck)
+            await asyncio.to_thread(
+                sweep_stale_archives,
+                max_age_seconds=AUDIT_SPOOL_MAX_AGE_SECONDS)
         except Exception:  # noqa: BLE001 -- the reaper must outlive a blip
             logger.warning("reap pass failed", exc_info=True)
         try:

@@ -24,12 +24,15 @@ import uuid
 from contextlib import asynccontextmanager
 from decimal import Decimal
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.alerts import notify_operator
+from app.audit_spool import SpoolFull, cleanup_staged_archive, stage_archive
 from app.accounts import (
     TIER_FREE,
     entitlements_dict,
@@ -397,14 +400,7 @@ async def _record_llm_usage(
                        job_type, job_id, exc_info=True)
 
 
-# --- Stage 4 step 2: enforcement (concurrency, daily cap, emergency stop) ----
-
-# LLM calls are I/O-bound (network to the provider), not CPU-bound like the
-# Docker sandbox, so a handful in flight is fine; kept just above the sandbox
-# runner's semaphore=2. Guards run_scan everywhere it is called so a burst of
-# audits can't open unbounded concurrent provider connections on one VPS.
-AUDIT_CONCURRENCY = int(os.environ.get("AUDIT_CONCURRENCY", "4"))
-_audit_semaphore = asyncio.Semaphore(AUDIT_CONCURRENCY)
+# --- Stage 4 step 2: enforcement (daily cap, emergency stop) -----------------
 
 # Daily USD backstop over ALL anonymous/free traffic (llm_usage rows with
 # account_id IS NULL, summed since UTC midnight). NOT per-IP -- that is the
@@ -430,12 +426,22 @@ def _reset_service_flag_cache() -> None:
     _llm_paid_ops_cache["at"] = 0.0
 
 
-async def _run_scan_guarded(*args, **kwargs):
-    """run_scan on the threadpool, bounded by the audit-concurrency semaphore.
-    Every scan path routes through here so nothing can spawn unbounded provider
-    calls under load."""
-    async with _audit_semaphore:
-        return await run_in_threadpool(run_scan, *args, **kwargs)
+async def _run_scan_offthread(*args, **kwargs):
+    """run_scan on the threadpool: it is blocking, and its LLM stage can take
+    minutes, so it must never occupy the event loop.
+
+    It used to also hold an AUDIT_CONCURRENCY semaphore. That semaphore is gone
+    with the queue cutover: the number of scans that can run at once is now
+    AUDIT_WORKER_CONCURRENCY, the audit worker's slot count, and a limit living
+    in a different process from the work it is supposed to limit is not a limit.
+    In this process only the monitoring drain still scans, and that drain is
+    strictly one run at a time under monitoring_processor_lock, so it could
+    never have reached a bound of 4 anyway.
+
+    Still a named wrapper rather than an inline run_in_threadpool because it is
+    the single definition of "how an audit scan is run", shared by the worker
+    (which imports it) and the monitoring path -- the two must not drift."""
+    return await run_in_threadpool(run_scan, *args, **kwargs)
 
 
 async def _llm_paid_ops_enabled(
@@ -544,7 +550,7 @@ async def run_repo_audit(
             "reused": True,
         }
 
-    scan = await _run_scan_guarded(raw, llm_client)
+    scan = await _run_scan_offthread(raw, llm_client)
     persisted = await audit_repo.create(
         stack=stack.value, file_count=report.file_count,
         score_total=scan["score"]["total"], score_json=scan["score"],
@@ -600,6 +606,18 @@ def _monitoring_process_token() -> str | None:
     env-var pattern as FIXPACK_PROCESS_TOKEN. Unset -> the endpoint 503s rather
     than accept a no-op auth check."""
     return os.environ.get("MONITORING_PROCESS_TOKEN") or None
+
+
+def _audit_jobs_stats_token() -> str | None:
+    """Bearer token protecting GET /internal/audit-jobs/stats, same env-var
+    pattern as the other internal endpoints.
+
+    Its own token rather than a reused one on purpose: the existing tokens
+    authorise ACTIONS (drain a backlog, flip the kill switch), and the thing
+    that wants queue depth is a monitoring scraper -- something that should be
+    able to read without holding a credential that can also start work. Unset
+    -> the endpoint 503s rather than accept a no-op auth check."""
+    return os.environ.get("AUDIT_JOBS_STATS_TOKEN") or None
 
 
 def _service_flags_token() -> str | None:
@@ -776,12 +794,14 @@ async def get_audit_job(
     GET /v1/audits/{id}), and `error_code` is the machine-readable reason a
     terminal job has no result. The internals a caller has no business acting
     on -- claimed_by, lease_expires_at, attempts, quota_key, idempotency_key,
-    the free-text error_message -- stay server-side, and access_token is never
-    selected by get_authorized in the first place.
+    the free-text error_message -- stay server-side, and the job's own
+    access_token is never selected by get_authorized in the first place.
 
-    Nothing populates this queue yet: POST /v1/audits still scans inline and is
-    unchanged in this PR. The endpoint ships now so PR3's cutover is a change
-    to one endpoint rather than to the public API surface."""
+    The one addition is `audit_access_token`: the finished audit is protected by
+    its OWN token, so audit_id alone would leave a poller unable to read the
+    result it waited for. It is null until the job succeeds. Handing it to the
+    holder of the job token is not a widening -- POST /v1/audits returned the
+    audit token directly to that same submitter before the cutover."""
     row = await audit_job_repo.get_authorized(job_id=job_id, access_token=token)
     if row is None:
         raise HTTPException(
@@ -796,6 +816,7 @@ async def get_audit_job(
         "state": row["state"],
         "error_code": row["error_code"],
         "audit_id": row["audit_id"],
+        "audit_access_token": row.get("audit_access_token"),
         "created_at": row["created_at"],
         "completed_at": row["completed_at"],
     }
@@ -2070,6 +2091,47 @@ async def process_pending_monitoring(
     return summary
 
 
+@app.get("/internal/audit-jobs/stats")
+async def audit_jobs_stats(
+    request: Request,
+    audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
+) -> dict:
+    """Operational read: how deep the audit queue is, broken down by state.
+
+    /readyz carries the two numbers a health check needs; this is the view for
+    a human or a scraper diagnosing WHY, which needs the whole state histogram.
+    `dead_letter` is the one to watch -- the worker alerts on each new one, and
+    a rising total here is what confirms a pattern rather than a one-off.
+
+    Requires `Authorization: Bearer <AUDIT_JOBS_STATS_TOKEN>`, constant-time
+    compared. 503 if the token isn't configured, and 503 if DATABASE_URL isn't
+    set, because zeros from a queue you cannot see are worse than an error."""
+    token = _audit_jobs_stats_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "audit_jobs_stats_not_configured",
+                    "detail": "AUDIT_JOBS_STATS_TOKEN is not set on this "
+                              "deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    stats = await audit_job_repo.backlog_stats()
+    if stats is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "persistence isn't configured on this deployment "
+                              "(see app/db.py)"},
+        )
+    return {
+        "states": stats["states"],
+        "queued": stats["queued"],
+        "oldest_queued_seconds": stats["oldest_queued_seconds"],
+        "dead_letter": stats["states"].get("dead_letter", 0),
+    }
+
+
 @app.post("/internal/service-flags/llm_paid_ops")
 async def set_llm_paid_ops(
     request: Request,
@@ -2144,13 +2206,32 @@ async def create_audit(
                     "private repos, no other hosts.",
     ),
     limiter: RateLimiter = Depends(get_rate_limiter),
-    llm_client: LLMClient = Depends(get_llm_client),
     audit_repo: AuditRepository = Depends(get_audit_repo),
     account_repo: AccountRepository = Depends(get_account_repo),
     repo_fetcher=Depends(get_repo_fetcher),
-    llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
     service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
+    audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> dict:
+    """Accept an audit and hand back a job to poll.
+
+    Asynchronous since Stage 2: the scan itself runs in the audit worker
+    (`python -m app.worker`), and this endpoint returns as soon as the job is
+    durably queued. Everything that can be decided from the submission alone
+    still happens here, before the enqueue, and still answers with the same
+    status codes it always did -- intake shape, the emergency stop, the repo
+    fetch, zip validation, stack detection, the daily quota. Rejecting those at
+    intake keeps the queue free of jobs that are already known to be dead, and
+    keeps a client's error for a bad upload immediate instead of arriving two
+    polls later.
+
+    The content-hash cache is likewise still checked here, and a hit still
+    returns the finished audit inline with no job created at all: the result
+    already exists, so making the client poll for it would be slower for no
+    gain.
+
+    Response on a miss is 202 {job_id, access_token, state}. See
+    GET /v1/audit-jobs/{job_id}."""
     # Exactly one intake method: not both, not neither. Both-None and
     # both-present are the two cases where the equality holds.
     if (archive is None) == (repo_url is None):
@@ -2225,7 +2306,7 @@ async def create_audit(
     buf = io.BytesIO(raw)
 
     try:
-        report = validate_zip(buf, size_bytes=len(raw))
+        validate_zip(buf, size_bytes=len(raw))
     except ArchiveValidationError as exc:
         raise HTTPException(
             status_code=422,
@@ -2298,55 +2379,139 @@ async def create_audit(
             "reused": True,
         }
 
-    # Anonymous daily-spend backstop: if today's total anonymous LLM spend has
-    # hit the cap, degrade THIS anonymous audit to static-only rather than
-    # spend more. Soft-degrade, not an error -- an anonymous caller has nothing
-    # to pay, and the static scan still returns a real (basis=static_only)
-    # report. Pro/free accounts (account is not None) are exempt: their volume
-    # is bounded by the per-account daily audit-count limit already checked
-    # above, not by this shared free-traffic ceiling.
-    llm_skip_reason: str | None = None
-    if account is None and await _anon_daily_cap_exceeded(llm_usage_repo):
-        llm_skip_reason = "daily_spend_cap"
-
-    # Off the event loop: the LLM stage does real network I/O and can take up
-    # to ~2 minutes. Bounded by the audit-concurrency semaphore so a burst of
-    # requests can't open unbounded concurrent provider connections.
-    scan = await _run_scan_guarded(raw, llm_client, llm_skip_reason=llm_skip_reason)
-
-    persisted = await audit_repo.create(
-        stack=stack.value, file_count=report.file_count,
-        score_total=scan["score"]["total"], score_json=scan["score"],
-        findings_json=scan["findings"], repo_url=source_url,
-        content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
-    )
-    audit_id = persisted["id"] if persisted else str(uuid.uuid4())
-
-    # Cost accounting: one row for the tokens this scan spent, billable to the
-    # caller's account (None for anonymous/free). The cache-hit branch above
-    # returned before run_scan, so a reused audit never reaches here.
-    await _record_llm_usage(
-        llm_usage_repo, job_type="audit",
-        job_id=persisted["id"] if persisted else None,
+    return await _enqueue_audit_job(
+        audit_job_repo,
+        raw=raw if archive is not None else None,
+        source_kind="zip" if archive is not None else "repo_url",
+        source_url=source_url,
+        digest=digest,
+        stack=stack.value,
         account_id=account["id"] if account else None,
-        llm_stats=scan["llm"],
+        quota_key=quota_key,
+        idempotency_key=(
+            idempotency_key
+            or _audit_idempotency_key(
+                digest, account["id"] if account else None)
+        ),
     )
+
+
+def _audit_idempotency_key(digest: str, account_id: str | None) -> str:
+    """The default key for a submission the client did not label itself.
+
+    (content, engine version, submitter) -- so a double-clicked upload joins the
+    job already running instead of queueing a second identical scan, while two
+    different callers submitting the same bytes stay independent (they have
+    separate quotas, and one's job going terminal must not decide the other's
+    outcome). The engine version is in the key for the same reason it is in the
+    cache key: after a bump the same content is genuinely different work."""
+    material = f"{digest}|{AUDIT_ENGINE_VERSION}|{account_id or 'anon'}"
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+async def _enqueue_audit_job(
+    audit_job_repo: AuditJobRepository, *, raw: bytes | None, source_kind: str,
+    source_url: str | None, digest: str, stack: str, account_id: str | None,
+    quota_key: str | None, idempotency_key: str,
+) -> dict:
+    """Queue one validated submission and return the 202 body.
+
+    A repo_url job is inserted straight into 'queued': its whole payload is the
+    URL, which is already in the row. An uploaded archive exists only in this
+    request's memory, so it goes through 'created' -- insert, write the bytes to
+    the spool, and only then mark_queued. A worker can never claim a 'created'
+    row, so a crash between the insert and the write cannot produce a claimable
+    job pointing at a file that was never written (see migration 0022).
+
+    The id is minted here rather than by the database because the spool filename
+    IS the job id, so it must be known before the archive can be staged, which
+    is before the row can be flipped to 'queued'.
+
+    A duplicate submission (inserted=False) returns the live job it collided
+    with, and deliberately does NOT re-stage: that job's payload is already on
+    disk, and rewriting it under a worker that may be mid-read buys nothing."""
+    job_id = str(uuid.uuid4())
+    job = await audit_job_repo.enqueue(
+        job_id=job_id,
+        initial_state="created" if source_kind == "zip" else "queued",
+        source_kind=source_kind,
+        # Filled in below for a zip, once the bytes are actually on disk.
+        source_ref=None if source_kind == "zip" else source_url,
+        content_hash=digest,
+        engine_version=AUDIT_ENGINE_VERSION,
+        stack=stack,
+        account_id=account_id,
+        quota_key=quota_key,
+        idempotency_key=idempotency_key,
+    )
+    if job is None:
+        # No DATABASE_URL: there is no queue to accept the job and no worker to
+        # run it. Before the cutover this deployment could still scan inline and
+        # return an unpersisted result; it cannot now, and saying so is better
+        # than handing back a job id that does not exist.
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "queue_unavailable",
+                    "detail": "audit persistence isn't configured on this "
+                              "deployment (see app/db.py)"},
+        )
+
+    if source_kind == "zip" and job.get("inserted"):
+        await _stage_and_queue(audit_job_repo, job_id=str(job["id"]), raw=raw)
 
     return {
-        "audit_id": audit_id,
-        # The ownership token for this audit, delivered exactly once here.
-        # None on an unpersisted (no-DATABASE_URL) deployment, where there is
-        # no stored row to protect and the id is ephemeral anyway.
-        "access_token": persisted.get("access_token") if persisted else None,
-        "persisted": persisted is not None,
-        "status": "completed",
-        "stack": stack.value,
-        "file_count": report.file_count,
-        "score": scan["score"],
-        "findings": scan["findings"],
-        "repo_url": source_url,
-        "llm": scan["llm"],
+        "job_id": str(job["id"]),
+        # The job's ownership token, delivered exactly once, here. It is the key
+        # to GET /v1/audit-jobs/{job_id} and, through it, to the finished audit.
+        "access_token": job.get("access_token"),
+        "state": "queued",
     }
+
+
+async def _stage_and_queue(
+    audit_job_repo: AuditJobRepository, *, job_id: str, raw: bytes
+) -> None:
+    """Write a zip job's payload to the spool, then make the job claimable.
+
+    On any staging failure the job is dead-lettered rather than left in
+    'created'. That is not cosmetic: the live-job idempotency index covers
+    'created', so an abandoned row would hold this submission's key and the
+    caller's retry would be told to poll a job no worker will ever claim.
+    Marking it terminal frees the key immediately, and the caller gets a 503 it
+    can act on. (reap_stuck_created is the backstop for the one case this cannot
+    cover -- the API process dying between the insert and here.)"""
+    try:
+        path = await run_in_threadpool(stage_archive, job_id, raw)
+    except SpoolFull as exc:
+        await audit_job_repo.abandon_created(
+            job_id=job_id, error_code="spool_full", error_message=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "spool_full",
+                    "detail": "the upload spool is full; retry shortly"},
+        ) from exc
+    except OSError as exc:
+        await audit_job_repo.abandon_created(
+            job_id=job_id, error_code="staging_failed",
+            error_message=f"{type(exc).__name__}: {exc}")
+        logger.exception("staging the upload for job %s failed", job_id)
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "staging_failed",
+                    "detail": "could not stage the upload; retry shortly"},
+        ) from exc
+
+    if not await audit_job_repo.mark_queued(job_id=job_id, source_ref=path):
+        # The row left 'created' while we were writing -- only
+        # reap_stuck_created does that, so the write took longer than its age
+        # bound. Nothing will read the file now.
+        await run_in_threadpool(cleanup_staged_archive, path)
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "staging_failed",
+                    "detail": "the job was abandoned while its upload was "
+                              "being staged; please resubmit"},
+        )
 
 
 @app.get("/v1/fixpacks/{job_id}")
