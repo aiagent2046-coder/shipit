@@ -6,6 +6,12 @@ Uses fake in-memory repos via dependency_overrides (same pattern as
 FakePreviewRegistry in test_fixpack_api.py) -- no real Postgres
 involved here. See tests/test_db.py for the repository layer itself,
 and scripts/verify_db_locally.py for real-Postgres proof.
+
+Since the queue cutover the audits row is written by the worker, not by
+POST /v1/audits, so the audit half of this file is POST -> drain_audit_queue
+-> assert. What is being tested is unchanged -- that the row lands with the
+right stack/repo_url and that its access_token gates reads -- only the
+process that writes it moved. Fixpacks are still synchronous and untouched.
 """
 
 import io
@@ -16,15 +22,19 @@ import zipfile
 from fastapi.testclient import TestClient
 
 from app.deploypack.delivery import PullRequestResult
+from app.llm.client import LLMClient
 from app.main import (
     app,
+    get_audit_job_repo,
     get_audit_repo,
     get_fixpack_repo,
     get_pr_opener,
     get_repo_fetcher,
 )
 import app.deploypack.pipeline as pipeline_mod
+import app.worker.main as worker_mod
 from app.deploypack.sandbox import SandboxResult
+from tests.conftest import FakeAuditQueue, drain_audit_queue
 
 client = TestClient(app)
 
@@ -124,96 +134,103 @@ def test_get_fixpack_404_when_not_found():
     assert resp.status_code == 404
 
 
-def test_create_audit_persists_and_returns_persisted_true():
-    fake = FakeAuditRepo()
-    app.dependency_overrides[get_audit_repo] = lambda: fake
+async def _post_and_run(audit_queue, audit_repo, **post_kwargs) -> tuple:
+    """POST an audit, then run the queued job through the real worker.
+
+    Returns (response, audit_id). The two halves are inseparable for these
+    tests: the endpoint decides what gets queued, the worker decides what gets
+    persisted, and every assertion below is about the persisted row."""
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     try:
-        resp = client.post(
-            "/v1/audits",
-            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+        resp = client.post("/v1/audits", **post_kwargs)
+        audit_ids = await drain_audit_queue(
+            audit_queue, audit_repo=audit_repo, llm_client=LLMClient(providers=[]),
         )
     finally:
         app.dependency_overrides.pop(get_audit_repo, None)
+    return resp, (audit_ids[0] if audit_ids else None)
+
+
+async def test_create_audit_queues_a_job_the_worker_persists(audit_queue):
+    fake = FakeAuditRepo()
+    resp, audit_id = await _post_and_run(
+        audit_queue, fake,
+        files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+    )
 
     assert resp.status_code == 202
-    body = resp.json()
-    assert body["persisted"] is True
-    assert body["audit_id"] in fake.rows
+    # The 202 hands back a job to poll, not a result: the row does not exist
+    # yet at the moment the response is written.
+    assert set(resp.json()) == {"job_id", "access_token", "state"}
+    assert audit_id in fake.rows
     assert fake.create_calls[0]["stack"] == "fastapi"
 
 
-def test_create_audit_from_upload_stores_null_repo_url():
+async def test_create_audit_from_upload_stores_null_repo_url(audit_queue):
     fake = FakeAuditRepo()
-    app.dependency_overrides[get_audit_repo] = lambda: fake
-    try:
-        client.post(
-            "/v1/audits",
-            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
-        )
-    finally:
-        app.dependency_overrides.pop(get_audit_repo, None)
-
+    await _post_and_run(
+        audit_queue, fake,
+        files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+    )
     assert fake.create_calls[0]["repo_url"] is None
 
 
-def test_create_audit_from_github_url_persists_repo_url():
+async def test_create_audit_from_github_url_persists_repo_url(audit_queue,
+                                                              monkeypatch):
     fake = FakeAuditRepo()
 
     def fake_fetch(owner, repo, **kwargs):
         return make_zip(FASTAPI_ZIP).getvalue()
 
-    app.dependency_overrides[get_audit_repo] = lambda: fake
+    # Two fetches, two stubs: intake validates and detects the stack from its
+    # own download (get_repo_fetcher), and the worker re-fetches when it runs
+    # the job (app.worker.main.fetch_repo_zip, called directly, not injected).
     app.dependency_overrides[get_repo_fetcher] = lambda: fake_fetch
+    monkeypatch.setattr(worker_mod, "fetch_repo_zip", fake_fetch)
     try:
-        resp = client.post(
-            "/v1/audits", data={"repo_url": "https://github.com/acme/app"}
+        resp, _ = await _post_and_run(
+            audit_queue, fake, data={"repo_url": "https://github.com/acme/app"},
         )
     finally:
-        app.dependency_overrides.pop(get_audit_repo, None)
         app.dependency_overrides.pop(get_repo_fetcher, None)
 
     assert resp.status_code == 202
     assert fake.create_calls[0]["repo_url"] == "https://github.com/acme/app"
 
 
-def test_create_audit_without_database_still_works_unpersisted():
-    # real, unmocked AuditRepository -- no DATABASE_URL in this test env
-    resp = client.post(
-        "/v1/audits",
-        files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
-    )
-    body = resp.json()
-    assert body["persisted"] is False
-    uuid.UUID(body["audit_id"])  # still a valid random id, just not stored
-
-
-def test_create_audit_returns_access_token():
-    fake = FakeAuditRepo()
-    app.dependency_overrides[get_audit_repo] = lambda: fake
+def test_create_audit_without_a_queue_is_503():
+    # Behaviour change from the cutover. This used to answer 200 with
+    # persisted=false: the scan ran inline and the result was simply never
+    # stored. With no inline scan left there is nothing to return, so a
+    # deployment without DATABASE_URL now refuses the submission outright
+    # rather than pretending to have done the work.
+    app.dependency_overrides[get_audit_job_repo] = lambda: FakeAuditQueue(
+        unavailable=True)
     try:
         resp = client.post(
             "/v1/audits",
             files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
         )
     finally:
-        app.dependency_overrides.pop(get_audit_repo, None)
+        app.dependency_overrides.pop(get_audit_job_repo, None)
 
-    body = resp.json()
-    audit_id = body["audit_id"]
-    assert body["access_token"] == fake.rows[audit_id]["access_token"]
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["reason"] == "queue_unavailable"
 
 
-def test_get_audit_after_create_round_trips():
+async def test_get_audit_after_create_round_trips(audit_queue):
     fake = FakeAuditRepo()
+    _resp, audit_id = await _post_and_run(
+        audit_queue, fake,
+        files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+    )
+    # The audits row still mints its own access_token, distinct from the job's;
+    # GET /v1/audit-jobs/{id} is what hands it to the submitter once the job
+    # succeeds (tests/test_audit_jobs_api.py).
+    token = fake.rows[audit_id]["access_token"]
+
     app.dependency_overrides[get_audit_repo] = lambda: fake
     try:
-        create_resp = client.post(
-            "/v1/audits",
-            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
-        )
-        created = create_resp.json()
-        audit_id = created["audit_id"]
-        token = created["access_token"]
         get_resp = client.get(f"/v1/audits/{audit_id}?token={token}")
     finally:
         app.dependency_overrides.pop(get_audit_repo, None)
@@ -224,15 +241,15 @@ def test_get_audit_after_create_round_trips():
     assert "access_token" not in get_resp.json()
 
 
-def test_get_audit_without_token_is_404():
+async def test_get_audit_without_token_is_404(audit_queue):
     fake = FakeAuditRepo()
+    _resp, audit_id = await _post_and_run(
+        audit_queue, fake,
+        files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
+    )
+
     app.dependency_overrides[get_audit_repo] = lambda: fake
     try:
-        create_resp = client.post(
-            "/v1/audits",
-            files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
-        )
-        audit_id = create_resp.json()["audit_id"]
         # A caller who knows only the id (leaked UUID) gets 404, not the report.
         no_token = client.get(f"/v1/audits/{audit_id}")
         wrong_token = client.get(f"/v1/audits/{audit_id}?token=not-the-token")

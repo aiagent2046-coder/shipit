@@ -7,17 +7,23 @@ than crash:
   * anonymous daily $-cap -- once total free spend hits the ceiling, a new
     anonymous audit soft-degrades to static-only (no LLM row), not a 402/429;
   * pro accounts are NOT subject to that $-cap (only the call-count limit);
-  * concurrency semaphore -- run_scan is bounded so a burst can't open unbounded
-    provider connections;
   * emergency stop -- a DB flag that 503s direct API calls and no-ops the
     monitoring drain, with a mandatory operator alert.
+
+The $-cap guards are checked where the spend now happens -- in the worker, at
+claim time, from the job's own account_id -- so those tests post to the endpoint
+and then drain the queue. The emergency stop stays an endpoint test: it exists
+to stop work from being ACCEPTED, and does that before anything is queued.
+
+A fifth mechanism used to live here: an asyncio semaphore bounding concurrent
+run_scan calls inside the API process. The queue cutover deleted it. The bound
+that matters is now AUDIT_WORKER_CONCURRENCY, the worker's slot count (see
+tests/test_audit_worker.py) -- a limit in a process that no longer runs scans
+was bounding nothing.
 """
 
-import asyncio
 import io
 import json
-import threading
-import time
 import uuid
 import zipfile
 from decimal import Decimal
@@ -39,6 +45,7 @@ from app.main import (
     get_repo_fetcher,
     get_billing_transport,
 )
+from tests.conftest import drain_audit_queue
 
 client = TestClient(app)
 
@@ -195,47 +202,47 @@ def _reset_cache_before():
 # 2. Anonymous daily $-cap: soft-degrade to static-only, not an error.
 # --------------------------------------------------------------------------
 
-def test_anon_daily_cap_soft_degrades_to_static_only(monkeypatch):
+async def test_anon_daily_cap_soft_degrades_to_static_only(monkeypatch,
+                                                           audit_queue):
     _reset_cache_before()
     _capture_alerts(monkeypatch)
     audit_repo = FakeAuditRepo()
     usage_repo = FakeUsageRepo(anon_spend=Decimal("2.50"))  # over the $2.00 cap
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
-    app.dependency_overrides[get_llm_usage_repo] = lambda: usage_repo
-    app.dependency_overrides[get_llm_client] = lambda: llm
     try:
         resp = client.post("/v1/audits",
                            files={"archive": ("app.zip", _auth_zip(), "application/zip")})
+        await drain_audit_queue(audit_queue, audit_repo=audit_repo,
+                                llm_client=llm, llm_usage_repo=usage_repo)
     finally:
         _clear()
 
+    # Soft-degrade: the submission is still accepted and still produces a real
+    # report -- the LLM stage is what gets dropped, not the audit.
     assert resp.status_code == 202
-    body = resp.json()
-    # Soft-degrade: not a 402/429, a real report with the LLM stage skipped.
-    assert body["llm"]["skipped_reason"] == "daily_spend_cap"
-    assert body["score"]["basis"] == "static_only"
+    assert audit_repo.rows[0]["score_json"]["basis"] == "static_only"
     assert llm.calls == 0                  # no LLM spend past the cap
     assert usage_repo.rows == []           # calls=0 -> no usage row
 
 
-def test_anon_under_cap_runs_llm(monkeypatch):
+async def test_anon_under_cap_runs_llm(monkeypatch, audit_queue):
     _reset_cache_before()
     _capture_alerts(monkeypatch)
     audit_repo = FakeAuditRepo()
     usage_repo = FakeUsageRepo(anon_spend=Decimal("0.10"))  # well under cap
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
-    app.dependency_overrides[get_llm_usage_repo] = lambda: usage_repo
-    app.dependency_overrides[get_llm_client] = lambda: llm
     try:
         resp = client.post("/v1/audits",
                            files={"archive": ("app.zip", _auth_zip(), "application/zip")})
+        await drain_audit_queue(audit_queue, audit_repo=audit_repo,
+                                llm_client=llm, llm_usage_repo=usage_repo)
     finally:
         _clear()
 
     assert resp.status_code == 202
-    assert resp.json()["llm"]["skipped_reason"] is None
+    assert audit_repo.rows[0]["score_json"]["basis"] == "static+llm"
     assert llm.calls == 1
     assert len(usage_repo.rows) == 1
 
@@ -244,7 +251,7 @@ def test_anon_under_cap_runs_llm(monkeypatch):
 # 3. Pro accounts are NOT subject to the new $-cap.
 # --------------------------------------------------------------------------
 
-def test_pro_account_not_subject_to_dollar_cap(monkeypatch):
+async def test_pro_account_not_subject_to_dollar_cap(monkeypatch, audit_queue):
     _reset_cache_before()
     _capture_alerts(monkeypatch)
 
@@ -257,19 +264,21 @@ def test_pro_account_not_subject_to_dollar_cap(monkeypatch):
     usage_repo = FakeUsageRepo(anon_spend=Decimal("99.00"))  # anon is way over
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
-    app.dependency_overrides[get_llm_usage_repo] = lambda: usage_repo
-    app.dependency_overrides[get_llm_client] = lambda: llm
     try:
         resp = client.post("/v1/audits",
                            files={"archive": ("app.zip", _auth_zip(), "application/zip")},
                            headers={"Authorization": "Bearer sk_live_x"})
+        # The API key is resolved at intake and its account stamped on the job;
+        # that stamp is the only thing the worker has to go on later.
+        assert audit_queue.only["account_id"] is not None
+        await drain_audit_queue(audit_queue, audit_repo=audit_repo,
+                                llm_client=llm, llm_usage_repo=usage_repo)
     finally:
         _clear()
 
     assert resp.status_code == 202
     # Pro ran the LLM despite anon spend being over the cap, and the anon
     # aggregate was never even consulted for a pro caller.
-    assert resp.json()["llm"]["skipped_reason"] is None
     assert llm.calls == 1
     assert usage_repo.sum_calls == 0
     assert len(usage_repo.rows) == 1
@@ -277,39 +286,7 @@ def test_pro_account_not_subject_to_dollar_cap(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# 4. Concurrency semaphore actually bounds parallel scans.
-# --------------------------------------------------------------------------
-
-def test_semaphore_limits_concurrent_scans(monkeypatch):
-    limit = 2
-    monkeypatch.setattr(main_mod, "_audit_semaphore", asyncio.Semaphore(limit))
-
-    state = {"active": 0, "max": 0}
-    lock = threading.Lock()
-
-    def slow_scan(data, llm_client, **kwargs):
-        with lock:
-            state["active"] += 1
-            state["max"] = max(state["max"], state["active"])
-        time.sleep(0.05)
-        with lock:
-            state["active"] -= 1
-        return {"score": {}, "findings": [], "llm": {}}
-
-    monkeypatch.setattr(main_mod, "run_scan", slow_scan)
-
-    async def drive():
-        await asyncio.gather(*[
-            main_mod._run_scan_guarded(b"data", object()) for _ in range(8)
-        ])
-
-    asyncio.run(drive())
-    assert state["max"] <= limit
-    assert state["max"] > 0                 # sanity: work actually ran
-
-
-# --------------------------------------------------------------------------
-# 5. Emergency stop: 503 for API, skip-drain for monitoring, mandatory alert.
+# 4. Emergency stop: 503 for API, skip-drain for monitoring, mandatory alert.
 # --------------------------------------------------------------------------
 
 def test_emergency_stop_blocks_audit_with_503_and_alerts(monkeypatch):
@@ -336,13 +313,10 @@ def test_emergency_stop_blocks_audit_with_503_and_alerts(monkeypatch):
     assert any(k == "llm-paid-ops-paused" for _t, k in alerts)
 
 
-def test_emergency_stop_not_engaged_allows_audit(monkeypatch):
+def test_emergency_stop_not_engaged_allows_audit(monkeypatch, audit_queue):
     _reset_cache_before()
     _capture_alerts(monkeypatch)
-    llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: FakeAuditRepo()
-    app.dependency_overrides[get_llm_usage_repo] = lambda: FakeUsageRepo()
-    app.dependency_overrides[get_llm_client] = lambda: llm
     app.dependency_overrides[get_service_flags_repo] = \
         lambda: FakeServiceFlagsRepo(enabled=True)
     try:
@@ -351,8 +325,10 @@ def test_emergency_stop_not_engaged_allows_audit(monkeypatch):
     finally:
         _clear()
 
+    # The mirror of the test above: with the stop off, the submission is
+    # accepted and reaches the queue.
     assert resp.status_code == 202
-    assert llm.calls == 1
+    assert len(audit_queue.rows) == 1
 
 
 class _FlagMonitoringRepo:
@@ -398,10 +374,10 @@ def test_emergency_stop_skips_monitoring_drain(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# 6. The 80%-of-cap operator alert fires as spend approaches the ceiling.
+# 5. The 80%-of-cap operator alert fires as spend approaches the ceiling.
 # --------------------------------------------------------------------------
 
-def test_alert_fires_at_80_percent_of_daily_cap(monkeypatch):
+async def test_alert_fires_at_80_percent_of_daily_cap(monkeypatch, audit_queue):
     _reset_cache_before()
     alerts = _capture_alerts(monkeypatch)
     audit_repo = FakeAuditRepo()
@@ -410,17 +386,15 @@ def test_alert_fires_at_80_percent_of_daily_cap(monkeypatch):
     usage_repo = FakeUsageRepo(anon_spend=Decimal("1.70"))
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
-    app.dependency_overrides[get_llm_usage_repo] = lambda: usage_repo
-    app.dependency_overrides[get_llm_client] = lambda: llm
     try:
-        resp = client.post("/v1/audits",
-                           files={"archive": ("app.zip", _auth_zip(), "application/zip")})
+        client.post("/v1/audits",
+                    files={"archive": ("app.zip", _auth_zip(), "application/zip")})
+        await drain_audit_queue(audit_queue, audit_repo=audit_repo,
+                                llm_client=llm, llm_usage_repo=usage_repo)
     finally:
         _clear()
 
-    assert resp.status_code == 202
-    assert resp.json()["llm"]["skipped_reason"] is None   # under cap: LLM ran
-    assert llm.calls == 1
+    assert llm.calls == 1                                  # under cap: LLM ran
     assert any(k == "anon-budget-80" for _t, k in alerts)
 
 

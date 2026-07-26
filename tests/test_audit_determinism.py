@@ -12,6 +12,11 @@ fake keyed by content_hash (same pattern as the billing tests' Fake*Repo),
 and the LLM is a fake that deliberately returns DIFFERENT findings on the
 second audit -- so a re-scan WOULD score differently, proving the cache is
 what pins the result.
+
+Since the queue cutover an audit takes two steps -- POST enqueues, the worker
+scans -- so each "audit" below is a _post followed by drain_audit_queue. The
+property under test is unchanged: the SECOND identical submission must never
+reach a scan at all, and must answer with the stored result inline.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from fastapi.testclient import TestClient
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.main import app, get_audit_repo, get_llm_client
 from app.scan.pipeline import content_digest
+from tests.conftest import drain_audit_queue
 
 client = TestClient(app)
 
@@ -126,84 +132,93 @@ def _post(archive: io.BytesIO):
     )
 
 
-def test_identical_content_returns_identical_score_via_cache():
+async def test_identical_content_returns_identical_score_via_cache(audit_queue):
     repo = FakeAuditRepo()
     # First audit finds a high issue; every later call finds nothing. So a
     # *re-scan* of the same code would score HIGHER -> without caching the
     # second request would differ, exactly the prod bug.
     llm = ScriptedLLM([_AUTH_FINDING, "[]", "[]", "[]"])
     app.dependency_overrides[get_audit_repo] = lambda: repo
-    app.dependency_overrides[get_llm_client] = lambda: llm
+    entries = {
+        "package.json": NEXT_PKG,
+        "app/auth.ts": b"const password = 'x'  // check auth token",
+    }
     try:
-        entries = {
-            "package.json": NEXT_PKG,
-            "app/auth.ts": b"const password = 'x'  // check auth token",
-        }
         first = _post(make_zip(entries))
+        await drain_audit_queue(audit_queue, audit_repo=repo, llm_client=llm)
         second = _post(make_zip(entries))  # byte-for-byte identical content
     finally:
         app.dependency_overrides.pop(get_audit_repo, None)
-        app.dependency_overrides.pop(get_llm_client, None)
 
     assert first.status_code == 202 and second.status_code == 202
-    b1, b2 = first.json(), second.json()
+    # The first submission was work to do; the second was already done.
+    assert "job_id" in first.json()
+    b2 = second.json()
+    scanned = repo.rows[0]
 
-    # The second request is served from cache: same audit id, same score,
-    # same findings -- despite the LLM now returning a different set.
     assert b2["reused"] is True
-    assert b1.get("reused") is not True
-    assert b2["audit_id"] == b1["audit_id"]
-    assert b2["score"] == b1["score"]
-    assert b2["findings"] == b1["findings"]
+    assert b2["audit_id"] == scanned["id"]
+    assert b2["score"] == scanned["score_json"]
+    assert b2["findings"] == scanned["findings_json"]
 
-    # Only one row was ever persisted (the second didn't create a new audit).
+    # Only one row was ever persisted, and the second submission queued no
+    # second job -- the cache is checked before the enqueue, so a repeat costs
+    # neither a scan nor a queue slot.
     assert len(repo.rows) == 1
+    assert len(audit_queue.rows) == 1
     # And the first audit's LLM finding really did lower the score, so this
     # isn't a trivial "both empty" pass.
-    assert any(f["rule_id"] == "llm-auth" for f in b1["findings"])
+    assert any(f["rule_id"] == "llm-auth" for f in scanned["findings_json"])
 
 
-def test_different_content_is_not_served_from_cache():
+async def test_different_content_is_not_served_from_cache(audit_queue):
     repo = FakeAuditRepo()
     llm = ScriptedLLM(["[]"])
     app.dependency_overrides[get_audit_repo] = lambda: repo
-    app.dependency_overrides[get_llm_client] = lambda: llm
     try:
         first = _post(make_zip({"package.json": NEXT_PKG, "a.ts": b"const x=1\n"}))
+        await drain_audit_queue(audit_queue, audit_repo=repo, llm_client=llm)
         second = _post(make_zip({"package.json": NEXT_PKG, "a.ts": b"const x=2\n"}))
+        await drain_audit_queue(audit_queue, audit_repo=repo, llm_client=llm)
     finally:
         app.dependency_overrides.pop(get_audit_repo, None)
-        app.dependency_overrides.pop(get_llm_client, None)
 
     assert first.json().get("reused") is not True
     assert second.json().get("reused") is not True
     assert len(repo.rows) == 2
 
 
-def test_engine_version_bump_invalidates_cache(monkeypatch):
+async def test_engine_version_bump_invalidates_cache(monkeypatch, audit_queue):
     """Same content, but the audit engine changed: a row cached under the old
     AUDIT_ENGINE_VERSION must NOT be reused -- the audit recomputes under the
     new version. This is the complement to reproducibility: PR #31 pins the
     result for a FIXED engine; this keeps a stale result from being frozen in
     across an engine change (migration 0013)."""
     import app.main as main_mod
+    import app.worker.main as worker_mod
+
+    def set_engine(version):
+        # Both processes stamp the row and read the cache, so both have to move
+        # together for the bump to mean anything.
+        monkeypatch.setattr(main_mod, "AUDIT_ENGINE_VERSION", version)
+        monkeypatch.setattr(worker_mod, "AUDIT_ENGINE_VERSION", version)
 
     repo = FakeAuditRepo()
     # LLM returns nothing on both runs, so any score difference here comes from
     # the engine-version gate, not LLM variance.
     llm = ScriptedLLM(["[]", "[]"])
     app.dependency_overrides[get_audit_repo] = lambda: repo
-    app.dependency_overrides[get_llm_client] = lambda: llm
     entries = {"package.json": NEXT_PKG, "a.ts": b"const x=1\n"}
     try:
-        monkeypatch.setattr(main_mod, "AUDIT_ENGINE_VERSION", "v-old")
+        set_engine("v-old")
         first = _post(make_zip(entries))
+        await drain_audit_queue(audit_queue, audit_repo=repo, llm_client=llm)
         # Engine changed between the two identical-content requests.
-        monkeypatch.setattr(main_mod, "AUDIT_ENGINE_VERSION", "v-new")
+        set_engine("v-new")
         second = _post(make_zip(entries))  # byte-for-byte identical content
+        await drain_audit_queue(audit_queue, audit_repo=repo, llm_client=llm)
     finally:
         app.dependency_overrides.pop(get_audit_repo, None)
-        app.dependency_overrides.pop(get_llm_client, None)
 
     assert first.status_code == 202 and second.status_code == 202
     # The second request is a cache MISS despite identical content: it recomputed

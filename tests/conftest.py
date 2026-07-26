@@ -22,10 +22,13 @@ explicitly, per test, where it wants the configured-path behavior.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
+import app.audit_spool as spool_mod
 import app.db as db_mod
-from app.main import app, get_rate_limiter
+from app.main import app, get_audit_job_repo, get_rate_limiter
 from app.ratelimit import RateLimiter
 
 
@@ -42,6 +45,186 @@ def _no_ambient_database_url(monkeypatch):
     db_mod._pool = None
     yield
     db_mod._pool = None
+
+
+@pytest.fixture(autouse=True)
+def audit_spool_dir(tmp_path, monkeypatch):
+    """Point the archive spool at a per-test directory.
+
+    Autouse for the same reason DATABASE_URL is stripped above: since the queue
+    cutover, POST /v1/audits with a file writes the upload to disk, and the
+    default target is the production spool (/srv/shipit/spool). No test may
+    write there, and no test may see another test's staged archives. Returned
+    so a test can assert on what was staged."""
+    directory = tmp_path / "spool"
+    monkeypatch.setattr(spool_mod, "SPOOL_DIR", directory)
+    return directory
+
+
+class FakeAuditQueue:
+    """The slice of AuditJobRepository that create_audit uses, in memory.
+
+    Models the two behaviours the endpoint's correctness rests on: the
+    partial unique index over live states (a second submission with the same
+    idempotency_key joins the existing job and reports inserted=False), and the
+    'created' -> 'queued' transition that only completes once the payload is
+    staged. The SQL behind both is covered against real Postgres in
+    tests/test_audit_jobs_repo.py."""
+
+    def __init__(self, *, unavailable: bool = False):
+        # unavailable models a deployment with no DATABASE_URL, where every
+        # repository method degrades to None/False.
+        self.unavailable = unavailable
+        self.rows: dict[str, dict] = {}
+        self.live_keys: dict[str, str] = {}
+        self.enqueued: list[dict] = []
+        self.abandoned: list[dict] = []
+
+    _LIVE = ("created", "queued", "claimed", "running")
+
+    async def enqueue(self, *, job_id=None, initial_state="queued", **fields):
+        if self.unavailable:
+            return None
+        self.enqueued.append({"initial_state": initial_state, **fields})
+        existing = self.live_keys.get(fields["idempotency_key"])
+        if existing is not None:
+            return {**self.rows[existing], "inserted": False}
+        row_id = job_id or str(uuid.uuid4())
+        row = {
+            "id": row_id,
+            "state": initial_state,
+            # Deliberately fake: the real token is minted by the database.
+            "access_token": f"fake-job-token-{row_id}",
+            **fields,
+        }
+        self.rows[row_id] = row
+        self.live_keys[fields["idempotency_key"]] = row_id
+        return {**row, "inserted": True}
+
+    async def mark_queued(self, *, job_id, source_ref=None):
+        row = self.rows.get(job_id)
+        if self.unavailable or row is None or row["state"] != "created":
+            return False
+        row["state"] = "queued"
+        if source_ref is not None:
+            row["source_ref"] = source_ref
+        return True
+
+    async def abandon_created(self, *, job_id, error_code, error_message):
+        row = self.rows.get(job_id)
+        if row is None or row["state"] != "created":
+            return False
+        row["state"] = "dead_letter"
+        row["error_code"] = error_code
+        self.live_keys.pop(row["idempotency_key"], None)
+        self.abandoned.append({"job_id": job_id, "error_code": error_code})
+        return True
+
+    @property
+    def only(self) -> dict:
+        """The single job this queue holds, asserting there is exactly one."""
+        assert len(self.rows) == 1, f"expected one job, have {len(self.rows)}"
+        return next(iter(self.rows.values()))
+
+
+class NullLlmUsageRepo:
+    """LlmUsageRepository's no-DATABASE_URL behaviour: records nothing."""
+
+    def __init__(self):
+        self.rows: list[dict] = []
+
+    async def create(self, **fields):
+        self.rows.append(fields)
+        return None
+
+    async def sum_anon_spend_today(self):
+        # None is the no-journal answer, which reads as "no cap to enforce".
+        return None
+
+
+class RecordingAuditRepo:
+    """AuditRepository with no cache and a record of everything persisted."""
+
+    def __init__(self):
+        self.rows: list[dict] = []
+
+    async def create(self, **fields):
+        row = {"id": str(uuid.uuid4()), **fields}
+        self.rows.append(row)
+        return row
+
+    async def get_by_content_hash(self, content_hash, engine_version):
+        return None
+
+
+async def run_audit_job(raw: bytes, *, llm_client, audit_repo=None,
+                        llm_usage_repo=None, account_id=None) -> dict:
+    """Stage `raw` as a zip job and run it through the worker.
+
+    The worker half of an audit for tests that care about what a scan produces
+    rather than about the endpoint. Goes through the real spool so the payload
+    handoff -- the part that only exists because the scan moved to another
+    process -- is exercised rather than assumed. Returns the persisted row."""
+    from app.audit_spool import stage_archive
+    from app.worker.main import _execute_job
+
+    repo = audit_repo or RecordingAuditRepo()
+    job_id = str(uuid.uuid4())
+    job = {
+        "id": job_id,
+        "source_kind": "zip",
+        "source_ref": stage_archive(job_id, raw),
+        "account_id": account_id,
+        "attempts": 1,
+        "max_attempts": 3,
+    }
+    audit_id = await _execute_job(
+        job, llm_client=llm_client, audit_repo=repo,
+        llm_usage_repo=llm_usage_repo or NullLlmUsageRepo(),
+    )
+    return next(r for r in repo.rows if r["id"] == audit_id)
+
+
+async def drain_audit_queue(queue, *, audit_repo, llm_client,
+                            llm_usage_repo=None) -> list[str]:
+    """Run every queued job in `queue` through the worker and return audit ids.
+
+    The other half of an audit since the cutover. A test that used to assert on
+    what POST /v1/audits returned now has two steps -- the endpoint queues, the
+    worker scans -- and this is the second one, running the real
+    `_execute_job` (payload load, validation, cache check, scan, persist)
+    rather than a stand-in, so the assertions still cover the code that
+    produces the result."""
+    from app.worker.main import _execute_job
+
+    audit_ids = []
+    for row in list(queue.rows.values()):
+        if row["state"] != "queued":
+            continue
+        audit_id = await _execute_job(
+            row, llm_client=llm_client, audit_repo=audit_repo,
+            llm_usage_repo=llm_usage_repo or NullLlmUsageRepo(),
+        )
+        row["state"] = "succeeded"
+        row["audit_id"] = audit_id
+        queue.live_keys.pop(row["idempotency_key"], None)
+        audit_ids.append(audit_id)
+    return audit_ids
+
+
+@pytest.fixture(autouse=True)
+def audit_queue():
+    """Give every test a working audit queue behind POST /v1/audits.
+
+    Autouse, like the rate limiter above and for the same reason: the endpoint
+    now needs a queue to accept anything at all, and without one every test that
+    posts an audit would get 503 queue_unavailable. A test that wants the
+    unconfigured deployment specifically overrides get_audit_job_repo itself,
+    which shadows this for its duration."""
+    queue = FakeAuditQueue()
+    app.dependency_overrides[get_audit_job_repo] = lambda: queue
+    yield queue
+    app.dependency_overrides.pop(get_audit_job_repo, None)
 
 
 @pytest.fixture(autouse=True)
