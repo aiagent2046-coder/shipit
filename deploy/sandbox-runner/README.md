@@ -6,7 +6,7 @@ process/user separation on the **same** VPS — NOT full isolation on a second
 host (that is Variant B, out of scope here).
 
 ```
-backend (root, /opt/shipit)                     runner (shipit-runner, /opt/shipit-runner)
+backend (shipit-ops, /opt/shipit)               runner (shipit-runner, /opt/shipit-runner)
   app.sandbox_client ──HTTP over UDS──▶ app.runner.main ──DOCKER_HOST=tcp──▶ docker-socket-proxy ──ro sock──▶ dockerd
   holds all prod secrets                 holds NO prod secrets                only container that
   (DATABASE_URL, billing, pepper…)       (token + runner knobs only)          touches the real socket
@@ -14,7 +14,8 @@ backend (root, /opt/shipit)                     runner (shipit-runner, /opt/ship
 
 ## What runs where
 
-- **backend** (`shipit.service`, root, `/opt/shipit`) — unchanged app; now calls
+- **backend** (`shipit.service`, `shipit-ops` + supplementary group
+  `shipit-runner`, `/opt/shipit`) — unchanged app; now calls
   `app.sandbox_client` instead of `app.deploypack.sandbox` / `app.fixpack.semantic_check`
   for every docker-touching step. Connects to the runner over a Unix socket.
 - **sandbox-runner** (`sandbox-runner.service`, `shipit-runner`, `/opt/shipit-runner`) —
@@ -58,8 +59,12 @@ backend (root, /opt/shipit)                     runner (shipit-runner, /opt/ship
    Access to the socket is gated by its parent dir `/run/shipit-runner`
    (`RuntimeDirectoryMode=0710`: only `shipit-runner` and its group may traverse,
    world cannot) — not by the socket file's own mode, which uvicorn sets to 0666.
-   The backend runs as root and traverses 0710 regardless; the token is the
-   second line of defence.
+   `shipit.service` runs as `shipit-ops` and reaches the socket through
+   `SupplementaryGroups=shipit-runner`
+   (`deploy/systemd/shipit.service.d/30-service-user.conf`) — group membership
+   is what buys the traverse, so `shipit-ops` must be able to resolve group
+   `shipit-runner` or every Deploy Pack / Fix Pack sandbox call fails. The
+   token is the second line of defence.
 
    > Note: the unit deliberately sets **no** `UMask=`. A process-global umask in
    > systemd applies to every file the runner writes — including the `mkdtemp`

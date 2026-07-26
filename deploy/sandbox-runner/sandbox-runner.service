@@ -38,8 +38,12 @@ Environment=DOCKER_BUILDKIT=0
 # as RuntimeDirectory. Access to the socket is gated by the DIRECTORY mode
 # 0710 (owner shipit-runner + group shipit-runner may traverse; world cannot),
 # NOT by the socket file's own mode: uvicorn force-chmods a self-created UDS to
-# 0666, so the file bits are not a control here. The backend runs as root and
-# traverses 0710 regardless; the token is the second line of defence (O5).
+# 0666, so the file bits are not a control here. shipit.service runs as
+# shipit-ops with SupplementaryGroups=shipit-runner (see
+# deploy/systemd/shipit.service.d/30-service-user.conf), so the backend
+# traverses 0710 by group membership -- it used to run as root and traverse it
+# regardless, which is no longer true. The token is the second line of
+# defence (O5).
 #
 # ⚠️  DO NOT add a process-global `UMask=` here. UMask in a systemd unit applies
 #     to EVERY file operation the process makes, not just the socket. The runner

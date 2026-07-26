@@ -20,21 +20,29 @@ boundary. The two compose.
 
 ## Why
 
-Today `shipit.service` runs as **root** with `EnvironmentFile=/opt/shipit/.env`
-(DATABASE_URL, billing keys, pepper, Telegram + admin tokens) and shells
-`docker` directly (`app/deploypack/sandbox.py`, `app/fixpack/semantic_check.py`).
-A container-escape in untrusted client code therefore lands in a process that
-can read every prod secret. Variant A does not claim to stop a determined escape
-(see the honest limitation), but it removes the "…and now you have all the
-secrets" second half: the process that talks to docker holds none of them.
+When this plan was written `shipit.service` ran as **root** with
+`EnvironmentFile=/opt/shipit/.env` (DATABASE_URL, billing keys, pepper, Telegram
++ admin tokens) and shelled `docker` directly (`app/deploypack/sandbox.py`,
+`app/fixpack/semantic_check.py`). A container-escape in untrusted client code
+therefore landed in a process that could read every prod secret. Variant A does
+not claim to stop a determined escape (see the honest limitation), but it removes
+the "…and now you have all the secrets" second half: the process that talks to
+docker holds none of them.
+
+**Update.** With the docker work moved out, `shipit.service` no longer needs
+root at all, and now runs as `shipit-ops` with
+`SupplementaryGroups=shipit-runner`
+(`deploy/systemd/shipit.service.d/30-service-user.conf`). That was a
+consequence of this plan, not part of it.
 
 ---
 
 ## Architecture
 
 ```
-backend  (root, /opt/shipit, all prod secrets)
+backend  (user shipit-ops + group shipit-runner, /opt/shipit, all prod secrets)
    │  app.sandbox_client  — HTTP over a Unix-domain socket
+   │  (group shipit-runner is what lets it traverse /run/shipit-runner, 0710)
    ▼
 sandbox-runner  (user shipit-runner, /opt/shipit-runner, NO prod secrets)
    │  app.runner.main  — FastAPI; calls the UNCHANGED real impl

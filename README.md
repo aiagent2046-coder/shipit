@@ -360,9 +360,14 @@ Implemented:
 Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
 
 - Code at `/opt/shipit`, venv at `/opt/shipit/.venv`, secrets in
-  `/opt/shipit/.env` (chmod 600, never committed).
+  `/opt/shipit/.env` (`chmod 0640`, owner `root:shipit-ops`, never committed).
+  Two identities read it: systemd itself, as root, for `EnvironmentFile=`, and
+  the `ExecStartPre=` validator, which runs as the service user — hence group
+  read rather than 0600.
 - `shipit.service` (systemd): uvicorn on `127.0.0.1:8000`,
-  `EnvironmentFile=/opt/shipit/.env`, `Restart=on-failure`.
+  `EnvironmentFile=/opt/shipit/.env`, `Restart=on-failure`. Runs as
+  `shipit-ops`, not root, with `SupplementaryGroups=shipit-runner` for the
+  sandbox socket — see `deploy/systemd/shipit.service.d/30-service-user.conf`.
 - Caddy terminates TLS for `45-10-40-169.sslip.io` (sslip.io wildcard
   DNS — no owned domain yet) and reverse-proxies to 8000. The public
   `{job_id}.preview.*` URL still needs a real domain; previews are
@@ -393,6 +398,28 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   within a few minutes of a push. The push webhook only enqueues the run and
   ACKs immediately, so nothing gets audited until this timer fires (see
   `MONITORING_ASYNC_PLAN.md`).
+
+### Host provisioning — one-time, not part of a deploy
+
+These set up **host** state, so they survive every release swap and
+`deploy-production.sh` does not run them. Both are needed once when a host is
+built (or rebuilt from scratch), and both are idempotent:
+
+```bash
+# 1. The audit payload spool the API writes and the worker reads.
+sudo deploy/scripts/provision-audit-spool.sh
+
+# 2. Group-read on .env for the ExecStartPre validator.
+sudo chown root:shipit-ops /opt/shipit/.env
+sudo chmod 0640 /opt/shipit/.env
+```
+
+Step 2 must happen **before** `shipit.service` is first started with the
+`30-service-user.conf` drop-in in place. `EnvironmentFile=` is read by systemd
+as root and would not notice, but
+`ExecStartPre=… validate-production-env.py --env-file /opt/shipit/.env` runs as
+`shipit-ops` and opens the file itself — on a `0600 root:root` `.env` the unit
+fails to start.
 
 ### GitHub webhook — two jobs (`pr_merged` + continuous monitoring)
 
