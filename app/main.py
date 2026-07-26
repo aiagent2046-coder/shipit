@@ -758,6 +758,49 @@ async def get_audit(
     return row
 
 
+@app.get("/v1/audit-jobs/{job_id}")
+async def get_audit_job(
+    job_id: str,
+    token: str | None = None,
+    audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
+) -> dict:
+    """Poll one queued audit's progress (durable queue, migration 0022).
+
+    Same ownership model as GET /v1/audits/{id}: the per-row access_token,
+    handed to the submitter once at enqueue, is the only key, and anything that
+    doesn't match -- wrong token, no token, unknown id -- is a flat 404 so this
+    never confirms a job id to someone who doesn't hold its token.
+
+    Deliberately narrow. `state` and `audit_id` are what a client polls for
+    (audit_id is null until the job succeeds, then it is the row to fetch via
+    GET /v1/audits/{id}), and `error_code` is the machine-readable reason a
+    terminal job has no result. The internals a caller has no business acting
+    on -- claimed_by, lease_expires_at, attempts, quota_key, idempotency_key,
+    the free-text error_message -- stay server-side, and access_token is never
+    selected by get_authorized in the first place.
+
+    Nothing populates this queue yet: POST /v1/audits still scans inline and is
+    unchanged in this PR. The endpoint ships now so PR3's cutover is a change
+    to one endpoint rather than to the public API surface."""
+    row = await audit_job_repo.get_authorized(job_id=job_id, access_token=token)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no audit job with this id and token, or "
+                              "persistence isn't configured on this "
+                              "deployment (see app/db.py)"},
+        )
+    return {
+        "id": row["id"],
+        "state": row["state"],
+        "error_code": row["error_code"],
+        "audit_id": row["audit_id"],
+        "created_at": row["created_at"],
+        "completed_at": row["completed_at"],
+    }
+
+
 @app.get("/v1/audits/{audit_id}/report")
 async def get_audit_report(
     audit_id: str,

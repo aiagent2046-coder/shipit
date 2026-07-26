@@ -1,0 +1,65 @@
+[Unit]
+# Drains the durable audit queue (migration 0022). Unlike shipit-fixpack /
+# shipit-monitoring / shipit-reap, this is NOT a timer-driven oneshot that
+# pokes an internal endpoint: it is a long-running process that talks to
+# Postgres directly, so there is no shipit-audit-worker.timer and no
+# Requires=shipit.service -- the queue outlives the API, which is the entire
+# point of moving audits off the request path.
+Description=ShipIt audit job worker
+After=network-online.target
+Wants=network-online.target
+OnFailure=shipit-alert@%n.service
+
+[Service]
+Type=simple
+User=shipit-ops
+# Runs out of the active release, same as shipit.service does via its
+# 20-release-layout.conf drop-in, so a deploy swaps the worker's code with
+# everything else.
+WorkingDirectory=/srv/shipit/current
+EnvironmentFile=/opt/shipit/.env
+# Fail loudly and immediately if the release venv is missing rather than
+# crash-looping on ExecStart (convention from shipit-alert@.service, PR #95).
+ExecStartPre=/usr/bin/test -x /srv/shipit/current/.venv/bin/python
+# The spool is created once per host by deploy/scripts/provision-audit-spool.sh,
+# not here: ReadWritePaths below refuses to start the unit if the path does not
+# exist, so an unprovisioned host must fail visibly instead of silently running
+# with a read-only spool and dead-lettering every zip job.
+ExecStartPre=/usr/bin/test -w /srv/shipit/spool
+ExecStart=/srv/shipit/current/.venv/bin/python -m app.worker
+Restart=always
+RestartSec=5
+
+# Longer than AUDIT_WORKER_LEASE_TTL_SECONDS (300) so systemd waits out the
+# worker's own graceful shutdown -- stop claiming, let in-flight audits finish
+# within AUDIT_WORKER_SHUTDOWN_GRACE_SECONDS (240), release whatever did not.
+# SIGKILL before that budget expires would leave jobs to the lease reaper,
+# which is correct but costs every redeploy a lease TTL of dead time.
+TimeoutStopSec=320
+
+# Hardening: the same NoNewPrivileges / PrivateTmp / ProtectSystem=strict /
+# ProtectHome baseline every shipit-ops unit uses, plus the RestrictSUIDSGID +
+# LockPersonality pair the other background processors carry.
+#
+# Deliberately absent: anything granting docker. This worker only reads a zip,
+# runs static rules over it in-process and calls the LLM provider over HTTPS
+# -- app/scan/* imports nothing from app/sandbox_client.py and never executes
+# user code. Untrusted execution stays exclusively with sandbox-runner.service
+# (User=shipit-runner, DOCKER_HOST on the socket proxy); this unit must never
+# join shipit-runner or reach that socket.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# ProtectSystem=strict makes /srv read-only; the spool is the one place the
+# worker writes. PrivateTmp does not conflict -- the spool is under /srv, not
+# /tmp, and both the API (staging) and the worker (reading) see the same path.
+ReadWritePaths=/srv/shipit/spool
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

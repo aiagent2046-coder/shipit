@@ -21,6 +21,8 @@ on:
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
       - "tests/test_audit_jobs_repo.py"
+      - "tests/test_audit_worker_postgres.py"
+      - "app/worker/**"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
       - ".github/workflows/db-postgres-smoke.yml"
@@ -30,6 +32,8 @@ on:
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
       - "tests/test_audit_jobs_repo.py"
+      - "tests/test_audit_worker_postgres.py"
+      - "app/worker/**"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
       - ".github/workflows/db-postgres-smoke.yml"
@@ -88,3 +92,11 @@ jobs:
       # default suite skips this file with DATABASE_URL unset.
       - name: "Real-Postgres audit queue claim/lease tests"
         run: pytest -q tests/test_audit_jobs_repo.py
+
+      # The worker on top of that queue: the join between its decisions
+      # (covered with a fake repository in tests/test_audit_worker.py) and
+      # the rows they actually produce -- a transient failure coming back
+      # after its backoff, a shutdown release refunding its attempt, four
+      # slots on one pool never running the same job twice.
+      - name: "Real-Postgres audit worker end-to-end tests"
+        run: pytest -q tests/test_audit_worker_postgres.py

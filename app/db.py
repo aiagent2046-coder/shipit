@@ -2181,6 +2181,54 @@ class AuditJobRepository:
             row = await cur.fetchone()
         return row is not None
 
+    async def release_early(self, *, job_id: str, worker_id: str) -> bool:
+        """Hand a claimed job straight back to the queue, unrun and unpenalised.
+
+        This is the graceful-shutdown path: on SIGTERM the worker stops
+        claiming and gives in-flight jobs a budget to finish, and whatever is
+        still running when that budget expires is released here. Waiting for
+        the lease to expire instead would strand the job for up to the full
+        TTL on every ordinary redeploy, which is the opposite of graceful.
+
+        attempts is decremented (floored at zero) because claim_one counts an
+        attempt optimistically and this attempt did not happen -- the job was
+        interrupted by an operator action, not by anything about the job. Left
+        alone, three routine redeploys during one long audit would dead-letter
+        a perfectly good submission.
+
+        error_code/error_message are deliberately not written: a released job
+        is not a failed one, exactly as in reap_expired's requeue branch.
+
+        Same lease gate and same False contract as the finalize_* methods, so
+        a worker that already lost its lease cannot yank a job back out from
+        under the worker now legitimately running it."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        try:
+            parsed_id = uuid.UUID(job_id)
+        except ValueError:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update audit_jobs
+                   set state = 'queued',
+                       claimed_by = null,
+                       claimed_at = null,
+                       lease_expires_at = null,
+                       available_at = now(),
+                       attempts = greatest(attempts - 1, 0),
+                       updated_at = now()
+                 where id = %s and claimed_by = %s and state = 'running'
+                returning id
+                """,
+                (parsed_id, worker_id),
+            )
+            row = await cur.fetchone()
+        return row is not None
+
     async def reap_expired(self, *, error_message: str) -> dict[str, int]:
         """Recover jobs whose worker died holding the lease: an expired
         lease_expires_at means nobody is renewing it, so nobody is working it.
