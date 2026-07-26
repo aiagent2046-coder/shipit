@@ -32,10 +32,23 @@ fi
 # backup-postgres.sh, backup-postgres-offsite.sh) and sets the mode atomically
 # rather than leaving a window at the umask default.
 #
-# 0700, and owned by the service user rather than root: the directory holds
-# users' private source code, and both writers -- the API staging an upload and
-# the worker reading it back -- run as ${SPOOL_USER}. Nothing else on the box
-# has any reason to list it.
-install -d -m 0700 -o "$SPOOL_USER" -g "$SPOOL_USER" "$SPOOL_DIR"
+# 2770, group ${SPOOL_USER}. The setgid bit is the load-bearing part: the two
+# services that share this directory do NOT run as the same user. shipit.service
+# has no User= and so stages uploads as root, while shipit-audit-worker.service
+# runs as ${SPOOL_USER} and reads them back. Setgid makes every file created
+# here inherit the directory's group regardless of who created it, which is what
+# lets the worker's group-read bit actually match. Without it a root-written
+# archive lands root:root and the worker gets EACCES on every zip audit.
+#
+# Still no bits for others: the directory holds users' private source code, and
+# exactly two service identities have any business reading it.
+install -d -m 2770 -o "$SPOOL_USER" -g "$SPOOL_USER" "$SPOOL_DIR"
 
-echo "Provisioned ${SPOOL_DIR} (0700 ${SPOOL_USER}:${SPOOL_USER})"
+# install -d applies the mode to an existing directory too, but only on GNU
+# coreutils and only for the permission bits it is given. This chmod is the
+# explicit guarantee for the case this fix exists to repair: a host where the
+# directory was already provisioned at 0700 by an earlier release, or created
+# on demand by stage_archive() before this script ever ran.
+chmod 2770 "$SPOOL_DIR"
+
+echo "Provisioned ${SPOOL_DIR} (2770 ${SPOOL_USER}:${SPOOL_USER})"

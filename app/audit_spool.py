@@ -31,10 +31,20 @@ from app.ingest.validators import MAX_ARCHIVE_BYTES
 
 logger = logging.getLogger(__name__)
 
-# Provisioned as 0700 shipit-ops by deploy/scripts/provision_spool.sh. Kept
-# under /srv/shipit (the deploy root) rather than /var/lib so it sits with the
-# releases it belongs to, and overridable so tests never touch the real path.
+# Provisioned as 2770 shipit-ops by deploy/scripts/provision-audit-spool.sh.
+# Kept under /srv/shipit (the deploy root) rather than /var/lib so it sits with
+# the releases it belongs to, and overridable so tests never touch the real path.
 SPOOL_DIR = Path(os.environ.get("AUDIT_SPOOL_DIR", "/srv/shipit/spool"))
+
+# Setgid, so a file created here inherits the directory's group whoever writes
+# it. That is not a nicety: shipit.service (which stages) and
+# shipit-audit-worker.service (which reads) run as different users, so group
+# ownership is the only thing the two have in common. See stage_archive.
+SPOOL_DIR_MODE = 0o2770
+
+# Owner read/write, group read, nothing for others. Group read is what the
+# worker uses; see stage_archive for why it is not 0600.
+STAGED_ARCHIVE_MODE = 0o640
 
 # Disk backstop. Not a new limit: one staged file is bounded by the intake's
 # own MAX_ARCHIVE_BYTES (50 MB), so this is that same number times the number
@@ -72,6 +82,25 @@ def _spool_path(job_id: str) -> Path:
     return SPOOL_DIR / f"{parsed}.zip"
 
 
+def _ensure_spool_dir() -> None:
+    """Create the spool directory if this host has not been provisioned yet.
+
+    provision-audit-spool.sh is the real owner of this directory; this exists
+    only for the clean-host and test cases where staging runs before it. The
+    chmod is the point: Path.mkdir's mode is masked by the process umask, and a
+    directory created at a masked 0700 would lose the setgid bit -- which is
+    precisely the failure this whole module's group-read scheme depends on not
+    happening.
+
+    Only chmod'ed when we created it. A directory that already exists belongs
+    to provisioning, may be owned by another user, and re-chmod'ing it on every
+    upload could only ever fail."""
+    if SPOOL_DIR.is_dir():
+        return
+    SPOOL_DIR.mkdir(parents=True, exist_ok=True, mode=SPOOL_DIR_MODE)
+    os.chmod(SPOOL_DIR, SPOOL_DIR_MODE)
+
+
 def spool_bytes_used() -> int:
     """Total size of the staged archives currently on disk. Zero when the
     spool directory does not exist yet."""
@@ -100,12 +129,18 @@ def stage_archive(job_id: str, raw: bytes) -> str:
     'queued', and a crash between the two must not leave a claimable job
     pointing at a truncated file.
 
-    Mode 0600 explicitly (not just inherited from the 0700 directory): the
-    archive is a user's private source code, and the umask of whatever process
-    stages it is not something to depend on.
+    Mode 0640 explicitly, never inherited from the umask of whatever process
+    stages the file. Two service identities legitimately need to see a staged
+    archive, not one: the API process writes it and the worker reads it back,
+    and since shipit.service has no User= while shipit-audit-worker.service
+    runs as shipit-ops, they are not the same user. The group-read bit plus the
+    setgid spool directory (which forces the group onto the file whoever
+    created it) is what grants read to exactly those two and nobody else. This
+    is not a relaxation of "a user's private source code": others still get no
+    bits at all, which is why it is 0640 and not 0644.
 
     Raises SpoolFull if the directory is already at MAX_SPOOL_BYTES."""
-    SPOOL_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _ensure_spool_dir()
     used = spool_bytes_used()
     if used + len(raw) > MAX_SPOOL_BYTES:
         raise SpoolFull(
@@ -114,9 +149,14 @@ def stage_archive(job_id: str, raw: bytes) -> str:
         )
     path = _spool_path(job_id)
     tmp = path.with_suffix(".zip.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                 STAGED_ARCHIVE_MODE)
     try:
         with os.fdopen(fd, "wb") as fh:
+            # os.open's mode argument is masked by the process umask, so a host
+            # running the API under umask 077 would silently get 0600 back and
+            # the worker would be locked out again. fchmod is not masked.
+            os.fchmod(fh.fileno(), STAGED_ARCHIVE_MODE)
             fh.write(raw)
             fh.flush()
             os.fsync(fh.fileno())
