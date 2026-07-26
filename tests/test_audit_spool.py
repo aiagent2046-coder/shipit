@@ -6,6 +6,8 @@ so it runs in the default suite rather than behind DATABASE_URL.
 
 from __future__ import annotations
 
+import os
+import stat
 import uuid
 
 import pytest
@@ -34,12 +36,61 @@ def test_stage_read_round_trip(spool_dir):
     assert path.endswith(f"{job_id}.zip")
 
 
-def test_staged_archive_is_private_to_the_service_user(spool_dir):
-    # 0600, not whatever the staging process's umask happens to be: the file is
-    # a user's private source code sitting on a shared host.
+def test_staged_archive_is_readable_by_the_workers_group_and_nobody_else(
+        spool_dir):
+    """The regression this file previously enshrined as correct.
+
+    It used to assert 0600, which is right only if the writer and the reader
+    are the same user. They are not: shipit.service has no User= and stages as
+    root, while shipit-audit-worker.service runs as shipit-ops, so every zip
+    audit on production died with EACCES in read_staged_archive. 0640 plus the
+    setgid directory below is what gives those two identities -- and only those
+    two -- access."""
     path = spool.stage_archive(str(uuid.uuid4()), b"secret source")
-    assert (spool_dir / path.rsplit("/", 1)[-1]).stat().st_mode & 0o777 == 0o600
-    assert spool_dir.stat().st_mode & 0o777 == 0o700
+
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    assert mode == 0o640
+    # Others get nothing: this is still a user's private source code.
+    assert not mode & 0o007
+
+
+def test_the_spool_directory_is_setgid_so_files_inherit_its_group(spool_dir):
+    # Without the setgid bit the group-read bit above buys nothing on
+    # production: a root-staged file would land root:root and shipit-ops would
+    # still be locked out.
+    spool.stage_archive(str(uuid.uuid4()), b"zip bytes")
+
+    mode = os.stat(spool_dir).st_mode
+    assert mode & stat.S_ISGID
+    assert stat.S_IMODE(mode) == 0o2770
+    assert not stat.S_IMODE(mode) & 0o007
+
+
+def test_modes_do_not_depend_on_the_staging_process_umask(spool_dir):
+    """os.open's and mkdir's mode arguments are both masked by the umask, so a
+    host running the API under a restrictive umask would silently get 0600 and
+    a non-setgid directory back -- the exact production failure, reintroduced
+    invisibly. The explicit fchmod/chmod are what this pins."""
+    old = os.umask(0o077)
+    try:
+        path = spool.stage_archive(str(uuid.uuid4()), b"zip bytes")
+    finally:
+        os.umask(old)
+
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
+    assert stat.S_IMODE(os.stat(spool_dir).st_mode) == 0o2770
+
+
+def test_an_already_provisioned_directory_is_left_alone(spool_dir):
+    # provision-audit-spool.sh owns this directory on a real host, where it may
+    # be owned by another user; staging must not try to re-chmod it on every
+    # upload, which could only ever fail.
+    spool_dir.mkdir(parents=True)
+    os.chmod(spool_dir, 0o2750)
+
+    spool.stage_archive(str(uuid.uuid4()), b"zip bytes")
+
+    assert stat.S_IMODE(os.stat(spool_dir).st_mode) == 0o2750
 
 
 def test_staging_leaves_no_temporary_file_behind(spool_dir):
