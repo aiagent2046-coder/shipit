@@ -3,7 +3,9 @@
 
 import type {
   Account,
+  AuditJobStatus,
   AuditResult,
+  CreateAuditResponse,
   FixpackStatus,
   FixpackUsdtInvoice,
   InstallationStatus,
@@ -94,10 +96,14 @@ export async function getAccount(apiKey?: string | null): Promise<Account> {
   return parse<Account>(res);
 }
 
+// Submits an audit. The scan itself runs in the backend's audit worker, so the
+// normal answer is an AuditJobAccepted to poll with getAuditJob; the exception
+// is a content-cache hit, which comes back as a finished AuditResult. Use
+// isAuditJobAccepted to tell them apart.
 export async function createAudit(
   input: { repoUrl?: string; file?: File },
   apiKey?: string | null,
-): Promise<AuditResult> {
+): Promise<CreateAuditResponse> {
   const form = new FormData();
   if (input.file) {
     form.append("archive", input.file);
@@ -109,7 +115,21 @@ export async function createAudit(
     headers: { ...authHeaders(apiKey) },
     body: form,
   });
-  return parse<AuditResult>(res);
+  return parse<CreateAuditResponse>(res);
+}
+
+// Poll one queued audit. Gated by the JOB's access token (from createAudit),
+// which is not the same secret as the finished audit's — the response carries
+// that one separately once the job succeeds.
+export async function getAuditJob(
+  jobId: string,
+  token?: string | null,
+): Promise<AuditJobStatus> {
+  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  const res = await request(
+    `${API_BASE_URL}/v1/audit-jobs/${encodeURIComponent(jobId)}${q}`,
+  );
+  return parse<AuditJobStatus>(res);
 }
 
 // The audit and its report are ownership-gated by a per-row access token

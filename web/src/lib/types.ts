@@ -1,7 +1,8 @@
 // Types mirror the FastAPI backend's real response shapes. Sources:
 //   app/scan/scoring.py      -> Score
 //   app/scan/pipeline.py     -> finding keys, score.basis
-//   app/main.py create_audit -> AuditResult (POST /v1/audits, 202)
+//   app/main.py create_audit -> AuditJobAccepted | AuditResult (POST /v1/audits)
+//   app/main.py get_audit_job -> AuditJobStatus (GET /v1/audit-jobs/{id})
 //   app/db.py _row_to_audit  -> PersistedAudit (GET /v1/audits/{id})
 //   app/main.py get_account  -> Account (GET /v1/account)
 //   app/billing/usdt_trc20.py invoice_status/create_invoice -> Usdt*
@@ -36,7 +37,8 @@ export interface Finding {
   fix_hint?: string;
 }
 
-// POST /v1/audits — completes inline (up to ~2 min) and returns the full result.
+// POST /v1/audits, cache hit — byte-identical content was audited before, so
+// the backend answers with the stored result instead of queueing a scan.
 export interface AuditResult {
   audit_id: string;
   // Per-audit ownership token, delivered once at creation. Required as
@@ -53,6 +55,52 @@ export interface AuditResult {
   // is only available when this is present (there's a repo to open a PR on).
   repo_url: string | null;
   llm: unknown;
+}
+
+// POST /v1/audits, the normal path — the submission is queued and the scan
+// runs in the audit worker. Poll GET /v1/audit-jobs/{job_id}?token=...
+export interface AuditJobAccepted {
+  job_id: string;
+  // The JOB's ownership token (not the audit's), delivered once here. It is
+  // the only key to the poll endpoint.
+  access_token: string | null;
+  state: string;
+}
+
+export type CreateAuditResponse = AuditResult | AuditJobAccepted;
+
+// A cache hit returns a finished audit; everything else returns a job to poll.
+export function isAuditJobAccepted(
+  r: CreateAuditResponse,
+): r is AuditJobAccepted {
+  return "job_id" in r;
+}
+
+// app/db.py migration 0022 -- created/queued/claimed/running are in flight,
+// the rest are terminal.
+export type AuditJobState =
+  | "created"
+  | "queued"
+  | "claimed"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "dead_letter";
+
+// GET /v1/audit-jobs/{job_id}?token=...
+export interface AuditJobStatus {
+  id: string;
+  state: AuditJobState;
+  // Machine-readable reason a terminal job has no result. Never shown raw.
+  error_code: string | null;
+  audit_id: string | null;
+  // The finished AUDIT's own token — a different secret from the job token,
+  // and the one GET /v1/audits/{id} wants. Null until the job succeeds.
+  audit_access_token: string | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 // GET /v1/audits/{id} — the persisted DB row (different key names).
