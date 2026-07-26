@@ -416,6 +416,127 @@ async def test_finalize_failed_permanent_dead_letters_on_the_first_attempt(real_
     assert isinstance(row["completed_at"], datetime.datetime)
 
 
+# --- early release -------------------------------------------------------
+#
+# The redeploy path. Everything above is a job that ran; these are jobs that
+# were handed back untouched, and the distinction the row has to preserve is
+# "not started" rather than "failed".
+
+
+async def test_release_early_returns_the_job_to_the_queue(real_db):
+    repo = AuditJobRepository()
+    await repo.enqueue(**_enqueue_kwargs())
+    claimed = await repo.claim_one(worker_id="w1", lease_seconds=300)
+
+    assert await repo.release_early(job_id=claimed["id"], worker_id="w1") is True
+
+    row = await _read_row(claimed["id"])
+    assert row["state"] == "queued"
+    assert row["claimed_by"] is None
+    assert row["claimed_at"] is None
+    assert row["lease_expires_at"] is None
+    # Immediately, not after a backoff: a released job did not fail, and the
+    # next worker up should take it on its very next poll.
+    assert row["available_at"] <= datetime.datetime.now(datetime.timezone.utc)
+
+
+async def test_release_early_refunds_the_attempt(real_db):
+    """The reason this exists rather than letting the lease expire.
+
+    claim_one counts an attempt optimistically, so a worker that shut down
+    without running the job would otherwise spend one of three chances on a
+    redeploy. Three redeploys in a row would dead-letter a job nobody ever
+    tried."""
+    repo = AuditJobRepository()
+    await repo.enqueue(**_enqueue_kwargs())
+    claimed = await repo.claim_one(worker_id="w1", lease_seconds=300)
+    assert claimed["attempts"] == 1
+
+    await repo.release_early(job_id=claimed["id"], worker_id="w1")
+
+    assert (await _read_row(claimed["id"]))["attempts"] == 0
+
+
+async def test_release_early_writes_no_error(real_db):
+    # A released job is not a failed one; a stale error_code on a queued row
+    # would show up in the poll endpoint as a failure that never happened.
+    repo = AuditJobRepository()
+    await repo.enqueue(**_enqueue_kwargs())
+    claimed = await repo.claim_one(worker_id="w1", lease_seconds=300)
+
+    await repo.release_early(job_id=claimed["id"], worker_id="w1")
+
+    row = await _read_row(claimed["id"])
+    assert row["error_code"] is None
+    assert row["error_message"] is None
+    assert row["completed_at"] is None
+
+
+async def test_a_released_job_is_immediately_claimable_again(real_db):
+    repo = AuditJobRepository()
+    await repo.enqueue(**_enqueue_kwargs())
+    first = await repo.claim_one(worker_id="w1", lease_seconds=300)
+    await repo.release_early(job_id=first["id"], worker_id="w1")
+
+    second = await repo.claim_one(worker_id="w2", lease_seconds=300)
+
+    assert second is not None, "a released job must not wait out a backoff"
+    assert second["id"] == first["id"]
+    assert second["attempts"] == 1, "the refund makes this the first attempt again"
+
+
+async def test_release_early_is_false_after_the_lease_was_lost(real_db):
+    """The same lease gate as the finalize_* methods, and for the same reason.
+
+    A shutting-down worker whose lease was already reaped must not drag the job
+    out from under the worker that now holds it -- that would discard a scan in
+    flight and refund an attempt that is being spent right now."""
+    repo = AuditJobRepository()
+    await repo.enqueue(**_enqueue_kwargs())
+    claimed = await repo.claim_one(worker_id="w1", lease_seconds=-1)
+    await repo.reap_expired(error_message="lease expired")
+    stolen = await repo.claim_one(worker_id="w2", lease_seconds=300)
+    assert stolen["id"] == claimed["id"]
+
+    assert await repo.release_early(job_id=claimed["id"], worker_id="w1") is False
+
+    row = await _read_row(claimed["id"])
+    assert row["state"] == "running"
+    assert row["claimed_by"] == "w2"
+
+
+async def test_release_early_is_false_for_a_job_that_already_finished(real_db):
+    # The shutdown race in the other direction: the scan completed and was
+    # finalized, then the grace budget expired. Releasing would resurrect a
+    # finished job and re-run a paid audit.
+    repo = AuditJobRepository()
+    await repo.enqueue(**_enqueue_kwargs())
+    claimed = await repo.claim_one(worker_id="w1", lease_seconds=300)
+    audit = await AuditRepository().create(
+        stack="fastapi", file_count=1, score_total=7.0,
+        score_json={"total": 7.0}, findings_json=[],
+        content_hash=f"c-{uuid.uuid4().hex[:8]}", engine_version="test-engine-1",
+    )
+    await repo.finalize_succeeded(
+        job_id=claimed["id"], worker_id="w1", audit_id=audit["id"])
+
+    assert await repo.release_early(job_id=claimed["id"], worker_id="w1") is False
+    assert (await _read_row(claimed["id"]))["state"] == "succeeded"
+
+
+async def test_release_early_is_false_for_an_unknown_id(real_db):
+    repo = AuditJobRepository()
+    assert await repo.release_early(
+        job_id=str(uuid.uuid4()), worker_id="w1") is False
+
+
+async def test_release_early_is_false_for_a_malformed_id(real_db):
+    # Same defensive parse as the other id-taking methods: a bad id is a False,
+    # not a psycopg error escaping into a shutdown path.
+    repo = AuditJobRepository()
+    assert await repo.release_early(job_id="not-a-uuid", worker_id="w1") is False
+
+
 # --- reaping -------------------------------------------------------------
 
 async def test_reap_expired_requeues_while_attempts_remain(real_db):
