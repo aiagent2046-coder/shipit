@@ -31,6 +31,13 @@ Degradation contract when the runner is unreachable:
     ``error`` set instead of raising, so ``is_regression`` treats a runner
     outage as "could not verify", never a false regression — identical to the
     existing "docker CLI not available" behaviour.
+
+Before any of that degradation kicks in, a *connect-level* failure is retried
+(see ``SANDBOX_RUNNER_RETRY_DELAYS_S``): the runner is a systemd unit with
+``Restart=on-failure`` / ``RestartSec=2``, so "socket not there yet" is a
+routine few-second window during a redeploy or restart, not an outage. Only
+connect-level errors are retried — a read timeout means the runner is alive and
+working, and a 4xx is a deterministic rejection.
 """
 
 from __future__ import annotations
@@ -38,6 +45,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import time
 import zipfile
 from pathlib import Path
 
@@ -59,48 +67,97 @@ SANDBOX_RUNNER_TOKEN = os.environ.get("SANDBOX_RUNNER_TOKEN", "")
 # budget, or the backend gives up while the runner is still building.
 SANDBOX_RUNNER_TIMEOUT_S = float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_S", "600"))
 
+# Health probe must answer "is the runner ready *right now*", so it gets its own
+# short timeout instead of the multi-minute build budget above. Kept just above
+# the runner's own 10s `docker version` subprocess timeout, so a slow-but-alive
+# daemon reports itself rather than being cut off as unhealthy.
+SANDBOX_RUNNER_HEALTH_TIMEOUT_S = float(
+    os.environ.get("SANDBOX_RUNNER_HEALTH_TIMEOUT_S", "12")
+)
+
+# Delays *between* connect attempts, so len()+1 total attempts. Sized to cover
+# the unit's RestartSec=2 plus uvicorn's startup, not to paper over a real
+# outage: after ~4s of failing to connect, the runner is genuinely down.
+SANDBOX_RUNNER_RETRY_DELAYS_S = (1.0, 3.0)
+
+# Indirection so tests can observe the backoff without waiting it out.
+_sleep = time.sleep
+
 
 class SandboxRunnerUnavailable(RuntimeError):
     """Raised when the sandbox-runner cannot be reached or errored at the
     transport level (connection refused, timeout, 5xx). Callers translate this
     into their own degraded outcome."""
 
+    #: whether the same request could plausibly succeed if tried again later.
+    #: False here: a read timeout, a 5xx or a 4xx all mean the runner answered
+    #: (or was working) and the outcome is not a transient connect gap.
+    retryable = False
 
-def _client() -> httpx.Client:
+
+class SandboxRunnerTransportError(SandboxRunnerUnavailable):
+    """Connect-level failure: the socket was not accepting connections at all
+    (runner restarting, unit not up yet). Subclasses SandboxRunnerUnavailable so
+    existing ``except SandboxRunnerUnavailable`` call sites are unaffected; it is
+    only raised after the in-``_post`` connect retries are exhausted."""
+
+    retryable = True
+
+
+def _client(timeout: float | None = None) -> httpx.Client:
     headers = {}
     if SANDBOX_RUNNER_TOKEN:
         headers["Authorization"] = f"Bearer {SANDBOX_RUNNER_TOKEN}"
+    if timeout is None:
+        timeout = SANDBOX_RUNNER_TIMEOUT_S
     if SANDBOX_RUNNER_URL:
         return httpx.Client(
-            base_url=SANDBOX_RUNNER_URL, headers=headers,
-            timeout=SANDBOX_RUNNER_TIMEOUT_S,
+            base_url=SANDBOX_RUNNER_URL, headers=headers, timeout=timeout,
         )
     transport = httpx.HTTPTransport(uds=SANDBOX_RUNNER_UDS)
     # base_url host is arbitrary for a UDS connection but required by httpx.
     return httpx.Client(
         base_url="http://sandbox-runner", headers=headers,
-        transport=transport, timeout=SANDBOX_RUNNER_TIMEOUT_S,
+        transport=transport, timeout=timeout,
     )
+
+
+def _request_once(path: str, *, content: bytes | None,
+                  manifest: dict | None, json_body: dict | None) -> httpx.Response:
+    headers = {}
+    if manifest is not None:
+        headers["X-Sandbox-Request"] = json.dumps(manifest)
+    with _client() as client:
+        if json_body is not None:
+            return client.post(path, json=json_body, headers=headers)
+        headers.setdefault("Content-Type", "application/octet-stream")
+        return client.post(path, content=content or b"", headers=headers)
 
 
 def _post(path: str, *, content: bytes | None = None,
           manifest: dict | None = None, json_body: dict | None = None) -> dict:
     """POST to the runner and return the parsed JSON, or raise
-    SandboxRunnerUnavailable on any transport-level failure."""
-    headers = {}
-    if manifest is not None:
-        headers["X-Sandbox-Request"] = json.dumps(manifest)
-    try:
-        with _client() as client:
-            if json_body is not None:
-                resp = client.post(path, json=json_body, headers=headers)
-            else:
-                headers.setdefault("Content-Type", "application/octet-stream")
-                resp = client.post(path, content=content or b"", headers=headers)
-    except httpx.HTTPError as exc:
-        raise SandboxRunnerUnavailable(
-            f"sandbox-runner unreachable ({type(exc).__name__})"
-        ) from exc
+    SandboxRunnerUnavailable on any transport-level failure.
+
+    Connect-level failures are retried per SANDBOX_RUNNER_RETRY_DELAYS_S; every
+    other failure is raised on the first attempt. Retrying a read timeout would
+    double an already multi-minute wait for a runner that is demonstrably alive,
+    and retrying a 4xx (bad token, bad request) can only fail again."""
+    for delay in (*SANDBOX_RUNNER_RETRY_DELAYS_S, None):
+        try:
+            resp = _request_once(path, content=content, manifest=manifest,
+                                 json_body=json_body)
+            break
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            if delay is None:
+                raise SandboxRunnerTransportError(
+                    f"sandbox-runner unreachable ({type(exc).__name__})"
+                ) from exc
+            _sleep(delay)
+        except httpx.HTTPError as exc:
+            raise SandboxRunnerUnavailable(
+                f"sandbox-runner unreachable ({type(exc).__name__})"
+            ) from exc
     if resp.status_code >= 500:
         raise SandboxRunnerUnavailable(
             f"sandbox-runner returned {resp.status_code}"
@@ -124,6 +181,25 @@ def _zip_dir(build_dir: Path) -> bytes:
             if p.is_file():
                 zf.write(p, p.relative_to(build_dir).as_posix())
     return buf.getvalue()
+
+
+def runner_healthy() -> bool:
+    """Is the runner up and able to see docker *right now*?
+
+    A cheap ``GET /healthz`` with a short timeout and NO retries: this answers a
+    point-in-time readiness question (intended as a pre-flight gate before
+    claiming paid work), so "not ready yet" must come back in seconds rather
+    than being retried into a slow maybe. Never raises — any transport error,
+    non-200 or unparseable body is simply False."""
+    try:
+        with _client(timeout=SANDBOX_RUNNER_HEALTH_TIMEOUT_S) as client:
+            resp = client.get("/healthz")
+        if resp.status_code != 200:
+            return False
+        data = resp.json()
+        return bool(data.get("ok")) and bool(data.get("docker"))
+    except Exception:
+        return False
 
 
 # --- deploy-pack -----------------------------------------------------------
