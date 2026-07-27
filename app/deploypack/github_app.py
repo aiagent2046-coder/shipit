@@ -154,20 +154,34 @@ def mint_app_jwt(app_id: str, private_key: str, *, now: float | None = None) -> 
     skew), never the ``iss`` type."""
     now = now if now is not None else time.time()
     payload = {"iat": int(now) - 60, "exp": int(now) + 9 * 60, "iss": app_id.strip()}
+    had_literal_escapes = "\\n" in private_key
     private_key = _normalize_pem(private_key)
     try:
         return jwt.encode(payload, private_key, algorithm="RS256")
     except (ValueError, jwt.exceptions.PyJWTError) as exc:
-        # Structure-only diagnostics for PEM parse failures: the exact
-        # underlying library error, the real-newline count after normalize,
-        # and the first/last 15 chars (PEM boundary markers, never key
-        # material). Enough to tell a truncated/mis-escaped key from a
-        # genuinely wrong one without ever logging the secret.
+        # Structure-only diagnostics for PEM parse failures: the underlying
+        # library error plus counts and booleans describing the SHAPE of the
+        # value, never any of its content. This branch fires precisely when
+        # the key is malformed, so a slice of it is NOT reliably the PEM
+        # header/footer -- on a truncated key the tail is base64 key material.
+        #
+        # Between them these separate the three real causes: systemd having
+        # eaten the backslashes so no escape ever reached us (escapes=False
+        # with newlines=0, the incident _private_key_from_b64 exists for), a
+        # truncated key (begin without end), and a structurally fine but
+        # wrong/corrupt key (both markers, plausible length -- reach for
+        # _public_key_fingerprint next). `escapes` is measured before
+        # normalize, which is the only point at which it is still knowable.
+        stripped = private_key.strip()
         logger.warning(
-            "PEM parse failed: %s: %s | real newlines after normalize=%d | "
-            "head=%r | tail=%r",
-            type(exc).__name__, exc, private_key.count("\n"),
-            private_key[:15], private_key[-15:],
+            "PEM parse failed: %s: %s | length=%d | newlines after "
+            "normalize=%d | lines=%d | escapes before normalize=%s | "
+            "has_begin=%s | has_end=%s",
+            type(exc).__name__, exc, len(private_key),
+            private_key.count("\n"), len(stripped.splitlines()),
+            had_literal_escapes,
+            stripped.startswith("-----BEGIN"),
+            stripped.endswith("-----") and "-----END" in stripped,
         )
         raise GitHubAppError(
             "GITHUB_APP_PRIVATE_KEY is not a valid PEM private key — "
