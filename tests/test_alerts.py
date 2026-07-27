@@ -173,3 +173,16 @@ def test_main_uses_default_message_when_no_args(monkeypatch):
     monkeypatch.setattr(alerts, "notify_operator", rec)
     assert alerts._main(["app.alerts"]) == 0
     assert rec.calls == [("shipit: service OnFailure alert", "systemd-onfailure")]
+
+
+def test_main_configures_logging_so_its_one_record_is_emitted(monkeypatch):
+    """The third process entry point, and the one that was riding on Python's
+    lastResort handler: that drops anything below WARNING, so the single INFO
+    line proving the OnFailure hook ran never reached the journal. Asserted via
+    the call rather than the output, because basicConfig no-ops once a handler
+    exists and pytest has already installed one."""
+    called: list[bool] = []
+    monkeypatch.setattr(alerts, "configure_logging", lambda: called.append(True))
+    monkeypatch.setattr(alerts, "notify_operator", _AsyncRecorder(result=True))
+    assert alerts._main(["app.alerts", "boom"]) == 0
+    assert called == [True]

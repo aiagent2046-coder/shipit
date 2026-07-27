@@ -38,6 +38,7 @@ import os
 import signal
 import socket
 import sys
+import time
 
 import psycopg
 
@@ -58,6 +59,7 @@ from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
+from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging
 from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
 
@@ -185,6 +187,15 @@ def classify_failure(exc: BaseException) -> tuple[str, str, bool]:
         return "database_unavailable", str(exc) or type(exc).__name__, False
 
     return "unexpected_error", f"{type(exc).__name__}: {exc}", True
+
+
+def _elapsed_ms(started: float) -> int:
+    """Milliseconds since a time.monotonic() mark, rounded to an int.
+
+    monotonic rather than time(): these spans are compared against each other
+    and must not jump when the clock is stepped by NTP mid-scan.
+    """
+    return int((time.monotonic() - started) * 1000)
 
 
 def _worker_id(slot: int) -> str:
@@ -354,6 +365,7 @@ async def _heartbeat(
         logger.warning(
             "lost the lease on job %s (worker %s) -- abandoning it without "
             "writing anything", job_id, worker_id,
+            extra={"step": "lease_renew"},
         )
         lease_lost.set()
         scan_task.cancel()
@@ -374,6 +386,10 @@ async def _process_job(
     backstop."""
     job_id = str(job["id"])
     lease_lost = asyncio.Event()
+    # Wall time for the whole claimed-to-finalized span, so a slow job shows up
+    # as one number on its terminal line instead of having to be reconstructed
+    # from two timestamps.
+    started = time.monotonic()
 
     scan_task = asyncio.create_task(
         _execute_job(
@@ -404,6 +420,8 @@ async def _process_job(
             logger.info(
                 "shutdown released job %s back to the queue (%s)",
                 job_id, "ok" if released else "lease already gone",
+                extra={"step": "release_early",
+                       "duration_ms": _elapsed_ms(started)},
             )
         raise
     except Exception as exc:  # noqa: BLE001 -- classified, then recorded
@@ -411,6 +429,8 @@ async def _process_job(
         logger.warning(
             "job %s failed (%s, permanent=%s)", job_id, code, permanent,
             exc_info=True,
+            extra={"step": "execute", "duration_ms": _elapsed_ms(started),
+                   "error_code": code},
         )
         if lease_lost.is_set():
             return
@@ -420,7 +440,9 @@ async def _process_job(
         )
         if not wrote:
             logger.warning(
-                "job %s failure not recorded -- lease was already gone", job_id)
+                "job %s failure not recorded -- lease was already gone", job_id,
+                extra={"step": "finalize_failed",
+                       "duration_ms": _elapsed_ms(started)})
             return
         # finalize_failed picks the branch from the row's own attempts, so the
         # same condition is re-derived here to know whether the job is done.
@@ -431,10 +453,14 @@ async def _process_job(
     else:
         if lease_lost.is_set():
             return
+        set_log_context(audit_id=str(audit_id))
         wrote = await jobs.finalize_succeeded(
             job_id=job_id, worker_id=worker_id, audit_id=audit_id)
         if wrote:
-            logger.info("job %s succeeded -> audit %s", job_id, audit_id)
+            logger.info(
+                "job %s succeeded -> audit %s", job_id, audit_id,
+                extra={"step": "finalize",
+                       "duration_ms": _elapsed_ms(started)})
             _discard_payload(job)
         else:
             logger.warning(
@@ -442,6 +468,8 @@ async def _process_job(
                 "the audit is persisted and reusable via its content hash, "
                 "the job will be retried or dead-lettered by whoever holds it",
                 job_id, audit_id,
+                extra={"step": "finalize",
+                       "duration_ms": _elapsed_ms(started)},
             )
     finally:
         heartbeat_task.cancel()
@@ -467,6 +495,7 @@ async def _slot(
             await _sleep_or_shutdown(shutting_down)
             continue
 
+        claim_started = time.monotonic()
         job = await jobs.claim_one(
             worker_id=worker_id,
             lease_seconds=AUDIT_WORKER_LEASE_TTL_SECONDS,
@@ -475,13 +504,31 @@ async def _slot(
             await _sleep_or_shutdown(shutting_down)
             continue
 
-        logger.info("slot %s claimed job %s (attempt %s)",
-                    slot, job["id"], job.get("attempts"))
-        await _process_job(
-            job, worker_id=worker_id, jobs=jobs, llm_client=llm_client,
-            audit_repo=audit_repo, llm_usage_repo=llm_usage_repo,
-            shutting_down=shutting_down,
-        )
+        # Scoped to this job, not to the slot: the `with` restores the
+        # previous values on EVERY exit -- success, failure, lost lease,
+        # shutdown cancellation -- so the next claim cannot inherit the
+        # previous job's ids. audit_id is bound to None here so that the reset
+        # also clears the value _process_job sets when a scan succeeds.
+        #
+        # Slots are separate asyncio tasks, and a task runs in a COPY of the
+        # context it was created in, so a value set inside one slot is
+        # invisible to the others: two jobs running concurrently cannot mix up
+        # their job_id in the logs. tests/test_log_context_wiring.py pins this.
+        with log_context(
+            job_id=str(job["id"]),
+            trace_id=str(job["id"]),
+            audit_id=None,
+        ):
+            logger.info("slot %s claimed job %s (attempt %s)",
+                        slot, job["id"], job.get("attempts"),
+                        extra={"step": "claim",
+                               "duration_ms": _elapsed_ms(claim_started),
+                               "attempt": job.get("attempts")})
+            await _process_job(
+                job, worker_id=worker_id, jobs=jobs, llm_client=llm_client,
+                audit_repo=audit_repo, llm_usage_repo=llm_usage_repo,
+                shutting_down=shutting_down,
+            )
 
     logger.info("audit worker slot %s stopped claiming", slot)
 
@@ -513,12 +560,15 @@ async def _reaper(
     either of the first two leaves bytes behind that no worker will ever read
     and MAX_SPOOL_BYTES eventually starts rejecting new uploads."""
     while not shutting_down.is_set():
+        pass_started = time.monotonic()
         try:
             result = await jobs.reap_expired(error_message=_REAP_MESSAGE)
             if result["requeued"] or result["dead_lettered"]:
                 logger.info(
                     "reaped expired leases: %s requeued, %s dead-lettered",
                     result["requeued"], result["dead_lettered"],
+                    extra={"step": "reap",
+                           "duration_ms": _elapsed_ms(pass_started)},
                 )
             stuck = await jobs.reap_stuck_created(
                 older_than_seconds=AUDIT_WORKER_CREATED_TTL_SECONDS,
@@ -532,7 +582,9 @@ async def _reaper(
                 sweep_stale_archives,
                 max_age_seconds=AUDIT_SPOOL_MAX_AGE_SECONDS)
         except Exception:  # noqa: BLE001 -- the reaper must outlive a blip
-            logger.warning("reap pass failed", exc_info=True)
+            logger.warning(
+                "reap pass failed", exc_info=True,
+                extra={"step": "reap", "duration_ms": _elapsed_ms(pass_started)})
         try:
             await asyncio.wait_for(
                 shutting_down.wait(),

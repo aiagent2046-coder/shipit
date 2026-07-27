@@ -81,6 +81,7 @@ from app import sandbox_client
 from app.sandbox_client import SandboxRunnerUnavailable
 from app.llm.client import LLMClient
 from app.llm import pricing
+from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging
 from app.monitor import normalize_repo_full_name, repo_url_from_full_name
 from app.monitor.diff import new_high_severity_findings
@@ -183,6 +184,79 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("Cache-Control", "private, no-store")
     return response
+
+
+REQUEST_ID_HEADER = "X-Request-ID"
+
+
+def new_request_id() -> str:
+    """The correlation id minted for one request.
+
+    Short because a user reads it off an error page and types it into a
+    support message.
+    """
+    return uuid.uuid4().hex[:12]
+
+
+# Registered after add_security_headers, and app.middleware inserts at position
+# 0, so this is the OUTERMOST user middleware: every other middleware and every
+# route runs inside the context it establishes.
+@app.middleware("http")
+async def bind_request_context(request: Request, call_next):
+    """Give each request a correlation id, in the log context and on the way out.
+
+    The id is always minted here and an inbound X-Request-ID is deliberately
+    IGNORED. This is a public API: a client-supplied value is attacker-controlled
+    text that would land in every log line of the request (newlines and all) and
+    could be set to another user's id to poison a support investigation. Echoing
+    a header is not worth either. Clients that want their own correlation id can
+    keep it and match on ours from the response.
+
+    Every context field is bound here, not just the two with values, so the reset
+    on the way out covers whatever a route added underneath (account_id,
+    audit_id, job_id). Without that a value set in a handler would survive into
+    the next request served on the same keep-alive connection, which is the worst
+    kind of logging bug: plausible, wrong, and attributed to a real id.
+
+    request.state carries the id as well, for the one reader that cannot see the
+    contextvar -- see unhandled_exception_handler.
+    """
+    request_id = new_request_id()
+    request.state.request_id = request_id
+    with log_context(
+        request_id=request_id,
+        trace_id=request_id,
+        account_id=None,
+        audit_id=None,
+        job_id=None,
+    ):
+        response = await call_next(request)
+    response.headers[REQUEST_ID_HEADER] = request_id
+    return response
+
+
+def _elapsed_ms(started: float) -> int:
+    """Milliseconds since a time.monotonic() mark, rounded to an int.
+
+    monotonic rather than time(): these spans are compared against each other
+    and must not jump when the clock is stepped by NTP mid-request.
+    """
+    return int((time.monotonic() - started) * 1000)
+
+
+def _bind_account(account: dict | None) -> None:
+    """Put the resolved account on the log context for the rest of the request.
+
+    Anonymous traffic leaves the field as None rather than writing a
+    placeholder, so "account_id absent" reads as "no key presented" instead of
+    being confusable with a real account. Safe to call unscoped:
+    bind_request_context binds account_id too, so its reset on the way out
+    clears whatever a handler set here.
+    """
+    if account is not None:
+        set_log_context(account_id=str(account["id"]))
+
+
 
 
 _limiter = limiter_from_env()
@@ -673,12 +747,20 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     HTTPException here, so the intentional 422/404/503/401 responses raised
     across the API stay normal control flow and never alert.
 
-    This is the one place the request-id correlation gap gets its minimal
-    fix: mint a short id, put it in the 500 log line, the operator alert, and
-    the response body, so a user's report ("I got error abc123") ties to an
-    exact log line and alert without full structured logging. The alert is
-    best-effort and deduped so a crash-loop can't spam the operator."""
-    request_id = uuid.uuid4().hex[:12]
+    The id in the log line, the operator alert and the response body is the one
+    bind_request_context minted, so "I got error abc123" ties to every line of
+    that request rather than to this handler alone. The alert is best-effort and
+    deduped so a crash-loop can't spam the operator.
+
+    It is read off request.state and not the contextvar, because this handler is
+    the one place in the process that cannot see the contextvar: Starlette runs
+    an Exception handler in ServerErrorMiddleware, which sits OUTSIDE the user
+    middleware stack, so by the time the exception reaches here
+    bind_request_context's `with` block has already reset the context. The scope
+    dict travels with the request instead of with the context, so it survives.
+    The same ordering is why this response sets the header itself -- it never
+    passes back through the middleware that would otherwise add it."""
+    request_id = getattr(request.state, "request_id", None)
     logger.exception(
         "unhandled error [request_id=%s] %s %s",
         request_id, request.method, request.url.path,
@@ -691,6 +773,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return JSONResponse(
         status_code=500,
         content={"detail": {"reason": "internal_error", "request_id": request_id}},
+        headers={REQUEST_ID_HEADER: request_id} if request_id else None,
     )
 
 
@@ -745,6 +828,10 @@ async def get_audit(
     # access_token (?token=...), delivered once at creation. A leaked id is
     # not enough. A missing/wrong token is answered 404 (not 403) so this
     # never confirms an id exists to someone who doesn't hold its token.
+    #
+    # Bound before the lookup, not after: a failed authorization is exactly the
+    # request whose logs need the id someone asked for.
+    set_log_context(audit_id=audit_id)
     row = await audit_repo.get_authorized(audit_id, token)
     if row is None:
         raise HTTPException(
@@ -782,6 +869,7 @@ async def get_audit_job(
     result it waited for. It is null until the job succeeds. Handing it to the
     holder of the job token is not a widening -- POST /v1/audits returned the
     audit token directly to that same submitter before the cutover."""
+    set_log_context(job_id=job_id)
     row = await audit_job_repo.get_authorized(job_id=job_id, access_token=token)
     if row is None:
         raise HTTPException(
@@ -811,6 +899,7 @@ async def get_audit_report(
     """The shareable artifact: the same persisted audit rendered as a
     self-contained, plain-language HTML page. Requires the audit's
     access_token (?token=...) -- same ownership check as GET /v1/audits/{id}."""
+    set_log_context(audit_id=audit_id)
     row = await audit_repo.get_authorized(audit_id, token)
     if row is None:
         raise HTTPException(
@@ -860,6 +949,7 @@ async def get_account(
     back to free" without the endpoint leaking which keys exist.
     """
     account = await resolve_account(request, account_repo)
+    _bind_account(account)
     tier = account["tier"] if account else TIER_FREE
     entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
     return {
@@ -886,6 +976,7 @@ async def rotate_account_key(
     would mislead the caller into thinking a bad key was rotated.
     """
     account = await resolve_account(request, account_repo)
+    _bind_account(account)
     if account is None:
         raise HTTPException(
             status_code=401,
@@ -1581,6 +1672,7 @@ async def get_fixpack_status(
     generation failure. Derived from the detail the reaper writes, so it needs no
     schema change; null for every non-failed status.
     """
+    set_log_context(audit_id=audit_id)
     audit = await audit_repo.get(audit_id)
     if audit is None:
         raise HTTPException(
@@ -1822,11 +1914,16 @@ async def _process_one_paid_job(
     production failure impossible to diagnose (see the silent-failure
     incident this path was hardened for)."""
     job_id = job["id"]
+    set_log_context(job_id=str(job_id),
+                    audit_id=str(job["audit_id"]) if job.get("audit_id") else None)
+    started = time.monotonic()
     try:
         audit = await audit_repo.get(job["audit_id"]) if job.get("audit_id") else None
         if audit is None or not audit.get("repo_url"):
             detail = "audit missing or has no repo_url to re-fetch"
-            logger.error("Fix Pack job %s failed: %s", job_id, detail)
+            logger.error("Fix Pack job %s failed: %s", job_id, detail,
+                         extra={"step": "load_audit",
+                                "duration_ms": _elapsed_ms(started)})
             await fixpack_repo.mark_status(job_id, "failed", detail=detail)
             await _record_fix_outcome(
                 fix_outcome_repo, job=job, outcome="failed",
@@ -1838,7 +1935,9 @@ async def _process_one_paid_job(
         parsed = _parse_github_repo_url(audit["repo_url"])
         if parsed is None:
             detail = f"unparseable repo_url: {audit['repo_url']!r}"
-            logger.error("Fix Pack job %s failed: %s", job_id, detail)
+            logger.error("Fix Pack job %s failed: %s", job_id, detail,
+                         extra={"step": "parse_repo_url",
+                                "duration_ms": _elapsed_ms(started)})
             await fixpack_repo.mark_status(job_id, "failed", detail=detail)
             await _record_fix_outcome(
                 fix_outcome_repo, job=job, outcome="failed",
@@ -1885,6 +1984,8 @@ async def _process_one_paid_job(
             logger.warning(
                 "Fix Pack job %s deferred, verification unavailable: %s",
                 job_id, semantic.detail,
+                extra={"step": "semantic_check",
+                       "duration_ms": _elapsed_ms(started)},
             )
             await fixpack_repo.mark_status(job_id, "running", detail=semantic.detail)
             return "deferred"
@@ -1893,6 +1994,8 @@ async def _process_one_paid_job(
             logger.warning(
                 "Fix Pack job %s blocked by semantic check: %s",
                 job_id, semantic.detail,
+                extra={"step": "semantic_check",
+                       "duration_ms": _elapsed_ms(started)},
             )
             await fixpack_repo.mark_status(job_id, "blocked", detail=semantic.detail)
             await _record_fix_outcome(
@@ -1924,7 +2027,9 @@ async def _process_one_paid_job(
         # lands here. Log the full traceback (logger.exception attaches it)
         # and persist a short reason so the failure is diagnosable from both
         # the logs and a `select ... from fixpack_jobs` query.
-        logger.exception("Fix Pack job %s failed during processing", job_id)
+        logger.exception("Fix Pack job %s failed during processing", job_id,
+                         extra={"step": "fixpack",
+                                "duration_ms": _elapsed_ms(started)})
         detail = _failure_detail(exc)
         await fixpack_repo.mark_status(job_id, "failed", detail=detail)
         await _record_fix_outcome(
@@ -2295,6 +2400,7 @@ async def create_audit(
     # note) before any repo fetch or scan work is done. Checked here, at the
     # very start, so a paused service spends nothing. The mandatory operator
     # alert fires inside _emergency_stop_active.
+    intake_started = time.monotonic()
     paused, note = await _emergency_stop_active(service_flags_repo)
     if paused:
         raise HTTPException(
@@ -2306,6 +2412,7 @@ async def create_audit(
     # free, with no DB call, so anonymous traffic is byte-for-byte unchanged.
     # The only entitlement enforced here is daily_audit_limit (below).
     account = await resolve_account(request, account_repo)
+    _bind_account(account)
     tier = account["tier"] if account else TIER_FREE
     entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
 
@@ -2352,8 +2459,14 @@ async def create_audit(
                 detail={"reason": exc.reason, "detail": exc.detail},
             ) from exc
 
+    logger.info(
+        "audit intake: source read (%s bytes)", len(raw),
+        extra={"step": "read_source", "duration_ms": _elapsed_ms(intake_started)},
+    )
+
     buf = io.BytesIO(raw)
 
+    stage_started = time.monotonic()
     try:
         validate_zip(buf, size_bytes=len(raw))
     except ArchiveValidationError as exc:
@@ -2364,6 +2477,10 @@ async def create_audit(
 
     buf.seek(0)
     stack = detect_stack(buf)
+    logger.info(
+        "audit intake: archive validated as %s", stack.value,
+        extra={"step": "validate", "duration_ms": _elapsed_ms(stage_started)},
+    )
     if stack is Stack.UNSUPPORTED:
         raise HTTPException(
             status_code=422,
@@ -2408,9 +2525,16 @@ async def create_audit(
     # prior result only if it was produced by the current audit engine, so an
     # engine change (AUDIT_ENGINE_VERSION bump) recomputes rather than serving
     # a stale row. See app/scan/pipeline.py and AuditRepository.get_by_content_hash.
+    stage_started = time.monotonic()
     digest = content_digest(raw)
     cached = await audit_repo.get_by_content_hash(digest, AUDIT_ENGINE_VERSION)
+    logger.info(
+        "audit intake: cache %s for digest %s",
+        "hit" if cached is not None else "miss", digest[:12],
+        extra={"step": "cache_lookup", "duration_ms": _elapsed_ms(stage_started)},
+    )
     if cached is not None:
+        set_log_context(audit_id=str(cached["id"]))
         return {
             "audit_id": cached["id"],
             # The reused audit's own token, so the client can open its page.
@@ -2428,7 +2552,8 @@ async def create_audit(
             "reused": True,
         }
 
-    return await _enqueue_audit_job(
+    stage_started = time.monotonic()
+    enqueued = await _enqueue_audit_job(
         audit_job_repo,
         raw=raw if archive is not None else None,
         source_kind="zip" if archive is not None else "repo_url",
@@ -2443,6 +2568,11 @@ async def create_audit(
                 digest, account["id"] if account else None)
         ),
     )
+    logger.info(
+        "audit intake: queued job %s", enqueued["job_id"],
+        extra={"step": "enqueue", "duration_ms": _elapsed_ms(stage_started)},
+    )
+    return enqueued
 
 
 def _audit_idempotency_key(digest: str, account_id: str | None) -> str:
@@ -2505,6 +2635,11 @@ async def _enqueue_audit_job(
                               "deployment (see app/db.py)"},
         )
 
+    # job["id"] rather than the minted job_id: on a duplicate collision the row
+    # returned is the live job this submission matched, not the one we minted,
+    # and the id a caller will poll with is the one worth logging.
+    set_log_context(job_id=str(job["id"]))
+
     if source_kind == "zip" and job.get("inserted"):
         await _stage_and_queue(audit_job_repo, job_id=str(job["id"]), raw=raw)
 
@@ -2543,7 +2678,8 @@ async def _stage_and_queue(
         await audit_job_repo.abandon_created(
             job_id=job_id, error_code="staging_failed",
             error_message=f"{type(exc).__name__}: {exc}")
-        logger.exception("staging the upload for job %s failed", job_id)
+        logger.exception("staging the upload for job %s failed", job_id,
+                         extra={"step": "stage"})
         raise HTTPException(
             status_code=503,
             detail={"reason": "staging_failed",
@@ -2574,6 +2710,7 @@ async def get_fixpack(
     # not enough. A missing/wrong token is answered 404 (not 403) so this
     # never confirms an id exists to someone who doesn't hold its token --
     # same model as GET /v1/audits/{id} (migration 0012 mirrors 0010).
+    set_log_context(job_id=job_id)
     row = await fixpack_repo.get_authorized(job_id, token)
     if row is None:
         raise HTTPException(
@@ -2667,6 +2804,9 @@ async def create_fixpack(
                 detail={"reason": "bad_audit_id",
                         "detail": "audit_id must be a valid UUID"},
             )
+        # Bound only once the value is known to be a UUID, so a malformed
+        # client string never reaches a log field.
+        set_log_context(audit_id=audit_id)
 
     # Validate deliver_to before any expensive build or GitHub call: it's
     # user input that lands directly in GitHub REST API paths (owner/repo
