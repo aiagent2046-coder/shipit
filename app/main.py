@@ -1716,9 +1716,20 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
     # creds look present in the process env yet resolution still yields no
     # token, this pins down whether os.environ actually carries them at
     # call time. Presence/length only — never the secret values.
+    #
+    # Only the contradiction is a warning. Resolving a token is the healthy
+    # path and running with no App configured at all is a supported one (the
+    # GITHUB_PR_TOKEN fallback in the docstring), so both log at debug — this
+    # fires on every PR delivery and used to warn unconditionally. Both PEM
+    # variables are counted, because a deployment on the base64 path has
+    # GITHUB_APP_PRIVATE_KEY unset and is perfectly healthy.
     app_id_env = os.environ.get("GITHUB_APP_ID")
-    pem_env = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-    logger.warning(
+    pem_env = (os.environ.get("GITHUB_APP_PRIVATE_KEY")
+               or os.environ.get("GITHUB_APP_PRIVATE_KEY_B64"))
+    log = (logger.warning
+           if app_creds is None and (app_id_env or pem_env)
+           else logger.debug)
+    log(
         "PR token resolve for %s/%s: GITHUB_APP_ID=%s, "
         "GITHUB_APP_PRIVATE_KEY=%s, app_credentials_from_env=%s",
         owner, repo,

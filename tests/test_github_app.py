@@ -11,6 +11,7 @@ yet; see app/deploypack/github_app.py's module docstring for why that
 manual step can't be automated from here.
 """
 
+import logging
 import time
 
 import jwt
@@ -259,6 +260,52 @@ def test_installation_token_401_logs_keypair_fingerprint(keypair, caplog):
 def test_mint_app_jwt_garbage_key_raises_githubapperror():
     with pytest.raises(GitHubAppError, match="not a valid PEM private key"):
         mint_app_jwt("999", "this-is-not-a-pem-key")
+
+
+def test_pem_parse_failure_log_leaks_no_key_material(caplog, keypair):
+    """The PEM-parse diagnostic fires precisely when the key is malformed, so
+    a slice of the value is NOT reliably the header/footer -- on a truncated
+    key the tail is base64 key material. Nothing but shape may be logged."""
+    private_pem, _ = keypair
+    truncated = private_pem[:len(private_pem) // 2]     # cut mid-base64
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(GitHubAppError):
+            mint_app_jwt("999", truncated)
+
+    msg = caplog.text
+    # Not one 12-char window of the base64 body may appear anywhere in the
+    # line. The window is deliberately shorter than the 15-char head/tail
+    # slices this replaced, so this test fails against the old code rather
+    # than passing vacuously.
+    body = "".join(truncated.splitlines()[1:])
+    assert len(body) > 12
+    for offset in range(len(body) - 12):
+        assert body[offset:offset + 12] not in msg
+    # ...and the shape survives: truncation reads as a begin with no end.
+    assert "has_begin=True" in msg
+    assert "has_end=False" in msg
+
+
+def test_pem_parse_failure_log_reports_shape_of_flattened_value(caplog, keypair):
+    """The other real cause, the one _private_key_from_b64 exists for: systemd
+    ate the backslashes, so no escape ever reached us and the newlines became
+    bare letter "n". Distinguishable from truncation without seeing content --
+    no escapes, no real newlines, so the whole key is a single line."""
+    private_pem, _ = keypair
+    flattened = private_pem.strip().replace("\n", "n")
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(GitHubAppError):
+            mint_app_jwt("999", flattened)
+
+    msg = caplog.text
+    assert "escapes before normalize=False" in msg
+    assert "newlines after normalize=0" in msg
+    assert "lines=1" in msg
+    body = "".join(private_pem.splitlines()[1:-1])
+    for offset in range(len(body) - 12):
+        assert body[offset:offset + 12] not in msg
 
 
 def test_installation_token_for_repo_happy_path(keypair):
