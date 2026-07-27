@@ -18,6 +18,17 @@ User=shipit-ops
 # everything else.
 WorkingDirectory=/srv/shipit/current
 EnvironmentFile=/opt/shipit/.env
+# SHIPIT_RELEASE, rewritten by the deploy script on every release. Same
+# optional load (leading dash) shipit.service gets from its
+# 10-production-operations.conf drop-in: a host that has never deployed has no
+# such file, and that must not stop the worker. Without this the worker's log
+# lines carried "release":"unknown" while the API's carried the real sha --
+# one incident, two answers to "which build was running".
+EnvironmentFile=-/opt/shipit/.release-env
+# Which process a log line came from. Placed after both EnvironmentFile= lines
+# on purpose: systemd applies env directives in file order, so this is the
+# final word even if a copied-from-.env.example .env ever carries the key.
+Environment=SHIPIT_SERVICE=shipit-audit-worker
 # Fail loudly and immediately if the release venv is missing rather than
 # crash-looping on ExecStart (convention from shipit-alert@.service, PR #95).
 ExecStartPre=/usr/bin/test -x /srv/shipit/current/.venv/bin/python

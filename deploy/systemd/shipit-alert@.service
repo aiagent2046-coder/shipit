@@ -6,7 +6,18 @@ Type=oneshot
 User=shipit-ops
 WorkingDirectory=/srv/shipit/current
 EnvironmentFile=/opt/shipit/.env
+# SHIPIT_RELEASE, rewritten by the deploy script on every release. Optional load
+# (leading dash) like shipit.service and shipit-audit-worker.service: a host that
+# has never deployed has no such file, and a failed alert delivery is the worst
+# possible moment to also lose the alerter.
+EnvironmentFile=-/opt/shipit/.release-env
 Environment=PYTHONDONTWRITEBYTECODE=1
+# The alerter's own name, NOT shipit-alert@%i. %i here is the unit that FAILED,
+# which is already in the alert text and in journald's own _SYSTEMD_UNIT; this
+# field names the KIND of process that emitted the line, so folding the
+# instance in would mean `jq 'select(.service=="shipit-alert")'` matches none
+# of them and every query needs a regex instead.
+Environment=SHIPIT_SERVICE=shipit-alert
 ExecStartPre=/usr/bin/test -x /srv/shipit/current/.venv/bin/python
 ExecStart=/srv/shipit/current/.venv/bin/python -m app.alerts "Drydock: systemd unit %i failed on the production VPS"
 TimeoutStartSec=30
