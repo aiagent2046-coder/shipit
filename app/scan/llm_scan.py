@@ -223,6 +223,7 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
 def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                  rubrics: tuple[str, ...] = ("auth", "security"),
                  passes: int = 1,
+                 stats: LLMScanStats | None = None,
                  ) -> tuple[list[ScoredFinding], LLMScanStats]:
     """`passes` > 1 = union-of-N mode: repeat every rubric prompt N
     times and merge findings via the same (file, line) dedup. Measured
@@ -233,8 +234,15 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     pass — score and criticals are stable, which is what the shareable
     report leads with. The paid Fix Pack uses passes=2 for completeness
     of scope; the extra LLM cost is covered by the Pack price. See
-    docs/shipit-architecture.md 2.2, v0.3 note."""
-    stats = LLMScanStats()
+    docs/shipit-architecture.md 2.2, v0.3 note.
+
+    `stats` lets the CALLER own the accumulator instead of receiving it back on
+    return. That is the difference between recording and losing the money when
+    client.complete() raises on the second rubric: the tokens the first call
+    already burned are in the caller's object, whereas a locally-created one is
+    discarded with the frame. app/scan/pipeline.py passes one in for exactly
+    that reason; the default keeps every other caller unchanged."""
+    stats = stats if stats is not None else LLMScanStats()
     with zipfile.ZipFile(fileobj) as zf:
         files = _iter_code_files(zf)
     files_by_name = dict(files)

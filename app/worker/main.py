@@ -296,26 +296,45 @@ async def _execute_job(
     scan = await _run_scan_offthread(
         raw, llm_client, llm_skip_reason=llm_skip_reason)
 
-    persisted = await audit_repo.create(
-        stack=stack.value, file_count=report.file_count,
-        score_total=scan["score"]["total"], score_json=scan["score"],
-        findings_json=scan["findings"], repo_url=source_url,
-        content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
-    )
-    if persisted is None:
-        # create_audit tolerates this by minting a throwaway id for its
-        # response, but a job has nowhere to put an unpersisted result: it must
-        # reference a real audits row. Transient, because the cause is the
-        # database, not the job.
-        raise JobExecutionError(
-            "audit_not_persisted",
-            "audit_repo.create returned nothing -- persistence unavailable",
-            permanent=False,
+    # Everything from here on is bookkeeping over money that is already spent:
+    # the scan above made the provider calls. Whether this attempt goes on to
+    # produce an audits row, fail, or be cancelled out from under us decides
+    # what the row can point AT, never whether it is written -- an attempt whose
+    # cost went unrecorded is an attempt nobody can bill or explain.
+    try:
+        persisted = await audit_repo.create(
+            stack=stack.value, file_count=report.file_count,
+            score_total=scan["score"]["total"], score_json=scan["score"],
+            findings_json=scan["findings"], repo_url=source_url,
+            content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
         )
+        if persisted is None:
+            # create_audit tolerates this by minting a throwaway id for its
+            # response, but a job has nowhere to put an unpersisted result: it
+            # must reference a real audits row. Transient, because the cause is
+            # the database, not the job.
+            raise JobExecutionError(
+                "audit_not_persisted",
+                "audit_repo.create returned nothing -- persistence unavailable",
+                permanent=False,
+            )
+    except BaseException:
+        # BaseException, not Exception: losing the lease cancels this coroutine
+        # mid-await, and a cancelled attempt burned exactly as much money as a
+        # failed one. Shielded so the insert survives the cancellation that
+        # triggered it -- an unshielded await here would itself be cancelled and
+        # write nothing, which is the bug this branch exists to fix.
+        await asyncio.shield(_record_llm_usage(
+            llm_usage_repo, job_type="audit", job_id=None,
+            account_id=job.get("account_id"), llm_stats=scan["llm_usage"],
+            audit_job_id=str(job["id"]),
+        ))
+        raise
 
     await _record_llm_usage(
         llm_usage_repo, job_type="audit", job_id=persisted["id"],
-        account_id=job.get("account_id"), llm_stats=scan["llm"],
+        account_id=job.get("account_id"), llm_stats=scan["llm_usage"],
+        audit_job_id=str(job["id"]),
     )
     return str(persisted["id"])
 

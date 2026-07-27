@@ -1013,6 +1013,7 @@ class LlmUsageRepository:
         self, *, job_type: str, job_id: str | None,
         account_id: str | None, model: str, calls: int,
         input_tokens: int, output_tokens: int, cost_usd: Any,
+        audit_job_id: str | None = None,
     ) -> dict[str, Any] | None:
         try:
             pool = await get_pool()
@@ -1025,21 +1026,74 @@ class LlmUsageRepository:
         # than the linkage.
         parsed_job_id = _uuid_or_none(job_id)
         parsed_account_id = _uuid_or_none(account_id)
+        # audit_jobs.id, when this spend happened inside a queued job. One row
+        # per ATTEMPT, so a job retried three times leaves three rows sharing
+        # this id and the true cost of the job is their sum -- see
+        # sum_by_audit_job. Null for the monitoring re-audit path, which has no
+        # queue row.
+        parsed_audit_job_id = _uuid_or_none(audit_job_id)
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
                 insert into llm_usage
                     (job_type, job_id, account_id, model, calls,
-                     input_tokens, output_tokens, cost_usd)
-                values (%s, %s, %s, %s, %s, %s, %s, %s)
+                     input_tokens, output_tokens, cost_usd, audit_job_id)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id, job_type, job_id, account_id, model, calls,
-                          input_tokens, output_tokens, cost_usd, created_at
+                          input_tokens, output_tokens, cost_usd, created_at,
+                          audit_job_id
                 """,
                 (job_type, parsed_job_id, parsed_account_id, model,
-                 int(calls), int(input_tokens), int(output_tokens), cost_usd),
+                 int(calls), int(input_tokens), int(output_tokens), cost_usd,
+                 parsed_audit_job_id),
             )
             row = await cur.fetchone()
         return dict(row) if row else None
+
+    async def sum_by_audit_job(self, audit_job_id: str) -> dict[str, Any]:
+        """What one queued job actually cost, summed over EVERY attempt.
+
+        A job is allowed max_attempts tries and each one re-runs the scan, so
+        the cost of the job is the sum of its rows, not the cost of the attempt
+        that happened to succeed. `attempts` is the number of rows, i.e. how
+        many attempts reached the provider -- not audit_jobs.attempts, which
+        also counts attempts that failed before spending anything.
+
+        Zeros (not None) for an unknown or unspent job: "this job cost nothing"
+        is the truthful answer for a job whose scans never reached the LLM, and
+        a caller adding this into a total should not have to special-case it."""
+        empty = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+                 "cost_usd": Decimal(0), "attempts": 0}
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return empty
+        parsed = _uuid_or_none(audit_job_id)
+        if parsed is None:
+            return empty
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select coalesce(sum(calls), 0) as calls,
+                       coalesce(sum(input_tokens), 0) as input_tokens,
+                       coalesce(sum(output_tokens), 0) as output_tokens,
+                       coalesce(sum(cost_usd), 0) as cost_usd,
+                       count(*) as attempts
+                from llm_usage
+                where audit_job_id = %s
+                """,
+                (parsed,),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return empty
+        return {
+            "calls": int(row["calls"]),
+            "input_tokens": int(row["input_tokens"]),
+            "output_tokens": int(row["output_tokens"]),
+            "cost_usd": Decimal(row["cost_usd"]),
+            "attempts": int(row["attempts"]),
+        }
 
     async def sum_anon_spend_today(self) -> Decimal | None:
         """Total USD spent today (UTC) by anonymous/free traffic -- every
