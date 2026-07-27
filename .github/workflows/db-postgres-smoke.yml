@@ -22,6 +22,7 @@ on:
       - "tests/test_db_postgres_smoke.py"
       - "tests/test_audit_jobs_repo.py"
       - "tests/test_audit_worker_postgres.py"
+      - "tests/test_internal_stats.py"
       - "app/worker/**"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
@@ -33,6 +34,7 @@ on:
       - "tests/test_db_postgres_smoke.py"
       - "tests/test_audit_jobs_repo.py"
       - "tests/test_audit_worker_postgres.py"
+      - "tests/test_internal_stats.py"
       - "app/worker/**"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
@@ -100,3 +102,12 @@ jobs:
       # slots on one pool never running the same job twice.
       - name: "Real-Postgres audit worker end-to-end tests"
         run: pytest -q tests/test_audit_worker_postgres.py
+
+      # GET /internal/stats is nothing but SQL aggregation -- a state
+      # histogram, a percentile, two trailing windows. A fake repository could
+      # only prove the endpoint copies dict keys, so the aggregates are asserted
+      # against planted rows here, including ones deliberately outside each
+      # window. The heartbeat half of the file needs no database and also runs
+      # in the default suite.
+      - name: "Real-Postgres /internal/stats aggregate tests"
+        run: pytest -q tests/test_internal_stats.py
