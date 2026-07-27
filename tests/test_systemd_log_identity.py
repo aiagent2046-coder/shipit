@@ -64,11 +64,11 @@ def test_logging_unit_declares_its_service_name(unit: str, expected: str) -> Non
     )
 
 
-def test_audit_worker_loads_the_release_env() -> None:
+@pytest.mark.parametrize("unit", sorted(LOGGING_UNITS))
+def test_logging_unit_loads_the_release_env(unit: str) -> None:
     """The deploy script rewrites /opt/shipit/.release-env on every release. The
     leading dash keeps a never-deployed host bootable, and must stay."""
-    lines = _service_lines(SYSTEMD / "shipit-audit-worker.service")
-    assert "EnvironmentFile=-/opt/shipit/.release-env" in lines, (
-        "shipit-audit-worker.service must load /opt/shipit/.release-env optionally "
-        '(leading dash) or its log lines carry "release": "unknown".'
+    assert "EnvironmentFile=-/opt/shipit/.release-env" in _service_lines(SYSTEMD / unit), (
+        f"{unit} must load /opt/shipit/.release-env optionally (leading dash) or "
+        'its log lines carry "release": "unknown" while other units report the sha.'
     )
