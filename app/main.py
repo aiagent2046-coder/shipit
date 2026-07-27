@@ -81,6 +81,7 @@ from app import sandbox_client
 from app.sandbox_client import SandboxRunnerUnavailable
 from app.llm.client import LLMClient
 from app.llm import pricing
+from app.logging_config import configure_logging
 from app.monitor import normalize_repo_full_name, repo_url_from_full_name
 from app.monitor.diff import new_high_severity_findings
 from app.report.html import render_report
@@ -93,28 +94,6 @@ from app.ingest.validators import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-_VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
-
-
-def configure_logging() -> None:
-    """Make log level/format explicit instead of inherited-by-accident.
-
-    Until now nothing called basicConfig, so app loggers rode on Python's
-    last-resort handler (WARNING-only, bare format) — INFO lines never
-    showed and there was no timestamp/level/name prefix to grep in
-    journalctl. This sets one plain-text (NOT JSON — deliberate at this log
-    volume) format and an env-overridable level. basicConfig is a no-op if a
-    handler is already installed, so it never fights uvicorn's own loggers or
-    double-configures across test app instances."""
-    level = (os.environ.get("LOG_LEVEL") or "INFO").upper()
-    if level not in _VALID_LOG_LEVELS:
-        level = "INFO"
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
 
 
 @asynccontextmanager

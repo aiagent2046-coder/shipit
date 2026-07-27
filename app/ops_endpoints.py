@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app.db import AuditJobRepository, FixpackJobRepository
+from app.logging_config import environment_from_env, release_from_env
 
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,10 @@ async def readyz() -> JSONResponse:
 
 @router.get("/version", include_in_schema=False)
 async def version() -> dict[str, str]:
+    # Same source the `release`/`env` fields of every JSON log record read, so
+    # a line in journalctl and this endpoint can never disagree about which
+    # build is running.
     return {
-        "release": os.environ.get("SHIPIT_RELEASE", "unknown"),
-        "environment": os.environ.get("ENVIRONMENT", "development"),
+        "release": release_from_env(),
+        "environment": environment_from_env(),
     }

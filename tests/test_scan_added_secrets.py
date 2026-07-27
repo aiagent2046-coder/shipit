@@ -43,13 +43,16 @@ def signatures(content: bytes) -> set[str]:
 # --- Self-exclusion allowlist --------------------------------------------
 
 def test_scanner_and_its_test_file_are_excluded():
-    # These two files exist to enumerate secret formats, so the diff scan must
-    # skip them or the scanner trips on its own definitions/fixtures. This test
-    # runs PATTERNS in-process (like every test here), so it keeps working even
-    # though the file it names is excluded from the git-diff scan.
+    # These files exist to enumerate secret formats, so the diff scan must skip
+    # them or the scanner trips on its own definitions/fixtures. The third is
+    # the log-redaction suite, which cannot test masking without carrying a
+    # fake secret of each shape. This test runs PATTERNS in-process (like every
+    # test here), so it keeps working even though the files it names are
+    # excluded from the git-diff scan.
     assert scan_added_secrets.EXCLUDED_PATHS == {
         ".github/scripts/scan-added-secrets.py",
         "tests/test_scan_added_secrets.py",
+        "tests/test_logging_config.py",
     }
 
 
