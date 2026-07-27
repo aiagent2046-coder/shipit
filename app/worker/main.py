@@ -109,6 +109,22 @@ AUDIT_WORKER_SHUTDOWN_GRACE_SECONDS = float(
 AUDIT_WORKER_REAP_INTERVAL_SECONDS = float(
     os.environ.get("AUDIT_WORKER_REAP_INTERVAL_SECONDS", "60"))
 
+# How often the queue-depth heartbeat record is written. NOT the lease
+# heartbeat above -- this one touches no job. It emits one INFO line so that
+# `journalctl | jq` can reconstruct a coarse time series after the fact, which
+# is the whole metrics story on a box with no room for a time-series database.
+# Five minutes because the thing it measures (a backlog draining, or not) moves
+# on the scale of minutes, and one line per five keeps a day of it readable.
+AUDIT_WORKER_STATS_INTERVAL_SECONDS = float(
+    os.environ.get("AUDIT_WORKER_STATS_INTERVAL_SECONDS", "300"))
+
+# Slot numbers currently inside a job. Module-level because it mirrors what it
+# measures: one worker process owns exactly one set of slots, and threading it
+# through _slot's signature would only let a caller build a second one that
+# cannot exist. Written by the slots and read by the heartbeat, both on the
+# same event loop, so there is nothing to lock.
+_active_slots: set[int] = set()
+
 _REAP_MESSAGE = (
     "lease expired with no heartbeat -- the worker holding this job died or "
     "was SIGKILLed"
@@ -543,11 +559,19 @@ async def _slot(
                         extra={"step": "claim",
                                "duration_ms": _elapsed_ms(claim_started),
                                "attempt": job.get("attempts")})
-            await _process_job(
-                job, worker_id=worker_id, jobs=jobs, llm_client=llm_client,
-                audit_repo=audit_repo, llm_usage_repo=llm_usage_repo,
-                shutting_down=shutting_down,
-            )
+            _active_slots.add(slot)
+            try:
+                await _process_job(
+                    job, worker_id=worker_id, jobs=jobs, llm_client=llm_client,
+                    audit_repo=audit_repo, llm_usage_repo=llm_usage_repo,
+                    shutting_down=shutting_down,
+                )
+            finally:
+                # finally, not a line after the call: a slot cancelled at
+                # shutdown or killed by an unexpected error is no longer busy,
+                # and a gauge that only decrements on the happy path drifts
+                # upward until it permanently reads "fully saturated".
+                _active_slots.discard(slot)
 
     logger.info("audit worker slot %s stopped claiming", slot)
 
@@ -612,6 +636,58 @@ async def _reaper(
             continue
 
 
+async def _stats_heartbeat(
+    *, jobs: AuditJobRepository, shutting_down: asyncio.Event
+) -> None:
+    """One INFO record per interval carrying the numbers a time series would.
+
+    This is the metrics story for this deployment. A single VPS whose free
+    memory is already spoken for by the Fix Pack sandboxes has no room for
+    Prometheus, so rather than export a gauge the worker writes it into the log
+    it is already writing: with LOG_FORMAT=json,
+
+        journalctl -u shipit-audit-worker | jq -c 'select(.event=="heartbeat")'
+
+    replays queue depth and slot occupancy over whatever journald retained.
+    GET /internal/stats answers "what is true now" and needs the API up; this
+    answers "what was true at 04:00 last Tuesday" and needs nothing.
+
+    Unconditional, unlike the reaper's line, which only speaks when it reaped
+    something: a missing heartbeat has to mean the worker was down, so the
+    record cannot be contingent on there being anything interesting to say.
+
+    Failures are swallowed and logged, matching the reaper -- a stats read that
+    cannot reach the database must not take down the process whose health it is
+    reporting on."""
+    while not shutting_down.is_set():
+        pass_started = time.monotonic()
+        try:
+            stats = await jobs.backlog_stats()
+            logger.info(
+                "heartbeat: %s queued, %s slot(s) busy",
+                stats["queued"] if stats else 0, len(_active_slots),
+                extra={
+                    "event": "heartbeat",
+                    "queue_depth": stats["queued"] if stats else 0,
+                    "oldest_queued_seconds": (
+                        stats["oldest_queued_seconds"] if stats else None),
+                    "active_slots": len(_active_slots),
+                    "duration_ms": _elapsed_ms(pass_started),
+                },
+            )
+        except Exception:  # noqa: BLE001 -- reporting must not kill the worker
+            logger.warning(
+                "heartbeat pass failed", exc_info=True,
+                extra={"event": "heartbeat",
+                       "duration_ms": _elapsed_ms(pass_started)})
+        try:
+            await asyncio.wait_for(
+                shutting_down.wait(),
+                timeout=AUDIT_WORKER_STATS_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            continue
+
+
 async def run_worker(
     *, concurrency: int = AUDIT_WORKER_CONCURRENCY,
     shutting_down: asyncio.Event | None = None,
@@ -630,6 +706,12 @@ async def run_worker(
 
     reaper_task = asyncio.create_task(
         _reaper(jobs=jobs, shutting_down=shutting_down))
+    # Its own task, not a step in the claim loop: a slot inside a long scan is
+    # exactly when the heartbeat matters most and exactly when that loop is not
+    # coming back around. Separate, it keeps reporting through a fully
+    # saturated worker and cannot delay a claim.
+    heartbeat_task = asyncio.create_task(
+        _stats_heartbeat(jobs=jobs, shutting_down=shutting_down))
     slot_tasks = [
         asyncio.create_task(
             _slot(
@@ -666,9 +748,11 @@ async def run_worker(
             task.cancel()
 
     reaper_task.cancel()
+    heartbeat_task.cancel()
     # return_exceptions so one slot's failure cannot hide the others' cleanup;
     # the exceptions were already logged where they happened.
-    await asyncio.gather(*slot_tasks, reaper_task, return_exceptions=True)
+    await asyncio.gather(*slot_tasks, reaper_task, heartbeat_task,
+                         return_exceptions=True)
     await db_mod.close_pool()
     logger.info("audit worker stopped")
 

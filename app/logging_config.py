@@ -47,6 +47,11 @@ ALLOWED_FIELDS: tuple[str, ...] = (
     "service", "release", "env", "pid",
     "trace_id", "request_id", "job_id", "audit_id", "account_id",
     "step", "duration_ms", "error_code", "attempt",
+    # Metric-as-a-log-event, written by the worker's periodic heartbeat
+    # (app/worker/main.py _stats_heartbeat) and read back by
+    # `journalctl | jq`. `event` names a KIND of record, where `step` names a
+    # phase within one unit of work -- a jq selector needs the former.
+    "event", "queue_depth", "oldest_queued_seconds", "active_slots",
     "exc_type", "exc_stack",
 )
 

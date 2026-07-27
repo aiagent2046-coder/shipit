@@ -2298,7 +2298,13 @@ async def audit_jobs_stats(
 
     Requires `Authorization: Bearer <AUDIT_JOBS_STATS_TOKEN>`, constant-time
     compared. 503 if the token isn't configured, and 503 if DATABASE_URL isn't
-    set, because zeros from a queue you cannot see are worse than an error."""
+    set, because zeros from a queue you cannot see are worse than an error.
+
+    Superseded by GET /internal/stats, which reports this queue alongside the
+    others from the same backlog_stats() call. Kept, unchanged: this path and
+    its response shape are already deployed and hand-curled, and there is no
+    logic here that can drift from the new endpoint -- both are projections of
+    one repository read."""
     token = _audit_jobs_stats_token()
     if not token:
         raise HTTPException(
@@ -2322,6 +2328,113 @@ async def audit_jobs_stats(
         "queued": stats["queued"],
         "oldest_queued_seconds": stats["oldest_queued_seconds"],
         "dead_letter": stats["states"].get("dead_letter", 0),
+    }
+
+
+STATS_RECENT_WINDOW_SECONDS = 3600
+STATS_DAY_WINDOW_SECONDS = 24 * 3600
+
+
+@app.get("/internal/stats")
+async def internal_stats(
+    request: Request,
+    audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+) -> dict:
+    """Every queue and the LLM bill, aggregated, in one authenticated read.
+
+    The deployment is a single VPS whose spare memory is already contended for
+    by the Fix Pack sandbox containers, so there is no Prometheus and no
+    metrics process: the aggregates are computed on demand from the tables that
+    already hold the facts (audit_jobs, fixpack_jobs, llm_usage), and this is
+    what a scraper or a human polls. Counts and percentiles only, never rows,
+    so the response size does not grow with the size of the queues.
+
+    Same auth as /internal/audit-jobs/stats and deliberately the same token:
+    AUDIT_JOBS_STATS_TOKEN exists so a monitoring reader can see queue depth
+    without holding a credential that can also start work, which is exactly
+    this endpoint's audience. A second token for the same reader would be two
+    secrets to rotate for one job.
+
+    Every number comes from a repository method, several of which /readyz and
+    /internal/audit-jobs/stats already call, so "backlog" and "oldest queued"
+    have one definition in the codebase rather than one per reader.
+
+    503 rather than zeros when the token or the database is missing: a stats
+    endpoint answering 200 with empty counters while it cannot see the queue is
+    worse than one that fails, because a dashboard cannot tell the difference
+    and a silent zero reads as healthy."""
+    token = _audit_jobs_stats_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "audit_jobs_stats_not_configured",
+                    "detail": "AUDIT_JOBS_STATS_TOKEN is not set on this "
+                              "deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    audit_backlog = await audit_job_repo.backlog_stats()
+    if audit_backlog is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "persistence isn't configured on this deployment "
+                              "(see app/db.py)"},
+        )
+    # Past this point the pool is known to exist, so the remaining reads
+    # cannot return the not-configured None.
+    audit_recent = await audit_job_repo.recent_outcomes(
+        window_seconds=STATS_RECENT_WINDOW_SECONDS)
+    fixpack_backlog = await fixpack_repo.backlog_stats()
+    fixpack_statuses = await fixpack_repo.status_counts()
+    spend_hour = await llm_usage_repo.spend_since(
+        window_seconds=STATS_RECENT_WINDOW_SECONDS)
+    spend_day = await llm_usage_repo.spend_since(
+        window_seconds=STATS_DAY_WINDOW_SECONDS)
+
+    return {
+        "window_seconds": STATS_RECENT_WINDOW_SECONDS,
+        "audit_jobs": {
+            "states": audit_backlog["states"],
+            "queued": audit_backlog["queued"],
+            "oldest_queued_seconds": audit_backlog["oldest_queued_seconds"],
+            "recent": audit_recent,
+        },
+        "fixpack_jobs": {
+            "statuses": fixpack_statuses,
+            "paid_backlog": fixpack_backlog["backlog"],
+            "oldest_paid_seconds": fixpack_backlog["oldest_paid_seconds"],
+        },
+        "llm_usage": {
+            "last_hour": _spend_view(spend_hour),
+            "last_24h": _spend_view(spend_day),
+        },
+        # audit_jobs only, and named so rather than presented as a service-wide
+        # figure it is not: fixpack_jobs stamps no timestamp on a terminal
+        # transition, so "failed in the last hour" is not computable for that
+        # queue without a schema change, and quietly folding in its lifetime
+        # totals would make the ratio mean nothing.
+        "errors": {
+            "source": "audit_jobs",
+            "window_seconds": STATS_RECENT_WINDOW_SECONDS,
+            "terminal_total": audit_recent["terminal_total"],
+            "failed": audit_recent["failed"],
+            "error_rate": audit_recent["error_rate"],
+            "top_error_codes": audit_recent["top_error_codes"],
+        },
+    }
+
+
+def _spend_view(spend: dict) -> dict:
+    """One llm_usage window as JSON. cost_usd is quantized to the column's own
+    numeric(12,6) scale and then floated -- the repository hands back a Decimal
+    so nothing rounds before it must, and this is where it must, because JSON
+    has no decimal type."""
+    return {
+        "calls": spend["calls"],
+        "cost_usd": float(spend["cost_usd"].quantize(Decimal("0.000001"))),
     }
 
 

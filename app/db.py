@@ -179,6 +179,14 @@ def _uuid_or_none(value: str | None) -> uuid.UUID | None:
         return None
 
 
+def _seconds_to_ms(value: Any) -> int | None:
+    """Postgres epoch-seconds (numeric/Decimal) to whole milliseconds, keeping
+    NULL as None so "no rows in the window" stays distinguishable from zero.
+    Milliseconds because that is the unit `duration_ms` already uses in the
+    logs, and a stats reader should not have to convert between the two."""
+    return None if value is None else int(float(value) * 1000)
+
+
 def _row_to_audit(row: dict[str, Any]) -> dict[str, Any]:
     d = dict(row)
     d["id"] = str(d["id"])
@@ -666,6 +674,32 @@ class FixpackJobRepository:
             "oldest_paid_seconds": float(oldest) if oldest is not None else None,
         }
 
+    async def status_counts(self) -> dict[str, int] | None:
+        """How many Fix Pack jobs sit in each status, right now.
+
+        The histogram backlog_stats deliberately does not carry: /readyz only
+        needs the one number that decides "is the processor draining", while a
+        human diagnosing WHY needs to see 'failed' and 'blocked' next to it.
+
+        Only statuses with rows appear, so read with .get(name, 0). None when
+        DATABASE_URL isn't set, matching backlog_stats.
+
+        Deliberately not windowed, unlike AuditJobRepository.recent_outcomes:
+        fixpack_jobs records no terminal timestamp (created_at and started_at
+        are all it has), so "what finished in the last hour" is not answerable
+        from this table without a schema change."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "select status, count(*) as jobs from fixpack_jobs "
+                "group by status",
+            )
+            rows = await cur.fetchall()
+        return {row["status"]: int(row["jobs"]) for row in rows}
+
     async def mark_fixpack_delivered(self, job_id: str, pr_url: str) -> None:
         """A paid Fix Pack job whose fix PR was successfully opened: record
         the PR url and advance status to 'delivered'. 'delivered' is the
@@ -1093,6 +1127,43 @@ class LlmUsageRepository:
             "output_tokens": int(row["output_tokens"]),
             "cost_usd": Decimal(row["cost_usd"]),
             "attempts": int(row["attempts"]),
+        }
+
+    async def spend_since(self, *, window_seconds: int) -> dict[str, Any] | None:
+        """Provider spend and call count over a trailing window, all accounts.
+
+        The operational view of the same journal sum_anon_spend_today reads for
+        enforcement: that one gates a request, this one answers "did our LLM
+        bill just change shape" from a stats endpoint. Whole-fleet, so no
+        account filter -- a per-account breakdown belongs with the billing
+        views, not in an ops aggregate.
+
+        cost_usd stays a Decimal so nothing rounds before the caller decides
+        it has to; the column is numeric(12,6) and this sum is a spend figure,
+        not a display string.
+
+        Zeros for an empty window (nothing spent IS the answer), None only when
+        DATABASE_URL isn't set."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select coalesce(sum(calls), 0) as calls,
+                       coalesce(sum(cost_usd), 0) as cost_usd
+                  from llm_usage
+                 where created_at >= now()
+                       - make_interval(secs => %s::double precision)
+                """,
+                (float(window_seconds),),
+            )
+            row = await cur.fetchone()
+        return {
+            "window_seconds": window_seconds,
+            "calls": int(row["calls"]),
+            "cost_usd": Decimal(row["cost_usd"]),
         }
 
     async def sum_anon_spend_today(self) -> Decimal | None:
@@ -2574,4 +2645,89 @@ class AuditJobRepository:
             "oldest_queued_seconds": (
                 float(oldest_queued) if oldest_queued is not None else None
             ),
+        }
+
+    async def recent_outcomes(
+        self, *, window_seconds: int, top_error_codes: int = 5,
+    ) -> dict[str, Any] | None:
+        """What finished in the trailing window, and how it went.
+
+        backlog_stats answers "how deep is the queue right now"; this answers
+        "is work completing, how fast, and how much of it is failing" -- the
+        two questions a rising backlog forces you to ask next, and neither is
+        answerable from a state histogram of live rows.
+
+        Windowed on completed_at, which finalize_succeeded and the terminal
+        branch of finalize_failed both stamp. A requeued attempt writes
+        error_code but NOT completed_at, so a transient failure that later
+        succeeds is not counted as a failure here -- a job contributes one
+        outcome, when it reaches a terminal state.
+
+        Durations are completed_at - claimed_at of the succeeded rows: how long
+        the worker actually held the job, not how long since submission, which
+        would fold queue depth into a number meant to measure scan speed.
+
+        Returns None when DATABASE_URL isn't set, matching backlog_stats."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select state, count(*) as jobs,
+                       avg(extract(epoch from (completed_at - claimed_at)))
+                           as avg_seconds,
+                       percentile_cont(0.95) within group (
+                           order by extract(epoch from
+                                            (completed_at - claimed_at)))
+                           as p95_seconds
+                  from audit_jobs
+                 where completed_at >= now()
+                       - make_interval(secs => %s::double precision)
+                 group by state
+                """,
+                (float(window_seconds),),
+            )
+            outcome_rows = await cur.fetchall()
+            cur = await conn.execute(
+                """
+                select coalesce(error_code, 'unknown') as error_code,
+                       count(*) as jobs
+                  from audit_jobs
+                 where completed_at >= now()
+                       - make_interval(secs => %s::double precision)
+                   and state <> 'succeeded'
+                 group by 1
+                 order by jobs desc, error_code
+                 limit %s
+                """,
+                (float(window_seconds), int(top_error_codes)),
+            )
+            error_rows = await cur.fetchall()
+
+        outcomes = {row["state"]: int(row["jobs"]) for row in outcome_rows}
+        succeeded = next(
+            (row for row in outcome_rows if row["state"] == "succeeded"), None)
+        total = sum(outcomes.values())
+        failed = total - outcomes.get("succeeded", 0)
+        return {
+            "window_seconds": window_seconds,
+            "terminal": outcomes,
+            "terminal_total": total,
+            "failed": failed,
+            # None rather than 0.0 on an idle window: "nothing failed" and
+            # "nothing finished" are different answers, and an alert built on
+            # this has to be able to tell them apart.
+            "error_rate": (failed / total) if total else None,
+            "succeeded_duration_ms": {
+                "avg": _seconds_to_ms(
+                    succeeded["avg_seconds"] if succeeded else None),
+                "p95": _seconds_to_ms(
+                    succeeded["p95_seconds"] if succeeded else None),
+            },
+            "top_error_codes": [
+                {"error_code": row["error_code"], "jobs": int(row["jobs"])}
+                for row in error_rows
+            ],
         }
