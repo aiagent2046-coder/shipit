@@ -73,14 +73,16 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
 
 
 # Files that BY DESIGN carry secret-format samples: the scanner itself (every
-# pattern above literally spells out a secret prefix) and its test suite (a
-# positive fixture per pattern). Scanning them flags the scanner against its own
-# definitions on every change that touches them, so they are excluded here --
-# the self-exclusion that secret scanners (gitleaks, detect-secrets) carry for
-# their own rule/fixture files. Kept next to PATTERNS so a pattern author sees
-# the allowlist in the same place they add a signature.
+# pattern above literally spells out a secret prefix), its test suite (a
+# positive fixture per pattern), and the log-redaction test suite (a fake secret
+# of each shape, because a redaction test that carries no secret-shaped string
+# proves nothing). Scanning them flags the scanner against its own definitions
+# on every change that touches them, so they are excluded here -- the
+# self-exclusion that secret scanners (gitleaks, detect-secrets) carry for their
+# own rule/fixture files. Kept next to PATTERNS so a pattern author sees the
+# allowlist in the same place they add a signature.
 #
-# Excluded WHOLE, not line-filtered: the entire purpose of these two files is to
+# Excluded WHOLE, not line-filtered: the entire purpose of these files is to
 # enumerate secret formats, so there is no "real code" in them worth scanning
 # for the same signatures. Detection is still tested --
 # tests/test_scan_added_secrets.py exercises PATTERNS directly in-process (it
@@ -91,6 +93,7 @@ EXCLUDED_PATHS: frozenset[str] = frozenset(
     {
         ".github/scripts/scan-added-secrets.py",
         "tests/test_scan_added_secrets.py",
+        "tests/test_logging_config.py",
     }
 )
 
