@@ -58,6 +58,7 @@ from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
+from app.logging_config import configure_logging
 from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
 
 # Reused rather than reimplemented, which is the whole point: the worker must
@@ -629,10 +630,7 @@ async def _amain() -> None:
 
 def main() -> int:
     """Entry point for `python -m app.worker`."""
-    logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO"),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_logging()
     if not os.environ.get("DATABASE_URL"):
         # Not fatal -- every repository degrades to a no-op without a DB, so
         # the worker would simply idle. Loud, because an audit worker that can

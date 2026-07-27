@@ -591,6 +591,17 @@ Single VPS, single uvicorn process — so no Prometheus/Grafana/ELK/Sentry.
 Everything rides Postgres and the Telegram bot that already exist (see
 `PHASE3_OBSERVABILITY_PLAN.md`).
 
+- **Log format** is configured in one place for every process
+  (`app/logging_config.py`, called by both the API and the audit worker;
+  the fixpack/monitoring/reap/usdt timers are `curl` calls into the API, not
+  Python processes of their own). `LOG_FORMAT=text` (the default) is the plain
+  line this has always emitted; `LOG_FORMAT=json` emits one JSON object per
+  line for `journalctl -o cat | jq` — see the runbook below. The JSON
+  formatter serialises an explicit allowlist of fields, so a value that nobody
+  reviewed cannot reach the log by being attached to a record. Secrets
+  matching a known shape (GitHub tokens, PEM keys, JWTs, bot tokens, DSN
+  passwords) are masked by a filter that runs in **both** formats.
+
 - **`GET /health`** (public, unauthenticated, leak-free) reports what
   actually fails here: `{"db": <bool>, "fixpack_backlog": <n|null>,
   "oldest_paid_seconds": <secs|null>}`. `db:false` means the database is
@@ -656,6 +667,65 @@ Everything rides Postgres and the Telegram bot that already exist (see
   With `RestartSec=3` a flapping service can restart at most a handful of
   times before systemd gives up for the interval, which caps the `OnFailure=`
   alerts to that same handful rather than an unbounded stream.
+
+### Debugging one `audit_id` / `job_id`
+
+Given nothing but an id from a user report, these three queries say where the
+work stopped, how many times it was tried, and what it cost. The first two work
+today against the live database and need no code change — the tables have
+carried these columns since migrations `0020_llm_usage.sql` and
+`0022_audit_jobs.sql`, nothing was reading them.
+
+**1. Where it stopped and how many attempts it took.** `state` plus
+`error_code` (written by `classify_failure` in `app/worker/main.py`) give the
+class of failure; `attempts` vs `max_attempts` says whether it was retried and
+whether it gave up:
+
+```sh
+psql "$DATABASE_URL" -c "
+  select id as job_id, state, attempts, max_attempts, error_code,
+         created_at, claimed_at, completed_at,
+         completed_at - claimed_at as duration
+    from audit_jobs
+   where audit_id = '<AUDIT_ID>' or id = '<AUDIT_ID>';"
+```
+
+Query by `id` when the audit never got far enough to exist — a job that failed
+before persisting has `audit_id = null`, and the id the client was handed at
+submission is the job's.
+
+**2. What it cost.** `llm_usage.job_id` holds the *audit* id for scan jobs (see
+`_record_llm_usage` in `app/main.py`):
+
+```sh
+psql "$DATABASE_URL" -c "
+  select model, calls, input_tokens, output_tokens, cost_usd, created_at
+    from llm_usage where job_id = '<AUDIT_ID>';"
+```
+
+Note the gap: a row is written only when the LLM stage actually spent tokens
+*and* the audit persisted, so a failed audit's spend is not recorded anywhere
+yet.
+
+**3. Every log line for that work, across processes.** Only with
+`LOG_FORMAT=json` set (see `.env.example`); in the default `text` mode use
+`journalctl --grep` instead.
+
+```sh
+journalctl -u shipit -u shipit-audit-worker --since '-24h' -o cat \
+  | jq -c 'select(.audit_id=="<AUDIT_ID>" or .job_id=="<JOB_ID>")
+           | {ts, level, service, step, duration_ms, error_code, msg}'
+```
+
+`-o cat` prints the bare `MESSAGE` field with no syslog prefix, which is what
+keeps the stream valid JSON for `jq`. Both units are listed because a
+submission crosses processes — the API enqueues, the worker runs it — and the
+handoff happens through the `audit_jobs` table, so querying one unit shows half
+the story.
+
+Correlation ids only appear on lines emitted underneath a set log context;
+wiring that context up at the four places that own a unit of work is a separate
+change, so until then these fields are absent and the filter matches nothing.
 
 ### CORS (browser frontend on Vercel)
 
