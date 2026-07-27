@@ -9,6 +9,7 @@ suite never touches the network or a database.
 
 import asyncio
 import io
+import logging
 import zipfile
 from contextlib import asynccontextmanager
 
@@ -941,3 +942,83 @@ def test_healthy_runner_claims_normally(monkeypatch):
     body = resp.json()
     assert "skipped_unhealthy_runner" not in body
     assert body["delivered"] == 1
+
+
+# --- _resolve_pr_token log level ------------------------------------------
+#
+# The presence/length diagnostic below was left at warning after the "no
+# GitHub token configured" incident closed, so it fired on every successful PR
+# delivery. Only the contradiction it was written to catch is anomalous.
+
+# Opaque stand-in for a private key: these tests only care that the value is
+# never echoed, so it needs no PEM shape (and carrying one would trip the CI
+# secret scanner on a line that holds no secret).
+FAKE_PEM = "not-a-real-key-only-a-placeholder"
+
+
+def _resolve(owner="acme", repo="app"):
+    return asyncio.run(main_mod._resolve_pr_token(owner, repo))
+
+
+def test_pr_token_resolve_is_quiet_on_the_healthy_path(monkeypatch, caplog):
+    """App configured and resolving: the normal path of every PR delivery."""
+    monkeypatch.setattr(main_mod, "app_credentials_from_env",
+                        lambda: ("Iv23appid", FAKE_PEM))
+    monkeypatch.setattr(main_mod, "installation_token_for_repo",
+                        lambda owner, repo, *, app_id, private_key: "ghs-token")
+
+    with caplog.at_level(logging.DEBUG, logger="app.main"):
+        assert _resolve() == "ghs-token"
+
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+    # Still emitted, just at debug -- the diagnostic keeps its value.
+    assert any("PR token resolve" in r.message for r in caplog.records)
+
+
+def test_pr_token_resolve_is_quiet_when_no_app_is_configured(monkeypatch, caplog):
+    """The documented GITHUB_PR_TOKEN fallback is a supported deployment, not
+    a fault: nothing configured, nothing resolved, nothing to warn about."""
+    monkeypatch.delenv("GITHUB_APP_ID", raising=False)
+    monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY_B64", raising=False)
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    with caplog.at_level(logging.DEBUG, logger="app.main"):
+        assert _resolve() is None
+
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_pr_token_resolve_warns_when_creds_are_present_but_unresolved(
+        monkeypatch, caplog):
+    """The incident signature, and the only reason this log line exists: the
+    env carries App credentials yet resolution still yields nothing."""
+    monkeypatch.setenv("GITHUB_APP_ID", "4278482")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", FAKE_PEM)
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    with caplog.at_level(logging.DEBUG, logger="app.main"):
+        assert _resolve() is None
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert "app_credentials_from_env=None" in warnings[0].getMessage()
+    # Lengths, never the values.
+    assert FAKE_PEM not in warnings[0].getMessage()
+
+
+def test_pr_token_resolve_counts_the_base64_pem_variable(monkeypatch, caplog):
+    """A deployment on the systemd-safe base64 path leaves
+    GITHUB_APP_PRIVATE_KEY unset and is healthy; reporting it as MISSING sent
+    an operator hunting for a key that was never supposed to be there."""
+    monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY", raising=False)
+    monkeypatch.setenv("GITHUB_APP_ID", "4278482")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_B64", "Zm9vYmFy")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    with caplog.at_level(logging.DEBUG, logger="app.main"):
+        _resolve()
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert "GITHUB_APP_PRIVATE_KEY=MISSING" not in warnings[0].getMessage()
