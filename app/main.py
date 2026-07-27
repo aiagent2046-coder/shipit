@@ -416,13 +416,26 @@ def _parse_github_repo_url(repo_url: str) -> tuple[str, str] | None:
 async def _record_llm_usage(
     llm_usage_repo: LlmUsageRepository, *, job_type: str,
     job_id: str | None, account_id: str | None, llm_stats: object,
+    audit_job_id: str | None = None,
 ) -> None:
-    """Write ONE llm_usage row for a job, but only when the LLM stage actually
-    ran and spent tokens. `llm_stats` is run_scan()["llm"]: a dict of
-    LLMScanStats fields when the stage ran, a bare "failed: ..." string on a
-    provider failure, and an all-zero dict (calls=0) when it was skipped (no
-    providers configured) or matched no rubric-relevant files. Tokens were spent
-    only in the first case with calls>0, so every other case records nothing.
+    """Write ONE llm_usage row per ATTEMPT that actually bought tokens.
+
+    `llm_stats` is run_scan()["llm_usage"] -- the accounting key, not the `llm`
+    diagnostic key. The distinction is the whole point: `llm` degrades to the
+    string "failed: ..." when a provider dies mid-scan, and reading spend off it
+    silently discarded every token the calls before that failure had already
+    paid for. `llm_usage` always carries the real totals, so calls>0 is now the
+    single condition, and it means what it says.
+
+    Callers must invoke this on the FAILURE path too, passing job_id=None when
+    no audits row exists to point at. Spend is a fact about the provider's
+    ledger, not about whether we managed to save the result: an attempt that
+    scanned and then lost its database is money gone, and a job that
+    dead-letters after three such attempts cost three scans.
+
+    `audit_job_id` is the audit_jobs row this attempt belongs to. Rows accumulate
+    per attempt under it, so the cost of a job is their SUM -- see
+    LlmUsageRepository.sum_by_audit_job.
 
     The reused-audit (content-hash cache hit) path never reaches this: it
     returns before run_scan is ever called, so a cache hit costs $0 and writes
@@ -448,6 +461,7 @@ async def _record_llm_usage(
             job_type=job_type, job_id=job_id, account_id=account_id,
             model=model, calls=calls, input_tokens=input_tokens,
             output_tokens=output_tokens, cost_usd=cost,
+            audit_job_id=audit_job_id,
         )
     except Exception:  # noqa: BLE001 -- accounting must never fail the audit
         logger.warning("llm_usage recording failed for %s job %s",
@@ -605,22 +619,36 @@ async def run_repo_audit(
         }
 
     scan = await _run_scan_offthread(raw, llm_client)
-    persisted = await audit_repo.create(
-        stack=stack.value, file_count=report.file_count,
-        score_total=scan["score"]["total"], score_json=scan["score"],
-        findings_json=scan["findings"], repo_url=repo_url,
-        content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
-    )
-    audit_id = persisted["id"] if persisted else str(uuid.uuid4())
     # Cost accounting. account_id is None: this path serves system re-audits
     # (continuous monitoring), whose LLM cost is incurred once per push
     # regardless of how many subscribers watch the repo -- attributing it to any
     # single subscriber would be wrong, so it is recorded unattributed.
+    # audit_job_id is None too: monitoring runs have their own table and never
+    # pass through the audit_jobs queue.
+    #
+    # The scan above already spent the money, so the row is written whatever
+    # audit_repo.create does next -- including raise, which is why this is a
+    # try/except/else rather than a line after the call.
+    try:
+        persisted = await audit_repo.create(
+            stack=stack.value, file_count=report.file_count,
+            score_total=scan["score"]["total"], score_json=scan["score"],
+            findings_json=scan["findings"], repo_url=repo_url,
+            content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
+        )
+    except Exception:
+        if llm_usage_repo is not None:
+            await _record_llm_usage(
+                llm_usage_repo, job_type=job_type, job_id=None,
+                account_id=None, llm_stats=scan["llm_usage"],
+            )
+        raise
+    audit_id = persisted["id"] if persisted else str(uuid.uuid4())
     if llm_usage_repo is not None:
         await _record_llm_usage(
             llm_usage_repo, job_type=job_type,
             job_id=persisted["id"] if persisted else None,
-            account_id=None, llm_stats=scan["llm"],
+            account_id=None, llm_stats=scan["llm_usage"],
         )
     return {
         "audit_id": audit_id,
