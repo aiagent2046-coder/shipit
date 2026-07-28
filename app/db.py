@@ -102,17 +102,20 @@ async def close_pool() -> None:
 
 
 # Arbitrary but fixed keys for the processors' session advisory locks -- ascii
-# "FIXP" and "MONI". Any value works as long as it is stable and not shared with
-# another advisory-lock user in this database; the two processors use distinct
-# keys so a Fix Pack run and a monitoring run never serialize against each other.
+# "FIXP", "MONI" and "USDT". Any value works as long as it is stable and not
+# shared with another advisory-lock user in this database; each processor uses a
+# distinct key so a Fix Pack run, a monitoring run and a USDT poll never
+# serialize against each other.
 _FIXPACK_PROCESSOR_LOCK_KEY = 0x46495850
 _MONITORING_PROCESSOR_LOCK_KEY = 0x4D4F4E49
+_USDT_POLL_LOCK_KEY = 0x55534454
 
 
 class ProcessorLockBusy(Exception):
     """Another processor run already holds the advisory lock, so this run must
     not proceed -- returned to the caller as a benign skipped-because-locked
-    outcome, not an error. Shared by the Fix Pack and monitoring processors."""
+    outcome, not an error. Shared by the Fix Pack, monitoring and USDT-poll
+    processors."""
 
 
 @asynccontextmanager
@@ -155,6 +158,35 @@ def monitoring_processor_lock():
     """The continuous-monitoring processor's advisory lock, on a distinct key so
     it never serializes against a Fix Pack run (see _advisory_processor_lock)."""
     return _advisory_processor_lock(_MONITORING_PROCESSOR_LOCK_KEY)
+
+
+def usdt_poll_lock():
+    """The USDT poller's advisory lock, on a distinct key so it never serializes
+    against a Fix Pack or monitoring run (see _advisory_processor_lock).
+
+    Unlike those two, here the lock is not belt-and-suspenders -- it is the only
+    thing stopping a double grant. Both of them claim each unit of work atomically
+    first (claim_one_paid / claim_one_pending), so their lock merely makes "one run
+    at a time" explicit. The USDT poller has no such claim: it reads
+    get_by_external_ref, finds nothing, and only then creates an account and marks
+    the invoice completed. Two overlapping runs both pass that check and both
+    grant. The partial unique index on payments(provider, external_ref) does not
+    catch it either, because completing a USDT invoice is an UPDATE of the same
+    already-existing pending row (invoice_payment_id is known up front), not a
+    competing INSERT. The result is two pro accounts for one payment, the second
+    mark_completed overwriting the first's account_id, so the key the payer was
+    handed points at an orphaned account.
+
+    Concurrency does not need an overlapping timer to happen: /internal/billing/
+    poll-usdt is plain authenticated HTTP, reachable by an operator curl during a
+    scheduled run, by two app instances mid-deploy, or from a second host.
+
+    Trade-off, the same one the other two processors already accept: the lock holds
+    one of the pool's max_size=5 connections for the whole poller run, including
+    the TronGrid HTTP call (30s timeout in fetch_transfers). A slow poll therefore
+    ties a connection up for that long. The alternative -- no lock -- is
+    double-granting a paid account, which is worse."""
+    return _advisory_processor_lock(_USDT_POLL_LOCK_KEY)
 
 
 def _json_field(value: Any) -> Any:
