@@ -57,6 +57,7 @@ from app.db import (
     database_url_from_env,
     fixpack_processor_lock,
     monitoring_processor_lock,
+    usdt_poll_lock,
 )
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
@@ -1811,6 +1812,26 @@ async def poll_usdt(
     Requires `Authorization: Bearer <USDT_POLL_TOKEN>`, constant-time
     compared, exactly like the reap endpoint. 503 if the token or the
     receiving address isn't configured.
+
+    One poll at a time (advisory lock), like the Fix Pack and monitoring
+    processors -- but load-bearing here rather than belt-and-suspenders,
+    because matching a transfer is a read-then-write with no atomic claim
+    behind it. Two overlapping polls both see the same invoice unpaid and both
+    grant it, producing two pro accounts for one payment; see db.usdt_poll_lock
+    for why the unique index on payments(provider, external_ref) doesn't stop
+    that. If another poll holds the lock this returns {"skipped_locked": true},
+    matching the other two endpoints.
+
+    shipit-usdt-poller.timer alone won't overlap two runs on one host (oneshot
+    + OnUnitInactiveSec re-arms only after the previous run exits), but nothing
+    about this endpoint depends on that: it is plain authenticated HTTP, so an
+    operator curl during a scheduled run, two app instances mid-deploy, or a
+    second host all produce a concurrent poll. The lock, not the schedule, is
+    what makes the grant safe.
+
+    Cost of holding it: one of the pool's max_size=5 connections for the whole
+    run, including the TronGrid call (30s timeout in fetch_transfers) -- the
+    same trade-off the Fix Pack and monitoring processors already accept.
     """
     token = usdt_trc20.poll_token_from_env()
     if not token:
@@ -1828,11 +1849,16 @@ async def poll_usdt(
             detail={"reason": "usdt_not_configured",
                     "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
         )
-    return await usdt_trc20.poll_and_match(
-        payment_repo, account_repo, address=address,
-        api_key=usdt_trc20.trongrid_api_key_from_env(), transport=transport,
-        fixpack_repo=fixpack_repo, audit_repo=audit_repo,
-    )
+    try:
+        async with usdt_poll_lock():
+            return await usdt_trc20.poll_and_match(
+                payment_repo, account_repo, address=address,
+                api_key=usdt_trc20.trongrid_api_key_from_env(), transport=transport,
+                fixpack_repo=fixpack_repo, audit_repo=audit_repo,
+            )
+    except ProcessorLockBusy:
+        # Another poll holds the lock — benign. The scheduler logs and moves on.
+        return {"skipped_locked": True}
 
 
 async def _resolve_pr_token(owner: str, repo: str) -> str | None:

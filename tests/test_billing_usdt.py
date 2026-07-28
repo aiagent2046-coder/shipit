@@ -13,9 +13,11 @@ from __future__ import annotations
 import datetime
 import re
 import uuid
+from contextlib import asynccontextmanager
 
 import httpx
 
+import app.main as main_mod
 from app.accounts import api_key_prefix
 from app.billing import usdt_trc20
 from app.main import (
@@ -358,6 +360,37 @@ def test_poll_endpoint_requires_bearer_token(monkeypatch):
         assert r.json()["matched"] == 0
     finally:
         _clear()
+
+
+def test_poll_endpoint_lock_busy_returns_skipped_locked(monkeypatch):
+    """A second overlapping poll does no work and reports skipped_locked --
+    same contract as the Fix Pack and monitoring process endpoints.
+
+    The transport here would match a transfer if it were reached, so the
+    assertion that nothing was granted is what proves the lock actually gated
+    the call rather than the poll merely finding nothing to do."""
+    monkeypatch.setenv("USDT_POLL_TOKEN", "polltok")
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+
+    @asynccontextmanager
+    async def busy_lock():
+        raise main_mod.ProcessorLockBusy()
+        yield  # unreachable, keeps this a valid async context manager
+
+    monkeypatch.setattr(main_mod, "usdt_poll_lock", busy_lock)
+
+    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    _override(accounts, payments,
+              _trongrid_transport([_transfer(1_000_000, tx_id="0xlocked")]))
+    try:
+        r = client.post("/internal/billing/poll-usdt",
+                        headers={"Authorization": "Bearer polltok"})
+    finally:
+        _clear()
+
+    assert r.status_code == 200          # benign skip, not an error
+    assert r.json() == {"skipped_locked": True}
+    assert accounts.by_id == {}          # no account granted while locked out
 
 
 def test_poll_endpoint_503_when_token_unconfigured(monkeypatch):

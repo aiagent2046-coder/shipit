@@ -60,10 +60,20 @@ DEPLOYPACK_READONLY_ROOTFS = (
     os.environ.get("DEPLOYPACK_READONLY_ROOTFS", "1").lower() not in ("0", "false", "")
 )
 
-# Optional non-root user for the preview container. OFF by default: a generated
-# app may bind a low port (e.g. Vite serves on container :80, which needs root)
-# or write to its own rootfs, so forcing a uid would break legitimate apps. Set
-# DEPLOYPACK_RUN_AS_USER ("1000:1000") to opt in where the image allows it.
+# Optional non-root --user override for the preview container. Still empty by
+# default, but no longer because the templates need root: every generated stack
+# now runs unprivileged by way of its own Dockerfile (Vite via
+# nginx-unprivileged/uid 101, Next.js `USER node`/uid 1000, FastAPI
+# `USER 1000:1000`), and none of them listens below 1024 (8080 / 3000 / 8000).
+#
+# It stays empty because this flag is a single GLOBAL uid applied to whichever
+# image happens to be running, and the three images do not agree on one: forcing
+# 1000:1000 onto the Vite preview would run nginx-unprivileged as a uid that
+# doesn't own its config/temp dirs. Per-stack ownership belongs in the
+# Dockerfile, which is also the only half the client keeps -- they take the Pack
+# and `docker compose up` on their own host, where this runner flag doesn't
+# exist. Set DEPLOYPACK_RUN_AS_USER ("1000:1000") to pin a uid anyway for a
+# one-off investigation.
 DEPLOYPACK_RUN_AS_USER = os.environ.get("DEPLOYPACK_RUN_AS_USER", "")
 
 # No-egress network for the running preview (requirement 3.5). The preview
