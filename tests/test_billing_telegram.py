@@ -11,11 +11,12 @@ tapping Pay; see scripts/verify_telegram_stars_locally.py.
 from __future__ import annotations
 
 import datetime
+import re
 import uuid
 
 import httpx
 
-from app.accounts import api_key_prefix, generate_api_key
+from app.accounts import api_key_prefix
 from app.billing import telegram_stars, usdt_trc20
 from app.main import (
     app,
@@ -24,39 +25,14 @@ from app.main import (
     get_payment_repo,
 )
 from fastapi.testclient import TestClient
+from tests.conftest import FakeAccountRepo, FakeKeyDeliveryMixin
 
 client = TestClient(app)
 
 
 # --- in-memory repo fakes ---
 
-class FakeAccountRepo:
-    def __init__(self):
-        self.by_id: dict[str, dict] = {}
-
-    async def create(self, *, api_key: str, tier: str):
-        row = {
-            "id": str(uuid.uuid4()), "api_key": api_key,
-            "key_prefix": api_key_prefix(api_key), "tier": tier,
-            "created_at": "2026-07-14T10:00:00Z",
-        }
-        self.by_id[row["id"]] = row
-        return row
-
-    async def get_by_id(self, account_id: str):
-        return self.by_id.get(account_id)
-
-    async def rotate_key(self, account_id: str):
-        row = self.by_id.get(account_id)
-        if row is None:
-            return None
-        new_key = generate_api_key()
-        row["api_key"] = new_key
-        row["key_prefix"] = api_key_prefix(new_key)
-        return row
-
-
-class FakePaymentRepo:
+class FakePaymentRepo(FakeKeyDeliveryMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
@@ -249,7 +225,8 @@ async def test_successful_payment_grants_pro_and_dms_key():
         account_repo=accounts, payment_repo=payments,
         token="t", transport=transport,
     )
-    assert result == {"ok": True, "handled": "successful_payment", "persisted": True}
+    assert result == {"ok": True, "handled": "successful_payment",
+                      "persisted": True, "key_delivered": True}
     # exactly one account, tier pro, key delivered by sendMessage
     assert len(accounts.by_id) == 1
     account = next(iter(accounts.by_id.values()))
@@ -257,7 +234,12 @@ async def test_successful_payment_grants_pro_and_dms_key():
     send_calls = [c for c in calls if c[0] == "sendMessage"]
     assert len(send_calls) == 1
     text = send_calls[0][1]["text"]
-    assert account["api_key"] in text
+    # The key is delivered straight out of the grant that minted it, in this
+    # same handler. It is never re-read from the account row, because the row
+    # does not have it (migration 0019) -- assert that absence directly, since
+    # a fake that carried the key here is what hid this bug in the first place.
+    assert "api_key" not in account
+    assert api_key_prefix(_delivered_key(text)) == account["key_prefix"]
     # Pro is a general subscription, not tied to any one audit, so the DM
     # must NOT dangle a report link (there is no report for this purchase);
     # it points at the run-an-audit landing page instead.
@@ -284,11 +266,17 @@ async def test_duplicate_successful_payment_is_idempotent():
     # No second account, no second payment — same charge id.
     assert len(accounts.by_id) == 1
     assert len(payments.rows) == 1
-    # The key is re-delivered on the retry (same key), so the payer who
-    # missed the first DM still gets it.
+    # The retry cannot re-deliver the key: it was minted once, in the first
+    # call, and is stored nowhere. So instead of crashing on a key that isn't
+    # there (the bug this replaced) the payer gets a plain explanation and the
+    # /rotatekey recovery path -- which works, because the chat_id was stamped.
     send_calls = [c for c in calls if c[0] == "sendMessage"]
     assert len(send_calls) == 2
-    assert send_calls[0][1]["text"] == send_calls[1][1]["text"]
+    first, second = send_calls[0][1]["text"], send_calls[1][1]["text"]
+    assert _delivered_key(first) is not None
+    assert _delivered_key(second) is None
+    assert "already delivered" in second
+    assert "/rotatekey" in second
 
 
 # --- 4. webhook endpoint rejects wrong/missing secret token ---
@@ -370,12 +358,23 @@ def _last_text(calls):
     return sends[-1][1]["text"] if sends else None
 
 
+def _delivered_key(msg):
+    """The API key a bot message actually handed over, or None if it handed
+    over none. Read out of the message text on purpose: the key exists only in
+    what was delivered, never in the account row (migration 0019), so scraping
+    the DM is the only way to assert on it -- and a test that reaches into the
+    repo for it would be asserting against a fake that lies."""
+    found = re.search(r"sk_live_[A-Za-z0-9_-]+", msg or "")
+    return found.group(0) if found else None
+
+
 async def test_mykey_shows_prefix_and_never_the_full_key():
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
     # A Stars purchase links this chat_id (555) to the account automatically.
     await _send(_successful_payment_update("charge_mykey", 555),
                 accounts, payments, calls)
     account = next(iter(accounts.by_id.values()))
+    purchase_key = _delivered_key(_last_text(calls))
 
     calls.clear()
     result = await _send(_text_update("/mykey", 555), accounts, payments, calls)
@@ -383,7 +382,7 @@ async def test_mykey_shows_prefix_and_never_the_full_key():
     msg = _last_text(calls)
     # The full secret is never re-sent; only the safe prefix is shown, and the
     # user is pointed at /rotatekey to recover a lost key.
-    assert account["api_key"] not in msg
+    assert purchase_key not in msg
     assert account["key_prefix"] in msg
     assert "/rotatekey" in msg
 
@@ -403,16 +402,18 @@ async def test_rotatekey_mints_new_key_for_linked_account():
     await _send(_successful_payment_update("charge_rot", 555),
                 accounts, payments, calls)
     account = next(iter(accounts.by_id.values()))
-    old_key = account["api_key"]
+    old_key = _delivered_key(_last_text(calls))
 
     calls.clear()
     result = await _send(_text_update("/rotatekey", 555), accounts, payments, calls)
     assert result["handled"] == "rotatekey" and result["found"] is True
     msg = _last_text(calls)
-    # The freshly minted key is delivered; it is not the old one.
-    assert account["api_key"] in msg
-    assert account["api_key"] != old_key
+    # The freshly minted key is delivered; it is not the old one, and it is now
+    # the account's current key (the stored prefix moved with it).
+    new_key = _delivered_key(msg)
+    assert new_key != old_key
     assert old_key not in msg
+    assert api_key_prefix(new_key) == account["key_prefix"]
 
 
 async def test_rotatekey_no_account_returns_helpful_message():
@@ -445,19 +446,58 @@ async def test_link_valid_unlinked_payment_links_and_returns_key():
     result = await _send(_text_update("/link 0xabc", 777),
                          accounts, payments, calls)
     assert result["result"] == "linked"
-    assert acct["api_key"] in _last_text(calls)
+    # /link mints the key it hands over. The plaintext the poller minted when
+    # it credited this payment was discarded and is NOT what gets sent -- it
+    # could not be, since nothing stored it.
+    delivered = _delivered_key(_last_text(calls))
+    assert delivered != acct["api_key"]
+    assert acct["api_key"] not in _last_text(calls)
+    assert api_key_prefix(delivered) == accounts.by_id[acct["id"]]["key_prefix"]
     # Persisted the association so a later /mykey works.
     assert row["telegram_chat_id"] == "777"
 
 
 async def test_link_is_idempotent_for_same_chat():
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
-    acct, _ = await _completed_usdt_payment(payments, accounts, "0xdup")
-    for _ in range(2):
-        result = await _send(_text_update("/link 0xdup", 777),
-                             accounts, payments, calls)
-        assert result["result"] == "linked"
-    assert acct["api_key"] in _last_text(calls)
+    await _completed_usdt_payment(payments, accounts, "0xdup")
+    first = await _send(_text_update("/link 0xdup", 777), accounts, payments, calls)
+    assert first["result"] == "linked"
+    delivered = _delivered_key(_last_text(calls))
+    assert delivered is not None
+
+    # Re-running /link is safe but delivers no second key: the payment's one
+    # delivery was already spent above. Rotating again here would silently kill
+    # the key the payer is already holding.
+    second = await _send(_text_update("/link 0xdup", 777), accounts, payments, calls)
+    assert second["result"] == "already_delivered"
+    assert _delivered_key(_last_text(calls)) is None
+    assert "/rotatekey" in _last_text(calls)
+    assert accounts.rotations == [next(iter(accounts.by_id))]
+
+
+async def test_link_after_web_checkout_already_took_the_key():
+    """The two doors to one USDT payment. If the payer already saw the key on
+    the web checkout page, /link must not hand out a second one -- and must not
+    blow up reaching for a key that was never stored (the original bug: /link
+    read api_key straight off get_by_id)."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    acct, row = await _completed_usdt_payment(payments, accounts, "0xweb")
+
+    # The browser polled first and was handed the key.
+    web = await usdt_trc20.invoice_status(
+        payments, accounts, row["id"], address="T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb")
+    assert web["api_key"] is not None
+
+    result = await _send(_text_update("/link 0xweb", 777), accounts, payments, calls)
+    assert result["result"] == "already_delivered"
+    msg = _last_text(calls)
+    assert _delivered_key(msg) is None
+    assert "/rotatekey" in msg
+    # The claim still linked the chat, so /rotatekey really is usable from here.
+    assert row["telegram_chat_id"] == "777"
+    rotate = await _send(_text_update("/rotatekey", 777), accounts, payments, calls)
+    assert rotate["found"] is True
+    assert _delivered_key(_last_text(calls)) not in (None, web["api_key"])
 
 
 async def test_link_already_claimed_by_other_chat_is_rejected():

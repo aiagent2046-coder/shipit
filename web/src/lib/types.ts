@@ -147,7 +147,17 @@ export type UsdtInvoiceStatus =
       currency: string;
       expires_at: string;
     }
-  | { invoice_id: string; status: "completed"; tier: "pro"; api_key: string | null }
+  | {
+      invoice_id: string;
+      status: "completed";
+      tier: "pro";
+      // Delivered exactly once, on the first completed poll: the key is not
+      // stored server-side, so a repeat poll of the same invoice gets null
+      // here with key_already_delivered true. That is not an error — it means
+      // the key already went out (to this page, or to Telegram /link).
+      api_key: string | null;
+      key_already_delivered?: boolean;
+    }
   | { invoice_id: string; status: "expired" };
 
 // POST /v1/audits/{audit_id}/fixpack/usdt-invoice — same shape as UsdtInvoice
@@ -196,7 +206,14 @@ export interface PaypalOrder {
 // captured and granted (Pro). A pending order never carries a key.
 export type PaypalOrderStatus =
   | { order_id: string; status: "pending" }
-  | { order_id: string; status: "completed"; tier: "pro"; api_key: string | null };
+  | {
+      order_id: string;
+      status: "completed";
+      tier: "pro";
+      // Same one-shot delivery as UsdtInvoiceStatus above.
+      api_key: string | null;
+      key_already_delivered?: boolean;
+    };
 
 // POST /v1/paypal/subscriptions — a recurring monitoring subscription. The
 // browser sends the buyer to `approve_url` (or approves via the SDK button);

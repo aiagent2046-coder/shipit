@@ -40,7 +40,7 @@ import uuid
 import pytest
 
 import app.db as db_mod
-from app.accounts import generate_api_key
+from app.accounts import api_key_prefix, generate_api_key
 from app.db import (
     AccountRepository,
     AuditRepository,
@@ -199,6 +199,18 @@ async def test_all_repository_write_paths(real_db):
         await account_repo.get_by_key_hash(hash_api_key(rotated["api_key"]))
     )["id"] == account_id
 
+    # get_by_id: pins the post-0019 contract against the real database. There is
+    # no api_key column any more, so the row this returns carries no key text at
+    # all -- only the prefix that is safe to show. Four billing call sites used
+    # to read ["api_key"] off exactly this row and 500 on the KeyError; the
+    # shared FakeAccountRepo in tests/conftest.py copies this shape, and this
+    # assertion is what keeps that fake honest.
+    by_id = await account_repo.get_by_id(account_id)
+    assert by_id is not None
+    assert "api_key" not in by_id
+    assert by_id["key_prefix"] == api_key_prefix(rotated["api_key"])
+    assert await account_repo.get_by_id(str(uuid.uuid4())) is None
+
     # ---- PaymentRepository ----------------------------------------------
     payment = await payment_repo.create(
         account_id=account_id, provider="usdt_trc20",
@@ -222,6 +234,23 @@ async def test_all_repository_write_paths(real_db):
     await payment_repo.mark_completed_fixpack(
         fp_payment["id"], external_ref=f"0xfixpack-{run}"
     )
+
+    # claim_key_delivery: migration 0024's one-shot claim, first asker wins.
+    # This is the whole mechanism the two unauthenticated poll endpoints and
+    # /link rely on to hand the plaintext key over exactly once, so both the
+    # win and the loss have to come from real SQL rather than a fake's dict.
+    assert await payment_repo.claim_key_delivery(payment_id) is True
+    assert await payment_repo.claim_key_delivery(payment_id) is False
+    await payment_repo.release_key_delivery(payment_id)
+    assert await payment_repo.claim_key_delivery(payment_id) is True
+
+    # A payment that is not completed is never claimable -- the status guard is
+    # in the same UPDATE, so an unpaid invoice cannot mint a key.
+    unpaid = await payment_repo.create(
+        account_id=account_id, provider="usdt_trc20", external_ref=None,
+        amount=5.0, currency="USD", status="pending", tier_granted="pro",
+    )
+    assert await payment_repo.claim_key_delivery(unpaid["id"]) is False
 
     # link_telegram_chat_id: the null-guard anti-hijack UPDATE + read-back.
     linked = await payment_repo.link_telegram_chat_id(payment_id, f"chat-{run}")

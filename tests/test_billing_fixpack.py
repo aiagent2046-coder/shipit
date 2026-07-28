@@ -31,6 +31,7 @@ from app.main import (
     get_fixpack_repo,
     get_payment_repo,
 )
+from tests.conftest import FakeAccountRepo, FakeKeyDeliveryMixin
 
 client = TestClient(app)
 
@@ -75,20 +76,7 @@ class FakeFixpackRepo:
         return max(matches, key=lambda r: r["created_at"])
 
 
-class FakeAccountRepo:
-    def __init__(self):
-        self.by_id: dict[str, dict] = {}
-
-    async def create(self, *, api_key, tier):
-        row = {"id": str(uuid.uuid4()), "api_key": api_key, "tier": tier}
-        self.by_id[row["id"]] = row
-        return row
-
-    async def get_by_id(self, account_id):
-        return self.by_id.get(account_id)
-
-
-class FakePaymentRepo:
+class FakePaymentRepo(FakeKeyDeliveryMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 

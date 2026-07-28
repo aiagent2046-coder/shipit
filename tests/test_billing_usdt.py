@@ -16,6 +16,7 @@ import uuid
 
 import httpx
 
+from app.accounts import api_key_prefix
 from app.billing import usdt_trc20
 from app.main import (
     app,
@@ -24,6 +25,7 @@ from app.main import (
     get_payment_repo,
 )
 from fastapi.testclient import TestClient
+from tests.conftest import FakeAccountRepo, FakeKeyDeliveryMixin
 
 client = TestClient(app)
 
@@ -39,21 +41,7 @@ USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 _TRON_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
 
 
-class FakeAccountRepo:
-    def __init__(self):
-        self.by_id: dict[str, dict] = {}
-
-    async def create(self, *, api_key: str, tier: str):
-        row = {"id": str(uuid.uuid4()), "api_key": api_key, "tier": tier,
-               "created_at": "2026-07-14T10:00:00Z"}
-        self.by_id[row["id"]] = row
-        return row
-
-    async def get_by_id(self, account_id: str):
-        return self.by_id.get(account_id)
-
-
-class FakePaymentRepo:
+class FakePaymentRepo(FakeKeyDeliveryMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
@@ -235,11 +223,16 @@ async def test_poll_matches_transfer_and_grants_pro():
     account = accounts.by_id[row["account_id"]]
     assert account["tier"] == "pro"
 
-    # the status endpoint now reveals the key (and only now)
+    # The poller ran with no browser attached, so the plaintext key it minted
+    # is gone -- nothing stored it (migration 0019). The status endpoint the
+    # payer polls therefore mints the key it hands back, and it is genuinely
+    # this account's current key (its prefix matches what the account carries).
     status = await usdt_trc20.invoice_status(
         payments, accounts, inv["invoice_id"], address=ADDRESS)
     assert status["status"] == "completed"
-    assert status["api_key"] == account["api_key"]
+    assert status["api_key"].startswith("sk_live_")
+    assert status["key_already_delivered"] is False
+    assert api_key_prefix(status["api_key"]) == account["key_prefix"]
 
 
 async def test_status_pending_never_reveals_key():
@@ -264,6 +257,62 @@ async def test_poll_is_idempotent_across_repeated_transfers():
     assert first["matched"] == 1
     assert second["matched"] == 0          # same tx, already applied
     assert len(accounts.by_id) == 1        # no second account
+
+
+async def test_repeat_status_poll_after_key_delivery_does_not_crash():
+    """The regression this file could not express before: the browser polls
+    this endpoint on a timer, so the SECOND poll of a paid invoice used to read
+    api_key off a get_by_id() row that has no such field -- KeyError, 500, and
+    a paying customer with no key and no way to get one.
+
+    Now the first poll delivers and the rest report, in a shape the checkout
+    page already renders (api_key null + key_already_delivered)."""
+    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    inv = await usdt_trc20.create_invoice(payments, address=ADDRESS)
+    micros = usdt_trc20.amount_to_micros(inv["amount"])
+    await usdt_trc20.poll_and_match(
+        payments, accounts, address=ADDRESS,
+        transport=_trongrid_transport([_transfer(micros, tx_id="0xpoll")]))
+
+    first = await usdt_trc20.invoice_status(
+        payments, accounts, inv["invoice_id"], address=ADDRESS)
+    assert first["api_key"] is not None
+
+    for _ in range(3):
+        again = await usdt_trc20.invoice_status(
+            payments, accounts, inv["invoice_id"], address=ADDRESS)
+        assert again["status"] == "completed"
+        assert again["tier"] == "pro"
+        assert again["api_key"] is None
+        assert again["key_already_delivered"] is True
+    # And no repeat poll quietly rotated the key out from under the payer.
+    assert accounts.rotations == [payments.rows[inv["invoice_id"]]["account_id"]]
+
+
+async def test_status_endpoint_delivers_key_once_over_http():
+    """Same one-shot rule through the real endpoint, since that is where a
+    KeyError became a 500 for the payer."""
+    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    inv = await usdt_trc20.create_invoice(payments, address=ADDRESS)
+    micros = usdt_trc20.amount_to_micros(inv["amount"])
+    await usdt_trc20.poll_and_match(
+        payments, accounts, address=ADDRESS,
+        transport=_trongrid_transport([_transfer(micros, tx_id="0xhttp")]))
+
+    app.dependency_overrides[get_account_repo] = lambda: accounts
+    app.dependency_overrides[get_payment_repo] = lambda: payments
+    try:
+        first = client.get(f"/v1/billing/usdt/invoice/{inv['invoice_id']}")
+        second = client.get(f"/v1/billing/usdt/invoice/{inv['invoice_id']}")
+    finally:
+        app.dependency_overrides.pop(get_account_repo, None)
+        app.dependency_overrides.pop(get_payment_repo, None)
+
+    assert first.status_code == 200
+    assert first.json()["api_key"].startswith("sk_live_")
+    assert second.status_code == 200          # not a 500
+    assert second.json()["api_key"] is None
+    assert second.json()["key_already_delivered"] is True
 
 
 async def test_poll_ignores_wrong_amount_and_wrong_token():

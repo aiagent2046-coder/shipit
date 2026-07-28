@@ -116,6 +116,7 @@ export function PayPalOrderCard({
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "approved" | "completed">("idle");
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [alreadyDelivered, setAlreadyDelivered] = useState(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -134,6 +135,7 @@ export function PayPalOrderCard({
             stopPolling();
             setPhase("completed");
             setApiKey(status.api_key);
+            setAlreadyDelivered(status.key_already_delivered === true);
           }
         } catch {
           /* transient; keep polling */
@@ -239,7 +241,11 @@ export function PayPalOrderCard({
           )}
 
           {phase === "completed" && product === "pro" && (
-            <ProKeyReveal apiKey={apiKey} orderId={orderIdRef.current} />
+            <ProKeyReveal
+              apiKey={apiKey}
+              alreadyDelivered={alreadyDelivered}
+              orderId={orderIdRef.current}
+            />
           )}
         </>
       )}
@@ -249,9 +255,11 @@ export function PayPalOrderCard({
 
 function ProKeyReveal({
   apiKey,
+  alreadyDelivered,
   orderId,
 }: {
   apiKey: string | null;
+  alreadyDelivered: boolean;
   orderId: string | null;
 }) {
   const { setKey } = useApiKey();
@@ -303,6 +311,13 @@ function ProKeyReveal({
             Keep it secret — anyone with it has your pro access.
           </p>
         </>
+      ) : alreadyDelivered ? (
+        <p className="mt-2 text-sm text-muted">
+          This key was already delivered once. For security it is shown only
+          once and is never stored, so it can&apos;t be shown again — if you
+          didn&apos;t save it, contact the operator with order id{" "}
+          <span className="font-mono">{orderId}</span> to have it reissued.
+        </p>
       ) : (
         <p className="mt-2 text-sm text-muted">
           Payment recorded, but the key wasn&apos;t returned yet. Contact the

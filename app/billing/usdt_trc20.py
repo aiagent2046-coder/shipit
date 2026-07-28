@@ -322,19 +322,31 @@ async def invoice_status(
     """State of one invoice for the checkout page to poll. Reveals the
     api_key ONLY once the invoice is completed (the payer proved payment
     by sending the exact amount); a pending/expired invoice never leaks a
-    key. Returns None if there's no such invoice (endpoint -> 404)."""
+    key. Returns None if there's no such invoice (endpoint -> 404).
+
+    The key is delivered exactly once, on the first completed poll: it is
+    minted here (deliver_key_once), because poll_and_match granted this
+    account with no browser attached and the plaintext it saw is gone. A
+    second poll of the same invoice gets api_key=None with
+    key_already_delivered=True -- not an error, and not a second key. The
+    checkout page stops polling as soon as it sees `completed`, so the one
+    shot lands on the poll the payer is actually looking at."""
+    from app.billing import deliver_key_once
+
     row = await payment_repo.get(invoice_id)
     if row is None or row.get("provider") != PROVIDER:
         return None
 
     if row["status"] == "completed":
-        account = await account_repo.get_by_id(row["account_id"]) if row.get("account_id") else None
+        api_key = await deliver_key_once(
+            account_repo=account_repo, payment_repo=payment_repo, payment=row,
+        )
         return {
             "invoice_id": row["id"],
             "status": "completed",
             "tier": "pro",
-            # The whole point of the poll: hand back the key once paid.
-            "api_key": account["api_key"] if account else None,
+            "api_key": api_key,
+            "key_already_delivered": api_key is None,
         }
 
     if is_expired(row):

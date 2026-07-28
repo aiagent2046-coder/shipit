@@ -25,6 +25,7 @@ from app.accounts import TIER_PRO, generate_api_key
 class _AccountStore(Protocol):
     async def create(self, *, api_key: str, tier: str) -> dict[str, Any] | None: ...
     async def get_by_id(self, account_id: str) -> dict[str, Any] | None: ...
+    async def rotate_key(self, account_id: str) -> dict[str, Any] | None: ...
 
 
 class _PaymentStore(Protocol):
@@ -38,6 +39,46 @@ class _PaymentStore(Protocol):
     async def mark_completed_fixpack(
         self, payment_id: str, *, external_ref: str
     ) -> None: ...
+    async def claim_key_delivery(self, payment_id: str) -> bool: ...
+    async def release_key_delivery(self, payment_id: str) -> None: ...
+
+
+async def deliver_key_once(
+    *,
+    account_repo: _AccountStore,
+    payment_repo: _PaymentStore,
+    payment: dict[str, Any],
+) -> str | None:
+    """The plaintext API key for a completed payment, for the first caller to
+    ask and no one after -- or None if it has already been delivered.
+
+    This exists because the plaintext key is not stored anywhere (migration
+    0019). The USDT poller and the PayPal capture webhook both mint an account
+    while nobody is connected, so the key they receive is discarded; the payer's
+    browser then polls a separate endpoint for it. There is nothing to look up
+    at that point, so the key is *minted* here instead: winning migration
+    0024's key_delivered_at claim earns one rotate_key, whose fresh plaintext is
+    what gets handed back. Nothing is ever written to disk in plaintext.
+
+    None means "not yours to receive" and callers must say so plainly rather
+    than imply the payment failed: either it was already delivered (the common
+    case -- a duplicate poll, or /link after the browser already showed it), or
+    the payment has no account. Recovery from there is /rotatekey, the same
+    lost-key path /mykey points at.
+    """
+    if not payment.get("account_id"):
+        return None
+    if not await payment_repo.claim_key_delivery(payment["id"]):
+        return None
+    try:
+        rotated = await account_repo.rotate_key(payment["account_id"])
+    except Exception:
+        await payment_repo.release_key_delivery(payment["id"])
+        raise
+    if rotated is None:
+        await payment_repo.release_key_delivery(payment["id"])
+        return None
+    return rotated.get("api_key")
 
 
 async def grant_pro_tier(
@@ -51,7 +92,17 @@ async def grant_pro_tier(
     invoice_payment_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Idempotently turn a confirmed payment into a pro account, and
-    return that account (including its `api_key`) for delivery.
+    return that account.
+
+    The returned dict carries `api_key` ONLY when this call is what created
+    the account -- that plaintext exists in memory and nowhere else (migration
+    0019), so it is the caller's one chance to deliver it. On a replay of an
+    already-granted charge the account is re-read from the database, which by
+    design cannot produce the key text again, so `api_key` is absent. Read it
+    with `.get("api_key")` and handle None: for an in-handler delivery (Stars)
+    that means telling the payer the key already went out and pointing at
+    /rotatekey; for a later, separate poll (USDT, PayPal) it means going
+    through deliver_key_once instead of this function's return value.
 
     `external_ref` is the provider's own charge/transaction id
     (telegram_payment_charge_id for Stars, the TRC20 transaction_id for
@@ -71,12 +122,13 @@ async def grant_pro_tier(
 
     Returns None only when DATABASE_URL isn't configured (account_repo
     can't create): callers surface that as "couldn't persist", not a
-    crash. When configured, the returned dict always carries `api_key`.
+    crash.
     """
     existing = await payment_repo.get_by_external_ref(provider, external_ref)
     if existing is not None and existing.get("account_id"):
-        # Already granted for this charge/tx -- re-fetch and re-return the
-        # same account so a retry re-delivers the original key, unchanged.
+        # Already granted for this charge/tx -- re-return the same account so
+        # the retry mints no second key. This account dict has no `api_key`:
+        # the key was minted once, in the branch below, and is not stored.
         account = await account_repo.get_by_id(existing["account_id"])
         if account is not None:
             return account
