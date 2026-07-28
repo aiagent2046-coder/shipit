@@ -151,12 +151,25 @@ def _fastapi_pack(files: dict[str, str]) -> dict[str, str]:
             "RUN pip install --no-cache-dir -r requirements.txt"
         )
 
+    # Runs as a non-root uid, like the Vite pack (nginx-unprivileged, uid 101)
+    # and the Fix Pack runner's forced --user: this image runs untrusted client
+    # code. Two details are deliberate. The uid is NUMERIC (1000:1000) rather
+    # than a named user, because python:3.12-slim ships no non-root account and
+    # no guarantee of the shell tooling a `useradd` step would need. And USER
+    # comes AFTER the install steps, so pip still writes to system paths as
+    # root; only the finished app runs unprivileged. Safe on the exposed port:
+    # 8000 is above 1024, so no privileged bind is needed.
+    #
+    # This lives in the Dockerfile, not in sandbox.py's --user flag, because the
+    # Dockerfile is what the client takes with them when they `docker compose
+    # up` on their own host; the runner flag stays behind.
     dockerfile = (
         "FROM python:3.12-slim\n"
         "WORKDIR /app\n"
         f"{install}\n"
-        "COPY . .\n"
+        "COPY --chown=1000:1000 . .\n"
         "EXPOSE 8000\n"
+        "USER 1000:1000\n"
         f'CMD ["uvicorn", "{entry}", "--host", "0.0.0.0", "--port", "8000"]\n'
     )
 
@@ -339,10 +352,19 @@ def _nextjs_pack(files: dict[str, str]) -> dict[str, str]:
         # run, and it must ship in the Pack the user gets.
         "ENV HOSTNAME=0.0.0.0\n"
         "ENV PORT=3000\n"
-        "COPY --from=build /app/.next/standalone ./\n"
-        "COPY --from=build /app/.next/static ./.next/static\n"
-        "COPY --from=build /app/public ./public\n"
+        # Owned by and run as `node` (uid 1000, built into node:20-slim), not
+        # root. Same reason the Vite pack serves via nginx-unprivileged and the
+        # Fix Pack runner forces a non-root --user: this image runs untrusted
+        # client code. It belongs in the Dockerfile rather than in sandbox.py's
+        # --user flag, because the client takes the Dockerfile with them when
+        # they `docker compose up` on their own host -- the runner flag stays
+        # behind. Safe on the exposed port: 3000 is above 1024, so no
+        # privileged bind is needed.
+        "COPY --from=build --chown=node:node /app/.next/standalone ./\n"
+        "COPY --from=build --chown=node:node /app/.next/static ./.next/static\n"
+        "COPY --from=build --chown=node:node /app/public ./public\n"
         "EXPOSE 3000\n"
+        "USER node\n"
         'CMD ["node", "server.js"]\n'
     )
 

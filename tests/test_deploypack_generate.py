@@ -161,7 +161,7 @@ def test_nextjs_pack_standalone_npm_no_lockfile():
     df = pack["Dockerfile"]
     assert "RUN npm install" in df          # no lockfile -> install, not ci
     assert "npm run build" in df
-    assert "COPY --from=build /app/.next/standalone ./" in df
+    assert "COPY --from=build --chown=node:node /app/.next/standalone ./" in df
     assert "ENV HOSTNAME=0.0.0.0" in df     # the Docker-bind gotcha, fixed here
     assert "EXPOSE 3000" in df
     assert 'CMD ["node", "server.js"]' in df
@@ -223,6 +223,136 @@ def test_nextjs_pack_refuses_without_output_standalone():
         assert False, "expected UnsupportedForDeployPack"
     except UnsupportedForDeployPack:
         pass
+
+
+# --- non-root preview containers ---
+#
+# SCOPE, stated plainly so these are not mistaken for more than they are: every
+# test below reads the TEXT of a generated Dockerfile. None of them builds an
+# image or starts a container, so none of them proves the app actually boots as a
+# non-root uid -- only that the template asks for it. Real proof needs a
+# `docker build` + `docker run` + `id -u`, which no pytest run here has a docker
+# daemon for; that belongs in .github/workflows/e2e-sandbox-runner.yml.
+
+
+def _last_start_directive_index(dockerfile: str) -> int:
+    """Line index of the final CMD/ENTRYPOINT -- the process that runs untrusted
+    client code, and therefore the line every USER must precede."""
+    starts = [
+        i for i, line in enumerate(dockerfile.splitlines())
+        if line.startswith(("CMD ", "ENTRYPOINT "))
+    ]
+    assert starts, f"template has no CMD/ENTRYPOINT:\n{dockerfile}"
+    return starts[-1]
+
+
+def _user_line_indexes(dockerfile: str) -> list[int]:
+    return [
+        i for i, line in enumerate(dockerfile.splitlines())
+        if line.startswith("USER ")
+    ]
+
+
+def test_nextjs_template_runs_as_node_not_root():
+    """Template text only (see scope note above)."""
+    df = generate_deploy_pack(Stack.NEXTJS, _next_files())["Dockerfile"]
+
+    users = _user_line_indexes(df)
+    assert users, f"no USER directive -- runtime stage would run as root:\n{df}"
+    # `node` is built into node:20-slim (uid 1000), so no useradd step is needed.
+    assert df.splitlines()[users[-1]] == "USER node"
+    assert users[-1] < _last_start_directive_index(df)
+
+    # Every runtime-stage COPY lands owned by node, or the unprivileged process
+    # would be reading files it doesn't own.
+    runtime = df.split("FROM node:20-slim AS run\n", 1)[1]
+    copies = [ln for ln in runtime.splitlines() if ln.startswith("COPY ")]
+    assert copies, "expected COPY lines in the runtime stage"
+    assert all("--chown=node:node" in ln for ln in copies), copies
+
+
+def test_fastapi_template_runs_as_numeric_nonroot_uid_after_install():
+    """Template text only (see scope note above)."""
+    df = generate_deploy_pack(Stack.FASTAPI, {
+        "requirements.txt": "fastapi\nuvicorn\n",
+        "app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+    })["Dockerfile"]
+
+    users = _user_line_indexes(df)
+    assert users, f"no USER directive -- container would run as root:\n{df}"
+    # Numeric on purpose: python:3.12-slim ships no non-root account, and a
+    # `useradd` step would depend on tooling a slim image needn't have.
+    assert df.splitlines()[users[-1]] == "USER 1000:1000"
+    assert users[-1] < _last_start_directive_index(df)
+    assert "COPY --chown=1000:1000 . ." in df
+
+    # pip must still install as root, into system paths: USER comes after every
+    # install RUN, not before. Regression guard on the ordering specifically,
+    # since a USER placed too early breaks the build rather than the runtime.
+    lines = df.splitlines()
+    install_runs = [i for i, ln in enumerate(lines) if ln.startswith("RUN pip ")]
+    assert install_runs, f"expected a pip install step:\n{df}"
+    assert max(install_runs) < users[-1]
+
+
+def test_fastapi_poetry_variant_also_installs_as_root_then_drops():
+    """Template text only. The poetry branch emits a different install block,
+    so the USER-after-install ordering is asserted for it separately."""
+    df = generate_deploy_pack(Stack.FASTAPI, {
+        "pyproject.toml": "[tool.poetry]\nname = 'x'\n",
+        "app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+    })["Dockerfile"]
+
+    lines = df.splitlines()
+    user_index = _user_line_indexes(df)[-1]
+    poetry_runs = [i for i, ln in enumerate(lines) if "poetry install" in ln]
+    assert poetry_runs, f"expected a poetry install step:\n{df}"
+    assert max(poetry_runs) < user_index < _last_start_directive_index(df)
+
+
+def test_vite_template_is_left_alone_and_still_unprivileged():
+    """Regression guard: the Vite pack was ALREADY non-root before this change
+    and must stay byte-identical in the ways that matter. It gets there through
+    the base image (nginx-unprivileged runs as uid 101 and needs no USER line of
+    its own), so adding one here would be wrong -- a USER 1000 would run nginx
+    as a uid that owns none of its config or temp dirs.
+
+    Template text only (see scope note above)."""
+    df = generate_deploy_pack(
+        Stack.VITE_REACT,
+        {"package.json": '{"dependencies":{"react":"18","vite":"5"}}'},
+    )["Dockerfile"]
+
+    assert "FROM nginxinc/nginx-unprivileged:alpine" in df
+    assert _user_line_indexes(df) == []
+    assert "--chown" not in df
+    # No CMD either: the unprivileged nginx image's own entrypoint serves.
+    assert "CMD " not in df and "ENTRYPOINT " not in df
+
+
+def test_no_generated_template_exposes_a_privileged_port():
+    """The reason the old sandbox.py comment ("a generated app may bind a low
+    port") is obsolete, pinned as a test: if a future template ever EXPOSEs
+    below 1024 it would need root again, and this fails instead of silently
+    reintroducing the conflict. Template text only."""
+    packs = {
+        "vite": generate_deploy_pack(
+            Stack.VITE_REACT,
+            {"package.json": '{"dependencies":{"react":"18","vite":"5"}}'},
+        ),
+        "nextjs": generate_deploy_pack(Stack.NEXTJS, _next_files()),
+        "fastapi": generate_deploy_pack(Stack.FASTAPI, {
+            "requirements.txt": "fastapi\n",
+            "app/main.py": "app = FastAPI()\n",
+        }),
+    }
+    for stack, pack in packs.items():
+        ports = [
+            int(ln.split()[1])
+            for ln in pack["Dockerfile"].splitlines() if ln.startswith("EXPOSE ")
+        ]
+        assert ports, f"{stack} template EXPOSEs nothing"
+        assert all(p >= 1024 for p in ports), (stack, ports)
 
 
 # --- unsupported ---
