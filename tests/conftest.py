@@ -196,6 +196,70 @@ class FakeKeyDeliveryMixin:
         self.rows[payment_id]["key_delivered_at"] = None
 
 
+FIXPACK_LIVE_STATUSES = ("paid", "running")
+
+
+def fixpack_live_job(jobs, audit_id):
+    """The one live Fix Pack job for an audit, or None -- the in-memory stand-in
+    for the arbiter of FixpackJobRepository.create_paid's ON CONFLICT
+    (fixpack_jobs_audit_live_idx, migration 0025).
+
+    Shared by the FakeFixpackRepo in each billing test file so both agree on the
+    predicate, including the part that is easy to get wrong: only 'paid' and
+    'running' collide. A terminal job ('failed', 'delivered', ...) must NOT, or
+    the fakes would forbid the re-purchase-after-failure the real index allows.
+    A null audit_id never collides (Postgres treats NULLs as distinct)."""
+    if audit_id is None:
+        return None
+    for job in jobs:
+        if (job.get("audit_id") == audit_id
+                and job.get("status") in FIXPACK_LIVE_STATUSES):
+            return job
+    return None
+
+
+class FakeCompletionCasMixin:
+    """PaymentRepository's compare-and-set completion gate for the in-memory
+    payment fakes, defined once so all four of them agree on it and none can
+    drift back to the unconditional overwrite the real SQL no longer does.
+
+    Mirrors the predicate in app/db.py exactly -- `where id = %s and (status =
+    'pending' or (status = 'completed' and external_ref = %s))` -- and therefore
+    the contract that matters to callers: a row on success, including on a replay
+    of the SAME charge, and None when the row is already completed under a
+    DIFFERENT one. A fake that kept returning None unconditionally would let a
+    caller mishandle that refusal and still pass.
+
+    Expects the host class to keep payment rows in `self.rows`, keyed by id."""
+
+    rows: dict[str, dict]
+
+    def _cas_complete(self, payment_id: str, external_ref: str) -> dict | None:
+        row = self.rows[payment_id]
+        if row.get("status") == "pending":
+            return row
+        if row.get("status") == "completed" and row.get("external_ref") == (
+            external_ref
+        ):
+            return row
+        return None
+
+    async def mark_completed(self, payment_id, *, account_id, external_ref):
+        row = self._cas_complete(payment_id, external_ref)
+        if row is None:
+            return None
+        row.update(
+            status="completed", account_id=account_id, external_ref=external_ref)
+        return row
+
+    async def mark_completed_fixpack(self, payment_id, *, external_ref):
+        row = self._cas_complete(payment_id, external_ref)
+        if row is None:
+            return None
+        row.update(status="completed", external_ref=external_ref)
+        return row
+
+
 class NullLlmUsageRepo:
     """LlmUsageRepository's no-DATABASE_URL behaviour: records nothing."""
 

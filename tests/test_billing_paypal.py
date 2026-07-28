@@ -32,7 +32,12 @@ from app.main import (
     get_subscription_repo,
 )
 from fastapi.testclient import TestClient
-from tests.conftest import FakeAccountRepo, FakeKeyDeliveryMixin
+from tests.conftest import (
+    FakeAccountRepo,
+    FakeCompletionCasMixin,
+    FakeKeyDeliveryMixin,
+    fixpack_live_job,
+)
 
 client = TestClient(app)
 
@@ -53,7 +58,7 @@ def _paypal_env(monkeypatch):
 
 # --- in-memory repo fakes ---
 
-class FakePaymentRepo(FakeKeyDeliveryMixin):
+class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
@@ -85,13 +90,6 @@ class FakePaymentRepo(FakeKeyDeliveryMixin):
                 return r
         return None
 
-    async def mark_completed(self, payment_id, *, account_id, external_ref):
-        self.rows[payment_id].update(
-            status="completed", account_id=account_id, external_ref=external_ref)
-
-    async def mark_completed_fixpack(self, payment_id, *, external_ref):
-        self.rows[payment_id].update(status="completed", external_ref=external_ref)
-
 
 class FakeAuditRepo:
     def __init__(self, audits=None):
@@ -106,10 +104,13 @@ class FakeFixpackRepo:
         self.jobs: list[dict] = []
 
     async def create_paid(self, *, audit_id, stack):
+        live = fixpack_live_job(self.jobs, audit_id)
+        if live is not None:
+            return {**live, "inserted": False}
         job = {"id": str(uuid.uuid4()), "audit_id": audit_id, "stack": stack,
                "status": "paid"}
         self.jobs.append(job)
-        return job
+        return {**job, "inserted": True}
 
 
 class FakeSubscriptionRepo:

@@ -534,7 +534,34 @@ class FixpackJobRepository:
         generated rows, which default to status 'generated') -- a separate
         follow-up step picks up 'paid' rows and generates the fix PR.
         pack='fixpack' names the product; the other generation outputs
-        (verified, detail, preview_*) stay null until that step runs."""
+        (verified, detail, preview_*) stay null until that step runs.
+
+        IDEMPOTENT per audit, which is what lets grant_fixpack retry safely.
+        grant_fixpack creates the job BEFORE completing the payment, so a crash
+        between the two leaves the payment 'pending' and therefore retryable
+        (the older order left it 'completed' with no job, and the early-return on
+        a completed payment made that permanent). The retry then arrives here a
+        second time for the same audit, and must NOT open a second fix PR for one
+        payment.
+
+        The ON CONFLICT arbiter names fixpack_jobs_audit_live_idx (migration
+        0025) by repeating its predicate, so a second call collides only with a
+        job that is still live -- once the earlier one is terminal ('failed',
+        'delivered', ...) the same audit inserts a fresh row, which is what keeps
+        re-purchase after a failure working. DO UPDATE rather than DO NOTHING
+        because only DO UPDATE returns the conflicting row; the assignment is a
+        deliberate no-op (audit_id to its own value). Same shape as
+        AuditJobRepository.enqueue.
+
+        Because the row is not re-inserted, access_token keeps its original value
+        (the column default in migration 0012 is evaluated per INSERT, and this
+        path performs none) -- so a retry hands back the SAME job and the SAME
+        ownership token the first call did, and a link already given out stays
+        valid.
+
+        `inserted` says which happened, via the xmax idiom: on a real INSERT the
+        new tuple has no updating transaction, so xmax is 0. False means "joined
+        the job an earlier call already created"."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -545,9 +572,12 @@ class FixpackJobRepository:
                 """
                 insert into fixpack_jobs (audit_id, pack, stack, status)
                 values (%s, 'fixpack', %s, 'paid')
+                on conflict (audit_id) where status in ('paid', 'running')
+                do update set audit_id = fixpack_jobs.audit_id
                 returning id, audit_id, pack, stack, verified, detail,
                           preview_local_url, preview_expires_at,
-                          pr_url, pr_delivered, status, access_token, created_at
+                          pr_url, pr_delivered, status, access_token, created_at,
+                          (xmax = 0) as inserted
                 """,
                 (parsed_audit_id, stack),
             )
@@ -1411,46 +1441,80 @@ class PaymentRepository:
 
     async def mark_completed(
         self, payment_id: str, *, account_id: str, external_ref: str
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Transition a pending invoice to completed and link the account
         it granted. The USDT flow's counterpart to Telegram creating a
-        completed row outright -- see app/billing/grant_pro_tier. No-op
-        when DATABASE_URL isn't set, matching mark_delivered."""
+        completed row outright -- see app/billing/grant_pro_tier.
+
+        Compare-and-set, the same first-writer-wins shape as
+        link_telegram_chat_id: the predicate is part of the UPDATE, so the
+        decision and the write cannot be separated by another connection.
+        Returns the row on success and None on refusal, and the caller MUST
+        distinguish the two -- see below. No-op (None) when DATABASE_URL isn't
+        set, matching mark_delivered.
+
+        Three outcomes:
+          * row was 'pending' -> completed here, row returned. This caller won.
+          * row was already 'completed' under the SAME external_ref -> returned
+            too, because that is this same payment arriving twice (a retried
+            webhook, a transfer seen on a later poll). Idempotent: the caller
+            learns "already done" and must not repeat side effects.
+          * row was already 'completed' under a DIFFERENT external_ref -> None.
+            Not an earlier copy of this payment but a second, distinct charge
+            against one invoice, which is a money anomaly a human has to
+            reconcile. Returning None rather than overwriting is the point: the
+            older unconditional UPDATE clobbered the first charge's account_id,
+            so the key the first payer was handed pointed at an orphaned
+            account."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
-            return
+            return None
         async with pool.connection() as conn:
-            await conn.execute(
+            cur = await conn.execute(
                 """
                 update payments
                 set status = 'completed', account_id = %s, external_ref = %s
-                where id = %s
+                where id = %s and (status = 'pending'
+                                   or (status = 'completed'
+                                       and external_ref = %s))
+                returning id, status, account_id, external_ref
                 """,
-                (uuid.UUID(account_id), external_ref, uuid.UUID(payment_id)),
+                (uuid.UUID(account_id), external_ref, uuid.UUID(payment_id),
+                 external_ref),
             )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
 
     async def mark_completed_fixpack(
         self, payment_id: str, *, external_ref: str
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Transition a pending Fix Pack invoice to completed, stamping the
-        on-chain tx as its external_ref. The Fix Pack counterpart to
+        provider's charge id as its external_ref. The Fix Pack counterpart to
         mark_completed -- but a Fix Pack grants no account/tier, so this
-        never sets account_id (it stays null). No-op when DATABASE_URL isn't
-        set, matching mark_completed."""
+        never sets account_id (it stays null).
+
+        Identical compare-and-set gate, same three outcomes, same obligation on
+        the caller to tell a returned row from None: see mark_completed. None
+        when DATABASE_URL isn't set."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
-            return
+            return None
         async with pool.connection() as conn:
-            await conn.execute(
+            cur = await conn.execute(
                 """
                 update payments
                 set status = 'completed', external_ref = %s
-                where id = %s
+                where id = %s and (status = 'pending'
+                                   or (status = 'completed'
+                                       and external_ref = %s))
+                returning id, status, account_id, external_ref
                 """,
-                (external_ref, uuid.UUID(payment_id)),
+                (external_ref, uuid.UUID(payment_id), external_ref),
             )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
 
     async def get_completed_by_telegram_chat_id(
         self, telegram_chat_id: str

@@ -807,6 +807,22 @@ allowed request headers are `Authorization` and `Content-Type`.
   file *and* renamed to look like a placeholder would be under-reported.
 - LLM client surfaces only the HTTP status on provider errors; log the
   response body for 4xx to make the next 400 diagnosable without curl.
+- Billing has no transactions anywhere (`app/db.py` is 100% autocommit).
+  `grant_fixpack`'s permanent-money-loss window is now closed without one: the
+  two writes are reordered (`create_paid` before `mark_completed_fixpack`), and
+  `create_paid` is made idempotent per audit via a partial unique index
+  (`migrations/0025`, `ON CONFLICT ... RETURNING (xmax = 0) AS inserted`), so a
+  crash between the two leaves the payment `pending` (retryable) instead of
+  `completed` with no job. `mark_completed`/`mark_completed_fixpack` also picked
+  up a compare-and-set gate (`WHERE status = 'pending' OR (status = 'completed'
+  AND external_ref = %s)`), so a retried webhook or a transfer seen on two USDT
+  polls is idempotent instead of silently overwriting `account_id`. Still open:
+  the USDT branch of `grant_pro_tier` has one narrower window left — a crash
+  between that CAS succeeding and the account being created leaves the payment
+  `completed` with no account and no key, and closing it needs an actual
+  transaction (there isn't one anywhere in this codebase yet). The PayPal SALE
+  webhook replay (a redelivered charge extending a subscription for free) and
+  the Telegram `grant_pro_tier` branch aren't touched by this either — next up.
 
 ## Dev
 

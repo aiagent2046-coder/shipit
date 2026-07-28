@@ -31,7 +31,12 @@ from app.main import (
     get_fixpack_repo,
     get_payment_repo,
 )
-from tests.conftest import FakeAccountRepo, FakeKeyDeliveryMixin
+from tests.conftest import (
+    FakeAccountRepo,
+    FakeCompletionCasMixin,
+    FakeKeyDeliveryMixin,
+    fixpack_live_job,
+)
 
 client = TestClient(app)
 
@@ -60,6 +65,9 @@ class FakeFixpackRepo:
         self.rows: list[dict] = []
 
     async def create_paid(self, *, audit_id, stack):
+        live = fixpack_live_job(self.rows, audit_id)
+        if live is not None:
+            return {**live, "inserted": False}
         row = {
             "id": str(uuid.uuid4()), "audit_id": audit_id, "pack": "fixpack",
             "stack": stack, "status": "paid", "verified": None, "detail": None,
@@ -67,7 +75,7 @@ class FakeFixpackRepo:
             "created_at": datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows.append(row)
-        return row
+        return {**row, "inserted": True}
 
     async def get_by_audit(self, audit_id):
         matches = [r for r in self.rows if r["audit_id"] == audit_id]
@@ -75,8 +83,17 @@ class FakeFixpackRepo:
             return None
         return max(matches, key=lambda r: r["created_at"])
 
+    def stored(self, job_id: str) -> dict:
+        """The stored row, for a test that wants to move a job's status on.
 
-class FakePaymentRepo(FakeKeyDeliveryMixin):
+        Needed because create_paid hands back a copy, not this row: the real
+        repository returns a RETURNING result, and mutating that never reached
+        the database. A test that wrote to the returned dict was asserting
+        against something the endpoint would not have seen."""
+        return next(r for r in self.rows if r["id"] == job_id)
+
+
+class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
@@ -105,13 +122,6 @@ class FakePaymentRepo(FakeKeyDeliveryMixin):
     async def list_pending(self, provider):
         return [r for r in self.rows.values()
                 if r["provider"] == provider and r["status"] == "pending"]
-
-    async def mark_completed(self, payment_id, *, account_id, external_ref):
-        self.rows[payment_id].update(
-            status="completed", account_id=account_id, external_ref=external_ref)
-
-    async def mark_completed_fixpack(self, payment_id, *, external_ref):
-        self.rows[payment_id].update(status="completed", external_ref=external_ref)
 
 
 def _telegram_transport(calls: list):
@@ -453,7 +463,8 @@ def test_fixpack_status_no_job_returns_null_status():
 async def test_fixpack_status_reports_paid_then_delivered():
     audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
     audit = audits.add(repo_url=REPO_URL)
-    job = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    created = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    job = fixpacks.stored(created["id"])
     _override_status(audits=audits, fixpacks=fixpacks)
     try:
         r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
@@ -477,7 +488,8 @@ async def test_fixpack_status_marks_a_reaped_failure_as_infrastructure():
     # be able to say "on us", not "your fix couldn't be generated".
     audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
     audit = audits.add(repo_url=REPO_URL)
-    job = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    created = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    job = fixpacks.stored(created["id"])
     _override_status(audits=audits, fixpacks=fixpacks)
     try:
         job["status"] = "failed"
@@ -492,7 +504,8 @@ async def test_fixpack_status_marks_a_reaped_failure_as_infrastructure():
 async def test_fixpack_status_leaves_a_generation_failure_unlabelled():
     audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
     audit = audits.add(repo_url=REPO_URL)
-    job = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    created = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    job = fixpacks.stored(created["id"])
     _override_status(audits=audits, fixpacks=fixpacks)
     try:
         job["status"] = "failed"
