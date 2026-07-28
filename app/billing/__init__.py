@@ -17,9 +17,12 @@ can't persist (returns None) rather than raising.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Protocol
 
 from app.accounts import TIER_PRO, generate_api_key
+
+logger = logging.getLogger(__name__)
 
 
 class _AccountStore(Protocol):
@@ -35,10 +38,10 @@ class _PaymentStore(Protocol):
     async def create(self, **kwargs: Any) -> dict[str, Any] | None: ...
     async def mark_completed(
         self, payment_id: str, *, account_id: str, external_ref: str
-    ) -> None: ...
+    ) -> dict[str, Any] | None: ...
     async def mark_completed_fixpack(
         self, payment_id: str, *, external_ref: str
-    ) -> None: ...
+    ) -> dict[str, Any] | None: ...
     async def claim_key_delivery(self, payment_id: str) -> bool: ...
     async def release_key_delivery(self, payment_id: str) -> None: ...
 
@@ -138,9 +141,22 @@ async def grant_pro_tier(
         return None  # DATABASE_URL not configured -- nothing was persisted.
 
     if invoice_payment_id is not None:
-        await payment_repo.mark_completed(
+        completed = await payment_repo.mark_completed(
             invoice_payment_id, account_id=account["id"], external_ref=external_ref
         )
+        if completed is None:
+            # The CAS gate refused: this invoice is already completed under a
+            # DIFFERENT external_ref, so a distinct charge got here first. Say so
+            # rather than report a grant -- the older unconditional UPDATE would
+            # have overwritten that charge's account_id and orphaned the account
+            # whose key its payer already holds.
+            logger.error(
+                "payment %s already completed under another charge; refusing to "
+                "re-complete it for %s/%s (account %s was minted and is now "
+                "unreferenced)",
+                invoice_payment_id, provider, external_ref, account["id"],
+            )
+            return None
     else:
         await payment_repo.create(
             account_id=account["id"], provider=provider, external_ref=external_ref,
@@ -186,10 +202,30 @@ async def grant_fixpack(
     exists -> transition it to completed), Telegram omits it (no pre-
     existing row -> insert a completed one).
 
-    Returns None only when nothing could be persisted (DATABASE_URL not
-    configured); callers surface that as "couldn't queue", not a crash.
-    Generation of the actual fix PR is a separate follow-up step that picks
-    up the 'paid' row this creates.
+    THE JOB IS CREATED BEFORE THE PAYMENT IS COMPLETED, and the order is the
+    whole point rather than an accident. There is no transaction around the two
+    writes -- nothing in app/db.py uses one -- so a crash, a lost connection or
+    a redeploy can always land between them, and the order decides which
+    half-done state that leaves:
+
+      * payment completed, no job (the OLD order) is unrecoverable. The retry
+        hits the early-return above, because the payment is already 'completed',
+        and never reaches the job creation. Money taken, no Fix Pack, forever.
+      * job created, payment still 'pending' (THIS order) self-heals. The retry
+        skips the early-return, calls create_paid again, gets the SAME job back
+        (idempotent per audit via migration 0025), completes the payment, and
+        finishes what the first attempt started.
+
+    The cost of this order is the mirror-image window -- a job exists for a
+    payment that never completed -- and it is the cheap one: nothing bills off
+    fixpack_jobs, so an orphan job is at worst one fix PR generated for a
+    payment that has to be reconciled by hand, never a paying customer left with
+    nothing. Neither window closes without a real transaction.
+
+    Returns None when nothing could be persisted (DATABASE_URL not configured);
+    callers surface that as "couldn't queue", not a crash. Generation of the
+    actual fix PR is a separate follow-up step that picks up the 'paid' row this
+    creates.
     """
     existing = await payment_repo.get_by_external_ref(provider, external_ref)
     if existing is not None and existing.get("status") == "completed":
@@ -199,10 +235,28 @@ async def grant_fixpack(
     audit = await audit_repo.get(audit_id) if (audit_repo and audit_id) else None
     stack = (audit or {}).get("stack") or "unknown"
 
+    job = await fixpack_repo.create_paid(audit_id=audit_id, stack=stack)
+    if job is None:
+        return None  # DATABASE_URL not configured -- nothing persisted.
+
     if invoice_payment_id is not None:
-        await payment_repo.mark_completed_fixpack(
+        completed = await payment_repo.mark_completed_fixpack(
             invoice_payment_id, external_ref=external_ref
         )
+        if completed is None:
+            # The CAS gate refused: the invoice is already completed under a
+            # DIFFERENT charge. A second distinct payment against one invoice is
+            # a bookkeeping anomaly for a human, but the delivery outcome is
+            # still correct and complete -- create_paid is idempotent per audit,
+            # so `job` is the one job that audit has, and the earlier charge's
+            # row is left untouched. Report it loudly and return the job, since
+            # the caller's only question is whether the Fix Pack is queued.
+            logger.error(
+                "fixpack invoice %s already completed under another charge; "
+                "leaving it as is and not recording %s/%s against it (job %s "
+                "stands)",
+                invoice_payment_id, provider, external_ref, job["id"],
+            )
     else:
         created = await payment_repo.create(
             account_id=None, provider=provider, external_ref=external_ref,
@@ -212,7 +266,7 @@ async def grant_fixpack(
         if created is None:
             return None  # DATABASE_URL not configured -- nothing persisted.
 
-    return await fixpack_repo.create_paid(audit_id=audit_id, stack=stack)
+    return job
 
 
 # Product label for the `payments.product` column on a subscription charge --

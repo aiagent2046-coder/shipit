@@ -147,15 +147,24 @@ async def test_all_repository_write_paths(real_db):
     # create_paid -> claim_one_paid (atomic paid->running) -> mark_fixpack_delivered
     paid = await fixpack_repo.create_paid(audit_id=audit_id, stack="fastapi")
     assert paid["status"] == "paid"
+    # inserted: migration 0025's xmax idiom. This audit is new in this run, so
+    # nothing live can precede it and a real INSERT must have happened.
+    assert paid["inserted"] is True
     claimed = await fixpack_repo.claim_one_paid()
-    assert claimed is not None and claimed["status"] == "running"
+    # The oldest 'paid' row globally, which is this one: every test in this file
+    # terminalizes the jobs it creates, so no live leftover precedes it.
+    assert claimed is not None and claimed["id"] == paid["id"]
+    assert claimed["status"] == "running"
     await fixpack_repo.mark_fixpack_delivered(
         claimed["id"], f"https://github.com/acme/app/pull/{run}-2"
     )
     assert (await fixpack_repo.get(claimed["id"]))["status"] == "delivered"
 
     # mark_status: both branches (detail=None, then detail=...)
+    # Also a second insert for the SAME audit: legal because the first job is
+    # 'delivered' and so outside fixpack_jobs_audit_live_idx's predicate.
     paid2 = await fixpack_repo.create_paid(audit_id=audit_id, stack="fastapi")
+    assert paid2["inserted"] is True and paid2["id"] != paid["id"]
     await fixpack_repo.mark_status(paid2["id"], "no_fix_needed")  # detail=None branch
     await fixpack_repo.mark_status(paid2["id"], "failed", "smoke failure detail")
     assert (await fixpack_repo.get(paid2["id"]))["status"] == "failed"
@@ -544,6 +553,338 @@ async def test_usdt_poll_lock_second_caller_skipped(real_db):
     # must not be locked out forever by a finished run.
     async with db_mod.usdt_poll_lock():
         pass
+
+
+async def _fixpack_job_rows(audit_id: str) -> list[dict]:
+    """Every Fix Pack job row for an audit, straight from SQL.
+
+    The repository only offers get_by_audit (newest one), and the property these
+    tests are about is a count, so it has to be read directly."""
+    pool = await db_mod.get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "select id, status, access_token from fixpack_jobs "
+            "where audit_id = %s and pack = 'fixpack' order by created_at",
+            (uuid.UUID(audit_id),),
+        )
+        return await cur.fetchall()
+
+
+async def _fixpack_audit(audit_repo: AuditRepository, run: str) -> str:
+    """A throwaway audit row to hang Fix Pack jobs off, since fixpack_jobs.
+    audit_id is a real foreign key."""
+    audit = await audit_repo.create(
+        stack="fastapi", file_count=1, score_total=7.0,
+        score_json={"total": 7.0, "categories": {}}, findings_json=[],
+        repo_url="https://github.com/acme/app",
+        content_hash=f"fixpack-{run}", engine_version="smoke-engine-1",
+    )
+    assert audit is not None, "DATABASE_URL not reaching get_pool -- false green"
+    return audit["id"]
+
+
+async def test_concurrent_mark_completed_only_one_wins(real_db):
+    """Six concurrent completions of ONE invoice under SIX DIFFERENT charge ids,
+    on real Postgres: exactly one may win, and the winner's account_id must
+    survive.
+
+    This is the race the old unconditional `update payments set ... where id = %s`
+    lost silently. Every caller "succeeded", the last write decided which account
+    the invoice pointed at, and the payer whose key was minted by an earlier
+    caller was left holding a key for an account nothing references. The gate is
+    now in the WHERE clause (`status = 'pending' or ...`), so the decision and the
+    write happen in one statement and Postgres' row lock arbitrates.
+
+    A real race, on separate pooled connections via asyncio.gather, in the shape
+    of tests/test_audit_jobs_repo.py's concurrent-claim test -- sequential calls
+    would prove only that the predicate reads its own writes.
+
+    A different external_ref per contender is the point: same-ref replays are the
+    idempotent case and are covered in the next test. Different refs mean these
+    are six DISTINCT charges, and completing an invoice twice under two of them
+    is the anomaly that must be refused rather than overwritten."""
+    payment_repo, account_repo = PaymentRepository(), AccountRepository()
+    run = uuid.uuid4().hex[:12]
+
+    invoice = await payment_repo.create(
+        account_id=None, provider="usdt_trc20", external_ref=None,
+        amount=9.99, currency="USD", status="pending", tier_granted="pro",
+    )
+    assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
+
+    # One account per contender, so the row's final account_id identifies which
+    # caller's write landed -- the assertion that catches a lost update.
+    accounts = []
+    for _ in range(6):
+        account = await account_repo.create(api_key=generate_api_key(), tier="pro")
+        assert account is not None
+        accounts.append(account["id"])
+
+    results = await asyncio.gather(*(
+        payment_repo.mark_completed(
+            invoice["id"], account_id=account_id,
+            external_ref=f"0xrace-{run}-{i}",
+        )
+        for i, account_id in enumerate(accounts)
+    ))
+
+    winners = [row for row in results if row is not None]
+    assert len(winners) == 1, (
+        f"{len(winners)} callers completed one invoice under different charges"
+    )
+    winner = winners[0]
+
+    # The winner's own write is what is at rest -- no loser overwrote it.
+    stored = await payment_repo.get(invoice["id"])
+    assert stored["status"] == "completed"
+    assert stored["account_id"] == winner["account_id"]
+    assert stored["external_ref"] == winner["external_ref"]
+
+    # And the losers' accounts are not the one the invoice points at.
+    losing = [a for a in accounts if a != winner["account_id"]]
+    assert len(losing) == 5
+    assert stored["account_id"] not in losing
+
+
+async def test_mark_completed_same_external_ref_idempotent(real_db):
+    """The other side of the gate: the SAME charge arriving twice must be told
+    "yes, that's done" -- a row, not None.
+
+    A retried Telegram webhook, a TRC20 transfer seen on two consecutive polls
+    and a re-delivered PayPal capture all replay the same external_ref against an
+    already-completed invoice. If that returned None the caller could not tell a
+    harmless replay from the genuine two-distinct-charges anomaly, and would have
+    to treat its own completed payment as failed.
+
+    Covers both completion methods, since each carries its own copy of the
+    predicate."""
+    payment_repo, account_repo = PaymentRepository(), AccountRepository()
+    run = uuid.uuid4().hex[:12]
+    account = await account_repo.create(api_key=generate_api_key(), tier="pro")
+    assert account is not None, "DATABASE_URL not reaching get_pool -- false green"
+
+    invoice = await payment_repo.create(
+        account_id=None, provider="usdt_trc20", external_ref=None,
+        amount=9.99, currency="USD", status="pending", tier_granted="pro",
+    )
+    charge = f"0xreplay-{run}"
+
+    first = await payment_repo.mark_completed(
+        invoice["id"], account_id=account["id"], external_ref=charge
+    )
+    assert first is not None and first["status"] == "completed"
+
+    replay = await payment_repo.mark_completed(
+        invoice["id"], account_id=account["id"], external_ref=charge
+    )
+    assert replay is not None, "a replay of the same charge was refused"
+    assert replay["account_id"] == account["id"]
+
+    # A DIFFERENT charge against the same completed invoice is the refusal case.
+    other = await account_repo.create(api_key=generate_api_key(), tier="pro")
+    assert await payment_repo.mark_completed(
+        invoice["id"], account_id=other["id"], external_ref=f"0xother-{run}"
+    ) is None
+    assert (await payment_repo.get(invoice["id"]))["account_id"] == account["id"]
+
+    # mark_completed_fixpack: same three outcomes, its own copy of the predicate.
+    audit_id = await _fixpack_audit(AuditRepository(), run)
+    fp_invoice = await payment_repo.create(
+        account_id=None, provider="usdt_trc20", external_ref=None,
+        amount=5.0, currency="USD", status="pending", tier_granted=None,
+        product="fixpack", audit_id=audit_id,
+    )
+    fp_charge = f"0xfpreplay-{run}"
+    assert await payment_repo.mark_completed_fixpack(
+        fp_invoice["id"], external_ref=fp_charge
+    ) is not None
+    assert await payment_repo.mark_completed_fixpack(
+        fp_invoice["id"], external_ref=fp_charge
+    ) is not None, "a replay of the same fixpack charge was refused"
+    assert await payment_repo.mark_completed_fixpack(
+        fp_invoice["id"], external_ref=f"0xfpother-{run}"
+    ) is None
+    assert (await payment_repo.get(fp_invoice["id"]))["external_ref"] == fp_charge
+
+
+async def test_concurrent_create_paid_one_job_per_audit(real_db):
+    """Six concurrent create_paid calls for ONE audit yield ONE job, on real
+    Postgres: the arbiter is migration 0025's partial unique index, so only the
+    real index can prove it.
+
+    One paid Fix Pack must never become two fix PRs, and the retry path in
+    grant_fixpack now calls this a second time by design (see the self-healing
+    test below), so idempotency here is load-bearing rather than defensive.
+
+    access_token is asserted identical across every result because the losers
+    take the ON CONFLICT DO UPDATE branch, which performs no INSERT and so does
+    not evaluate the column default from migration 0012. A link handed to the
+    payer by the first call therefore stays valid; a fresh token per caller would
+    mean the retry silently invalidated it."""
+    fixpack_repo = FixpackJobRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _fixpack_audit(AuditRepository(), run)
+
+    results = await asyncio.gather(*(
+        fixpack_repo.create_paid(audit_id=audit_id, stack="fastapi")
+        for _ in range(6)
+    ))
+
+    assert all(row is not None for row in results)
+    assert len({row["id"] for row in results}) == 1, "one payment, two fix PRs"
+    assert [row["inserted"] for row in results].count(True) == 1, (
+        "more than one caller believed it created the job"
+    )
+    assert len({row["access_token"] for row in results}) == 1, (
+        "a retry re-minted access_token and invalidated the first link"
+    )
+    assert {row["status"] for row in results} == {"paid"}
+
+    rows = await _fixpack_job_rows(audit_id)
+    assert len(rows) == 1
+
+    # Terminalize so this audit leaves no live row behind: claim_one_paid in
+    # test_all_repository_write_paths takes the oldest 'paid' row GLOBALLY.
+    await fixpack_repo.mark_status(str(rows[0]["id"]), "failed", "smoke cleanup")
+
+
+async def test_repurchase_after_failed_is_allowed(real_db):
+    """A terminal job must NOT block a new purchase for the same audit.
+
+    This is a regression test on the index PREDICATE rather than on the happy
+    path. `where status in ('paid', 'running')` is deliberately partial, and an
+    unconditional unique index on audit_id would have been simpler and wrong: it
+    would have made a customer whose generation failed unable to ever buy again,
+    and it would have collided with the Deploy Pack rows that share audit_id
+    (pack='deploy', status 'generated') as well as with the delivered history.
+
+    Both terminal states a real audit passes through are covered: 'failed' (the
+    re-purchase case) and 'delivered' (the second-Fix-Pack case)."""
+    fixpack_repo = FixpackJobRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _fixpack_audit(AuditRepository(), run)
+
+    first = await fixpack_repo.create_paid(audit_id=audit_id, stack="fastapi")
+    assert first["inserted"] is True
+
+    # While it is live, a second purchase joins it -- the property above.
+    assert (await fixpack_repo.create_paid(
+        audit_id=audit_id, stack="fastapi"
+    ))["id"] == first["id"]
+
+    await fixpack_repo.mark_status(first["id"], "failed", "generation failed")
+
+    second = await fixpack_repo.create_paid(audit_id=audit_id, stack="fastapi")
+    assert second["inserted"] is True, "re-purchase after a failure was blocked"
+    assert second["id"] != first["id"]
+    assert second["access_token"] != first["access_token"]
+
+    # Same again from 'delivered', the other terminal state.
+    await fixpack_repo.mark_fixpack_delivered(
+        second["id"], f"https://github.com/acme/app/pull/{run}-repurchase"
+    )
+    third = await fixpack_repo.create_paid(audit_id=audit_id, stack="fastapi")
+    assert third["inserted"] is True, "purchase after delivery was blocked"
+    assert third["id"] not in (first["id"], second["id"])
+
+    assert len(await _fixpack_job_rows(audit_id)) == 3
+
+    await fixpack_repo.mark_status(third["id"], "failed", "smoke cleanup")
+
+
+async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db):
+    """THE test this change exists for: a crash between grant_fixpack's two
+    writes must leave a state a retry can finish, and the retry must not produce
+    a second fix PR.
+
+    RED ON THE OLD CODE, GREEN ON THE NEW, and the reason is purely the order of
+    the two writes -- there is no transaction around them and nothing here adds
+    one.
+
+      * OLD order (mark_completed_fixpack -> create_paid): the crash lands after
+        the payment is already 'completed' but before the job exists. The retry
+        hits grant_fixpack's `if existing["status"] == "completed": return
+        existing` early-return and never reaches create_paid. No job, ever.
+        Money taken, nothing delivered, unrecoverable -- so the assertions below
+        find zero jobs and a payment that was completed by the crashed attempt.
+      * NEW order (create_paid -> mark_completed_fixpack): the crash leaves the
+        job created and the payment still 'pending'. The retry skips the
+        early-return, calls create_paid again, gets the SAME job back (migration
+        0025), and completes the payment -- finishing what the first attempt
+        started.
+
+    The crash is injected after the FIRST successful write whichever method that
+    is, deliberately, so the test does not encode the new order in its own
+    setup: both repository subclasses below perform their real write and then
+    raise. On the old code that trips in mark_completed_fixpack, on the new one
+    in create_paid, and `crashed_in` records which -- so the test measures the
+    order rather than assuming it."""
+    from app.billing import grant_fixpack
+
+    audit_repo = AuditRepository()
+    payment_repo = PaymentRepository()
+    fixpack_repo = FixpackJobRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _fixpack_audit(audit_repo, run)
+
+    invoice = await payment_repo.create(
+        account_id=None, provider="usdt_trc20", external_ref=None,
+        amount=5.0, currency="USD", status="pending", tier_granted=None,
+        product="fixpack", audit_id=audit_id,
+    )
+    assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
+    charge = f"0xselfheal-{run}"
+
+    crashed_in: list[str] = []
+
+    class CrashAfterCreatePaid(FixpackJobRepository):
+        async def create_paid(self, **kwargs):
+            row = await super().create_paid(**kwargs)
+            crashed_in.append("create_paid")
+            raise RuntimeError("connection lost after create_paid")
+
+    class CrashAfterMarkCompleted(PaymentRepository):
+        async def mark_completed_fixpack(self, payment_id, **kwargs):
+            await super().mark_completed_fixpack(payment_id, **kwargs)
+            crashed_in.append("mark_completed_fixpack")
+            raise RuntimeError("connection lost after mark_completed_fixpack")
+
+    grant_kwargs = dict(
+        audit_repo=audit_repo, provider="usdt_trc20", external_ref=charge,
+        amount=5.0, currency="USD", audit_id=audit_id,
+        invoice_payment_id=invoice["id"],
+    )
+
+    with pytest.raises(RuntimeError):
+        await grant_fixpack(
+            fixpack_repo=CrashAfterCreatePaid(),
+            payment_repo=CrashAfterMarkCompleted(), **grant_kwargs,
+        )
+
+    # Which write went first is the whole difference, so assert it outright.
+    assert crashed_in == ["create_paid"], (
+        f"the first write was {crashed_in}, not create_paid -- grant_fixpack "
+        "must create the job before completing the payment"
+    )
+    assert (await payment_repo.get(invoice["id"]))["status"] == "pending"
+    assert len(await _fixpack_job_rows(audit_id)) == 1
+
+    # The retry, run entirely normally -- no fakes, no patches.
+    job = await grant_fixpack(
+        fixpack_repo=fixpack_repo, payment_repo=payment_repo, **grant_kwargs
+    )
+
+    assert job is not None
+    assert job["inserted"] is False, "the retry created a second job"
+    settled = await payment_repo.get(invoice["id"])
+    assert settled["status"] == "completed"
+    assert settled["external_ref"] == charge
+
+    rows = await _fixpack_job_rows(audit_id)
+    assert len(rows) == 1, f"{len(rows)} jobs for one paid Fix Pack"
+    assert rows[0]["id"] == uuid.UUID(job["id"])
+
+    await fixpack_repo.mark_status(job["id"], "failed", "smoke cleanup")
 
 
 async def test_usdt_poll_lock_does_not_serialize_against_other_processors(real_db):

@@ -27,7 +27,11 @@ from app.main import (
     get_payment_repo,
 )
 from fastapi.testclient import TestClient
-from tests.conftest import FakeAccountRepo, FakeKeyDeliveryMixin
+from tests.conftest import (
+    FakeAccountRepo,
+    FakeCompletionCasMixin,
+    FakeKeyDeliveryMixin,
+)
 
 client = TestClient(app)
 
@@ -43,7 +47,7 @@ USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 _TRON_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
 
 
-class FakePaymentRepo(FakeKeyDeliveryMixin):
+class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
@@ -72,13 +76,6 @@ class FakePaymentRepo(FakeKeyDeliveryMixin):
     async def list_pending(self, provider: str):
         return [r for r in self.rows.values()
                 if r["provider"] == provider and r["status"] == "pending"]
-
-    async def mark_completed(self, payment_id, *, account_id, external_ref):
-        self.rows[payment_id].update(
-            status="completed", account_id=account_id, external_ref=external_ref)
-
-    async def mark_completed_fixpack(self, payment_id, *, external_ref):
-        self.rows[payment_id].update(status="completed", external_ref=external_ref)
 
 
 def _trongrid_transport(transfers: list, *, success: bool = True):

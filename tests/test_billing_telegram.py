@@ -25,14 +25,18 @@ from app.main import (
     get_payment_repo,
 )
 from fastapi.testclient import TestClient
-from tests.conftest import FakeAccountRepo, FakeKeyDeliveryMixin
+from tests.conftest import (
+    FakeAccountRepo,
+    FakeCompletionCasMixin,
+    FakeKeyDeliveryMixin,
+)
 
 client = TestClient(app)
 
 
 # --- in-memory repo fakes ---
 
-class FakePaymentRepo(FakeKeyDeliveryMixin):
+class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
@@ -57,14 +61,6 @@ class FakePaymentRepo(FakeKeyDeliveryMixin):
             if r["provider"] == provider and r["external_ref"] == external_ref:
                 return r
         return None
-
-    async def mark_completed(self, payment_id, *, account_id, external_ref):
-        r = self.rows[payment_id]
-        r.update(status="completed", account_id=account_id, external_ref=external_ref)
-
-    async def mark_completed_fixpack(self, payment_id, *, external_ref):
-        r = self.rows[payment_id]
-        r.update(status="completed", external_ref=external_ref)
 
     async def get_completed_by_telegram_chat_id(self, telegram_chat_id: str):
         found = [
