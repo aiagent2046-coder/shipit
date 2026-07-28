@@ -7,10 +7,14 @@ read and useless to query. A ContextVar set once per unit of work, plus the
 ContextFilter in app/logging_config.py, puts the same ids on *every* record
 emitted underneath it as real fields.
 
-Nothing in this module is wired up yet -- setting the context at the four
-places that own a unit of work (HTTP middleware, the audit worker's claim
-loop, the Fix Pack processor, the monitoring run loop) is a separate change.
-Until then every field reads None and simply doesn't appear in the output.
+All four places that own a unit of work bind context: the HTTP middleware
+(app/main.py bind_request_context -- request_id + trace_id per request, plus
+account_id once an api key resolves), the audit worker's claim loop
+(app/worker/main.py, per claimed job), the Fix Pack processor
+(_process_one_paid_job) and the monitoring drain (_process_one_monitoring_run).
+Individual endpoints add the id they were addressed by on top of that. A field
+nobody set reads None and simply doesn't appear in the output, so a code path
+outside all of the above still logs -- just without correlation ids.
 
 ContextVars are the right primitive rather than a thread-local or a module
 global because the audit worker runs its slots as concurrent asyncio tasks in

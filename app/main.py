@@ -1235,6 +1235,12 @@ async def _process_one_monitoring_run(
     (the run left stuck 'running') is recovered by the stale-lease reaper."""
     run_id = run["id"]
     repo_full_name = run["repo_full_name"]
+    # Same ambient-context binding _process_one_paid_job does, for the same
+    # reason: this is the other durable queue, and its drain loop is the only
+    # place that knows which run the lines below belong to. Bare set (not
+    # log_context()) matches that function -- the loop is sequential, so each
+    # claimed run overwrites the previous one's ids rather than nesting.
+    set_log_context(job_id=str(run_id))
     try:
         subs = await subscription_repo.list_active_for_repo(repo_full_name)
         if not subs:
@@ -1263,6 +1269,11 @@ async def _process_one_monitoring_run(
         if result is None:
             await monitoring_repo.mark_done(run_id)
             return "unauditable"
+
+        # The audit this run produced (or reused from the content-hash cache).
+        # run_repo_audit doesn't bind it, so without this the notify half of the
+        # run can't be joined to the audit it is diffing.
+        set_log_context(audit_id=str(result["audit_id"]))
 
         new_findings = new_high_severity_findings(
             previous_findings, result["findings"]

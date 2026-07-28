@@ -50,6 +50,12 @@ def main() -> int:
         return 0
 
     errors: list[str] = []
+    # Two severities on purpose. An `errors` entry exits 78, which fails the
+    # ExecStartPre and so refuses to start shipit.service -- correct for a value
+    # whose absence breaks the service, wrong for one whose absence only costs
+    # visibility. Warnings are printed and ignored by the exit code, so adding
+    # one can never take a host down that was up before.
+    warnings: list[str] = []
 
     required = (
         "DATABASE_URL",
@@ -64,6 +70,18 @@ def main() -> int:
     for name in required:
         if not values.get(name, "").strip():
             errors.append(f"{name} is required in production")
+
+    # A warning, not a requirement: every token above gates a side-effecting
+    # /internal endpoint that a systemd timer drives, so a missing one silently
+    # stops real work. AUDIT_JOBS_STATS_TOKEN only gates the two read-only
+    # stats endpoints -- unset means they 503 and an operator loses a dashboard,
+    # which is not worth refusing to boot the API over.
+    if not values.get("AUDIT_JOBS_STATS_TOKEN", "").strip():
+        warnings.append(
+            "AUDIT_JOBS_STATS_TOKEN is not set; GET /internal/stats and "
+            "GET /internal/audit-jobs/stats are disabled (queue depth, LLM "
+            "spend and error rate are unreadable)"
+        )
 
     aitunnel_key = bool(values.get("AITUNNEL_API_KEY", "").strip())
     aitunnel_url = bool(values.get("AITUNNEL_BASE_URL", "").strip())
@@ -102,6 +120,9 @@ def main() -> int:
                 f"{name} appears to contain an inline comment; "
                 "systemd treats it as part of the value"
             )
+
+    for warning in warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
 
     if errors:
         print("Invalid production configuration:", file=sys.stderr)

@@ -13,7 +13,9 @@ deliberately called it from nowhere. This file covers the call sites:
     is written as "the values are correct", not "nothing blew up";
   * thread offloading -- the codebase moves blocking work off the loop with
     asyncio.to_thread and starlette's run_in_threadpool. Both must carry the
-    context across, or every log line from a scan loses its job_id.
+    context across, or every log line from a scan loses its job_id;
+  * the monitoring drain -- the second durable queue, whose lines carried no
+    ids at all until it bound them.
 
 Records are captured with a real logging.Handler rather than caplog so the
 ContextFilter (which is what copies the contextvars onto the record) is in the
@@ -31,6 +33,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.concurrency import run_in_threadpool
 
+import app.main as main_mod
 from app import log_context as ctx
 from app.logging_config import ContextFilter
 from app.main import app, get_audit_repo
@@ -367,3 +370,62 @@ def test_a_read_handler_binds_the_id_it_was_asked_for():
     assert seen[0]["request_id"] == response.headers["X-Request-ID"]
     # And the binding is scoped to the request that made it.
     assert ctx.current_log_context()["audit_id"] is None
+
+
+# --- the monitoring drain -------------------------------------------------
+
+
+async def test_the_monitoring_drain_binds_the_run_and_its_audit(
+    monkeypatch, collector,
+):
+    """The other durable queue. Its lines used to carry no ids at all, which
+    made a failed monitoring run the one piece of work that could not be traced
+    -- the audit_id in particular, because run_repo_audit does not bind it, so
+    only the drain knows which audit the diff came from."""
+    logger = logging.getLogger("tests.monitoring-drain")
+    seen: list[dict] = []
+
+    async def fake_audit(repo_url, *, llm_client, audit_repo, repo_fetcher,
+                         llm_usage_repo=None, job_type="audit"):
+        # Before the audit exists: the run is already identified.
+        seen.append(ctx.current_log_context())
+        return {"audit_id": "audit-mon", "findings": [], "repo_url": repo_url,
+                "reused": False}
+
+    monkeypatch.setattr(main_mod, "run_repo_audit", fake_audit)
+
+    class _Subs:
+        async def list_active_for_repo(self, repo_full_name):
+            return [{"telegram_chat_id": "chat-1"}]
+
+    class _Audits:
+        async def get_latest_by_repo_url(self, repo_full_name):
+            return None
+
+    class _Runs:
+        def __init__(self):
+            self.done: list[str] = []
+
+        async def mark_done(self, run_id):
+            self.done.append(run_id)
+            logger.info("run finished")
+
+    runs = _Runs()
+    outcome = await main_mod._process_one_monitoring_run(
+        {"id": "run-ctx", "repo_full_name": "acme/app"},
+        monitoring_repo=runs, subscription_repo=_Subs(), audit_repo=_Audits(),
+        llm_client=object(), repo_fetcher=object(), transport=object(),
+        llm_usage_repo=None,
+    )
+
+    assert outcome == "no_new"
+    assert runs.done == ["run-ctx"]
+    # job_id is the queue-row id here, the same field the audit-job and Fix Pack
+    # queues use, so one jq filter spans all three.
+    assert seen[0]["job_id"] == "run-ctx"
+    assert seen[0]["audit_id"] is None
+
+    lines = [r for r in collector.records if r.name == "tests.monitoring-drain"]
+    assert len(lines) == 1
+    assert lines[0].job_id == "run-ctx"
+    assert lines[0].audit_id == "audit-mon"
