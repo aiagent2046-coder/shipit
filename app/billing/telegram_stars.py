@@ -376,6 +376,20 @@ def _delivery_text(api_key: str) -> str:
     )
 
 
+def _already_delivered_text() -> str:
+    # A retried webhook / a second /link for a payment whose key already went
+    # out. The key text is not stored (migration 0019), so there is nothing to
+    # re-send -- say that plainly and point at the same recovery path /mykey
+    # does, rather than going silent or implying the payment failed.
+    return (
+        "Your payment is confirmed and your Drydock pro access is active — "
+        "this key was already delivered once.\n\n"
+        "For security the full key is shown only once and is never stored, so "
+        "it can't be re-sent. Lost it? Run /rotatekey to get a new key (the "
+        "old one stops working immediately)."
+    )
+
+
 async def handle_update(
     update: dict[str, Any], *, account_repo: Any, payment_repo: Any,
     token: str, transport: httpx.BaseTransport | None = None,
@@ -487,11 +501,22 @@ async def handle_update(
         )
         if paid is not None:
             await payment_repo.link_telegram_chat_id(paid["id"], str(chat_id))
+        # The key is delivered straight from the grant that minted it, in this
+        # same handler -- it is never re-read from the database, because it
+        # isn't stored there (migration 0019). A retried webhook therefore has
+        # no key to re-send: grant_pro_tier's replay path returns the account
+        # without one, and the payer is pointed at /rotatekey (usable because
+        # the chat_id was just stamped above).
+        api_key = account.get("api_key")
         await send_message(
-            chat_id, _delivery_text(account["api_key"]),
+            chat_id,
+            _delivery_text(api_key) if api_key else _already_delivered_text(),
             token=token, transport=transport,
         )
-        return {"ok": True, "handled": "successful_payment", "persisted": True}
+        return {
+            "ok": True, "handled": "successful_payment", "persisted": True,
+            "key_delivered": api_key is not None,
+        }
 
     text = (message.get("text") or "").strip()
     if text.split(maxsplit=1)[:1] == ["/upgrade"]:
@@ -1067,8 +1092,7 @@ async def _handle_link(
         )
         return {"ok": True, "handled": "link", "result": "already_claimed"}
 
-    account = await account_repo.get_by_id(row["account_id"]) if row.get("account_id") else None
-    if account is None:
+    if not row.get("account_id"):
         await send_message(
             chat_id,
             "That payment is linked to this chat, but its account could not "
@@ -1076,8 +1100,25 @@ async def _handle_link(
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "link", "result": "no_account"}
+
+    # /link and the web checkout's invoice poll are two doors to the same USDT
+    # payment, and the key it grants exists in neither place: the poller that
+    # granted it discarded the plaintext. So both doors go through the one
+    # delivery claim -- whichever the payer reaches first mints and hands over
+    # the key, and the other reports it already went out. Re-running /link is
+    # then a no-op that costs no key, and /rotatekey works from here on because
+    # the claim above stamped this chat_id.
+    from app.billing import deliver_key_once
+
+    api_key = await deliver_key_once(
+        account_repo=account_repo, payment_repo=payment_repo, payment=row,
+    )
     await send_message(
-        chat_id, _delivery_text(account["api_key"]),
+        chat_id,
+        _delivery_text(api_key) if api_key else _already_delivered_text(),
         token=token, transport=transport,
     )
-    return {"ok": True, "handled": "link", "result": "linked"}
+    return {
+        "ok": True, "handled": "link",
+        "result": "linked" if api_key else "already_delivered",
+    }

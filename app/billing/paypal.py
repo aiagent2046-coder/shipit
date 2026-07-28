@@ -310,20 +310,28 @@ async def order_status(
     """State of one Pro order for the browser widget to poll, mirroring
     usdt_trc20.invoice_status. Reveals the API key ONLY once the webhook has
     captured and granted (status 'completed', account linked); a pending order
-    never leaks a key. Returns None if there's no such order (endpoint -> 404)."""
+    never leaks a key. Returns None if there's no such order (endpoint -> 404).
+
+    Same one-shot delivery as usdt_trc20.invoice_status, for the same reason:
+    _handle_capture_completed granted this account from a webhook with no
+    browser attached, so the plaintext key it saw is gone and there is nothing
+    to re-read here. The first completed poll mints the key; a later one gets
+    api_key=None with key_already_delivered=True."""
+    from app.billing import deliver_key_once
+
     row = await payment_repo.get_by_paypal_order_id(order_id)
     if row is None or row.get("provider") != PROVIDER:
         return None
     if row.get("status") == "completed":
-        account = (
-            await account_repo.get_by_id(row["account_id"])
-            if row.get("account_id") else None
+        api_key = await deliver_key_once(
+            account_repo=account_repo, payment_repo=payment_repo, payment=row,
         )
         return {
             "order_id": order_id,
             "status": "completed",
             "tier": "pro",
-            "api_key": account["api_key"] if account else None,
+            "api_key": api_key,
+            "key_already_delivered": api_key is None,
         }
     return {"order_id": order_id, "status": "pending"}
 

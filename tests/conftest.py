@@ -28,6 +28,7 @@ import pytest
 
 import app.audit_spool as spool_mod
 import app.db as db_mod
+from app.accounts import api_key_prefix, generate_api_key
 from app.main import app, get_audit_job_repo, get_rate_limiter
 from app.ratelimit import RateLimiter
 
@@ -125,6 +126,74 @@ class FakeAuditQueue:
         """The single job this queue holds, asserting there is exactly one."""
         assert len(self.rows) == 1, f"expected one job, have {len(self.rows)}"
         return next(iter(self.rows.values()))
+
+
+class FakeAccountRepo:
+    """AccountRepository's real post-0019 contract, in memory.
+
+    Lives here, shared, because four copies of this fake used to live in four
+    billing test files and all four got the same thing wrong: they stored the
+    account dict with its `api_key` and handed that same dict back from
+    get_by_id. The real repository cannot do that -- migration 0019 dropped
+    accounts.api_key, so only key_prefix and key_hash are at rest and
+    get_by_id's SELECT has no key text to return. That divergence is what made
+    a production KeyError on `get_by_id(...)["api_key"]` inexpressible in the
+    suite, in four places at once.
+
+    So the invariant here is deliberate and load-bearing: the plaintext key is
+    returned by create() and rotate_key() and is stored NOWHERE. Rows are
+    handed out as copies, so a caller can't write a key back into storage and
+    quietly restore the old, wrong behaviour.
+    """
+
+    def __init__(self):
+        self.by_id: dict[str, dict] = {}
+        self.rotations: list[str] = []
+
+    def _issue(self, account_id: str, api_key: str) -> dict:
+        stored = self.by_id[account_id]
+        stored["key_prefix"] = api_key_prefix(api_key)
+        # Stands in for the real HMAC-with-env-pepper digest: what matters for
+        # these tests is only that it is not the key text itself.
+        stored["key_hash"] = f"hash-of:{api_key}"
+        return {**stored, "api_key": api_key}
+
+    async def create(self, *, api_key: str, tier: str):
+        account_id = str(uuid.uuid4())
+        self.by_id[account_id] = {
+            "id": account_id, "tier": tier,
+            "created_at": "2026-07-14T10:00:00Z",
+        }
+        return self._issue(account_id, api_key)
+
+    async def get_by_id(self, account_id: str):
+        stored = self.by_id.get(account_id)
+        return dict(stored) if stored is not None else None
+
+    async def rotate_key(self, account_id: str):
+        if account_id not in self.by_id:
+            return None
+        self.rotations.append(account_id)
+        return self._issue(account_id, generate_api_key())
+
+
+class FakeKeyDeliveryMixin:
+    """PaymentRepository's one-shot key-delivery claim (migration 0024) for the
+    in-memory payment fakes, defined once so all of them agree on the rule that
+    matters: a completed payment can be claimed exactly once. Expects the host
+    class to keep payment rows in `self.rows`, keyed by id."""
+
+    rows: dict[str, dict]
+
+    async def claim_key_delivery(self, payment_id: str) -> bool:
+        row = self.rows[payment_id]
+        if row.get("status") != "completed" or row.get("key_delivered_at"):
+            return False
+        row["key_delivered_at"] = "2026-07-14T10:05:00Z"
+        return True
+
+    async def release_key_delivery(self, payment_id: str) -> None:
+        self.rows[payment_id]["key_delivered_at"] = None
 
 
 class NullLlmUsageRepo:

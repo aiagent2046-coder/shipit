@@ -1,0 +1,32 @@
+-- Deliver a paid account's API key exactly once, without storing it.
+--
+-- Migration 0019 dropped accounts.api_key: the plaintext key now exists only
+-- in memory, in the return value of accounts.create / accounts.rotate_key.
+-- That is fine for Telegram Stars, where the same handler that grants also
+-- DMs the key. It is NOT fine for the two flows where the grant happens with
+-- no user connection open:
+--
+--   * USDT: the systemd poller (billing.usdt_trc20.poll_and_match) sees the
+--     on-chain transfer, grants pro, and discards the plaintext. The payer's
+--     browser asks for the key later, from GET /v1/billing/usdt/invoice/{id}.
+--   * PayPal: the capture webhook grants, and the browser widget polls
+--     GET /v1/paypal/orders/{id} afterwards.
+--
+-- Those two poll endpoints used to read accounts.get_by_id()["api_key"],
+-- which cannot work post-0019 (KeyError -> 500, key unrecoverable, money
+-- taken). The fix is a one-shot delivery claim: the FIRST caller that asks
+-- for a completed payment's key wins this column, and only the winner gets a
+-- freshly rotated key handed back. Later callers are told the key was already
+-- delivered instead of being handed a key again.
+--
+-- Why a claim column and not a plaintext stash with a TTL: rotating on the
+-- winning claim means no plaintext is ever written to disk, so 0019's property
+-- is preserved exactly. And why one-shot rather than re-readable: these poll
+-- endpoints are unauthenticated (the invoice/order id is the only credential),
+-- so a re-readable key would let anyone who learns an id keep re-reading it,
+-- and an always-rotating one would let them silently kill a working key.
+--
+-- Null means "not delivered yet", so existing rows need no backfill: an
+-- already-completed payment stays claimable, which is what we want for anyone
+-- who paid before this migration and never got their key.
+alter table payments add column if not exists key_delivered_at timestamptz;

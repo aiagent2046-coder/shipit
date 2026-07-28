@@ -1485,6 +1485,53 @@ class PaymentRepository:
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
 
+    async def claim_key_delivery(self, payment_id: str) -> bool:
+        """First-asker-wins the right to be handed this payment's API key:
+        True for exactly one caller, False for every later one (migration
+        0024's key_delivered_at). Same conditional-update shape as
+        link_telegram_chat_id -- the second caller's update matches zero rows.
+
+        Only a completed payment can be claimed, so a pending invoice can
+        never have its key delivered. False when DATABASE_URL isn't set: no
+        claim was recorded, so no key may be handed out.
+
+        The winner is expected to mint the key with rotate_key (the plaintext
+        from the original create() was discarded by the poller/webhook that
+        granted, and is not stored -- see migration 0019). If that fails, call
+        release_key_delivery so the payer can try again.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update payments set key_delivered_at = now()
+                where id = %s and status = 'completed'
+                  and key_delivered_at is null
+                returning id
+                """,
+                (uuid.UUID(payment_id),),
+            )
+            return await cur.fetchone() is not None
+
+    async def release_key_delivery(self, payment_id: str) -> None:
+        """Undo a won claim_key_delivery because the key could not actually be
+        minted. Without this, a transient failure between claiming and rotating
+        would burn the payer's only delivery attempt and leave them with a paid
+        account they can never get a key for. No-op when DATABASE_URL isn't
+        set, matching mark_completed."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                "update payments set key_delivered_at = null where id = %s",
+                (uuid.UUID(payment_id),),
+            )
+
 
 class SubscriptionRepository:
     """Recurring Stars subscriptions (migration 0015). Same real/fake split

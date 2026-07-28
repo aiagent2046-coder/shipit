@@ -20,6 +20,7 @@ import uuid
 import httpx
 import pytest
 
+from app.accounts import api_key_prefix
 from app.billing import paypal
 from app.main import (
     app,
@@ -31,6 +32,7 @@ from app.main import (
     get_subscription_repo,
 )
 from fastapi.testclient import TestClient
+from tests.conftest import FakeAccountRepo, FakeKeyDeliveryMixin
 
 client = TestClient(app)
 
@@ -51,21 +53,7 @@ def _paypal_env(monkeypatch):
 
 # --- in-memory repo fakes ---
 
-class FakeAccountRepo:
-    def __init__(self):
-        self.by_id: dict[str, dict] = {}
-
-    async def create(self, *, api_key: str, tier: str):
-        row = {"id": str(uuid.uuid4()), "api_key": api_key, "tier": tier,
-               "created_at": "2026-07-14T10:00:00Z"}
-        self.by_id[row["id"]] = row
-        return row
-
-    async def get_by_id(self, account_id: str):
-        return self.by_id.get(account_id)
-
-
-class FakePaymentRepo:
+class FakePaymentRepo(FakeKeyDeliveryMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
@@ -344,11 +332,63 @@ async def test_capture_grants_pro_via_pending_row_and_reveals_key():
     assert row["external_ref"] == "CAPTURE-1"
     assert row["account_id"] == account["id"]
 
-    # only now does order_status hand back the key
+    # Only now does order_status hand back a key -- and it mints it, because
+    # the webhook granted with no browser attached and the plaintext it saw was
+    # never stored (migration 0019). The key belongs to this account: its
+    # prefix is the one the account now carries.
     status = await paypal.order_status(payments, accounts, "ORDER-1")
     assert status["status"] == "completed"
     assert status["tier"] == "pro"
-    assert status["api_key"] == account["api_key"]
+    assert status["api_key"].startswith("sk_live_")
+    assert status["key_already_delivered"] is False
+    assert api_key_prefix(status["api_key"]) == account["key_prefix"]
+
+
+async def test_repeat_order_poll_after_key_delivery_does_not_crash():
+    """The regression: the PayPal widget polls this endpoint every 4s, so the
+    second poll of a captured order used to read api_key off a get_by_id() row
+    that cannot carry one -- KeyError, 500, key lost, money kept.
+
+    Now the first poll delivers and later ones say so, without a second key and
+    without rotating away the one the payer already has."""
+    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    await paypal.create_pro_order(payments, transport=_paypal_transport([]))
+    await _handle(_capture_event(custom_id="pro"), accounts=accounts,
+                  payments=payments)
+
+    first = await paypal.order_status(payments, accounts, "ORDER-1")
+    assert first["api_key"] is not None
+
+    for _ in range(3):
+        again = await paypal.order_status(payments, accounts, "ORDER-1")
+        assert again["status"] == "completed"
+        assert again["tier"] == "pro"
+        assert again["api_key"] is None
+        assert again["key_already_delivered"] is True
+    assert len(accounts.rotations) == 1
+
+
+async def test_order_status_endpoint_delivers_key_once_over_http():
+    """The same one-shot rule through the endpoint the browser actually calls."""
+    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    await paypal.create_pro_order(payments, transport=_paypal_transport([]))
+    await _handle(_capture_event(custom_id="pro"), accounts=accounts,
+                  payments=payments)
+
+    app.dependency_overrides[get_account_repo] = lambda: accounts
+    app.dependency_overrides[get_payment_repo] = lambda: payments
+    try:
+        first = client.get("/v1/paypal/orders/ORDER-1")
+        second = client.get("/v1/paypal/orders/ORDER-1")
+    finally:
+        app.dependency_overrides.pop(get_account_repo, None)
+        app.dependency_overrides.pop(get_payment_repo, None)
+
+    assert first.status_code == 200
+    assert first.json()["api_key"].startswith("sk_live_")
+    assert second.status_code == 200          # not a 500
+    assert second.json()["api_key"] is None
+    assert second.json()["key_already_delivered"] is True
 
 
 async def test_capture_is_idempotent_on_retry():
