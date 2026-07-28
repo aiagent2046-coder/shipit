@@ -421,6 +421,14 @@ as root and would not notice, but
 `shipit-ops` and opens the file itself — on a `0600 root:root` `.env` the unit
 fails to start.
 
+`/opt/shipit/.env` is the host's own file and is never overwritten by a deploy,
+so it can drift from `.env.example`. One such value is worth knowing about when
+rebuilding a host: production already carries `LOG_FORMAT=json`, set by hand
+after Stage 5 shipped the JSON formatter. `.env.example` now ships `json` too,
+so a `.env` seeded from it matches the running host instead of silently
+downgrading it to `text` (the code-level fallback for unset/unrecognized
+values) and breaking the `jq` runbook below.
+
 ### GitHub webhook — two jobs (`pr_merged` + continuous monitoring)
 
 `POST /v1/webhooks/github` is one endpoint dispatching on `X-GitHub-Event`.
@@ -594,9 +602,11 @@ Everything rides Postgres and the Telegram bot that already exist (see
 - **Log format** is configured in one place for every process
   (`app/logging_config.py`, called by both the API and the audit worker;
   the fixpack/monitoring/reap/usdt timers are `curl` calls into the API, not
-  Python processes of their own). `LOG_FORMAT=text` (the default) is the plain
-  line this has always emitted; `LOG_FORMAT=json` emits one JSON object per
-  line for `journalctl -o cat | jq` — see the runbook below. The JSON
+  Python processes of their own). `LOG_FORMAT=json` emits one JSON object per
+  line for `journalctl -o cat | jq` — see the runbook below — and is what
+  `.env.example` now ships and what production runs; `LOG_FORMAT=text` is the
+  plain line this emitted before Stage 5 and remains the fallback the *code*
+  uses when the variable is unset or unrecognized. The JSON
   formatter serialises an explicit allowlist of fields, so a value that nobody
   reviewed cannot reach the log by being attached to a record. Secrets
   matching a known shape (GitHub tokens, PEM keys, JWTs, bot tokens, DSN
@@ -723,9 +733,11 @@ submission crosses processes — the API enqueues, the worker runs it — and th
 handoff happens through the `audit_jobs` table, so querying one unit shows half
 the story.
 
-Correlation ids only appear on lines emitted underneath a set log context;
-wiring that context up at the four places that own a unit of work is a separate
-change, so until then these fields are absent and the filter matches nothing.
+Correlation ids only appear on lines emitted underneath a set log context. All
+four places that own a unit of work set one (`app/log_context.py` names them):
+the HTTP middleware, the audit worker's claim loop, the Fix Pack processor and
+the monitoring drain. A line logged outside any of them — module import, an
+unhandled path — has no ids, so the filter above won't match it.
 
 ### CORS (browser frontend on Vercel)
 
