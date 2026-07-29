@@ -148,3 +148,44 @@ def test_invalid_uploads_do_not_consume_quota():
             assert resp.status_code == 202
     finally:
         app.dependency_overrides.pop(get_rate_limiter, None)
+
+
+# --- which IP the quota is keyed on -------------------------------------
+#
+# _client_key resolves the quota key from X-Forwarded-For. Caddy APPENDS the
+# peer address to whatever header arrived, so the leftmost entry is chosen by
+# the client and the rightmost is the one our proxy wrote. Keying on the
+# leftmost let anyone rotate the header for unlimited free audits, i.e.
+# unlimited LLM spend — these pin the resolution to the trusted entry.
+
+class _FakeRequest:
+    """The two attributes _client_key reads, nothing else."""
+
+    def __init__(self, forwarded=None, peer="10.0.0.1"):
+        self.headers = {"x-forwarded-for": forwarded} if forwarded else {}
+        self.client = type("C", (), {"host": peer})()
+
+
+def test_client_key_uses_the_hop_our_proxy_wrote():
+    from app.main import _client_key
+    assert _client_key(_FakeRequest("9.9.9.9")) == "9.9.9.9"
+
+
+def test_client_key_ignores_a_client_supplied_prefix():
+    """`XFF: 1.2.3.4` from the client + Caddy's append = `1.2.3.4, 9.9.9.9`.
+    The forged entry must not change the key."""
+    from app.main import _client_key
+    honest = _client_key(_FakeRequest("9.9.9.9"))
+    forged = _client_key(_FakeRequest("1.2.3.4, 9.9.9.9"))
+    assert forged == honest == "9.9.9.9"
+
+
+def test_client_key_a_rotating_forged_prefix_maps_to_one_key():
+    from app.main import _client_key
+    keys = {_client_key(_FakeRequest(f"1.2.3.{i}, 9.9.9.9")) for i in range(50)}
+    assert keys == {"9.9.9.9"}
+
+
+def test_client_key_falls_back_to_the_peer_without_the_header():
+    from app.main import _client_key
+    assert _client_key(_FakeRequest(peer="10.0.0.7")) == "10.0.0.7"

@@ -721,15 +721,23 @@ def _require_bearer_token(request: Request, token: str) -> None:
 
 
 def _client_key(request: Request) -> str:
-    """Client IP, honoring one reverse-proxy hop (Caddy in prod).
+    """Client IP, honoring exactly one reverse-proxy hop (Caddy in prod).
 
-    Trusts the first X-Forwarded-For entry. Only safe because this
-    endpoint sits behind our own known proxy — do not reuse this helper
-    if the app is ever exposed directly to the internet without one.
+    The LAST X-Forwarded-For entry, not the first. Caddy appends the peer
+    address to whatever header arrived, so on `XFF: 1.2.3.4` from a client the
+    backend sees `1.2.3.4, <real ip>` — reading entry [0] returns a value the
+    client chose. That is the free tier's daily audit quota, so a client
+    rotating the header buys unlimited LLM spend. Entry [-1] is the one our own
+    proxy wrote and is the only entry nobody upstream of it can forge.
+
+    Assumes exactly one trusted hop. If a CDN is ever put in front of Caddy the
+    trusted entry moves and this has to count hops instead. Only safe behind a
+    proxy at all — do not reuse this helper if the app is ever exposed to the
+    internet directly.
     """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 
