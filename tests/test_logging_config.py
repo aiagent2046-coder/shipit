@@ -26,6 +26,7 @@ import pytest
 from app import log_context
 from app.logging_config import (
     ALLOWED_FIELDS,
+    StripAccessQueryFilter,
     TEXT_FORMAT,
     ContextFilter,
     JsonFormatter,
@@ -386,3 +387,74 @@ def test_version_endpoint_and_log_records_read_the_same_source(monkeypatch):
     out = emit_json(make_record("up"))
     assert body["release"] == out["release"] == "deadbee"
     assert body["environment"] == out["env"] == "production"
+
+
+# --- uvicorn's access log ------------------------------------------------
+#
+# The audit access_token rides in the query string (?token=...), so every
+# access log line used to carry the ownership secret for the row it served.
+# RedactionFilter never saw those records: uvicorn.access has propagate=False
+# and its own handler, so nothing on the root handler applies to it.
+
+
+@contextmanager
+def uvicorn_access_logger():
+    """A uvicorn.access logger configured the way uvicorn configures it,
+    writing into a buffer. Restored afterwards so this never leaks into
+    other tests."""
+    import io
+    import logging.config
+
+    from uvicorn.config import LOGGING_CONFIG
+
+    logger = logging.getLogger("uvicorn.access")
+    saved_handlers, saved_propagate = logger.handlers[:], logger.propagate
+    try:
+        logging.config.dictConfig(LOGGING_CONFIG)
+        configure_logging()
+        buf = io.StringIO()
+        for handler in logging.getLogger("uvicorn.access").handlers:
+            handler.stream = buf
+        yield logging.getLogger("uvicorn.access"), buf
+    finally:
+        logger.handlers, logger.propagate = saved_handlers, saved_propagate
+
+
+def _access(logger, path):
+    """One access record in uvicorn's own five-argument shape."""
+    logger.info('%s - "%s %s HTTP/%s" %d',
+                "1.2.3.4", "GET", path, "1.1", 200)
+
+
+def test_access_log_does_not_carry_the_audit_access_token():
+    token = "deadbeefdeadbeefdeadbeefdeadbeef"  # fake, hand-written shape
+    with uvicorn_access_logger() as (logger, buf):
+        _access(logger, f"/v1/audits/abc123?token={token}")
+    out = buf.getvalue()
+    assert token not in out
+    assert "/v1/audits/abc123" in out, "the path itself must survive"
+
+
+def test_access_log_line_is_not_dropped_by_the_filter():
+    """The obvious fix -- adding RedactionFilter here -- empties record.args,
+    and uvicorn's AccessFormatter unpacks exactly five of them, so the line
+    dies with a ValueError instead of being masked. Both lines must arrive."""
+    with uvicorn_access_logger() as (logger, buf):
+        _access(logger, "/v1/audits/abc123?token=deadbeefdeadbeef")
+        _access(logger, "/healthz")
+    assert buf.getvalue().count("\n") == 2
+
+
+def test_access_log_leaves_a_query_less_path_alone():
+    with uvicorn_access_logger() as (logger, buf):
+        _access(logger, "/healthz")
+    assert "?" not in buf.getvalue()
+
+
+def test_configure_logging_does_not_stack_duplicate_access_filters():
+    with uvicorn_access_logger() as (logger, _buf):
+        configure_logging()
+        configure_logging()
+        for handler in logger.handlers:
+            assert sum(isinstance(f, StripAccessQueryFilter)
+                       for f in handler.filters) == 1
