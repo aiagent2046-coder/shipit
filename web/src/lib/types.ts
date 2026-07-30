@@ -167,6 +167,71 @@ export interface FixpackUsdtInvoice extends UsdtInvoice {
   audit_id: string;
 }
 
+// The payer-facing bank fields. Returned in the invoice response body rather
+// than published as NEXT_PUBLIC_* — they are a private individual's real
+// banking details, so they should exist only in a response to someone who
+// actually started a purchase.
+export interface BankDetails {
+  bank_name: string;
+  swift: string;
+  beneficiary: string;
+  account: string;
+  address: string;
+}
+
+// POST /v1/billing/bank-transfer/pro and
+// POST /v1/audits/{id}/fixpack/bank-transfer.
+export interface BankTransferInvoice {
+  payment_id: string;
+  // Goes in the transfer's payment-reference field. THIS, not the amount, is
+  // what the operator matches against the bank statement.
+  reference: string;
+  amount: string;
+  currency: string;
+  bank: BankDetails;
+  expires_at: string;
+  audit_id?: string;
+}
+
+// GET /v1/billing/bank-transfer/{reference}. "expired" is cosmetic: the quote
+// is stale, but the operator can still confirm a transfer that arrives later.
+export type BankTransferStatus =
+  | {
+      reference: string;
+      status: "pending";
+      product: "pro_tier" | "fixpack";
+      amount: string | null;
+      currency: string;
+      expires_at: string;
+      bank?: BankDetails;
+      audit_id?: string;
+    }
+  | {
+      reference: string;
+      status: "completed";
+      product: "pro_tier";
+      tier: "pro";
+      // Same one-shot delivery as UsdtInvoiceStatus above.
+      api_key: string | null;
+      key_already_delivered?: boolean;
+    }
+  | {
+      reference: string;
+      status: "completed";
+      product: "fixpack";
+      audit_id?: string;
+    }
+  | { reference: string; status: "expired" };
+
+// POST /v1/billing/bank-transfer/{reference}/paid — "I've paid". Grants
+// nothing; `notified` says whether the operator's phone actually buzzed
+// (false when alerting is unconfigured or the repeat was throttled).
+export interface BankTransferPaidResult {
+  reference: string;
+  status: string;
+  notified: boolean;
+}
+
 // fixpack_jobs status progression (app/db.py). null = no purchase yet.
 // "paid" = purchased, waiting in the backlog; "running" = the processor
 // has claimed it and is generating the fix (both shown as in-progress).

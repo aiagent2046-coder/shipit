@@ -40,7 +40,7 @@ from app.accounts import (
     resolve_account,
     validate_api_key_pepper_configured,
 )
-from app.billing import paypal, telegram_stars, usdt_trc20
+from app.billing import bank_transfer, paypal, telegram_stars, usdt_trc20
 from app.db import (
     AccountRepository,
     AuditJobRepository,
@@ -1046,8 +1046,9 @@ async def telegram_webhook(
 ) -> dict:
     """Telegram Bot API webhook for Stars payments. Handles the
     pre_checkout_query (approve within 10s), successful_payment (grant pro /
-    Fix Pack / subscription), and subscription (BotSubscriptionUpdated
-    renewal state changes) update types; ignores everything else.
+    Fix Pack / subscription), subscription (BotSubscriptionUpdated renewal
+    state changes) and callback_query (the operator's bank-transfer confirm
+    button) update types; ignores everything else.
 
     Authenticity is Telegram's secret_token: setWebhook is called with a
     secret, echoed back in X-Telegram-Bot-Api-Secret-Token on every
@@ -1055,6 +1056,11 @@ async def telegram_webhook(
     endpoint's bearer token. 503 if the bot token or webhook secret
     isn't configured — an unconfigured payment webhook is an operational
     gap to notice, not a silent no-op. See app/billing/telegram_stars.py.
+
+    Note this header proves the update came from TELEGRAM, not from any
+    particular person: it is shared by every user who can message the bot.
+    The callback_query branch therefore does its own owner check against
+    TELEGRAM_ADMIN_CHAT_ID before acting (telegram_stars._is_operator).
     """
     token = telegram_stars.bot_token_from_env()
     secret = telegram_stars.webhook_secret_from_env()
@@ -1459,6 +1465,186 @@ async def create_fixpack_usdt_invoice(
                               "payment row is created to match payment against)"},
         )
     return invoice
+
+
+# Distinct "I've paid" presses, per client key, per limiter window (24h).
+# This bounds a flood of DIFFERENT invoices from one source; repeat presses of
+# ONE invoice are already collapsed by notify_operator's dedupe_key. Well above
+# what any real payer needs -- a payer opens one invoice, maybe two.
+BANK_TRANSFER_PAID_LIMIT = 10
+
+
+def _bank_transfer_details() -> dict[str, str]:
+    """The configured payer-facing bank fields, or 503.
+
+    All five or nothing (see bank_transfer.bank_details_from_env): a payer
+    handed a SWIFT code with no account number cannot send anything, so a
+    half-configured deployment must refuse rather than render an invoice that
+    can't be paid."""
+    details = bank_transfer.bank_details_from_env()
+    if details is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "bank_transfer_not_configured",
+                    "detail": "bank transfer is not configured on this "
+                              "deployment (BANK_TRANSFER_BANK_NAME, "
+                              "BANK_TRANSFER_SWIFT, BANK_TRANSFER_BENEFICIARY, "
+                              "BANK_TRANSFER_ACCOUNT and BANK_TRANSFER_ADDRESS "
+                              "must all be set)"},
+        )
+    return details
+
+
+def _bank_transfer_not_persisted_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={"reason": "not_persisted",
+                "detail": "bank transfer invoices require DATABASE_URL (a "
+                          "pending payment row carries the reference code the "
+                          "operator matches against the bank statement)"},
+    )
+
+
+@app.post("/v1/billing/bank-transfer/pro", status_code=201)
+async def create_bank_transfer_invoice(
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+) -> dict:
+    """Open a bank-transfer invoice for the Pro tier.
+
+    Returns the bank details, the amount, and the reference code to put in the
+    transfer's payment-reference field — that code, not the amount, is how the
+    operator matches the transfer back to this invoice (the bank converts at
+    its own rate, so what lands never equals what was quoted). Poll GET
+    /v1/billing/bank-transfer/{reference} to collect the key once the operator
+    confirms the money arrived.
+
+    The bank details are a private individual's, so they are returned in this
+    response body rather than published to the frontend build — they reach
+    only someone who actually started a purchase.
+
+    503 if bank transfer isn't configured, or if the pending row can't be
+    persisted (no DATABASE_URL / no free reference code)."""
+    details = _bank_transfer_details()
+    invoice = await bank_transfer.create_invoice(payment_repo, details=details)
+    if invoice is None:
+        raise _bank_transfer_not_persisted_error()
+    return invoice
+
+
+@app.post("/v1/audits/{audit_id}/fixpack/bank-transfer", status_code=201)
+async def create_fixpack_bank_transfer_invoice(
+    audit_id: str,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+) -> dict:
+    """Open a bank-transfer invoice to buy a Fix Pack for one audit. Same
+    reference-code flow and same polling endpoint as the Pro invoice above, at
+    the Fix Pack price and scoped to this audit.
+
+    Same GitHub-URL-only gate as the USDT and PayPal Fix Pack routes: a zip
+    audit has no repository to open a fix PR against, so 422 rather than sell
+    something that can't be fulfilled. 404 if no such audit."""
+    audit = await audit_repo.get(audit_id)
+    if audit is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "audit_not_found",
+                    "detail": "no audit with this id, or persistence isn't "
+                              "configured on this deployment (see app/db.py)"},
+        )
+    if not audit.get("repo_url"):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "not_github_audit",
+                    "detail": "Fix Pack currently only supports audits run "
+                              "from a public GitHub URL. This audit was created "
+                              "from an uploaded zip, so there's no repository to "
+                              "open a fix PR against — re-run the audit with your "
+                              "GitHub repo URL, then buy a Fix Pack for it."},
+        )
+    details = _bank_transfer_details()
+    invoice = await bank_transfer.create_fixpack_invoice(
+        payment_repo, details=details, audit_id=audit_id
+    )
+    if invoice is None:
+        raise _bank_transfer_not_persisted_error()
+    return invoice
+
+
+@app.get("/v1/billing/bank-transfer/{reference}")
+async def get_bank_transfer_invoice(
+    reference: str,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    account_repo: AccountRepository = Depends(get_account_repo),
+) -> dict:
+    """Poll one bank-transfer invoice. Reveals the API key only once the
+    operator has confirmed the transfer arrived (status 'completed'); a
+    pending or expired invoice never leaks a key. 404 if no such invoice.
+
+    An 'expired' status here is cosmetic: it tells a payer the quote is stale,
+    but the operator can still confirm a transfer that surfaces later, because
+    a slow bank must never become lost money."""
+    status = await bank_transfer.invoice_status(
+        payment_repo, account_repo, reference,
+        details=bank_transfer.bank_details_from_env(),
+    )
+    if status is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no bank transfer invoice with this reference, or "
+                              "persistence isn't configured on this deployment"},
+        )
+    return status
+
+
+@app.post("/v1/billing/bank-transfer/{reference}/paid")
+async def report_bank_transfer_paid(
+    reference: str,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+    transport=Depends(get_billing_transport),
+) -> dict:
+    """The payer pressed "I've paid": notify the operator, grant nothing.
+
+    This writes no state — the row stays 'pending' until a human has seen the
+    money on the statement and pressed the Confirm button carried by the
+    notification. Pressing this without paying achieves exactly nothing.
+
+    Rate limited because it is unauthenticated and its whole job is to push a
+    message to the operator's phone. The per-invoice repeat is already
+    collapsed by notify_operator's dedupe window; this bounds how many
+    DISTINCT invoices one client can page the operator about. 404 if there's
+    no such invoice."""
+    try:
+        limiter.check(
+            f"bank-transfer-paid:{_client_key(request)}",
+            limit=BANK_TRANSFER_PAID_LIMIT,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {BANK_TRANSFER_PAID_LIMIT} bank transfer "
+                          "notifications per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+    result = await bank_transfer.mark_awaiting_confirmation(
+        payment_repo, reference,
+        transport=transport, site_url=telegram_stars.SITE_URL,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no bank transfer invoice with this reference, or "
+                              "persistence isn't configured on this deployment"},
+        )
+    return result
 
 
 def _paypal_not_configured_error() -> HTTPException:
