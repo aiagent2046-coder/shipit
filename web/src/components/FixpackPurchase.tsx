@@ -5,10 +5,12 @@ import type { ReactNode } from "react";
 import type { FixpackStatus, InstallationStatus } from "@/lib/types";
 import {
   TELEGRAM_BOT_USERNAME,
+  createFixpackBankTransferInvoice,
   createFixpackUsdtInvoice,
   getFixpackStatus,
   getInstallationStatus,
 } from "@/lib/api";
+import { BankTransferCheckout } from "./BankTransferCheckout";
 import { UsdtCheckout } from "./UsdtCheckout";
 import { PayPalOrderCard } from "./PayPalButton";
 import { Spinner } from "./Spinner";
@@ -110,6 +112,27 @@ export function FixpackPurchase({
                 status below.
               </>
             }
+          />
+          <BankTransferCheckout
+            description={
+              <>
+                Send a normal bank transfer quoting the reference code below.
+                Your Fix Pack starts once we&apos;ve seen the money — usually
+                1–3 business days.
+              </>
+            }
+            createInvoice={() => createFixpackBankTransferInvoice(auditId)}
+            renderCompleted={() => (
+              <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
+                <p className="font-semibold text-accent">
+                  Transfer confirmed — generating your Fix Pack.
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  No further action needed. The fix PR is opened automatically —
+                  its status appears below.
+                </p>
+              </div>
+            )}
           />
         </div>
       </InstallGate>

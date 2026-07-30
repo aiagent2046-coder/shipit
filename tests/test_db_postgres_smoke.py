@@ -43,7 +43,7 @@ import pytest
 
 import app.db as db_mod
 from app.accounts import api_key_prefix, generate_api_key
-from app.billing import usdt_trc20
+from app.billing import bank_transfer, usdt_trc20
 from app.db import (
     AccountRepository,
     AuditRepository,
@@ -899,3 +899,164 @@ async def test_usdt_poll_lock_does_not_serialize_against_other_processors(real_d
             pass
         async with db_mod.monitoring_processor_lock():
             pass
+
+
+# --- bank_transfer: manual confirmation, on real Postgres ---
+#
+# The provider's whole safety argument is that the operator can press Confirm
+# twice, and that two payers can have open invoices at the same time. Both
+# rest on SQL the in-memory fakes in tests/test_billing_bank_transfer.py can
+# only imitate: the CAS predicate in mark_completed/mark_completed_fixpack and
+# migration 0004's partial unique index on (provider, external_ref).
+
+BANK_DETAILS_SMOKE = {
+    "bank_name": "Example Test Bank",
+    "swift": "TESTKZKAXXX",
+    "beneficiary": "Test Beneficiary",
+    "account": "KZ00TEST0000000000000000",
+    "address": "1 Test Street, Testville",
+}
+
+
+async def test_bank_transfer_double_confirm_grants_pro_once(real_db):
+    """The operator presses Confirm twice. Both presses must report success and
+    exactly one account may exist -- the second press replays the invoice's own
+    reference code, which is precisely what the CAS predicate admits.
+
+    Only Postgres can settle this: the second call's fate is decided by
+    `where id = %s and (status = 'pending' or (status = 'completed' and
+    external_ref = %s))` inside one statement, under the row lock."""
+    payment_repo, account_repo = PaymentRepository(), AccountRepository()
+    invoice = await bank_transfer.create_invoice(
+        payment_repo, details=dict(BANK_DETAILS_SMOKE)
+    )
+    assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
+
+    confirm_kwargs = {
+        "payment_repo": payment_repo, "account_repo": account_repo,
+        "payment_id": invoice["payment_id"],
+    }
+    first = await bank_transfer.confirm(**confirm_kwargs)
+    second = await bank_transfer.confirm(**confirm_kwargs)
+
+    assert first["granted"] is True
+    assert second["granted"] is True, "a second Confirm press was refused"
+
+    stored = await payment_repo.get(invoice["payment_id"])
+    assert stored["status"] == "completed"
+    # The reference code, not a bank transaction id: a second press then carries
+    # the SAME external_ref, so the gate reads it as a replay rather than as a
+    # second distinct charge it must refuse.
+    assert stored["external_ref"] == invoice["reference"]
+
+    # One account, and the key is delivered exactly once however many times the
+    # payer reloads the checkout page.
+    account_id = stored["account_id"]
+    assert account_id is not None
+    assert (await account_repo.get_by_id(account_id))["tier"] == "pro"
+    status = await bank_transfer.invoice_status(
+        payment_repo, account_repo, invoice["reference"]
+    )
+    assert status["api_key"] is not None
+    again = await bank_transfer.invoice_status(
+        payment_repo, account_repo, invoice["reference"]
+    )
+    assert again["api_key"] is None and again["key_already_delivered"] is True
+    assert (await payment_repo.get(invoice["payment_id"]))["account_id"] == account_id
+
+
+async def test_bank_transfer_double_confirm_creates_one_fixpack(real_db):
+    """Same double press for the Fix Pack product: one paid job for the audit,
+    arbitrated by migration 0025's partial unique index rather than by a
+    check-then-write in Python."""
+    payment_repo, fixpack_repo = PaymentRepository(), FixpackJobRepository()
+    audit_repo = AuditRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _fixpack_audit(audit_repo, f"bank-{run}")
+
+    invoice = await bank_transfer.create_fixpack_invoice(
+        payment_repo, details=dict(BANK_DETAILS_SMOKE), audit_id=audit_id
+    )
+    assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
+
+    confirm_kwargs = {
+        "payment_repo": payment_repo, "account_repo": AccountRepository(),
+        "fixpack_repo": fixpack_repo, "audit_repo": audit_repo,
+        "payment_id": invoice["payment_id"],
+    }
+    first = await bank_transfer.confirm(**confirm_kwargs)
+    second = await bank_transfer.confirm(**confirm_kwargs)
+
+    assert first["granted"] is True
+    assert second["granted"] is True, "a second Confirm press was refused"
+    assert first["product"] == "fixpack"
+
+    rows = await _fixpack_job_rows(audit_id)
+    assert len(rows) == 1, f"{len(rows)} Fix Pack jobs for one confirmed transfer"
+    stored = await payment_repo.get(invoice["payment_id"])
+    assert stored["status"] == "completed"
+    assert stored["external_ref"] == invoice["reference"]
+
+    await fixpack_repo.mark_status(str(rows[0]["id"]), "failed", "smoke cleanup")
+
+
+async def test_bank_transfer_open_invoices_coexist(real_db):
+    """Several payers waiting on the operator at once. Each invoice carries its
+    own reference code, so migration 0004's unique index on (provider,
+    external_ref) is satisfied and confirming one leaves the others pending.
+
+    The USDT provider gets this for free by making the AMOUNT unique; a bank
+    transfer cannot, because the bank converts at its own rate and what lands is
+    never what was quoted. The reference code is the only distinguishing key
+    this provider has, which is why its uniqueness is asserted against the real
+    index rather than against a dict."""
+    payment_repo, account_repo = PaymentRepository(), AccountRepository()
+    invoices = [
+        await bank_transfer.create_invoice(
+            payment_repo, details=dict(BANK_DETAILS_SMOKE)
+        )
+        for _ in range(4)
+    ]
+    assert all(inv is not None for inv in invoices)
+    references = [inv["reference"] for inv in invoices]
+    assert len(set(references)) == 4
+
+    confirmed = await bank_transfer.confirm(
+        payment_repo=payment_repo, account_repo=account_repo,
+        payment_id=invoices[1]["payment_id"],
+    )
+    assert confirmed["granted"] is True
+
+    for index, invoice in enumerate(invoices):
+        row = await payment_repo.get(invoice["payment_id"])
+        expected = "completed" if index == 1 else "pending"
+        assert row["status"] == expected, f"invoice {index} is {row['status']}"
+        # A reference lookup still resolves to its own invoice, so a payer
+        # polling the checkout page never sees someone else's outcome.
+        found = await payment_repo.get_by_external_ref(
+            bank_transfer.PROVIDER, invoice["reference"]
+        )
+        assert found["id"] == invoice["payment_id"]
+
+
+async def test_bank_transfer_reference_uniqueness_is_enforced_by_postgres(real_db):
+    """The backstop behind _reserve_reference's re-roll: even if two concurrent
+    creations picked the same code, the database refuses the second. Without
+    this index a duplicate code would mean the operator confirming one payer's
+    transfer and granting to another."""
+    import psycopg
+
+    payment_repo = PaymentRepository()
+    reference = bank_transfer.generate_reference()
+
+    first = await payment_repo.create(
+        account_id=None, provider="bank_transfer", external_ref=reference,
+        amount=5.0, currency="USD", status="pending", tier_granted="pro",
+    )
+    assert first is not None, "DATABASE_URL not reaching get_pool -- false green"
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        await payment_repo.create(
+            account_id=None, provider="bank_transfer", external_ref=reference,
+            amount=5.0, currency="USD", status="pending", tier_granted="pro",
+        )

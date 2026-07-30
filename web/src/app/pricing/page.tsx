@@ -5,6 +5,7 @@ import { TELEGRAM_BOT_USERNAME } from "@/lib/api";
 import { useApiKey } from "@/components/providers";
 import { ProUsdtCheckout } from "@/components/UsdtCheckout";
 import { PayPalOrderCard } from "@/components/PayPalButton";
+import { ProBankTransferCheckout } from "@/components/BankTransferCheckout";
 
 interface Row {
   label: string;
@@ -192,6 +193,9 @@ export default function PricingPage() {
             </>
           }
         />
+
+        {/* Bank transfer */}
+        <ProBankTransferCheckout />
       </section>
 
       <p className="mt-8 text-center text-sm text-muted">

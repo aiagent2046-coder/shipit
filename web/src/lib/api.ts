@@ -5,6 +5,9 @@ import type {
   Account,
   AuditJobStatus,
   AuditResult,
+  BankTransferInvoice,
+  BankTransferPaidResult,
+  BankTransferStatus,
   CreateAuditResponse,
   FixpackStatus,
   FixpackUsdtInvoice,
@@ -175,6 +178,48 @@ export async function createFixpackUsdtInvoice(
     { method: "POST" },
   );
   return parse<FixpackUsdtInvoice>(res);
+}
+
+// Open a bank-transfer invoice for Pro. The response carries the bank details
+// themselves — they are deliberately NOT NEXT_PUBLIC_* config, so the only
+// place the frontend can learn them is a response to a started purchase.
+export async function createBankTransferInvoice(): Promise<BankTransferInvoice> {
+  const res = await request(`${API_BASE_URL}/v1/billing/bank-transfer/pro`, {
+    method: "POST",
+  });
+  return parse<BankTransferInvoice>(res);
+}
+
+// Same, scoped to one audit's Fix Pack. Polled with getBankTransferInvoice.
+export async function createFixpackBankTransferInvoice(
+  auditId: string,
+): Promise<BankTransferInvoice> {
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/bank-transfer`,
+    { method: "POST" },
+  );
+  return parse<BankTransferInvoice>(res);
+}
+
+export async function getBankTransferInvoice(
+  reference: string,
+): Promise<BankTransferStatus> {
+  const res = await request(
+    `${API_BASE_URL}/v1/billing/bank-transfer/${encodeURIComponent(reference)}`,
+  );
+  return parse<BankTransferStatus>(res);
+}
+
+// "I've paid" — pages the operator to go look at their statement. Grants
+// nothing on its own; the invoice stays pending until a human confirms.
+export async function reportBankTransferPaid(
+  reference: string,
+): Promise<BankTransferPaidResult> {
+  const res = await request(
+    `${API_BASE_URL}/v1/billing/bank-transfer/${encodeURIComponent(reference)}/paid`,
+    { method: "POST" },
+  );
+  return parse<BankTransferPaidResult>(res);
 }
 
 export async function getFixpackStatus(auditId: string): Promise<FixpackStatus> {

@@ -393,10 +393,23 @@ def _no_ambient_production_integrations(monkeypatch):
         "SANDBOX_RUNNER_TOKEN",
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_WEBHOOK_SECRET",
+        # The operator's own Telegram id. Stripped for two reasons: it is the
+        # allowlist the bank-transfer confirm button checks against, and its
+        # absence is itself a behaviour under test (an unset allowlist must
+        # reject everyone, never allow everyone).
+        "TELEGRAM_ADMIN_CHAT_ID",
         "PAYPAL_CLIENT_ID",
         "PAYPAL_CLIENT_SECRET",
         "PAYPAL_WEBHOOK_ID",
         "USDT_POLL_TOKEN",
+        # A private individual's real banking details on the production host.
+        "BANK_TRANSFER_BANK_NAME",
+        "BANK_TRANSFER_SWIFT",
+        "BANK_TRANSFER_BENEFICIARY",
+        "BANK_TRANSFER_ACCOUNT",
+        "BANK_TRANSFER_ADDRESS",
+        "BANK_TRANSFER_PRO_PRICE_USD",
+        "BANK_TRANSFER_FIXPACK_PRICE_USD",
     )
 
     for variable in variables:
