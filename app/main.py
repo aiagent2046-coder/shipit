@@ -1474,6 +1474,43 @@ async def create_fixpack_usdt_invoice(
 # what any real payer needs -- a payer opens one invoice, maybe two.
 BANK_TRANSFER_PAID_LIMIT = 10
 
+# Invoices opened per client key per limiter window (24h).
+#
+# Unauthenticated by necessity -- a buyer has no key until they have paid --
+# which until now meant unbounded. Each invoice permanently consumed one of the
+# 99 kopeck suffixes, so a hundred anonymous POSTs switched the operator's
+# whole matching mechanism off. The TTL window in bank_transfer fixed the
+# permanence; this bounds how fast one source can fill the window.
+#
+# Well above any real checkout: a buyer opens one invoice, changes their mind
+# about Pro versus a Fix Pack, maybe reloads a stale page. Fifteen is generous
+# for that and still a hundredth of what saturation needs.
+BANK_TRANSFER_INVOICE_LIMIT = 15
+
+
+def _check_invoice_rate_limit(request: Request, limiter: RateLimiter) -> None:
+    """429 when one client has opened too many invoices today.
+
+    Shared by the Pro and Fix Pack creators on ONE limiter key on purpose:
+    they draw suffixes from the same pool, so a per-endpoint budget would let
+    the same client take twice as much of it.
+    """
+    try:
+        limiter.check(
+            f"bank-transfer-invoice:{_client_key(request)}",
+            limit=BANK_TRANSFER_INVOICE_LIMIT,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {BANK_TRANSFER_INVOICE_LIMIT} bank transfer "
+                          "invoices per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
 
 def _bank_transfer_details() -> dict[str, str]:
     """The configured payer-facing bank fields, or 503.
@@ -1562,7 +1599,9 @@ def _bank_transfer_not_persisted_error() -> HTTPException:
 @app.post("/v1/billing/bank-transfer/pro", status_code=201)
 async def create_bank_transfer_invoice(
     payer: PayerContact,
+    request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ) -> dict:
     """Open a bank-transfer invoice for the Pro tier.
 
@@ -1573,8 +1612,12 @@ async def create_bank_transfer_invoice(
     /v1/billing/bank-transfer/{reference} to collect the key once the operator
     confirms the money arrived.
 
+    Rate limited: unauthenticated, and every invoice takes one of the 99
+    kopeck suffixes for the length of the TTL window.
+
     503 if bank transfer isn't configured, or if the pending row can't be
     persisted (no DATABASE_URL / no free reference code)."""
+    _check_invoice_rate_limit(request, limiter)
     details = _bank_transfer_details()
     invoice = await bank_transfer.create_invoice(
         payment_repo, details=details,
@@ -1590,8 +1633,10 @@ async def create_bank_transfer_invoice(
 async def create_fixpack_bank_transfer_invoice(
     audit_id: str,
     payer: PayerContact,
+    request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ) -> dict:
     """Open a bank-transfer invoice to buy a Fix Pack for one audit. Same
     reference-code flow and same polling endpoint as the Pro invoice above, at
@@ -1599,7 +1644,11 @@ async def create_fixpack_bank_transfer_invoice(
 
     Same GitHub-URL-only gate as the USDT and PayPal Fix Pack routes: a zip
     audit has no repository to open a fix PR against, so 422 rather than sell
-    something that can't be fulfilled. 404 if no such audit."""
+    something that can't be fulfilled. 404 if no such audit.
+
+    Rate limited on the same key as the Pro creator: both draw kopeck suffixes
+    from one pool."""
+    _check_invoice_rate_limit(request, limiter)
     audit = await audit_repo.get(audit_id)
     if audit is None:
         raise HTTPException(

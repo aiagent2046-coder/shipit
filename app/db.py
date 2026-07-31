@@ -109,6 +109,7 @@ async def close_pool() -> None:
 _FIXPACK_PROCESSOR_LOCK_KEY = 0x46495850
 _MONITORING_PROCESSOR_LOCK_KEY = 0x4D4F4E49
 _USDT_POLL_LOCK_KEY = 0x55534454
+_BANK_TRANSFER_AMOUNT_LOCK_KEY = 0x424E4B41  # "BNKA"
 
 
 class ProcessorLockBusy(Exception):
@@ -158,6 +159,76 @@ def monitoring_processor_lock():
     """The continuous-monitoring processor's advisory lock, on a distinct key so
     it never serializes against a Fix Pack run (see _advisory_processor_lock)."""
     return _advisory_processor_lock(_MONITORING_PROCESSOR_LOCK_KEY)
+
+
+# Retry budget for the kopeck-suffix lock. ~1s of contention before giving up,
+# which is far longer than the read-plus-insert it protects and short enough
+# that a checkout never visibly stalls on it.
+_AMOUNT_LOCK_ATTEMPTS = 20
+_AMOUNT_LOCK_DELAY_SECONDS = 0.05
+
+
+@asynccontextmanager
+async def bank_transfer_amount_lock():
+    """Serialize kopeck-suffix reservation: read the open invoices, pick a free
+    suffix, insert -- with nobody else doing the same in between.
+
+    Without it two concurrent checkouts both read the same set of taken
+    suffixes and both pick the same free one. Measured with a suspension point
+    where the real round-trip sits: 12 duplicate amounts per 200 concurrent
+    invoices.
+
+    Three deliberate differences from _advisory_processor_lock, all forced by
+    this being on a user's checkout rather than a background timer:
+
+      * It retries instead of raising. ProcessorLockBusy is the right answer
+        for an overlapping timer firing -- skip this run, the next one picks
+        the backlog up. On a buyer pressing Pay it is a 5xx, and refusing a
+        sale to protect a matching HINT is backwards.
+      * It releases the connection between attempts. Blocking on
+        pg_advisory_lock while holding a pooled connection deadlocks at
+        max_size=5: five concurrent checkouts hold all five connections
+        waiting, and the one holding the lock cannot get a sixth to do its
+        work. A waiter that sleeps without a connection cannot starve the
+        holder.
+      * On exhausting the retries it proceeds WITHOUT the lock rather than
+        failing. The degraded outcome is two open invoices sharing an amount,
+        which the operator separates by payer name and email -- the fallback
+        those fields exist for. That is strictly better than a lost sale, and
+        it is logged so the calibration can be revisited if it ever happens.
+
+    Yields without a lock when DATABASE_URL isn't set: nothing to serialize,
+    same not-configured contract as the repositories.
+    """
+    try:
+        pool = await get_pool()
+    except DatabaseNotConfigured:
+        yield
+        return
+    for _ in range(_AMOUNT_LOCK_ATTEMPTS):
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "select pg_try_advisory_lock(%s) as locked",
+                (_BANK_TRANSFER_AMOUNT_LOCK_KEY,),
+            )
+            row = await cur.fetchone()
+            if row and row["locked"]:
+                try:
+                    yield
+                finally:
+                    await conn.execute(
+                        "select pg_advisory_unlock(%s)",
+                        (_BANK_TRANSFER_AMOUNT_LOCK_KEY,),
+                    )
+                return
+        # Connection released before sleeping -- see the deadlock note above.
+        await asyncio.sleep(_AMOUNT_LOCK_DELAY_SECONDS)
+    logger.warning(
+        "kopeck-suffix lock busy for %.1fs; reserving without it, two open "
+        "invoices may share an amount and be separated by payer name instead",
+        _AMOUNT_LOCK_ATTEMPTS * _AMOUNT_LOCK_DELAY_SECONDS,
+    )
+    yield
 
 
 def usdt_poll_lock():
@@ -1424,12 +1495,27 @@ class PaymentRepository:
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
 
-    async def list_pending(self, provider: str) -> list[dict[str, Any]]:
+    async def list_pending(
+        self, provider: str, *, created_after: datetime.datetime | None = None
+    ) -> list[dict[str, Any]]:
         """Open (unpaid) invoices for a provider, newest first. Used by the
         USDT poller to match incoming on-chain transfers to invoices it
         hasn't seen paid yet. Returns [] when DATABASE_URL isn't set, same
         not-configured contract as create/get (an empty list, not None, so
-        callers can iterate without a guard)."""
+        callers can iterate without a guard).
+
+        `created_after` bounds the window. It exists for bank_transfer's
+        kopeck-suffix reservation, which asks a different question from the
+        poller: not "what might still get paid" (anything, forever -- a
+        transfer can surface on day nine) but "what amount is currently in
+        flight". Without a bound those two questions share an answer, and
+        since nothing ever moves an abandoned invoice out of 'pending', the
+        set only grows -- 99 abandoned checkouts and every later buyer is
+        quoted the same amount.
+
+        The default is unbounded so the poller keeps its old behaviour: a
+        window there would silently stop matching a slow transfer.
+        """
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1443,9 +1529,10 @@ class PaymentRepository:
                        payer_email, created_at
                 from payments
                 where provider = %s and status = 'pending'
+                  and (%s::timestamptz is null or created_at >= %s)
                 order by created_at desc
                 """,
-                (provider,),
+                (provider, created_after, created_after),
             )
             rows = await cur.fetchall()
         return [_row_to_payment(r) for r in rows]

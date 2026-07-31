@@ -158,9 +158,15 @@ def fixpack_price_usd() -> str:
 # instead of six -- which is the whole difference that matters:
 #
 #  - 99 slots, not a million. Exhaustion is reachable (100 invoices open inside
-#    the 7-day TTL), so _reserve_unique_amount walks the free slots instead of
+#    the TTL window), so _reserve_unique_amount walks the free slots instead of
 #    re-rolling blind, and falls back to the bare price rather than duplicating
 #    an amount that is already in flight.
+#    The window is what makes 99 a THROUGHPUT and not a lifetime budget. The
+#    first version of this counted every 'pending' row ever written, and since
+#    nothing moves an abandoned checkout out of 'pending' -- no cancel endpoint,
+#    no sweeper, and deliberately no expiry status (see below) -- 99 abandoned
+#    invoices switched the whole mechanism off permanently, quoting every later
+#    buyer the same bare price with nothing in the report to say so.
 #  - The nonce is 1..99, never 0: an invoice quoted at a round 5.00 carries no
 #    information, and this is the only provider where a human, not an exact
 #    integer comparison, does the matching.
@@ -169,6 +175,19 @@ def fixpack_price_usd() -> str:
 # never undercharge -- the same direction usdt_trc20 adds its nonce in.
 _CENTS_NONCE_MIN = 1
 _CENTS_NONCE_MAX = 99
+
+
+def _amount_lock():
+    """The advisory lock serializing suffix reservation (see
+    db.bank_transfer_amount_lock).
+
+    Imported lazily, like app.alerts below, so this module stays importable
+    and testable without a database: with DATABASE_URL unset the lock yields
+    without locking, which is exactly what the in-memory fakes need.
+    """
+    from app.db import bank_transfer_amount_lock
+
+    return bank_transfer_amount_lock()
 
 
 def amount_to_cents(amount: float) -> int:
@@ -180,6 +199,19 @@ def amount_to_cents(amount: float) -> int:
 
 async def _reserve_unique_amount(payment_repo: Any, price: str) -> str:
     """`price` plus a kopeck nonce no currently-open invoice is already quoted.
+
+    "Currently open" means pending AND created inside INVOICE_TTL_SECONDS. That
+    window is deliberately a different question from the one the USDT poller
+    asks of the same rows: the poller must keep matching a transfer that shows
+    up on day nine, while a suffix only has to be unique among the quotes a
+    payer might still be looking at. Sharing one answer between the two is what
+    made the pool a lifetime budget instead of a throughput.
+
+    Reusing a suffix after the window has a cost, and it is the right one to
+    pay: a nine-day-late transfer can land on an amount now quoted to someone
+    else, and the operator then has two candidate rows. Payer name and email
+    separate them -- that is exactly the fallback they exist for. The
+    alternative, refusing late transfers, turns a slow bank into lost money.
 
     The nonce is what makes the amount a MATCHING HINT rather than noise: the
     operator sees 5.07 on the statement and knows which of two open orders it
@@ -200,7 +232,10 @@ async def _reserve_unique_amount(payment_repo: Any, price: str) -> str:
     collide with each other either.
     """
     base_cents = amount_to_cents(float(price))
-    pending = await payment_repo.list_pending(PROVIDER)
+    window_start = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        seconds=INVOICE_TTL_SECONDS
+    )
+    pending = await payment_repo.list_pending(PROVIDER, created_after=window_start)
     taken = {
         amount_to_cents(p["amount"])
         for p in pending
@@ -324,13 +359,16 @@ async def create_invoice(
     reference = await _reserve_reference(payment_repo)
     if reference is None:
         return None
-    amount = await _reserve_unique_amount(payment_repo, pro_price_usd())
-    row = await payment_repo.create(
-        account_id=None, provider=PROVIDER, external_ref=reference,
-        amount=float(amount), currency=CURRENCY, status="pending",
-        tier_granted="pro", product=PRODUCT_PRO,
-        payer_name=payer_name, payer_email=payer_email,
-    )
+    # Reservation and insert under one lock: a suffix picked but not yet
+    # written is invisible to the next reader, and that gap is the race.
+    async with _amount_lock():
+        amount = await _reserve_unique_amount(payment_repo, pro_price_usd())
+        row = await payment_repo.create(
+            account_id=None, provider=PROVIDER, external_ref=reference,
+            amount=float(amount), currency=CURRENCY, status="pending",
+            tier_granted="pro", product=PRODUCT_PRO,
+            payer_name=payer_name, payer_email=payer_email,
+        )
     if row is None:
         return None
     return _invoice_view(row, details=details, amount=amount)
@@ -348,13 +386,17 @@ async def create_fixpack_invoice(
     reference = await _reserve_reference(payment_repo)
     if reference is None:
         return None
-    amount = await _reserve_unique_amount(payment_repo, fixpack_price_usd())
-    row = await payment_repo.create(
-        account_id=None, provider=PROVIDER, external_ref=reference,
-        amount=float(amount), currency=CURRENCY, status="pending",
-        tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
-        payer_name=payer_name, payer_email=payer_email,
-    )
+    # Same lock as create_invoice, and the same lock KEY: Pro and Fix Pack draw
+    # suffixes from one pending set, so serializing them separately would let
+    # them collide with each other.
+    async with _amount_lock():
+        amount = await _reserve_unique_amount(payment_repo, fixpack_price_usd())
+        row = await payment_repo.create(
+            account_id=None, provider=PROVIDER, external_ref=reference,
+            amount=float(amount), currency=CURRENCY, status="pending",
+            tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
+            payer_name=payer_name, payer_email=payer_email,
+        )
     if row is None:
         return None
     view = _invoice_view(row, details=details, amount=amount)
@@ -488,10 +530,17 @@ def _notification_text(row: dict[str, Any], *, site_url: str | None = None) -> s
             lines.append(f"{site_url.rstrip('/')}/audit/{row['audit_id']}")
     lines += [
         "",
-        "Find the incoming card transfer by the exact amount above — its "
-        "kopecks are unique to this order. If the payer's bank converted, the "
-        "kopecks are gone: match on the payer name instead and check the "
-        "amount is sufficient. Only then press Confirm.",
+        # Deliberately "should be" and not "is". Two cases make the kopecks
+        # non-unique and neither is visible from this row: the payer's bank
+        # converted the amount, or all 99 suffixes were in flight and this
+        # invoice got the bare price. Asserting uniqueness the operator can
+        # then disprove is worse than not asserting it -- the first time the
+        # message is wrong, every later one stops being read.
+        "Find the incoming card transfer by the exact amount above: its "
+        "kopecks should be unique to this order. If two transfers match, or "
+        "the payer's bank converted and the kopecks are gone, match on the "
+        "payer name instead and check the amount is sufficient. Only then "
+        "press Confirm.",
     ]
     return "\n".join(lines)
 
