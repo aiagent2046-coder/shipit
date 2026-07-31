@@ -64,7 +64,7 @@ export default function PricingPage() {
         </h1>
         <p className="mt-2 max-w-2xl text-muted">
           The audit itself is free. Pro raises your daily audit limit — pay
-          once by bank transfer and unlock a Pro API key. Pro does not include
+          once by card and unlock a Pro API key. Pro does not include
           a Fix Pack: those are bought per-audit from an audit&apos;s results
           page.
         </p>
@@ -149,7 +149,7 @@ export default function PricingPage() {
         </ul>
       </section>
 
-      {/* Payment options. Bank transfer is the only method on the storefront;
+      {/* Payment options. Card payment is the only method on the storefront;
           the other providers still work for existing customers through the
           Telegram bot and their direct links, they are just not advertised. */}
       <section className="mx-auto mt-10 max-w-md">

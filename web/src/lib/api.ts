@@ -8,6 +8,7 @@ import type {
   BankTransferInvoice,
   BankTransferPaidResult,
   BankTransferStatus,
+  BillingDetails,
   CreateAuditResponse,
   FixpackStatus,
   FixpackUsdtInvoice,
@@ -180,33 +181,36 @@ export async function createFixpackUsdtInvoice(
   return parse<FixpackUsdtInvoice>(res);
 }
 
-// Who the payer says they are. Both fields optional, and the whole argument is
-// optional: the backend accepts these routes with no body at all. Recorded for
-// the operator's bookkeeping only — nothing is ever sent to the address, which
-// is why neither this layer nor the backend validates its format.
+// Who the payer says they are. Both required by the backend: a card transfer
+// carries no reference field, so the payer's name and email are the only thing
+// the operator can match an incoming transfer against.
 export interface PayerContact {
-  payer_name?: string;
-  payer_email?: string;
+  payer_name: string;
+  payer_email: string;
 }
 
-// Blank inputs must reach the backend as absent, not as "". Returns undefined
-// when the payer filled in neither, so the request carries no body — exactly
-// what this endpoint did before payer contact existed.
-function payerBody(payer?: PayerContact): RequestInit {
-  const payer_name = payer?.payer_name?.trim() || undefined;
-  const payer_email = payer?.payer_email?.trim() || undefined;
-  if (!payer_name && !payer_email) return {};
+function payerBody(payer: PayerContact): RequestInit {
   return {
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ payer_name, payer_email }),
+    body: JSON.stringify({
+      payer_name: payer.payer_name.trim(),
+      payer_email: payer.payer_email.trim(),
+    }),
   };
 }
 
-// Open a bank-transfer invoice for Pro. The response carries the bank details
-// themselves — they are deliberately NOT NEXT_PUBLIC_* config, so the only
-// place the frontend can learn them is a response to a started purchase.
+// The published payment requisites for the footer. Public and uncached-by-us:
+// the backend env is the single source, so a rotated card takes effect on the
+// next page load with no rebuild.
+export async function getBillingDetails(): Promise<BillingDetails> {
+  const res = await request(`${API_BASE_URL}/v1/billing/details`);
+  return parse<BillingDetails>(res);
+}
+
+// Open a bank-transfer invoice for Pro. The response carries the card number
+// to pay and the reference code that identifies the order.
 export async function createBankTransferInvoice(
-  payer?: PayerContact,
+  payer: PayerContact,
 ): Promise<BankTransferInvoice> {
   const res = await request(`${API_BASE_URL}/v1/billing/bank-transfer/pro`, {
     method: "POST",
@@ -218,7 +222,7 @@ export async function createBankTransferInvoice(
 // Same, scoped to one audit's Fix Pack. Polled with getBankTransferInvoice.
 export async function createFixpackBankTransferInvoice(
   auditId: string,
-  payer?: PayerContact,
+  payer: PayerContact,
 ): Promise<BankTransferInvoice> {
   const res = await request(
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/bank-transfer`,

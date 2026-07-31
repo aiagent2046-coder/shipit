@@ -66,22 +66,22 @@ export function FixpackPurchase({
         </h2>
         <p className="mt-2 max-w-2xl text-sm text-muted">
           A Fix Pack generates real fixes for the issues above and opens a pull
-          request against your repository automatically. Pay once by bank
-          transfer — the price is shown on the invoice below.
+          request against your repository automatically. Pay once by card —
+          the price is shown below.
         </p>
       </header>
 
       <InstallGate repoUrl={repoUrl}>
-        {/* Bank transfer is the only method on the storefront; the other
+        {/* Card payment is the only method on the storefront; the other
             providers still work for existing customers through the Telegram
             bot and their direct links, they are just not advertised. */}
         <div className="mx-auto mt-5 max-w-md">
           <BankTransferCheckout
             description={
               <>
-                Send a normal bank transfer quoting the reference code below.
-                Your Fix Pack starts once we&apos;ve seen the money — usually
-                1–3 business days.
+                Copy the card number and pay from your banking app. Your Fix
+                Pack starts once we&apos;ve seen the money — usually within a
+                business day.
               </>
             }
             createInvoice={(payer) =>

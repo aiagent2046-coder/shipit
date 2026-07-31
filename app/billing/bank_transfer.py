@@ -18,20 +18,36 @@ second key, and creates no second Fix Pack. Going through the other branch of
 those functions (the INSERT path Telegram Stars uses) would NOT be safe here,
 because a human can and will press a button twice.
 
-Matching is by REFERENCE CODE, not by amount. The payer types the code into
-the transfer's payment-reference field and the operator reads it back off the
-statement. Amount cannot be the key the way it is for USDT: the bank converts
-at its own rate on the day, so what lands is never exactly what was quoted.
-For the same reason this module deliberately does not try to record the
-amount that actually arrived -- the operator eyeballs sufficiency before
-confirming, and storing a number that is wrong in a knowable way is worse
-than storing the catalogue price.
+Matching is by PAYER IDENTITY, corroborated by a KOPECK SUFFIX on the amount.
+The payer pays a card number, and a card-to-card transfer has no
+payment-reference field the payer could type a code into, so the operator
+matches the sender's name against the name and email the payer gave on the
+checkout page. On top of that, every open invoice is quoted a unique amount --
+5.07 rather than 5.00 -- so two orders from the same person, or two payers with
+the same name, are still told apart on the statement.
+
+The suffix is a HINT, never a key, and the ordering matters:
+
+  - It survives only a same-currency transfer. If the payer's bank converts,
+    what lands is a converted figure and the kopecks are gone -- which is why
+    amount cannot be the primary key here the way it is for USDT.
+  - There are 99 slots. Under saturation the price is quoted bare and identity
+    is all that is left (see _reserve_unique_amount).
+
+This module deliberately does not try to record the amount that actually
+arrived -- the operator eyeballs sufficiency before confirming, and storing a
+number that is wrong in a knowable way is worse than storing what was quoted.
+
+The reference code survives as the ORDER ID, not as a bank-statement key: it
+is what /link presents to claim a paid invoice's key and what the payer quotes
+to support. It just no longer has to travel through the bank.
 
 Bank details are read from env and never hardcoded: they are a private
 individual's account and beneficiary name, not public infrastructure like a
-TRON address. They are also never exposed as NEXT_PUBLIC_* -- the frontend
-receives them in the invoice response body, so they exist only in a response
-to someone who actually started a purchase.
+TRON address. They are published, on the operator's explicit instruction, by
+GET /v1/billing/details so the site footer can show them -- that endpoint is
+the single source, and they are still never mirrored into a NEXT_PUBLIC_*
+build variable.
 """
 
 from __future__ import annotations
@@ -80,11 +96,16 @@ _REFERENCE_ATTEMPTS = 20
 # the payer which provider they used.
 REFERENCE_RE = re.compile(r"^DRY-[2-9A-HJ-NP-Z]{6}$")
 
-# Every field the payer needs to actually make the transfer. All five are
+# Every field the payer needs to actually make the transfer. All six are
 # required together: a payer given a SWIFT code but no account number cannot
 # send anything, so a half-configured deployment must refuse (503) rather than
 # render an unusable invoice.
+#
+# `card` is the one the checkout page actually shows. The other five are the
+# full requisites behind that card, shown in the site footer for payers whose
+# bank needs them.
 _BANK_ENV_FIELDS: tuple[tuple[str, str], ...] = (
+    ("card", "BANK_TRANSFER_CARD"),
     ("bank_name", "BANK_TRANSFER_BANK_NAME"),
     ("swift", "BANK_TRANSFER_SWIFT"),
     ("beneficiary", "BANK_TRANSFER_BENEFICIARY"),
@@ -94,7 +115,7 @@ _BANK_ENV_FIELDS: tuple[tuple[str, str], ...] = (
 
 
 def bank_details_from_env() -> dict[str, str] | None:
-    """The five payer-facing bank fields, or None if any is unset.
+    """The six payer-facing bank fields, or None if any is unset.
 
     All-or-nothing on purpose, and never defaulted: these are one private
     individual's real banking details, so there is no sensible fallback value
@@ -129,6 +150,76 @@ def fixpack_price_usd() -> str:
     return _price_from_env(
         "BANK_TRANSFER_FIXPACK_PRICE_USD", _DEFAULT_FIXPACK_PRICE_USD
     )
+
+
+# The kopeck nonce added to every quoted price, so two open invoices are never
+# quoted the same amount and the operator can tell one incoming card transfer
+# from another. Same idea as usdt_trc20._reserve_unique_amount, at two decimals
+# instead of six -- which is the whole difference that matters:
+#
+#  - 99 slots, not a million. Exhaustion is reachable (100 invoices open inside
+#    the 7-day TTL), so _reserve_unique_amount walks the free slots instead of
+#    re-rolling blind, and falls back to the bare price rather than duplicating
+#    an amount that is already in flight.
+#  - The nonce is 1..99, never 0: an invoice quoted at a round 5.00 carries no
+#    information, and this is the only provider where a human, not an exact
+#    integer comparison, does the matching.
+#
+# It raises the price by under a dollar, and always UPWARDS, so a nonce can
+# never undercharge -- the same direction usdt_trc20 adds its nonce in.
+_CENTS_NONCE_MIN = 1
+_CENTS_NONCE_MAX = 99
+
+
+def amount_to_cents(amount: float) -> int:
+    """A quoted amount as integer cents. round() not int(): 5.07 * 100 is
+    506.9999... in binary float and int() would truncate it to 506. Same
+    reasoning and same fix as usdt_trc20.amount_to_micros."""
+    return int(round(amount * 100))
+
+
+async def _reserve_unique_amount(payment_repo: Any, price: str) -> str:
+    """`price` plus a kopeck nonce no currently-open invoice is already quoted.
+
+    The nonce is what makes the amount a MATCHING HINT rather than noise: the
+    operator sees 5.07 on the statement and knows which of two open orders it
+    belongs to without waiting for the payer to confirm their name.
+
+    It is a hint and not a key, deliberately, and the caller must not treat it
+    as one:
+
+      - It only survives a same-currency transfer. If the payer's bank converts,
+        what lands is a converted figure and the kopecks are gone. Payer name
+        and email stay the primary handle for exactly this reason.
+      - With all 99 slots taken it returns the bare price. Two invoices then
+        share an amount, which name and email still disambiguate -- whereas
+        blocking a sale because a hundred invoices are open would be absurd.
+
+    Shared by the Pro and Fix Pack creators, both drawing from the same pending
+    set and comparing whole amounts, so a Pro and a Fix Pack invoice cannot
+    collide with each other either.
+    """
+    base_cents = amount_to_cents(float(price))
+    pending = await payment_repo.list_pending(PROVIDER)
+    taken = {
+        amount_to_cents(p["amount"])
+        for p in pending
+        if p.get("amount") is not None
+    }
+
+    free = [
+        base_cents + n
+        for n in range(_CENTS_NONCE_MIN, _CENTS_NONCE_MAX + 1)
+        if base_cents + n not in taken
+    ]
+    if not free:
+        logger.warning(
+            "every kopeck nonce for %s is in flight; quoting the bare price and "
+            "leaving the payer's name as the only handle on this payment",
+            price,
+        )
+        return price
+    return f"{secrets.choice(free) / 100:.2f}"
 
 
 def generate_reference() -> str:
@@ -192,9 +283,9 @@ def is_expired(row: dict[str, Any], *, now: datetime.datetime | None = None) -> 
 def _invoice_view(
     row: dict[str, Any], *, details: dict[str, str], amount: str
 ) -> dict[str, Any]:
-    """The payer-facing invoice. Bank details ride in the response body rather
-    than being published to the frontend build, so they reach only someone who
-    started a purchase."""
+    """The payer-facing invoice. `bank` carries the same details GET
+    /v1/billing/details publishes; the checkout page renders only `bank.card`
+    from it, because the card number is all a payer needs to pay."""
     return {
         "payment_id": row["id"],
         "reference": row["external_ref"],
@@ -217,11 +308,14 @@ async def create_invoice(
     PaymentRepository.mark_completed). Setting it here would be a value nobody
     reads.
 
-    `payer_name`/`payer_email` are whatever the payer chose to tell the operator
-    about themselves, both optional and neither checked for format: this
-    provider's money lands on a private individual's account and the operator
-    needs a name against the receipt for their own books. Nothing is ever sent
-    to the address, so there is no delivery to get wrong -- see migration 0026.
+    `payer_name`/`payer_email` are how the operator finds this payment when the
+    kopeck suffix on the amount does not survive the payer's bank converting it:
+    a card transfer has no reference field, so the sender's name on the statement
+    is the only handle left, and the email is the tie-breaker when two payers
+    share a name. The endpoint requires both (see main.PayerContact); they stay
+    Optional in this signature because rows written before card payments have
+    them blank and nothing here may assume otherwise. Nothing is ever sent to
+    the address -- see migration 0026.
 
     Returns None when the row could not be written -- no DATABASE_URL, or no
     free reference code -- so the endpoint can 503 instead of showing a payer
@@ -230,7 +324,7 @@ async def create_invoice(
     reference = await _reserve_reference(payment_repo)
     if reference is None:
         return None
-    amount = pro_price_usd()
+    amount = await _reserve_unique_amount(payment_repo, pro_price_usd())
     row = await payment_repo.create(
         account_id=None, provider=PROVIDER, external_ref=reference,
         amount=float(amount), currency=CURRENCY, status="pending",
@@ -249,12 +343,12 @@ async def create_fixpack_invoice(
     """Open a bank-transfer invoice for a Fix Pack scoped to one audit. Same
     reference-code disambiguation as create_invoice, at the Fix Pack price and
     tagged product='fixpack' + audit_id so confirm() knows to create a
-    fixpack_jobs row rather than grant a tier. Optional payer contact is
-    recorded the same way and for the same reason as in create_invoice."""
+    fixpack_jobs row rather than grant a tier. Payer contact is recorded the
+    same way and for the same reason as in create_invoice."""
     reference = await _reserve_reference(payment_repo)
     if reference is None:
         return None
-    amount = fixpack_price_usd()
+    amount = await _reserve_unique_amount(payment_repo, fixpack_price_usd())
     row = await payment_repo.create(
         account_id=None, provider=PROVIDER, external_ref=reference,
         amount=float(amount), currency=CURRENCY, status="pending",
@@ -372,12 +466,16 @@ def _notification_text(row: dict[str, Any], *, site_url: str | None = None) -> s
     lines = [
         f"Bank transfer reported — {what}",
         "",
+        # Amount first: the kopeck suffix is unique per open invoice, so on a
+        # same-currency transfer this line alone identifies the payment.
+        f"Expect exactly: {quoted} {row.get('currency') or CURRENCY}",
         f"Reference: {row.get('external_ref')}",
-        f"Quoted: {quoted} {row.get('currency') or CURRENCY}",
     ]
     # This message is the only place the payer contact from migration 0026 is
-    # ever read. Omit the line entirely when the payer left the field blank --
-    # a "Payer: " with nothing after it tells the operator less than no line.
+    # ever read, and it is the fallback the kopeck suffix above degrades to when
+    # the payer's bank converted the amount. Rows created before card payments
+    # may still have these blank, so the lines stay conditional -- a "Payer: "
+    # with nothing after it tells the operator less than no line.
     payer_name = (row.get("payer_name") or "").strip()
     payer_email = (row.get("payer_email") or "").strip()
     if payer_name:
@@ -390,9 +488,10 @@ def _notification_text(row: dict[str, Any], *, site_url: str | None = None) -> s
             lines.append(f"{site_url.rstrip('/')}/audit/{row['audit_id']}")
     lines += [
         "",
-        "Check the reference on your bank statement and confirm the amount "
-        "is sufficient (the bank converts at its own rate, so it will not "
-        "match the quote exactly). Only then press Confirm.",
+        "Find the incoming card transfer by the exact amount above — its "
+        "kopecks are unique to this order. If the payer's bank converted, the "
+        "kopecks are gone: match on the payer name instead and check the "
+        "amount is sufficient. Only then press Confirm.",
     ]
     return "\n".join(lines)
 
