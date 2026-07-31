@@ -117,6 +117,29 @@ jobs:
           ((checked > 0))
           echo "Validated $checked shell scripts"
 
+      # bash -n above is a syntax check and nothing more. It passed happily on
+      # a deploy script whose rollback reported success after failing, because
+      # that bug was semantic: a function invoked under `||` runs with errexit
+      # disabled for its whole body. shellcheck names exactly that (SC2310),
+      # which is why check-set-e-suppressed is enabled explicitly rather than
+      # relying on the default severity, where it does not fire.
+      #
+      # Scoped to that one optional check on purpose. Turning on --enable=all
+      # adds nine SC2312 findings that have nothing to do with this class of
+      # bug, and a gate that fails for unrelated reasons is a gate people
+      # start skipping.
+      - name: Lint shell scripts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+
+          git ls-files -z '*.sh' | xargs -0 shellcheck \
+            --severity=info \
+            --enable=check-set-e-suppressed
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
