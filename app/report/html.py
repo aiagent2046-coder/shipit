@@ -10,6 +10,7 @@ from __future__ import annotations
 from html import escape
 
 from app.report.plain_language import plain_fields, tier
+from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 _SEVERITY_COLOR = {
@@ -60,6 +61,29 @@ def _finding_row(f: dict) -> str:
     )
 
 
+def _is_non_production(f: dict) -> bool:
+    """Whether a finding is about test, example or documentation material.
+
+    Two sources because there are two producers. Secrets findings carry an
+    explicit `context` set by the damping rules; LLM findings carry none, so
+    they fall back to the path. Trusting `context` first matters: it is the
+    scanner's own decision, and re-deriving it from the path here would let
+    the two answers drift.
+    """
+    context = f.get("context")
+    if context:
+        return context in NON_PRODUCTION_CONTEXTS
+    return is_non_production_path(str(f.get("file", "")))
+
+
+def _findings_table(findings: list[dict]) -> str:
+    rows = "".join(_finding_row(f) for f in findings)
+    return (
+        '<table><thead><tr><th></th><th>Finding</th></tr></thead>'
+        f'<tbody>{rows}</tbody></table>'
+    )
+
+
 def render_report(result: dict, project_name: str = "your app") -> str:
     score = result["score"]
     total = float(score["total"])
@@ -72,14 +96,31 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     cats = "".join(
         _bar(name, val) for name, val in score["categories"].items()
     )
-    if findings:
-        rows = "".join(_finding_row(f) for f in findings)
-        body = (
-            '<table><thead><tr><th></th><th>Finding</th></tr></thead>'
-            f'<tbody>{rows}</tbody></table>'
-        )
+
+    # Split, don't hide. A secret in a test fixture and a secret in a running
+    # handler need different reactions -- one is "check the fixture is fake",
+    # the other is "revoke the key now" -- and one undifferentiated table asks
+    # the reader to tell them apart from the file path. Readers don't; they
+    # either treat every row as urgent or, after the first false alarm, none
+    # of them.
+    production = [f for f in findings if not _is_non_production(f)]
+    non_production = [f for f in findings if _is_non_production(f)]
+
+    if production:
+        body = _findings_table(production)
+    elif non_production:
+        body = ('<p class="clean">Nothing found in the code your app runs.</p>')
     else:
         body = '<p class="clean">No issues found by the current checks.</p>'
+
+    if non_production:
+        body += (
+            '<h2 class="sechead">In tests, examples and documentation</h2>'
+            '<p class="secnote">These files don\'t run in production. Usually '
+            'the credentials here are deliberate fakes — worth a glance to '
+            'confirm, not worth blocking a launch.</p>'
+            + _findings_table(non_production)
+        )
 
     counts = {}
     for f in findings:
@@ -122,6 +163,9 @@ def render_report(result: dict, project_name: str = "your app") -> str:
       color:#111113;text-transform:uppercase}}
  .loc{{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#8b8d98}}
  .clean{{color:#30a46c}}
+ .sechead{{font-size:15px;margin:32px 0 4px;padding-top:24px;
+          border-top:1px solid #26262a}}
+ .secnote{{color:#8b8d98;font-size:13px;margin:0}}
  footer{{margin-top:36px;color:#5a5c66;font-size:12px}}
 </style></head><body><div class="wrap">
 <header>
