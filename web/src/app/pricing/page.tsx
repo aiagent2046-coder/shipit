@@ -1,10 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { TELEGRAM_BOT_USERNAME } from "@/lib/api";
 import { useApiKey } from "@/components/providers";
-import { ProUsdtCheckout } from "@/components/UsdtCheckout";
-import { PayPalOrderCard } from "@/components/PayPalButton";
 import { ProBankTransferCheckout } from "@/components/BankTransferCheckout";
 
 interface Row {
@@ -54,7 +51,6 @@ const ROWS: Row[] = [
 export default function PricingPage() {
   const { account } = useApiKey();
   const isPro = account?.tier === "pro";
-  const telegramConfigured = TELEGRAM_BOT_USERNAME.length > 0;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
@@ -68,9 +64,9 @@ export default function PricingPage() {
         </h1>
         <p className="mt-2 max-w-2xl text-muted">
           The audit itself is free. Pro raises your daily audit limit — pay
-          once with Telegram Stars, USDT, or PayPal and unlock a Pro API key.
-          Pro does not include a Fix Pack: those are bought per-audit from an
-          audit&apos;s results page.
+          once by bank transfer and unlock a Pro API key. Pro does not include
+          a Fix Pack: those are bought per-audit from an audit&apos;s results
+          page.
         </p>
         {isPro && (
           <p className="mt-3 inline-block rounded-md border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm text-accent">
@@ -153,48 +149,10 @@ export default function PricingPage() {
         </ul>
       </section>
 
-      {/* Payment options */}
-      <section className="mt-10 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-        {/* Telegram Stars */}
-        <div className="rounded-xl border border-border bg-elevated p-5">
-          <h3 className="text-lg font-semibold">Pay with Telegram Stars</h3>
-          <p className="mt-1 text-sm text-muted">
-            Checkout runs inside the Telegram bot. Open it, then use the
-            /upgrade command to pay with Stars and receive your key.
-          </p>
-          {telegramConfigured ? (
-            <a
-              href={`https://t.me/${TELEGRAM_BOT_USERNAME}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90"
-            >
-              Open @{TELEGRAM_BOT_USERNAME} in Telegram ↗
-            </a>
-          ) : (
-            <div className="mt-4 rounded-md border border-high/40 bg-high/10 p-3 text-sm text-high">
-              The Telegram bot username isn&apos;t configured for this site.
-              Set <code className="font-mono">NEXT_PUBLIC_TELEGRAM_BOT_USERNAME</code>{" "}
-              in the frontend&apos;s environment to enable this button.
-            </div>
-          )}
-        </div>
-
-        {/* USDT / TRC20 */}
-        <ProUsdtCheckout />
-
-        {/* PayPal */}
-        <PayPalOrderCard
-          product="pro"
-          description={
-            <>
-              Pay once with PayPal (card or balance). Your Pro API key unlocks
-              automatically the moment the payment is captured.
-            </>
-          }
-        />
-
-        {/* Bank transfer */}
+      {/* Payment options. Bank transfer is the only method on the storefront;
+          the other providers still work for existing customers through the
+          Telegram bot and their direct links, they are just not advertised. */}
+      <section className="mx-auto mt-10 max-w-md">
         <ProBankTransferCheckout />
       </section>
 
