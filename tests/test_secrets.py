@@ -214,8 +214,11 @@ def test_jest_setup_placeholder_anthropic_key_is_damped():
              f"|| '{FIXTURE_ANTHROPIC}',\n").encode(),
     })
     f = next(f for f in scan_secrets(zf) if f.rule_id == "anthropic-api-key")
-    assert f.severity == "medium"        # capped down from critical
-    assert f.confidence < 0.4            # damped
+    # Two independent signals agree that this is a fixture -- a test path AND
+    # a value that self-labels as a placeholder -- so this damps further than
+    # the path alone does.
+    assert f.severity == "low"
+    assert f.confidence < 0.2
     assert "(test fixture/placeholder context)" in f.title
 
 
@@ -242,26 +245,71 @@ def test_non_damped_finding_has_null_context():
 def test_jest_setup_placeholder_jwt_is_damped():
     zf = make_zip({"jest.setup.ts": f"const t = '{FIXTURE_JWT}';\n".encode()})
     f = next(f for f in scan_secrets(zf) if f.rule_id == "jwt-in-code")
-    assert f.severity not in ("critical", "high")  # capped to medium
-    assert f.severity == "medium"
+    assert f.severity == "low"
     assert "(test fixture/placeholder context)" in f.title
 
 
-def test_real_secret_in_test_path_still_flagged():
-    # REGRESSION: a genuine, non-placeholder-looking secret sitting in a test
-    # file must NOT be silenced. Test paths aren't inherently safe; only the
-    # path+placeholder-value combination is treated as a fixture.
+def test_realistic_secret_in_test_path_is_damped_but_kept():
+    """POLICY REVERSAL, deliberate. This test previously asserted the opposite:
+    that a non-placeholder-looking value in a test file stays critical.
+
+    That policy was measured on this repository and failed. 23 of 26 findings
+    landed in tests/, 14 of them as "Fix before launch", and none of those 14
+    were in code the app runs. A realistic fake key is realistic precisely
+    because it doesn't say "fake" in it, so requiring the marker meant the
+    damping almost never fired.
+
+    The finding is NOT dropped -- a real key committed to a test file is still
+    committed -- it is capped at medium and reported under its own heading.
+    """
     zf = make_zip({"src/config.test.ts": f"const k = '{FAKE_AWS}';\n".encode()})
     findings = scan_secrets(zf)
     assert len(findings) == 1
+    assert findings[0].severity == "medium"
+    assert findings[0].confidence < 0.4
+    assert findings[0].context == "test_file"
+    assert "(test file)" in findings[0].title
+
+
+def test_same_secret_outside_a_test_path_stays_critical():
+    """The other half of the reversal: damping is bounded by the path. The
+    identical value in application code is untouched."""
+    zf = make_zip({"src/config.ts": f"const k = '{FAKE_AWS}';\n".encode()})
+    findings = scan_secrets(zf)
     assert findings[0].severity == "critical"
     assert findings[0].confidence >= 0.9
-    assert "(test fixture" not in findings[0].title
+    assert findings[0].context is None
+
+
+def test_commented_out_secret_is_damped_but_kept():
+    """A match on a comment line is documentation living in a source file: a
+    commented-out example, or a rule declaring the shape it searches for.
+    This scanner's own pattern comments were reported as leaked credentials.
+
+    Capped rather than dropped: a commented-out REAL key is still committed.
+    """
+    zf = make_zip({"app/scan/rules.py": f"# example: {FAKE_AWS}\n".encode()})
+    findings = scan_secrets(zf)
+    assert len(findings) == 1
+    assert findings[0].severity == "medium"
+    assert findings[0].context == "comment"
+    assert "(commented-out line)" in findings[0].title
+
+
+def test_secret_on_a_code_line_with_a_trailing_comment_is_not_damped():
+    """The comment check is a prefix check, and the boundary is deliberate:
+    deciding whether an offset sits inside a comment needs a parser per
+    language, and a wrong answer there silently hides a real secret."""
+    zf = make_zip({"src/config.py": f"KEY = '{FAKE_AWS}'  # temporary\n".encode()})
+    findings = scan_secrets(zf)
+    assert findings[0].severity == "critical"
+    assert findings[0].context is None
 
 
 def test_placeholder_value_outside_test_path_still_flagged():
-    # The AND logic in action: a placeholder-labelled value in a real
-    # production file is NOT damped (path signal absent), so it stays critical.
+    # Damping is anchored on the path, never on the value alone. Anyone can
+    # write "placeholder" next to a live key; being in a test file is the
+    # signal that carries weight.
     zf = make_zip({"src/config.ts": f"const k = '{FIXTURE_ANTHROPIC}';\n".encode()})
     findings = scan_secrets(zf)
     f = next(f for f in findings if f.rule_id == "anthropic-api-key")

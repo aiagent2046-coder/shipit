@@ -119,9 +119,12 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
                 return r
         return None
 
-    async def list_pending(self, provider):
+    async def list_pending(self, provider, *, created_after=None):
         return [r for r in self.rows.values()
-                if r["provider"] == provider and r["status"] == "pending"]
+                if r["provider"] == provider and r["status"] == "pending"
+                and (created_after is None
+                     or r.get("created_at") is None
+                     or r["created_at"] >= created_after)]
 
 
 def _telegram_transport(calls: list):

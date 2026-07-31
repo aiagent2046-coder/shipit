@@ -109,11 +109,14 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
         return None
 
     # Read by _reserve_unique_amount to find which kopeck suffixes are already
-    # in flight. Same shape as the USDT fake's: open invoices for one provider.
-    async def list_pending(self, provider):
+    # in flight. `created_after` is honoured for real here, not accepted and
+    # ignored: the window is the whole fix for the pool saturating, so a fake
+    # that ignores it would let that regression back in silently.
+    async def list_pending(self, provider, *, created_after=None):
         return [
             r for r in self.rows.values()
             if r["provider"] == provider and r["status"] == "pending"
+            and (created_after is None or r["created_at"] >= created_after)
         ]
 
     async def link_telegram_chat_id(self, payment_id, telegram_chat_id):
@@ -393,6 +396,67 @@ async def test_a_completed_invoice_frees_its_suffix(monkeypatch):
     # All 99 slots were available again, the freed one among them.
     assert len(taken) == 99
     assert first["amount"] in taken
+
+
+async def test_an_abandoned_invoice_stops_holding_its_suffix(monkeypatch):
+    """THE regression this window exists for.
+
+    Nothing moves an abandoned checkout out of 'pending': no cancel endpoint,
+    no sweeper, and deliberately no expiry status (that would make a late
+    transfer unconfirmable). So before the window, 99 people who opened the
+    payment page and walked away switched the suffix off permanently -- every
+    later buyer quoted the same bare price, with nothing in any report saying
+    the operator's matching hint had stopped existing.
+    """
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    stale = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        seconds=bank_transfer.INVOICE_TTL_SECONDS + 60)
+    # 99 abandoned invoices, all older than the TTL window.
+    for cents in range(1, 100):
+        payments.rows[str(uuid.uuid4())] = {
+            "id": str(uuid.uuid4()), "provider": "bank_transfer",
+            "status": "pending", "amount": 5.0 + cents / 100,
+            "created_at": stale, "external_ref": f"DRY-OLD{cents:03d}",
+        }
+
+    invoice = await bank_transfer.create_invoice(
+        payments, details=dict(BANK_DETAILS))
+
+    # A real suffix, not the saturation fallback.
+    assert invoice["amount"] != "5.00"
+    assert 501 <= bank_transfer.amount_to_cents(float(invoice["amount"])) <= 599
+
+
+async def test_a_recent_invoice_still_holds_its_suffix(monkeypatch):
+    """The other half: the window must not be so eager that it hands out a
+    suffix another payer is currently looking at."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    first = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+    second = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+    assert first["amount"] != second["amount"]
+
+
+async def test_the_window_is_the_invoice_ttl(monkeypatch):
+    """The window reuses INVOICE_TTL_SECONDS rather than a constant of its own.
+    Two numbers here would drift, and the drift is silent in both directions:
+    too short hands out a suffix a payer is still looking at, too long brings
+    the saturation back."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    seen = {}
+
+    async def spy(provider, *, created_after=None):
+        seen["created_after"] = created_after
+        return []
+
+    payments.list_pending = spy
+    await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    age = (now - seen["created_after"]).total_seconds()
+    assert abs(age - bank_transfer.INVOICE_TTL_SECONDS) < 5
 
 
 async def test_saturation_falls_back_to_the_bare_price(monkeypatch):
@@ -1134,3 +1198,54 @@ async def test_a_pro_confirmation_never_carries_the_warning(monkeypatch):
         fixpack_repo=fixpacks, payment_id=invoice["payment_id"])
     assert result["joined_existing_job"] is False
     assert "WARNING" not in telegram_stars._confirmed_text(result)
+def test_invoice_creation_is_rate_limited(monkeypatch):
+    """Opening an invoice is unauthenticated by necessity -- a buyer has no key
+    until they have paid -- and each one takes a kopeck suffix for the length
+    of the TTL window. Unbounded, that is a way for anyone to fill the pool and
+    switch the operator's matching hint off for everybody."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    monkeypatch.setattr(main_mod, "BANK_TRANSFER_INVOICE_LIMIT", 2)
+    limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    _override({get_payment_repo: payments})
+    try:
+        codes = [
+            client.post("/v1/billing/bank-transfer/pro", json=PAYER).status_code
+            for _ in range(3)
+        ]
+        assert codes == [201, 201, 429]
+        last = client.post("/v1/billing/bank-transfer/pro", json=PAYER)
+        assert last.json()["detail"]["reason"] == "rate_limited"
+        assert int(last.headers["Retry-After"]) > 0
+        # Refused before anything was written: a 429 must not consume a suffix.
+        assert len(payments.rows) == 2
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+        _clear()
+
+
+def test_pro_and_fixpack_share_one_invoice_budget(monkeypatch):
+    """One limiter key across both creators, because they draw suffixes from
+    one pool. Separate budgets would let the same client take twice as much
+    of it."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    audits = FakeAuditRepo()
+    audit = audits.add()
+    monkeypatch.setattr(main_mod, "BANK_TRANSFER_INVOICE_LIMIT", 2)
+    limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    _override({get_payment_repo: payments, get_audit_repo: audits})
+    try:
+        assert client.post(
+            "/v1/billing/bank-transfer/pro", json=PAYER).status_code == 201
+        assert client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer",
+            json=PAYER).status_code == 201
+        # Budget spent across the two routes, not per route.
+        assert client.post(
+            "/v1/billing/bank-transfer/pro", json=PAYER).status_code == 429
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+        _clear()

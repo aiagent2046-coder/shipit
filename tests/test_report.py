@@ -139,3 +139,71 @@ def test_collapsed_occurrence_note_surfaces_in_html():
     html = render_report(result(collapsed))
     assert "found in 6 places" in html   # title-derived count (tech line)
     assert "6 files" in html             # occurrence note surfaced in the risk text
+
+
+# --- production / non-production split ---
+#
+# The report used to be one flat table, which asked the reader to tell a
+# secret in a running handler from a secret in a test fixture by squinting at
+# the file path. Readers don't: they either treat every row as urgent or, after
+# the first false alarm, none of them. Findings are still all present -- the
+# split is about ordering attention, not about hiding.
+
+_PROD = {
+    "severity": "critical", "confidence": 0.95,
+    "title": "AWS Access Key ID", "file": "src/config.ts", "line": 3,
+    "masked": "AKIA****(20 chars)",
+}
+_TEST_FILE = {
+    "severity": "medium", "confidence": 0.33,
+    "title": "AWS Access Key ID (test file)", "file": "tests/test_secrets.py",
+    "line": 12, "masked": "AKIA****(20 chars)", "context": "test_file",
+}
+
+
+def test_test_findings_go_under_their_own_heading():
+    html = render_report(result([_PROD, _TEST_FILE]))
+    assert "In tests, examples and documentation" in html
+    # Both are present; the production one comes first.
+    assert html.index("src/config.ts") < html.index("tests/test_secrets.py")
+    assert html.index("In tests, examples and documentation") < html.index(
+        "tests/test_secrets.py")
+
+
+def test_no_heading_when_everything_is_production_code():
+    html = render_report(result([_PROD]))
+    assert "In tests, examples and documentation" not in html
+
+
+def test_clean_production_code_is_said_out_loud():
+    """The case this whole split exists for: nothing wrong with the running
+    app, findings only in fixtures. Silence there reads as "we found problems"
+    when the truth is the opposite."""
+    html = render_report(result([_TEST_FILE]))
+    assert "Nothing found in the code your app runs." in html
+    assert "In tests, examples and documentation" in html
+    assert "tests/test_secrets.py" in html
+
+
+def test_llm_findings_without_context_are_split_by_path():
+    """LLM findings carry no `context` field, so the split falls back to the
+    path. Without this, an LLM finding about a fixture lands in the production
+    section next to real ones."""
+    html = render_report(result([{
+        "severity": "high", "confidence": 0.7,
+        "title": "Webhook mutates database without authentication",
+        "file": "tests/fixtures/unauthenticated_webhook.ts", "line": 11,
+    }]))
+    assert "Nothing found in the code your app runs." in html
+    assert "In tests, examples and documentation" in html
+
+
+def test_migration_findings_stay_in_the_production_section():
+    """A migration is applied state. `examples/migrations/` must not slip into
+    the non-production section on the strength of its first path segment."""
+    html = render_report(result([{
+        "severity": "critical", "confidence": 0.95,
+        "title": "Hardcoded secret in SQL/PLpgSQL assignment (committed database migration)",
+        "file": "examples/migrations/0007_seed.sql", "line": 4,
+    }]))
+    assert "In tests, examples and documentation" not in html
