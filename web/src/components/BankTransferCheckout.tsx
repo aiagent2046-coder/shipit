@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BankTransferInvoice, BankTransferStatus } from "@/lib/types";
 import type { PayerContact } from "@/lib/api";
@@ -39,9 +40,9 @@ const POLL_MS = 20_000;
  *    transfer has no payment-reference field, so quoting a code through the
  *    bank is impossible and the operator matches by the payer's name and
  *    email instead — which is why both inputs below are required, not
- *    optional. The full requisites behind the card live in the site footer for
- *    the rare payer whose bank asks for SWIFT/IBAN; this screen stays a card
- *    number and a Copy button.
+ *    optional. The full requisites behind the card live on /payment-details
+ *    for the rare payer whose bank asks for SWIFT/IBAN; this screen stays a
+ *    card number and a Copy button.
  *
  * "I've paid" is a notification, not a claim on anything: it grants no access
  * and moves no state, so pressing it without paying accomplishes nothing.
@@ -283,7 +284,14 @@ export function BankTransferCheckout({
 
           <p className="text-xs text-muted">
             Bank needs full requisites (SWIFT / IBAN / beneficiary)? They&apos;re
-            at the bottom of this page.
+            on the{" "}
+            <Link
+              href="/payment-details"
+              className="text-accent underline underline-offset-2 hover:opacity-80"
+            >
+              payment details
+            </Link>{" "}
+            page.
           </p>
 
           {reported ? (
