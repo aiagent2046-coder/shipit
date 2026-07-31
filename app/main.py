@@ -29,6 +29,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from app.alerts import notify_operator
@@ -1495,6 +1496,23 @@ def _bank_transfer_details() -> dict[str, str]:
     return details
 
 
+class PayerContact(BaseModel):
+    """Who says they are sending the transfer, for the operator's own books.
+
+    Both fields optional and the whole body optional (see the endpoints below):
+    a payer who fills in neither still gets a perfectly good invoice, and every
+    caller that predates this model keeps working with no body at all.
+
+    max_length is abuse protection, not validation -- it stops someone posting a
+    megabyte into a text column. There is deliberately no email format check at
+    any layer: nothing is ever sent to this address, so a work address with an
+    unusual TLD must not cost a sale. See migration 0026.
+    """
+
+    payer_name: str | None = Field(default=None, max_length=200)
+    payer_email: str | None = Field(default=None, max_length=200)
+
+
 def _bank_transfer_not_persisted_error() -> HTTPException:
     return HTTPException(
         status_code=503,
@@ -1507,6 +1525,7 @@ def _bank_transfer_not_persisted_error() -> HTTPException:
 
 @app.post("/v1/billing/bank-transfer/pro", status_code=201)
 async def create_bank_transfer_invoice(
+    payer: PayerContact | None = None,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
 ) -> dict:
     """Open a bank-transfer invoice for the Pro tier.
@@ -1522,10 +1541,18 @@ async def create_bank_transfer_invoice(
     response body rather than published to the frontend build — they reach
     only someone who actually started a purchase.
 
+    The request body is optional and so is every field in it (see
+    PayerContact): a payer who tells us nothing about themselves still gets an
+    invoice.
+
     503 if bank transfer isn't configured, or if the pending row can't be
     persisted (no DATABASE_URL / no free reference code)."""
     details = _bank_transfer_details()
-    invoice = await bank_transfer.create_invoice(payment_repo, details=details)
+    invoice = await bank_transfer.create_invoice(
+        payment_repo, details=details,
+        payer_name=payer.payer_name if payer else None,
+        payer_email=payer.payer_email if payer else None,
+    )
     if invoice is None:
         raise _bank_transfer_not_persisted_error()
     return invoice
@@ -1534,6 +1561,7 @@ async def create_bank_transfer_invoice(
 @app.post("/v1/audits/{audit_id}/fixpack/bank-transfer", status_code=201)
 async def create_fixpack_bank_transfer_invoice(
     audit_id: str,
+    payer: PayerContact | None = None,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
 ) -> dict:
@@ -1564,7 +1592,9 @@ async def create_fixpack_bank_transfer_invoice(
         )
     details = _bank_transfer_details()
     invoice = await bank_transfer.create_fixpack_invoice(
-        payment_repo, details=details, audit_id=audit_id
+        payment_repo, details=details, audit_id=audit_id,
+        payer_name=payer.payer_name if payer else None,
+        payer_email=payer.payer_email if payer else None,
     )
     if invoice is None:
         raise _bank_transfer_not_persisted_error()

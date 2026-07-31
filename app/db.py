@@ -1316,7 +1316,12 @@ class PaymentRepository:
         status: str, tier_granted: str | None,
         product: str = "pro_tier", audit_id: str | None = None,
         paypal_order_id: str | None = None,
+        payer_name: str | None = None, payer_email: str | None = None,
     ) -> dict[str, Any] | None:
+        """payer_name/payer_email (migration 0026) are what the payer said
+        about themselves before paying, kept for the operator's books. Only
+        bank_transfer supplies them; every other provider carries an identity
+        of its own and leaves both None."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1328,15 +1333,17 @@ class PaymentRepository:
                 """
                 insert into payments
                     (account_id, provider, external_ref, amount, currency,
-                     status, tier_granted, product, audit_id, paypal_order_id)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     status, tier_granted, product, audit_id, paypal_order_id,
+                     payer_name, payer_email)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id, account_id, provider, external_ref, amount,
                           currency, status, tier_granted, telegram_chat_id,
-                          product, audit_id, paypal_order_id, created_at
+                          product, audit_id, paypal_order_id, payer_name,
+                          payer_email, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
                  status, tier_granted, product, parsed_audit_id,
-                 paypal_order_id),
+                 paypal_order_id, payer_name, payer_email),
             )
             row = await cur.fetchone()
         return _row_to_payment(row)
@@ -1355,7 +1362,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -1379,7 +1387,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
@@ -1406,7 +1415,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments where paypal_order_id = %s
                 """,
                 (paypal_order_id,),
@@ -1429,7 +1439,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments
                 where provider = %s and status = 'pending'
                 order by created_at desc
@@ -1533,7 +1544,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments
                 where telegram_chat_id = %s and status = 'completed'
                 order by created_at desc
@@ -1573,7 +1585,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments where id = %s
                 """,
                 (pid,),

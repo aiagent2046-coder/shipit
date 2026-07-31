@@ -206,7 +206,8 @@ def _invoice_view(
 
 
 async def create_invoice(
-    payment_repo: Any, *, details: dict[str, str]
+    payment_repo: Any, *, details: dict[str, str],
+    payer_name: str | None = None, payer_email: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for the Pro tier.
 
@@ -215,6 +216,12 @@ async def create_invoice(
     confirmation time, which overwrites this column anyway (see
     PaymentRepository.mark_completed). Setting it here would be a value nobody
     reads.
+
+    `payer_name`/`payer_email` are whatever the payer chose to tell the operator
+    about themselves, both optional and neither checked for format: this
+    provider's money lands on a private individual's account and the operator
+    needs a name against the receipt for their own books. Nothing is ever sent
+    to the address, so there is no delivery to get wrong -- see migration 0026.
 
     Returns None when the row could not be written -- no DATABASE_URL, or no
     free reference code -- so the endpoint can 503 instead of showing a payer
@@ -228,6 +235,7 @@ async def create_invoice(
         account_id=None, provider=PROVIDER, external_ref=reference,
         amount=float(amount), currency=CURRENCY, status="pending",
         tier_granted="pro", product=PRODUCT_PRO,
+        payer_name=payer_name, payer_email=payer_email,
     )
     if row is None:
         return None
@@ -235,12 +243,14 @@ async def create_invoice(
 
 
 async def create_fixpack_invoice(
-    payment_repo: Any, *, details: dict[str, str], audit_id: str
+    payment_repo: Any, *, details: dict[str, str], audit_id: str,
+    payer_name: str | None = None, payer_email: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for a Fix Pack scoped to one audit. Same
     reference-code disambiguation as create_invoice, at the Fix Pack price and
     tagged product='fixpack' + audit_id so confirm() knows to create a
-    fixpack_jobs row rather than grant a tier."""
+    fixpack_jobs row rather than grant a tier. Optional payer contact is
+    recorded the same way and for the same reason as in create_invoice."""
     reference = await _reserve_reference(payment_repo)
     if reference is None:
         return None
@@ -249,6 +259,7 @@ async def create_fixpack_invoice(
         account_id=None, provider=PROVIDER, external_ref=reference,
         amount=float(amount), currency=CURRENCY, status="pending",
         tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
+        payer_name=payer_name, payer_email=payer_email,
     )
     if row is None:
         return None
@@ -364,6 +375,15 @@ def _notification_text(row: dict[str, Any], *, site_url: str | None = None) -> s
         f"Reference: {row.get('external_ref')}",
         f"Quoted: {quoted} {row.get('currency') or CURRENCY}",
     ]
+    # This message is the only place the payer contact from migration 0026 is
+    # ever read. Omit the line entirely when the payer left the field blank --
+    # a "Payer: " with nothing after it tells the operator less than no line.
+    payer_name = (row.get("payer_name") or "").strip()
+    payer_email = (row.get("payer_email") or "").strip()
+    if payer_name:
+        lines.append(f"Payer: {payer_name}")
+    if payer_email:
+        lines.append(f"Email: {payer_email}")
     if row.get("audit_id"):
         lines.append(f"Audit: {row['audit_id']}")
         if site_url:

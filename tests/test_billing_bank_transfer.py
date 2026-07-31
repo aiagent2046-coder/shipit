@@ -76,12 +76,14 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
 
     async def create(self, *, account_id, provider, external_ref, amount,
                      currency, status, tier_granted, product="pro_tier",
-                     audit_id=None, created_at=None):
+                     audit_id=None, created_at=None,
+                     payer_name=None, payer_email=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
             "audit_id": audit_id,
+            "payer_name": payer_name, "payer_email": payer_email,
             "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows[row["id"]] = row
@@ -722,3 +724,174 @@ async def test_link_unknown_reference_says_so(monkeypatch):
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
     text = await _link("/link DRY-ZZZZZZ", accounts, payments, calls)
     assert "reference code wasn't found" in text
+
+
+# --- 8. optional payer contact (migration 0026) ---
+#
+# Obviously-fake payer details: these stand in for a member of the public, not
+# for anyone real.
+PAYER_NAME = "Test Payer"
+PAYER_EMAIL = "test.payer@example.invalid"
+
+
+def test_pro_invoice_records_payer_contact(monkeypatch):
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    _override({get_payment_repo: payments})
+    try:
+        body = client.post(
+            "/v1/billing/bank-transfer/pro",
+            json={"payer_name": PAYER_NAME, "payer_email": PAYER_EMAIL},
+        ).json()
+    finally:
+        _clear()
+
+    row = payments.rows[body["payment_id"]]
+    assert row["payer_name"] == PAYER_NAME
+    assert row["payer_email"] == PAYER_EMAIL
+    # Contact is for the operator's books only -- it must not leak back into
+    # the payer-facing invoice, which is rendered on a shared checkout card.
+    assert "payer_name" not in body
+    assert "payer_email" not in body
+
+
+def test_pro_invoice_without_a_body_still_works(monkeypatch):
+    """The body is optional in full, not just field by field: this is exactly
+    the request every caller made before payer contact existed."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    _override({get_payment_repo: payments})
+    try:
+        r = client.post("/v1/billing/bank-transfer/pro")
+    finally:
+        _clear()
+
+    assert r.status_code == 201
+    row = payments.rows[r.json()["payment_id"]]
+    assert row["payer_name"] is None
+    assert row["payer_email"] is None
+
+
+def test_pro_invoice_accepts_one_field_without_the_other(monkeypatch):
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    _override({get_payment_repo: payments})
+    try:
+        r = client.post("/v1/billing/bank-transfer/pro",
+                        json={"payer_name": PAYER_NAME})
+    finally:
+        _clear()
+
+    assert r.status_code == 201
+    row = payments.rows[r.json()["payment_id"]]
+    assert row["payer_name"] == PAYER_NAME
+    assert row["payer_email"] is None
+
+
+def test_pro_invoice_does_not_validate_the_email_format(monkeypatch):
+    """Deliberate: nothing is ever sent to this address, so it is a note to
+    the operator, not a delivery channel. Rejecting an unusual address here
+    would cost a sale to enforce a rule nothing depends on."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    _override({get_payment_repo: payments})
+    try:
+        r = client.post("/v1/billing/bank-transfer/pro",
+                        json={"payer_email": "not really an address"})
+    finally:
+        _clear()
+
+    assert r.status_code == 201
+    assert payments.rows[r.json()["payment_id"]]["payer_email"] == (
+        "not really an address"
+    )
+
+
+def test_payer_contact_is_length_capped(monkeypatch):
+    """The one thing that IS rejected: a field long enough to be abuse rather
+    than a name. 422 from the model, and no payment row written."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    _override({get_payment_repo: payments})
+    try:
+        r = client.post("/v1/billing/bank-transfer/pro",
+                        json={"payer_name": "x" * 201})
+    finally:
+        _clear()
+
+    assert r.status_code == 422
+    assert payments.rows == {}
+
+
+def test_fixpack_invoice_records_payer_contact(monkeypatch):
+    _configure_bank(monkeypatch)
+    payments, audits = FakePaymentRepo(), FakeAuditRepo()
+    audit = audits.add()
+    _override({get_payment_repo: payments, get_audit_repo: audits})
+    try:
+        body = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer",
+            json={"payer_name": PAYER_NAME, "payer_email": PAYER_EMAIL},
+        ).json()
+    finally:
+        _clear()
+
+    row = payments.rows[body["payment_id"]]
+    assert row["payer_name"] == PAYER_NAME
+    assert row["payer_email"] == PAYER_EMAIL
+    assert row["product"] == bank_transfer.PRODUCT_FIXPACK
+
+
+async def test_notification_carries_the_payer_contact(monkeypatch):
+    """The operator's Telegram message is the only consumer of these fields."""
+    _configure_bank(monkeypatch)
+    _configure_alerts(monkeypatch)
+    payments, calls = FakePaymentRepo(), []
+    invoice = await bank_transfer.create_invoice(
+        payments, details=dict(BANK_DETAILS),
+        payer_name=PAYER_NAME, payer_email=PAYER_EMAIL,
+    )
+
+    await bank_transfer.mark_awaiting_confirmation(
+        payments, invoice["reference"], transport=_telegram_transport(calls),
+    )
+
+    text = calls[0][1]["text"]
+    assert f"Payer: {PAYER_NAME}" in text
+    assert f"Email: {PAYER_EMAIL}" in text
+
+
+async def test_notification_omits_the_lines_when_no_contact_was_given(monkeypatch):
+    """No empty "Payer:" line -- a label with nothing after it tells the
+    operator less than no line at all."""
+    _configure_bank(monkeypatch)
+    _configure_alerts(monkeypatch)
+    payments, calls = FakePaymentRepo(), []
+    invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+
+    await bank_transfer.mark_awaiting_confirmation(
+        payments, invoice["reference"], transport=_telegram_transport(calls),
+    )
+
+    text = calls[0][1]["text"]
+    assert "Payer:" not in text
+    assert "Email:" not in text
+    assert invoice["reference"] in text
+
+
+async def test_blank_payer_contact_is_treated_as_absent(monkeypatch):
+    """A payer who tabs through the inputs leaves whitespace, not a name."""
+    _configure_bank(monkeypatch)
+    _configure_alerts(monkeypatch)
+    payments, calls = FakePaymentRepo(), []
+    invoice = await bank_transfer.create_invoice(
+        payments, details=dict(BANK_DETAILS), payer_name="   ", payer_email="",
+    )
+
+    await bank_transfer.mark_awaiting_confirmation(
+        payments, invoice["reference"], transport=_telegram_transport(calls),
+    )
+
+    text = calls[0][1]["text"]
+    assert "Payer:" not in text
+    assert "Email:" not in text
