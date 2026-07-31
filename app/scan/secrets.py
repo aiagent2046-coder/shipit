@@ -51,14 +51,26 @@ _DOC_SEVERITY_CAP = {"critical": "medium", "high": "medium"}
 _MIGRATION_SEGMENTS = frozenset(("migrations", "migration"))
 _MIGRATION_MIN_CONFIDENCE = 0.9
 
-# Test-fixture context: a credential-shaped string in a test-setup file
-# that *also* self-labels as a placeholder (seen for real: a jest.setup.ts
-# with `ANTHROPIC_API_KEY: ... || 'sk-ant-api03-test-placeholder-not-real-key'`
-# and a `...placeholder_sig_for_unit_tests` JWT). Damped exactly like doc
-# context — capped, not dropped — because a test file is NOT inherently
-# safe: a real leaked key can live there too. So unlike doc context (path
-# alone), this requires BOTH a test path AND the value itself carrying a
-# placeholder marker, so a genuine secret in a test file stays flagged.
+# Test context, in two strengths.
+#
+# This used to require BOTH a test path AND a placeholder marker in the value,
+# which made the whole rule fire almost never. Measured on this repository:
+# 23 of 26 findings were in tests/, 14 of them rendered as "Fix before launch",
+# and exactly two were damped -- the two whose values literally contain the
+# word "placeholder". A realistic fake key is realistic precisely because it
+# does not say "fake" in it, so the marker requirement selected for the one
+# jest.setup.ts shape the rule was written from and missed every other fixture.
+#
+# A wall of red on test files is not a stricter scanner, it is a scanner the
+# reader stops believing -- and the credibility it burns is spent on the
+# findings that DO matter. So the path alone now damps, exactly like doc
+# context: capped at medium, never dropped, because a real leaked key can and
+# does live in a test file.
+#
+# The marker is still worth something: path AND marker is two independent
+# signals pointing the same way, so that combination damps further, to low.
+# Neither strength drops the finding -- a reader who wants to check their
+# fixtures still finds them in the report.
 _TEST_PATH_SEGMENTS = frozenset(("__tests__", "__mocks__", "test", "tests"))
 _TEST_SETUP_FILENAMES = frozenset(("jest.setup.ts", "jest.setup.js"))
 _TEST_FILE_SUFFIXES = (".test.ts", ".test.js", ".spec.ts", ".spec.js")
@@ -71,6 +83,21 @@ _PLACEHOLDER_MARKERS = (
     "test-only",
     "test_only",
 )
+_TEST_PATH_CONFIDENCE_FACTOR = 0.35        # path alone: same as doc context
+_TEST_PLACEHOLDER_CONFIDENCE_FACTOR = 0.1  # path + self-labelled placeholder
+_TEST_PLACEHOLDER_SEVERITY = "low"
+
+# A match on a comment line is documentation that happens to live in a source
+# file: a commented-out example, or a rule declaration describing the shape of
+# the thing being searched for. This scanner's own pattern comments were
+# reported as leaked Anthropic and SQL credentials -- it found a leak in its
+# own description of how it finds leaks.
+#
+# Damped like doc context rather than dropped, because a commented-out REAL
+# key is still committed and still leaked. Deliberately not applied to
+# migrations: that escalation was calibrated on real exports and a comment
+# marker is too weak a reason to weaken it.
+_COMMENT_PREFIXES = ("#", "//", "*", "--", "<!--", "/*")
 
 
 def _is_migration_context(name: str) -> bool:
@@ -90,16 +117,40 @@ def _value_has_placeholder_marker(value: str) -> bool:
     return any(marker in low for marker in _PLACEHOLDER_MARKERS)
 
 
-def _is_test_fixture_context(name: str, value: str) -> bool:
-    # AND, not OR: the path signal narrows to test files, the value signal
-    # confirms the match is a deliberate placeholder rather than a real leak.
-    return _is_test_fixture_path(name) and _value_has_placeholder_marker(value)
+def _is_comment_line(line_text: str) -> bool:
+    """True when the match sits on a line that is entirely a comment.
+
+    Prefix check only, and deliberately so: correctly deciding whether an
+    offset is inside a comment needs a parser per language, and a wrong answer
+    here silently hides a real secret. A line that STARTS as a comment is the
+    case this is for -- code with a trailing `// key = "..."` is not damped.
+    """
+    return line_text.lstrip().startswith(_COMMENT_PREFIXES)
 
 
 def _is_doc_context(name: str) -> bool:
     if name.lower().endswith(_DOC_SUFFIXES):
         return True
     return any(seg.lower() in _DOC_SEGMENTS for seg in name.split("/")[:-1])
+
+
+# Contexts that mean "this file is not what the app runs in production".
+# Kept next to the predicates that produce them so the two cannot drift.
+NON_PRODUCTION_CONTEXTS = frozenset(("test_fixture", "test_file", "comment",
+                                     "doc_example"))
+
+
+def is_non_production_path(name: str) -> bool:
+    """True for test, example and documentation files.
+
+    Public because the report groups findings by it, and findings that did not
+    come from this scanner (the LLM pass) carry no `context` field to group on
+    — only a path. Migration paths are excluded: a migration is applied state,
+    which is as production as it gets.
+    """
+    if _is_migration_context(name):
+        return False
+    return _is_test_fixture_path(name) or _is_doc_context(name)
 
 
 @dataclass(frozen=True)
@@ -177,9 +228,11 @@ class SecretFinding:
     line: int
     masked: str  # e.g. "AKIA****(20 chars)" — value itself is never stored
     # Machine-readable damping context, mirroring the title suffix so
-    # downstream code (e.g. the Fix Pack eligibility filter) can branch
-    # on it without string-matching the title. "test_fixture" when the
-    # test-fixture/placeholder path fired; None otherwise.
+    # downstream code (the report's section split, the Fix Pack eligibility
+    # filter) can branch on it without string-matching the title. One of
+    # "test_fixture", "test_file", "comment", "doc_example", or None when the
+    # finding is undamped production code. Escalated migration findings stay
+    # None: they are production context, more so than anything else here.
     context: str | None = None
 
 
@@ -224,7 +277,7 @@ def _jwt_severity(token: str) -> tuple[str, float, str]:
 
 
 def _classify_match(name: str, lineno: int, rule: SecretRule,
-                    matched: str) -> SecretFinding:
+                    matched: str, line_text: str = "") -> SecretFinding:
     """Turn one rule hit into a SecretFinding, applying the same
     context-damping and effective-rule-id logic scan_secrets has always
     used. Extracted so iter_secret_matches and scan_secrets share one
@@ -239,19 +292,36 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     # report can collapse and translate it correctly.
     is_anon = title.startswith("Supabase anon key")
     effective_rule_id = "supabase-anon-key" if is_anon else rule.id
+    # Order matters. Migration escalation wins outright -- it is the one
+    # context calibrated on confirmed real leaks. Everything below it damps,
+    # strongest signal first: a self-labelled placeholder on a test path is
+    # two signals, a test path is one, a comment or doc path is one.
     context: str | None = None
     if _is_migration_context(name) and not is_anon:
         confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
         title = f"{title} (committed database migration)"
-    elif _is_doc_context(name) and not is_anon:
+    elif is_anon:
+        pass
+    elif _is_test_fixture_path(name) and _value_has_placeholder_marker(matched):
+        severity = _TEST_PLACEHOLDER_SEVERITY
+        confidence = round(confidence * _TEST_PLACEHOLDER_CONFIDENCE_FACTOR, 2)
+        title = f"{title} (test fixture/placeholder context)"
+        context = "test_fixture"
+    elif _is_test_fixture_path(name):
+        severity = _DOC_SEVERITY_CAP.get(severity, severity)
+        confidence = round(confidence * _TEST_PATH_CONFIDENCE_FACTOR, 2)
+        title = f"{title} (test file)"
+        context = "test_file"
+    elif _is_comment_line(line_text):
+        severity = _DOC_SEVERITY_CAP.get(severity, severity)
+        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
+        title = f"{title} (commented-out line)"
+        context = "comment"
+    elif _is_doc_context(name):
         severity = _DOC_SEVERITY_CAP.get(severity, severity)
         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
         title = f"{title} (documentation/example context)"
-    elif _is_test_fixture_context(name, matched) and not is_anon:
-        severity = _DOC_SEVERITY_CAP.get(severity, severity)
-        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
-        title = f"{title} (test fixture/placeholder context)"
-        context = "test_fixture"
+        context = "doc_example"
     return SecretFinding(
         rule_id=effective_rule_id,
         title=title,
@@ -283,7 +353,10 @@ def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]
                     m = rule.pattern.search(line)
                     if not m:
                         continue
-                    yield _classify_match(name, lineno, rule, m.group(0)), m.group(0)
+                    yield (
+                        _classify_match(name, lineno, rule, m.group(0), line),
+                        m.group(0),
+                    )
 
 
 def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
