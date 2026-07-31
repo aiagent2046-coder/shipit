@@ -167,11 +167,13 @@ export interface FixpackUsdtInvoice extends UsdtInvoice {
   audit_id: string;
 }
 
-// The payer-facing bank fields. Returned in the invoice response body rather
-// than published as NEXT_PUBLIC_* — they are a private individual's real
-// banking details, so they should exist only in a response to someone who
-// actually started a purchase.
+// The payer-facing bank fields. Served by GET /v1/billing/details and echoed
+// in the invoice response, never published as NEXT_PUBLIC_* — the backend env
+// stays the single source, so rotating the card needs no frontend rebuild.
 export interface BankDetails {
+  // The only field the checkout page shows: the payer copies this and pays.
+  // The rest are the full requisites behind that card, rendered in the footer.
+  card: string;
   bank_name: string;
   swift: string;
   beneficiary: string;
@@ -191,6 +193,13 @@ export interface BankTransferInvoice {
   bank: BankDetails;
   expires_at: string;
   audit_id?: string;
+}
+
+// GET /v1/billing/details — public, unauthenticated, the single source for the
+// requisites the footer renders. `bank` is null when the deployment has no
+// bank transfer configured, and the footer then omits the block.
+export interface BillingDetails {
+  bank: BankDetails | null;
 }
 
 // GET /v1/billing/bank-transfer/{reference}. "expired" is cosmetic: the quote

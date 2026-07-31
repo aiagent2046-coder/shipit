@@ -29,7 +29,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.alerts import notify_operator
@@ -1478,7 +1478,7 @@ BANK_TRANSFER_PAID_LIMIT = 10
 def _bank_transfer_details() -> dict[str, str]:
     """The configured payer-facing bank fields, or 503.
 
-    All five or nothing (see bank_transfer.bank_details_from_env): a payer
+    All six or nothing (see bank_transfer.bank_details_from_env): a payer
     handed a SWIFT code with no account number cannot send anything, so a
     half-configured deployment must refuse rather than render an invoice that
     can't be paid."""
@@ -1488,7 +1488,8 @@ def _bank_transfer_details() -> dict[str, str]:
             status_code=503,
             detail={"reason": "bank_transfer_not_configured",
                     "detail": "bank transfer is not configured on this "
-                              "deployment (BANK_TRANSFER_BANK_NAME, "
+                              "deployment (BANK_TRANSFER_CARD, "
+                              "BANK_TRANSFER_BANK_NAME, "
                               "BANK_TRANSFER_SWIFT, BANK_TRANSFER_BENEFICIARY, "
                               "BANK_TRANSFER_ACCOUNT and BANK_TRANSFER_ADDRESS "
                               "must all be set)"},
@@ -1496,21 +1497,56 @@ def _bank_transfer_details() -> dict[str, str]:
     return details
 
 
-class PayerContact(BaseModel):
-    """Who says they are sending the transfer, for the operator's own books.
+@app.get("/v1/billing/details")
+async def get_billing_details() -> dict:
+    """The publishable payment requisites, for the site footer.
 
-    Both fields optional and the whole body optional (see the endpoints below):
-    a payer who fills in neither still gets a perfectly good invoice, and every
-    caller that predates this model keeps working with no body at all.
+    Public and unauthenticated on purpose: the footer renders on every page,
+    including to visitors who have not started a purchase, and the operator's
+    decision is that these requisites are published information. This endpoint
+    is the single source for them -- they are still never mirrored into a
+    NEXT_PUBLIC_* build variable, so rotating the card is an env change and a
+    restart, with no frontend rebuild.
+
+    Returns 200 with `bank: null` rather than 503 when bank transfer isn't
+    configured. A footer is not a checkout: an unconfigured deployment should
+    render a footer without a requisites block, not an error.
+    """
+    return {"bank": bank_transfer.bank_details_from_env()}
+
+
+class PayerContact(BaseModel):
+    """Who is sending the transfer. Since payment moved to a card number this
+    is not bookkeeping colour, it is the MATCHING KEY: a card-to-card transfer
+    carries no reference field, so the sender's name on the operator's
+    statement is the only handle on the payment, with the email as tie-breaker
+    between two payers of the same name. Hence both fields are now required
+    and so is the request body.
 
     max_length is abuse protection, not validation -- it stops someone posting a
-    megabyte into a text column. There is deliberately no email format check at
-    any layer: nothing is ever sent to this address, so a work address with an
-    unusual TLD must not cost a sale. See migration 0026.
+    megabyte into a text column. The email check is deliberately the weakest
+    thing that still rejects an obvious non-address: nothing is ever sent here,
+    so a work address with an unusual TLD must not cost a sale. See migration
+    0026.
     """
 
-    payer_name: str | None = Field(default=None, max_length=200)
-    payer_email: str | None = Field(default=None, max_length=200)
+    payer_name: str = Field(min_length=1, max_length=200)
+    payer_email: str = Field(min_length=3, max_length=200)
+
+    @field_validator("payer_name", "payer_email")
+    @classmethod
+    def _stripped_and_present(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("must not be blank")
+        return v
+
+    @field_validator("payer_email")
+    @classmethod
+    def _looks_like_an_address(cls, v: str) -> str:
+        if "@" not in v:
+            raise ValueError("must contain @")
+        return v
 
 
 def _bank_transfer_not_persisted_error() -> HTTPException:
@@ -1525,33 +1561,25 @@ def _bank_transfer_not_persisted_error() -> HTTPException:
 
 @app.post("/v1/billing/bank-transfer/pro", status_code=201)
 async def create_bank_transfer_invoice(
-    payer: PayerContact | None = None,
+    payer: PayerContact,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
 ) -> dict:
     """Open a bank-transfer invoice for the Pro tier.
 
-    Returns the bank details, the amount, and the reference code to put in the
-    transfer's payment-reference field — that code, not the amount, is how the
-    operator matches the transfer back to this invoice (the bank converts at
-    its own rate, so what lands never equals what was quoted). Poll GET
+    Returns the card number to pay, the amount, and the reference code that
+    identifies this order. The card transfer itself carries no reference, so
+    the operator matches it by the payer's name and email — both required (422
+    without them, see PayerContact). Poll GET
     /v1/billing/bank-transfer/{reference} to collect the key once the operator
     confirms the money arrived.
-
-    The bank details are a private individual's, so they are returned in this
-    response body rather than published to the frontend build — they reach
-    only someone who actually started a purchase.
-
-    The request body is optional and so is every field in it (see
-    PayerContact): a payer who tells us nothing about themselves still gets an
-    invoice.
 
     503 if bank transfer isn't configured, or if the pending row can't be
     persisted (no DATABASE_URL / no free reference code)."""
     details = _bank_transfer_details()
     invoice = await bank_transfer.create_invoice(
         payment_repo, details=details,
-        payer_name=payer.payer_name if payer else None,
-        payer_email=payer.payer_email if payer else None,
+        payer_name=payer.payer_name,
+        payer_email=payer.payer_email,
     )
     if invoice is None:
         raise _bank_transfer_not_persisted_error()
@@ -1561,7 +1589,7 @@ async def create_bank_transfer_invoice(
 @app.post("/v1/audits/{audit_id}/fixpack/bank-transfer", status_code=201)
 async def create_fixpack_bank_transfer_invoice(
     audit_id: str,
-    payer: PayerContact | None = None,
+    payer: PayerContact,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
 ) -> dict:
@@ -1593,8 +1621,8 @@ async def create_fixpack_bank_transfer_invoice(
     details = _bank_transfer_details()
     invoice = await bank_transfer.create_fixpack_invoice(
         payment_repo, details=details, audit_id=audit_id,
-        payer_name=payer.payer_name if payer else None,
-        payer_email=payer.payer_email if payer else None,
+        payer_name=payer.payer_name,
+        payer_email=payer.payer_email,
     )
     if invoice is None:
         raise _bank_transfer_not_persisted_error()

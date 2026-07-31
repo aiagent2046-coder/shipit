@@ -32,18 +32,22 @@ const POLL_MS = 20_000;
  *
  * Two things differ from every other provider here and drive the whole UI:
  *
- *  - Nothing is automatic. The operator reads the reference off their bank
- *    statement by hand, so the wait is measured in business days and the page
- *    says so rather than showing a countdown that implies minutes.
- *  - The bank details arrive in the create-invoice RESPONSE, not from build-
- *    time config. They are a private individual's account, so they are never
- *    NEXT_PUBLIC_* and this component never hardcodes or caches them.
+ *  - Nothing is automatic. The operator finds the transfer in their banking
+ *    app by hand, so the wait is measured in business days and the page says
+ *    so rather than showing a countdown that implies minutes.
+ *  - The payer is shown ONE thing to act on: the card number. A card-to-card
+ *    transfer has no payment-reference field, so quoting a code through the
+ *    bank is impossible and the operator matches by the payer's name and
+ *    email instead — which is why both inputs below are required, not
+ *    optional. The full requisites behind the card live in the site footer for
+ *    the rare payer whose bank asks for SWIFT/IBAN; this screen stays a card
+ *    number and a Copy button.
  *
  * "I've paid" is a notification, not a claim on anything: it grants no access
  * and moves no state, so pressing it without paying accomplishes nothing.
  */
 export function BankTransferCheckout({
-  title = "Pay by bank transfer",
+  title = "Pay by card",
   description,
   createInvoice,
   renderCompleted,
@@ -65,6 +69,11 @@ export function BankTransferCheckout({
   const [copied, setCopied] = useState<string | null>(null);
   const [payerName, setPayerName] = useState("");
   const [payerEmail, setPayerEmail] = useState("");
+  // The backend rejects a blank name or an email with no "@" (422). Mirroring
+  // exactly that here keeps the button honest rather than letting the payer
+  // submit into a validation error.
+  const contactReady =
+    payerName.trim().length > 0 && payerEmail.trim().includes("@");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -93,9 +102,9 @@ export function BankTransferCheckout({
         e instanceof ApiError
           ? e.reason === "bank_transfer_not_configured" ||
             e.reason === "not_persisted"
-            ? "Bank transfer isn't configured on the backend yet. Try another payment method, or ask the operator to configure it."
+            ? "Card payment isn't configured on the backend yet. Try another payment method, or contact support."
             : e.message
-          : "Could not create a bank transfer invoice.",
+          : "Could not create an invoice.",
       );
     } finally {
       setCreating(false);
@@ -157,23 +166,21 @@ export function BankTransferCheckout({
 
       {!invoice && (
         <>
-          {/* Optional both in name and in fact: leaving these blank creates a
-              perfectly good invoice. Money for this provider lands on a
-              private individual's account, so the operator keeps a note of who
-              paid for their own books — nothing is ever sent to the address,
-              and nothing checks its format. */}
+          {/* Required, and required for a concrete reason: a card transfer
+              arrives with nothing on it but the sender's name, so this is how
+              the operator knows which order the money belongs to. */}
           <div className="mt-4 space-y-2">
             <PayerInput
-              label="Your name (optional)"
+              label="Your name"
               type="text"
               autoComplete="name"
-              placeholder="Name on the transfer"
+              placeholder="Exactly as on the sending card"
               value={payerName}
               onChange={setPayerName}
               disabled={creating}
             />
             <PayerInput
-              label="Your email (optional)"
+              label="Your email"
               type="email"
               autoComplete="email"
               placeholder="you@example.com"
@@ -182,16 +189,17 @@ export function BankTransferCheckout({
               disabled={creating}
             />
             <p className="text-xs text-muted">
-              Only so the operator can tie the transfer to a person in their
-              records. Both can be left empty, and we don&apos;t email you —
-              this page is where your order updates.
+              A card transfer carries no order number, so your name and email
+              are how we recognise your payment. Use the name on the card you
+              pay from. We don&apos;t email you — this page is where your order
+              updates.
             </p>
           </div>
 
           <button
             type="button"
             onClick={start}
-            disabled={creating}
+            disabled={creating || !contactReady}
             className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90 disabled:opacity-60"
           >
             {creating ? (
@@ -199,7 +207,7 @@ export function BankTransferCheckout({
                 <Spinner /> Creating invoice…
               </>
             ) : (
-              "Get bank details"
+              "Show card number"
             )}
           </button>
         </>
@@ -216,64 +224,73 @@ export function BankTransferCheckout({
 
       {invoice && !completed && (
         <div className="mt-4 space-y-3">
+          {/* The whole point of this screen: one number, one Copy button.
+              Everything else here is context, not something to act on. */}
           <div className="rounded-md border border-accent/40 bg-accent/10 p-3">
             <p className="text-xs font-medium text-accent">
-              Payment reference — put this in the transfer&apos;s reference
-              field
+              Send exactly {invoice.amount} {invoice.currency} to this card
+              {invoice.bank.bank_name ? ` — ${invoice.bank.bank_name}` : ""}
             </p>
             <div className="mt-1 flex items-center justify-between gap-3">
-              <code className="break-all font-mono text-lg tracking-wider">
-                {invoice.reference}
+              <code className="break-all font-mono text-xl tracking-wider">
+                {invoice.bank.card}
               </code>
               <button
                 type="button"
-                onClick={() => copy(invoice.reference, "reference")}
+                onClick={() => copy(invoice.bank.card, "card")}
                 className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-muted hover:text-text"
               >
-                {copied === "reference" ? "✓" : "Copy"}
+                {copied === "card" ? "✓" : "Copy"}
               </button>
             </div>
             <p className="mt-2 text-xs text-muted">
-              This code is how your transfer is matched to this order. Without
-              it we can&apos;t tell which payment is yours.
+              Send the exact amount, kopecks included — they identify your order.
+              Pay from a card in the name you entered. No comment or reference is
+              needed.
             </p>
           </div>
 
           <Field
-            label="Amount"
+            label="Exact amount"
             value={`${invoice.amount} ${invoice.currency}`}
             mono
             onCopy={() => copy(invoice.amount, "amount")}
             copied={copied === "amount"}
           />
           <p className="text-xs text-muted">
-            Charged in {invoice.currency}; your bank converts at its own rate on
-            the day of the transfer, so the exact figure that arrives may differ
-            slightly. That&apos;s expected — the reference is what matters.
+            The kopecks are unique to this order — they&apos;re how we spot your
+            transfer among others. If your bank charges in another currency it
+            converts at its own rate and the figure that arrives will differ;
+            that&apos;s fine, we&apos;ll match you by name instead.
           </p>
 
-          <Field label="Bank" value={invoice.bank.bank_name} />
-          <Field label="SWIFT / BIC" value={invoice.bank.swift} mono
-            onCopy={() => copy(invoice.bank.swift, "swift")}
-            copied={copied === "swift"} />
-          <Field label="Beneficiary" value={invoice.bank.beneficiary}
-            onCopy={() => copy(invoice.bank.beneficiary, "beneficiary")}
-            copied={copied === "beneficiary"} />
+          {/* Not a payment instruction — the order id, kept visible because
+              /link and support both ask for it, and confirmation often lands
+              long after this tab is gone. */}
           <Field
-            label="Account / IBAN"
-            value={invoice.bank.account}
+            label="Order number"
+            value={invoice.reference}
             mono
-            breakAll
-            onCopy={() => copy(invoice.bank.account, "account")}
-            copied={copied === "account"}
+            onCopy={() => copy(invoice.reference, "reference")}
+            copied={copied === "reference"}
           />
-          <Field label="Beneficiary address" value={invoice.bank.address} breakAll />
+          <p className="text-xs text-muted">
+            Keep this if you need to reach support about the order, or to claim
+            your key from the Telegram bot with{" "}
+            <span className="font-mono">/link</span>. You don&apos;t need to put
+            it anywhere in the transfer.
+          </p>
+
+          <p className="text-xs text-muted">
+            Bank needs full requisites (SWIFT / IBAN / beneficiary)? They&apos;re
+            at the bottom of this page.
+          </p>
 
           {reported ? (
             <p className="flex items-center gap-2 rounded-md border border-border bg-surface p-3 text-sm text-muted">
-              <Spinner /> Thanks — we&apos;ve been notified and will check the
-              transfer. Bank transfers usually take 1–3 business days to arrive.
-              This page updates itself, and you can safely close it.
+              <Spinner /> Thanks — we&apos;ve been notified and will look for
+              your transfer. Confirmation is manual, so allow up to one business
+              day. This page updates itself, and you can safely close it.
             </p>
           ) : (
             <button
@@ -287,7 +304,7 @@ export function BankTransferCheckout({
                   <Spinner /> Notifying…
                 </>
               ) : (
-                "I've sent the transfer"
+                "I've paid"
               )}
             </button>
           )}
@@ -296,7 +313,8 @@ export function BankTransferCheckout({
             <p className="rounded-md border border-high/40 bg-high/10 p-3 text-xs text-high">
               This quote is more than a week old. Your transfer can still be
               confirmed if it arrives — nothing is lost — but if you haven&apos;t
-              sent it yet, contact the operator to re-check the amount first.
+              paid yet, contact support to re-check the amount and the card
+              number first.
             </p>
           )}
         </div>
@@ -345,19 +363,19 @@ function PayerInput({
 }
 
 /**
- * The Pro-tier bank-transfer card used on /pricing. Once the operator
- * confirms, reveals + lets you save the returned API key — the same one-shot
- * delivery as the USDT card, and it matters more here: confirmation lands
- * hours or days later, when this tab is usually long gone. Telegram /link with
- * the reference code is the recovery door for that case.
+ * The Pro-tier card-payment card used on /pricing. Once the operator confirms,
+ * reveals + lets you save the returned API key — the same one-shot delivery as
+ * the USDT card, and it matters more here: confirmation lands hours later, when
+ * this tab is usually long gone. Telegram /link with the order number is the
+ * recovery door for that case.
  */
 export function ProBankTransferCheckout() {
   return (
     <BankTransferCheckout
       description={
         <>
-          Send a normal bank transfer quoting the reference code below. Your Pro
-          key unlocks once we&apos;ve seen the money — usually 1–3 business days.
+          Copy the card number and pay from your banking app. Your Pro key
+          unlocks once we&apos;ve seen the money — usually within a business day.
         </>
       }
       createInvoice={createBankTransferInvoice}

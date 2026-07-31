@@ -19,6 +19,7 @@ import datetime
 import uuid
 
 import httpx
+import pytest
 
 import app.main as main_mod
 from app.billing import bank_transfer, telegram_stars
@@ -47,6 +48,7 @@ REPO_URL = "https://github.com/acme/widget"
 # Obviously-fake stand-ins for the operator's real banking details, which are
 # one private individual's and live only in the deployment's environment.
 BANK_ENV = {
+    "BANK_TRANSFER_CARD": "0000 0000 0000 0000",
     "BANK_TRANSFER_BANK_NAME": "Example Test Bank",
     "BANK_TRANSFER_SWIFT": "TESTKZKAXXX",
     "BANK_TRANSFER_BENEFICIARY": "Test Beneficiary",
@@ -54,9 +56,10 @@ BANK_ENV = {
     "BANK_TRANSFER_ADDRESS": "1 Test Street, Testville",
 }
 
-# The same five fields as they reach the payer, keyed the way the module and
+# The same six fields as they reach the payer, keyed the way the module and
 # the API response key them.
 BANK_DETAILS = {
+    "card": BANK_ENV["BANK_TRANSFER_CARD"],
     "bank_name": BANK_ENV["BANK_TRANSFER_BANK_NAME"],
     "swift": BANK_ENV["BANK_TRANSFER_SWIFT"],
     "beneficiary": BANK_ENV["BANK_TRANSFER_BENEFICIARY"],
@@ -66,6 +69,13 @@ BANK_DETAILS = {
 
 ADMIN_CHAT_ID = "424242"
 STRANGER_CHAT_ID = 999111
+
+# Obviously-fake payer details: these stand in for a member of the public, not
+# for anyone real. Both fields are required by the endpoint (see section 8), so
+# every invoice-creating request in this file carries them.
+PAYER_NAME = "Test Payer"
+PAYER_EMAIL = "test.payer@example.invalid"
+PAYER = {"payer_name": PAYER_NAME, "payer_email": PAYER_EMAIL}
 
 
 # --- in-memory repo fakes ---
@@ -97,6 +107,14 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
             if r["provider"] == provider and r["external_ref"] == external_ref:
                 return r
         return None
+
+    # Read by _reserve_unique_amount to find which kopeck suffixes are already
+    # in flight. Same shape as the USDT fake's: open invoices for one provider.
+    async def list_pending(self, provider):
+        return [
+            r for r in self.rows.values()
+            if r["provider"] == provider and r["status"] == "pending"
+        ]
 
     async def link_telegram_chat_id(self, payment_id, telegram_chat_id):
         # First-wins, mirroring the real method's WHERE clause.
@@ -271,7 +289,7 @@ def test_pro_invoice_503_when_bank_details_unset():
     payments = FakePaymentRepo()
     _override({get_payment_repo: payments})
     try:
-        r = client.post("/v1/billing/bank-transfer/pro")
+        r = client.post("/v1/billing/bank-transfer/pro", json=PAYER)
         assert r.status_code == 503
         assert r.json()["detail"]["reason"] == "bank_transfer_not_configured"
     finally:
@@ -283,11 +301,30 @@ def test_fixpack_invoice_503_when_bank_details_unset():
     audit = audits.add()
     _override({get_payment_repo: payments, get_audit_repo: audits})
     try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/bank-transfer")
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/bank-transfer",
+                        json=PAYER)
         assert r.status_code == 503
         assert r.json()["detail"]["reason"] == "bank_transfer_not_configured"
     finally:
         _clear()
+
+
+def test_billing_details_publishes_the_requisites(monkeypatch):
+    """The footer's source. Public and unauthenticated by the operator's own
+    decision -- these requisites are published information, and this endpoint
+    is the single place the frontend reads them from."""
+    _configure_bank(monkeypatch)
+    r = client.get("/v1/billing/details")
+    assert r.status_code == 200
+    assert r.json()["bank"] == BANK_DETAILS
+
+
+def test_billing_details_is_200_with_null_when_unconfigured():
+    """Not 503: a footer is not a checkout. An unconfigured deployment renders
+    a footer without a requisites block, not an error on every page."""
+    r = client.get("/v1/billing/details")
+    assert r.status_code == 200
+    assert r.json() == {"bank": None}
 
 
 def test_pro_invoice_returns_details_and_reference(monkeypatch):
@@ -295,15 +332,17 @@ def test_pro_invoice_returns_details_and_reference(monkeypatch):
     payments = FakePaymentRepo()
     _override({get_payment_repo: payments})
     try:
-        body = client.post("/v1/billing/bank-transfer/pro").json()
+        body = client.post("/v1/billing/bank-transfer/pro", json=PAYER).json()
     finally:
         _clear()
 
     assert bank_transfer.REFERENCE_RE.match(body["reference"])
     assert body["currency"] == "USD"
-    assert body["amount"] == "5.00"
-    # The details ride in the response body, never in NEXT_PUBLIC_* config:
-    # this is the only place the frontend can learn them.
+    # 5.00 plus a kopeck suffix, never the bare price and never a discount.
+    assert 501 <= bank_transfer.amount_to_cents(float(body["amount"])) <= 599
+    # The card is what the checkout page renders and the payer copies; the rest
+    # ride along for the footer, and none of it is ever NEXT_PUBLIC_* config.
+    assert body["bank"]["card"] == BANK_ENV["BANK_TRANSFER_CARD"]
     assert body["bank"]["swift"] == BANK_ENV["BANK_TRANSFER_SWIFT"]
     assert body["bank"]["account"] == BANK_ENV["BANK_TRANSFER_ACCOUNT"]
     row = payments.rows[body["payment_id"]]
@@ -312,13 +351,71 @@ def test_pro_invoice_returns_details_and_reference(monkeypatch):
     assert row["account_id"] is None
 
 
+async def test_open_invoices_get_distinct_kopeck_suffixes(monkeypatch):
+    """The point of the suffix: the operator reads 5.07 off the statement and
+    knows which order paid, without waiting on the payer."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    amounts = [
+        (await bank_transfer.create_invoice(
+            payments, details=dict(BANK_DETAILS)))["amount"]
+        for _ in range(20)
+    ]
+    assert len(set(amounts)) == 20
+    for a in amounts:
+        assert 501 <= bank_transfer.amount_to_cents(float(a)) <= 599
+
+
+async def test_pro_and_fixpack_suffixes_cannot_collide(monkeypatch):
+    """Both creators draw from the same pending set. At different base prices
+    they cannot collide anyway, but the shared set is what makes that hold even
+    if an operator ever sets the two prices equal."""
+    _configure_bank(monkeypatch)
+    monkeypatch.setenv("BANK_TRANSFER_FIXPACK_PRICE_USD", "5.00")
+    payments = FakePaymentRepo()
+    pro = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+    fix = await bank_transfer.create_fixpack_invoice(
+        payments, details=dict(BANK_DETAILS), audit_id="a1")
+    assert pro["amount"] != fix["amount"]
+
+
+async def test_a_completed_invoice_frees_its_suffix(monkeypatch):
+    """Only OPEN invoices reserve a suffix. A 99-invoice-per-week ceiling that
+    counted settled orders too would run out for no reason."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    first = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+    payments.rows[first["payment_id"]]["status"] = "completed"
+    taken = set()
+    for _ in range(99):
+        inv = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+        taken.add(inv["amount"])
+    # All 99 slots were available again, the freed one among them.
+    assert len(taken) == 99
+    assert first["amount"] in taken
+
+
+async def test_saturation_falls_back_to_the_bare_price(monkeypatch):
+    """With every suffix in flight the sale still goes through at the plain
+    price. Refusing to sell because a hundred invoices are open would be a
+    worse failure than two orders sharing an amount -- name and email still
+    tell those apart."""
+    _configure_bank(monkeypatch)
+    payments = FakePaymentRepo()
+    for _ in range(99):
+        await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+    saturated = await bank_transfer.create_invoice(
+        payments, details=dict(BANK_DETAILS))
+    assert saturated["amount"] == "5.00"
+
+
 def test_two_open_invoices_get_distinct_references(monkeypatch):
     _configure_bank(monkeypatch)
     payments = FakePaymentRepo()
     _override({get_payment_repo: payments})
     try:
-        first = client.post("/v1/billing/bank-transfer/pro").json()
-        second = client.post("/v1/billing/bank-transfer/pro").json()
+        first = client.post("/v1/billing/bank-transfer/pro", json=PAYER).json()
+        second = client.post("/v1/billing/bank-transfer/pro", json=PAYER).json()
     finally:
         _clear()
     assert first["reference"] != second["reference"]
@@ -331,7 +428,8 @@ def test_fixpack_invoice_rejects_a_zip_audit(monkeypatch):
     audit = audits.add(repo_url=None)
     _override({get_payment_repo: payments, get_audit_repo: audits})
     try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/bank-transfer")
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/bank-transfer",
+                        json=PAYER)
         assert r.status_code == 422
         assert r.json()["detail"]["reason"] == "not_github_audit"
     finally:
@@ -398,7 +496,7 @@ def test_report_paid_is_rate_limited(monkeypatch):
                  get_billing_transport: _telegram_transport([])})
     try:
         references = [
-            client.post("/v1/billing/bank-transfer/pro").json()["reference"]
+            client.post("/v1/billing/bank-transfer/pro", json=PAYER).json()["reference"]
             for _ in range(3)
         ]
         codes = [
@@ -661,7 +759,10 @@ async def test_pending_status_carries_what_the_page_needs(monkeypatch):
     status = await bank_transfer.invoice_status(
         payments, accounts, invoice["reference"], details=dict(BANK_DETAILS))
     assert status["status"] == "pending"
-    assert status["amount"] == "5.00"
+    # The amount the payer was quoted, suffix included -- not the catalogue
+    # price, or the page would tell them to send the wrong figure.
+    assert status["amount"] == f"{float(invoice['amount']):.2f}"
+    assert 501 <= bank_transfer.amount_to_cents(float(status["amount"])) <= 599
     assert status["currency"] == "USD"
     assert status["bank"]["bank_name"] == BANK_ENV["BANK_TRANSFER_BANK_NAME"]
     assert "api_key" not in status
@@ -726,12 +827,11 @@ async def test_link_unknown_reference_says_so(monkeypatch):
     assert "reference code wasn't found" in text
 
 
-# --- 8. optional payer contact (migration 0026) ---
+# --- 8. required payer contact (migration 0026) ---
 #
-# Obviously-fake payer details: these stand in for a member of the public, not
-# for anyone real.
-PAYER_NAME = "Test Payer"
-PAYER_EMAIL = "test.payer@example.invalid"
+# Required, not decorative: a card transfer carries no reference field, so the
+# payer's name on the statement plus their email is the only thing the operator
+# can match an incoming payment against.
 
 
 def test_pro_invoice_records_payer_contact(monkeypatch):
@@ -755,56 +855,68 @@ def test_pro_invoice_records_payer_contact(monkeypatch):
     assert "payer_email" not in body
 
 
-def test_pro_invoice_without_a_body_still_works(monkeypatch):
-    """The body is optional in full, not just field by field: this is exactly
-    the request every caller made before payer contact existed."""
+@pytest.mark.parametrize("body", [
+    None,                                                  # no body at all
+    {},                                                    # neither field
+    {"payer_name": PAYER_NAME},                            # no email
+    {"payer_email": PAYER_EMAIL},                          # no name
+    {"payer_name": "   ", "payer_email": PAYER_EMAIL},     # blank name
+    {"payer_name": PAYER_NAME, "payer_email": "nope"},     # not an address
+])
+def test_pro_invoice_requires_both_contact_fields(monkeypatch, body):
+    """422 and no payment row. Without a name the operator cannot tell whose
+    card transfer arrived, so an invoice that can never be confirmed must not
+    be created in the first place."""
     _configure_bank(monkeypatch)
     payments = FakePaymentRepo()
     _override({get_payment_repo: payments})
     try:
-        r = client.post("/v1/billing/bank-transfer/pro")
+        r = client.post("/v1/billing/bank-transfer/pro", json=body)
     finally:
         _clear()
 
-    assert r.status_code == 201
-    row = payments.rows[r.json()["payment_id"]]
-    assert row["payer_name"] is None
-    assert row["payer_email"] is None
+    assert r.status_code == 422
+    assert payments.rows == {}
 
 
-def test_pro_invoice_accepts_one_field_without_the_other(monkeypatch):
+def test_payer_contact_is_stored_stripped(monkeypatch):
+    """Surrounding whitespace is the payer's, not part of their name: the
+    operator compares this string against a bank statement by eye."""
     _configure_bank(monkeypatch)
     payments = FakePaymentRepo()
     _override({get_payment_repo: payments})
     try:
-        r = client.post("/v1/billing/bank-transfer/pro",
-                        json={"payer_name": PAYER_NAME})
+        r = client.post(
+            "/v1/billing/bank-transfer/pro",
+            json={"payer_name": f"  {PAYER_NAME}  ",
+                  "payer_email": f" {PAYER_EMAIL} "},
+        )
     finally:
         _clear()
 
     assert r.status_code == 201
     row = payments.rows[r.json()["payment_id"]]
     assert row["payer_name"] == PAYER_NAME
-    assert row["payer_email"] is None
+    assert row["payer_email"] == PAYER_EMAIL
 
 
-def test_pro_invoice_does_not_validate_the_email_format(monkeypatch):
-    """Deliberate: nothing is ever sent to this address, so it is a note to
-    the operator, not a delivery channel. Rejecting an unusual address here
-    would cost a sale to enforce a rule nothing depends on."""
+def test_payer_email_check_stays_weak(monkeypatch):
+    """An "@" is the whole test. Nothing is ever sent to this address -- it is
+    a tie-breaker between two payers of the same name -- so rejecting an
+    unusual TLD would cost a sale to enforce a rule nothing depends on."""
     _configure_bank(monkeypatch)
     payments = FakePaymentRepo()
     _override({get_payment_repo: payments})
     try:
-        r = client.post("/v1/billing/bank-transfer/pro",
-                        json={"payer_email": "not really an address"})
+        r = client.post(
+            "/v1/billing/bank-transfer/pro",
+            json={"payer_name": PAYER_NAME, "payer_email": "a@b"},
+        )
     finally:
         _clear()
 
     assert r.status_code == 201
-    assert payments.rows[r.json()["payment_id"]]["payer_email"] == (
-        "not really an address"
-    )
+    assert payments.rows[r.json()["payment_id"]]["payer_email"] == "a@b"
 
 
 def test_payer_contact_is_length_capped(monkeypatch):
@@ -814,8 +926,10 @@ def test_payer_contact_is_length_capped(monkeypatch):
     payments = FakePaymentRepo()
     _override({get_payment_repo: payments})
     try:
-        r = client.post("/v1/billing/bank-transfer/pro",
-                        json={"payer_name": "x" * 201})
+        r = client.post(
+            "/v1/billing/bank-transfer/pro",
+            json={"payer_name": "x" * 201, "payer_email": PAYER_EMAIL},
+        )
     finally:
         _clear()
 

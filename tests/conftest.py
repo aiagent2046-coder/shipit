@@ -403,6 +403,7 @@ def _no_ambient_production_integrations(monkeypatch):
         "PAYPAL_WEBHOOK_ID",
         "USDT_POLL_TOKEN",
         # A private individual's real banking details on the production host.
+        "BANK_TRANSFER_CARD",
         "BANK_TRANSFER_BANK_NAME",
         "BANK_TRANSFER_SWIFT",
         "BANK_TRANSFER_BENEFICIARY",
