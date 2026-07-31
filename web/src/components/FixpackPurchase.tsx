@@ -84,7 +84,9 @@ export function FixpackPurchase({
                 1–3 business days.
               </>
             }
-            createInvoice={() => createFixpackBankTransferInvoice(auditId)}
+            createInvoice={(payer) =>
+              createFixpackBankTransferInvoice(auditId, payer)
+            }
             renderCompleted={() => (
               <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
                 <p className="font-semibold text-accent">
