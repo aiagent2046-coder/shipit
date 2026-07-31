@@ -1416,6 +1416,7 @@ async def create_fixpack_usdt_invoice(
     audit_id: str,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
 ) -> dict:
     """Open a USDT/TRC20 invoice to buy a Fix Pack for one specific audit.
     Mirrors POST /v1/billing/usdt/invoice (fixed address + unique amount so
@@ -1448,6 +1449,7 @@ async def create_fixpack_usdt_invoice(
                               "open a fix PR against — re-run the audit with your "
                               "GitHub repo URL, then buy a Fix Pack for it."},
         )
+    await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
     address = _usdt_receiving_address()
     if not address:
         raise HTTPException(
@@ -1473,6 +1475,43 @@ async def create_fixpack_usdt_invoice(
 # ONE invoice are already collapsed by notify_operator's dedupe_key. Well above
 # what any real payer needs -- a payer opens one invoice, maybe two.
 BANK_TRANSFER_PAID_LIMIT = 10
+
+
+async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
+    """409 when this audit already has a Fix Pack job that is paid or running.
+
+    Selling one is the last moment refusing costs nothing. After the payment,
+    every layer below reports success and none of them can undo it:
+    create_paid is idempotent per audit, so a second confirmed payment joins
+    the existing job instead of opening a second fix PR, and the buyer is told
+    "completed" for work that was already bought and paid for once.
+
+    The condition mirrors the ON CONFLICT predicate in create_paid --
+    status in ('paid', 'running') -- and must keep mirroring it. A stricter
+    check here would refuse sales the database would have happily served:
+    re-buying after a 'failed' job is a supported flow, and so is buying again
+    once a previous Fix Pack was delivered and the audit re-run.
+
+    get_by_audit returns the newest job, which is enough: migration 0025's
+    partial unique index allows only one live job per audit, so a newer
+    terminal row can only exist if no live one does.
+
+    No-op when persistence isn't configured (get_by_audit returns None), same
+    contract as every other repository call on this path.
+    """
+    job = await fixpack_repo.get_by_audit(audit_id)
+    if job is None or job.get("status") not in ("paid", "running"):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "reason": "fixpack_already_in_progress",
+            "detail": "a Fix Pack for this audit has already been paid for "
+                      "and is being generated. Watch this audit's page for "
+                      "the pull request — buying a second one would fund no "
+                      "extra work.",
+        },
+    )
 
 
 def _bank_transfer_details() -> dict[str, str]:
@@ -1592,6 +1631,7 @@ async def create_fixpack_bank_transfer_invoice(
     payer: PayerContact,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
 ) -> dict:
     """Open a bank-transfer invoice to buy a Fix Pack for one audit. Same
     reference-code flow and same polling endpoint as the Pro invoice above, at
@@ -1618,6 +1658,7 @@ async def create_fixpack_bank_transfer_invoice(
                               "open a fix PR against — re-run the audit with your "
                               "GitHub repo URL, then buy a Fix Pack for it."},
         )
+    await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
     details = _bank_transfer_details()
     invoice = await bank_transfer.create_fixpack_invoice(
         payment_repo, details=details, audit_id=audit_id,
@@ -1729,6 +1770,7 @@ async def create_paypal_order(
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     transport=Depends(get_paypal_transport),
 ) -> dict:
     """Open a PayPal order for a ONE-TIME product (Pro or a Fix Pack), the
@@ -1777,6 +1819,7 @@ async def create_paypal_order(
                                   "created from an uploaded zip, so there's no "
                                   "repository to open a fix PR against."},
             )
+        await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
         try:
             order = await paypal.create_fixpack_order(
                 payment_repo, audit_id=audit_id, transport=transport

@@ -525,3 +525,32 @@ def test_fixpack_status_unknown_audit_is_404():
         assert r.json()["detail"]["reason"] == "audit_not_found"
     finally:
         _clear()
+
+
+def test_usdt_fixpack_invoice_refused_while_a_job_is_live(monkeypatch):
+    """The same sell-side refusal as the bank-transfer route, on the USDT one.
+
+    Worth having in both places rather than trusting the shared helper: the
+    three sell points grew independently (they already duplicate the audit and
+    repo_url gates), so the thing that breaks is one of them being missed when
+    a fourth provider is added.
+    """
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks = FakeFixpackRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    fixpacks.rows.append({
+        "id": str(uuid.uuid4()), "audit_id": audit["id"], "pack": "fixpack",
+        "stack": "fastapi", "status": "running", "verified": None,
+        "detail": None, "pr_url": None, "pr_delivered": False,
+        "created_at": datetime.datetime.now(datetime.timezone.utc),
+    })
+    _override(audits=audits, payments=payments)
+    app.dependency_overrides[get_fixpack_repo] = lambda: fixpacks
+    try:
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
+        assert r.status_code == 409
+        assert r.json()["detail"]["reason"] == "fixpack_already_in_progress"
+        assert payments.rows == {}
+    finally:
+        _clear()

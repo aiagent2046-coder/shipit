@@ -754,6 +754,17 @@ def _confirmed_text(result: dict[str, Any]) -> str:
     ]
     if result.get("audit_id"):
         lines.append(f"Audit: {result['audit_id']}")
+    if result.get("joined_existing_job"):
+        # The one case where "CONFIRMED" alone would be a lie by omission: the
+        # money is taken and no extra work was funded, because this audit
+        # already had a live Fix Pack job and create_paid is idempotent per
+        # audit. Nothing downstream can undo that -- only the operator can.
+        lines += [
+            "",
+            "WARNING: this audit already had a Fix Pack job in progress, so "
+            "this payment funded no additional work. One pull request will be "
+            "opened, not two. Reconcile by hand — a refund is likely owed.",
+        ]
     return "\n".join(lines)
 
 
