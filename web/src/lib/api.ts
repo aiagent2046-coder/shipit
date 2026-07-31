@@ -180,12 +180,37 @@ export async function createFixpackUsdtInvoice(
   return parse<FixpackUsdtInvoice>(res);
 }
 
+// Who the payer says they are. Both fields optional, and the whole argument is
+// optional: the backend accepts these routes with no body at all. Recorded for
+// the operator's bookkeeping only — nothing is ever sent to the address, which
+// is why neither this layer nor the backend validates its format.
+export interface PayerContact {
+  payer_name?: string;
+  payer_email?: string;
+}
+
+// Blank inputs must reach the backend as absent, not as "". Returns undefined
+// when the payer filled in neither, so the request carries no body — exactly
+// what this endpoint did before payer contact existed.
+function payerBody(payer?: PayerContact): RequestInit {
+  const payer_name = payer?.payer_name?.trim() || undefined;
+  const payer_email = payer?.payer_email?.trim() || undefined;
+  if (!payer_name && !payer_email) return {};
+  return {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payer_name, payer_email }),
+  };
+}
+
 // Open a bank-transfer invoice for Pro. The response carries the bank details
 // themselves — they are deliberately NOT NEXT_PUBLIC_* config, so the only
 // place the frontend can learn them is a response to a started purchase.
-export async function createBankTransferInvoice(): Promise<BankTransferInvoice> {
+export async function createBankTransferInvoice(
+  payer?: PayerContact,
+): Promise<BankTransferInvoice> {
   const res = await request(`${API_BASE_URL}/v1/billing/bank-transfer/pro`, {
     method: "POST",
+    ...payerBody(payer),
   });
   return parse<BankTransferInvoice>(res);
 }
@@ -193,10 +218,11 @@ export async function createBankTransferInvoice(): Promise<BankTransferInvoice> 
 // Same, scoped to one audit's Fix Pack. Polled with getBankTransferInvoice.
 export async function createFixpackBankTransferInvoice(
   auditId: string,
+  payer?: PayerContact,
 ): Promise<BankTransferInvoice> {
   const res = await request(
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/bank-transfer`,
-    { method: "POST" },
+    { method: "POST", ...payerBody(payer) },
   );
   return parse<BankTransferInvoice>(res);
 }

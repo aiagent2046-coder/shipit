@@ -1060,3 +1060,63 @@ async def test_bank_transfer_reference_uniqueness_is_enforced_by_postgres(real_d
             account_id=None, provider="bank_transfer", external_ref=reference,
             amount=5.0, currency="USD", status="pending", tier_granted="pro",
         )
+
+
+# --- payer contact (migration 0026) against the real columns ---
+
+# Obviously-fake stand-ins for a member of the public.
+PAYER_NAME_SMOKE = "Test Payer"
+PAYER_EMAIL_SMOKE = "test.payer@example.invalid"
+
+
+async def test_bank_transfer_payer_contact_round_trips(real_db):
+    """The columns exist, accept what the payer typed, and come back on every
+    read path the operator's confirmation flow uses -- get() by id and
+    get_by_external_ref() by reference code, which is what the Telegram
+    notification is built from."""
+    payment_repo = PaymentRepository()
+    invoice = await bank_transfer.create_invoice(
+        payment_repo, details=dict(BANK_DETAILS_SMOKE),
+        payer_name=PAYER_NAME_SMOKE, payer_email=PAYER_EMAIL_SMOKE,
+    )
+    assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
+
+    by_id = await payment_repo.get(invoice["payment_id"])
+    assert by_id["payer_name"] == PAYER_NAME_SMOKE
+    assert by_id["payer_email"] == PAYER_EMAIL_SMOKE
+
+    by_ref = await payment_repo.get_by_external_ref(
+        bank_transfer.PROVIDER, invoice["reference"]
+    )
+    assert by_ref["payer_name"] == PAYER_NAME_SMOKE
+    assert by_ref["payer_email"] == PAYER_EMAIL_SMOKE
+
+
+async def test_payment_without_payer_contact_stores_nulls(real_db):
+    """Both columns are nullable and stay nullable: an invoice created without
+    them is not an error, it is the ordinary case. A NOT NULL here would have
+    made every historical payment row invalid."""
+    payment_repo = PaymentRepository()
+    created = await payment_repo.create(
+        account_id=None, provider="usdt_trc20",
+        external_ref=None, amount=5.0, currency="USDT",
+        status="pending", tier_granted="pro",
+    )
+    assert created is not None, "DATABASE_URL not reaching get_pool -- false green"
+    assert created["payer_name"] is None
+    assert created["payer_email"] is None
+    assert (await payment_repo.get(created["id"]))["payer_name"] is None
+
+
+async def test_payer_contact_is_not_format_checked_by_the_database(real_db):
+    """A plain text column with no constraint, deliberately: this is a note for
+    the operator's books, never an address anything is sent to."""
+    payment_repo = PaymentRepository()
+    invoice = await bank_transfer.create_invoice(
+        payment_repo, details=dict(BANK_DETAILS_SMOKE),
+        payer_name="Ünïcode Payer 名前", payer_email="not really an address",
+    )
+    assert invoice is not None
+    stored = await payment_repo.get(invoice["payment_id"])
+    assert stored["payer_name"] == "Ünïcode Payer 名前"
+    assert stored["payer_email"] == "not really an address"

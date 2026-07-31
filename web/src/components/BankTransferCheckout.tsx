@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BankTransferInvoice, BankTransferStatus } from "@/lib/types";
+import type { PayerContact } from "@/lib/api";
 import {
   ApiError,
   createBankTransferInvoice,
@@ -49,7 +50,7 @@ export function BankTransferCheckout({
 }: {
   title?: string;
   description: React.ReactNode;
-  createInvoice: () => Promise<BankTransferInvoice>;
+  createInvoice: (payer: PayerContact) => Promise<BankTransferInvoice>;
   renderCompleted: (
     completed: CompletedStatus,
     helpers: CopyHelpers,
@@ -62,6 +63,8 @@ export function BankTransferCheckout({
   const [reported, setReported] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [payerName, setPayerName] = useState("");
+  const [payerEmail, setPayerEmail] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -79,7 +82,10 @@ export function BankTransferCheckout({
     setStatus(null);
     setReported(false);
     try {
-      const inv = await createInvoice();
+      const inv = await createInvoice({
+        payer_name: payerName,
+        payer_email: payerEmail,
+      });
       setInvoice(inv);
       poll(inv.reference);
     } catch (e) {
@@ -150,20 +156,53 @@ export function BankTransferCheckout({
       <p className="mt-1 text-sm text-muted">{description}</p>
 
       {!invoice && (
-        <button
-          type="button"
-          onClick={start}
-          disabled={creating}
-          className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90 disabled:opacity-60"
-        >
-          {creating ? (
-            <>
-              <Spinner /> Creating invoice…
-            </>
-          ) : (
-            "Get bank details"
-          )}
-        </button>
+        <>
+          {/* Optional both in name and in fact: leaving these blank creates a
+              perfectly good invoice. Money for this provider lands on a
+              private individual's account, so the operator keeps a note of who
+              paid for their own books — nothing is ever sent to the address,
+              and nothing checks its format. */}
+          <div className="mt-4 space-y-2">
+            <PayerInput
+              label="Your name (optional)"
+              type="text"
+              autoComplete="name"
+              placeholder="Name on the transfer"
+              value={payerName}
+              onChange={setPayerName}
+              disabled={creating}
+            />
+            <PayerInput
+              label="Your email (optional)"
+              type="email"
+              autoComplete="email"
+              placeholder="you@example.com"
+              value={payerEmail}
+              onChange={setPayerEmail}
+              disabled={creating}
+            />
+            <p className="text-xs text-muted">
+              Only so the operator can tie the transfer to a person in their
+              records. Both can be left empty, and we don&apos;t email you —
+              this page is where your order updates.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={start}
+            disabled={creating}
+            className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90 disabled:opacity-60"
+          >
+            {creating ? (
+              <>
+                <Spinner /> Creating invoice…
+              </>
+            ) : (
+              "Get bank details"
+            )}
+          </button>
+        </>
       )}
 
       {error && (
@@ -265,6 +304,43 @@ export function BankTransferCheckout({
 
       {completed && renderCompleted(completed, { copy, copied })}
     </div>
+  );
+}
+
+// The editable twin of UsdtCheckout's Field: same bordered row, same muted
+// label on the left and right-aligned value, so the pre-payment inputs and the
+// post-payment bank details read as one list rather than two designs.
+function PayerInput({
+  label,
+  type,
+  autoComplete,
+  placeholder,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  type: "text" | "email";
+  autoComplete: string;
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 text-sm focus-within:border-accent">
+      <span className="shrink-0 text-muted">{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+        disabled={disabled}
+        maxLength={200}
+        className="w-full min-w-0 bg-transparent text-right outline-none disabled:opacity-60"
+      />
+    </label>
   );
 }
 
