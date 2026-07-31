@@ -151,6 +151,23 @@ python3 "$MIGRATION_GATE" \
   --release "$TARGET_RELEASE" \
   --env-file "$ENV_FILE"
 
+# EVERY step below is checked explicitly, and that is not a style choice.
+#
+# This function is called from a conditional context (see the call site), and
+# bash disables errexit for the whole body of a function invoked that way --
+# inside `f || true`, inside `if f; then`, inside `f && g`, all of them. So
+# `set -Eeuo pipefail` at the top of this file does NOT protect anything in
+# here. Before these checks existed, all four steps ran regardless of whether
+# the previous one failed, and the success line at the bottom printed
+# unconditionally: a rollback that never switched the symlink and never passed
+# a health check still reported "Automatic rollback completed".
+#
+# Switching the call site to `if rollback_after_failure ...` would NOT have
+# fixed it. The suppression comes from the conditional context, not from the
+# `|| true`.
+#
+# Returns 0 only when the service is actually back on the previous release and
+# answering. Any other outcome returns non-zero after saying which step failed.
 rollback_after_failure() {
   local original_sha="$1"
 
@@ -166,32 +183,81 @@ rollback_after_failure() {
 
   local original_release="$RELEASE_ROOT/releases/$original_sha"
 
-  python3 "$MIGRATION_GATE" \
+  if [[ ! -d "$original_release" ]]; then
+    echo \
+      "ROLLBACK FAILED at step 'locate release': $original_release is gone" \
+      >&2
+    return 1
+  fi
+
+  # The gate refuses when the database schema is ahead of the release being
+  # activated -- which is exactly the case whenever the failed deployment
+  # carried a migration. That refusal is correct (old code against a newer
+  # schema is its own outage) but it means the automatic path is unavailable
+  # precisely when a deployment was riskiest, so say so in those words rather
+  # than let it read as a generic failure.
+  if ! python3 "$MIGRATION_GATE" \
     --release "$original_release" \
     --env-file "$ENV_FILE"
+  then
+    echo >&2
+    echo \
+      "ROLLBACK FAILED at step 'migration gate': the database schema is" \
+      "ahead of $original_sha, so restoring that code would run it against a" \
+      "schema it does not know. The service is still on the FAILED release." \
+      "Roll the schema back by hand, or fix forward." >&2
+    return 1
+  fi
 
-  python3 "$MANAGER" \
+  if ! python3 "$MANAGER" \
     --root "$RELEASE_ROOT" \
     activate \
     --sha "$original_sha" \
     --release-env "$RELEASE_ENV"
+  then
+    echo \
+      "ROLLBACK FAILED at step 'activate': could not point current at" \
+      "$original_sha. The symlink may be in either state -- check it before" \
+      "restarting anything." >&2
+    return 1
+  fi
 
-  systemctl restart "$SERVICE"
+  if ! systemctl restart "$SERVICE"; then
+    echo \
+      "ROLLBACK FAILED at step 'restart': $SERVICE did not restart on" \
+      "$original_sha. The symlink IS rolled back, so a manual" \
+      "'systemctl restart $SERVICE' is the next thing to try." >&2
+    return 1
+  fi
 
-  python3 "$HEALTH_GATE" \
+  if ! python3 "$HEALTH_GATE" \
     --base-url http://127.0.0.1:8000 \
     --attempts 45 \
     --interval 1 \
     --timeout 3 \
     --consecutive 3
+  then
+    echo \
+      "ROLLBACK FAILED at step 'local health': $original_sha is activated and" \
+      "the service restarted, but it is not answering on 127.0.0.1:8000." \
+      "The previous release is not healthy either -- this is an outage." >&2
+    return 1
+  fi
 
   if [[ -n "$PUBLIC_BASE_URL" ]]; then
-    python3 "$HEALTH_GATE" \
+    if ! python3 "$HEALTH_GATE" \
       --base-url "$PUBLIC_BASE_URL" \
       --attempts 20 \
       --interval 1 \
       --timeout 5 \
       --consecutive 2
+    then
+      echo \
+        "ROLLBACK FAILED at step 'public health': $original_sha is healthy" \
+        "locally but not reachable at $PUBLIC_BASE_URL. Look at the edge" \
+        "(Caddy, DNS, TLS) rather than at the release." >&2
+      return 1
+    fi
   fi
 
   echo "Automatic rollback completed: $original_sha"
@@ -227,7 +293,26 @@ then
 fi
 
 if [[ "$deployment_ok" -ne 1 ]]; then
-  rollback_after_failure "$CURRENT_SHA" || true
+  # `|| true` here is what silenced the whole function (see the comment on it).
+  # The status is captured instead, so a failed rollback is loud and a
+  # successful one still exits non-zero -- the DEPLOYMENT failed either way.
+  rollback_status=0
+  # shellcheck disable=SC2310  # errexit IS suppressed in the function body
+  # here, and that is accounted for: rollback_after_failure checks every step
+  # itself and returns non-zero on the first failure, which is the whole point
+  # of this change. The warning is left visible rather than the check disabled
+  # tree-wide, so the next `f || true` somewhere else still fails CI.
+  rollback_after_failure "$CURRENT_SHA" || rollback_status=$?
+
+  if [[ "$rollback_status" -ne 0 ]]; then
+    echo >&2
+    echo "Production deployment: FAILED, AND ROLLBACK FAILED" >&2
+    echo "This host needs manual intervention now. See the step above." >&2
+    exit 1
+  fi
+
+  echo >&2
+  echo "Production deployment: FAILED (rolled back to $CURRENT_SHA)" >&2
   exit 1
 fi
 
