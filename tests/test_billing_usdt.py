@@ -73,9 +73,12 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
                 return r
         return None
 
-    async def list_pending(self, provider: str):
+    async def list_pending(self, provider: str, *, created_after=None):
         return [r for r in self.rows.values()
-                if r["provider"] == provider and r["status"] == "pending"]
+                if r["provider"] == provider and r["status"] == "pending"
+                and (created_after is None
+                     or r.get("created_at") is None
+                     or r["created_at"] >= created_after)]
 
 
 def _trongrid_transport(transfers: list, *, success: bool = True):
