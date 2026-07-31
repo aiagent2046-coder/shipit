@@ -1075,6 +1075,129 @@ async def test_blank_payer_contact_is_treated_as_absent(monkeypatch):
     assert "Email:" not in text
 
 
+# --- a second Fix Pack for one audit ---
+#
+# create_paid is idempotent per audit: a second confirmed payment joins the
+# live job instead of opening a second fix PR. That is correct for a retry and
+# wrong for a second BUYER -- two payments, one pull request, and "completed"
+# reported to both. Two defences, because neither covers the other's case.
+
+
+def test_second_fixpack_invoice_is_refused_while_a_job_is_live(monkeypatch):
+    """Defence one: don't sell. This is the last moment where refusing costs
+    nothing, because no money has moved yet."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add()
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        first = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer", json=PAYER)
+        assert first.status_code == 201
+        # The job appears when the operator CONFIRMS, not when the invoice is
+        # opened, so put one there directly rather than driving the whole
+        # Telegram callback -- the endpoint under test only reads the status.
+        fixpacks.rows.append({
+            "id": str(uuid.uuid4()), "audit_id": audit["id"], "pack": "fixpack",
+            "stack": "fastapi", "status": "paid", "verified": None,
+            "detail": None, "pr_url": None, "pr_delivered": False,
+            "created_at": datetime.datetime.now(datetime.timezone.utc),
+        })
+
+        second = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer", json=PAYER)
+        assert second.status_code == 409
+        assert second.json()["detail"]["reason"] == "fixpack_already_in_progress"
+        # Refused before anything was written: no second invoice to confirm.
+        assert len(payments.rows) == 1
+    finally:
+        _clear()
+
+
+def test_a_terminal_job_does_not_block_a_new_purchase(monkeypatch):
+    """The boundary. The refusal mirrors create_paid's ON CONFLICT predicate --
+    'paid' and 'running' only -- so re-buying after a failed Fix Pack, or after
+    a delivered one on a re-run audit, still works. A stricter check here would
+    refuse sales the database would have served."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add()
+    fixpacks.rows.append({
+        "id": str(uuid.uuid4()), "audit_id": audit["id"], "pack": "fixpack",
+        "stack": "fastapi", "status": "failed", "verified": None, "detail": None,
+        "pr_url": None, "pr_delivered": False,
+        "created_at": datetime.datetime.now(datetime.timezone.utc),
+    })
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        r = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer", json=PAYER)
+        assert r.status_code == 201
+    finally:
+        _clear()
+
+
+async def test_confirming_a_second_payment_warns_the_operator(monkeypatch):
+    """Defence two, for the case defence one cannot see.
+
+    Both invoices are opened BEFORE either is confirmed, so no job exists yet
+    and the 409 has nothing to refuse on. With a 7-day TTL and manual
+    confirmation that window is a normal week. The money is then taken twice
+    and nothing downstream can undo it -- only the operator can, and only if
+    they are told.
+    """
+    _configure_bank(monkeypatch)
+    _configure_alerts(monkeypatch)
+    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    audits, fixpacks, calls = FakeAuditRepo(), FakeFixpackRepo(), []
+    audit = audits.add()
+
+    first_invoice = await bank_transfer.create_fixpack_invoice(
+        payments, details=dict(BANK_DETAILS), audit_id=audit["id"])
+    second_invoice = await bank_transfer.create_fixpack_invoice(
+        payments, details=dict(BANK_DETAILS), audit_id=audit["id"])
+    assert first_invoice["reference"] != second_invoice["reference"]
+
+    first = await bank_transfer.confirm(
+        payment_repo=payments, account_repo=accounts, audit_repo=audits,
+        fixpack_repo=fixpacks, payment_id=first_invoice["payment_id"])
+    second = await bank_transfer.confirm(
+        payment_repo=payments, account_repo=accounts, audit_repo=audits,
+        fixpack_repo=fixpacks, payment_id=second_invoice["payment_id"])
+
+    # Both payments went through and both report granted -- that part is
+    # unchanged and correct, the Fix Pack IS queued.
+    assert first["granted"] is True and second["granted"] is True
+    assert len(fixpacks.rows) == 1
+
+    # What changed: the second one no longer claims to have funded work.
+    assert first["joined_existing_job"] is False
+    assert second["joined_existing_job"] is True
+
+    text = telegram_stars._confirmed_text(second)
+    assert "WARNING" in text
+    assert "funded no additional work" in text
+    assert "refund" in text
+    # The first confirmation stays clean; a warning on every Fix Pack would be
+    # noise and would stop being read.
+    assert "WARNING" not in telegram_stars._confirmed_text(first)
+
+
+async def test_a_pro_confirmation_never_carries_the_warning(monkeypatch):
+    """joined_existing_job is a Fix Pack concept. Pro grants an account, and
+    grant_pro_tier's replay path returns a row with no `inserted` key at all --
+    "we don't know" must not render as "we double-charged"."""
+    _configure_bank(monkeypatch)
+    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
+    result = await bank_transfer.confirm(
+        payment_repo=payments, account_repo=accounts, audit_repo=audits,
+        fixpack_repo=fixpacks, payment_id=invoice["payment_id"])
+    assert result["joined_existing_job"] is False
+    assert "WARNING" not in telegram_stars._confirmed_text(result)
 def test_invoice_creation_is_rate_limited(monkeypatch):
     """Opening an invoice is unauthenticated by necessity -- a buyer has no key
     until they have paid -- and each one takes a kopeck suffix for the length

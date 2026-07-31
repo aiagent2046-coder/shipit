@@ -634,10 +634,28 @@ async def confirm(
             amount=row.get("amount"), currency=row.get("currency") or CURRENCY,
             invoice_payment_id=str(row["id"]),
         )
+    # create_paid is idempotent per audit, so a second CONFIRMED payment for an
+    # audit that already has a live job silently joins that job: one fix PR,
+    # two payments taken, and every layer reporting success. The sell-side 409
+    # in main._reject_if_fixpack_already_live is the real defence, but it cannot
+    # cover an invoice opened BEFORE the first one was confirmed -- with a
+    # 7-day TTL and manual confirmation, that window is a normal week.
+    #
+    # So when it happens anyway, say so. The operator is the only one who can
+    # refund, and they cannot refund money they were told was fine.
+    joined_existing_job = (
+        product == PRODUCT_FIXPACK
+        and isinstance(granted, dict)
+        and granted.get("inserted") is False
+    )
     return {
         "payment_id": str(row["id"]),
         "reference": reference,
         "product": product,
         "audit_id": row.get("audit_id"),
         "granted": granted is not None,
+        # `is False`, not falsy: grant_fixpack's already-processed branch
+        # returns a payments row with no `inserted` key at all, and "we don't
+        # know" must not read as "we double-charged".
+        "joined_existing_job": joined_existing_job,
     }
