@@ -161,7 +161,9 @@ def query_applied_migrations(
     # rollback_safe is read through to_jsonb rather than named directly, so a
     # ledger that predates the column yields NULL instead of an error. NULL is
     # "nobody said", which this gate treats as unsafe -- exactly the behaviour
-    # it had for every row before the column existed.
+    # it had for every row before the column existed. It becomes the literal
+    # 'unknown' rather than an empty field, so the row never ends in a tab
+    # that some layer of whitespace stripping can quietly remove.
     sql = r"""
 \pset tuples_only on
 \pset format unaligned
@@ -170,7 +172,7 @@ def query_applied_migrations(
 SELECT
     filename,
     btrim(checksum),
-    coalesce(to_jsonb(ledger) ->> 'rollback_safe', '')
+    coalesce(to_jsonb(ledger) ->> 'rollback_safe', 'unknown')
 FROM public.shipit_schema_migrations AS ledger
 ORDER BY filename;
 """
@@ -200,7 +202,7 @@ ORDER BY filename;
             + (f": {detail}" if detail else "")
         )
 
-    applied: dict[str, str] = {}
+    applied: dict[str, AppliedRow] = {}
 
     for raw_line in completed.stdout.splitlines():
         line = raw_line.strip()
@@ -210,12 +212,13 @@ ORDER BY filename;
 
         parts = line.split("\t")
 
-        if len(parts) != 2:
+        if len(parts) != 3:
             raise MigrationGateError(
                 "unexpected migration ledger row"
             )
 
-        filename, checksum = parts
+        filename, checksum, rollback_safe = parts
+        filename = filename.strip()
         checksum = checksum.strip()
 
         if filename in applied:
@@ -223,7 +226,12 @@ ORDER BY filename;
                 f"duplicate migration in database: {filename}"
             )
 
-        applied[filename] = checksum
+        applied[filename] = AppliedRow(
+            checksum=checksum,
+            rollback_safe={"true": True, "false": False}.get(
+                rollback_safe.strip().lower()
+            ),
+        )
 
     return applied
 

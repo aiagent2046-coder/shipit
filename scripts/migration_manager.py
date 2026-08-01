@@ -550,7 +550,14 @@ def load_applied() -> dict[str, AppliedMigration]:
             -- a ledger that predates rollback_safe yields NULL instead of an
             -- error. `status` must stay read-only; the column is added by
             -- ensure_ledger_columns on the write paths.
-            coalesce(to_jsonb(ledger) ->> 'rollback_safe', '')
+            --
+            -- 'unknown' rather than '': psql separates fields with a tab, so
+            -- an empty last field makes the row end in one -- and every layer
+            -- that touches this output, starting with run_psql stripping the
+            -- whole thing, is happy to remove it. A row that then splits into
+            -- three fields instead of four is not a parsing problem worth
+            -- having. The sentinel keeps every field non-empty.
+            coalesce(to_jsonb(ledger) ->> 'rollback_safe', 'unknown')
         FROM {LEDGER_TABLE} AS ledger
         ORDER BY filename;
         """
