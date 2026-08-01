@@ -131,8 +131,17 @@ class FakeAuditRepo:
     def __init__(self):
         self.by_id: dict[str, dict] = {}
 
-    def add(self, *, stack="fastapi", repo_url=REPO_URL):
-        row = {"id": str(uuid.uuid4()), "stack": stack, "repo_url": repo_url}
+    # A finding the Fix Pack can actually rewrite. Default rather than opt-in
+    # because these tests are about invoice mechanics, and since the sell
+    # endpoints refuse an audit with nothing auto-fixable, an audit with no
+    # findings at all is no longer a neutral fixture -- it is the refusal case.
+    def add(self, *, stack="fastapi", repo_url=REPO_URL, findings=None):
+        row = {"id": str(uuid.uuid4()), "stack": stack, "repo_url": repo_url,
+               "findings_json": [{"rule_id": "aws-access-key-id",
+                                  "file": "config.py", "line": 1,
+                                  "title": "AWS Access Key ID",
+                                  "context": None}]
+               if findings is None else findings}
         self.by_id[row["id"]] = row
         return row
 
@@ -1248,4 +1257,26 @@ def test_pro_and_fixpack_share_one_invoice_budget(monkeypatch):
             "/v1/billing/bank-transfer/pro", json=PAYER).status_code == 429
     finally:
         app.dependency_overrides.pop(get_rate_limiter, None)
+        _clear()
+
+
+def test_bank_transfer_refuses_when_nothing_is_auto_fixable(monkeypatch):
+    """Same refusal on the card route. Three sell points grew independently
+    and already duplicate the audit and repo_url gates, so the thing that
+    breaks is one of them being missed -- see #128."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(findings=[
+        {"rule_id": "no-tests", "file": "", "line": 0, "title": "No tests",
+         "context": None},
+    ])
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        r = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer", json=PAYER)
+        assert r.status_code == 409
+        assert r.json()["detail"]["reason"] == "no_auto_fixable_findings"
+        assert len(payments.rows) == 0
+    finally:
         _clear()

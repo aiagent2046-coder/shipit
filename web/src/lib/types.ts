@@ -114,6 +114,15 @@ export interface PersistedAudit {
   findings_json: Finding[] | null;
   repo_url: string | null;
   created_at: string;
+  /**
+   * Whether a Fix Pack could produce anything for this audit. Computed by the
+   * API from the findings and the rules the Fix Pack knows how to rewrite --
+   * not derivable here without copying that list into TypeScript, where it
+   * would drift.
+   *
+   * Optional so an older API (or a cached response) simply reads as unknown.
+   */
+  fixpack_auto_fixable?: boolean;
 }
 
 export interface Entitlements {

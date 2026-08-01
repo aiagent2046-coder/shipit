@@ -40,10 +40,46 @@ const TERMINAL: ReadonlySet<string> = new Set([
 export function FixpackPurchase({
   auditId,
   repoUrl,
+  autoFixable,
 }: {
   auditId: string;
   repoUrl: string | null;
+  /**
+   * Whether a Fix Pack could produce anything for this audit, decided by the
+   * API (`fixpack_auto_fixable`). Not recomputed here: the answer depends on
+   * which rules the Fix Pack knows how to rewrite, and a second copy of that
+   * list in TypeScript would drift from the Python one.
+   *
+   * `undefined` means an older API that doesn't send the field. Treated as
+   * "offer it", because the sell endpoints refuse with 409 anyway -- hiding a
+   * button was never the protection.
+   */
+  autoFixable?: boolean;
 }) {
+  if (repoUrl && autoFixable === false) {
+    // Nothing here can be fixed automatically, and that was knowable before
+    // anyone paid. Audit 05fa18f5 was sold a Fix Pack in exactly this state:
+    // the job ran, found nothing, and the payer was charged for "Nothing to
+    // auto-fix". Explain instead of selling.
+    return (
+      <section className="mt-8 rounded-xl border border-border bg-elevated p-5 sm:p-6">
+        <h2 className="text-lg font-semibold">Fix Pack</h2>
+        <p className="mt-2 max-w-2xl text-sm text-muted">
+          Nothing in this audit can be fixed automatically, so there&apos;s
+          nothing to buy. A Fix Pack rewrites hardcoded secrets and a few
+          config problems into a pull request; the findings here are
+          recommendations, or they live in comments, docs or tests, where
+          rewriting them would change nothing an attacker could use.
+        </p>
+        <p className="mt-2 max-w-2xl text-sm text-muted">
+          Work through the recommendations above instead. If you change the
+          code and re-run the audit, this section will offer a Fix Pack when
+          there&apos;s something for it to do.
+        </p>
+      </section>
+    );
+  }
+
   if (!repoUrl) {
     return (
       <section className="mt-8 rounded-xl border border-border bg-elevated p-5 sm:p-6">
