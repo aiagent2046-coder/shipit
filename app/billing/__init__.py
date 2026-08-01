@@ -127,6 +127,41 @@ async def grant_pro_tier(
     can't create): callers surface that as "couldn't persist", not a
     crash.
     """
+    # Imported here, not at module scope, on purpose. This module talks to
+    # storage only through the Protocols above so it can be tested with fakes,
+    # and serialization is not a repository operation -- it belongs to the
+    # database. Importing it locally keeps the module-level boundary intact
+    # while making the lock impossible to forget: the alternative was passing
+    # it in from every provider, and a call site that forgot would silently
+    # lose the protection.
+    #
+    # With no DATABASE_URL the lock yields without locking, which is exactly
+    # what keeps the fake-backed tests unchanged.
+    from app.db import grant_lock
+
+    async with grant_lock(provider, external_ref):
+        return await _grant_pro_tier_locked(
+            account_repo=account_repo, payment_repo=payment_repo,
+            provider=provider, external_ref=external_ref, amount=amount,
+            currency=currency, invoice_payment_id=invoice_payment_id,
+        )
+
+
+async def _grant_pro_tier_locked(
+    *,
+    account_repo: _AccountStore,
+    payment_repo: _PaymentStore,
+    provider: str,
+    external_ref: str,
+    amount: float | None,
+    currency: str | None,
+    invoice_payment_id: str | None,
+) -> dict[str, Any] | None:
+    """grant_pro_tier's body, with the per-charge lock already held.
+
+    Split out only so the lock wraps every return path including the early
+    ones; there is no reason to call this directly.
+    """
     existing = await payment_repo.get_by_external_ref(provider, external_ref)
     if existing is not None and existing.get("account_id"):
         # Already granted for this charge/tx -- re-return the same account so
@@ -145,11 +180,43 @@ async def grant_pro_tier(
             invoice_payment_id, account_id=account["id"], external_ref=external_ref
         )
         if completed is None:
-            # The CAS gate refused: this invoice is already completed under a
-            # DIFFERENT external_ref, so a distinct charge got here first. Say so
-            # rather than report a grant -- the older unconditional UPDATE would
-            # have overwritten that charge's account_id and orphaned the account
-            # whose key its payer already holds.
+            # The CAS gate refused, and the two reasons it can refuse mean
+            # opposite things, so they must not share an outcome.
+            current = await payment_repo.get_by_external_ref(
+                provider, external_ref
+            )
+            linked = (current or {}).get("account_id")
+
+            if linked and linked != account["id"]:
+                # Same charge, someone else got there first: a concurrent
+                # confirmation of this very payment. The grant DID happen, so
+                # reporting failure would be a lie that makes an operator press
+                # Confirm again. Return the account that won, without an
+                # api_key -- the key was minted by the winner and delivered by
+                # it, and this path must not hand out a second one.
+                #
+                # The account minted a few lines above is now unreferenced. It
+                # is inert (nobody holds its key) but it is junk, so it is
+                # logged rather than swept: with grant_lock in place this should
+                # not happen at all, and a silent cleanup would hide the fact
+                # that it did.
+                logger.warning(
+                    "concurrent grant for %s/%s: payment %s was linked to "
+                    "account %s first; account %s minted here is unreferenced "
+                    "and its key was never delivered",
+                    provider, external_ref, invoice_payment_id, linked,
+                    account["id"],
+                )
+                winner = await account_repo.get_by_id(linked)
+                if winner is not None:
+                    return winner
+                return None
+
+            # This invoice is already completed under a DIFFERENT external_ref,
+            # so a distinct charge got here first. Say so rather than report a
+            # grant -- the older unconditional UPDATE would have overwritten
+            # that charge's account_id and orphaned the account whose key its
+            # payer already holds. A human has to reconcile this one.
             logger.error(
                 "payment %s already completed under another charge; refusing to "
                 "re-complete it for %s/%s (account %s was minted and is now "
