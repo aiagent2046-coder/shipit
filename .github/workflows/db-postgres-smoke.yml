@@ -82,6 +82,13 @@ jobs:
           pip install --require-hashes -r requirements-dev.txt
           pip install -e . --no-deps
 
+      # Needs no database: catches a new migration with no `rollback-safe`
+      # directive, or one whose SQL contradicts a `yes`. Runs before anything
+      # is applied, because the answer does not depend on applying it and a
+      # missing directive is cheapest to fix here.
+      - name: Lint migration files
+        run: python3 scripts/migration_manager.py lint
+
       - name: Apply all migrations in order
         run: bash scripts/apply_migrations.sh
 

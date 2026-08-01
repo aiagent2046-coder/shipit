@@ -77,6 +77,46 @@ CONCURRENT_INDEX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A migration declares, in its own header, whether the PREVIOUS release's code
+# runs correctly against the schema once this migration is applied. That is the
+# only question a rollback needs answered, and it cannot be inferred from the
+# SQL: `create index` is safe, `alter table add column` almost always is,
+# `add column not null` without a default is not, and a rename never is.
+# Guessing here means guessing wrong once, during an incident. So the author
+# declares it and ROLLBACK_UNSAFE_PATTERNS refuses the obviously false claims.
+ROLLBACK_SAFE_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*--[ \t]*rollback-safe:[ \t]*(yes|no)[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# The migration number from which the directive is mandatory. Everything below
+# it predates the directive and is already applied everywhere, so demanding it
+# retroactively would only break a fresh bootstrap of the existing history.
+DIRECTIVE_REQUIRED_FROM = 28
+
+# Statements that contradict a `rollback-safe: yes` claim. Not a completeness
+# check -- a migration can be rollback-unsafe without matching any of these,
+# which is why the directive is a declaration and not a derivation.
+ROLLBACK_UNSAFE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("DROP", re.compile(r"\bDROP\b", re.IGNORECASE)),
+    ("TRUNCATE", re.compile(r"\bTRUNCATE\b", re.IGNORECASE)),
+    ("RENAME", re.compile(r"\bRENAME\b", re.IGNORECASE)),
+    ("ALTER TYPE", re.compile(r"\bALTER\s+(?:COLUMN\s+\S+\s+)?TYPE\b",
+                              re.IGNORECASE)),
+    ("SET NOT NULL", re.compile(r"\bSET\s+NOT\s+NULL\b", re.IGNORECASE)),
+)
+
+# `add column ... not null` needs the whole statement, not a pattern: DEFAULT
+# can sit on either side of NOT NULL, so any single regex either misses
+# `not null default ''` or misses `default '' not null`.
+ADD_COLUMN_STATEMENT_RE = re.compile(
+    r"\bADD\s+COLUMN\b[^;]*",
+    re.IGNORECASE,
+)
+
+NOT_NULL_RE = re.compile(r"\bNOT\s+NULL\b", re.IGNORECASE)
+DEFAULT_RE = re.compile(r"\bDEFAULT\b", re.IGNORECASE)
+
 DESTRUCTIVE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "DROP",
@@ -100,6 +140,9 @@ class Migration:
     path: Path
     checksum: str
     destructive_reasons: tuple[str, ...]
+    # None when the file carries no directive: "unknown", not "unsafe" and not
+    # "safe". Only migrations below DIRECTIVE_REQUIRED_FROM may be None.
+    rollback_safe: bool | None
 
 
 @dataclass(frozen=True)
@@ -107,6 +150,11 @@ class AppliedMigration:
     name: str
     checksum: str
     execution_mode: str
+    # None for rows written before the ledger had the column, and for rows
+    # whose file predates the directive. The release migration gate reads this
+    # and treats None as "assume unsafe", which is the behaviour it had for
+    # every row before any of this existed.
+    rollback_safe: bool | None = None
 
 
 class MigrationError(RuntimeError):
@@ -153,6 +201,87 @@ def classify_destructive(sql: str) -> tuple[str, ...]:
         for name, pattern in DESTRUCTIVE_PATTERNS
         if pattern.search(stripped)
     )
+
+
+def parse_rollback_safe(sql: str) -> bool | None:
+    """Read the `-- rollback-safe: yes|no` header, or None when absent.
+
+    Read from the raw file, not the comment-stripped SQL: the directive IS a
+    comment. A second, contradicting directive is a hard error rather than a
+    silent first-wins, because the two most likely ways to write one are
+    copying a header from another migration and forgetting to change it.
+    """
+    matches = ROLLBACK_SAFE_DIRECTIVE_RE.findall(sql)
+
+    if not matches:
+        return None
+
+    values = {value.lower() for value in matches}
+
+    if len(values) > 1:
+        raise MigrationError(
+            "migration declares rollback-safe both yes and no"
+        )
+
+    return values.pop() == "yes"
+
+
+def classify_rollback_unsafe(sql: str) -> tuple[str, ...]:
+    """Reasons the SQL contradicts a `rollback-safe: yes` claim.
+
+    Judged on comment-stripped SQL. Every migration in this repo explains
+    itself in a header comment and those comments discuss what was NOT done --
+    0027's says "NOT a unique index" -- so classifying on raw text would
+    reject correct migrations for describing themselves.
+    """
+    stripped = strip_sql_comments(sql)
+
+    reasons = [
+        name
+        for name, pattern in ROLLBACK_UNSAFE_PATTERNS
+        if pattern.search(stripped)
+    ]
+
+    for statement in ADD_COLUMN_STATEMENT_RE.findall(stripped):
+        if NOT_NULL_RE.search(statement) and not DEFAULT_RE.search(statement):
+            reasons.append("NOT NULL without a default")
+            break
+
+    return tuple(reasons)
+
+
+def validate_rollback_directive(migration: Migration) -> None:
+    """A missing directive on a new migration, or a false `yes`, is an error.
+
+    Only `yes` is cross-checked. A migration is free to declare `no` for a
+    reason no pattern could see -- code that reads a column this migration
+    starts writing, say -- and being wrong in that direction only costs a
+    rollback that stays blocked.
+    """
+    if migration.rollback_safe is None:
+        if migration.number >= DIRECTIVE_REQUIRED_FROM:
+            raise MigrationError(
+                f"{migration.name}: missing required header directive. Add "
+                "`-- rollback-safe: yes` if the previous release's code runs "
+                "correctly once this migration is applied, `no` otherwise. "
+                "The release migration gate uses it to decide whether a "
+                "rollback past this migration is allowed."
+            )
+        return
+
+    if not migration.rollback_safe:
+        return
+
+    sql = migration.path.read_text(encoding="utf-8", errors="strict")
+    reasons = classify_rollback_unsafe(sql)
+
+    if reasons:
+        raise MigrationError(
+            f"{migration.name}: declares `rollback-safe: yes` but contains "
+            f"{', '.join(reasons)}. The previous release's code cannot be "
+            "assumed to survive that. Declare `no`, or split the compatible "
+            "part into its own migration."
+        )
 
 
 def validate_migration_sql(migration: Migration) -> None:
@@ -221,6 +350,7 @@ def discover_migrations(
                 path=path.resolve(),
                 checksum=migration_checksum(path),
                 destructive_reasons=classify_destructive(sql),
+                rollback_safe=parse_rollback_safe(sql),
             )
         )
 
@@ -371,12 +501,33 @@ def create_ledger() -> None:
             applied_by text NOT NULL DEFAULT current_user,
             git_sha text NOT NULL,
             execution_mode text NOT NULL
-                CHECK (execution_mode IN ('apply', 'baseline'))
+                CHECK (execution_mode IN ('apply', 'baseline')),
+            -- Nullable on purpose: NULL means "nobody said", which the
+            -- release migration gate treats as unsafe. Rows written before
+            -- this column existed keep that meaning without a backfill.
+            rollback_safe boolean
         );
 
         REVOKE ALL ON TABLE {LEDGER_TABLE} FROM PUBLIC;
 
         COMMIT;
+        """
+    )
+
+
+def ensure_ledger_columns() -> None:
+    """Bring an existing ledger up to the current shape.
+
+    Deliberately NOT a migration in migrations/. The ledger is this script's
+    own bookkeeping and has never been part of the migration history -- and a
+    migration here would be self-defeating, since the whole point of the
+    change is that shipping a migration must stop making a release
+    irreversible.
+    """
+    run_psql(
+        f"""
+        ALTER TABLE {LEDGER_TABLE}
+            ADD COLUMN IF NOT EXISTS rollback_safe boolean;
         """
     )
 
@@ -394,8 +545,13 @@ def load_applied() -> dict[str, AppliedMigration]:
         SELECT
             filename,
             checksum,
-            execution_mode
-        FROM {LEDGER_TABLE}
+            execution_mode,
+            -- Through to_jsonb rather than naming the column, so that reading
+            -- a ledger that predates rollback_safe yields NULL instead of an
+            -- error. `status` must stay read-only; the column is added by
+            -- ensure_ledger_columns on the write paths.
+            coalesce(to_jsonb(ledger) ->> 'rollback_safe', '')
+        FROM {LEDGER_TABLE} AS ledger
         ORDER BY filename;
         """
     )
@@ -410,17 +566,20 @@ def load_applied() -> dict[str, AppliedMigration]:
 
         parts = line.split("\t")
 
-        if len(parts) != 3:
+        if len(parts) != 4:
             raise MigrationError(
                 "unexpected migration ledger row format"
             )
 
-        name, checksum, execution_mode = parts
+        name, checksum, execution_mode, rollback_safe = parts
 
         applied[name] = AppliedMigration(
             name=name,
             checksum=checksum.strip(),
             execution_mode=execution_mode,
+            rollback_safe={"true": True, "false": False}.get(
+                rollback_safe.strip().lower()
+            ),
         )
 
     return applied
@@ -658,6 +817,10 @@ def apply_one(
     checksum = sql_literal(migration.checksum)
     revision_literal = sql_literal(revision)
     include_path = psql_include_path(migration.path)
+    rollback_safe = (
+        "NULL" if migration.rollback_safe is None
+        else str(migration.rollback_safe).lower()
+    )
 
     sql = f"""
 \\set ON_ERROR_STOP on
@@ -697,13 +860,15 @@ SELECT EXISTS (
         filename,
         checksum,
         git_sha,
-        execution_mode
+        execution_mode,
+        rollback_safe
     )
     VALUES (
         {name},
         {checksum},
         {revision_literal},
-        'apply'
+        'apply',
+        {rollback_safe}
     );
 
 \\endif
@@ -712,6 +877,33 @@ COMMIT;
 """
 
     run_psql(sql, quiet=False)
+
+
+def lint_migrations(migrations: Sequence[Migration]) -> int:
+    """Validate every migration file. Used by CI, needs no database."""
+
+    errors: list[str] = []
+
+    for migration in migrations:
+        for check in (validate_migration_sql, validate_rollback_directive):
+            try:
+                check(migration)
+            except MigrationError as error:
+                errors.append(str(error))
+
+    if errors:
+        for message in errors:
+            print(f"ERROR: {message}", file=sys.stderr)
+        return 1
+
+    declared = sum(
+        1 for migration in migrations if migration.rollback_safe is not None
+    )
+    print(
+        f"Migration lint: PASSED ({len(migrations)} files, "
+        f"{declared} with a rollback-safe directive)"
+    )
+    return 0
 
 
 def apply_migrations(
@@ -731,6 +923,8 @@ def apply_migrations(
 
     if not has_ledger:
         create_ledger()
+    else:
+        ensure_ledger_columns()
 
     applied = load_applied()
     verify_applied_integrity(migrations, applied)
@@ -742,6 +936,7 @@ def apply_migrations(
 
     for migration in pending:
         validate_migration_sql(migration)
+        validate_rollback_directive(migration)
 
     destructive = [
         migration
@@ -820,6 +1015,11 @@ def parse_args(
         help="show applied, pending and drifted migrations",
     )
 
+    subparsers.add_parser(
+        "lint",
+        help="validate migration files without touching the database",
+    )
+
     apply_parser = subparsers.add_parser(
         "apply",
         help="apply pending migrations",
@@ -847,6 +1047,12 @@ def main(
     argv: Sequence[str] | None = None,
 ) -> int:
     arguments = parse_args(argv)
+
+    if arguments.mode == "lint":
+        # No psql, no DATABASE_URL: this runs in CI on a pull request, where
+        # the point is to catch a missing or false directive before the
+        # migration is ever applied anywhere.
+        return lint_migrations(discover_migrations())
 
     require_command("psql")
     database_url()

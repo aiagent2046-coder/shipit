@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, NoReturn, Sequence
+from typing import Any, NamedTuple, NoReturn, Sequence
 
 
 METADATA_FILE = ".shipit-release.json"
@@ -20,6 +20,15 @@ CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
 
 class MigrationGateError(RuntimeError):
     """Release and database migration state are incompatible."""
+
+
+class AppliedRow(NamedTuple):
+    checksum: str
+    # Whether the release BEFORE this migration can run against a schema that
+    # has it. Declared by the migration author, recorded at apply time by
+    # scripts/migration_manager.py. None means nobody said, which is not the
+    # same as no and is treated here the same as no.
+    rollback_safe: bool | None
 
 
 def fail(message: str) -> NoReturn:
@@ -148,7 +157,11 @@ def load_env_values(
 
 def query_applied_migrations(
     database_url: str,
-) -> dict[str, str]:
+) -> dict[str, AppliedRow]:
+    # rollback_safe is read through to_jsonb rather than named directly, so a
+    # ledger that predates the column yields NULL instead of an error. NULL is
+    # "nobody said", which this gate treats as unsafe -- exactly the behaviour
+    # it had for every row before the column existed.
     sql = r"""
 \pset tuples_only on
 \pset format unaligned
@@ -156,8 +169,9 @@ def query_applied_migrations(
 
 SELECT
     filename,
-    btrim(checksum)
-FROM public.shipit_schema_migrations
+    btrim(checksum),
+    coalesce(to_jsonb(ledger) ->> 'rollback_safe', '')
+FROM public.shipit_schema_migrations AS ledger
 ORDER BY filename;
 """
 
@@ -216,8 +230,25 @@ ORDER BY filename;
 
 def compare_migrations(
     expected: dict[str, str],
-    applied: dict[str, str],
+    applied: dict[str, AppliedRow],
 ) -> list[str]:
+    """Three kinds of divergence, and they are not equally dangerous.
+
+    The database MISSING a release migration means new code against an old
+    schema. Always fatal, no exceptions -- that is the case this gate exists
+    for.
+
+    A CHECKSUM mismatch means a migration file was edited after it was
+    applied. Always fatal: whatever the database contains, it is no longer
+    what the file says it contains.
+
+    The database being AHEAD of the release means old code against a newer
+    schema, which is what every rollback looks like. Treating that as fatal
+    made any release carrying a migration irreversible, however harmless the
+    migration was -- an index nobody reads would block the rollback of an
+    unrelated outage. So it is fatal only when the extra migration is not
+    declared rollback-safe.
+    """
     errors: list[str] = []
 
     for filename in sorted(expected.keys() - applied.keys()):
@@ -226,12 +257,20 @@ def compare_migrations(
         )
 
     for filename in sorted(applied.keys() - expected.keys()):
+        if applied[filename].rollback_safe:
+            continue
+
         errors.append(
-            f"database is ahead of release: {filename}"
+            f"database is ahead of release: {filename} "
+            + (
+                "(declared rollback-safe: no)"
+                if applied[filename].rollback_safe is False
+                else "(no rollback-safe declaration; assuming unsafe)"
+            )
         )
 
     for filename in sorted(expected.keys() & applied.keys()):
-        if expected[filename] != applied[filename]:
+        if expected[filename] != applied[filename].checksum:
             errors.append(
                 f"migration checksum mismatch: {filename}"
             )
