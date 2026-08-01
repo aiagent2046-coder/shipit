@@ -1758,11 +1758,25 @@ class PaymentRepository:
     async def get_completed_by_telegram_chat_id(
         self, telegram_chat_id: str
     ) -> dict[str, Any] | None:
-        """The completed payment linked to this Telegram chat_id, if any
-        (newest first). Backs /mykey: a chat_id has an account -- and thus
-        a recoverable key -- exactly when a completed payment carries it
-        (Stars stamps it at purchase, USDT via /link). Returns None when
-        DATABASE_URL isn't set, same not-configured contract as get."""
+        """The completed payment linked to this Telegram chat_id that granted
+        an account, if any (newest first). Backs /mykey and /rotatekey: a
+        chat_id has an account -- and thus a recoverable key -- exactly when a
+        completed payment carries it (Stars stamps it at purchase, USDT and
+        bank transfer via /link). Returns None when DATABASE_URL isn't set,
+        same not-configured contract as get.
+
+        `account_id is not null` is load-bearing, not tidiness. A Fix Pack
+        payment is completed and can carry a telegram_chat_id, but grants no
+        account by design -- mark_completed_fixpack leaves account_id null,
+        because a Fix Pack is delivered as a pull request and has no key. It is
+        also, being a later purchase, the NEWEST row for that chat. Without
+        this predicate a Pro customer who ran /link with a Fix Pack reference
+        had /mykey and /rotatekey answer "no account" from then on, with no way
+        back: nothing unlinks a chat.
+
+        The predicate cannot hide a payment that has a key. A completed Pro
+        payment always has an account -- mark_completed takes account_id as a
+        required argument, so the state cannot exist."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1776,6 +1790,7 @@ class PaymentRepository:
                        payer_email, created_at
                 from payments
                 where telegram_chat_id = %s and status = 'completed'
+                  and account_id is not null
                 order by created_at desc
                 limit 1
                 """,

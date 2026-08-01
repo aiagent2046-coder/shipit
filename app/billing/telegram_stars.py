@@ -446,6 +446,31 @@ def _delivery_text(api_key: str) -> str:
     )
 
 
+def _no_key_for_this_payment_text(payment: dict[str, Any]) -> str:
+    """A real, completed payment that simply has no key to hand over.
+
+    In practice always a Fix Pack, which is delivered as a pull request. The
+    text this replaced said the account "could not be loaded" and told the
+    payer to contact support -- describing a failure to someone whose payment
+    worked perfectly, about a key that was never supposed to exist.
+
+    The last line matters as much as the first: a payer who just typed a
+    command and got an unexpected answer will assume they broke something, and
+    the honest reassurance is cheaper than the support message it prevents.
+    """
+    from app.billing import PRODUCT_FIXPACK
+
+    what = ("Fix Pack" if payment.get("product") == PRODUCT_FIXPACK
+            else "purchase")
+    return (
+        f"That reference is for a {what}, which doesn't come with an API "
+        "key — it's delivered as a pull request on your repository, and "
+        "you'll get a message here when it's opened.\n\n"
+        "Nothing went wrong and nothing changed: if you also have Drydock "
+        "pro on this chat, /mykey and /rotatekey still work as before."
+    )
+
+
 def _already_delivered_text() -> str:
     # A retried webhook / a second /link for a payment whose key already went
     # out. The key text is not stored (migration 0019), so there is nothing to
@@ -1309,6 +1334,27 @@ async def _handle_link(
         )
         return {"ok": True, "handled": "link", "result": "already_claimed"}
 
+    # Before claiming anything: does this payment grant an account at all?
+    #
+    # A Fix Pack payment is completed and matches a DRY- reference like any
+    # other, but grants no account by design -- it is delivered as a pull
+    # request and has no key. Stamping this chat onto it used to happen first
+    # and be discovered second, which broke the payer's Pro access: /mykey and
+    # /rotatekey read the NEWEST completed payment carrying the chat, that was
+    # now the Fix Pack row, and it has no account. Permanently, because nothing
+    # unlinks a chat.
+    #
+    # get_completed_by_telegram_chat_id now ignores account-less payments, so
+    # the damage is undone for anyone already in that state. This stops it
+    # being done in the first place -- and lets us say something true instead
+    # of sending the payer to support over a failure that never happened.
+    if not row.get("account_id"):
+        await send_message(
+            chat_id, _no_key_for_this_payment_text(row),
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "link", "result": "no_account"}
+
     # Unlinked, or already linked to THIS chat (idempotent): claim it and
     # hand back the key. The conditional update is the first-wins guard.
     linked = await payment_repo.link_telegram_chat_id(row["id"], str(chat_id))
@@ -1321,16 +1367,6 @@ async def _handle_link(
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "link", "result": "already_claimed"}
-
-    if not row.get("account_id"):
-        await send_message(
-            chat_id,
-            "That payment is linked to this chat, but its account could not "
-            "be loaded. Please contact support and quote what you sent with "
-            "`/link`.",
-            token=token, transport=transport,
-        )
-        return {"ok": True, "handled": "link", "result": "no_account"}
 
     # /link and the web checkout's invoice poll are two doors to the same USDT
     # payment, and the key it grants exists in neither place: the poller that

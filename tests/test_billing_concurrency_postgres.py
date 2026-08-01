@@ -260,3 +260,98 @@ async def test_the_kopeck_lock_degrades_instead_of_crashing(live_db, caplog):
     # designed -- and said so.
     assert entered
     assert any("reserving without it" in r.message for r in caplog.records)
+
+
+# --- a Fix Pack must not take away a Pro payer's key ---
+#
+# /link stamped the chat onto the payment BEFORE checking whether that payment
+# grants an account. A Fix Pack grants none by design -- it is delivered as a
+# pull request -- so a Pro customer who ran /link with a Fix Pack reference
+# ended up with the chat pointing at an account-less row.
+#
+# /mykey and /rotatekey read the NEWEST completed payment carrying the chat.
+# The Fix Pack, being the later purchase, won. Both answered "no account" from
+# then on, permanently: nothing unlinks a chat.
+#
+# Real Postgres because the whole defect lives in `order by created_at desc
+# limit 1` over two rows -- a fake returning one dict cannot express it.
+
+
+async def _completed_pro(payments, accounts, chat_id: str) -> dict:
+    account = await accounts.create(api_key="pro-" + "a" * 28, tier="pro")
+    invoice = await payments.create(
+        account_id=None, provider="bank_transfer", external_ref=None,
+        amount=5.13, currency="USD", status="pending",
+        tier_granted=None, product="pro_tier",
+    )
+    await payments.mark_completed(
+        str(invoice["id"]), account_id=str(account["id"]),
+        external_ref="DRY-PROAA2",
+    )
+    await payments.link_telegram_chat_id(str(invoice["id"]), chat_id)
+    return account
+
+
+async def _completed_fixpack(payments, chat_id: str | None) -> dict:
+    invoice = await payments.create(
+        account_id=None, provider="bank_transfer", external_ref=None,
+        amount=29.07, currency="USD", status="pending",
+        tier_granted=None, product="fixpack",
+    )
+    await payments.mark_completed_fixpack(
+        str(invoice["id"]), external_ref="DRY-FXPK23",
+    )
+    if chat_id is not None:
+        await payments.link_telegram_chat_id(str(invoice["id"]), chat_id)
+    return invoice
+
+
+async def test_a_newer_fixpack_does_not_hide_the_pro_account(live_db):
+    """The repair, and the half that acts retroactively: anyone already in
+    this state gets their key recovery back on deploy, with no data surgery."""
+    accounts, payments = db.AccountRepository(), db.PaymentRepository()
+    chat = "555001"
+
+    account = await _completed_pro(payments, accounts, chat)
+    await _completed_fixpack(payments, chat)   # later, and account-less
+
+    found = await payments.get_completed_by_telegram_chat_id(chat)
+
+    assert found is not None, "/mykey would answer 'no account'"
+    assert str(found["account_id"]) == str(account["id"])
+    assert found["product"] == "pro_tier"
+
+
+async def test_a_chat_with_only_a_fixpack_still_has_no_account(live_db):
+    """The boundary. The predicate must not invent an account for someone who
+    genuinely has none -- a Fix Pack buyer who never bought Pro."""
+    payments = db.PaymentRepository()
+    chat = "555002"
+
+    await _completed_fixpack(payments, chat)
+
+    assert await payments.get_completed_by_telegram_chat_id(chat) is None
+
+
+async def test_the_newest_pro_payment_still_wins(live_db):
+    """Two Pro payments on one chat -- an upgrade, a re-purchase after a
+    refund -- must still resolve to the later one. The fix narrows which rows
+    are considered, not the ordering among them."""
+    accounts, payments = db.AccountRepository(), db.PaymentRepository()
+    chat = "555003"
+
+    await _completed_pro(payments, accounts, chat)
+    second = await accounts.create(api_key="pro-" + "b" * 28, tier="pro")
+    invoice = await payments.create(
+        account_id=None, provider="bank_transfer", external_ref=None,
+        amount=5.14, currency="USD", status="pending",
+        tier_granted=None, product="pro_tier",
+    )
+    await payments.mark_completed(
+        str(invoice["id"]), account_id=str(second["id"]),
+        external_ref="DRY-PROAA3",
+    )
+    await payments.link_telegram_chat_id(str(invoice["id"]), chat)
+
+    found = await payments.get_completed_by_telegram_chat_id(chat)
+    assert str(found["account_id"]) == str(second["id"])
