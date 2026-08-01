@@ -83,6 +83,9 @@ def test_health_db_up_reports_backlog():
     assert resp.status_code == 200
     assert resp.json() == {
         "db": True, "fixpack_backlog": 2, "oldest_paid_seconds": 43.0,
+        # None, not False: App auth simply isn't configured in the test
+        # environment, which is not the same as a rejected key.
+        "github_app": None,
     }
 
 
@@ -97,6 +100,7 @@ def test_health_db_unconfigured_is_200_with_db_false():
     assert resp.status_code == 200          # live process reporting degraded
     assert resp.json() == {
         "db": False, "fixpack_backlog": None, "oldest_paid_seconds": None,
+        "github_app": None,
     }
 
 
@@ -109,6 +113,7 @@ def test_health_empty_backlog_has_null_age():
         _clear()
     assert resp.json() == {
         "db": True, "fixpack_backlog": 0, "oldest_paid_seconds": None,
+        "github_app": None,
     }
 
 

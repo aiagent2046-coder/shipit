@@ -614,10 +614,18 @@ Everything rides Postgres and the Telegram bot that already exist (see
 
 - **`GET /health`** (public, unauthenticated, leak-free) reports what
   actually fails here: `{"db": <bool>, "fixpack_backlog": <n|null>,
-  "oldest_paid_seconds": <secs|null>}`. `db:false` means the database is
+  "oldest_paid_seconds": <secs|null>, "github_app": <bool|null>}`. `db:false`
+  means the database is
   unset or unreachable (a live process honestly reporting degraded — still
   `200`, so a dumb uptime pinger can read it). A growing `oldest_paid_seconds`
   past the `shipit-fixpack.timer` interval means the processor isn't draining.
+  `github_app:false` means GitHub no longer accepts this deployment's App
+  credentials, so **no** Fix Pack can open a PR until `GITHUB_APP_ID` /
+  `GITHUB_APP_PRIVATE_KEY_B64` are fixed — affected jobs stay queued rather
+  than failing, and the 401 log line carries a non-secret public-key
+  fingerprint to compare against the App's registered key. `null` means App
+  auth isn't configured here at all (the PAT path), which is not a fault. The
+  verdict is cached for five minutes, so the probe stays cheap.
   Returns only booleans/coarse counts — no ids, urls, or error text — so it's
   safe to expose without a token, unlike the side-effecting `/internal/*`
   endpoints.

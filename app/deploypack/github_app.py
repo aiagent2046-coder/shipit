@@ -70,6 +70,23 @@ class GitHubAppError(Exception):
     not an error."""
 
 
+class GitHubAppAuthError(GitHubAppError):
+    """GitHub refused to believe we are who we say we are.
+
+    A separate type because it means something different from every other
+    GitHubAppError: nothing about the caller's repository is wrong. The key
+    on this deployment does not match the App, or the PEM never parsed. No
+    retry, no other repo, and no amount of the customer's patience fixes it
+    -- only an operator editing .env does.
+
+    Callers that charge money for the work must treat it accordingly: a job
+    that hit this was never really attempted, so failing it terminally bills
+    a customer for our outage.
+
+    A subclass rather than a flag so that every existing `except
+    GitHubAppError` keeps catching it unchanged."""
+
+
 def _normalize_pem(raw: str) -> str:
     """A flat systemd EnvironmentFile line holds one KEY=VALUE per
     physical line and cannot carry a raw multi-line PEM block, so the
@@ -183,7 +200,7 @@ def mint_app_jwt(app_id: str, private_key: str, *, now: float | None = None) -> 
             stripped.startswith("-----BEGIN"),
             stripped.endswith("-----") and "-----END" in stripped,
         )
-        raise GitHubAppError(
+        raise GitHubAppAuthError(
             "GITHUB_APP_PRIVATE_KEY is not a valid PEM private key — "
             "check for missing newlines or truncation"
         ) from exc
@@ -253,6 +270,11 @@ def installation_token_for_repo(
                 f"GitHub App is not installed on {owner}/{repo} \u2014 "
                 "the repo owner needs to install it first"
             )
+        if resp.status_code == 401:
+            raise GitHubAppAuthError(
+                f"resolve installation failed: {resp.status_code} "
+                f"{resp.text[:300]}"
+            )
         if resp.status_code >= 300:
             raise GitHubAppError(
                 f"resolve installation failed: {resp.status_code} {resp.text[:300]}"
@@ -260,6 +282,14 @@ def installation_token_for_repo(
         installation_id = resp.json()["id"]
 
         token_resp = client.post(f"/app/installations/{installation_id}/access_tokens")
+        if token_resp.status_code == 401:
+            # The App JWT was good enough to resolve the installation a moment
+            # ago, so a 401 here is the same credential problem surfacing one
+            # call later -- most plausibly a JWT that expired mid-request.
+            raise GitHubAppAuthError(
+                f"mint installation token failed: {token_resp.status_code} "
+                f"{token_resp.text[:300]}"
+            )
         if token_resp.status_code >= 300:
             raise GitHubAppError(
                 f"mint installation token failed: {token_resp.status_code} "
@@ -295,11 +325,101 @@ def installation_exists_for_repo(
         resp = client.get(f"/repos/{owner}/{repo}/installation")
         if resp.status_code == 404:
             return False
+        if resp.status_code == 401:
+            raise GitHubAppAuthError(
+                f"resolve installation failed: {resp.status_code} "
+                f"{resp.text[:300]}"
+            )
         if resp.status_code >= 300:
             raise GitHubAppError(
                 f"resolve installation failed: {resp.status_code} {resp.text[:300]}"
             )
         return True
+
+
+# Cached result of app_auth_ok, as (checked_at, verdict). /health is public
+# and unauthenticated, so without a cache a dumb uptime pinger would turn
+# every probe into a GitHub API call and eventually rate-limit the App.
+_AUTH_CACHE: tuple[float, bool] | None = None
+AUTH_CACHE_SECONDS = 300
+
+
+def reset_app_auth_cache() -> None:
+    """Drop the cached verdict. For tests, and for a caller that has just
+    changed the credentials and wants the next probe to mean something."""
+    global _AUTH_CACHE
+    _AUTH_CACHE = None
+
+
+def app_auth_ok(
+    *,
+    transport: httpx.BaseTransport | None = None,
+    now: float | None = None,
+) -> bool | None:
+    """Does GitHub still accept our App credentials?
+
+    Returns None when App auth isn't configured on this deployment at all
+    (the PAT path), True/False otherwise. Never raises: this exists to be
+    called from a health probe, and a probe that can fail is not a probe.
+
+    ``GET /app`` is the App reading its own metadata -- the cheapest call
+    that answers exactly the question the JWT answers, with no repository,
+    installation or permission involved. A 401 here is the credential
+    problem and nothing else.
+
+    Blocking (httpx.Client), like every other function in this module, so an
+    async caller must hand it to a thread.
+
+    Only a definite verdict is cached. A network error or a 5xx says nothing
+    about the key, so it is reported as False for this probe -- honest, since
+    we genuinely cannot open a PR right now -- but not remembered, or one
+    blip would read as a broken key for the next five minutes.
+    """
+    global _AUTH_CACHE
+    now = now if now is not None else time.time()
+
+    if _AUTH_CACHE is not None and now - _AUTH_CACHE[0] < AUTH_CACHE_SECONDS:
+        return _AUTH_CACHE[1]
+
+    credentials = app_credentials_from_env()
+    if credentials is None:
+        return None
+    app_id, private_key = credentials
+
+    try:
+        app_jwt = mint_app_jwt(app_id, private_key, now=now)
+    except GitHubAppError:
+        # A PEM that will not parse is a definite verdict, and a cheap one:
+        # it needs no network and cannot be a transient.
+        _AUTH_CACHE = (now, False)
+        return False
+
+    headers = {**_HEADERS_BASE, "Authorization": f"Bearer {app_jwt}"}
+    try:
+        with httpx.Client(base_url=GITHUB_API, headers=headers, timeout=10,
+                          transport=transport) as client:
+            resp = client.get("/app")
+    except httpx.HTTPError as exc:
+        logger.warning("App auth probe could not reach GitHub: %s", exc)
+        return False
+
+    if resp.status_code == 401:
+        logger.warning(
+            "App auth probe: GitHub rejected the App JWT (401) | "
+            "app_id(iss)=%r | public key %s",
+            app_id.strip(), _public_key_fingerprint(private_key),
+        )
+        _AUTH_CACHE = (now, False)
+        return False
+
+    if resp.status_code >= 300:
+        logger.warning(
+            "App auth probe: unexpected %s from GitHub", resp.status_code
+        )
+        return False
+
+    _AUTH_CACHE = (now, True)
+    return True
 
 
 def app_slug_from_env() -> str:

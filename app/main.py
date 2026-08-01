@@ -63,7 +63,9 @@ from app.db import (
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.github_app import (
+    GitHubAppAuthError,
     GitHubAppError,
+    app_auth_ok,
     app_credentials_from_env,
     build_install_url,
     installation_exists_for_repo,
@@ -759,22 +761,32 @@ async def health(
         from "process up but the Supabase pooler is unreachable");
       * `fixpack_backlog` / `oldest_paid_seconds` — is the Fix Pack processor
         timer draining the queue, or is a paid job stuck (see
-        FixpackJobRepository.backlog_stats).
+        FixpackJobRepository.backlog_stats);
+      * `github_app` — does GitHub still accept our App credentials. A key
+        that no longer matches the App breaks every Fix Pack delivery on
+        this deployment, and before this it was invisible until a paying
+        customer's job hit a 401. `null` means App auth isn't configured
+        here at all (the PAT path), which is not a fault. Cached for five
+        minutes inside app_auth_ok, so this stays cheap for a pinger.
 
     Deliberately leak-free: only booleans and coarse counts/ages — never ids,
     urls, or error text — so it's safe to expose to a dumb uptime pinger or
     the systemd timer without a token. Always 200: an unconfigured or
     unreachable DB is reported as db:false (a live process honestly saying
     it's degraded), not a transport-level failure the pinger can't read."""
+    # Blocking httpx call, so off the event loop. Never raises by contract.
+    github_app = await run_in_threadpool(app_auth_ok)
     stats = await fixpack_repo.backlog_stats()
     if stats is None:
         # DATABASE_URL unset, or the pool couldn't be built — either way the
         # DB isn't usable. Report degraded rather than 503 (see docstring).
-        return {"db": False, "fixpack_backlog": None, "oldest_paid_seconds": None}
+        return {"db": False, "fixpack_backlog": None,
+                "oldest_paid_seconds": None, "github_app": github_app}
     return {
         "db": True,
         "fixpack_backlog": stats["backlog"],
         "oldest_paid_seconds": stats["oldest_paid_seconds"],
+        "github_app": github_app,
     }
 
 
@@ -2269,6 +2281,25 @@ async def _alert_fixpack_failed(job_id, detail: str) -> None:
     )
 
 
+async def _alert_github_app_auth_failed(detail: str) -> None:
+    """One operator alert for a broken GitHub App credential.
+
+    Deduped on the deployment, NOT on the job: the key is either right or
+    wrong for everyone, so alerting per job would page once per queued Fix
+    Pack for a single cause. The text names the cause and the file to edit,
+    because the useful thing to know at 3am is not that a job failed -- it is
+    that no Fix Pack on this deployment can be delivered until .env changes.
+    """
+    await notify_operator(
+        "Drydock: GitHub App credentials REJECTED — no Fix Pack can open a "
+        f"PR on this deployment until this is fixed. {detail} — check "
+        "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_B64 in .env; the 401 log "
+        "line carries a public-key fingerprint to compare against the App's "
+        "registered key. Affected jobs are queued, not lost.",
+        dedupe_key="github-app-auth-rejected",
+    )
+
+
 def _rule_ids_from_plan(plan) -> list[str]:
     """The deduplicated, sorted rule_ids a Fix Pack plan actually fixes --
     across both secret_fixes and config_fixes (one plan fixes many findings).
@@ -2442,6 +2473,35 @@ async def _process_one_paid_job(
             pr_url=opened.html_url,
         )
         return "delivered"
+    except GitHubAppAuthError as exc:
+        # GitHub refused our own App credentials. Nothing about this job or
+        # this customer's repository was reached, so the three things the
+        # generic handler below does would all be wrong here:
+        #
+        #   * 'failed' is terminal, and this job is perfectly deliverable the
+        #     moment an operator fixes the key -- failing it bills a customer
+        #     for our outage and leaves recovery to hand-editing the database;
+        #   * the attempt the claim charged walks it toward the reaper's
+        #     terminal 'failed' for a reason no retry of theirs can fix;
+        #   * a fix_outcomes row would record OUR outage as the outcome of a
+        #     fix, in the one table we intend to learn from later.
+        #
+        # So the job goes back on the queue, unspent, and the operator is told
+        # what is actually broken. Same shape as the verification_unavailable
+        # branch above: when we could not do our job, the customer's job waits.
+        detail = _failure_detail(exc)
+        logger.error(
+            "Fix Pack job %s deferred: GitHub App credentials rejected (%s)",
+            job_id, detail,
+            extra={"step": "github_app_auth",
+                   "duration_ms": _elapsed_ms(started)},
+        )
+        await fixpack_repo.release_to_paid(
+            job_id,
+            f"requeued: GitHub App credentials rejected — {detail}",
+        )
+        await _alert_github_app_auth_failed(detail)
+        return "auth_rejected"
     except Exception as exc:  # noqa: BLE001 — every failure must be recorded
         # Any error in fetch, generation, token exchange, or PR delivery
         # lands here. Log the full traceback (logger.exception attaches it)
@@ -2574,6 +2634,20 @@ async def process_paid_fixpacks(
                     # Stop draining: the runner just went down mid-run, so every
                     # further claim would only spend another job's attempts.
                     summary["deferred"] += 1
+                    break
+                elif outcome == "auth_rejected":
+                    # Already back on 'paid' with its attempt refunded, so
+                    # unlike the branch above this one is NOT waiting for the
+                    # reaper -- it is immediately re-claimable, which is exactly
+                    # why the loop must stop. A broken App key rejects every
+                    # job identically, so draining on would spin through the
+                    # whole backlog releasing and re-claiming the same rows.
+                    #
+                    # Reported separately from `deferred` because the two mean
+                    # different things to whoever reads the summary: one is a
+                    # sandbox outage that heals itself, the other needs a human
+                    # to edit .env before any Fix Pack can ever be delivered.
+                    summary["skipped_github_app_auth"] = True
                     break
                 else:
                     summary["failed"] += 1
