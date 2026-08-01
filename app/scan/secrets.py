@@ -197,7 +197,7 @@ RULES: tuple[SecretRule, ...] = (
     SecretRule(
         # Systemic Lovable-export pattern, confirmed on real repos:
         # migrations declare PL/pgSQL variables like
-        #   v_cron_secret text := 'hunter2...';
+        #   v_cron_secret text := os.environ["DATABASE_SECRET"];
         # The generic-assignment rule misses these because a type
         # annotation sits between the name and the assignment.
         "sql-secret-assignment", "Hardcoded secret in SQL/PLpgSQL assignment",
