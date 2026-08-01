@@ -421,6 +421,16 @@ as root and would not notice, but
 `shipit-ops` and opens the file itself — on a `0600 root:root` `.env` the unit
 fails to start.
 
+Given `--env-file`, the validator reads **only** that file and ignores its own
+process environment: the validating process is not the service, so a variable
+exported in an operator's shell is one the service will never see. Running the
+command by hand therefore gives the same verdict systemd gets. If the file
+defines no `ENVIRONMENT`, the production checks are skipped and the script says
+so on stderr rather than silently reporting success. Without `--env-file` it
+validates the ambient environment, which is what the `10-production-operations`
+drop-in relies on — there `ExecStartPre` has already inherited
+`EnvironmentFile=` from the unit.
+
 `/opt/shipit/.env` is the host's own file and is never overwritten by a deploy,
 so it can drift from `.env.example`. One such value is worth knowing about when
 rebuilding a host: production already carries `LOG_FORMAT=json`, set by hand
