@@ -15,6 +15,8 @@ import io
 import json
 import zipfile
 
+import pytest
+
 from app.fixpack.generate import (
     _is_test_path,
     _validate_syntax,
@@ -25,6 +27,9 @@ from app.fixpack.generate import (
 
 # Distinctive, obviously-fake secrets so absence assertions are unambiguous.
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"          # matches aws-access-key-id
+# A second distinct value, so a test can tell which of two matches in one
+# file was edited and which was left alone.
+AWS_KEY_2 = "AKIAIOSFODNN7SECONDK"
 GH_PAT = "ghp_" + "a" * 36               # matches github-pat
 
 
@@ -358,3 +363,108 @@ def test_validate_syntax_helper_py_json_and_heuristic():
     assert _validate_syntax("a.go", "f(a)\n", "f(b)\n")
     assert not _validate_syntax("a.go", "f(a)\n", "f(b\n")
     assert _validate_syntax("a.go", "f(a\n", "still f(b\n")  # already broken -> not our fault
+
+
+# --- non-production contexts are reported, not rewritten ---
+#
+# From a real Fix Pack, PR #131 on shipit itself. The scanner matched an
+# illustrative string inside a comment documenting one of our OWN rules:
+#
+#     #   v_cron_secret text := 'hunter2...';
+#
+# The Fix Pack rewrote the comment to Python syntax inside a PL/pgSQL example,
+# added DATABASE_SECRET=changeme to .env.example, and told the customer to
+# ROTATE THIS SECRET NOW. The value was a joke placeholder that never existed.
+#
+# Editing a secret out of a comment buys no security at all: the value is in
+# git history either way and must be rotated regardless, and a comment
+# executes nothing, so there is no running code to disarm. All of the value of
+# a code fix is absent and only the damage remains.
+
+
+@pytest.mark.parametrize("context", ["comment", "doc_example", "test_file"])
+def test_non_production_context_is_reported_not_rewritten(context):
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    findings = [
+        finding(rule_id="aws-access-key-id", file="config.py", line=1,
+                context=context),
+    ]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert not plan.has_changes
+    assert plan.files == {}
+    assert plan.secret_fixes == []
+    # Recorded, not dropped silently: the customer should see that we looked
+    # at it and chose not to touch it.
+    assert len(plan.skipped) == 1
+    assert plan.skipped[0].rule_id == "aws-access-key-id"
+    assert context in plan.skipped[0].reason
+
+
+def test_a_real_secret_beside_a_comment_one_is_still_fixed():
+    """The other side of the calibration, and the thing that would make this
+    change harmful if it were wrong: two matches in one file, one in a comment
+    and one in executable code. Only the executable one may be touched."""
+    zip_bytes = make_zip({"config.py": (
+        f"# example: v_x text := '{AWS_KEY}';\n"
+        f'API_KEY = "{AWS_KEY_2}"\n'
+    )})
+    findings = [
+        finding(rule_id="aws-access-key-id", file="config.py", line=1,
+                context="comment"),
+        finding(rule_id="aws-access-key-id", file="config.py", line=2,
+                context=None),
+    ]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert plan.has_changes
+    assert len(plan.secret_fixes) == 1
+    assert plan.secret_fixes[0].file == "config.py"
+    # SecretFix carries no line, so the proof that the RIGHT one was fixed is
+    # in the edited text below, not in the fix record.
+    assert len(plan.skipped) == 1
+    assert plan.skipped[0].line == 1
+
+    edited = plan.files["config.py"]
+    # The comment is byte-for-byte untouched, including its example value.
+    assert f"# example: v_x text := '{AWS_KEY}';" in edited
+    # The executable line no longer holds the secret.
+    assert AWS_KEY_2 not in edited
+    assert "os.environ[" in edited
+
+
+def test_a_plan_of_only_comment_findings_opens_no_pull_request():
+    """The end-to-end consequence. has_changes drives whether a PR is opened
+    at all, so a repo whose every match is a comment now finishes as
+    no_fix_needed instead of receiving PR #131."""
+    zip_bytes = make_zip({"a.py": f"# key: {AWS_KEY}\n",
+                          "b.py": f"# other: {AWS_KEY_2}\n"})
+    findings = [
+        finding(rule_id="aws-access-key-id", file="a.py", line=1,
+                context="comment"),
+        finding(rule_id="aws-access-key-id", file="b.py", line=1,
+                context="doc_example"),
+    ]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert not plan.has_changes
+    assert len(plan.skipped) == 2
+
+
+def test_the_filter_reuses_the_scanner_vocabulary():
+    """Not a behaviour test -- a coupling test. The report learned all four
+    contexts in #125 while this filter still compared against one string
+    literal, and that divergence IS the bug. A second hand-maintained copy of
+    the list would diverge again."""
+    from app.scan import secrets as scanner
+
+    for context in scanner.NON_PRODUCTION_CONTEXTS:
+        zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+        plan = build_fixpack_plan(zip_bytes, [
+            finding(rule_id="aws-access-key-id", file="config.py", line=1,
+                    context=context),
+        ])
+        assert not plan.has_changes, f"{context} still edited"
