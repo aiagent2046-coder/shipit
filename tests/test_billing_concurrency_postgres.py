@@ -65,6 +65,39 @@ async def _open_invoice(payments) -> dict:
     )
 
 
+class _BarrierAtTheRead(db.PaymentRepository):
+    """A real PaymentRepository that pauses each caller just after it reads the
+    payment, until both callers have read it or a short deadline passes.
+
+    Without this the test is not a test. `asyncio.gather` over two grants
+    interleaves wherever the driver happens to yield, so whether the two reads
+    both land before either mint depends on pool warmth and scheduling -- the
+    first version of this test passed against the broken code as often as it
+    failed. The barrier makes the window certain in BOTH directions:
+
+      * unguarded, both callers pass the read and then both mint;
+      * with grant_lock held, the loser cannot even reach the read until the
+        winner is done, so it never arrives -- hence the deadline rather than a
+        plain barrier, which would hang forever waiting for it.
+    """
+
+    def __init__(self, expected: int, deadline: float = 0.5) -> None:
+        super().__init__()
+        self._barrier = asyncio.Barrier(expected)
+        self._deadline = deadline
+
+    async def get_by_external_ref(self, provider: str, external_ref: str):
+        row = await super().get_by_external_ref(provider, external_ref)
+        try:
+            async with asyncio.timeout(self._deadline):
+                await self._barrier.wait()
+        except (TimeoutError, asyncio.BrokenBarrierError):
+            # Serialized after all: the other caller is behind a lock and will
+            # never join us here. That IS the fix working.
+            pass
+        return row
+
+
 async def test_two_concurrent_confirmations_grant_exactly_one_account(live_db):
     """The bug, reproduced. An operator double-tapping Confirm, or two
     operators on the same invoice, used to produce:
@@ -78,7 +111,8 @@ async def test_two_concurrent_confirmations_grant_exactly_one_account(live_db):
     pointed at an account the payment does not reference -- so /mykey and
     /rotatekey for that payer led nowhere.
     """
-    accounts, payments = db.AccountRepository(), db.PaymentRepository()
+    accounts = db.AccountRepository()
+    payments = _BarrierAtTheRead(expected=2)
     invoice = await _open_invoice(payments)
     reference = "DRY-RACE01"
 

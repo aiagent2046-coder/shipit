@@ -1687,17 +1687,22 @@ class PaymentRepository:
             so the key the first payer was handed pointed at an orphaned
             account.
 
-        `account_id is null` is in the predicate for the same reason, one level
-        deeper. Two concurrent confirmations of the SAME charge both read a
-        payment with no account, both minted one, and the second was admitted
-        by the same-external_ref branch above -- overwriting the first's
-        account_id and orphaning an account whose key had already gone out.
-        grant_lock now stops them meeting at all; this makes the overwrite
-        impossible even if it doesn't.
+        `account_id is null or account_id = %s` is in the predicate for the
+        same reason, one level deeper. Two concurrent confirmations of the SAME
+        charge both read a payment with no account, both minted one, and the
+        second was admitted by the same-external_ref branch above -- overwriting
+        the first's account_id and orphaning an account whose key had already
+        gone out. grant_lock now stops them meeting at all; this makes the
+        overwrite impossible even if it doesn't.
 
-        It does not weaken idempotency, because a genuine replay never reaches
-        here: grant_pro_tier returns as soon as it sees an account_id on the
-        payment, so this UPDATE only runs when the column was null when read."""
+        Note the `or account_id = %s`: re-linking the SAME account is still
+        allowed, so a replay that reaches here with the account it already
+        granted gets the idempotent row back. Only reassignment to a DIFFERENT
+        account is refused, which is the actual anomaly. Writing this as a bare
+        `account_id is null` looked equivalent -- grant_pro_tier returns before
+        the UPDATE once it sees an account_id -- but this method's contract is
+        the repository's, not grant_pro_tier's, and CI's real-Postgres suite
+        asserts the replay directly."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1707,14 +1712,15 @@ class PaymentRepository:
                 """
                 update payments
                 set status = 'completed', account_id = %s, external_ref = %s
-                where id = %s and account_id is null
+                where id = %s
+                  and (account_id is null or account_id = %s)
                   and (status = 'pending'
                        or (status = 'completed'
                            and external_ref = %s))
                 returning id, status, account_id, external_ref
                 """,
                 (uuid.UUID(account_id), external_ref, uuid.UUID(payment_id),
-                 external_ref),
+                 uuid.UUID(account_id), external_ref),
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
