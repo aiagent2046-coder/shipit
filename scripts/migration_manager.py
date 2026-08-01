@@ -913,6 +913,108 @@ def lint_migrations(migrations: Sequence[Migration]) -> int:
     return 0
 
 
+def mark_migration(
+    migrations: Sequence[Migration],
+    *,
+    filename: str,
+    rollback_safe: bool,
+) -> None:
+    """Record the rollback-safe flag for a migration that is already applied.
+
+    The directive lives in the migration file, but a file that has already
+    been applied cannot be edited to add one: the checksum would change and
+    the release gate would read that as tampering, correctly. So migrations
+    applied before the directive existed can only be classified here, by an
+    operator, against a database.
+
+    Four gates, and none of them is ceremony:
+
+      * the row must exist -- marking a migration the database never applied
+        would silently open a rollback past something that is not there;
+      * the file must be present in THIS release, so there is something to
+        check the claim against;
+      * its checksum must match the ledger, or the file on disk is not the
+        migration that was applied and its SQL says nothing about the schema;
+      * a `yes` is cross-checked against the SQL, exactly as it would be in
+        the file.
+
+    An existing flag is never overwritten. Widening a `no` into a `yes` from
+    the command line, with no file diff and no review, is the one operation
+    here that could quietly authorise a rollback that corrupts data.
+    """
+    if not ledger_exists():
+        raise MigrationError("no migration ledger in this database")
+
+    ensure_ledger_columns()
+    applied = load_applied()
+
+    row = applied.get(filename)
+
+    if row is None:
+        raise MigrationError(
+            f"{filename} is not in the ledger; nothing to mark"
+        )
+
+    if row.rollback_safe is not None:
+        current = "yes" if row.rollback_safe else "no"
+        raise MigrationError(
+            f"{filename} is already marked rollback-safe: {current}. "
+            "Changing it needs a deliberate UPDATE by someone who can say "
+            "why, not a rerun of this command."
+        )
+
+    migration = next(
+        (item for item in migrations if item.name == filename),
+        None,
+    )
+
+    if migration is None:
+        raise MigrationError(
+            f"{filename} is applied in the database but not present in this "
+            "release. Run this from a release that contains the file, so the "
+            "claim can be checked against its SQL."
+        )
+
+    if migration.checksum != row.checksum:
+        raise MigrationError(
+            f"{filename}: the file in this release does not match the one "
+            "recorded in the ledger. Whatever is on disk is not what was "
+            "applied, so its SQL cannot answer the question."
+        )
+
+    if rollback_safe:
+        sql = migration.path.read_text(encoding="utf-8", errors="strict")
+        reasons = classify_rollback_unsafe(sql)
+
+        if reasons:
+            raise MigrationError(
+                f"{filename} contains {', '.join(reasons)} and cannot be "
+                "marked rollback-safe."
+            )
+
+    run_psql(
+        f"""
+        UPDATE {LEDGER_TABLE}
+        SET rollback_safe = {str(rollback_safe).lower()}
+        WHERE filename = {sql_literal(filename)}
+          AND rollback_safe IS NULL;
+        """
+    )
+
+    confirmed = load_applied()[filename].rollback_safe
+
+    if confirmed is not rollback_safe:
+        raise MigrationError(
+            f"{filename}: the flag did not stick; the ledger now reads "
+            f"{confirmed!r}"
+        )
+
+    print(
+        f"Marked {filename} rollback-safe: "
+        f"{'yes' if rollback_safe else 'no'}."
+    )
+
+
 def apply_migrations(
     migrations: Sequence[Migration],
     *,
@@ -1037,6 +1139,27 @@ def parse_args(
         help="allow pending DROP/TRUNCATE/DELETE migrations",
     )
 
+    mark_parser = subparsers.add_parser(
+        "mark",
+        help=(
+            "record the rollback-safe flag for an already-applied migration"
+        ),
+    )
+    mark_parser.add_argument(
+        "--filename",
+        required=True,
+        help="migration filename exactly as it appears in the ledger",
+    )
+    mark_parser.add_argument(
+        "--rollback-safe",
+        required=True,
+        choices=("yes", "no"),
+        help=(
+            "whether the previous release's code runs correctly against a "
+            "schema that has this migration applied"
+        ),
+    )
+
     baseline_parser = subparsers.add_parser(
         "baseline",
         help="register an existing schema without executing SQL",
@@ -1075,6 +1198,14 @@ def main(
             baseline_migrations(
                 migrations,
                 confirmed=arguments.confirm_existing_schema,
+            )
+            return 0
+
+        if arguments.mode == "mark":
+            mark_migration(
+                migrations,
+                filename=arguments.filename,
+                rollback_safe=arguments.rollback_safe == "yes",
             )
             return 0
 

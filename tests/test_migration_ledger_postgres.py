@@ -144,3 +144,162 @@ def test_the_column_is_added_to_an_existing_ledger(ledger_db) -> None:
         migration_manager.ensure_ledger_columns()  # idempotent
     finally:
         migration_manager.ensure_ledger_columns()
+
+
+# --- marking an already-applied migration ---
+#
+# The directive belongs in the migration file, but a file that has already
+# been applied cannot be edited to add one: the checksum would change and the
+# gate would read that as tampering. So the migrations applied before the
+# directive existed -- including 0027, the one that made the current
+# production release irreversible -- can only be classified against a
+# database, by an operator, here.
+
+
+def _flag(filename: str):
+    return migration_manager.load_applied()[filename].rollback_safe
+
+
+def _clear_flag(database_url: str, filename: str) -> None:
+    _psql(database_url, f"""
+        UPDATE public.shipit_schema_migrations
+        SET rollback_safe = NULL
+        WHERE filename = '{filename}';
+    """)
+
+
+@pytest.fixture
+def unmarked(ledger_db):
+    """Every migration back to NULL after the test, whatever it did."""
+    yield ledger_db
+    _psql(ledger_db, """
+        UPDATE public.shipit_schema_migrations SET rollback_safe = NULL;
+    """)
+
+
+def test_mark_records_the_flag(unmarked) -> None:
+    target = "0027_payments_provider_status_index.sql"
+    migrations = migration_manager.discover_migrations()
+
+    assert _flag(target) is None
+    migration_manager.mark_migration(
+        migrations, filename=target, rollback_safe=True
+    )
+    assert _flag(target) is True
+
+
+def test_mark_refuses_to_overwrite_an_existing_flag(unmarked) -> None:
+    """Widening a `no` into a `yes` from a command line, with no file diff and
+    no review, is the one thing here that could quietly authorise a rollback
+    that loses data."""
+    target = "0027_payments_provider_status_index.sql"
+    migrations = migration_manager.discover_migrations()
+
+    migration_manager.mark_migration(
+        migrations, filename=target, rollback_safe=True
+    )
+
+    with pytest.raises(migration_manager.MigrationError,
+                       match="already marked rollback-safe: yes"):
+        migration_manager.mark_migration(
+            migrations, filename=target, rollback_safe=False
+        )
+
+    assert _flag(target) is True
+
+
+def test_mark_refuses_a_migration_the_database_never_applied(unmarked) -> None:
+    """Otherwise a typo would open a rollback past a migration that is not
+    there, and report success doing it."""
+    with pytest.raises(migration_manager.MigrationError,
+                       match="not in the ledger"):
+        migration_manager.mark_migration(
+            migration_manager.discover_migrations(),
+            filename="9999_typo.sql", rollback_safe=True,
+        )
+
+
+def test_mark_applies_the_same_sql_check_as_the_directive(unmarked) -> None:
+    """0019 drops a column. No operator assertion makes the previous
+    release's code survive that, so the claim is refused rather than stored."""
+    target = "0019_drop_accounts_api_key.sql"
+
+    with pytest.raises(migration_manager.MigrationError, match="contains DROP"):
+        migration_manager.mark_migration(
+            migration_manager.discover_migrations(),
+            filename=target, rollback_safe=True,
+        )
+
+    assert _flag(target) is None
+
+    # `no` on the same migration is fine -- that is the honest answer.
+    migration_manager.mark_migration(
+        migration_manager.discover_migrations(),
+        filename=target, rollback_safe=False,
+    )
+    assert _flag(target) is False
+
+
+def test_mark_refuses_when_the_file_does_not_match_the_ledger(
+    unmarked, tmp_path
+) -> None:
+    """The claim is checked against the SQL on disk, so the SQL on disk has to
+    be the SQL that was applied. A file that drifted describes some other
+    schema and can answer nothing about this one."""
+    target = "0027_payments_provider_status_index.sql"
+    real = [
+        m for m in migration_manager.discover_migrations() if m.name == target
+    ][0]
+    tampered = migration_manager.Migration(
+        number=real.number, name=real.name, path=real.path,
+        checksum="0" * 64, destructive_reasons=(), rollback_safe=None,
+    )
+
+    with pytest.raises(migration_manager.MigrationError,
+                       match="does not match the one recorded"):
+        migration_manager.mark_migration(
+            [tampered], filename=target, rollback_safe=True
+        )
+
+    assert _flag(target) is None
+
+
+def test_mark_refuses_a_file_missing_from_this_release(unmarked) -> None:
+    """Run from an older release that predates the migration, there is no SQL
+    to check the claim against -- and taking the operator's word for it is
+    exactly what the file-based directive exists to avoid."""
+    target = "0027_payments_provider_status_index.sql"
+    others = [
+        m for m in migration_manager.discover_migrations() if m.name != target
+    ]
+
+    with pytest.raises(migration_manager.MigrationError,
+                       match="not present in this release"):
+        migration_manager.mark_migration(
+            others, filename=target, rollback_safe=True
+        )
+
+
+def test_marking_0027_unblocks_the_gate(unmarked) -> None:
+    """The end to end point of the command: a release that predates 0027 goes
+    from blocked to deployable, which is what a rollback is."""
+    target = "0027_payments_provider_status_index.sql"
+    ledger = migration_manager.load_applied()
+    older_release = {
+        name: row.checksum for name, row in ledger.items() if name != target
+    }
+
+    before = migration_gate.compare_migrations(
+        older_release, migration_gate.query_applied_migrations(unmarked)
+    )
+    assert before and "database is ahead of release" in before[0]
+
+    migration_manager.mark_migration(
+        migration_manager.discover_migrations(),
+        filename=target, rollback_safe=True,
+    )
+
+    after = migration_gate.compare_migrations(
+        older_release, migration_gate.query_applied_migrations(unmarked)
+    )
+    assert after == []
