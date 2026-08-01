@@ -37,7 +37,11 @@ import zipfile
 from dataclasses import dataclass, field
 
 from app.scan.checks import find_committed_env_files, gitignore_covers_env
-from app.scan.secrets import RULES, iter_secret_matches
+from app.scan.secrets import (
+    NON_PRODUCTION_CONTEXTS,
+    RULES,
+    iter_secret_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -324,12 +328,44 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     side stays separate."""
     plan = FixpackPlan()
 
-    eligible = [
-        f for f in findings
-        if f.get("context") != "test_fixture"
-        and not _is_test_path(f.get("file", ""))
-        and f.get("rule_id") in (SECRET_RULE_IDS | _CHECK_RULE_IDS)
-    ]
+    # NON_PRODUCTION_CONTEXTS, not a single literal. The scanner already
+    # classifies a match as test_fixture, test_file, comment or doc_example,
+    # and #125 taught the REPORT to damp all four -- but this filter only knew
+    # the first, so the Fix Pack kept editing the other three.
+    #
+    # It shipped a PR that rewrote an illustrative string inside a comment
+    # documenting one of our own scanner rules, added a bogus variable to
+    # .env.example, and told the customer to rotate a credential that never
+    # existed.
+    #
+    # Editing a secret out of a comment buys no security whatsoever: the value
+    # is in git history either way and must be rotated regardless, and a
+    # comment executes nothing, so there is no running code to disarm. The
+    # entire value of a code fix is absent, and only the damage remains.
+    #
+    # They stay in the report -- damped, as #125 left them. Noticing something
+    # and declining to rewrite it automatically is not the same as hiding it.
+    eligible = []
+    for f in findings:
+        if f.get("rule_id") not in (SECRET_RULE_IDS | _CHECK_RULE_IDS):
+            continue
+        context = f.get("context")
+        if context in NON_PRODUCTION_CONTEXTS or _is_test_path(f.get("file", "")):
+            # Recorded rather than dropped silently, so the PR body can show
+            # that the finding was seen and deliberately left alone.
+            plan.skipped.append(SkippedFinding(
+                rule_id=f.get("rule_id", ""),
+                file=_repo_relative(f.get("file", "")),
+                line=f.get("line", 0),
+                reason=(
+                    f"{context or 'test path'} — not executable code, so "
+                    "editing it would change nothing an attacker can use; "
+                    "reported instead of rewritten"
+                ),
+            ))
+            continue
+        eligible.append(f)
+
     if not eligible:
         return plan
 
