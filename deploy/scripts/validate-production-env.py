@@ -37,16 +37,38 @@ def main() -> int:
     parser.add_argument("--env-file", type=Path)
     args = parser.parse_args()
 
-    values = dict(os.environ)
-
     if args.env_file:
         if not args.env_file.exists():
             print(f"Environment file not found: {args.env_file}", file=sys.stderr)
             return 78
 
-        values.update(read_env_file(args.env_file))
+        # The file, and nothing but the file. This process is not the service:
+        # under systemd it runs as ExecStartPre with root's environment, while
+        # shipit.service starts with EnvironmentFile= alone. Merging os.environ
+        # in meant the validator could pass on values the service would never
+        # see -- and it did. A nano edit deleted USDT_POLL_TOKEN from .env;
+        # systemd's run correctly refused to start, while the identical command
+        # typed by hand printed "Production configuration is valid", because
+        # the operator's shell happened to export it. The one check that exists
+        # to catch a broken config reported green about a broken config.
+        values = read_env_file(args.env_file)
+    else:
+        # No file given: validating the ambient environment IS the request.
+        values = dict(os.environ)
 
-    if values.get("ENVIRONMENT", "development") != "production":
+    if "ENVIRONMENT" not in values:
+        if args.env_file:
+            # Not silent. Skipping every check is the most dangerous outcome
+            # this script has, so it may not happen quietly -- that would just
+            # be the same false green wearing a different hat.
+            print(
+                f"Warning: {args.env_file} defines no ENVIRONMENT; "
+                "production checks skipped",
+                file=sys.stderr,
+            )
+        return 0
+
+    if values["ENVIRONMENT"] != "production":
         return 0
 
     errors: list[str] = []
