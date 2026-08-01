@@ -21,10 +21,12 @@ on:
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
       - "tests/test_migration_ledger_postgres.py"
+      - "tests/test_billing_concurrency_postgres.py"
       - "tests/test_audit_jobs_repo.py"
       - "tests/test_audit_worker_postgres.py"
       - "tests/test_internal_stats.py"
       - "app/worker/**"
+      - "app/billing/**"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
       - "deploy/scripts/check_release_migrations.py"
@@ -35,10 +37,12 @@ on:
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
       - "tests/test_migration_ledger_postgres.py"
+      - "tests/test_billing_concurrency_postgres.py"
       - "tests/test_audit_jobs_repo.py"
       - "tests/test_audit_worker_postgres.py"
       - "tests/test_internal_stats.py"
       - "app/worker/**"
+      - "app/billing/**"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
       - "deploy/scripts/check_release_migrations.py"
@@ -103,6 +107,12 @@ jobs:
       # them. Runs first: nothing below it works if the ledger cannot be read.
       - name: "Real-Postgres migration ledger parsing"
         run: pytest -q tests/test_migration_ledger_postgres.py
+
+      # Races in the money paths, which fakes cannot express: every one of
+      # them lives in the gap between a read and a write on one row, and a
+      # fake dict has no such gap.
+      - name: "Real-Postgres billing concurrency"
+        run: pytest -q tests/test_billing_concurrency_postgres.py
 
       - name: "Real-Postgres repository write-path smoke"
         run: pytest -q tests/test_db_postgres_smoke.py

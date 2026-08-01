@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
+import logging
 import json
 import os
 import uuid
@@ -44,8 +46,11 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
 
+import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+logger = logging.getLogger(__name__)
 
 from app.accounts import api_key_prefix, generate_api_key, hash_api_key
 
@@ -148,6 +153,85 @@ async def _advisory_processor_lock(key: int):
             yield
         finally:
             await conn.execute("select pg_advisory_unlock(%s)", (key,))
+
+
+# Namespace for the per-charge grant lock -- ascii "GRNT". Postgres advisory
+# locks take an optional second int32, so this is key1 and a hash of
+# (provider, external_ref) is key2: two confirmations of the SAME charge
+# serialize, and two confirmations of different charges do not.
+_GRANT_LOCK_NAMESPACE = 0x47524E54
+
+# How long to wait for another confirmation of the same charge before giving up
+# on the lock. The section it guards is three short queries, so anything near
+# this means something is wrong; five seconds is long enough that ordinary
+# contention never reaches it.
+GRANT_LOCK_TIMEOUT_MS = 5000
+
+
+def _grant_lock_key(provider: str, external_ref: str) -> int:
+    """A stable signed int32 from the charge identity, for advisory-lock key2.
+
+    sha256 rather than hash() because Python's hash is salted per process:
+    two web workers must derive the SAME key for the same charge, which is the
+    entire point.
+    """
+    digest = hashlib.sha256(f"{provider}:{external_ref}".encode()).digest()
+    return int.from_bytes(digest[:4], "big", signed=True)
+
+
+@asynccontextmanager
+async def grant_lock(provider: str, external_ref: str):
+    """Serialize the grant of ONE charge across concurrent handlers.
+
+    grant_pro_tier reads the payment, sees no account, mints one, then links
+    it. Two handlers running that concurrently -- an operator double-tapping
+    Confirm, a retried Telegram webhook, a transfer seen by two polls -- both
+    passed the read and both minted an account, and the second link overwrote
+    the first's account_id. Two Pro accounts, one orphaned, and its key
+    already in a payer's hands.
+
+    Blocking, not try-and-skip like _advisory_processor_lock: skipping a
+    processor run is harmless because a timer will fire again, while skipping a
+    grant would drop a paid-for entitlement on the floor. The loser waits,
+    then re-reads and takes the idempotent path.
+
+    Two ways this yields WITHOUT a lock, both deliberate:
+      * DATABASE_URL isn't configured -- nothing to serialize, same contract as
+        the repositories and what keeps fake-backed tests working;
+      * the wait timed out -- proceeding unserialized is still money-safe,
+        because mark_completed refuses to overwrite an account_id that is
+        already set. Better a logged anomaly and a redundant account row than a
+        confirmed payment that grants nothing.
+    """
+    try:
+        pool = await get_pool()
+    except DatabaseNotConfigured:
+        yield
+        return
+
+    key2 = _grant_lock_key(provider, external_ref)
+    async with pool.connection() as conn:
+        await conn.execute(f"set lock_timeout = {GRANT_LOCK_TIMEOUT_MS}")
+        try:
+            await conn.execute(
+                "select pg_advisory_lock(%s, %s)",
+                (_GRANT_LOCK_NAMESPACE, key2),
+            )
+        except psycopg.errors.LockNotAvailable:
+            logger.warning(
+                "grant lock for %s/%s not acquired within %sms; proceeding "
+                "unserialized (mark_completed still refuses to overwrite)",
+                provider, external_ref, GRANT_LOCK_TIMEOUT_MS,
+            )
+            yield
+            return
+        try:
+            yield
+        finally:
+            await conn.execute(
+                "select pg_advisory_unlock(%s, %s)",
+                (_GRANT_LOCK_NAMESPACE, key2),
+            )
 
 
 def fixpack_processor_lock():
@@ -1601,7 +1685,24 @@ class PaymentRepository:
             reconcile. Returning None rather than overwriting is the point: the
             older unconditional UPDATE clobbered the first charge's account_id,
             so the key the first payer was handed pointed at an orphaned
-            account."""
+            account.
+
+        `account_id is null or account_id = %s` is in the predicate for the
+        same reason, one level deeper. Two concurrent confirmations of the SAME
+        charge both read a payment with no account, both minted one, and the
+        second was admitted by the same-external_ref branch above -- overwriting
+        the first's account_id and orphaning an account whose key had already
+        gone out. grant_lock now stops them meeting at all; this makes the
+        overwrite impossible even if it doesn't.
+
+        Note the `or account_id = %s`: re-linking the SAME account is still
+        allowed, so a replay that reaches here with the account it already
+        granted gets the idempotent row back. Only reassignment to a DIFFERENT
+        account is refused, which is the actual anomaly. Writing this as a bare
+        `account_id is null` looked equivalent -- grant_pro_tier returns before
+        the UPDATE once it sees an account_id -- but this method's contract is
+        the repository's, not grant_pro_tier's, and CI's real-Postgres suite
+        asserts the replay directly."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1611,13 +1712,15 @@ class PaymentRepository:
                 """
                 update payments
                 set status = 'completed', account_id = %s, external_ref = %s
-                where id = %s and (status = 'pending'
-                                   or (status = 'completed'
-                                       and external_ref = %s))
+                where id = %s
+                  and (account_id is null or account_id = %s)
+                  and (status = 'pending'
+                       or (status = 'completed'
+                           and external_ref = %s))
                 returning id, status, account_id, external_ref
                 """,
                 (uuid.UUID(account_id), external_ref, uuid.UUID(payment_id),
-                 external_ref),
+                 uuid.UUID(account_id), external_ref),
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
