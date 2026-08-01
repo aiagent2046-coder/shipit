@@ -74,6 +74,7 @@ from app.deploypack.github_app import (
 from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
 from app.fixpack.generate import (
+    has_auto_fixable_findings,
     build_fixpack_plan,
     render_pr_body as render_fixpack_pr_body,
     render_pr_title as render_fixpack_pr_title,
@@ -890,7 +891,17 @@ async def get_audit(
                     "detail": "no audit with this id and token, or persistence "
                                "isn't configured on this deployment (see app/db.py)"},
         )
-    return row
+    # Whether a Fix Pack could produce anything for this audit. Computed here,
+    # not in the browser: the answer depends on which rules the Fix Pack knows
+    # how to rewrite, and a second copy of that list in TypeScript would drift
+    # from this one -- which is precisely what #132 was about. The page uses it
+    # to explain instead of offering a purchase that cannot deliver.
+    return {
+        **row,
+        "fixpack_auto_fixable": has_auto_fixable_findings(
+            row.get("findings_json") or []
+        ),
+    }
 
 
 @app.get("/v1/audit-jobs/{job_id}")
@@ -1462,6 +1473,7 @@ async def create_fixpack_usdt_invoice(
                               "GitHub repo URL, then buy a Fix Pack for it."},
         )
     await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+    _reject_if_nothing_to_fix(audit)
     address = _usdt_receiving_address()
     if not address:
         raise HTTPException(
@@ -1524,6 +1536,35 @@ def _check_invoice_rate_limit(request: Request, limiter: RateLimiter) -> None:
             },
             headers={"Retry-After": str(exc.retry_after)},
         ) from exc
+
+
+def _reject_if_nothing_to_fix(audit: dict) -> None:
+    """409 when this audit has no finding a Fix Pack could ever rewrite.
+
+    Every rule the Fix Pack knows is fixed; every other finding is advice. An
+    audit whose findings contain none of them has an empty plan before a
+    customer pays, and no amount of running the job changes that.
+
+    Audit 05fa18f5 was sold one anyway: zero eligible findings, job ran, payer
+    got "Nothing to auto-fix" and was charged for it. The check needs no
+    network and no LLM -- only the findings already stored on the audit.
+
+    Deliberately one-directional. It proves "definitely nothing to fix" and
+    never claims the opposite: a finding eligible here can still fall away
+    when the repository is re-fetched, because the code may have moved since
+    the audit. Refusing on the certain case is worth doing; promising a pull
+    request is not something this can honestly do.
+    """
+    if not has_auto_fixable_findings(audit.get("findings_json") or []):
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "no_auto_fixable_findings",
+                    "detail": "This audit has no findings a Fix Pack can fix "
+                              "automatically \u2014 the ones it found are "
+                              "recommendations, or live in comments, docs or "
+                              "tests. Buying one would produce an empty pull "
+                              "request, so it isn't offered."},
+        )
 
 
 async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
@@ -1720,6 +1761,7 @@ async def create_fixpack_bank_transfer_invoice(
                               "GitHub repo URL, then buy a Fix Pack for it."},
         )
     await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+    _reject_if_nothing_to_fix(audit)
     details = _bank_transfer_details()
     invoice = await bank_transfer.create_fixpack_invoice(
         payment_repo, details=details, audit_id=audit_id,
@@ -1881,6 +1923,7 @@ async def create_paypal_order(
                                   "repository to open a fix PR against."},
             )
         await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+        _reject_if_nothing_to_fix(audit)
         try:
             order = await paypal.create_fixpack_order(
                 payment_repo, audit_id=audit_id, transport=transport
