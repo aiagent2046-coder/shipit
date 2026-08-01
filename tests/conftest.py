@@ -381,7 +381,13 @@ def _no_ambient_production_integrations(monkeypatch):
 
     The production VPS exports real GitHub App and sandbox-runner settings.
     Tests that need these values must set or monkeypatch them explicitly.
+
+    Also drops app_auth_ok's cached verdict, which is module-level and would
+    otherwise let one test's credentials answer another test's health probe.
     """
+    from app.deploypack.github_app import reset_app_auth_cache
+
+    reset_app_auth_cache()
     variables = (
         "GITHUB_APP_ID",
         "GITHUB_APP_PRIVATE_KEY",

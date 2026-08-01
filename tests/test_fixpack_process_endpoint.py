@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 import app.main as main_mod
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
-from app.deploypack.github_app import GitHubAppError
+from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
 from app.main import (
     app,
     get_audit_repo,
@@ -76,6 +76,7 @@ class FakeFixpackRepo:
         self.statuses: dict[str, str] = {}
         self.details: dict[str, str | None] = {}
         self.claimed: list[str] = []
+        self.released: list[str] = []
         self._reap = reap or {"requeued": 0, "failed": 0}
 
     async def reap_stale_running(self, *, max_age_minutes, max_attempts):
@@ -99,6 +100,15 @@ class FakeFixpackRepo:
     async def mark_status(self, job_id, status, detail=None):
         self.statuses[job_id] = status
         self.details[job_id] = detail
+
+    async def release_to_paid(self, job_id, detail):
+        # The real one refunds the attempt the claim charged and puts the row
+        # back on 'paid'. Here that means the job becomes claimable again --
+        # which is precisely the property the loop has to cope with.
+        self.statuses[job_id] = "paid"
+        self.details[job_id] = detail
+        self.released.append(job_id)
+        self._paid.append({"id": job_id, "audit_id": "a1", "status": "paid"})
 
 
 def fake_fetcher_returning(zip_bytes: bytes):
@@ -1022,3 +1032,145 @@ def test_pr_token_resolve_counts_the_base64_pem_variable(monkeypatch, caplog):
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert len(warnings) == 1
     assert "GITHUB_APP_PRIVATE_KEY=MISSING" not in warnings[0].getMessage()
+
+
+# --- GitHub rejects OUR credentials ---
+#
+# Every other failure in this processor is about the customer's repository.
+# This one is about us: the key on this deployment no longer matches the App,
+# so no Fix Pack anywhere can open a PR. Treating it like the others billed a
+# customer for our outage -- the job went terminal 'failed', the payment was
+# spent, and recovery meant editing the database by hand.
+
+
+def _auth_rejected_setup(monkeypatch, jobs):
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(
+        main_mod, "app_credentials_from_env",
+        lambda: ("Iv23appid",
+                 "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"),
+    )
+
+    def rejecting_token(owner, repo, *, app_id, private_key):
+        raise GitHubAppAuthError(
+            'resolve installation failed: 401 {"message": "A JSON web token '
+            'could not be decoded"}'
+        )
+
+    monkeypatch.setattr(main_mod, "installation_token_for_repo", rejecting_token)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    audits = {"a1": {
+        "repo_url": "https://github.com/donjonson-hash/drydock-fixpack-e2e-test",
+        "findings_json": [
+            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
+             "title": "AWS Access Key ID", "context": None},
+        ],
+    }}
+    fixpack_repo = FakeFixpackRepo(jobs)
+    override(FakeAuditRepo(audits), fixpack_repo,
+             fake_fetcher_returning(zip_bytes),
+             lambda *a, **k: PullRequestResult(html_url="x", branch="y"))
+    return fixpack_repo
+
+
+def test_rejected_credentials_requeue_the_job_instead_of_failing_it(monkeypatch):
+    """The job is deliverable the moment an operator fixes the key, so it goes
+    back on the queue rather than to a terminal state a customer paid for."""
+    fixpack_repo = _auth_rejected_setup(
+        monkeypatch, [{"id": "j1", "audit_id": "a1", "status": "paid"}])
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    body = resp.json()
+    assert body["failed"] == 0
+    assert body["delivered"] == 0
+    assert body["skipped_github_app_auth"] is True
+    assert fixpack_repo.released == ["j1"]
+    assert fixpack_repo.statuses["j1"] == "paid"
+    assert "credentials rejected" in fixpack_repo.details["j1"]
+
+
+def test_rejected_credentials_write_no_fix_outcome_row(monkeypatch):
+    """fix_outcomes is the table we intend to learn from. Our own outage is
+    not the outcome of a fix and must not be recorded as one."""
+    recorded = []
+
+    class RecordingOutcomes:
+        async def record(self, **kwargs):
+            recorded.append(kwargs)
+            return None
+
+    fixpack_repo = _auth_rejected_setup(
+        monkeypatch, [{"id": "j1", "audit_id": "a1", "status": "paid"}])
+    app.dependency_overrides[main_mod.get_fix_outcome_repo] = \
+        lambda: RecordingOutcomes()
+    try:
+        client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+        app.dependency_overrides.pop(main_mod.get_fix_outcome_repo, None)
+
+    assert recorded == []
+    assert fixpack_repo.released == ["j1"]
+
+
+def test_rejected_credentials_stop_the_drain_instead_of_spinning(monkeypatch):
+    """The released job is immediately re-claimable, unlike the sandbox
+    'deferred' path which leaves it leased. Without the break, one broken key
+    would spin the loop releasing and re-claiming the same rows forever."""
+    fixpack_repo = _auth_rejected_setup(monkeypatch, [
+        {"id": "j1", "audit_id": "a1", "status": "paid"},
+        {"id": "j2", "audit_id": "a1", "status": "paid"},
+        {"id": "j3", "audit_id": "a1", "status": "paid"},
+    ])
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    # Exactly one job claimed, then the run stopped. The other two are
+    # untouched, with their attempts unspent.
+    assert fixpack_repo.claimed == ["j1"]
+    assert resp.json()["processed"] == 1
+    assert fixpack_repo.statuses.get("j2") is None
+
+
+def test_an_uninstalled_app_still_fails_terminally(monkeypatch):
+    """The boundary. 'Not installed on this repo' is the customer's problem
+    and stays a real failure -- relaxing the auth case must not relax that,
+    or a repo that will never work would be retried forever."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(
+        main_mod, "app_credentials_from_env",
+        lambda: ("Iv23appid",
+                 "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"),
+    )
+
+    def not_installed(owner, repo, *, app_id, private_key):
+        raise GitHubAppError(f"GitHub App is not installed on {owner}/{repo}")
+
+    monkeypatch.setattr(main_mod, "installation_token_for_repo", not_installed)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    audits = {"a1": {
+        "repo_url": "https://github.com/donjonson-hash/drydock-fixpack-e2e-test",
+        "findings_json": [
+            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
+             "title": "AWS Access Key ID", "context": None},
+        ],
+    }}
+    fixpack_repo = FakeFixpackRepo([{"id": "j1", "audit_id": "a1", "status": "paid"}])
+    override(FakeAuditRepo(audits), fixpack_repo,
+             fake_fetcher_returning(zip_bytes),
+             lambda *a, **k: PullRequestResult(html_url="x", branch="y"))
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["failed"] == 1
+    assert fixpack_repo.statuses["j1"] == "failed"
+    assert fixpack_repo.released == []

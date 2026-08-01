@@ -20,6 +20,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+import app.deploypack.github_app as github_app
 from app.deploypack.github_app import (
     GITHUB_APP_SLUG_DEFAULT,
     GitHubAppError,
@@ -430,3 +431,122 @@ def test_build_install_url_encodes_state(monkeypatch):
         "https://github.com/apps/aiagent2046-coder-shipit/installations/new"
         "?state=acme%2Fapp"
     )
+
+
+# --- the health probe, and telling our failure from the caller's ---
+
+
+def _key_pem() -> str:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+
+
+def _configure(monkeypatch, pem: str | None = None) -> None:
+    monkeypatch.setenv("GITHUB_APP_ID", "Iv23test")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", pem if pem else _key_pem())
+    github_app.reset_app_auth_cache()
+
+
+def _transport(status: int, body: dict | None = None):
+    return httpx.MockTransport(
+        lambda request: httpx.Response(status, json=body or {})
+    )
+
+
+def test_auth_probe_is_none_when_app_is_not_configured(monkeypatch):
+    """Not every deployment uses the App -- the PAT path is legitimate, and
+    reporting it as a fault would make /health permanently red for it."""
+    monkeypatch.delenv("GITHUB_APP_ID", raising=False)
+    github_app.reset_app_auth_cache()
+    assert github_app.app_auth_ok() is None
+
+
+def test_auth_probe_true_when_github_accepts_the_jwt(monkeypatch):
+    _configure(monkeypatch)
+    assert github_app.app_auth_ok(
+        transport=_transport(200, {"slug": "drydock"})
+    ) is True
+
+
+def test_auth_probe_false_on_401(monkeypatch):
+    _configure(monkeypatch)
+    assert github_app.app_auth_ok(
+        transport=_transport(401, {"message": "A JSON web token could not be decoded"})
+    ) is False
+
+
+def test_auth_probe_false_on_an_unparseable_key_without_any_network(monkeypatch):
+    """A PEM that will not parse is a verdict on its own -- and the one cause
+    that must be caught even when GitHub is unreachable."""
+    _configure(monkeypatch, pem="not a pem at all")
+
+    def explode(request):
+        raise AssertionError("the probe must not call GitHub for a broken PEM")
+
+    assert github_app.app_auth_ok(
+        transport=httpx.MockTransport(explode)
+    ) is False
+
+
+def test_a_definite_verdict_is_cached(monkeypatch):
+    """/health is public and unauthenticated: without this, a pinger turns
+    every probe into a GitHub call and rate-limits the App."""
+    _configure(monkeypatch)
+    calls = []
+
+    def counting(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(counting)
+    assert github_app.app_auth_ok(transport=transport, now=1000.0) is True
+    assert github_app.app_auth_ok(transport=transport, now=1200.0) is True
+    assert calls == ["/app"]
+
+    # Past the TTL it asks again.
+    github_app.app_auth_ok(
+        transport=transport, now=1000.0 + github_app.AUTH_CACHE_SECONDS + 1)
+    assert len(calls) == 2
+
+
+def test_an_unreachable_github_is_reported_but_not_remembered(monkeypatch):
+    """A network blip says nothing about the key. Reporting False is honest
+    -- we cannot open a PR right now -- but caching it would keep the probe
+    red for five minutes after GitHub came back."""
+    _configure(monkeypatch)
+
+    def failing(request):
+        raise httpx.ConnectError("no route to host")
+
+    assert github_app.app_auth_ok(transport=httpx.MockTransport(failing)) is False
+    assert github_app.app_auth_ok(transport=_transport(200)) is True
+
+
+def test_401_raises_the_auth_subclass_not_the_generic_error(monkeypatch):
+    """The processor tells 'our credentials are broken' from 'this repo has a
+    problem' by exception type, so the type is the contract."""
+    pem = _key_pem()
+    with pytest.raises(github_app.GitHubAppAuthError):
+        github_app.installation_token_for_repo(
+            "owner", "repo", app_id="Iv23test", private_key=pem,
+            transport=_transport(401, {"message": "could not be decoded"}),
+        )
+
+
+def test_404_stays_the_plain_error(monkeypatch):
+    """'Not installed on this repo' is the caller's problem and must NOT be
+    the auth subclass, or a repo that will never work would be retried."""
+    pem = _key_pem()
+    with pytest.raises(github_app.GitHubAppError) as caught:
+        github_app.installation_token_for_repo(
+            "owner", "repo", app_id="Iv23test", private_key=pem,
+            transport=_transport(404, {"message": "Not Found"}),
+        )
+    assert not isinstance(caught.value, github_app.GitHubAppAuthError)
+    assert "not installed" in str(caught.value)

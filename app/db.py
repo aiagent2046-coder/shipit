@@ -855,6 +855,44 @@ class FixpackJobRepository:
                 (pr_url, uuid.UUID(job_id)),
             )
 
+    async def release_to_paid(self, job_id: str, detail: str) -> None:
+        """Hand a claimed job back to the queue as if it had never been
+        claimed: 'running' -> 'paid', lease cleared, and the attempt the
+        claim charged for refunded.
+
+        For the one class of failure that is ours, not the job's -- GitHub
+        rejecting our own App credentials. Nothing about the customer's
+        repository was even reached, so charging the job an attempt walks it
+        toward the reaper's terminal 'failed' over a problem no retry of
+        theirs can fix.
+
+        Distinct from reap_stale_running, which also returns jobs to 'paid':
+        that one is for a crashed worker and deliberately KEEPS the attempt,
+        because a job that reliably kills its worker must eventually stop
+        being retried. Here the opposite is true -- the job is fine and the
+        deployment is broken, so the count must not move.
+
+        `detail` is written so the row explains itself while it waits.
+        Guarded on status = 'running' so a concurrently-reaped job is not
+        resurrected out from under the reaper."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                update fixpack_jobs
+                   set status = 'paid',
+                       started_at = null,
+                       attempts = greatest(attempts - 1, 0),
+                       detail = %s
+                 where id = %s
+                   and status = 'running'
+                """,
+                (detail, uuid.UUID(job_id)),
+            )
+
     async def mark_status(
         self, job_id: str, status: str, detail: str | None = None
     ) -> None:
