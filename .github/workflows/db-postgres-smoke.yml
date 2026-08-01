@@ -20,24 +20,28 @@ on:
       - "migrations/**"
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
+      - "tests/test_migration_ledger_postgres.py"
       - "tests/test_audit_jobs_repo.py"
       - "tests/test_audit_worker_postgres.py"
       - "tests/test_internal_stats.py"
       - "app/worker/**"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
+      - "deploy/scripts/check_release_migrations.py"
       - ".github/workflows/db-postgres-smoke.yml"
   pull_request:
     paths:
       - "migrations/**"
       - "app/db.py"
       - "tests/test_db_postgres_smoke.py"
+      - "tests/test_migration_ledger_postgres.py"
       - "tests/test_audit_jobs_repo.py"
       - "tests/test_audit_worker_postgres.py"
       - "tests/test_internal_stats.py"
       - "app/worker/**"
       - "scripts/apply_migrations.sh"
       - "scripts/migration_manager.py"
+      - "deploy/scripts/check_release_migrations.py"
       - ".github/workflows/db-postgres-smoke.yml"
   workflow_dispatch: {}
 
@@ -91,6 +95,14 @@ jobs:
 
       - name: Apply all migrations in order
         run: bash scripts/apply_migrations.sh
+
+      # The two hand-written parsers of psql's tab-separated ledger output.
+      # Their unit tests build inputs as Python dicts and so have never seen
+      # psql's actual bytes -- which is how a NULL column, rendered as an
+      # empty trailing field, broke every read of the ledger and got past
+      # them. Runs first: nothing below it works if the ledger cannot be read.
+      - name: "Real-Postgres migration ledger parsing"
+        run: pytest -q tests/test_migration_ledger_postgres.py
 
       - name: "Real-Postgres repository write-path smoke"
         run: pytest -q tests/test_db_postgres_smoke.py
