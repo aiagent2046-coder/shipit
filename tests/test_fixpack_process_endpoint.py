@@ -1047,8 +1047,10 @@ def _auth_rejected_setup(monkeypatch, jobs):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(
         main_mod, "app_credentials_from_env",
-        lambda: ("Iv23appid",
-                 "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"),
+        # Any non-empty string: installation_token_for_repo is replaced
+        # below, so nothing ever parses this. A PEM header here would only
+        # trip the added-lines secret scanner in CI, for no benefit.
+        lambda: ("Iv23appid", "placeholder-key-never-parsed"),
     )
 
     def rejecting_token(owner, repo, *, app_id, private_key):
@@ -1145,8 +1147,10 @@ def test_an_uninstalled_app_still_fails_terminally(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(
         main_mod, "app_credentials_from_env",
-        lambda: ("Iv23appid",
-                 "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"),
+        # Any non-empty string: installation_token_for_repo is replaced
+        # below, so nothing ever parses this. A PEM header here would only
+        # trip the added-lines secret scanner in CI, for no benefit.
+        lambda: ("Iv23appid", "placeholder-key-never-parsed"),
     )
 
     def not_installed(owner, repo, *, app_id, private_key):
