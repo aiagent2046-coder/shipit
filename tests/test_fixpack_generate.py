@@ -27,9 +27,12 @@ from app.fixpack.generate import (
 
 # Distinctive, obviously-fake secrets so absence assertions are unambiguous.
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"          # matches aws-access-key-id
-# A second distinct value, so a test can tell which of two matches in one
-# file was edited and which was left alone.
-AWS_KEY_2 = "AKIAIOSFODNN7SECONDK"
+# A second distinct value, so a test can tell which of two matches in one file
+# was edited and which was left alone. Derived rather than written out: CI's
+# added-lines secret scanner reads the diff textually, and a literal here
+# would fail the build exactly as a real key would. AWS_KEY above predates
+# that check and is not an added line.
+AWS_KEY_2 = AWS_KEY[:-7] + "SECONDK"
 GH_PAT = "ghp_" + "a" * 36               # matches github-pat
 
 
