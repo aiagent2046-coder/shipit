@@ -6,21 +6,22 @@ name: web-build
 # deployment after the merge. A build error would therefore be discovered
 # either in a check nobody treats as blocking, or on main.
 #
-# Path-filtered: the Python suite has no opinion about TypeScript, and running
-# a Node build on every backend commit would be noise that teaches people to
-# ignore a red check.
+# Runs on EVERY pull request, with no path filter, so that it can be a
+# required status check. A path-filtered workflow simply does not start on a
+# PR that misses the filter, so the check never reports, and a rule requiring
+# it would leave every backend-only PR waiting forever. That is why `smoke` is
+# not required either.
+#
+# The alternative -- keeping the filter and adding a second always-running job
+# that reports on its behalf -- buys back about 40 seconds per backend PR and
+# costs a layer of indirection in the one place that must be obvious. Not
+# worth it.
 
 on:
   pull_request:
-    paths:
-      - "web/**"
-      - ".github/workflows/web-build.yml"
   push:
     branches:
       - main
-    paths:
-      - "web/**"
-      - ".github/workflows/web-build.yml"
   workflow_dispatch:
 
 permissions:
