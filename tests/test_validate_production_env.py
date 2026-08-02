@@ -219,3 +219,135 @@ def test_a_complete_file_still_passes_with_a_hostile_environment(
     monkeypatch.setenv("USDT_TRC20_ADDRESS", "TFake000000000000000000000000000")
 
     assert _run(tmp_path, monkeypatch, COMPLETE_ENV) == 0
+
+
+def test_the_glued_line_that_cost_two_days_of_payments(
+    tmp_path, monkeypatch, capsys,
+):
+    """The exact shape of the 2026-07-31 corruption, and the reason this whole
+    tier exists.
+
+    A nano paste appended the USDT_POLL_TOKEN line to the value of the variable
+    above it. USDT_POLL_TOKEN was then restored from a backup, so BOTH names
+    were present and non-empty -- and every check in the script passed. The
+    address was garbage, poll-usdt answered 503 on every run for two days, and
+    no USDT payment was confirmed in that window.
+
+    Against main this file validates clean, exit 0.
+    """
+    env = dict(COMPLETE_ENV)
+    env["USDT_TRC20_ADDRESS"] = "USDT_POLL_TOKEN=fake-usdt-token-not-real"
+    env["USDT_POLL_TOKEN"] = "fake-usdt-token-not-real"
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+
+    err = capsys.readouterr().err
+    assert "USDT_TRC20_ADDRESS starts with 'USDT_POLL_TOKEN='" in err
+
+
+def test_the_glue_is_caught_on_any_variable_not_just_the_address(
+    tmp_path, monkeypatch, capsys,
+):
+    """The check keys on the SHAPE of the value, not on which variable holds
+    it. A rule that only knew about TRON addresses would have to be extended
+    every time the paste lands somewhere new -- and the next paste will."""
+    env = dict(COMPLETE_ENV)
+    env["CORS_ALLOWED_ORIGINS"] = "SERVICE_FLAGS_TOKEN=fake-flags-token"
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+    assert "CORS_ALLOWED_ORIGINS starts with 'SERVICE_FLAGS_TOKEN='" in (
+        capsys.readouterr().err
+    )
+
+
+def test_an_equals_sign_inside_a_value_is_left_alone(
+    tmp_path, monkeypatch,
+):
+    """The boundary that keeps this from being a nuisance. Only the START of a
+    value is examined: connection strings carry query parameters and base64
+    carries padding, and neither is a glued line."""
+    env = dict(COMPLETE_ENV)
+    env["DATABASE_URL"] = (
+        "postgresql://fake-user@localhost:5432/fake-db?sslmode=require"
+    )
+
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
+def test_a_lowercase_prefix_is_not_treated_as_a_glued_line(
+    tmp_path, monkeypatch,
+):
+    """Environment variable names are upper-case by convention and the pattern
+    relies on it. A value that merely contains 'word=' at the front, like a
+    URL-encoded parameter, must not refuse to boot the API."""
+    env = dict(COMPLETE_ENV)
+    env["CORS_ALLOWED_ORIGINS"] = "mode=strict"
+
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
+def test_a_malformed_tron_address_is_refused(tmp_path, monkeypatch, capsys):
+    """Independently of the glue check: a transposed or truncated address is
+    still an address-shaped string that no check used to look at."""
+    env = dict(COMPLETE_ENV)
+    env["USDT_TRC20_ADDRESS"] = "TBTwuY1oQMLw2wxc3FWB8TFtu1dTnuv"  # 31 chars
+    env["USDT_POLL_TOKEN"] = "fake-usdt-token-not-real"
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+    assert "USDT_TRC20_ADDRESS is not a TRON address" in capsys.readouterr().err
+
+
+def test_a_well_formed_tron_address_passes(tmp_path, monkeypatch):
+    """The address restored from backup on 2026-08-02. It is a public
+    receiving address, not a secret."""
+    env = dict(COMPLETE_ENV)
+    env["USDT_TRC20_ADDRESS"] = "TBTwuY1oQMLw2wxc3FWB8TFtu1dTnuvZuf"
+    env["USDT_POLL_TOKEN"] = "fake-usdt-token-not-real"
+
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
+def test_no_check_ever_prints_the_value_it_rejected(
+    tmp_path, monkeypatch, capsys,
+):
+    """On 2026-08-02 an error message that echoed USDT_TRC20_ADDRESS put a live
+    bearer token -- which is what the variable wrongly held -- into the journal
+    and into an HTTP response body. This script runs under systemd, so anything
+    it prints is journalled on every boot. Naming the variable is just as
+    actionable as showing it."""
+    secret = "d41d8cd98f00b204e9800998ecf8427e"
+    env = dict(COMPLETE_ENV)
+    env["USDT_TRC20_ADDRESS"] = f"USDT_POLL_TOKEN={secret}"
+    env["USDT_POLL_TOKEN"] = secret
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+
+    captured = capsys.readouterr()
+    assert secret not in captured.err
+    assert secret not in captured.out
+
+
+def test_a_database_url_with_the_wrong_scheme_is_refused(
+    tmp_path, monkeypatch, capsys,
+):
+    env = dict(COMPLETE_ENV)
+    env["DATABASE_URL"] = "mysql://fake-user@localhost/fake-db"
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+    assert "DATABASE_URL does not start with" in capsys.readouterr().err
+
+
+def test_a_short_token_warns_but_still_starts(tmp_path, monkeypatch, capsys):
+    """Truncation is the sibling of gluing: the value is present and non-empty,
+    so every existing check passes, but it is not the token. A warning rather
+    than an error -- nothing enforces the `openssl rand -hex 32` convention,
+    and refusing to boot over a short-but-working token would turn a note about
+    strength into an outage."""
+    env = dict(COMPLETE_ENV)
+    env["SERVICE_FLAGS_TOKEN"] = "abc123"
+
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+    err = capsys.readouterr().err
+    assert "SERVICE_FLAGS_TOKEN is shorter than 16 characters" in err
+    assert "Invalid production configuration" not in err
