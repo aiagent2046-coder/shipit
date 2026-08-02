@@ -639,7 +639,8 @@ async def test_run_worker_starts_and_stops_the_heartbeat(monkeypatch):
 
 
 async def _insert_outcome(conn, *, rule_ids, outcome="delivered",
-                          pr_merged=None, audit_id=None):
+                          pr_merged=None, audit_id=None,
+                          pr_url="https://github.com/acme/app/pull/1"):
     """One fix_outcomes row, optionally tied to a specific audit so the
     distinct-audit half of the threshold can be exercised."""
     if audit_id is None:
@@ -650,8 +651,8 @@ async def _insert_outcome(conn, *, rule_ids, outcome="delivered",
         audit_id = (await cur.fetchone())["id"]
     await conn.execute(
         "insert into fix_outcomes (audit_id, rule_ids, stack, outcome, "
-        "pr_merged) values (%s, %s::jsonb, 'nextjs', %s, %s)",
-        (audit_id, json.dumps(rule_ids), outcome, pr_merged),
+        "pr_merged, pr_url) values (%s, %s::jsonb, 'nextjs', %s, %s, %s)",
+        (audit_id, json.dumps(rule_ids), outcome, pr_merged, pr_url),
     )
     return audit_id
 
@@ -755,3 +756,56 @@ async def test_a_rule_becomes_ready_once_both_thresholds_are_met(
     assert rule["ready"] is True
     assert learning["rules_ready"] == 1
     assert learning["thresholds"] == {"min_labelled": 20, "min_audits": 5}
+
+
+@requires_postgres
+async def test_a_verdict_on_a_fabricated_pr_url_does_not_count(
+    real_db, stats_token,
+):
+    """The production table really held these on 2026-08-02.
+
+    Four rows claiming pr_merged = true on URLs like
+    ".../pull/278bcdc68ae9-outcome". A pull request number is an integer, so no
+    such PR exists and no webhook ever fired for one -- they came from this
+    very smoke suite, run four times against the PRODUCTION database instead of
+    the throwaway container it is written for.
+
+    They sat one distinct audit away from declaring SEC001 and CFG002 ready to
+    learn from, on a fabricated 100% merge rate.
+    """
+    async with real_db.connection() as conn:
+        for fake in ("278bcdc68ae9", "6771d0a8ca77", "dee92a1b284e",
+                     "f6de4fc51a8c"):
+            await _insert_outcome(
+                conn, rule_ids=["SEC001", "CFG002"], pr_merged=True,
+                pr_url=f"https://github.com/acme/app/pull/{fake}-outcome")
+
+    rules = {r["rule_id"]: r for r in
+             client.get("/internal/stats", headers=stats_token).json()[
+                 "learning"]["rules"]}
+
+    assert rules["SEC001"]["labelled"] == 0
+    assert rules["SEC001"]["merged"] == 0
+    assert rules["SEC001"]["audits"] == 0
+    # Not deleted, and not hidden: the rows are still counted as rows, so the
+    # history that they happened stays visible.
+    assert rules["SEC001"]["rows_total"] == 4
+
+
+@requires_postgres
+async def test_a_verdict_from_a_real_webhook_still_counts(
+    real_db, stats_token,
+):
+    """The boundary. A filter that refused everything would be worse than
+    counting the fakes -- this is the shape GitHub actually sends."""
+    async with real_db.connection() as conn:
+        await _insert_outcome(
+            conn, rule_ids=["sql-secret-assignment"], pr_merged=False,
+            pr_url="https://github.com/aiagent2046-coder/shipit/pull/131")
+
+    rules = {r["rule_id"]: r for r in
+             client.get("/internal/stats", headers=stats_token).json()[
+                 "learning"]["rules"]}
+
+    assert rules["sql-secret-assignment"]["labelled"] == 1
+    assert rules["sql-secret-assignment"]["merged"] == 0
