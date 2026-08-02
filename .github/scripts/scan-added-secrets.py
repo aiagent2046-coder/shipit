@@ -69,6 +69,29 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
         "postgres-url-password",
         re.compile(rb"postgres(?:ql)?://[^:/?#@\s]+:[^@/?#\s]+@"),
     ),
+    (
+        # A long hex string assigned to a secret-shaped NAME. Every token this
+        # project mints follows the `openssl rand -hex 32` convention, which
+        # has no prefix to key on -- so unlike every pattern above, this one
+        # cannot recognise the value and keys on the assignment instead.
+        #
+        # Added because it was missed for real: on 2026-08-02 a live
+        # USDT_POLL_TOKEN was committed into tests/test_billing_usdt.py,
+        # copied out of a journal line while writing a regression test, and CI
+        # passed. None of the patterns above describe a bare hex string.
+        #
+        # The name requirement is what keeps it quiet. A bare 32+ hex literal
+        # matches SHA-256 digests, checksums and fixture ids all over a
+        # codebase; requiring `something_secretish = "<hex>"` narrowed it to
+        # exactly one hit across this repo -- the real leak. Test fixtures
+        # should not look like secrets anyway, and the convention here is an
+        # obviously-fake value such as "deadbeef" * 8.
+        "hex-secret-assignment",
+        re.compile(
+            rb"(?i)(?:token|secret|key|pepper|password)\w*\s*[=:]\s*"
+            rb"[\"'][0-9a-f]{32,}[\"']"
+        ),
+    ),
 )
 
 

@@ -315,7 +315,9 @@ def test_no_check_ever_prints_the_value_it_rejected(
     and into an HTTP response body. This script runs under systemd, so anything
     it prints is journalled on every boot. Naming the variable is just as
     actionable as showing it."""
-    secret = "d41d8cd98f00b204e9800998ecf8427e"
+    # Repetition rather than a 32-character hex literal: a fixture that
+    # looks like a secret trips the scanner that exists to find real ones.
+    secret = "deadbeef" * 8
     env = dict(COMPLETE_ENV)
     env["USDT_TRC20_ADDRESS"] = f"USDT_POLL_TOKEN={secret}"
     env["USDT_POLL_TOKEN"] = secret
