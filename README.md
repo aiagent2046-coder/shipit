@@ -830,6 +830,33 @@ allowed request headers are `Authorization` and `Content-Type`.
 
 ## Known gaps (honest list, post-deploy)
 
+- **Every foreign key is `ON DELETE NO ACTION`, and that is deliberate.**
+  Reviewed 2026-08-02 across all ten of them: `audit_jobs.{audit_id,
+  account_id}`, `fixpack_jobs.audit_id`, `fix_outcomes.{audit_id,
+  fixpack_job_id}`, `llm_usage.{account_id,audit_job_id}`,
+  `payments.{account_id,audit_id}`, `subscriptions.account_id`.
+
+  `NO ACTION` does not produce orphans — a foreign key makes orphans
+  impossible by definition. It refuses a delete that would create one, which
+  is the fail-safe direction. Nothing in the application deletes a parent row:
+  there is no account-deletion endpoint, no retention job, no GDPR erasure
+  path, and no `delete from` anywhere outside `scripts/verify_db_locally.py`
+  (which removes its own fixtures, children first, in the order the
+  constraints require).
+
+  Adding `ON DELETE CASCADE` would therefore fix nothing that is broken and
+  would introduce something that is not: four of these keys reach money
+  (`payments.account_id`, `payments.audit_id`, `subscriptions.account_id`,
+  `llm_usage.account_id`). Cascading them means deleting an account silently
+  takes its payment history with it, where today the database would refuse and
+  make a human stop and think. `SET NULL` is gentler but still changes what
+  the data means: a payment with no owner is money received that no longer
+  appears in any account's history.
+
+  Decide the semantics when there is a requirement to decide them against — an
+  erasure request, or a retention policy for old audits. Choosing now would be
+  guessing, and the guess is recorded in the `payments` table.
+
 - `POST /v1/audits` intake now accepts a public GitHub `repo_url` as an
   alternative to a zip upload (see above). Still NOT supported by design:
   private repos, non-GitHub hosts (GitLab/Bitbucket/self-hosted), and any
