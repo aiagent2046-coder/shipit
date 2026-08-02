@@ -714,13 +714,44 @@ def _service_flags_token() -> str | None:
     return os.environ.get("SERVICE_FLAGS_TOKEN") or None
 
 
+def _secret_equals(provided: str, expected: str) -> bool:
+    """Constant-time comparison of a header value against a configured secret.
+
+    `hmac.compare_digest` on two str arguments raises TypeError the moment
+    either side holds a character above 127 -- "comparing strings with
+    non-ASCII characters is not supported". Header values reach us as str, and
+    a client is free to put any byte in one, so a request with a Cyrillic
+    Authorization header used to raise inside the auth check and land in the
+    global handler: a 500, a traceback, and an operator alert, for a request
+    that should simply have been told 401.
+
+    Comparing bytes instead has no such restriction. The two sides are encoded
+    differently on purpose:
+
+      - `provided` came from the wire, and the ASGI server decoded those bytes
+        as latin-1, which is a byte-for-byte mapping. Encoding it back as
+        latin-1 therefore reconstructs exactly what the client sent, and can
+        never fail, because every character is <= 0xFF by construction.
+      - `expected` came from the environment as text, so it encodes as UTF-8,
+        which is what a shell wrote into it.
+
+    That pairing means a non-ASCII secret actually WORKS, rather than being
+    compared against mismatched bytes. An ASCII secret -- every one we have --
+    encodes identically either way, so nothing about today's behaviour moves
+    except that the wrong answer is now 401 instead of 500.
+    """
+    return hmac.compare_digest(
+        provided.encode("latin-1"), expected.encode("utf-8")
+    )
+
+
 def _require_bearer_token(request: Request, token: str) -> None:
     """Constant-time check of `Authorization: Bearer <token>`, raising 401
     on mismatch. The single implementation shared by every internal
     operational endpoint (reaper, USDT poller, Fix Pack processor) so the
     comparison stays constant-time in one place and can't drift."""
     provided = request.headers.get("authorization", "")
-    if not hmac.compare_digest(provided, f"Bearer {token}"):
+    if not _secret_equals(provided, f"Bearer {token}"):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
 
@@ -1129,7 +1160,7 @@ async def telegram_webhook(
                               "must both be set on this deployment"},
         )
     provided = request.headers.get("x-telegram-bot-api-secret-token", "")
-    if not hmac.compare_digest(provided, secret):
+    if not _secret_equals(provided, secret):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
     update = await _json_object_body(request)
@@ -1159,7 +1190,7 @@ def _verify_github_signature(secret: str, body: bytes, header: str) -> bool:
         secret.encode("utf-8"), body, hashlib.sha256
     ).hexdigest()
     provided = header.split("=", 1)[1]
-    return hmac.compare_digest(provided, expected)
+    return _secret_equals(provided, expected)
 
 
 @app.post("/v1/webhooks/github")
