@@ -2940,6 +2940,22 @@ async def audit_jobs_stats(
 STATS_RECENT_WINDOW_SECONDS = 3600
 STATS_DAY_WINDOW_SECONDS = 24 * 3600
 
+# When a rule has enough evidence to learn from.
+#
+# 20 labelled outcomes and 5 distinct audits, per rule. The second number is
+# the load-bearing one: twenty merges from one customer's repository say that
+# this fix suits that repository, and generalising from it is how a knowledge
+# base learns something false with confidence. Five audits is not a large
+# sample either, but it is the point past which a signal is at least not one
+# codebase's opinion.
+#
+# These are a stated position, not a derived one -- there is no dataset to
+# derive them from yet, which is rather the point. They live here so the
+# question "is there enough data?" is answered by a query instead of by
+# whoever is asked.
+LEARNING_MIN_LABELLED = 20
+LEARNING_MIN_AUDITS = 5
+
 
 @app.get("/internal/stats")
 async def internal_stats(
@@ -2947,6 +2963,7 @@ async def internal_stats(
     audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
     fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+    fix_outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
 ) -> dict:
     """Every queue and the LLM bill, aggregated, in one authenticated read.
 
@@ -2999,6 +3016,10 @@ async def internal_stats(
         window_seconds=STATS_RECENT_WINDOW_SECONDS)
     spend_day = await llm_usage_repo.spend_since(
         window_seconds=STATS_DAY_WINDOW_SECONDS)
+    learning = await fix_outcome_repo.learning_readiness(
+        min_labelled=LEARNING_MIN_LABELLED,
+        min_audits=LEARNING_MIN_AUDITS,
+    )
 
     return {
         "window_seconds": STATS_RECENT_WINDOW_SECONDS,
@@ -3030,6 +3051,10 @@ async def internal_stats(
             "error_rate": audit_recent["error_rate"],
             "top_error_codes": audit_recent["top_error_codes"],
         },
+        # Lifetime, not windowed like everything above it: the question this
+        # answers is "has enough evidence accumulated to learn from", and an
+        # hour of it is not evidence.
+        "learning": learning,
     }
 
 

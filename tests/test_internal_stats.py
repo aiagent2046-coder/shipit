@@ -636,3 +636,122 @@ async def test_run_worker_starts_and_stops_the_heartbeat(monkeypatch):
         timeout=5)
 
     assert started == ["heartbeat"]
+
+
+async def _insert_outcome(conn, *, rule_ids, outcome="delivered",
+                          pr_merged=None, audit_id=None):
+    """One fix_outcomes row, optionally tied to a specific audit so the
+    distinct-audit half of the threshold can be exercised."""
+    if audit_id is None:
+        cur = await conn.execute(
+            "insert into audits (stack, status) values ('nextjs', 'completed') "
+            "returning id"
+        )
+        audit_id = (await cur.fetchone())["id"]
+    await conn.execute(
+        "insert into fix_outcomes (audit_id, rule_ids, stack, outcome, "
+        "pr_merged) values (%s, %s::jsonb, 'nextjs', %s, %s)",
+        (audit_id, json.dumps(rule_ids), outcome, pr_merged),
+    )
+    return audit_id
+
+
+@requires_postgres
+async def test_learning_counts_only_outcomes_that_carry_a_verdict(
+    real_db, stats_token,
+):
+    """`labelled` is narrower than the row count on purpose.
+
+    A rule teaches us something only when the Fix Pack was delivered AND the
+    customer then merged or closed the PR. Blocked, failed, and
+    still-undecided rows carry no verdict; counting them would report a rule
+    as ready on evidence that cannot be learned from.
+    """
+    async with real_db.connection() as conn:
+        await _insert_outcome(conn, rule_ids=["hardcoded_secret"],
+                              pr_merged=True)
+        await _insert_outcome(conn, rule_ids=["hardcoded_secret"],
+                              pr_merged=False)
+        # Delivered, nobody has decided yet -- reported, not counted.
+        await _insert_outcome(conn, rule_ids=["hardcoded_secret"])
+        # Never delivered, so its rule_ids never faced a customer.
+        await _insert_outcome(conn, rule_ids=["hardcoded_secret"],
+                              outcome="blocked")
+
+    learning = client.get("/internal/stats", headers=stats_token).json()[
+        "learning"]
+    rule = next(r for r in learning["rules"]
+                if r["rule_id"] == "hardcoded_secret")
+
+    assert rule["labelled"] == 2
+    assert rule["merged"] == 1
+    assert rule["awaiting_verdict"] == 1
+    assert rule["rows_total"] == 4
+    assert rule["ready"] is False
+
+
+@requires_postgres
+async def test_learning_splits_a_multi_rule_outcome_across_its_rules(
+    real_db, stats_token,
+):
+    """One Fix Pack fixes many findings, so one row carries many rule_ids and
+    is evidence for each of them separately."""
+    async with real_db.connection() as conn:
+        await _insert_outcome(
+            conn, rule_ids=["hardcoded_secret", "missing_env_example"],
+            pr_merged=True)
+
+    rules = {r["rule_id"]: r for r in
+             client.get("/internal/stats", headers=stats_token).json()[
+                 "learning"]["rules"]}
+
+    assert rules["hardcoded_secret"]["labelled"] == 1
+    assert rules["missing_env_example"]["labelled"] == 1
+
+
+@requires_postgres
+async def test_a_rule_is_not_ready_on_one_repository_alone(
+    real_db, stats_token,
+):
+    """The load-bearing half of the threshold. Twenty merges from ONE
+    customer's repository say the fix suits that repository; generalising from
+    it is how a knowledge base learns something false with confidence."""
+    async with real_db.connection() as conn:
+        audit_id = await _insert_outcome(conn, rule_ids=["debug_true"],
+                                         pr_merged=True)
+        for _ in range(24):
+            await _insert_outcome(conn, rule_ids=["debug_true"],
+                                  pr_merged=True, audit_id=audit_id)
+
+    learning = client.get("/internal/stats", headers=stats_token).json()[
+        "learning"]
+    rule = next(r for r in learning["rules"] if r["rule_id"] == "debug_true")
+
+    assert rule["labelled"] == 25          # past the count threshold
+    assert rule["audits"] == 1             # from a single codebase
+    assert rule["ready"] is False
+    assert learning["rules_ready"] == 0
+
+
+@requires_postgres
+async def test_a_rule_becomes_ready_once_both_thresholds_are_met(
+    real_db, stats_token,
+):
+    """The other side of the boundary: a gate that never opens is not a gate."""
+    async with real_db.connection() as conn:
+        for _ in range(5):
+            audit_id = await _insert_outcome(conn, rule_ids=["debug_true"],
+                                             pr_merged=True)
+            for _ in range(3):
+                await _insert_outcome(conn, rule_ids=["debug_true"],
+                                      pr_merged=True, audit_id=audit_id)
+
+    learning = client.get("/internal/stats", headers=stats_token).json()[
+        "learning"]
+    rule = next(r for r in learning["rules"] if r["rule_id"] == "debug_true")
+
+    assert rule["labelled"] == 20
+    assert rule["audits"] == 5
+    assert rule["ready"] is True
+    assert learning["rules_ready"] == 1
+    assert learning["thresholds"] == {"min_labelled": 20, "min_audits": 5}
