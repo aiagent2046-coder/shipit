@@ -791,6 +791,39 @@ async def health(
     }
 
 
+async def _json_object_body(request: Request) -> dict:
+    """The request body as a JSON object, or 422.
+
+    `await request.json()` raises on a malformed body, and every endpoint that
+    called it bare turned a typo into a 500 -- which the global handler logs
+    with a traceback AND pages the operator for. A client sending broken JSON
+    is not an incident; it is the client's mistake, and the response should
+    say which.
+
+    Non-objects are refused for the same reason one level down. A body of `[]`
+    or `"hi"` parses fine, and the next line is always `body.get(...)`, so it
+    became AttributeError -- a 500 by a slightly longer route.
+
+    422 rather than 400 to match every other body-shape refusal in this API,
+    including the one place that already guarded this (the service-flags
+    endpoint). Webhook senders retry on any non-2xx, so this does not stop
+    Telegram or PayPal re-delivering an unparseable payload -- but a retry that
+    fails identically is cheap, while a 500 also wakes someone up.
+    """
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        body = None
+
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "invalid_json",
+                    "detail": "request body must be a JSON object"},
+        )
+    return body
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Single catch-all for genuinely *unhandled* server errors (a bug, not
@@ -1099,7 +1132,7 @@ async def telegram_webhook(
     if not hmac.compare_digest(provided, secret):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
-    update = await request.json()
+    update = await _json_object_body(request)
     return await telegram_stars.handle_update(
         update, account_repo=account_repo, payment_repo=payment_repo,
         audit_repo=audit_repo, fixpack_repo=fixpack_repo,
@@ -1894,7 +1927,7 @@ async def create_paypal_order(
     if not database_url_from_env():
         raise _paypal_not_persisted_error()
 
-    body = await request.json()
+    body = await _json_object_body(request)
     product = (body.get("product") or "").strip().lower()
 
     if product == "fixpack":
@@ -2004,7 +2037,7 @@ async def create_paypal_subscription(
     if not database_url_from_env():
         raise _paypal_not_persisted_error()
 
-    body = await request.json()
+    body = await _json_object_body(request)
     repo_full_name = normalize_repo_full_name(body.get("repo_url"))
     if repo_full_name is None:
         raise HTTPException(
@@ -2059,7 +2092,7 @@ async def paypal_webhook(
                     "detail": "PAYPAL_WEBHOOK_ID is not set on this deployment"},
         )
 
-    event = await request.json()
+    event = await _json_object_body(request)
     try:
         verified = await paypal.verify_webhook_signature(
             headers=request.headers, event=event, webhook_id=webhook_id,
@@ -2961,11 +2994,12 @@ async def set_llm_paid_ops(
         )
     _require_bearer_token(request, token)
 
-    try:
-        body = await request.json()
-    except (json.JSONDecodeError, ValueError):
-        body = None
-    if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+    # This endpoint already guarded the parse by hand; _json_object_body is
+    # that same guard, so the local try/except would now only catch what it
+    # already raised as a 422. The value check below stays -- the helper knows
+    # the body is an object, not what belongs in it.
+    body = await _json_object_body(request)
+    if not isinstance(body.get("enabled"), bool):
         raise HTTPException(
             status_code=422,
             detail={"reason": "bad_request",
