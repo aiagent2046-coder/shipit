@@ -1120,3 +1120,61 @@ async def test_payer_contact_is_not_format_checked_by_the_database(real_db):
     stored = await payment_repo.get(invoice["payment_id"])
     assert stored["payer_name"] == "Ünïcode Payer 名前"
     assert stored["payer_email"] == "not really an address"
+
+
+# Every foreign key in the schema, with the delete action it is meant to have.
+# All ten are NO ACTION, reviewed 2026-08-02 -- see "Known gaps" in README.md
+# for the reasoning. The short version: NO ACTION cannot orphan a row, it
+# refuses the delete that would; nothing in the application deletes a parent;
+# and four of these keys reach money, where a cascade would quietly take a
+# payment history with an account instead of making a human stop.
+#
+# This is a decision, not an oversight, so it is pinned. Changing an entry here
+# is fine -- changing one without noticing is what this prevents.
+EXPECTED_DELETE_ACTIONS = {
+    "audit_jobs_account_id_fkey": "NO ACTION",
+    "audit_jobs_audit_id_fkey": "NO ACTION",
+    "fix_outcomes_audit_id_fkey": "NO ACTION",
+    "fix_outcomes_fixpack_job_id_fkey": "NO ACTION",
+    "fixpack_jobs_audit_id_fkey": "NO ACTION",
+    "llm_usage_account_id_fkey": "NO ACTION",
+    "llm_usage_audit_job_id_fkey": "NO ACTION",
+    "payments_account_id_fkey": "NO ACTION",
+    "payments_audit_id_fkey": "NO ACTION",
+    "subscriptions_account_id_fkey": "NO ACTION",
+}
+
+
+async def test_foreign_key_delete_actions_are_what_we_decided(real_db):
+    """Read the delete action of every foreign key out of the live catalog.
+
+    Also catches a new foreign key arriving without anyone choosing its delete
+    behaviour: an unlisted constraint fails here rather than defaulting into
+    the schema unexamined.
+    """
+    pool = await db_mod.get_pool()
+    async with pool.connection() as conn:
+        rows = await (await conn.execute(
+            """
+            select c.conname as name,
+                   case c.confdeltype
+                       when 'a' then 'NO ACTION'
+                       when 'r' then 'RESTRICT'
+                       when 'c' then 'CASCADE'
+                       when 'n' then 'SET NULL'
+                       when 'd' then 'SET DEFAULT'
+                   end as delete_action
+            from pg_constraint c
+            where c.contype = 'f'
+            """
+        )).fetchall()
+
+    # The pool hands back mapping rows, so unpacking a row yields its column
+    # NAMES, not its values -- which silently produced {'conname': 'case'}.
+    actual = {row["name"]: row["delete_action"] for row in rows}
+
+    assert actual == EXPECTED_DELETE_ACTIONS, (
+        "foreign key delete actions differ from the reviewed set; if this is "
+        "intentional, update EXPECTED_DELETE_ACTIONS and the 'Known gaps' "
+        "entry in README.md that explains why"
+    )
