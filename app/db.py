@@ -1837,6 +1837,51 @@ class PaymentRepository:
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
 
+    async def mark_refunded(
+        self, payment_id: str, *, reason: str,
+    ) -> dict[str, Any] | None:
+        """Record that a completed payment was given back. Returns the row, or
+        None if there was nothing to refund.
+
+        This moves no money and cannot. A bank transfer lands on a private
+        individual's account and goes back the same way, by hand; Stars and
+        USDT have no refund call we hold a credential for. What the software
+        owes is an honest record: before this column existed, a refunded
+        payment stayed `completed` forever, and a month later nothing
+        distinguished money kept from money returned.
+
+        `status = 'completed'` is inside the UPDATE, not checked before it, for
+        the same reason as mark_completed: the decision and the write cannot be
+        separated by another connection. That also makes a second refund of the
+        same payment a no-op rather than a second entry -- an operator who runs
+        the command twice, or a retried request, must not turn one refund into
+        two in the books.
+
+        Refusing `pending` is not pedantry. DRY-XZCNTN sat at 10.60 pending
+        while DRY-UPRQKH at 10.79 was the charge that actually happened;
+        refunding the invoice nobody paid would have recorded a payout that
+        never occurred and left the real one looking clean.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update payments
+                   set status = 'refunded',
+                       refunded_at = now(),
+                       refund_reason = %s
+                 where id = %s
+                   and status = 'completed'
+                returning *
+                """,
+                (reason, uuid.UUID(payment_id)),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
+
     async def mark_completed_fixpack(
         self, payment_id: str, *, external_ref: str
     ) -> dict[str, Any] | None:
