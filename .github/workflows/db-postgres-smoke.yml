@@ -12,41 +12,27 @@ name: db-postgres-smoke
 # never touch a database -- see POSTGRES_CI_SMOKE_TEST_PLAN.md.
 #
 # Postgres 17 matches the real Supabase major version (app/db.py's module
-# docstring). Only fires on changes that can affect the schema/SQL contract.
+# docstring).
+#
+# Runs on EVERY pull request, with no path filter, so that it can be a
+# required status check. A path-filtered workflow does not start at all on a
+# PR that misses the filter, so the check never reports and a rule requiring
+# it would leave that PR waiting forever.
+#
+# The filter used to list the paths that "can affect the schema/SQL contract",
+# and that list was wrong twice in one day: app/billing/** had to be added
+# when a concurrency fix landed there, and deploy/scripts/check_release_
+# migrations.py when the release gate learned to read the ledger. A list of
+# what might touch the database is a thing to get wrong, and getting it wrong
+# means the check silently does not run on the change that needed it.
+#
+# The cost is about a minute of Postgres container on every PR. That is the
+# price of a check that blocks a merge instead of being advisory -- and this
+# is the suite that caught two money-path mistakes today.
 on:
   push:
     branches: [main]
-    paths:
-      - "migrations/**"
-      - "app/db.py"
-      - "tests/test_db_postgres_smoke.py"
-      - "tests/test_migration_ledger_postgres.py"
-      - "tests/test_billing_concurrency_postgres.py"
-      - "tests/test_audit_jobs_repo.py"
-      - "tests/test_audit_worker_postgres.py"
-      - "tests/test_internal_stats.py"
-      - "app/worker/**"
-      - "app/billing/**"
-      - "scripts/apply_migrations.sh"
-      - "scripts/migration_manager.py"
-      - "deploy/scripts/check_release_migrations.py"
-      - ".github/workflows/db-postgres-smoke.yml"
   pull_request:
-    paths:
-      - "migrations/**"
-      - "app/db.py"
-      - "tests/test_db_postgres_smoke.py"
-      - "tests/test_migration_ledger_postgres.py"
-      - "tests/test_billing_concurrency_postgres.py"
-      - "tests/test_audit_jobs_repo.py"
-      - "tests/test_audit_worker_postgres.py"
-      - "tests/test_internal_stats.py"
-      - "app/worker/**"
-      - "app/billing/**"
-      - "scripts/apply_migrations.sh"
-      - "scripts/migration_manager.py"
-      - "deploy/scripts/check_release_migrations.py"
-      - ".github/workflows/db-postgres-smoke.yml"
   workflow_dispatch: {}
 
 permissions:
