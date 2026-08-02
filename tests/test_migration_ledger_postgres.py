@@ -75,13 +75,21 @@ def _psql(database_url: str, sql: str) -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_manager_reads_a_ledger_full_of_null_flags(ledger_db) -> None:
-    """Every row applied so far predates the directive, so every rollback_safe
-    is NULL. That is the case that broke, and it is the normal case."""
+def test_manager_reads_a_ledger_of_mostly_null_flags(ledger_db) -> None:
+    """A NULL rollback_safe is the normal case and the one that broke the
+    parser: almost every migration predates the directive.
+
+    This used to assert that EVERY flag was NULL, which stopped being true the
+    moment 0028 became the first migration to declare one. The property worth
+    holding is that the parser survives a ledger where most rows are NULL --
+    not that the project never adopts its own directive.
+    """
     applied = migration_manager.load_applied()
 
     assert applied, "the workflow applies all migrations before this runs"
-    assert all(row.rollback_safe is None for row in applied.values())
+    assert any(row.rollback_safe is None for row in applied.values())
+    assert all(row.rollback_safe in (None, True, False)
+               for row in applied.values())
     assert all(len(row.checksum) == 64 for row in applied.values())
 
 
@@ -90,7 +98,12 @@ def test_gate_reads_the_same_ledger(ledger_db) -> None:
     applied = migration_gate.query_applied_migrations(ledger_db)
 
     assert set(applied) == set(migration_manager.load_applied())
-    assert all(row.rollback_safe is None for row in applied.values())
+    # Same flags, read by a different parser -- that agreement is the point,
+    # not any particular value. Asserting they were all NULL made this test
+    # fail on the first migration that declared the directive.
+    from_manager = migration_manager.load_applied()
+    assert {name: row.rollback_safe for name, row in applied.items()} == \
+           {name: row.rollback_safe for name, row in from_manager.items()}
 
 
 def test_both_readers_round_trip_true_and_false(ledger_db) -> None:

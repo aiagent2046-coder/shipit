@@ -1,0 +1,34 @@
+-- rollback-safe: yes
+--
+-- When a completed payment was given back, and why.
+--
+-- There is no provider to ask. Every payment this project takes lands
+-- somewhere a program cannot reverse: a bank transfer arrives on a private
+-- individual's account and goes back the same way, by hand; Telegram Stars and
+-- USDT have no refund call we hold a credential for. So the software's job
+-- here is not to move money. It is to stop the books quietly lying.
+--
+-- Before this, a refunded payment stayed `completed` forever. A month later
+-- nothing distinguishes money that was kept from money that was returned, and
+-- the error is always in the flattering direction.
+--
+-- The occasion: on 2026-08-01 payment DRY-UPRQKH took 10.79 USD for a Fix Pack
+-- on an audit with nothing a Fix Pack could fix. The customer was the operator
+-- testing his own product, so no money needed to move -- but the next one will
+-- not be. #136 stopped that particular sale from happening again; this records
+-- what happens when a sale should not have happened at all.
+--
+-- Both columns nullable, no backfill, no default: every existing row is
+-- correct as NULL, because no payment has ever been refunded. A default would
+-- have to invent a refund date for history that has none.
+--
+-- No CHECK tying them to status = 'refunded'. `status` has carried free text
+-- since 0003 (pending / completed / failed / expired, none of them
+-- constrained), and adding a constraint to one column's worth of new values
+-- while the column beside it stays free text buys consistency in the wrong
+-- half. The repository enforces the transition; see PaymentRepository.
+--
+-- No index. The reads are "show me this one payment" (by id, already indexed)
+-- and "count the refunds", which is a scan of a table holding tens of rows.
+alter table payments add column if not exists refunded_at timestamptz;
+alter table payments add column if not exists refund_reason text;

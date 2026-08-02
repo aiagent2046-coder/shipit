@@ -3069,6 +3069,84 @@ def _spend_view(spend: dict) -> dict:
     }
 
 
+@app.post("/internal/payments/{payment_id}/refund")
+async def refund_payment(
+    payment_id: str,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+) -> dict:
+    """Record that a completed payment was given back.
+
+    Body: JSON {"reason": str}. Requires `Authorization: Bearer
+    <SERVICE_FLAGS_TOKEN>`.
+
+    This endpoint moves no money, and no endpoint here could. A bank transfer
+    lands on a private individual's account and goes back the same way, by
+    hand; Telegram Stars and USDT have no refund call this deployment holds a
+    credential for. The operator sends the money and then tells the system, in
+    that order.
+
+    So the value is the record. Until now a refunded payment stayed
+    `completed` for ever, and a month later nothing distinguished money kept
+    from money returned -- an error that is always in the flattering
+    direction. It became concrete on 2026-08-01, when DRY-UPRQKH charged 10.79
+    for a Fix Pack on an audit with nothing a Fix Pack could fix. The customer
+    was the operator testing his own product; the next one will not be.
+
+    SERVICE_FLAGS_TOKEN rather than a token of its own. It is already the
+    operator-privileged credential -- it can halt every paid LLM operation --
+    and this is the same audience. AUDIT_JOBS_STATS_TOKEN would be wrong for
+    the reason its own docstring gives: it exists so a monitoring reader can
+    see queue depth WITHOUT holding a credential that can also act.
+
+    404 when the payment does not exist OR is not `completed`: an invoice
+    nobody paid has no refund to record, and the two cases are deliberately
+    not distinguished to an unauthenticated-by-id caller. Repeating the call
+    is a no-op for the same reason -- one refund must not become two entries
+    because a command was run twice.
+
+    Deliberately does NOT revoke anything. A Fix Pack PR that was delivered
+    stays delivered; Pro access stays granted. Whether a refund should take
+    back what it paid for is a policy question with a different cost of being
+    wrong, and mixing it into the record-keeping would mean neither could be
+    changed alone.
+    """
+    token = _service_flags_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "SERVICE_FLAGS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    body = await _json_object_body(request)
+    reason = body.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request",
+                    "detail": "body must be JSON with a non-empty 'reason'"},
+        )
+
+    try:
+        uuid.UUID(payment_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request", "detail": "payment_id must be a UUID"},
+        )
+
+    payment = await payment_repo.mark_refunded(payment_id, reason=reason.strip())
+    if payment is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_refundable",
+                    "detail": "no completed payment with that id"},
+        )
+    return payment
+
+
 @app.post("/internal/service-flags/llm_paid_ops")
 async def set_llm_paid_ops(
     request: Request,
