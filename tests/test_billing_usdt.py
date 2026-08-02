@@ -501,3 +501,91 @@ class TestRejectionMessagesCarryNoValue:
         assert response.status_code == 503
         assert self.FAKE_HEX not in response.text
         assert "usdt_misconfigured" in response.text
+
+
+def test_usdt_invoice_creation_is_rate_limited(monkeypatch):
+    """Opening an invoice is unauthenticated by necessity -- a buyer has no key
+    until they have paid -- and each call writes a pending row. This was the
+    one anonymous endpoint that wrote a row per call with nothing to stop it
+    repeating; its bank-transfer siblings have been bounded since #126."""
+    import app.main as main_mod
+    from app.main import get_rate_limiter
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    payments = FakePaymentRepo()
+    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 2)
+    limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_payment_repo] = lambda: payments
+    try:
+        codes = [
+            client.post("/v1/billing/usdt/invoice").status_code
+            for _ in range(3)
+        ]
+        assert codes == [201, 201, 429]
+
+        refused = client.post("/v1/billing/usdt/invoice")
+        assert refused.json()["detail"]["reason"] == "rate_limited"
+        assert int(refused.headers["Retry-After"]) > 0
+        # Refused before anything was written. A 429 that still left a row
+        # behind would bound the response and not the thing being limited.
+        assert len(payments.rows) == 2
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+        app.dependency_overrides.pop(get_payment_repo, None)
+
+
+def test_usdt_has_its_own_budget_separate_from_bank_transfer(monkeypatch):
+    """A SEPARATE limiter key from the bank-transfer pair, which share one.
+
+    Those two share because they draw from the same 99-suffix pool, so one
+    budget is what stops a client taking twice as much of it. USDT does not
+    touch that pool -- its nonce is a full micro-dollar and the invoice expires
+    in 30 minutes -- so a shared budget would only make a USDT invoice eat a
+    bank-transfer one.
+    """
+    import app.main as main_mod
+    from app.main import get_rate_limiter
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 1)
+    limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_payment_repo] = lambda: FakePaymentRepo()
+    try:
+        assert client.post("/v1/billing/usdt/invoice").status_code == 201
+        assert client.post("/v1/billing/usdt/invoice").status_code == 429
+
+        # The bank-transfer budget is untouched by the USDT spend: the key
+        # differs, so this must not already be exhausted.
+        assert limiter.check(
+            "bank-transfer-invoice:testclient", limit=1
+        ) is None
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+        app.dependency_overrides.pop(get_payment_repo, None)
+
+
+def test_an_unconfigured_deployment_says_so_rather_than_rate_limits(monkeypatch):
+    """Order of the two gates. A client on a deployment with no address should
+    learn that, not be told to slow down about an endpoint that cannot work
+    for them at any rate."""
+    import app.main as main_mod
+    from app.main import get_rate_limiter
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.delenv("USDT_TRC20_ADDRESS", raising=False)
+    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 1)
+    limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_payment_repo] = lambda: FakePaymentRepo()
+    try:
+        for _ in range(3):
+            response = client.post("/v1/billing/usdt/invoice")
+            assert response.status_code == 503
+            assert response.json()["detail"]["reason"] == "usdt_not_configured"
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+        app.dependency_overrides.pop(get_payment_repo, None)
