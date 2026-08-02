@@ -16,6 +16,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 import httpx
+import pytest
 
 import app.main as main_mod
 from app.accounts import api_key_prefix
@@ -431,3 +432,67 @@ async def test_expired_invoice_is_not_matched():
         payments, accounts, inv["id"], address=ADDRESS)
     assert status["status"] == "expired"
     assert "api_key" not in status
+
+
+class TestRejectionMessagesCarryNoValue:
+    """A rejection message must say what is wrong, never what the value was.
+
+    normalize_tron_address is called on exactly one thing: USDT_TRC20_ADDRESS.
+    On 2026-08-02 that variable turned out to hold a live bearer token, glued
+    there by a bad .env paste, and the message quoting it published the token
+    into the systemd journal AND into the body of a 503 response served over
+    the public internet.
+    """
+
+    SECRET = "a9f5b6c43a6bb2dd188aa99a32f5750a7781f60167f1a7c4dec7c876d1a73ea2"
+
+    @pytest.mark.parametrize("value", [
+        # The exact corruption: a whole `NAME=token` line as the value.
+        f"USDT_POLL_TOKEN={SECRET}",
+        # A bare secret, in case the glue lands without the name.
+        SECRET,
+        # Valid base58 alphabet, wrong version byte -- a different branch.
+        "S" + "1" * 33,
+        # Hex of the wrong length -- another branch again.
+        "0x" + "41" * 10,
+    ])
+    def test_the_value_is_never_echoed(self, value):
+        with pytest.raises(usdt_trc20.InvalidTronAddressError) as raised:
+            usdt_trc20.normalize_tron_address(value)
+
+        message = str(raised.value)
+        assert value not in message
+        assert self.SECRET not in message
+        # Not merely silent: the message still has to be worth reading.
+        assert message.strip()
+
+    def test_the_message_still_distinguishes_the_failures(self):
+        """Stripping the value must not collapse four faults into one string
+        an operator cannot act on."""
+        messages = set()
+        for value in ("S" + "1" * 33, "0x" + "41" * 10, "not-an-address",
+                      "T" + "1" * 33):
+            try:
+                usdt_trc20.normalize_tron_address(value)
+            except usdt_trc20.InvalidTronAddressError as exc:
+                messages.add(str(exc))
+
+        assert len(messages) == 4, messages
+
+    def test_the_503_body_does_not_carry_the_secret(self, monkeypatch):
+        """End to end, because the leak happened in the response body -- the
+        unit test above would pass while main.py interpolated the value back
+        in at the call site."""
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        monkeypatch.setenv("USDT_TRC20_ADDRESS", f"USDT_POLL_TOKEN={self.SECRET}")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://fake-user@localhost/fake")
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/billing/usdt/invoice")
+
+        assert response.status_code == 503
+        assert self.SECRET not in response.text
+        assert "usdt_misconfigured" in response.text

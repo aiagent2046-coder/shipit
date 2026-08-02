@@ -139,6 +139,13 @@ def normalize_tron_address(value: str) -> str:
         TRON hex -- the 0x41 version byte is prepended, then encoded. This
         is the exact shape that leaked to users as a raw "0x..." string.
     """
+    # None of these messages contain the rejected value. The only caller is
+    # receiving_address_from_env, so the value is always USDT_TRC20_ADDRESS --
+    # and on 2026-08-02 that variable turned out to hold a live bearer token,
+    # glued there by a bad .env paste. The message travelled into the systemd
+    # journal and into the body of a 503 response, publishing the token twice
+    # over. What is wrong is diagnostic; what the value was is not, and the
+    # operator can read the variable themselves.
     if not isinstance(value, str):
         raise InvalidTronAddressError(f"address is not a string: {type(value)!r}")
     v = value.strip()
@@ -148,23 +155,27 @@ def normalize_tron_address(value: str) -> str:
     if _TRON_BASE58_RE.match(v):
         raw = _b58decode(v)
         if len(raw) != 25 or raw[0] != _TRON_MAINNET_PREFIX:
-            raise InvalidTronAddressError(f"not a mainnet TRON address: {v}")
+            raise InvalidTronAddressError("not a mainnet TRON address (wrong version byte)")
         payload, checksum = raw[:21], raw[21:]
         if hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4] != checksum:
-            raise InvalidTronAddressError(f"base58 checksum mismatch: {v}")
+            raise InvalidTronAddressError("base58 checksum mismatch")
         return v
 
     hexstr = v[2:] if v[:2].lower() == "0x" else v
     try:
         body = bytes.fromhex(hexstr)
     except ValueError:
-        raise InvalidTronAddressError(f"not base58 or hex TRON address: {v}")
+        raise InvalidTronAddressError(
+            f"not base58 or hex TRON address ({len(v)} characters)"
+        )
     if len(body) == 21 and body[0] == _TRON_MAINNET_PREFIX:
         payload = body
     elif len(body) == 20:
         payload = bytes([_TRON_MAINNET_PREFIX]) + body
     else:
-        raise InvalidTronAddressError(f"hex TRON address wrong length: {v}")
+        raise InvalidTronAddressError(
+            f"hex TRON address wrong length ({len(body)} bytes, expected 20 or 21)"
+        )
     return _base58check_encode(payload)
 
 
