@@ -112,6 +112,29 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
 # imports this module and calls pattern.search on synthetic blobs), NOT by
 # asking this script to git-diff-scan a file, so the exclusion does not weaken
 # the tests.
+# A line carrying `scan-allow: <reason>` is not scanned.
+#
+# EXCLUDED_PATHS below is a whole-file hammer, and only three files earn it.
+# But secret-SHAPED fixtures are by design in at least six more --
+# tests/test_secrets.py, test_fixpack_generate.py, test_fixpack_process_
+# endpoint.py, test_fix_outcomes.py, test_observability.py, test_db.py -- and
+# those are the tests of the product's own secret scanner, which is to say the
+# files people ADD fixtures to. Today they pass only because their fixtures
+# arrived in one old commit and CI reads a pull request's diff; the first
+# person to add a fixture gets a red build on correct code, and the obvious
+# next move is to mute the check.
+#
+# A line marker rather than six more excluded files: excluding a whole test
+# module also stops scanning the real code in it, and the exemption becomes
+# invisible at the point it applies. On the line, it shows up in the diff,
+# right where a reviewer is already looking.
+#
+# The reason is required -- `scan-allow:` with nothing after it does not
+# match, so the marker cannot be used as a silent mute. Suppressed lines are
+# counted in the output for the same reason.
+ALLOW_MARKER = re.compile(rb"scan-allow:\s*\S")
+
+
 EXCLUDED_PATHS: frozenset[str] = frozenset(
     {
         ".github/scripts/scan-added-secrets.py",
@@ -162,7 +185,13 @@ def changed_files(base: str, head: str) -> list[str]:
     ]
 
 
-def added_lines(base: str, head: str, path: str) -> bytes:
+def added_lines(base: str, head: str, path: str) -> tuple[bytes, int]:
+    """The added lines of one file, and how many were skipped by a marker.
+
+    The count is returned rather than discarded so the run can say out loud
+    that something was exempted -- an allowlist nobody can see is one nobody
+    reviews.
+    """
     output = run_git(
         [
             "diff",
@@ -177,6 +206,7 @@ def added_lines(base: str, head: str, path: str) -> bytes:
     )
 
     collected: list[bytes] = []
+    suppressed = 0
     inside_hunk = False
 
     for line in output.splitlines():
@@ -189,9 +219,13 @@ def added_lines(base: str, head: str, path: str) -> bytes:
             continue
 
         if inside_hunk and line.startswith(b"+"):
-            collected.append(line[1:])
+            added = line[1:]
+            if ALLOW_MARKER.search(added):
+                suppressed += 1
+                continue
+            collected.append(added)
 
-    return b"\n".join(collected)
+    return b"\n".join(collected), suppressed
 
 
 def main() -> int:
@@ -207,16 +241,25 @@ def main() -> int:
     ]
     findings: set[tuple[str, str]] = set()
 
+    suppressed_total = 0
+
     for path in files:
-        content = added_lines(
+        content, suppressed = added_lines(
             arguments.base,
             arguments.head,
             path,
         )
+        suppressed_total += suppressed
 
         for signature_name, pattern in PATTERNS:
             if pattern.search(content):
                 findings.add((path, signature_name))
+
+    note = (
+        f" ({suppressed_total} line(s) exempted by a scan-allow marker)"
+        if suppressed_total
+        else ""
+    )
 
     if findings:
         for path, signature_name in sorted(findings):
@@ -226,11 +269,28 @@ def main() -> int:
                 file=sys.stderr,
             )
 
+        # Reported on the failing path too: a run that both flagged something
+        # and exempted something else is exactly when a reviewer wants to know
+        # about the exemption.
+        if note:
+            print(f"Note:{note}", file=sys.stderr)
+
+        # The escape hatch is printed at the moment someone needs it. A red
+        # build on a deliberate fixture -- the tests of this project's own
+        # secret scanner are full of them -- otherwise invites the author to
+        # go looking for a way to switch the check off, and there is a worse
+        # one available.
+        print(
+            "If a flagged line is a deliberate fixture, end it with "
+            "`scan-allow: <reason>`; the reason is required.",
+            file=sys.stderr,
+        )
+
         return 1
 
     print(
         f"Scanned added lines in {len(files)} changed files; "
-        "no strong secret signatures detected."
+        f"no strong secret signatures detected{note}."
     )
 
     return 0
