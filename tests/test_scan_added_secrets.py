@@ -151,3 +151,47 @@ def test_hex_lookalike_not_detected():
     assert "hex-secret-assignment" not in signatures(b'token = "deadbeef"')
     # The convention this repo uses for fixtures, so the fixtures stay quiet.
     assert "hex-secret-assignment" not in signatures(b'secret = "deadbeef" * 8')
+
+
+# --- the scan-allow line marker ---------------------------------------------
+#
+# Exercised against ALLOW_MARKER directly, the same way signatures() exercises
+# PATTERNS: these tests are about which lines the marker recognises, and
+# driving a real git diff to find out would test git.
+
+def _marked(line: bytes) -> bool:
+    return bool(scan_added_secrets.ALLOW_MARKER.search(line))
+
+
+def test_a_marker_with_a_reason_is_recognised():
+    secret = b'TOKEN = "' + b"a" * 64 + b'"'
+
+    assert _marked(secret + b"  # scan-allow: fixture for the scanner tests")
+    # Comment syntax is not assumed -- YAML, shell and SQL all differ.
+    assert _marked(secret + b"  // scan-allow: sample value")
+    assert _marked(secret + b"  -- scan-allow: sample value")
+
+
+def test_a_marker_without_a_reason_is_not_recognised():
+    """The reason is the whole point. A bare `scan-allow:` would be a silent
+    mute, indistinguishable in review from someone who thought about it."""
+    secret = b'TOKEN = "' + b"a" * 64 + b'"'
+
+    assert not _marked(secret + b"  # scan-allow:")
+    assert not _marked(secret + b"  # scan-allow:   ")
+
+
+def test_an_ordinary_line_is_not_marked():
+    assert not _marked(b'TOKEN = "' + b"a" * 64 + b'"')
+    # Near-misses that must not count.
+    assert not _marked(b"# scan allow: no colon-word")
+    assert not _marked(b"# scanallow: run")
+
+
+def test_the_marker_does_not_disable_the_patterns_themselves():
+    """The marker is applied when added lines are COLLECTED, not when they are
+    matched. A pattern that stopped firing on a marked line would also stop
+    firing on the same text quoted somewhere else."""
+    marked = b'TOKEN = "' + b"a" * 64 + b'"  # scan-allow: fixture'
+
+    assert "hex-secret-assignment" in signatures(marked)
