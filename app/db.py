@@ -1137,6 +1137,93 @@ class FixOutcomeRepository:
             row = await cur.fetchone()
         return _row_to_fix_outcome(row)
 
+    async def learning_readiness(
+        self, *, min_labelled: int, min_audits: int,
+    ) -> dict[str, Any] | None:
+        """Per-rule counts of the LABELLED outcomes, and whether each rule has
+        enough of them to learn from.
+
+        Nothing has ever read this table (PHASE_B_KNOWLEDGE_BASE_PLAN.md is
+        explicit that collection came first), which meant the only way to
+        answer "is there enough data yet?" was to guess. This is that question
+        as a query.
+
+        `labelled` is the number that matters, and it is narrower than the row
+        count: a rule only teaches us something when the Fix Pack was actually
+        delivered AND the customer then merged or closed the PR. A row that is
+        blocked, failed, or still waiting on a decision carries no verdict, so
+        counting it would inflate readiness with rows that cannot be learned
+        from. They are reported separately rather than dropped, because
+        "delivered but nobody has decided" is itself worth seeing.
+
+        Counts only, never rows -- same contract as the rest of /internal/stats.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select
+                    rule.id as rule_id,
+                    count(*) filter (
+                        where o.outcome = 'delivered'
+                          and o.pr_merged is not null
+                    ) as labelled,
+                    count(*) filter (where o.pr_merged is true) as merged,
+                    count(*) filter (
+                        where o.outcome = 'delivered' and o.pr_merged is null
+                    ) as awaiting_verdict,
+                    count(distinct o.audit_id) filter (
+                        where o.outcome = 'delivered'
+                          and o.pr_merged is not null
+                    ) as audits,
+                    count(*) as rows_total
+                from fix_outcomes o
+                cross join lateral
+                    jsonb_array_elements_text(o.rule_ids) as rule(id)
+                group by rule.id
+                order by labelled desc, rule.id
+                """
+            )
+            rows = await cur.fetchall()
+
+            cur = await conn.execute(
+                """
+                select outcome, count(*) as n
+                from fix_outcomes
+                group by outcome
+                order by outcome
+                """
+            )
+            outcome_rows = await cur.fetchall()
+
+        rules = []
+        for row in rows:
+            labelled = int(row["labelled"])
+            audits = int(row["audits"])
+            rules.append({
+                "rule_id": row["rule_id"],
+                "labelled": labelled,
+                "merged": int(row["merged"]),
+                "awaiting_verdict": int(row["awaiting_verdict"]),
+                "audits": audits,
+                "rows_total": int(row["rows_total"]),
+                "ready": labelled >= min_labelled and audits >= min_audits,
+            })
+
+        return {
+            "thresholds": {
+                "min_labelled": min_labelled,
+                "min_audits": min_audits,
+            },
+            "outcomes": {r["outcome"]: int(r["n"]) for r in outcome_rows},
+            "rules_ready": sum(1 for r in rules if r["ready"]),
+            "rules": rules,
+        }
+
     async def set_pr_merged_by_pr_url(self, pr_url: str, merged: bool) -> int:
         """Backfill pr_merged for the delivered outcome whose PR just closed,
         matched by the PR's html_url (the exact value stored at delivery).
