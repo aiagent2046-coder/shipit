@@ -455,12 +455,27 @@ values) and breaking the `jq` runbook below.
 **not** touch systemd units, so installing them is host provisioning: done once
 per host, and again by hand whenever a unit file in `deploy/systemd/` changes.
 
+Copy from **`/srv/shipit/current`**, the symlink to the release that is
+actually running. Not from `/opt/shipit`: that is the control checkout, no
+deploy updates its working tree, and it can be many releases behind. An
+earlier version of this section said `/opt/shipit`, and on 2026-08-02 that
+silently installed stale units -- the copy succeeded, `daemon-reload`
+succeeded, and the change simply was not there. Verify afterwards rather than
+trusting the exit code; the last command below is that check.
+
 ```bash
-sudo cp /opt/shipit/deploy/systemd/*.service /opt/shipit/deploy/systemd/*.timer /etc/systemd/system/
+sudo cp /srv/shipit/current/deploy/systemd/*.service \
+        /srv/shipit/current/deploy/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now shipit-fixpack.timer shipit-monitoring.timer \
                           shipit-usdt-poller.timer shipit-reap.timer
 systemctl list-timers --all | grep shipit
+
+# Prove that what systemd LOADED is what the release ships. `systemctl cat`
+# reads the loaded unit, so a stale copy shows up here and nowhere else; its
+# first line is the path it read, hence the tail. No output means they match.
+diff <(systemctl cat shipit-fixpack.service | tail -n +2) \
+     /srv/shipit/current/deploy/systemd/shipit-fixpack.service
 ```
 
 Run the `.service` once by hand before enabling its `.timer` — a oneshot unit
