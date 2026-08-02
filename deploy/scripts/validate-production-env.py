@@ -3,8 +3,29 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
+
+# A value that STARTS with something shaped like an environment variable name
+# followed by '=' is a line that got glued onto the one above it. On 2026-07-31
+# a nano paste did exactly that:
+#
+#     USDT_TRC20_ADDRESS=USDT_POLL_TOKEN=a9f5b6c4...
+#
+# and USDT_POLL_TOKEN was restored from a backup afterwards, so BOTH names were
+# present and non-empty. Every check in this file passed. The address was
+# garbage, POST /internal/billing/poll-usdt answered 503 on every run for two
+# days, and no USDT payment was confirmed in that window -- a customer who paid
+# just saw an invoice stay `pending`.
+#
+# Only the start of the value is examined. An '=' further along is ordinary --
+# connection strings and base64 padding are full of them.
+GLUED_LINE = re.compile(r"^([A-Z][A-Z0-9_]{2,})=")
+
+# base58: no 0, O, I or l, so a transposed character is usually caught rather
+# than silently accepted. Mainnet addresses start with T and are 34 characters.
+TRON_ADDRESS = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -129,6 +150,44 @@ def main() -> int:
         if not values.get("USDT_POLL_TOKEN", "").strip():
             errors.append(
                 "USDT_POLL_TOKEN is required when USDT_TRC20_ADDRESS is configured"
+            )
+
+    # Format checks. These never print the offending value: on 2026-08-02 an
+    # error message that echoed USDT_TRC20_ADDRESS put a live bearer token --
+    # which is what the variable wrongly held -- into the journal and into an
+    # HTTP response body. A check that names the variable is just as actionable
+    # and cannot leak what it is looking at.
+    for name, value in sorted(values.items()):
+        glued = GLUED_LINE.match(value)
+        if glued and glued.group(1) != name:
+            errors.append(
+                f"{name} starts with '{glued.group(1)}=', so the line for "
+                f"{glued.group(1)} was appended to it instead of standing on "
+                f"its own; both {name} and {glued.group(1)} are wrong"
+            )
+
+    address = values.get("USDT_TRC20_ADDRESS", "").strip()
+    if address and not TRON_ADDRESS.match(address):
+        errors.append(
+            "USDT_TRC20_ADDRESS is not a TRON address (expected 'T' followed "
+            "by 33 base58 characters); every USDT payment silently stays "
+            "pending while this is wrong"
+        )
+
+    database_url = values.get("DATABASE_URL", "").strip()
+    if database_url and not database_url.startswith(("postgresql://", "postgres://")):
+        errors.append(
+            "DATABASE_URL does not start with postgresql:// or postgres://"
+        )
+
+    # A warning, not an error. The convention is `openssl rand -hex 32`, but
+    # nothing enforces it, and refusing to boot over a short-but-working token
+    # would turn a note about strength into an outage.
+    for name, value in sorted(values.items()):
+        if name.endswith("_TOKEN") and 0 < len(value.strip()) < 16:
+            warnings.append(
+                f"{name} is shorter than 16 characters; the convention for "
+                "these is `openssl rand -hex 32`"
             )
 
     for name, value in values.items():
