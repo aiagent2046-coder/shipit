@@ -1096,6 +1096,26 @@ class FixpackJobRepository:
         return _row_to_fixpack_job(row) if row else None
 
 
+# A verdict is only trustworthy if the webhook set it, and the webhook finds
+# its row by the PR's html_url -- which GitHub always spells
+# https://github.com/<owner>/<repo>/pull/<number>.
+#
+# On 2026-08-02 the production table held four rows claiming pr_merged = true
+# on URLs like ".../pull/278bcdc68ae9-outcome". A pull request number is an
+# integer; no such PR exists and no webhook ever fired for one. They came from
+# tests/test_db_postgres_smoke.py, which records an outcome and then calls
+# set_pr_merged_by_pr_url on its own fabricated URL -- run four times against
+# the PRODUCTION database on 2026-07-22, instead of the throwaway CI container
+# it is written for.
+#
+# Those four rows sat one distinct audit away from declaring SEC001 and CFG002
+# ready to learn from, on a fabricated 100% merge rate. Keyed on the shape of
+# the URL rather than a list of banned repositories: this also refuses the
+# next fabrication, and refuses the rows already present without deleting the
+# history that shows they happened.
+REAL_PR_URL = r"^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$"
+
+
 class FixOutcomeRepository:
     """The fix-outcome knowledge base (migration 0014). One row per terminal
     Fix Pack job outcome; collection only, nothing reads it for decisions yet
@@ -1171,14 +1191,18 @@ class FixOutcomeRepository:
                     count(*) filter (
                         where o.outcome = 'delivered'
                           and o.pr_merged is not null
+                          and o.pr_url ~ %(real_pr)s
                     ) as labelled,
-                    count(*) filter (where o.pr_merged is true) as merged,
+                    count(*) filter (
+                        where o.pr_merged is true and o.pr_url ~ %(real_pr)s
+                    ) as merged,
                     count(*) filter (
                         where o.outcome = 'delivered' and o.pr_merged is null
                     ) as awaiting_verdict,
                     count(distinct o.audit_id) filter (
                         where o.outcome = 'delivered'
                           and o.pr_merged is not null
+                          and o.pr_url ~ %(real_pr)s
                     ) as audits,
                     count(*) as rows_total
                 from fix_outcomes o
@@ -1186,7 +1210,8 @@ class FixOutcomeRepository:
                     jsonb_array_elements_text(o.rule_ids) as rule(id)
                 group by rule.id
                 order by labelled desc, rule.id
-                """
+                """,
+                {"real_pr": REAL_PR_URL},
             )
             rows = await cur.fetchall()
 
