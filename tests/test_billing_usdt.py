@@ -444,13 +444,18 @@ class TestRejectionMessagesCarryNoValue:
     the public internet.
     """
 
-    SECRET = "a9f5b6c43a6bb2dd188aa99a32f5750a7781f60167f1a7c4dec7c876d1a73ea2"
+    # Built by repetition, and named for what it is. The first version of
+    # this test pasted the REAL rotated-out USDT_POLL_TOKEN straight out of
+    # a journal line, and CI had no pattern that describes a bare hex
+    # string, so it landed in the repository. 64 hex characters keeps the
+    # branch coverage the real value gave: parses as hex, wrong length.
+    FAKE_HEX = "deadbeef" * 8
 
     @pytest.mark.parametrize("value", [
         # The exact corruption: a whole `NAME=token` line as the value.
-        f"USDT_POLL_TOKEN={SECRET}",
+        f"USDT_POLL_TOKEN={FAKE_HEX}",
         # A bare secret, in case the glue lands without the name.
-        SECRET,
+        FAKE_HEX,
         # Valid base58 alphabet, wrong version byte -- a different branch.
         "S" + "1" * 33,
         # Hex of the wrong length -- another branch again.
@@ -462,7 +467,7 @@ class TestRejectionMessagesCarryNoValue:
 
         message = str(raised.value)
         assert value not in message
-        assert self.SECRET not in message
+        assert self.FAKE_HEX not in message
         # Not merely silent: the message still has to be worth reading.
         assert message.strip()
 
@@ -487,12 +492,12 @@ class TestRejectionMessagesCarryNoValue:
 
         from app.main import app
 
-        monkeypatch.setenv("USDT_TRC20_ADDRESS", f"USDT_POLL_TOKEN={self.SECRET}")
+        monkeypatch.setenv("USDT_TRC20_ADDRESS", f"USDT_POLL_TOKEN={self.FAKE_HEX}")
         monkeypatch.setenv("DATABASE_URL", "postgresql://fake-user@localhost/fake")
 
         client = TestClient(app, raise_server_exceptions=False)
         response = client.post("/v1/billing/usdt/invoice")
 
         assert response.status_code == 503
-        assert self.SECRET not in response.text
+        assert self.FAKE_HEX not in response.text
         assert "usdt_misconfigured" in response.text

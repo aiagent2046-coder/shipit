@@ -117,3 +117,37 @@ def test_postgres_url_without_password_not_detected():
     assert "postgres-url-password" not in signatures(
         b"postgres://readonly@replica/db"
     )
+
+
+def test_hex_secret_assignment_detected():
+    """The leak this pattern was added for: on 2026-08-02 a live
+    USDT_POLL_TOKEN was pasted into a regression test out of a journal line and
+    CI passed, because no pattern here described a bare hex string."""
+    leaked = b"a" * 64
+    assert "hex-secret-assignment" in signatures(b'    SECRET = "' + leaked + b'"')
+    # The shapes it has to cover: shell assignment, an env line, YAML, and a
+    # name where the secret word is a suffix rather than the whole name.
+    assert "hex-secret-assignment" in signatures(b"USDT_POLL_TOKEN='" + leaked + b"'")
+    assert "hex-secret-assignment" in signatures(b'api_key: "' + leaked + b'"')
+    assert "hex-secret-assignment" in signatures(b'API_KEY_PEPPER = "' + leaked + b'"')
+
+
+def test_hex_lookalike_not_detected():
+    """Why the pattern keys on the NAME. A bare 32+ hex literal is a SHA-256
+    digest, a git object id, a checksum or a fixture id in every codebase --
+    matching those would make the scanner noise, and a noisy scanner gets
+    switched off."""
+    digest = b"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+    # A hash, named as one.
+    assert "hex-secret-assignment" not in signatures(b'sha256 = "' + digest + b'"')
+    # Bare, with no assignment at all.
+    assert "hex-secret-assignment" not in signatures(digest)
+    # Assigned to a secret-shaped name, but not hex.
+    assert "hex-secret-assignment" not in signatures(
+        b'SECRET = "fake-token-not-a-real-secret"'
+    )
+    # Too short to be one of this project's `openssl rand -hex 32` tokens.
+    assert "hex-secret-assignment" not in signatures(b'token = "deadbeef"')
+    # The convention this repo uses for fixtures, so the fixtures stay quiet.
+    assert "hex-secret-assignment" not in signatures(b'secret = "deadbeef" * 8')
