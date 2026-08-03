@@ -8,6 +8,17 @@ updates:
       interval: weekly
       day: monday
       time: "04:30"
+    # pydantic-core is not a package anyone upgrades on purpose. pydantic
+    # pins it exactly -- pydantic 2.13.4 requires pydantic-core==2.46.4, and
+    # no released pydantic pairs with 2.47.0 -- so a group that bumps the
+    # child without the parent cannot install at all.
+    #
+    # That is not hypothetical: #155 did exactly this and failed with
+    # ResolutionImpossible on the first CI step. Ignoring it here lets the
+    # rest of the group through; pydantic-core still moves whenever pydantic
+    # itself is upgraded, which is the only way it should ever move.
+    ignore:
+      - dependency-name: pydantic-core
     groups:
       python-minor-patch:
         update-types: [minor, patch]
