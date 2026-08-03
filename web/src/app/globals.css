@@ -1,6 +1,12 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind 4 replaces the three @tailwind directives with one import. */
+@import "tailwindcss";
+
+/* The theme stays in tailwind.config.ts rather than moving into an
+   @theme block here. v4 prefers CSS-first configuration, but @config is
+   supported and keeping the JS file makes this change a migration of the
+   build, not a rewrite of the design tokens -- two things that should
+   not fail together. */
+@config "../../tailwind.config.ts";
 
 /* Dark is the primary identity. Light mode is a full peer (system pref +
    manual toggle). Colors verified for WCAG AA (>=4.5:1) body text:
