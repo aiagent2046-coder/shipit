@@ -1,6 +1,7 @@
 """Deploy Pack — minimal scope (see shipit-go-to-market-plan.md, section 2).
 
-Generates Dockerfile / docker-compose.yml / .env.example / a CI workflow
+Generates Dockerfile / docker-compose.yml / .dockerignore / .env.example
+and a CI workflow
 for a detected stack. Deterministic and template-based — no agents, no
 LLM call. Three stacks:
 
@@ -213,6 +214,7 @@ def _fastapi_pack(files: dict[str, str]) -> dict[str, str]:
     return {
         "Dockerfile": dockerfile,
         "docker-compose.yml": compose,
+        ".dockerignore": DOCKERIGNORE,
         ".env.example": _merge_env_example(files, env_extra),
         ".github/workflows/deploy-pack-ci.yml": ci,
     }
@@ -275,6 +277,7 @@ def _vite_react_pack(files: dict[str, str]) -> dict[str, str]:
     return {
         "Dockerfile": dockerfile,
         "docker-compose.yml": compose,
+        ".dockerignore": DOCKERIGNORE,
         "nginx.conf": nginx_conf,
         ".env.example": _merge_env_example(files, env_extra),
         ".github/workflows/deploy-pack-ci.yml": ci,
@@ -383,10 +386,35 @@ def _nextjs_pack(files: dict[str, str]) -> dict[str, str]:
     return {
         "Dockerfile": dockerfile,
         "docker-compose.yml": compose,
+        ".dockerignore": DOCKERIGNORE,
         ".env.example": _merge_env_example(files, env_extra),
         ".github/workflows/deploy-pack-ci.yml": ci,
     }
 
+
+# docker build copies the whole build context into the image. Without this
+# file, an .env sitting next to the Dockerfile becomes a layer that travels
+# with the image to every registry and every host it is pulled onto -- and
+# leaked credentials are the single most common finding Drydock reports, so
+# shipping a build that bakes them in would undo the audit that preceded it.
+#
+# Excluding .env does not starve the container: docker-compose.yml declares
+# env_file: [.env], which compose reads from the host at run time, and the
+# generated CI boot check runs the image with no env file at all.
+#
+# .git goes too. A repository's history keeps deleted secrets alive in old
+# objects, and a runtime image has no use for it.
+DOCKERIGNORE = """\
+.env
+.env.*
+!.env.example
+
+node_modules
+.venv
+__pycache__
+
+.git
+"""
 
 def _merge_env_example(files: dict[str, str], extra: str) -> str:
     """Keep whatever the repo already documents; append only new keys."""
