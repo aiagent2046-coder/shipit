@@ -101,7 +101,7 @@ export function AuditForm() {
             }}
             className={`flex-1 rounded-md px-3 py-1.5 font-medium transition-colors ${
               mode === m
-                ? "bg-bg text-text shadow-sm"
+                ? "bg-bg text-text shadow-xs"
                 : "text-muted hover:text-text"
             }`}
           >
@@ -119,7 +119,7 @@ export function AuditForm() {
           placeholder="https://github.com/owner/repo"
           disabled={submitting}
           aria-label="Public GitHub repository URL"
-          className="w-full rounded-lg border border-border bg-surface px-4 py-3 font-mono text-sm outline-none focus:border-accent disabled:opacity-60"
+          className="w-full rounded-lg border border-border bg-surface px-4 py-3 font-mono text-sm outline-hidden focus:border-accent disabled:opacity-60"
         />
       ) : (
         <div>
@@ -130,7 +130,7 @@ export function AuditForm() {
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             disabled={submitting}
             aria-label="Project zip file"
-            className="block w-full cursor-pointer rounded-lg border border-border bg-surface px-4 py-3 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-accent-fg outline-none focus:border-accent disabled:opacity-60"
+            className="block w-full cursor-pointer rounded-lg border border-border bg-surface px-4 py-3 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-accent-fg outline-hidden focus:border-accent disabled:opacity-60"
           />
           {file && (
             <p className="mt-1 font-mono text-xs text-muted">
