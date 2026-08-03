@@ -153,6 +153,50 @@ def is_non_production_path(name: str) -> bool:
     return _is_test_fixture_path(name) or _is_doc_context(name)
 
 
+def damp_for_non_production_path(
+    name: str, severity: str, confidence: float,
+) -> tuple[str, float, str | None]:
+    """The path-only half of the damping above, for producers that have
+    nothing but a path to go on.
+
+    _classify_match damps a credential found in test, example or
+    documentation files: capped at medium, confidence scaled down, never
+    dropped. The LLM pass had no equivalent, so the same fixture the static
+    rules rated "medium (test file)" came back from the model as critical at
+    full weight -- and dedup_cross_rubric deliberately never merges an LLM
+    finding with a static one, so both survived into the same report. The
+    calibration on one side was being undone by the other.
+
+    Measured on this repository: 14 such criticals cost 2.0 * confidence each
+    against a category budget of 10, so Security scored 0.0 at every
+    plausible confidence; seven were enough. Every one of them was a fixture
+    in tests/ -- including the file literally named FAKE_SECRETS, and this
+    scanner's own comment describing the pattern it searches for.
+
+    Path only, deliberately. _classify_match also has the matched value and
+    the source line, so it can spot a self-labelled placeholder or a
+    commented-out example and damp harder on those two independent signals.
+    An LLM finding carries neither, and guessing at them from a title would
+    be inventing a signal rather than reading one.
+
+    Migrations are excluded here exactly as they are in
+    is_non_production_path: applied state is as production as it gets. The
+    two must stay in agreement -- test_damping_agrees_with_path_predicate
+    pins that.
+    """
+    if _is_migration_context(name):
+        return severity, confidence, None
+    if _is_test_fixture_path(name):
+        return (_DOC_SEVERITY_CAP.get(severity, severity),
+                round(confidence * _TEST_PATH_CONFIDENCE_FACTOR, 2),
+                "test_file")
+    if _is_doc_context(name):
+        return (_DOC_SEVERITY_CAP.get(severity, severity),
+                round(confidence * _DOC_CONFIDENCE_FACTOR, 2),
+                "doc_example")
+    return severity, confidence, None
+
+
 @dataclass(frozen=True)
 class SecretRule:
     id: str

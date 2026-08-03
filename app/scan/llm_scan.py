@@ -21,6 +21,7 @@ from app.llm import pricing
 from app.llm.client import LLMClient
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import ScoredFinding
+from app.scan.secrets import damp_for_non_production_path
 
 MAX_FILE_CHARS = 24_000          # per-file cap in prompt
 MAX_TOTAL_CHARS = 360_000        # ~90-100K tokens per rubric prompt
@@ -269,16 +270,26 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   stats.discarded += 1
                   continue
               stats.verified += 1
+              # Same context damping the static rules apply. Without it the
+              # model rates a fixture in tests/ critical while _classify_match
+              # rates the identical line medium, and both reach the report --
+              # dedup_cross_rubric never merges across the two producers.
+              severity, confidence, context = damp_for_non_production_path(
+                  f["file"],
+                  f["severity"],
+                  max(0.0, min(1.0, float(f["confidence"]))),
+              )
               findings.append(ScoredFinding(
                   rule_id=f"llm-{rubric}",
                   title=str(f["title"])[:200],
-                  severity=f["severity"],
-                  confidence=max(0.0, min(1.0, float(f["confidence"]))),
+                  severity=severity,
+                  confidence=confidence,
                   category="Security" if rubric == "security" else "Auth",
                   file=f["file"],
                   line=int(f["line_start"]),
                   explanation=str(f.get("explanation", ""))[:600],
                   fix_hint=str(f.get("fix_hint", ""))[:300],
+                  context=context,
               ))
           # Cost cap: price the tokens accumulated so far (all calls this scan
           # used the same served model) and stop before the NEXT call if we've
