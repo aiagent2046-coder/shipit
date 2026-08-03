@@ -12,3 +12,17 @@ batch_reports/
 
 # Local environment backups containing secrets
 .env.bak*
+
+# Private key material. GitHub App keys download as
+# <app-slug>.<date>.private-key.pem and land in whatever directory the browser
+# was pointed at -- on 2026-08-03 the live App key was sitting untracked in the
+# root of a working copy, one `git add -A` away from being committed.
+#
+# The CI secret scanner would have caught it (private-key-header), but that is
+# the last line, not the first: by then the key is in someone's local history
+# and in a pushed branch.
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_ed25519

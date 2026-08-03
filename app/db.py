@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
+import logging
 import json
 import os
 import uuid
@@ -44,8 +46,11 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
 
+import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+logger = logging.getLogger(__name__)
 
 from app.accounts import api_key_prefix, generate_api_key, hash_api_key
 
@@ -109,6 +114,7 @@ async def close_pool() -> None:
 _FIXPACK_PROCESSOR_LOCK_KEY = 0x46495850
 _MONITORING_PROCESSOR_LOCK_KEY = 0x4D4F4E49
 _USDT_POLL_LOCK_KEY = 0x55534454
+_BANK_TRANSFER_AMOUNT_LOCK_KEY = 0x424E4B41  # "BNKA"
 
 
 class ProcessorLockBusy(Exception):
@@ -149,6 +155,85 @@ async def _advisory_processor_lock(key: int):
             await conn.execute("select pg_advisory_unlock(%s)", (key,))
 
 
+# Namespace for the per-charge grant lock -- ascii "GRNT". Postgres advisory
+# locks take an optional second int32, so this is key1 and a hash of
+# (provider, external_ref) is key2: two confirmations of the SAME charge
+# serialize, and two confirmations of different charges do not.
+_GRANT_LOCK_NAMESPACE = 0x47524E54
+
+# How long to wait for another confirmation of the same charge before giving up
+# on the lock. The section it guards is three short queries, so anything near
+# this means something is wrong; five seconds is long enough that ordinary
+# contention never reaches it.
+GRANT_LOCK_TIMEOUT_MS = 5000
+
+
+def _grant_lock_key(provider: str, external_ref: str) -> int:
+    """A stable signed int32 from the charge identity, for advisory-lock key2.
+
+    sha256 rather than hash() because Python's hash is salted per process:
+    two web workers must derive the SAME key for the same charge, which is the
+    entire point.
+    """
+    digest = hashlib.sha256(f"{provider}:{external_ref}".encode()).digest()
+    return int.from_bytes(digest[:4], "big", signed=True)
+
+
+@asynccontextmanager
+async def grant_lock(provider: str, external_ref: str):
+    """Serialize the grant of ONE charge across concurrent handlers.
+
+    grant_pro_tier reads the payment, sees no account, mints one, then links
+    it. Two handlers running that concurrently -- an operator double-tapping
+    Confirm, a retried Telegram webhook, a transfer seen by two polls -- both
+    passed the read and both minted an account, and the second link overwrote
+    the first's account_id. Two Pro accounts, one orphaned, and its key
+    already in a payer's hands.
+
+    Blocking, not try-and-skip like _advisory_processor_lock: skipping a
+    processor run is harmless because a timer will fire again, while skipping a
+    grant would drop a paid-for entitlement on the floor. The loser waits,
+    then re-reads and takes the idempotent path.
+
+    Two ways this yields WITHOUT a lock, both deliberate:
+      * DATABASE_URL isn't configured -- nothing to serialize, same contract as
+        the repositories and what keeps fake-backed tests working;
+      * the wait timed out -- proceeding unserialized is still money-safe,
+        because mark_completed refuses to overwrite an account_id that is
+        already set. Better a logged anomaly and a redundant account row than a
+        confirmed payment that grants nothing.
+    """
+    try:
+        pool = await get_pool()
+    except DatabaseNotConfigured:
+        yield
+        return
+
+    key2 = _grant_lock_key(provider, external_ref)
+    async with pool.connection() as conn:
+        await conn.execute(f"set lock_timeout = {GRANT_LOCK_TIMEOUT_MS}")
+        try:
+            await conn.execute(
+                "select pg_advisory_lock(%s, %s)",
+                (_GRANT_LOCK_NAMESPACE, key2),
+            )
+        except psycopg.errors.LockNotAvailable:
+            logger.warning(
+                "grant lock for %s/%s not acquired within %sms; proceeding "
+                "unserialized (mark_completed still refuses to overwrite)",
+                provider, external_ref, GRANT_LOCK_TIMEOUT_MS,
+            )
+            yield
+            return
+        try:
+            yield
+        finally:
+            await conn.execute(
+                "select pg_advisory_unlock(%s, %s)",
+                (_GRANT_LOCK_NAMESPACE, key2),
+            )
+
+
 def fixpack_processor_lock():
     """The Fix Pack processor's advisory lock (see _advisory_processor_lock)."""
     return _advisory_processor_lock(_FIXPACK_PROCESSOR_LOCK_KEY)
@@ -158,6 +243,76 @@ def monitoring_processor_lock():
     """The continuous-monitoring processor's advisory lock, on a distinct key so
     it never serializes against a Fix Pack run (see _advisory_processor_lock)."""
     return _advisory_processor_lock(_MONITORING_PROCESSOR_LOCK_KEY)
+
+
+# Retry budget for the kopeck-suffix lock. ~1s of contention before giving up,
+# which is far longer than the read-plus-insert it protects and short enough
+# that a checkout never visibly stalls on it.
+_AMOUNT_LOCK_ATTEMPTS = 20
+_AMOUNT_LOCK_DELAY_SECONDS = 0.05
+
+
+@asynccontextmanager
+async def bank_transfer_amount_lock():
+    """Serialize kopeck-suffix reservation: read the open invoices, pick a free
+    suffix, insert -- with nobody else doing the same in between.
+
+    Without it two concurrent checkouts both read the same set of taken
+    suffixes and both pick the same free one. Measured with a suspension point
+    where the real round-trip sits: 12 duplicate amounts per 200 concurrent
+    invoices.
+
+    Three deliberate differences from _advisory_processor_lock, all forced by
+    this being on a user's checkout rather than a background timer:
+
+      * It retries instead of raising. ProcessorLockBusy is the right answer
+        for an overlapping timer firing -- skip this run, the next one picks
+        the backlog up. On a buyer pressing Pay it is a 5xx, and refusing a
+        sale to protect a matching HINT is backwards.
+      * It releases the connection between attempts. Blocking on
+        pg_advisory_lock while holding a pooled connection deadlocks at
+        max_size=5: five concurrent checkouts hold all five connections
+        waiting, and the one holding the lock cannot get a sixth to do its
+        work. A waiter that sleeps without a connection cannot starve the
+        holder.
+      * On exhausting the retries it proceeds WITHOUT the lock rather than
+        failing. The degraded outcome is two open invoices sharing an amount,
+        which the operator separates by payer name and email -- the fallback
+        those fields exist for. That is strictly better than a lost sale, and
+        it is logged so the calibration can be revisited if it ever happens.
+
+    Yields without a lock when DATABASE_URL isn't set: nothing to serialize,
+    same not-configured contract as the repositories.
+    """
+    try:
+        pool = await get_pool()
+    except DatabaseNotConfigured:
+        yield
+        return
+    for _ in range(_AMOUNT_LOCK_ATTEMPTS):
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "select pg_try_advisory_lock(%s) as locked",
+                (_BANK_TRANSFER_AMOUNT_LOCK_KEY,),
+            )
+            row = await cur.fetchone()
+            if row and row["locked"]:
+                try:
+                    yield
+                finally:
+                    await conn.execute(
+                        "select pg_advisory_unlock(%s)",
+                        (_BANK_TRANSFER_AMOUNT_LOCK_KEY,),
+                    )
+                return
+        # Connection released before sleeping -- see the deadlock note above.
+        await asyncio.sleep(_AMOUNT_LOCK_DELAY_SECONDS)
+    logger.warning(
+        "kopeck-suffix lock busy for %.1fs; reserving without it, two open "
+        "invoices may share an amount and be separated by payer name instead",
+        _AMOUNT_LOCK_ATTEMPTS * _AMOUNT_LOCK_DELAY_SECONDS,
+    )
+    yield
 
 
 def usdt_poll_lock():
@@ -784,6 +939,44 @@ class FixpackJobRepository:
                 (pr_url, uuid.UUID(job_id)),
             )
 
+    async def release_to_paid(self, job_id: str, detail: str) -> None:
+        """Hand a claimed job back to the queue as if it had never been
+        claimed: 'running' -> 'paid', lease cleared, and the attempt the
+        claim charged for refunded.
+
+        For the one class of failure that is ours, not the job's -- GitHub
+        rejecting our own App credentials. Nothing about the customer's
+        repository was even reached, so charging the job an attempt walks it
+        toward the reaper's terminal 'failed' over a problem no retry of
+        theirs can fix.
+
+        Distinct from reap_stale_running, which also returns jobs to 'paid':
+        that one is for a crashed worker and deliberately KEEPS the attempt,
+        because a job that reliably kills its worker must eventually stop
+        being retried. Here the opposite is true -- the job is fine and the
+        deployment is broken, so the count must not move.
+
+        `detail` is written so the row explains itself while it waits.
+        Guarded on status = 'running' so a concurrently-reaped job is not
+        resurrected out from under the reaper."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                update fixpack_jobs
+                   set status = 'paid',
+                       started_at = null,
+                       attempts = greatest(attempts - 1, 0),
+                       detail = %s
+                 where id = %s
+                   and status = 'running'
+                """,
+                (detail, uuid.UUID(job_id)),
+            )
+
     async def mark_status(
         self, job_id: str, status: str, detail: str | None = None
     ) -> None:
@@ -903,6 +1096,26 @@ class FixpackJobRepository:
         return _row_to_fixpack_job(row) if row else None
 
 
+# A verdict is only trustworthy if the webhook set it, and the webhook finds
+# its row by the PR's html_url -- which GitHub always spells
+# https://github.com/<owner>/<repo>/pull/<number>.
+#
+# On 2026-08-02 the production table held four rows claiming pr_merged = true
+# on URLs like ".../pull/278bcdc68ae9-outcome". A pull request number is an
+# integer; no such PR exists and no webhook ever fired for one. They came from
+# tests/test_db_postgres_smoke.py, which records an outcome and then calls
+# set_pr_merged_by_pr_url on its own fabricated URL -- run four times against
+# the PRODUCTION database on 2026-07-22, instead of the throwaway CI container
+# it is written for.
+#
+# Those four rows sat one distinct audit away from declaring SEC001 and CFG002
+# ready to learn from, on a fabricated 100% merge rate. Keyed on the shape of
+# the URL rather than a list of banned repositories: this also refuses the
+# next fabrication, and refuses the rows already present without deleting the
+# history that shows they happened.
+REAL_PR_URL = r"^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$"
+
+
 class FixOutcomeRepository:
     """The fix-outcome knowledge base (migration 0014). One row per terminal
     Fix Pack job outcome; collection only, nothing reads it for decisions yet
@@ -943,6 +1156,98 @@ class FixOutcomeRepository:
             )
             row = await cur.fetchone()
         return _row_to_fix_outcome(row)
+
+    async def learning_readiness(
+        self, *, min_labelled: int, min_audits: int,
+    ) -> dict[str, Any] | None:
+        """Per-rule counts of the LABELLED outcomes, and whether each rule has
+        enough of them to learn from.
+
+        Nothing has ever read this table (PHASE_B_KNOWLEDGE_BASE_PLAN.md is
+        explicit that collection came first), which meant the only way to
+        answer "is there enough data yet?" was to guess. This is that question
+        as a query.
+
+        `labelled` is the number that matters, and it is narrower than the row
+        count: a rule only teaches us something when the Fix Pack was actually
+        delivered AND the customer then merged or closed the PR. A row that is
+        blocked, failed, or still waiting on a decision carries no verdict, so
+        counting it would inflate readiness with rows that cannot be learned
+        from. They are reported separately rather than dropped, because
+        "delivered but nobody has decided" is itself worth seeing.
+
+        Counts only, never rows -- same contract as the rest of /internal/stats.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select
+                    rule.id as rule_id,
+                    count(*) filter (
+                        where o.outcome = 'delivered'
+                          and o.pr_merged is not null
+                          and o.pr_url ~ %(real_pr)s
+                    ) as labelled,
+                    count(*) filter (
+                        where o.pr_merged is true and o.pr_url ~ %(real_pr)s
+                    ) as merged,
+                    count(*) filter (
+                        where o.outcome = 'delivered' and o.pr_merged is null
+                    ) as awaiting_verdict,
+                    count(distinct o.audit_id) filter (
+                        where o.outcome = 'delivered'
+                          and o.pr_merged is not null
+                          and o.pr_url ~ %(real_pr)s
+                    ) as audits,
+                    count(*) as rows_total
+                from fix_outcomes o
+                cross join lateral
+                    jsonb_array_elements_text(o.rule_ids) as rule(id)
+                group by rule.id
+                order by labelled desc, rule.id
+                """,
+                {"real_pr": REAL_PR_URL},
+            )
+            rows = await cur.fetchall()
+
+            cur = await conn.execute(
+                """
+                select outcome, count(*) as n
+                from fix_outcomes
+                group by outcome
+                order by outcome
+                """
+            )
+            outcome_rows = await cur.fetchall()
+
+        rules = []
+        for row in rows:
+            labelled = int(row["labelled"])
+            audits = int(row["audits"])
+            rules.append({
+                "rule_id": row["rule_id"],
+                "labelled": labelled,
+                "merged": int(row["merged"]),
+                "awaiting_verdict": int(row["awaiting_verdict"]),
+                "audits": audits,
+                "rows_total": int(row["rows_total"]),
+                "ready": labelled >= min_labelled and audits >= min_audits,
+            })
+
+        return {
+            "thresholds": {
+                "min_labelled": min_labelled,
+                "min_audits": min_audits,
+            },
+            "outcomes": {r["outcome"]: int(r["n"]) for r in outcome_rows},
+            "rules_ready": sum(1 for r in rules if r["ready"]),
+            "rules": rules,
+        }
 
     async def set_pr_merged_by_pr_url(self, pr_url: str, merged: bool) -> int:
         """Backfill pr_merged for the delivered outcome whose PR just closed,
@@ -1316,7 +1621,12 @@ class PaymentRepository:
         status: str, tier_granted: str | None,
         product: str = "pro_tier", audit_id: str | None = None,
         paypal_order_id: str | None = None,
+        payer_name: str | None = None, payer_email: str | None = None,
     ) -> dict[str, Any] | None:
+        """payer_name/payer_email (migration 0026) are what the payer said
+        about themselves before paying, kept for the operator's books. Only
+        bank_transfer supplies them; every other provider carries an identity
+        of its own and leaves both None."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1328,15 +1638,17 @@ class PaymentRepository:
                 """
                 insert into payments
                     (account_id, provider, external_ref, amount, currency,
-                     status, tier_granted, product, audit_id, paypal_order_id)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     status, tier_granted, product, audit_id, paypal_order_id,
+                     payer_name, payer_email)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id, account_id, provider, external_ref, amount,
                           currency, status, tier_granted, telegram_chat_id,
-                          product, audit_id, paypal_order_id, created_at
+                          product, audit_id, paypal_order_id, payer_name,
+                          payer_email, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
                  status, tier_granted, product, parsed_audit_id,
-                 paypal_order_id),
+                 paypal_order_id, payer_name, payer_email),
             )
             row = await cur.fetchone()
         return _row_to_payment(row)
@@ -1355,7 +1667,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -1379,7 +1692,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
@@ -1406,7 +1720,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments where paypal_order_id = %s
                 """,
                 (paypal_order_id,),
@@ -1414,12 +1729,27 @@ class PaymentRepository:
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
 
-    async def list_pending(self, provider: str) -> list[dict[str, Any]]:
+    async def list_pending(
+        self, provider: str, *, created_after: datetime.datetime | None = None
+    ) -> list[dict[str, Any]]:
         """Open (unpaid) invoices for a provider, newest first. Used by the
         USDT poller to match incoming on-chain transfers to invoices it
         hasn't seen paid yet. Returns [] when DATABASE_URL isn't set, same
         not-configured contract as create/get (an empty list, not None, so
-        callers can iterate without a guard)."""
+        callers can iterate without a guard).
+
+        `created_after` bounds the window. It exists for bank_transfer's
+        kopeck-suffix reservation, which asks a different question from the
+        poller: not "what might still get paid" (anything, forever -- a
+        transfer can surface on day nine) but "what amount is currently in
+        flight". Without a bound those two questions share an answer, and
+        since nothing ever moves an abandoned invoice out of 'pending', the
+        set only grows -- 99 abandoned checkouts and every later buyer is
+        quoted the same amount.
+
+        The default is unbounded so the poller keeps its old behaviour: a
+        window there would silently stop matching a slow transfer.
+        """
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1429,12 +1759,14 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments
                 where provider = %s and status = 'pending'
+                  and (%s::timestamptz is null or created_at >= %s)
                 order by created_at desc
                 """,
-                (provider,),
+                (provider, created_after, created_after),
             )
             rows = await cur.fetchall()
         return [_row_to_payment(r) for r in rows]
@@ -1465,7 +1797,24 @@ class PaymentRepository:
             reconcile. Returning None rather than overwriting is the point: the
             older unconditional UPDATE clobbered the first charge's account_id,
             so the key the first payer was handed pointed at an orphaned
-            account."""
+            account.
+
+        `account_id is null or account_id = %s` is in the predicate for the
+        same reason, one level deeper. Two concurrent confirmations of the SAME
+        charge both read a payment with no account, both minted one, and the
+        second was admitted by the same-external_ref branch above -- overwriting
+        the first's account_id and orphaning an account whose key had already
+        gone out. grant_lock now stops them meeting at all; this makes the
+        overwrite impossible even if it doesn't.
+
+        Note the `or account_id = %s`: re-linking the SAME account is still
+        allowed, so a replay that reaches here with the account it already
+        granted gets the idempotent row back. Only reassignment to a DIFFERENT
+        account is refused, which is the actual anomaly. Writing this as a bare
+        `account_id is null` looked equivalent -- grant_pro_tier returns before
+        the UPDATE once it sees an account_id -- but this method's contract is
+        the repository's, not grant_pro_tier's, and CI's real-Postgres suite
+        asserts the replay directly."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1475,13 +1824,60 @@ class PaymentRepository:
                 """
                 update payments
                 set status = 'completed', account_id = %s, external_ref = %s
-                where id = %s and (status = 'pending'
-                                   or (status = 'completed'
-                                       and external_ref = %s))
+                where id = %s
+                  and (account_id is null or account_id = %s)
+                  and (status = 'pending'
+                       or (status = 'completed'
+                           and external_ref = %s))
                 returning id, status, account_id, external_ref
                 """,
                 (uuid.UUID(account_id), external_ref, uuid.UUID(payment_id),
-                 external_ref),
+                 uuid.UUID(account_id), external_ref),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
+
+    async def mark_refunded(
+        self, payment_id: str, *, reason: str,
+    ) -> dict[str, Any] | None:
+        """Record that a completed payment was given back. Returns the row, or
+        None if there was nothing to refund.
+
+        This moves no money and cannot. A bank transfer lands on a private
+        individual's account and goes back the same way, by hand; Stars and
+        USDT have no refund call we hold a credential for. What the software
+        owes is an honest record: before this column existed, a refunded
+        payment stayed `completed` forever, and a month later nothing
+        distinguished money kept from money returned.
+
+        `status = 'completed'` is inside the UPDATE, not checked before it, for
+        the same reason as mark_completed: the decision and the write cannot be
+        separated by another connection. That also makes a second refund of the
+        same payment a no-op rather than a second entry -- an operator who runs
+        the command twice, or a retried request, must not turn one refund into
+        two in the books.
+
+        Refusing `pending` is not pedantry. DRY-XZCNTN sat at 10.60 pending
+        while DRY-UPRQKH at 10.79 was the charge that actually happened;
+        refunding the invoice nobody paid would have recorded a payout that
+        never occurred and left the real one looking clean.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update payments
+                   set status = 'refunded',
+                       refunded_at = now(),
+                       refund_reason = %s
+                 where id = %s
+                   and status = 'completed'
+                returning *
+                """,
+                (reason, uuid.UUID(payment_id)),
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
@@ -1519,11 +1915,25 @@ class PaymentRepository:
     async def get_completed_by_telegram_chat_id(
         self, telegram_chat_id: str
     ) -> dict[str, Any] | None:
-        """The completed payment linked to this Telegram chat_id, if any
-        (newest first). Backs /mykey: a chat_id has an account -- and thus
-        a recoverable key -- exactly when a completed payment carries it
-        (Stars stamps it at purchase, USDT via /link). Returns None when
-        DATABASE_URL isn't set, same not-configured contract as get."""
+        """The completed payment linked to this Telegram chat_id that granted
+        an account, if any (newest first). Backs /mykey and /rotatekey: a
+        chat_id has an account -- and thus a recoverable key -- exactly when a
+        completed payment carries it (Stars stamps it at purchase, USDT and
+        bank transfer via /link). Returns None when DATABASE_URL isn't set,
+        same not-configured contract as get.
+
+        `account_id is not null` is load-bearing, not tidiness. A Fix Pack
+        payment is completed and can carry a telegram_chat_id, but grants no
+        account by design -- mark_completed_fixpack leaves account_id null,
+        because a Fix Pack is delivered as a pull request and has no key. It is
+        also, being a later purchase, the NEWEST row for that chat. Without
+        this predicate a Pro customer who ran /link with a Fix Pack reference
+        had /mykey and /rotatekey answer "no account" from then on, with no way
+        back: nothing unlinks a chat.
+
+        The predicate cannot hide a payment that has a key. A completed Pro
+        payment always has an account -- mark_completed takes account_id as a
+        required argument, so the state cannot exist."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1533,9 +1943,11 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments
                 where telegram_chat_id = %s and status = 'completed'
+                  and account_id is not null
                 order by created_at desc
                 limit 1
                 """,
@@ -1573,7 +1985,8 @@ class PaymentRepository:
                 """
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, created_at
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, created_at
                 from payments where id = %s
                 """,
                 (pid,),

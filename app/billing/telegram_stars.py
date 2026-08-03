@@ -34,10 +34,14 @@ real sendInvoice call with their own token. See the README.
 
 from __future__ import annotations
 
+import hmac
+import logging
 import os
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 TELEGRAM_API = "https://api.telegram.org"
 
@@ -362,6 +366,72 @@ async def send_message(
     )
 
 
+async def answer_callback_query(
+    query_id: str, *, token: str, text: str | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> bool:
+    """Dismiss the spinner on a tapped inline button, optionally with a toast.
+
+    Best-effort, unlike answer_pre_checkout_query: that one MUST raise because
+    an unanswered pre-checkout makes Telegram cancel the charge. This one runs
+    AFTER the operator's confirmation has already been persisted and the money
+    already granted, so a Telegram hiccup here must not unwind a completed
+    grant. Returns whether the call went through."""
+    body: dict[str, Any] = {"callback_query_id": query_id}
+    if text:
+        body["text"] = text
+    return await _best_effort_call("answerCallbackQuery", body, token=token,
+                                   transport=transport)
+
+
+async def edit_message_reply_markup(
+    *, chat_id: int | str, message_id: int | str, token: str,
+    reply_markup: dict[str, Any] | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> bool:
+    """Replace (or, with reply_markup=None, strip) a message's inline keyboard.
+
+    Used to take the confirm button off an already-actioned notification. That
+    is a UI-level guard only -- pressing a stale button twice is already safe
+    at the database level via the CAS gate -- so like answer_callback_query it
+    is best-effort and never raises."""
+    body: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
+    if reply_markup is not None:
+        body["reply_markup"] = reply_markup
+    return await _best_effort_call("editMessageReplyMarkup", body, token=token,
+                                   transport=transport)
+
+
+async def edit_message_text(
+    *, chat_id: int | str, message_id: int | str, text: str, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> bool:
+    """Rewrite a message's text, dropping any inline keyboard with it. Same
+    best-effort contract as edit_message_reply_markup."""
+    return await _best_effort_call(
+        "editMessageText",
+        {"chat_id": chat_id, "message_id": message_id, "text": text},
+        token=token, transport=transport,
+    )
+
+
+async def _best_effort_call(
+    method: str, body: dict[str, Any], *, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> bool:
+    """_call with the exception swallowed, in the style of
+    app.alerts.notify_operator. For cosmetic post-grant calls only: every
+    caller has already committed the state change the user paid for, so the
+    only thing a raise could accomplish is to turn a successful payment into
+    a 5xx."""
+    try:
+        await _call(method, body, token=token, transport=transport)
+        return True
+    except Exception:
+        logger.warning("%s failed (best-effort)", method, exc_info=True)
+        return False
+
+
 def _delivery_text(api_key: str) -> str:
     return (
         "Payment received — your Drydock pro access is active.\n\n"
@@ -373,6 +443,31 @@ def _delivery_text(api_key: str) -> str:
         # no specific "report" to link. Point at the run-an-audit landing
         # page instead of a bare, report-less homepage link.
         f"Run an audit: {SITE_URL}"
+    )
+
+
+def _no_key_for_this_payment_text(payment: dict[str, Any]) -> str:
+    """A real, completed payment that simply has no key to hand over.
+
+    In practice always a Fix Pack, which is delivered as a pull request. The
+    text this replaced said the account "could not be loaded" and told the
+    payer to contact support -- describing a failure to someone whose payment
+    worked perfectly, about a key that was never supposed to exist.
+
+    The last line matters as much as the first: a payer who just typed a
+    command and got an unexpected answer will assume they broke something, and
+    the honest reassurance is cheaper than the support message it prevents.
+    """
+    from app.billing import PRODUCT_FIXPACK
+
+    what = ("Fix Pack" if payment.get("product") == PRODUCT_FIXPACK
+            else "purchase")
+    return (
+        f"That reference is for a {what}, which doesn't come with an API "
+        "key — it's delivered as a pull request on your repository, and "
+        "you'll get a message here when it's opened.\n\n"
+        "Nothing went wrong and nothing changed: if you also have Drydock "
+        "pro on this chat, /mykey and /rotatekey still work as before."
     )
 
 
@@ -412,6 +507,8 @@ async def handle_update(
         grant_fixpack) and DM a confirmation -- no tier change, no key; for a
         subscription (payload prefixed "sub:"), upsert/renew the subscriptions
         row (via grant_subscription) -- no account, no key.
+      * callback_query -> an inline button was tapped. Only the operator's
+        bank-transfer Confirm button produces one; owner-only, fail-closed.
       * subscription (BotSubscriptionUpdated) -> a renewal state change
         (canceled/active/failed); update the subscriptions row's status. This
         is the field key the Bot API uses for BotSubscriptionUpdated.
@@ -447,6 +544,18 @@ async def handle_update(
             pcq["id"], ok=True, token=token, transport=transport
         )
         return {"ok": True, "handled": "pre_checkout_query"}
+
+    # An inline button was tapped. Today the only one that produces a callback
+    # is the operator's bank-transfer confirm button (every other keyboard in
+    # this module is a `url` button, which produces no update at all), and it
+    # moves money, so this branch is owner-only -- see _handle_callback_query.
+    cbq = update.get("callback_query")
+    if cbq is not None:
+        return await _handle_callback_query(
+            cbq, account_repo=account_repo, payment_repo=payment_repo,
+            audit_repo=audit_repo, fixpack_repo=fixpack_repo,
+            token=token, transport=transport,
+        )
 
     # BotSubscriptionUpdated: a renewal state change (canceled/active/failed).
     # The Bot API delivers it under the `subscription` field of an Update. It
@@ -561,6 +670,129 @@ async def handle_update(
     return {"ok": True, "handled": "ignored"}
 
 
+def _is_operator(user_id: Any) -> bool:
+    """True only if `user_id` is the configured operator's Telegram id.
+
+    FAILS CLOSED, and that is the whole point of the function: with
+    TELEGRAM_ADMIN_CHAT_ID unset there is nobody to compare against, so the
+    answer is False for everyone. The opposite reading -- "no allowlist
+    configured, so allow all" -- would turn any deployment that merely forgot
+    one env var into a stranger-operated Confirm button handing out pro
+    access, which is the single worst failure this module can have."""
+    from app.alerts import admin_chat_id_from_env
+
+    expected = admin_chat_id_from_env()
+    if not expected or user_id is None:
+        return False
+    # compare_digest over the string forms: the env var is a string and the
+    # Bot API sends an int, so both are normalised before comparing.
+    return hmac.compare_digest(str(expected).strip(), str(user_id))
+
+
+async def _handle_callback_query(
+    cbq: dict[str, Any], *, account_repo: Any, payment_repo: Any,
+    audit_repo: Any = None, fixpack_repo: Any = None,
+    token: str, transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    """The operator tapped Confirm on a bank-transfer notification.
+
+    The webhook's secret-token check proves the update came from Telegram; it
+    says nothing about WHO tapped the button, and anyone who learns the bot's
+    username can send it a callback. So the sender is checked against the
+    operator allowlist here, and an unrecognised sender is treated exactly
+    like an unknown button -- acknowledged so their client stops spinning,
+    but nothing is granted and nothing is disclosed about what the button
+    would have done.
+
+    Confirmation itself is idempotent (bank_transfer.confirm goes through the
+    CAS-gated grant path), so the button being tapped twice -- by a retried
+    webhook, or by an operator who did not see the first edit land -- grants
+    once and reports success both times."""
+    from app.billing import bank_transfer
+
+    data = cbq.get("data") or ""
+    query_id = cbq.get("id")
+
+    if not data.startswith(bank_transfer.CONFIRM_CALLBACK_PREFIX):
+        if query_id:
+            await answer_callback_query(query_id, token=token, transport=transport)
+        return {"ok": True, "handled": "callback_query", "result": "ignored"}
+
+    sender = (cbq.get("from") or {}).get("id")
+    if not _is_operator(sender):
+        logger.warning(
+            "rejected bank-transfer confirm callback from non-operator %s", sender
+        )
+        if query_id:
+            await answer_callback_query(query_id, token=token, transport=transport)
+        return {"ok": True, "handled": "callback_query", "result": "forbidden"}
+
+    payment_id = data[len(bank_transfer.CONFIRM_CALLBACK_PREFIX):]
+    result = await bank_transfer.confirm(
+        payment_repo=payment_repo, account_repo=account_repo,
+        payment_id=payment_id, fixpack_repo=fixpack_repo, audit_repo=audit_repo,
+    )
+    if result is None:
+        if query_id:
+            await answer_callback_query(
+                query_id, token=token, transport=transport,
+                text="No such bank transfer.",
+            )
+        return {"ok": True, "handled": "callback_query", "result": "not_found"}
+
+    granted = result["granted"]
+    if query_id:
+        await answer_callback_query(
+            query_id, token=token, transport=transport,
+            text="Confirmed." if granted else "Could not record the confirmation.",
+        )
+    if granted:
+        # Take the button off the notification so the operator can see at a
+        # glance which transfers are still outstanding. Cosmetic and
+        # best-effort -- a stale button is harmless, since a second press
+        # replays through the same CAS gate and grants nothing new.
+        message = cbq.get("message") or {}
+        chat = message.get("chat") or {}
+        if chat.get("id") is not None and message.get("message_id") is not None:
+            await edit_message_text(
+                chat_id=chat["id"], message_id=message["message_id"],
+                text=_confirmed_text(result), token=token, transport=transport,
+            )
+    return {
+        "ok": True, "handled": "callback_query",
+        "result": "confirmed" if granted else "not_persisted",
+        "payment_id": result["payment_id"], "product": result["product"],
+    }
+
+
+def _confirmed_text(result: dict[str, Any]) -> str:
+    from app.billing import bank_transfer
+
+    what = (
+        "Fix Pack" if result.get("product") == bank_transfer.PRODUCT_FIXPACK
+        else "Pro tier"
+    )
+    lines = [
+        f"Bank transfer CONFIRMED — {what}",
+        "",
+        f"Reference: {result.get('reference')}",
+    ]
+    if result.get("audit_id"):
+        lines.append(f"Audit: {result['audit_id']}")
+    if result.get("joined_existing_job"):
+        # The one case where "CONFIRMED" alone would be a lie by omission: the
+        # money is taken and no extra work was funded, because this audit
+        # already had a live Fix Pack job and create_paid is idempotent per
+        # audit. Nothing downstream can undo that -- only the operator can.
+        lines += [
+            "",
+            "WARNING: this audit already had a Fix Pack job in progress, so "
+            "this payment funded no additional work. One pull request will be "
+            "opened, not two. Reconcile by hand — a refund is likely owed.",
+        ]
+    return "\n".join(lines)
+
+
 _NO_ACCOUNT_TEXT = (
     "No Drydock pro account is linked to this Telegram chat yet.\n\n"
     "If you paid with Telegram Stars, your key is linked automatically at "
@@ -568,7 +800,9 @@ _NO_ACCOUNT_TEXT = (
     "same Telegram account you paid with.\n\n"
     "If you paid with USDT (TRC20), send `/link <tx_hash>` with your "
     "payment's transaction hash to link it to this chat, then run /mykey "
-    "again."
+    "again.\n\n"
+    "If you paid by bank transfer, send `/link DRY-XXXXXX` with the reference "
+    "code from the payment page instead."
 )
 
 
@@ -1030,40 +1264,61 @@ async def _handle_link(
     # a different one (enforced atomically in
     # PaymentRepository.link_telegram_chat_id's WHERE clause). This is an
     # accepted MVP-level residual risk, not a bug to eliminate here.
-    from app.billing import usdt_trc20
+    from app.billing import bank_transfer, usdt_trc20
 
     chat_id = message["chat"]["id"]
     parts = text.split(maxsplit=1)
-    tx_hash = parts[1].strip() if len(parts) > 1 else ""
-    if not tx_hash:
+    claim = parts[1].strip() if len(parts) > 1 else ""
+    if not claim:
         await send_message(
             chat_id,
-            "Usage: `/link <tx_hash>` — send the transaction hash of your "
-            "USDT (TRC20) payment.",
+            "Usage: `/link <tx_hash>` — the transaction hash of your USDT "
+            "(TRC20) payment, or `/link DRY-XXXXXX` — the reference code of "
+            "your bank transfer.",
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "link", "result": "missing_hash"}
 
-    row = await payment_repo.get_by_external_ref(usdt_trc20.PROVIDER, tx_hash)
-    if row is None:
-        await send_message(
-            chat_id,
+    # Which provider to look the claim up under is read off its shape: a bank
+    # reference is DRY- plus six characters, a TRC20 hash is 64 hex, so the
+    # payer never has to say which method they used. Uppercased first because
+    # the code is shown uppercase but typed by hand.
+    if bank_transfer.REFERENCE_RE.match(claim.upper()):
+        provider, claim = bank_transfer.PROVIDER, claim.upper()
+        not_found_text = (
+            "That reference code wasn't found. Check it against the one shown "
+            "on the payment page — it looks like `DRY-XXXXXX`."
+        )
+        pending_text = (
+            "That transfer hasn't been confirmed yet. Bank transfers are "
+            "checked by hand and can take a few business days to arrive — "
+            "please retry `/link` later."
+        )
+    else:
+        provider = usdt_trc20.PROVIDER
+        not_found_text = (
             "That transaction hash wasn't found. If you just sent the "
             "payment, the poller runs on an interval — wait a few minutes "
-            "and try `/link` again.",
-            token=token, transport=transport,
+            "and try `/link` again."
+        )
+        pending_text = (
+            "That payment is still pending confirmation. The poller runs on "
+            "an interval — please retry `/link` shortly."
+        )
+
+    row = await payment_repo.get_by_external_ref(provider, claim)
+    if row is None:
+        await send_message(
+            chat_id, not_found_text, token=token, transport=transport,
         )
         return {"ok": True, "handled": "link", "result": "not_found"}
 
-    # "completed" is the credited/matched state the USDT poller sets (via
+    # "completed" is the credited state both providers converge on (via
     # grant_pro_tier -> mark_completed); reuse it rather than invent a new
-    # status. Anything else means the poller hasn't credited it yet.
+    # status. Anything else means it hasn't been credited yet.
     if row.get("status") != "completed":
         await send_message(
-            chat_id,
-            "That payment is still pending confirmation. The poller runs on "
-            "an interval — please retry `/link` shortly.",
-            token=token, transport=transport,
+            chat_id, pending_text, token=token, transport=transport,
         )
         return {"ok": True, "handled": "link", "result": "pending"}
 
@@ -1079,6 +1334,27 @@ async def _handle_link(
         )
         return {"ok": True, "handled": "link", "result": "already_claimed"}
 
+    # Before claiming anything: does this payment grant an account at all?
+    #
+    # A Fix Pack payment is completed and matches a DRY- reference like any
+    # other, but grants no account by design -- it is delivered as a pull
+    # request and has no key. Stamping this chat onto it used to happen first
+    # and be discovered second, which broke the payer's Pro access: /mykey and
+    # /rotatekey read the NEWEST completed payment carrying the chat, that was
+    # now the Fix Pack row, and it has no account. Permanently, because nothing
+    # unlinks a chat.
+    #
+    # get_completed_by_telegram_chat_id now ignores account-less payments, so
+    # the damage is undone for anyone already in that state. This stops it
+    # being done in the first place -- and lets us say something true instead
+    # of sending the payer to support over a failure that never happened.
+    if not row.get("account_id"):
+        await send_message(
+            chat_id, _no_key_for_this_payment_text(row),
+            token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "link", "result": "no_account"}
+
     # Unlinked, or already linked to THIS chat (idempotent): claim it and
     # hand back the key. The conditional update is the first-wins guard.
     linked = await payment_repo.link_telegram_chat_id(row["id"], str(chat_id))
@@ -1091,15 +1367,6 @@ async def _handle_link(
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "link", "result": "already_claimed"}
-
-    if not row.get("account_id"):
-        await send_message(
-            chat_id,
-            "That payment is linked to this chat, but its account could not "
-            "be loaded. Please contact support with your transaction hash.",
-            token=token, transport=transport,
-        )
-        return {"ok": True, "handled": "link", "result": "no_account"}
 
     # /link and the web checkout's invoice poll are two doors to the same USDT
     # payment, and the key it grants exists in neither place: the poller that

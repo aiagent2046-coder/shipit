@@ -213,6 +213,39 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+class StripAccessQueryFilter(logging.Filter):
+    """Drop the query string from uvicorn's access log lines.
+
+    The audit access_token travels as `?token=...` (GET /v1/audits/{id} and
+    /report), so every access log line carries the ownership secret for the
+    row it served. RedactionFilter does not reach it: uvicorn configures
+    `uvicorn.access` with propagate=False and its own handler, so the record
+    never passes the root handler our basicConfig installs.
+
+    Reaching it means adding a filter to *that* logger's handler -- but
+    RedactionFilter cannot be the one added. It rewrites record.msg to the
+    interpolated string and empties record.args, and uvicorn's AccessFormatter
+    unpacks exactly five args (client_addr, method, full_path, http_version,
+    status_code); given none it raises ValueError and the line is lost
+    entirely. So this filter edits args[2] in place and leaves the record's
+    shape alone.
+
+    The whole query is dropped, not just the token: the path is what an access
+    log is read for, and an allowlist of safe parameters is one forgotten
+    entry away from the same leak.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if (isinstance(args, tuple) and len(args) == 5
+                and isinstance(args[2], str)):
+            path, sep, _ = args[2].partition("?")
+            if sep:
+                record.args = (args[0], args[1], f"{path}?{REDACTED}",
+                               args[3], args[4])
+        return True
+
+
 def log_level_from_env() -> str:
     level = (os.environ.get("LOG_LEVEL") or "INFO").upper()
     return level if level in _VALID_LOG_LEVELS else "INFO"
@@ -250,3 +283,14 @@ def configure_logging() -> None:
     uvicorn's own loggers or double-configure across test app instances.
     """
     logging.basicConfig(level=log_level_from_env(), handlers=[build_handler()])
+    # basicConfig only reaches loggers that propagate to root, and
+    # uvicorn.access does not (propagate=False, own handler). Attach there
+    # explicitly -- see StripAccessQueryFilter. A no-op in the worker and the
+    # alerter, where uvicorn never ran and the logger has no handlers.
+    # configure_logging() is called once per process in production but several
+    # times across test app instances, so guard against stacking duplicates on
+    # the same handler.
+    for handler in logging.getLogger("uvicorn.access").handlers:
+        if not any(isinstance(f, StripAccessQueryFilter)
+                   for f in handler.filters):
+            handler.addFilter(StripAccessQueryFilter())

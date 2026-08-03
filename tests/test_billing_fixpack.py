@@ -51,12 +51,26 @@ class FakeAuditRepo:
     def __init__(self):
         self.by_id: dict[str, dict] = {}
 
-    def add(self, *, stack="fastapi", repo_url=REPO_URL):
-        row = {"id": str(uuid.uuid4()), "stack": stack, "repo_url": repo_url}
+    # A finding the Fix Pack can actually rewrite. Default rather than opt-in
+    # because these tests are about invoice mechanics, and since the sell
+    # endpoints refuse an audit with nothing auto-fixable, an audit with no
+    # findings at all is no longer a neutral fixture -- it is the refusal case.
+    def add(self, *, stack="fastapi", repo_url=REPO_URL, findings=None):
+        row = {"id": str(uuid.uuid4()), "stack": stack, "repo_url": repo_url,
+               "findings_json": [{"rule_id": "aws-access-key-id",
+                                  "file": "config.py", "line": 1,
+                                  "title": "AWS Access Key ID",
+                                  "context": None}]
+               if findings is None else findings}
         self.by_id[row["id"]] = row
         return row
 
     async def get(self, audit_id: str):
+        return self.by_id.get(audit_id)
+
+    async def get_authorized(self, audit_id: str, token):
+        # The real one checks the per-row access token; these tests are about
+        # the payload, not the ownership check, which has its own coverage.
         return self.by_id.get(audit_id)
 
 
@@ -119,9 +133,12 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
                 return r
         return None
 
-    async def list_pending(self, provider):
+    async def list_pending(self, provider, *, created_after=None):
         return [r for r in self.rows.values()
-                if r["provider"] == provider and r["status"] == "pending"]
+                if r["provider"] == provider and r["status"] == "pending"
+                and (created_after is None
+                     or r.get("created_at") is None
+                     or r["created_at"] >= created_after)]
 
 
 def _telegram_transport(calls: list):
@@ -523,5 +540,129 @@ def test_fixpack_status_unknown_audit_is_404():
         r = client.get(f"/v1/audits/{uuid.uuid4()}/fixpack-status")
         assert r.status_code == 404
         assert r.json()["detail"]["reason"] == "audit_not_found"
+    finally:
+        _clear()
+
+
+def test_usdt_fixpack_invoice_refused_while_a_job_is_live(monkeypatch):
+    """The same sell-side refusal as the bank-transfer route, on the USDT one.
+
+    Worth having in both places rather than trusting the shared helper: the
+    three sell points grew independently (they already duplicate the audit and
+    repo_url gates), so the thing that breaks is one of them being missed when
+    a fourth provider is added.
+    """
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks = FakeFixpackRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    fixpacks.rows.append({
+        "id": str(uuid.uuid4()), "audit_id": audit["id"], "pack": "fixpack",
+        "stack": "fastapi", "status": "running", "verified": None,
+        "detail": None, "pr_url": None, "pr_delivered": False,
+        "created_at": datetime.datetime.now(datetime.timezone.utc),
+    })
+    _override(audits=audits, payments=payments)
+    app.dependency_overrides[get_fixpack_repo] = lambda: fixpacks
+    try:
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
+        assert r.status_code == 409
+        assert r.json()["detail"]["reason"] == "fixpack_already_in_progress"
+        assert payments.rows == {}
+    finally:
+        _clear()
+
+
+# --- refusing to sell what cannot be delivered ---
+#
+# Audit 05fa18f5 was sold a Fix Pack with zero fixable findings. The job ran,
+# found nothing, and the payer was charged for "Nothing to auto-fix". It was
+# computable before the sale, from the findings already on the audit.
+
+
+ADVICE_ONLY = [
+    {"rule_id": "no-tests", "file": "", "line": 0, "title": "No tests",
+     "context": None},
+    {"rule_id": "no-ci", "file": "", "line": 0, "title": "No CI",
+     "context": None},
+]
+
+
+def test_usdt_refuses_when_nothing_is_auto_fixable(monkeypatch):
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    audit = audits.add(repo_url=REPO_URL, findings=ADVICE_ONLY)
+    _override(audits=audits, payments=payments)
+    try:
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
+        assert r.status_code == 409
+        assert r.json()["detail"]["reason"] == "no_auto_fixable_findings"
+        assert payments.rows == {}
+    finally:
+        _clear()
+
+
+def test_a_finding_only_in_a_comment_is_not_something_to_sell(monkeypatch):
+    """The seam with #132. That change stopped the Fix Pack from rewriting
+    comments; this one stops us charging for the rewrite it will not do."""
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    audit = audits.add(repo_url=REPO_URL, findings=[
+        {"rule_id": "aws-access-key-id", "file": "app.py", "line": 3,
+         "title": "AWS Access Key ID", "context": "comment"},
+    ])
+    _override(audits=audits, payments=payments)
+    try:
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
+        assert r.status_code == 409
+    finally:
+        _clear()
+
+
+def test_a_real_secret_is_still_sellable(monkeypatch):
+    """The boundary. A check that refuses everything would be worse than the
+    bug: it would stop the product selling at all."""
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    audit = audits.add(repo_url=REPO_URL)     # default fixture: a real secret
+    _override(audits=audits, payments=payments)
+    try:
+        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
+        assert r.status_code == 201
+    finally:
+        _clear()
+
+
+def test_an_audit_with_no_findings_at_all_is_refused(monkeypatch):
+    """A clean repository. Nothing was found, so there is nothing to fix --
+    and this is the state a customer is most likely to try to buy from,
+    because a good score reads as 'everything is fine, but let me tidy up'."""
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    audit = audits.add(repo_url=REPO_URL, findings=[])
+    _override(audits=audits, payments=payments)
+    try:
+        assert client.post(
+            f"/v1/audits/{audit['id']}/fixpack/usdt-invoice"
+        ).status_code == 409
+    finally:
+        _clear()
+
+
+def test_the_audit_response_tells_the_page_whether_to_offer_a_fix_pack():
+    """The page must not decide this itself: the answer depends on which rules
+    the Fix Pack knows how to rewrite, and a second copy of that list in
+    TypeScript is exactly the drift #132 was about."""
+    audits = FakeAuditRepo()
+    sellable = audits.add(repo_url=REPO_URL)
+    nothing = audits.add(repo_url=REPO_URL, findings=ADVICE_ONLY)
+    _override(audits=audits, payments=FakePaymentRepo())
+    try:
+        assert client.get(
+            f"/v1/audits/{sellable['id']}?token=t"
+        ).json()["fixpack_auto_fixable"] is True
+        assert client.get(
+            f"/v1/audits/{nothing['id']}?token=t"
+        ).json()["fixpack_auto_fixable"] is False
     finally:
         _clear()

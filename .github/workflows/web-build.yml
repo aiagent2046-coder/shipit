@@ -1,0 +1,77 @@
+name: web-build
+
+# The frontend was never built by CI. Three changes to web/ shipped to
+# production today alone, and the only thing that had ever compiled them was
+# Vercel -- which builds the PREVIEW on a pull request and the production
+# deployment after the merge. A build error would therefore be discovered
+# either in a check nobody treats as blocking, or on main.
+#
+# Runs on EVERY pull request, with no path filter, so that it can be a
+# required status check. A path-filtered workflow simply does not start on a
+# PR that misses the filter, so the check never reports, and a rule requiring
+# it would leave every backend-only PR waiting forever. That is why `smoke` is
+# not required either.
+#
+# The alternative -- keeping the filter and adding a second always-running job
+# that reports on its behalf -- buys back about 40 seconds per backend PR and
+# costs a layer of indirection in the one place that must be obvious. Not
+# worth it.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-build:
+    name: web-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # package.json says >=20.9.0; pin the major rather than track
+          # 'latest', so a Node release cannot break the build on a day
+          # nobody touched the frontend.
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # `ci`, not `install`: it installs exactly the lockfile and fails if
+      # package.json and package-lock.json disagree, which is itself a defect
+      # worth failing on.
+      - name: Install dependencies
+        run: npm ci
+
+      # Before the build, and not redundant with it. `next build` type-checks
+      # the files reachable from the route graph; tsc checks everything
+      # tsconfig includes, so a module that is broken but not yet imported
+      # fails here and nowhere else. It also fails in seconds instead of after
+      # a full build.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # No NEXT_PUBLIC_* values are set on purpose. The build must succeed
+      # without them -- they are read at runtime in the browser, and a build
+      # that needs a production API URL to compile would be a defect. Vercel
+      # supplies the real values for the deployment it serves.
+      - name: Build
+        run: npm run build

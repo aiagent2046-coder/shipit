@@ -860,3 +860,66 @@ async def test_subscription_payment_not_configured_reports_gracefully():
     assert result == {"ok": True, "handled": "subscription_payment",
                       "persisted": False}
     assert any(c[0] == "sendMessage" for c in calls)
+
+
+# --- /link with a Fix Pack reference ---
+#
+# A Fix Pack payment is completed and matches a DRY- reference like any other,
+# but grants no account: it is delivered as a pull request. /link used to stamp
+# the chat onto it FIRST and discover that second, which is what broke a Pro
+# payer's key recovery -- see tests/test_billing_concurrency_postgres.py for
+# the half of this that needs a real database.
+
+
+async def _completed_fixpack_payment(payments, reference: str):
+    row = await payments.create(
+        account_id=None, provider="bank_transfer", external_ref=reference,
+        amount=29.07, currency="USD", status="completed",
+        tier_granted=None, product="fixpack",
+    )
+    return row
+
+
+async def test_link_with_a_fixpack_reference_claims_nothing():
+    """The order is the fix. The chat must not end up on a payment that has no
+    key to give -- once stamped, nothing ever removes it."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    row = await _completed_fixpack_payment(payments, "DRY-FXPK23")
+
+    result = await _send(_text_update("/link DRY-FXPK23", 777),
+                         accounts, payments, calls)
+
+    assert result["result"] == "no_account"
+    assert row.get("telegram_chat_id") is None, "the chat was stamped anyway"
+
+
+async def test_link_with_a_fixpack_reference_explains_instead_of_alarming():
+    """The old text said the account 'could not be loaded' and sent the payer
+    to support -- describing a failure to someone whose payment worked, about a
+    key that was never meant to exist."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    await _completed_fixpack_payment(payments, "DRY-FXPK24")
+
+    await _send(_text_update("/link DRY-FXPK24", 777), accounts, payments, calls)
+
+    text = _last_text(calls)
+    assert "Fix Pack" in text
+    assert "pull request" in text
+    assert "contact support" not in text
+    # The reassurance is the point: someone who typed a command and got an
+    # unexpected answer assumes they broke something.
+    assert "/mykey" in text and "still work" in text
+
+
+async def test_a_pro_link_is_untouched_by_the_new_check():
+    """The guard sits above the claim, so it must not intercept the ordinary
+    path -- a Pro payment still links and still delivers exactly one key."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    _acct, row = await _completed_usdt_payment(payments, accounts, "0xpro")
+
+    result = await _send(_text_update("/link 0xpro", 777),
+                         accounts, payments, calls)
+
+    assert result["result"] == "linked"
+    assert row["telegram_chat_id"] == "777"
+    assert _delivered_key(_last_text(calls)) is not None

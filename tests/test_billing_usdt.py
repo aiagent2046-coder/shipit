@@ -16,6 +16,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 import httpx
+import pytest
 
 import app.main as main_mod
 from app.accounts import api_key_prefix
@@ -73,9 +74,12 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
                 return r
         return None
 
-    async def list_pending(self, provider: str):
+    async def list_pending(self, provider: str, *, created_after=None):
         return [r for r in self.rows.values()
-                if r["provider"] == provider and r["status"] == "pending"]
+                if r["provider"] == provider and r["status"] == "pending"
+                and (created_after is None
+                     or r.get("created_at") is None
+                     or r["created_at"] >= created_after)]
 
 
 def _trongrid_transport(transfers: list, *, success: bool = True):
@@ -428,3 +432,160 @@ async def test_expired_invoice_is_not_matched():
         payments, accounts, inv["id"], address=ADDRESS)
     assert status["status"] == "expired"
     assert "api_key" not in status
+
+
+class TestRejectionMessagesCarryNoValue:
+    """A rejection message must say what is wrong, never what the value was.
+
+    normalize_tron_address is called on exactly one thing: USDT_TRC20_ADDRESS.
+    On 2026-08-02 that variable turned out to hold a live bearer token, glued
+    there by a bad .env paste, and the message quoting it published the token
+    into the systemd journal AND into the body of a 503 response served over
+    the public internet.
+    """
+
+    # Built by repetition, and named for what it is. The first version of
+    # this test pasted the REAL rotated-out USDT_POLL_TOKEN straight out of
+    # a journal line, and CI had no pattern that describes a bare hex
+    # string, so it landed in the repository. 64 hex characters keeps the
+    # branch coverage the real value gave: parses as hex, wrong length.
+    FAKE_HEX = "deadbeef" * 8
+
+    @pytest.mark.parametrize("value", [
+        # The exact corruption: a whole `NAME=token` line as the value.
+        f"USDT_POLL_TOKEN={FAKE_HEX}",
+        # A bare secret, in case the glue lands without the name.
+        FAKE_HEX,
+        # Valid base58 alphabet, wrong version byte -- a different branch.
+        "S" + "1" * 33,
+        # Hex of the wrong length -- another branch again.
+        "0x" + "41" * 10,
+    ])
+    def test_the_value_is_never_echoed(self, value):
+        with pytest.raises(usdt_trc20.InvalidTronAddressError) as raised:
+            usdt_trc20.normalize_tron_address(value)
+
+        message = str(raised.value)
+        assert value not in message
+        assert self.FAKE_HEX not in message
+        # Not merely silent: the message still has to be worth reading.
+        assert message.strip()
+
+    def test_the_message_still_distinguishes_the_failures(self):
+        """Stripping the value must not collapse four faults into one string
+        an operator cannot act on."""
+        messages = set()
+        for value in ("S" + "1" * 33, "0x" + "41" * 10, "not-an-address",
+                      "T" + "1" * 33):
+            try:
+                usdt_trc20.normalize_tron_address(value)
+            except usdt_trc20.InvalidTronAddressError as exc:
+                messages.add(str(exc))
+
+        assert len(messages) == 4, messages
+
+    def test_the_503_body_does_not_carry_the_secret(self, monkeypatch):
+        """End to end, because the leak happened in the response body -- the
+        unit test above would pass while main.py interpolated the value back
+        in at the call site."""
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        monkeypatch.setenv("USDT_TRC20_ADDRESS", f"USDT_POLL_TOKEN={self.FAKE_HEX}")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://fake-user@localhost/fake")
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/v1/billing/usdt/invoice")
+
+        assert response.status_code == 503
+        assert self.FAKE_HEX not in response.text
+        assert "usdt_misconfigured" in response.text
+
+
+def test_usdt_invoice_creation_is_rate_limited(monkeypatch):
+    """Opening an invoice is unauthenticated by necessity -- a buyer has no key
+    until they have paid -- and each call writes a pending row. This was the
+    one anonymous endpoint that wrote a row per call with nothing to stop it
+    repeating; its bank-transfer siblings have been bounded since #126."""
+    import app.main as main_mod
+    from app.main import get_rate_limiter
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    payments = FakePaymentRepo()
+    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 2)
+    limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_payment_repo] = lambda: payments
+    try:
+        codes = [
+            client.post("/v1/billing/usdt/invoice").status_code
+            for _ in range(3)
+        ]
+        assert codes == [201, 201, 429]
+
+        refused = client.post("/v1/billing/usdt/invoice")
+        assert refused.json()["detail"]["reason"] == "rate_limited"
+        assert int(refused.headers["Retry-After"]) > 0
+        # Refused before anything was written. A 429 that still left a row
+        # behind would bound the response and not the thing being limited.
+        assert len(payments.rows) == 2
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+        app.dependency_overrides.pop(get_payment_repo, None)
+
+
+def test_usdt_has_its_own_budget_separate_from_bank_transfer(monkeypatch):
+    """A SEPARATE limiter key from the bank-transfer pair, which share one.
+
+    Those two share because they draw from the same 99-suffix pool, so one
+    budget is what stops a client taking twice as much of it. USDT does not
+    touch that pool -- its nonce is a full micro-dollar and the invoice expires
+    in 30 minutes -- so a shared budget would only make a USDT invoice eat a
+    bank-transfer one.
+    """
+    import app.main as main_mod
+    from app.main import get_rate_limiter
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
+    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 1)
+    limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_payment_repo] = lambda: FakePaymentRepo()
+    try:
+        assert client.post("/v1/billing/usdt/invoice").status_code == 201
+        assert client.post("/v1/billing/usdt/invoice").status_code == 429
+
+        # The bank-transfer budget is untouched by the USDT spend: the key
+        # differs, so this must not already be exhausted.
+        assert limiter.check(
+            "bank-transfer-invoice:testclient", limit=1
+        ) is None
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+        app.dependency_overrides.pop(get_payment_repo, None)
+
+
+def test_an_unconfigured_deployment_says_so_rather_than_rate_limits(monkeypatch):
+    """Order of the two gates. A client on a deployment with no address should
+    learn that, not be told to slow down about an endpoint that cannot work
+    for them at any rate."""
+    import app.main as main_mod
+    from app.main import get_rate_limiter
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.delenv("USDT_TRC20_ADDRESS", raising=False)
+    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 1)
+    limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+    app.dependency_overrides[get_payment_repo] = lambda: FakePaymentRepo()
+    try:
+        for _ in range(3):
+            response = client.post("/v1/billing/usdt/invoice")
+            assert response.status_code == 503
+            assert response.json()["detail"]["reason"] == "usdt_not_configured"
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+        app.dependency_overrides.pop(get_payment_repo, None)

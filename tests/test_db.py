@@ -739,8 +739,12 @@ class TestPaymentRepositoryWithFakePool:
         assert result["account_id"] == str(account_id)
         query, params = fake.calls[0]
         assert "insert into payments" in query
+        # The two trailing Nones after paypal_order_id are payer_name and
+        # payer_email: supplied only by bank_transfer, so every other provider
+        # writes the row exactly as it did before migration 0026.
         assert params == (account_id, "usdt_trc20", "0xabc", 9.99, "USD",
-                          "completed", "pro", "pro_tier", None, None)
+                          "completed", "pro", "pro_tier", None, None,
+                          None, None)
 
     async def test_amount_numeric_is_cast_to_json_number_not_string(self, monkeypatch):
         """Postgres `numeric` -> decimal.Decimal renders as a JSON *string*

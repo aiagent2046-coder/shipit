@@ -4,17 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { FixpackStatus, InstallationStatus } from "@/lib/types";
 import {
-  TELEGRAM_BOT_USERNAME,
-  createFixpackUsdtInvoice,
+  createFixpackBankTransferInvoice,
   getFixpackStatus,
   getInstallationStatus,
 } from "@/lib/api";
-import { UsdtCheckout } from "./UsdtCheckout";
-import { PayPalOrderCard } from "./PayPalButton";
+import { BankTransferCheckout } from "./BankTransferCheckout";
 import { Spinner } from "./Spinner";
 
-const STARS_PRICE = "600 Stars";
-const USDT_PRICE = "12 USDT";
 const POLL_MS = 10_000;
 
 // Survives the round trip to github.com and back to /github/installed, so the
@@ -44,10 +40,46 @@ const TERMINAL: ReadonlySet<string> = new Set([
 export function FixpackPurchase({
   auditId,
   repoUrl,
+  autoFixable,
 }: {
   auditId: string;
   repoUrl: string | null;
+  /**
+   * Whether a Fix Pack could produce anything for this audit, decided by the
+   * API (`fixpack_auto_fixable`). Not recomputed here: the answer depends on
+   * which rules the Fix Pack knows how to rewrite, and a second copy of that
+   * list in TypeScript would drift from the Python one.
+   *
+   * `undefined` means an older API that doesn't send the field. Treated as
+   * "offer it", because the sell endpoints refuse with 409 anyway -- hiding a
+   * button was never the protection.
+   */
+  autoFixable?: boolean;
 }) {
+  if (repoUrl && autoFixable === false) {
+    // Nothing here can be fixed automatically, and that was knowable before
+    // anyone paid. Audit 05fa18f5 was sold a Fix Pack in exactly this state:
+    // the job ran, found nothing, and the payer was charged for "Nothing to
+    // auto-fix". Explain instead of selling.
+    return (
+      <section className="mt-8 rounded-xl border border-border bg-elevated p-5 sm:p-6">
+        <h2 className="text-lg font-semibold">Fix Pack</h2>
+        <p className="mt-2 max-w-2xl text-sm text-muted">
+          Nothing in this audit can be fixed automatically, so there&apos;s
+          nothing to buy. A Fix Pack rewrites hardcoded secrets and a few
+          config problems into a pull request; the findings here are
+          recommendations, or they live in comments, docs or tests, where
+          rewriting them would change nothing an attacker could use.
+        </p>
+        <p className="mt-2 max-w-2xl text-sm text-muted">
+          Work through the recommendations above instead. If you change the
+          code and re-run the audit, this section will offer a Fix Pack when
+          there&apos;s something for it to do.
+        </p>
+      </section>
+    );
+  }
+
   if (!repoUrl) {
     return (
       <section className="mt-8 rounded-xl border border-border bg-elevated p-5 sm:p-6">
@@ -70,28 +102,31 @@ export function FixpackPurchase({
         </h2>
         <p className="mt-2 max-w-2xl text-sm text-muted">
           A Fix Pack generates real fixes for the issues above and opens a pull
-          request against your repository automatically. Pay once —{" "}
-          <span className="font-medium text-text">{STARS_PRICE}</span> or{" "}
-          <span className="font-medium text-text">{USDT_PRICE}</span>.
+          request against your repository automatically. Pay once by card —
+          the price is shown below.
         </p>
       </header>
 
       <InstallGate repoUrl={repoUrl}>
-        <div className="mt-5 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-          <StarsCard auditId={auditId} />
-          <UsdtCheckout
+        {/* Card payment is the only method on the storefront; the other
+            providers still work for existing customers through the Telegram
+            bot and their direct links, they are just not advertised. */}
+        <div className="mx-auto mt-5 max-w-md">
+          <BankTransferCheckout
             description={
               <>
-                Send an exact amount on the TRON network. Once the transfer is
-                confirmed on-chain your Fix Pack is generated automatically —
-                watch the status below.
+                Copy the card number and pay from your banking app. Your Fix
+                Pack starts once we&apos;ve seen the money — usually within a
+                business day.
               </>
             }
-            createInvoice={() => createFixpackUsdtInvoice(auditId)}
+            createInvoice={(payer) =>
+              createFixpackBankTransferInvoice(auditId, payer)
+            }
             renderCompleted={() => (
               <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
                 <p className="font-semibold text-accent">
-                  Payment confirmed — generating your Fix Pack.
+                  Transfer confirmed — generating your Fix Pack.
                 </p>
                 <p className="mt-2 text-sm text-muted">
                   No further action needed. The fix PR is opened automatically —
@@ -99,17 +134,6 @@ export function FixpackPurchase({
                 </p>
               </div>
             )}
-          />
-          <PayPalOrderCard
-            product="fixpack"
-            auditId={auditId}
-            description={
-              <>
-                Pay once with PayPal (card or balance). Your Fix Pack is
-                generated automatically once the payment is captured — watch the
-                status below.
-              </>
-            }
           />
         </div>
       </InstallGate>
@@ -213,63 +237,6 @@ function InstallGate({
           Install GitHub App ↗
         </a>
       )}
-    </div>
-  );
-}
-
-function StarsCard({ auditId }: { auditId: string }) {
-  const [copied, setCopied] = useState(false);
-  const command = `/fixpack ${auditId}`;
-  const telegramConfigured = TELEGRAM_BOT_USERNAME.length > 0;
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-
-  return (
-    <div className="rounded-xl border border-border bg-elevated p-5">
-      <h3 className="text-lg font-semibold">Pay with Telegram Stars</h3>
-      <p className="mt-1 text-sm text-muted">
-        Open the bot and send the command below to pay {STARS_PRICE} and start
-        your Fix Pack for this audit.
-      </p>
-
-      {telegramConfigured ? (
-        <a
-          href={`https://t.me/${TELEGRAM_BOT_USERNAME}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90"
-        >
-          Open @{TELEGRAM_BOT_USERNAME} in Telegram ↗
-        </a>
-      ) : (
-        <div className="mt-4 rounded-md border border-high/40 bg-high/10 p-3 text-sm text-high">
-          The Telegram bot username isn&apos;t configured for this site. Set{" "}
-          <code className="font-mono">NEXT_PUBLIC_TELEGRAM_BOT_USERNAME</code>{" "}
-          in the frontend&apos;s environment to enable this button.
-        </div>
-      )}
-
-      <div className="mt-4">
-        <span className="text-xs text-muted">Then send this command:</span>
-        <div className="mt-1 flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 text-sm">
-          <code className="break-all font-mono">{command}</code>
-          <button
-            type="button"
-            onClick={copy}
-            className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-muted hover:text-text"
-          >
-            {copied ? "✓" : "Copy"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
