@@ -364,7 +364,7 @@ function PayerInput({
         autoComplete={autoComplete}
         disabled={disabled}
         maxLength={200}
-        className="w-full min-w-0 bg-transparent text-right outline-none disabled:opacity-60"
+        className="w-full min-w-0 bg-transparent text-right outline-hidden disabled:opacity-60"
       />
     </label>
   );
