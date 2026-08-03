@@ -360,9 +360,14 @@ Implemented:
 Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
 
 - Code at `/opt/shipit`, venv at `/opt/shipit/.venv`, secrets in
-  `/opt/shipit/.env` (chmod 600, never committed).
+  `/opt/shipit/.env` (`chmod 0640`, owner `root:shipit-ops`, never committed).
+  Two identities read it: systemd itself, as root, for `EnvironmentFile=`, and
+  the `ExecStartPre=` validator, which runs as the service user — hence group
+  read rather than 0600.
 - `shipit.service` (systemd): uvicorn on `127.0.0.1:8000`,
-  `EnvironmentFile=/opt/shipit/.env`, `Restart=on-failure`.
+  `EnvironmentFile=/opt/shipit/.env`, `Restart=on-failure`. Runs as
+  `shipit-ops`, not root, with `SupplementaryGroups=shipit-runner` for the
+  sandbox socket — see `deploy/systemd/shipit.service.d/30-service-user.conf`.
 - Caddy terminates TLS for `45-10-40-169.sslip.io` (sslip.io wildcard
   DNS — no owned domain yet) and reverse-proxies to 8000. The public
   `{job_id}.preview.*` URL still needs a real domain; previews are
@@ -373,8 +378,9 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
 - `shipit-fixpack.timer` (systemd) should call
   `POST /internal/fixpack/process-paid` (bearer token `FIXPACK_PROCESS_TOKEN`
   from `.env`) on a short interval (2–5 min) to drain paid Fix Pack jobs into
-  fix PRs. Like the reaper/USDT poller, **this repo ships no unit file** —
-  wire one up. The endpoint is safe to fire on a timer even while a previous
+  fix PRs. The unit files are `deploy/systemd/shipit-fixpack.{service,timer}`
+  — install them, do not write your own (see "Installing the timers" below).
+  The endpoint is safe to fire on a timer even while a previous
   run is still working: it takes a Postgres advisory lock (a second firing
   returns `{"skipped_locked": true}`) and claims each job atomically into a
   `running` lease, so overlapping runs never open a duplicate PR. A run also
@@ -387,12 +393,113 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   backlog: each pending run re-audits its repo, diffs the findings, and DMs
   subscribers. Same durable-queue shape as `shipit-fixpack.timer` (advisory
   lock → `{"skipped_locked": true}` on overlap, atomic per-run claim, 15 min /
-  3-attempt stale-lease reaper) and **no unit file is shipped** — wire one up. A
+  3-attempt stale-lease reaper). The unit files are
+  `deploy/systemd/shipit-monitoring.{service,timer}` — install them, do not
+  write your own (see "Installing the timers" below). A
   **longer interval than Fix Pack** is right (~5 min, `OnUnitActiveSec=5min`): a
   repo is re-audited at most once per 24h and a pending run only needs to drain
   within a few minutes of a push. The push webhook only enqueues the run and
   ACKs immediately, so nothing gets audited until this timer fires (see
   `MONITORING_ASYNC_PLAN.md`).
+- `shipit-usdt-poller.timer` (systemd, 2 min) calls
+  `POST /internal/billing/poll-usdt` (bearer token `USDT_POLL_TOKEN`) to match
+  incoming TRC20 transfers against pending invoices. Unit files are
+  `deploy/systemd/shipit-usdt-poller.{service,timer}`. This endpoint 503s when
+  `USDT_TRC20_ADDRESS` is unparseable, which is a whole-feature outage that
+  looks like silence: no payment is ever confirmed, and nobody complains,
+  because a customer who paid just sees an invoice that stays `pending`.
+
+### Host provisioning — one-time, not part of a deploy
+
+These set up **host** state, so they survive every release swap and
+`deploy-production.sh` does not run them. Both are needed once when a host is
+built (or rebuilt from scratch), and both are idempotent:
+
+```bash
+# 1. The audit payload spool the API writes and the worker reads.
+sudo deploy/scripts/provision-audit-spool.sh
+
+# 2. Group-read on .env for the ExecStartPre validator.
+sudo chown root:shipit-ops /opt/shipit/.env
+sudo chmod 0640 /opt/shipit/.env
+```
+
+Step 2 must happen **before** `shipit.service` is first started with the
+`30-service-user.conf` drop-in in place. `EnvironmentFile=` is read by systemd
+as root and would not notice, but
+`ExecStartPre=… validate-production-env.py --env-file /opt/shipit/.env` runs as
+`shipit-ops` and opens the file itself — on a `0600 root:root` `.env` the unit
+fails to start.
+
+Given `--env-file`, the validator reads **only** that file and ignores its own
+process environment: the validating process is not the service, so a variable
+exported in an operator's shell is one the service will never see. Running the
+command by hand therefore gives the same verdict systemd gets. If the file
+defines no `ENVIRONMENT`, the production checks are skipped and the script says
+so on stderr rather than silently reporting success. Without `--env-file` it
+validates the ambient environment, which is what the `10-production-operations`
+drop-in relies on — there `ExecStartPre` has already inherited
+`EnvironmentFile=` from the unit.
+
+`/opt/shipit/.env` is the host's own file and is never overwritten by a deploy,
+so it can drift from `.env.example`. One such value is worth knowing about when
+rebuilding a host: production already carries `LOG_FORMAT=json`, set by hand
+after Stage 5 shipped the JSON formatter. `.env.example` now ships `json` too,
+so a `.env` seeded from it matches the running host instead of silently
+downgrading it to `text` (the code-level fallback for unset/unrecognized
+values) and breaking the `jq` runbook below.
+
+### Installing the timers
+
+`deploy-production.sh` swaps the release and restarts `shipit.service`. It does
+**not** touch systemd units, so installing them is host provisioning: done once
+per host, and again by hand whenever a unit file in `deploy/systemd/` changes.
+
+Copy from **`/srv/shipit/current`**, the symlink to the release that is
+actually running. Not from `/opt/shipit`: that is the control checkout, no
+deploy updates its working tree, and it can be many releases behind. An
+earlier version of this section said `/opt/shipit`, and on 2026-08-02 that
+silently installed stale units -- the copy succeeded, `daemon-reload`
+succeeded, and the change simply was not there. Verify afterwards rather than
+trusting the exit code; the last command below is that check.
+
+```bash
+sudo cp /srv/shipit/current/deploy/systemd/*.service \
+        /srv/shipit/current/deploy/systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now shipit-fixpack.timer shipit-monitoring.timer \
+                          shipit-usdt-poller.timer shipit-reap.timer
+systemctl list-timers --all | grep shipit
+
+# Prove that what systemd LOADED is what the release ships. `systemctl cat`
+# reads the loaded unit, so a stale copy shows up here and nowhere else; its
+# first line is the path it read, hence the tail. No output means they match.
+diff <(systemctl cat shipit-fixpack.service | tail -n +2) \
+     /srv/shipit/current/deploy/systemd/shipit-fixpack.service
+```
+
+Run the `.service` once by hand before enabling its `.timer` — a oneshot unit
+reports its exit code immediately, and a broken one is much easier to read in
+`journalctl -u <unit>` than as a silent no-op every two minutes.
+
+**Do not hand-write a unit that curls the endpoint directly.** On 2026-08-02
+this host was found running three such units under names that no longer
+matched anything in this repo, and they were worse in ways that are easy to
+miss:
+
+- one had the bearer token written into the unit file, so it sat in plaintext
+  under `/etc/systemd/system` and was echoed by `systemctl cat`;
+- another interpolated the token into a `bash -c` command line, putting it in
+  `ps aux` for every local user each time it fired;
+- both called the **public** HTTPS URL rather than `127.0.0.1:8000`, ran as
+  root, and had no `OnFailure=`, so their failures alerted no one.
+
+The shipped units avoid all of that: `call-internal-endpoint.sh` writes the
+header into a `curl` config file with mode `0600` so it never reaches `ps`,
+the token comes from `.env` in one place, and `OnFailure=shipit-alert@%n`
+means a failed run is reported. The missing alert is not academic — the USDT
+poller had been failing on every run since 2026-07-31 and nobody knew, because
+the hand-written unit had nothing to tell.
 
 ### GitHub webhook — two jobs (`pr_merged` + continuous monitoring)
 
@@ -564,12 +671,33 @@ Single VPS, single uvicorn process — so no Prometheus/Grafana/ELK/Sentry.
 Everything rides Postgres and the Telegram bot that already exist (see
 `PHASE3_OBSERVABILITY_PLAN.md`).
 
+- **Log format** is configured in one place for every process
+  (`app/logging_config.py`, called by both the API and the audit worker;
+  the fixpack/monitoring/reap/usdt timers are `curl` calls into the API, not
+  Python processes of their own). `LOG_FORMAT=json` emits one JSON object per
+  line for `journalctl -o cat | jq` — see the runbook below — and is what
+  `.env.example` now ships and what production runs; `LOG_FORMAT=text` is the
+  plain line this emitted before Stage 5 and remains the fallback the *code*
+  uses when the variable is unset or unrecognized. The JSON
+  formatter serialises an explicit allowlist of fields, so a value that nobody
+  reviewed cannot reach the log by being attached to a record. Secrets
+  matching a known shape (GitHub tokens, PEM keys, JWTs, bot tokens, DSN
+  passwords) are masked by a filter that runs in **both** formats.
+
 - **`GET /health`** (public, unauthenticated, leak-free) reports what
   actually fails here: `{"db": <bool>, "fixpack_backlog": <n|null>,
-  "oldest_paid_seconds": <secs|null>}`. `db:false` means the database is
+  "oldest_paid_seconds": <secs|null>, "github_app": <bool|null>}`. `db:false`
+  means the database is
   unset or unreachable (a live process honestly reporting degraded — still
   `200`, so a dumb uptime pinger can read it). A growing `oldest_paid_seconds`
   past the `shipit-fixpack.timer` interval means the processor isn't draining.
+  `github_app:false` means GitHub no longer accepts this deployment's App
+  credentials, so **no** Fix Pack can open a PR until `GITHUB_APP_ID` /
+  `GITHUB_APP_PRIVATE_KEY_B64` are fixed — affected jobs stay queued rather
+  than failing, and the 401 log line carries a non-secret public-key
+  fingerprint to compare against the App's registered key. `null` means App
+  auth isn't configured here at all (the PAT path), which is not a fault. The
+  verdict is cached for five minutes, so the probe stays cheap.
   Returns only booleans/coarse counts — no ids, urls, or error text — so it's
   safe to expose without a token, unlike the side-effecting `/internal/*`
   endpoints.
@@ -630,6 +758,67 @@ Everything rides Postgres and the Telegram bot that already exist (see
   times before systemd gives up for the interval, which caps the `OnFailure=`
   alerts to that same handful rather than an unbounded stream.
 
+### Debugging one `audit_id` / `job_id`
+
+Given nothing but an id from a user report, these three queries say where the
+work stopped, how many times it was tried, and what it cost. The first two work
+today against the live database and need no code change — the tables have
+carried these columns since migrations `0020_llm_usage.sql` and
+`0022_audit_jobs.sql`, nothing was reading them.
+
+**1. Where it stopped and how many attempts it took.** `state` plus
+`error_code` (written by `classify_failure` in `app/worker/main.py`) give the
+class of failure; `attempts` vs `max_attempts` says whether it was retried and
+whether it gave up:
+
+```sh
+psql "$DATABASE_URL" -c "
+  select id as job_id, state, attempts, max_attempts, error_code,
+         created_at, claimed_at, completed_at,
+         completed_at - claimed_at as duration
+    from audit_jobs
+   where audit_id = '<AUDIT_ID>' or id = '<AUDIT_ID>';"
+```
+
+Query by `id` when the audit never got far enough to exist — a job that failed
+before persisting has `audit_id = null`, and the id the client was handed at
+submission is the job's.
+
+**2. What it cost.** `llm_usage.job_id` holds the *audit* id for scan jobs (see
+`_record_llm_usage` in `app/main.py`):
+
+```sh
+psql "$DATABASE_URL" -c "
+  select model, calls, input_tokens, output_tokens, cost_usd, created_at
+    from llm_usage where job_id = '<AUDIT_ID>';"
+```
+
+Note the gap: a row is written only when the LLM stage actually spent tokens
+*and* the audit persisted, so a failed audit's spend is not recorded anywhere
+yet.
+
+**3. Every log line for that work, across processes.** Only with
+`LOG_FORMAT=json` set (see `.env.example`); in the default `text` mode use
+`journalctl --grep` instead.
+
+```sh
+journalctl -u shipit -u shipit-audit-worker --since '-24h' -o cat \
+  | jq -c 'select(.audit_id=="<AUDIT_ID>" or .job_id=="<JOB_ID>")
+           | {ts, level, service, step, duration_ms, error_code, msg}'
+```
+
+`-o cat` prints the bare `MESSAGE` field with no syslog prefix, which is what
+keeps the stream valid JSON for `jq`. Both units are listed because a
+submission crosses processes — the API enqueues, the worker runs it — and the
+handoff happens through the `audit_jobs` table, so querying one unit shows half
+the story.
+
+Correlation ids only appear on lines emitted underneath a set log context. All
+four places that own a unit of work set one (`app/log_context.py` names them):
+the HTTP middleware, the audit worker's claim loop, the Fix Pack processor and
+the monitoring drain. A line logged outside any of them — module import, an
+unhandled path — has no ids, so the filter above won't match it.
+
 ### CORS (browser frontend on Vercel)
 
 The API talks to a separately-deployed Next.js frontend, so browser
@@ -655,6 +844,33 @@ occur. Allowed methods are `GET, POST` (the only methods the API uses);
 allowed request headers are `Authorization` and `Content-Type`.
 
 ## Known gaps (honest list, post-deploy)
+
+- **Every foreign key is `ON DELETE NO ACTION`, and that is deliberate.**
+  Reviewed 2026-08-02 across all ten of them: `audit_jobs.{audit_id,
+  account_id}`, `fixpack_jobs.audit_id`, `fix_outcomes.{audit_id,
+  fixpack_job_id}`, `llm_usage.{account_id,audit_job_id}`,
+  `payments.{account_id,audit_id}`, `subscriptions.account_id`.
+
+  `NO ACTION` does not produce orphans — a foreign key makes orphans
+  impossible by definition. It refuses a delete that would create one, which
+  is the fail-safe direction. Nothing in the application deletes a parent row:
+  there is no account-deletion endpoint, no retention job, no GDPR erasure
+  path, and no `delete from` anywhere outside `scripts/verify_db_locally.py`
+  (which removes its own fixtures, children first, in the order the
+  constraints require).
+
+  Adding `ON DELETE CASCADE` would therefore fix nothing that is broken and
+  would introduce something that is not: four of these keys reach money
+  (`payments.account_id`, `payments.audit_id`, `subscriptions.account_id`,
+  `llm_usage.account_id`). Cascading them means deleting an account silently
+  takes its payment history with it, where today the database would refuse and
+  make a human stop and think. `SET NULL` is gentler but still changes what
+  the data means: a payment with no owner is money received that no longer
+  appears in any account's history.
+
+  Decide the semantics when there is a requirement to decide them against — an
+  erasure request, or a retention policy for old audits. Choosing now would be
+  guessing, and the guess is recorded in the `payments` table.
 
 - `POST /v1/audits` intake now accepts a public GitHub `repo_url` as an
   alternative to a zip upload (see above). Still NOT supported by design:
@@ -698,6 +914,22 @@ allowed request headers are `Authorization` and `Content-Type`.
   file *and* renamed to look like a placeholder would be under-reported.
 - LLM client surfaces only the HTTP status on provider errors; log the
   response body for 4xx to make the next 400 diagnosable without curl.
+- Billing has no transactions anywhere (`app/db.py` is 100% autocommit).
+  `grant_fixpack`'s permanent-money-loss window is now closed without one: the
+  two writes are reordered (`create_paid` before `mark_completed_fixpack`), and
+  `create_paid` is made idempotent per audit via a partial unique index
+  (`migrations/0025`, `ON CONFLICT ... RETURNING (xmax = 0) AS inserted`), so a
+  crash between the two leaves the payment `pending` (retryable) instead of
+  `completed` with no job. `mark_completed`/`mark_completed_fixpack` also picked
+  up a compare-and-set gate (`WHERE status = 'pending' OR (status = 'completed'
+  AND external_ref = %s)`), so a retried webhook or a transfer seen on two USDT
+  polls is idempotent instead of silently overwriting `account_id`. Still open:
+  the USDT branch of `grant_pro_tier` has one narrower window left — a crash
+  between that CAS succeeding and the account being created leaves the payment
+  `completed` with no account and no key, and closing it needs an actual
+  transaction (there isn't one anywhere in this codebase yet). The PayPal SALE
+  webhook replay (a redelivered charge extending a subscription for free) and
+  the Telegram `grant_pro_tier` branch aren't touched by this either — next up.
 
 ## Dev
 

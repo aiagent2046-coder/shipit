@@ -45,6 +45,7 @@ import time
 import httpx
 
 from app.billing import telegram_stars
+from app.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ async def notify_operator(
     throttle_seconds: float = DEFAULT_THROTTLE_SECONDS,
     transport: httpx.BaseTransport | None = None,
     now: float | None = None,
+    reply_markup: dict | None = None,
 ) -> bool:
     """Push one short alert to the operator chat. Returns True only if a
     message was actually sent; False for every quiet outcome (not
@@ -91,7 +93,12 @@ async def notify_operator(
 
     `dedupe_key` groups alerts for throttling (defaults to the text itself);
     give a stable key like "fixpack-failed:<job_id>" so distinct events
-    don't share a window. `transport`/`now` are injection points for tests."""
+    don't share a window. `transport`/`now` are injection points for tests.
+
+    `reply_markup` attaches an inline keyboard, which turns an alert into
+    something the operator can act on in one tap (bank_transfer's confirm
+    button). Still best-effort: a keyboard that fails to send is a lost
+    notification, not a lost payment — the same invoice can be re-notified."""
     token = telegram_stars.bot_token_from_env()
     chat_id = admin_chat_id_from_env()
     if not token or not chat_id:
@@ -107,7 +114,8 @@ async def notify_operator(
 
     try:
         await telegram_stars.send_message(
-            chat_id, text, token=token, transport=transport
+            chat_id, text, token=token, transport=transport,
+            reply_markup=reply_markup,
         )
         return True
     except Exception:
@@ -124,6 +132,12 @@ def _main(argv: list[str]) -> int:
     OnFailure= unit (service crash/restart). Message text (Python-formatted
     by the caller) is joined from argv; exits 0 whether or not a message was
     sent, so it never turns a service failure into a failing OnFailure unit."""
+    # The third process entry point (shipit-alert@.service runs `python -m
+    # app.alerts`), and the only one that was not configuring logging: without
+    # this the line below goes to the root logger's lastResort handler, which
+    # drops anything under WARNING, so the one record proving the OnFailure
+    # hook ran never reached the journal.
+    configure_logging()
     text = " ".join(argv[1:]).strip() or "shipit: service OnFailure alert"
     sent = asyncio.run(notify_operator(text, dedupe_key="systemd-onfailure"))
     logger.info("app.alerts one-shot alert sent=%s", sent)

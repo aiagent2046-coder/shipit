@@ -1,0 +1,100 @@
+# systemd unit for the ShipIt sandbox-runner (Stage-3 Variant A).
+#
+# Runs as the unprivileged `shipit-runner` user from its OWN checkout
+# (/opt/shipit-runner) with its OWN reduced EnvironmentFile that holds NO prod
+# secrets (no DATABASE_URL, no billing/pepper/Telegram/admin tokens). It reaches
+# dockerd ONLY through the socket-proxy (DOCKER_HOST below) — `shipit-runner` is
+# deliberately NOT in the `docker` group.
+#
+# Install:
+#   cp deploy/sandbox-runner/sandbox-runner.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now sandbox-runner
+# See deploy/sandbox-runner/README.md for the full checklist.
+
+[Unit]
+Description=ShipIt sandbox-runner (out-of-process docker executor, Variant A)
+After=network.target docker.service
+Wants=docker.service
+# The proxy must be up first; it is a docker compose service, so we only
+# order after docker itself and health-gate at the app level (/healthz).
+
+[Service]
+Type=simple
+User=shipit-runner
+Group=shipit-runner
+
+# NOT in the docker group by design — dockerd is reached via the proxy only.
+DevicePolicy=closed
+
+WorkingDirectory=/opt/shipit-runner
+EnvironmentFile=/opt/shipit-runner/.env.runner
+# Talk to the docker-socket-proxy, never the real socket.
+Environment=DOCKER_HOST=tcp://127.0.0.1:2375
+# Classic builder: the proxy has the BuildKit grpc session endpoint disabled,
+# and BuildKit needs it. Force the classic builder so `docker build` works.
+Environment=DOCKER_BUILDKIT=0
+
+# The runner listens on a Unix socket in /run/shipit-runner, created by systemd
+# as RuntimeDirectory. Access to the socket is gated by the DIRECTORY mode
+# 0710 (owner shipit-runner + group shipit-runner may traverse; world cannot),
+# NOT by the socket file's own mode: uvicorn force-chmods a self-created UDS to
+# 0666, so the file bits are not a control here. shipit.service runs as
+# shipit-ops with SupplementaryGroups=shipit-runner (see
+# deploy/systemd/shipit.service.d/30-service-user.conf), so the backend
+# traverses 0710 by group membership -- it used to run as root and traverse it
+# regardless, which is no longer true. The token is the second line of
+# defence (O5).
+#
+# ⚠️  DO NOT add a process-global `UMask=` here. UMask in a systemd unit applies
+#     to EVERY file operation the process makes, not just the socket. The runner
+#     calls tempfile.mkdtemp() (mode 0700) to build/extract untrusted client
+#     zips; a umask like 0117 turns that into 0600 — a directory WITHOUT its
+#     execute (search) bit, so the runner cannot create files inside its own
+#     build dir and every deploy/fixpack run dies with EACCES. If you need to
+#     tighten the socket, do it via the runtime-dir mode above (or a systemd
+#     .socket unit with SocketMode=), never via UMask. Regression-guarded by
+#     scripts/check_runner_build_dir_perms.py and tests/test_runner_service_unit.py.
+RuntimeDirectory=shipit-runner
+RuntimeDirectoryMode=0710
+ExecStart=/opt/shipit-runner/.venv/bin/uvicorn app.runner.main:app \
+    --uds /run/shipit-runner/sandbox.sock \
+    --workers 1
+Restart=on-failure
+RestartSec=2
+
+# ── Hardening: the runner handles untrusted client code; keep its own
+#    footprint minimal even though the container flags in sandbox.py are the
+#    real isolation boundary. ──────────────────────────────────────────────
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# ── Writable scratch. The runner calls tempfile.mkdtemp() to extract each
+#    client zip, then bind-mounts that dir into the build/test containers
+#    (`docker run -v <dir>:/work`). systemd creates StateDirectory below on every
+#    start — owned by this service's user, mode 0700, and OUTSIDE /tmp — and we
+#    point TMPDIR at it so every mkdtemp lands there.
+#
+# ⚠️  The scratch dir MUST live outside /tmp, and TMPDIR must keep it there.
+#     PrivateTmp=true (above) gives the runner a PRIVATE /tmp in its OWN mount
+#     namespace, invisible to dockerd (which runs in the host namespace). A path
+#     under /tmp therefore does not exist as far as dockerd is concerned, so
+#     `docker run -v /tmp/…:/work` silently mounts an EMPTY /work (docker
+#     auto-creates the missing bind source) and every fixpack install/test fails
+#     with the requirements file "missing" — even though the file is right there
+#     in the runner's own /tmp. Do NOT remove TMPDIR or repoint it at /tmp while
+#     PrivateTmp is on. Regression-guarded by
+#     scripts/check_runner_bindmount_namespace.py.
+#     (deploy-pack is immune: it streams a tar build context to `docker build`,
+#     which never asks dockerd to resolve a host path — only fixpack's -v does.)
+StateDirectory=shipit-runner
+Environment=TMPDIR=/var/lib/shipit-runner
+ReadWritePaths=/run/shipit-runner
+
+[Install]
+WantedBy=multi-user.target

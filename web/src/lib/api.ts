@@ -3,7 +3,13 @@
 
 import type {
   Account,
+  AuditJobStatus,
   AuditResult,
+  BankTransferInvoice,
+  BankTransferPaidResult,
+  BankTransferStatus,
+  BillingDetails,
+  CreateAuditResponse,
   FixpackStatus,
   FixpackUsdtInvoice,
   InstallationStatus,
@@ -94,10 +100,14 @@ export async function getAccount(apiKey?: string | null): Promise<Account> {
   return parse<Account>(res);
 }
 
+// Submits an audit. The scan itself runs in the backend's audit worker, so the
+// normal answer is an AuditJobAccepted to poll with getAuditJob; the exception
+// is a content-cache hit, which comes back as a finished AuditResult. Use
+// isAuditJobAccepted to tell them apart.
 export async function createAudit(
   input: { repoUrl?: string; file?: File },
   apiKey?: string | null,
-): Promise<AuditResult> {
+): Promise<CreateAuditResponse> {
   const form = new FormData();
   if (input.file) {
     form.append("archive", input.file);
@@ -109,7 +119,21 @@ export async function createAudit(
     headers: { ...authHeaders(apiKey) },
     body: form,
   });
-  return parse<AuditResult>(res);
+  return parse<CreateAuditResponse>(res);
+}
+
+// Poll one queued audit. Gated by the JOB's access token (from createAudit),
+// which is not the same secret as the finished audit's — the response carries
+// that one separately once the job succeeds.
+export async function getAuditJob(
+  jobId: string,
+  token?: string | null,
+): Promise<AuditJobStatus> {
+  const q = token ? `?token=${encodeURIComponent(token)}` : "";
+  const res = await request(
+    `${API_BASE_URL}/v1/audit-jobs/${encodeURIComponent(jobId)}${q}`,
+  );
+  return parse<AuditJobStatus>(res);
 }
 
 // The audit and its report are ownership-gated by a per-row access token
@@ -155,6 +179,77 @@ export async function createFixpackUsdtInvoice(
     { method: "POST" },
   );
   return parse<FixpackUsdtInvoice>(res);
+}
+
+// Who the payer says they are. Both required by the backend: a card transfer
+// carries no reference field, so the payer's name and email are the only thing
+// the operator can match an incoming transfer against.
+export interface PayerContact {
+  payer_name: string;
+  payer_email: string;
+}
+
+function payerBody(payer: PayerContact): RequestInit {
+  return {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      payer_name: payer.payer_name.trim(),
+      payer_email: payer.payer_email.trim(),
+    }),
+  };
+}
+
+// The published payment requisites for the footer. Public and uncached-by-us:
+// the backend env is the single source, so a rotated card takes effect on the
+// next page load with no rebuild.
+export async function getBillingDetails(): Promise<BillingDetails> {
+  const res = await request(`${API_BASE_URL}/v1/billing/details`);
+  return parse<BillingDetails>(res);
+}
+
+// Open a bank-transfer invoice for Pro. The response carries the card number
+// to pay and the reference code that identifies the order.
+export async function createBankTransferInvoice(
+  payer: PayerContact,
+): Promise<BankTransferInvoice> {
+  const res = await request(`${API_BASE_URL}/v1/billing/bank-transfer/pro`, {
+    method: "POST",
+    ...payerBody(payer),
+  });
+  return parse<BankTransferInvoice>(res);
+}
+
+// Same, scoped to one audit's Fix Pack. Polled with getBankTransferInvoice.
+export async function createFixpackBankTransferInvoice(
+  auditId: string,
+  payer: PayerContact,
+): Promise<BankTransferInvoice> {
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/bank-transfer`,
+    { method: "POST", ...payerBody(payer) },
+  );
+  return parse<BankTransferInvoice>(res);
+}
+
+export async function getBankTransferInvoice(
+  reference: string,
+): Promise<BankTransferStatus> {
+  const res = await request(
+    `${API_BASE_URL}/v1/billing/bank-transfer/${encodeURIComponent(reference)}`,
+  );
+  return parse<BankTransferStatus>(res);
+}
+
+// "I've paid" — pages the operator to go look at their statement. Grants
+// nothing on its own; the invoice stays pending until a human confirms.
+export async function reportBankTransferPaid(
+  reference: string,
+): Promise<BankTransferPaidResult> {
+  const res = await request(
+    `${API_BASE_URL}/v1/billing/bank-transfer/${encodeURIComponent(reference)}/paid`,
+    { method: "POST" },
+  );
+  return parse<BankTransferPaidResult>(res);
 }
 
 export async function getFixpackStatus(auditId: string): Promise<FixpackStatus> {

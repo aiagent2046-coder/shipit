@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly ShipIt off-site backup maintenance
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=shipit-db-offsite-maintenance.service
+
+[Install]
+WantedBy=timers.target

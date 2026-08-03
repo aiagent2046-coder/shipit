@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""Fail when newly added Git lines contain strong secret signatures."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from collections.abc import Sequence
+
+
+PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
+    (
+        "private-key-header",
+        re.compile(
+            rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
+        ),
+    ),
+    (
+        "aws-access-key",
+        re.compile(rb"AKIA[0-9A-Z]{16}"),
+    ),
+    (
+        "github-token",
+        re.compile(rb"gh[pousr]_[A-Za-z0-9_]{36,}"),
+    ),
+    (
+        "github-fine-grained-token",
+        re.compile(rb"github_pat_[A-Za-z0-9_]{70,}"),
+    ),
+    (
+        "openai-project-key",
+        re.compile(rb"sk-(?:proj|svcacct)-[A-Za-z0-9_-]{32,}"),
+    ),
+    (
+        # Direct Anthropic fallback provider (ANTHROPIC_API_KEY, sent as the
+        # x-api-key header in app/llm/client.py). Format mirrors the project's
+        # own audit scanner, app/scan/secrets.py.
+        "anthropic-api-key",
+        re.compile(rb"sk-ant-api03-[A-Za-z0-9_-]{20,}"),
+    ),
+    (
+        # Primary LLM provider (AITUNNEL_API_KEY). The repo does not pin the
+        # key format anywhere, so this matches AITunnel's documented public
+        # "sk-aitunnel-" prefix; the prefix is specific enough to avoid false
+        # positives on ordinary code.
+        "aitunnel-api-key",
+        re.compile(rb"sk-aitunnel-[A-Za-z0-9_-]{20,}"),
+    ),
+    (
+        # Telegram bot token (TELEGRAM_BOT_TOKEN): "<8-10 digits>:<35 chars>".
+        # Boundaries keep it off ordinary "number:string" code: the leading
+        # look-behind rejects a longer digit run and the trailing look-ahead
+        # pins the secret half to exactly 35 characters. Mirrors the length
+        # bounds used in app/scan/secrets.py.
+        "telegram-bot-token",
+        re.compile(
+            rb"(?<![0-9A-Za-z_-])[0-9]{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])"
+        ),
+    ),
+    (
+        # Connection string carrying an EMBEDDED password
+        # (postgres://user:password@host, e.g. a Supabase pooler URL). Requires
+        # a non-empty "user:password@" userinfo, so a passwordless URL
+        # (postgres://user@host) or the bare DATABASE_URL variable name is not
+        # flagged -- only a real leaked password is.
+        "postgres-url-password",
+        re.compile(rb"postgres(?:ql)?://[^:/?#@\s]+:[^@/?#\s]+@"),
+    ),
+    (
+        # A long hex string assigned to a secret-shaped NAME. Every token this
+        # project mints follows the `openssl rand -hex 32` convention, which
+        # has no prefix to key on -- so unlike every pattern above, this one
+        # cannot recognise the value and keys on the assignment instead.
+        #
+        # Added because it was missed for real: on 2026-08-02 a live
+        # USDT_POLL_TOKEN was committed into tests/test_billing_usdt.py,
+        # copied out of a journal line while writing a regression test, and CI
+        # passed. None of the patterns above describe a bare hex string.
+        #
+        # The name requirement is what keeps it quiet. A bare 32+ hex literal
+        # matches SHA-256 digests, checksums and fixture ids all over a
+        # codebase; requiring `something_secretish = "<hex>"` narrowed it to
+        # exactly one hit across this repo -- the real leak. Test fixtures
+        # should not look like secrets anyway, and the convention here is an
+        # obviously-fake value such as "deadbeef" * 8.
+        "hex-secret-assignment",
+        re.compile(
+            rb"(?i)(?:token|secret|key|pepper|password)\w*\s*[=:]\s*"
+            rb"[\"'][0-9a-f]{32,}[\"']"
+        ),
+    ),
+)
+
+
+# Files that BY DESIGN carry secret-format samples: the scanner itself (every
+# pattern above literally spells out a secret prefix), its test suite (a
+# positive fixture per pattern), and the log-redaction test suite (a fake secret
+# of each shape, because a redaction test that carries no secret-shaped string
+# proves nothing). Scanning them flags the scanner against its own definitions
+# on every change that touches them, so they are excluded here -- the
+# self-exclusion that secret scanners (gitleaks, detect-secrets) carry for their
+# own rule/fixture files. Kept next to PATTERNS so a pattern author sees the
+# allowlist in the same place they add a signature.
+#
+# Excluded WHOLE, not line-filtered: the entire purpose of these files is to
+# enumerate secret formats, so there is no "real code" in them worth scanning
+# for the same signatures. Detection is still tested --
+# tests/test_scan_added_secrets.py exercises PATTERNS directly in-process (it
+# imports this module and calls pattern.search on synthetic blobs), NOT by
+# asking this script to git-diff-scan a file, so the exclusion does not weaken
+# the tests.
+# A line carrying `scan-allow: <reason>` is not scanned.
+#
+# EXCLUDED_PATHS below is a whole-file hammer, and only three files earn it.
+# But secret-SHAPED fixtures are by design in at least six more --
+# tests/test_secrets.py, test_fixpack_generate.py, test_fixpack_process_
+# endpoint.py, test_fix_outcomes.py, test_observability.py, test_db.py -- and
+# those are the tests of the product's own secret scanner, which is to say the
+# files people ADD fixtures to. Today they pass only because their fixtures
+# arrived in one old commit and CI reads a pull request's diff; the first
+# person to add a fixture gets a red build on correct code, and the obvious
+# next move is to mute the check.
+#
+# A line marker rather than six more excluded files: excluding a whole test
+# module also stops scanning the real code in it, and the exemption becomes
+# invisible at the point it applies. On the line, it shows up in the diff,
+# right where a reviewer is already looking.
+#
+# The reason is required -- `scan-allow:` with nothing after it does not
+# match, so the marker cannot be used as a silent mute. Suppressed lines are
+# counted in the output for the same reason.
+ALLOW_MARKER = re.compile(rb"scan-allow:\s*\S")
+
+
+EXCLUDED_PATHS: frozenset[str] = frozenset(
+    {
+        ".github/scripts/scan-added-secrets.py",
+        "tests/test_scan_added_secrets.py",
+        "tests/test_logging_config.py",
+    }
+)
+
+
+def run_git(arguments: Sequence[str]) -> bytes:
+    completed = subprocess.run(
+        ["git", *arguments],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    if completed.returncode != 0:
+        message = completed.stderr.decode(
+            "utf-8",
+            errors="replace",
+        ).strip()
+
+        raise RuntimeError(
+            f"git {' '.join(arguments)} failed: {message}"
+        )
+
+    return completed.stdout
+
+
+def changed_files(base: str, head: str) -> list[str]:
+    output = run_git(
+        [
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=ACMR",
+            base,
+            head,
+            "--",
+        ]
+    )
+
+    return [
+        os.fsdecode(raw_path)
+        for raw_path in output.split(b"\0")
+        if raw_path
+    ]
+
+
+def added_lines(base: str, head: str, path: str) -> tuple[bytes, int]:
+    """The added lines of one file, and how many were skipped by a marker.
+
+    The count is returned rather than discarded so the run can say out loud
+    that something was exempted -- an allowlist nobody can see is one nobody
+    reviews.
+    """
+    output = run_git(
+        [
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            base,
+            head,
+            "--",
+            path,
+        ]
+    )
+
+    collected: list[bytes] = []
+    suppressed = 0
+    inside_hunk = False
+
+    for line in output.splitlines():
+        if line.startswith(b"diff --git "):
+            inside_hunk = False
+            continue
+
+        if line.startswith(b"@@"):
+            inside_hunk = True
+            continue
+
+        if inside_hunk and line.startswith(b"+"):
+            added = line[1:]
+            if ALLOW_MARKER.search(added):
+                suppressed += 1
+                continue
+            collected.append(added)
+
+    return b"\n".join(collected), suppressed
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("base")
+    parser.add_argument("head")
+    arguments = parser.parse_args()
+
+    files = [
+        path
+        for path in changed_files(arguments.base, arguments.head)
+        if path not in EXCLUDED_PATHS
+    ]
+    findings: set[tuple[str, str]] = set()
+
+    suppressed_total = 0
+
+    for path in files:
+        content, suppressed = added_lines(
+            arguments.base,
+            arguments.head,
+            path,
+        )
+        suppressed_total += suppressed
+
+        for signature_name, pattern in PATTERNS:
+            if pattern.search(content):
+                findings.add((path, signature_name))
+
+    note = (
+        f" ({suppressed_total} line(s) exempted by a scan-allow marker)"
+        if suppressed_total
+        else ""
+    )
+
+    if findings:
+        for path, signature_name in sorted(findings):
+            print(
+                "Potential secret signature added in "
+                f"{path} ({signature_name})",
+                file=sys.stderr,
+            )
+
+        # Reported on the failing path too: a run that both flagged something
+        # and exempted something else is exactly when a reviewer wants to know
+        # about the exemption.
+        if note:
+            print(f"Note:{note}", file=sys.stderr)
+
+        # The escape hatch is printed at the moment someone needs it. A red
+        # build on a deliberate fixture -- the tests of this project's own
+        # secret scanner are full of them -- otherwise invites the author to
+        # go looking for a way to switch the check off, and there is a worse
+        # one available.
+        print(
+            "If a flagged line is a deliberate fixture, end it with "
+            "`scan-allow: <reason>`; the reason is required.",
+            file=sys.stderr,
+        )
+
+        return 1
+
+    print(
+        f"Scanned added lines in {len(files)} changed files; "
+        f"no strong secret signatures detected{note}."
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except RuntimeError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(2) from error

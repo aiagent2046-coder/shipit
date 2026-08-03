@@ -3,15 +3,16 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createAudit, ApiError } from "@/lib/api";
+import { isAuditJobAccepted } from "@/lib/types";
 import { useApiKey } from "./providers";
 import { Spinner } from "./Spinner";
 
 type Mode = "url" | "file";
 
-// sessionStorage handoff: the POST completes inline (can take up to ~2 min)
-// and returns the full result, so we stash it for the results page to show
-// immediately instead of re-fetching. Exported so the results page reads
-// the same key.
+// sessionStorage handoff for the one response that still carries a whole
+// result: a content-cache hit. Stashing it lets the results page render
+// immediately instead of re-fetching what we already have. Exported so the
+// results page reads the same key.
 export const RESULT_PREFIX = "shipit-audit-";
 
 export function AuditForm() {
@@ -41,6 +42,17 @@ export function AuditForm() {
         mode === "url" ? { repoUrl: repoUrl.trim() } : { file: file! },
         apiKey,
       );
+      if (isAuditJobAccepted(result)) {
+        // The scan is queued for the worker. The waiting page owns the poll,
+        // so the URL survives a refresh and the job is not lost with this tab.
+        const q = result.access_token
+          ? `?token=${encodeURIComponent(result.access_token)}`
+          : "";
+        router.push(
+          `/audit/pending/${encodeURIComponent(result.job_id)}${q}`,
+        );
+        return;
+      }
       try {
         sessionStorage.setItem(
           `${RESULT_PREFIX}${result.audit_id}`,
@@ -141,15 +153,15 @@ export function AuditForm() {
       >
         {submitting ? (
           <>
-            <Spinner /> Auditing… this can take up to ~2 minutes
+            <Spinner /> Submitting…
           </>
         ) : (
           "Audit my app"
         )}
       </button>
       <p className="mt-2 text-center text-xs text-muted">
-        Public GitHub repos only. The scan runs synchronously — keep this tab
-        open until it finishes.
+        Public GitHub repos only. The scan runs in the background — you get a
+        link you can come back to.
       </p>
     </form>
   );

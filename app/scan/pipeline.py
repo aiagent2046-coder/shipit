@@ -75,8 +75,9 @@ def content_digest(data: bytes) -> str:
     return h.hexdigest()
 
 
-def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
-    """Returns {"score": {...}, "findings": [...], "llm": <stats | status>}.
+def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
+             llm_skip_reason: str | None = None) -> dict:
+    """Returns {"score", "findings", "llm": <stats | status>, "llm_usage"}.
 
     `llm` is a stats dict when the stage ran, and also a stats-shaped dict
     (all-zero, with `skipped_reason` set) when it never ran because no
@@ -84,15 +85,32 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
     a real run that matched no rubric-relevant files (prompts=0,
     skipped_reason=None). A hard provider failure stays the honest string
     "failed: <reason>".
+
+    `llm_skip_reason`, when set by the caller (e.g. "daily_spend_cap"), forces
+    the LLM stage off exactly as if no providers were configured: the scan
+    degrades to static-only with that reason recorded, and calls=0 means no
+    llm_usage row is written. This is the soft-degrade path an anon daily
+    spend cap uses -- a backstop that stops spending, not an error to the user.
+
+    `llm` and `llm_usage` are deliberately two different things. `llm` is the
+    diagnostic the user and the report see, and on a provider failure it is the
+    honest string "failed: ...". `llm_usage` is the accounting fact: the tokens
+    that were actually bought, which on that same failure are whatever the calls
+    made BEFORE it cost -- money the provider will bill regardless of the scan
+    being useless. Reading spend off `llm` is what let a partial scan's cost
+    disappear; the accounting path reads this key instead.
     """
     static = run_static_scan(io.BytesIO(data))
     findings = static["findings"]
-    llm_summary: object = vars(LLMScanStats(skipped_reason="no_providers_configured"))
+    llm_summary: object = vars(LLMScanStats(
+        skipped_reason=llm_skip_reason or "no_providers_configured"))
+    # Owned here, not by run_llm_scan, so its contents survive an LLMError.
+    spend = LLMScanStats()
 
-    if llm_client.providers:
+    if llm_client.providers and llm_skip_reason is None:
         try:
             llm_findings, stats = run_llm_scan(io.BytesIO(data), llm_client,
-                                               passes=llm_passes)
+                                               passes=llm_passes, stats=spend)
         except LLMError as exc:
             # A provider failure mid-audit silently degrades the score to
             # static-only (a real 402-mid-run once turned a 0.0 into a 9.2).
@@ -122,4 +140,5 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1) -> dict:
         },
         "findings": findings,
         "llm": llm_summary,
+        "llm_usage": vars(spend),
     }

@@ -16,15 +16,21 @@ import zipfile
 from fastapi.testclient import TestClient
 
 import app.deploypack.pipeline as pipeline_mod
-import app.deploypack.sandbox as sandbox_mod
 import app.main as main_mod
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.deploypack.github_app import GitHubAppError
 from app.deploypack.preview import PreviewResult
 from app.deploypack.sandbox import SandboxResult
 from app.main import app, get_pr_opener, get_preview_registry
+from app.sandbox_client import SandboxRunnerUnavailable
 
 client = TestClient(app)
+
+
+def _runner_unavailable(*args, **kwargs):
+    raise SandboxRunnerUnavailable(
+        "sandbox-runner unreachable (deterministic pytest isolation)"
+    )
 
 FASTAPI_ZIP = {
     "requirements.txt": b"fastapi\nuvicorn\n",
@@ -94,20 +100,28 @@ class FakePreviewRegistry:
         return 0
 
 
-def test_fastapi_pack_generated_but_unverified_without_docker(monkeypatch):
-    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
+def test_fastapi_pack_generated_but_unverified_without_runner(monkeypatch):
+    # Variant A: the backend verifies over HTTP via the sandbox-runner. When
+    # that runner is unreachable, verification can't happen — the pipeline
+    # degrades to verified=None (an environment gap, not a verdict) and still
+    # returns the generated Pack. Same soft-fail principle as the old
+    # "docker binary not found" path this replaced.
+    def _unavailable(*a, **k):
+        raise SandboxRunnerUnavailable("sandbox-runner unreachable (test)")
+
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", _unavailable)
     resp = post_fixpack(FASTAPI_ZIP)
     assert resp.status_code == 202
     body = resp.json()
     assert body["stack"] == "fastapi"
     assert body["verified"] is None
-    assert "docker binary not found" in body["detail"]
+    assert "sandbox runner unavailable" in body["detail"]
     assert "Dockerfile" in body["files"]
     assert "docker-compose.yml" in body["files"]
 
 
 def test_vite_react_pack_generated_but_unverified_without_docker(monkeypatch):
-    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", _runner_unavailable)
     resp = post_fixpack(VITE_ZIP)
     assert resp.status_code == 202
     body = resp.json()
@@ -128,7 +142,7 @@ def test_nextjs_without_output_standalone_is_refused():
 
 
 def test_nextjs_standalone_pack_generated_but_unverified_without_docker(monkeypatch):
-    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", _runner_unavailable)
     resp = post_fixpack(NEXTJS_ZIP)
     assert resp.status_code == 202
     body = resp.json()
@@ -152,8 +166,8 @@ def test_verified_true_when_sandbox_actually_succeeds(monkeypatch):
 
 
 def test_deliver_to_skipped_when_not_verified(monkeypatch):
-    # forced no-docker path, so verified=None
-    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
+    # forced unavailable-runner path, so verified=None
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", _runner_unavailable)
     resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app")
     assert resp.status_code == 202
     body = resp.json()
@@ -282,12 +296,17 @@ def test_want_preview_true_returns_local_url_when_verified():
     assert fake.reap_calls == 1  # reaped before starting a new one
 
 
-def test_want_preview_true_but_not_verified_returns_preview_none(monkeypatch):
-    # forced no-docker path: verify fails, so preview is never started
-    monkeypatch.setattr(sandbox_mod, "docker_available", lambda: False)
-    resp = post_fixpack(FASTAPI_ZIP, want_preview=True)
+def test_want_preview_true_but_not_verified_returns_preview_none():
+    # The preview registry ran verify but the app didn't boot (ok=False), so
+    # no container is kept alive: verified=False and preview=None.
+    registry = FakePreviewRegistry(PreviewResult(ok=False, detail="boot failed"))
+    app.dependency_overrides[get_preview_registry] = lambda: registry
+    try:
+        resp = post_fixpack(FASTAPI_ZIP, want_preview=True)
+    finally:
+        app.dependency_overrides.pop(get_preview_registry, None)
     body = resp.json()
-    assert body["verified"] is None
+    assert body["verified"] is False
     assert body["preview"] is None
 
 

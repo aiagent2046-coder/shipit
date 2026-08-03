@@ -9,7 +9,9 @@ since the LLM call alone can take up to ~2 minutes.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import functools
 import hashlib
 import hmac
 import io
@@ -17,15 +19,21 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.alerts import notify_operator
+from app.audit_spool import SpoolFull, cleanup_staged_archive, stage_archive
 from app.accounts import (
     TIER_FREE,
     entitlements_dict,
@@ -33,32 +41,40 @@ from app.accounts import (
     resolve_account,
     validate_api_key_pepper_configured,
 )
-from app.billing import paypal, telegram_stars, usdt_trc20
+from app.billing import bank_transfer, paypal, telegram_stars, usdt_trc20
 from app.db import (
     AccountRepository,
+    AuditJobRepository,
     AuditRepository,
     FixOutcomeRepository,
     FixpackJobRepository,
+    LlmUsageRepository,
     MonitoringRunRepository,
     PaymentRepository,
     ProcessorLockBusy,
+    STALE_LEASE_DETAIL_PREFIX,
+    ServiceFlagsRepository,
     SubscriptionRepository,
     database_url_from_env,
     fixpack_processor_lock,
     monitoring_processor_lock,
+    usdt_poll_lock,
 )
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.github_app import (
+    GitHubAppAuthError,
     GitHubAppError,
+    app_auth_ok,
     app_credentials_from_env,
     build_install_url,
     installation_exists_for_repo,
     installation_token_for_repo,
 )
-from app.deploypack.pipeline import run_deploy_pack
-from app.deploypack.preview import PreviewRegistry, reconcile_previews
+from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
+from app.deploypack.preview import PreviewRegistry
 from app.fixpack.generate import (
+    has_auto_fixable_findings,
     build_fixpack_plan,
     render_pr_body as render_fixpack_pr_body,
     render_pr_title as render_fixpack_pr_title,
@@ -66,7 +82,12 @@ from app.fixpack.generate import (
 from app.fixpack.semantic_check import run_semantic_check
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
+from app import sandbox_client
+from app.sandbox_client import SandboxRunnerUnavailable
 from app.llm.client import LLMClient
+from app.llm import pricing
+from app.log_context import log_context, set_log_context
+from app.logging_config import configure_logging
 from app.monitor import normalize_repo_full_name, repo_url_from_full_name
 from app.monitor.diff import new_high_severity_findings
 from app.report.html import render_report
@@ -79,28 +100,6 @@ from app.ingest.validators import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-_VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
-
-
-def configure_logging() -> None:
-    """Make log level/format explicit instead of inherited-by-accident.
-
-    Until now nothing called basicConfig, so app loggers rode on Python's
-    last-resort handler (WARNING-only, bare format) — INFO lines never
-    showed and there was no timestamp/level/name prefix to grep in
-    journalctl. This sets one plain-text (NOT JSON — deliberate at this log
-    volume) format and an env-overridable level. basicConfig is a no-op if a
-    handler is already installed, so it never fights uvicorn's own loggers or
-    double-configures across test app instances."""
-    level = (os.environ.get("LOG_LEVEL") or "INFO").upper()
-    if level not in _VALID_LOG_LEVELS:
-        level = "INFO"
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
 
 
 @asynccontextmanager
@@ -173,6 +172,13 @@ async def add_security_headers(request: Request, call_next):
     deliberately NOT set globally — it would break Swagger UI (/docs) and
     ReDoc (/redoc), which load CDN JS and use inline scripts. CSP is scoped
     per-route to the self-contained HTML audit report instead.
+
+    Cache-Control: private, no-store is also global. Every response this
+    backend serves is dynamic and private — audit content and reports (gated
+    by per-row access tokens), account info, and the one-time API-key reveal
+    on the payment-poll endpoints. Nothing here should be cached by browsers
+    or shared proxies. Static frontend assets are served by Vercel, not this
+    backend, so a blanket no-store breaks no legitimate caching.
     """
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -181,7 +187,81 @@ async def add_security_headers(request: Request, call_next):
         "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
     )
     response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Cache-Control", "private, no-store")
     return response
+
+
+REQUEST_ID_HEADER = "X-Request-ID"
+
+
+def new_request_id() -> str:
+    """The correlation id minted for one request.
+
+    Short because a user reads it off an error page and types it into a
+    support message.
+    """
+    return uuid.uuid4().hex[:12]
+
+
+# Registered after add_security_headers, and app.middleware inserts at position
+# 0, so this is the OUTERMOST user middleware: every other middleware and every
+# route runs inside the context it establishes.
+@app.middleware("http")
+async def bind_request_context(request: Request, call_next):
+    """Give each request a correlation id, in the log context and on the way out.
+
+    The id is always minted here and an inbound X-Request-ID is deliberately
+    IGNORED. This is a public API: a client-supplied value is attacker-controlled
+    text that would land in every log line of the request (newlines and all) and
+    could be set to another user's id to poison a support investigation. Echoing
+    a header is not worth either. Clients that want their own correlation id can
+    keep it and match on ours from the response.
+
+    Every context field is bound here, not just the two with values, so the reset
+    on the way out covers whatever a route added underneath (account_id,
+    audit_id, job_id). Without that a value set in a handler would survive into
+    the next request served on the same keep-alive connection, which is the worst
+    kind of logging bug: plausible, wrong, and attributed to a real id.
+
+    request.state carries the id as well, for the one reader that cannot see the
+    contextvar -- see unhandled_exception_handler.
+    """
+    request_id = new_request_id()
+    request.state.request_id = request_id
+    with log_context(
+        request_id=request_id,
+        trace_id=request_id,
+        account_id=None,
+        audit_id=None,
+        job_id=None,
+    ):
+        response = await call_next(request)
+    response.headers[REQUEST_ID_HEADER] = request_id
+    return response
+
+
+def _elapsed_ms(started: float) -> int:
+    """Milliseconds since a time.monotonic() mark, rounded to an int.
+
+    monotonic rather than time(): these spans are compared against each other
+    and must not jump when the clock is stepped by NTP mid-request.
+    """
+    return int((time.monotonic() - started) * 1000)
+
+
+def _bind_account(account: dict | None) -> None:
+    """Put the resolved account on the log context for the rest of the request.
+
+    Anonymous traffic leaves the field as None rather than writing a
+    placeholder, so "account_id absent" reads as "no key presented" instead of
+    being confusable with a real account. Safe to call unscoped:
+    bind_request_context binds account_id too, so its reset on the way out
+    clears whatever a handler set here.
+    """
+    if account is not None:
+        set_log_context(account_id=str(account["id"]))
+
+
 
 
 _limiter = limiter_from_env()
@@ -219,17 +299,21 @@ def get_preview_registry() -> PreviewRegistry:
 
 def get_preview_reconciler():
     """FastAPI dependency indirection — overridable in tests so the reap
-    endpoint never shells out to a real `docker ps`."""
-    return reconcile_previews
+    endpoint never shells out to a real `docker ps`. Routes through the
+    sandbox-runner client (Variant A): the backend never execs docker itself."""
+    return sandbox_client.reconcile_previews
 
 
 _audit_repo = AuditRepository()
+_audit_job_repo = AuditJobRepository()
 _fixpack_repo = FixpackJobRepository()
 _fix_outcome_repo = FixOutcomeRepository()
 _account_repo = AccountRepository()
 _payment_repo = PaymentRepository()
 _subscription_repo = SubscriptionRepository()
 _monitoring_repo = MonitoringRunRepository()
+_llm_usage_repo = LlmUsageRepository()
+_service_flags_repo = ServiceFlagsRepository()
 
 
 def get_payment_repo() -> PaymentRepository:
@@ -269,6 +353,15 @@ def get_audit_repo() -> AuditRepository:
     return _audit_repo
 
 
+def get_audit_job_repo() -> AuditJobRepository:
+    """Same as get_audit_repo, for the durable audit queue (migration 0022).
+
+    Registered here so the queue has one canonical, test-overridable instance
+    from the moment the schema lands. Nothing depends on it yet -- the endpoints
+    that will (enqueue + poll) arrive in PR2."""
+    return _audit_job_repo
+
+
 def get_fixpack_repo() -> FixpackJobRepository:
     """Same as get_audit_repo, for fixpack_jobs."""
     return _fixpack_repo
@@ -287,6 +380,16 @@ def get_subscription_repo() -> SubscriptionRepository:
 def get_monitoring_repo() -> MonitoringRunRepository:
     """Same as get_audit_repo, for the async continuous-monitoring queue."""
     return _monitoring_repo
+
+
+def get_llm_usage_repo() -> LlmUsageRepository:
+    """Same as get_audit_repo, for the llm_usage cost journal."""
+    return _llm_usage_repo
+
+
+def get_service_flags_repo() -> ServiceFlagsRepository:
+    """Same as get_audit_repo, for the service_flags kill switches."""
+    return _service_flags_repo
 
 
 # GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
@@ -315,9 +418,164 @@ def _parse_github_repo_url(repo_url: str) -> tuple[str, str] | None:
     return owner, repo
 
 
+async def _record_llm_usage(
+    llm_usage_repo: LlmUsageRepository, *, job_type: str,
+    job_id: str | None, account_id: str | None, llm_stats: object,
+    audit_job_id: str | None = None,
+) -> None:
+    """Write ONE llm_usage row per ATTEMPT that actually bought tokens.
+
+    `llm_stats` is run_scan()["llm_usage"] -- the accounting key, not the `llm`
+    diagnostic key. The distinction is the whole point: `llm` degrades to the
+    string "failed: ..." when a provider dies mid-scan, and reading spend off it
+    silently discarded every token the calls before that failure had already
+    paid for. `llm_usage` always carries the real totals, so calls>0 is now the
+    single condition, and it means what it says.
+
+    Callers must invoke this on the FAILURE path too, passing job_id=None when
+    no audits row exists to point at. Spend is a fact about the provider's
+    ledger, not about whether we managed to save the result: an attempt that
+    scanned and then lost its database is money gone, and a job that
+    dead-letters after three such attempts cost three scans.
+
+    `audit_job_id` is the audit_jobs row this attempt belongs to. Rows accumulate
+    per attempt under it, so the cost of a job is their SUM -- see
+    LlmUsageRepository.sum_by_audit_job.
+
+    The reused-audit (content-hash cache hit) path never reaches this: it
+    returns before run_scan is ever called, so a cache hit costs $0 and writes
+    no row -- there is no double-charge for re-auditing identical content.
+
+    Recording is best-effort and must never break the audit it is accounting
+    for: llm_usage_repo.create no-ops (returns None) when DATABASE_URL isn't set,
+    and any unexpected write failure is logged, not raised."""
+    if not isinstance(llm_stats, dict):
+        return
+    calls = int(llm_stats.get("calls") or 0)
+    if calls <= 0:
+        return
+    input_tokens = int(llm_stats.get("input_tokens") or 0)
+    output_tokens = int(llm_stats.get("output_tokens") or 0)
+    # model is NOT NULL in the table; a job with calls>0 always set it, but fall
+    # back to a sentinel that prices at DEFAULT_PRICE (fail-safe high) rather
+    # than write a null or crash if a provider ever omitted it.
+    model = llm_stats.get("model") or "unknown"
+    cost = pricing.cost_usd(model, input_tokens, output_tokens)
+    try:
+        await llm_usage_repo.create(
+            job_type=job_type, job_id=job_id, account_id=account_id,
+            model=model, calls=calls, input_tokens=input_tokens,
+            output_tokens=output_tokens, cost_usd=cost,
+            audit_job_id=audit_job_id,
+        )
+    except Exception:  # noqa: BLE001 -- accounting must never fail the audit
+        logger.warning("llm_usage recording failed for %s job %s",
+                       job_type, job_id, exc_info=True)
+
+
+# --- Stage 4 step 2: enforcement (daily cap, emergency stop) -----------------
+
+# Daily USD backstop over ALL anonymous/free traffic (llm_usage rows with
+# account_id IS NULL, summed since UTC midnight). NOT per-IP -- that is the
+# request-count rate limiter's job -- and NOT a personal limit: it is a ceiling
+# on total free spend. Crossing it soft-degrades new anonymous audits to
+# static-only (same path as a provider failure), never a 402/429: an anonymous
+# caller has nothing to pay. Pro accounts are deliberately NOT subject to this;
+# their spend is bounded by PRO_DAILY_AUDIT_LIMIT (a call count) instead.
+DEFAULT_DAILY_SPEND_CAP_USD = Decimal(
+    os.environ.get("DEFAULT_DAILY_SPEND_CAP_USD", "2.00"))
+_ANON_SPEND_ALERT_FRACTION = Decimal("0.8")
+
+# Emergency-stop flag cache. The kill switch is read on the request path, so it
+# is cached for a few seconds to avoid a DB round-trip per request; a pause thus
+# takes effect within _FLAG_TTL_S, which is well inside "emergency" tolerance.
+_FLAG_TTL_S = 8.0
+_llm_paid_ops_cache: dict[str, object] = {"at": 0.0, "enabled": True, "note": None}
+
+
+def _reset_service_flag_cache() -> None:
+    """Force the next _llm_paid_ops_enabled call to re-read the DB. Used by the
+    toggle endpoint (so a just-set value is visible immediately) and by tests."""
+    _llm_paid_ops_cache["at"] = 0.0
+
+
+async def _run_scan_offthread(*args, **kwargs):
+    """run_scan on the threadpool: it is blocking, and its LLM stage can take
+    minutes, so it must never occupy the event loop.
+
+    It used to also hold an AUDIT_CONCURRENCY semaphore. That semaphore is gone
+    with the queue cutover: the number of scans that can run at once is now
+    AUDIT_WORKER_CONCURRENCY, the audit worker's slot count, and a limit living
+    in a different process from the work it is supposed to limit is not a limit.
+    In this process only the monitoring drain still scans, and that drain is
+    strictly one run at a time under monitoring_processor_lock, so it could
+    never have reached a bound of 4 anyway.
+
+    Still a named wrapper rather than an inline run_in_threadpool because it is
+    the single definition of "how an audit scan is run", shared by the worker
+    (which imports it) and the monitoring path -- the two must not drift."""
+    return await run_in_threadpool(run_scan, *args, **kwargs)
+
+
+async def _llm_paid_ops_enabled(
+    flags_repo: ServiceFlagsRepository,
+) -> tuple[bool, str | None]:
+    """(enabled, note) for the 'llm_paid_ops' emergency stop, cached for
+    _FLAG_TTL_S. A missing row or unconfigured DB reads as enabled (fail-open):
+    the kill switch must be an explicit operator action, never the accident of a
+    missing table -- an unconfigured dev box must still run scans."""
+    now = time.monotonic()
+    if now - float(_llm_paid_ops_cache["at"]) < _FLAG_TTL_S:
+        return bool(_llm_paid_ops_cache["enabled"]), _llm_paid_ops_cache["note"]  # type: ignore[return-value]
+    flag = await flags_repo.get("llm_paid_ops")
+    if flag is None:
+        enabled, note = True, None
+    else:
+        enabled, note = bool(flag["enabled"]), flag.get("note")
+    _llm_paid_ops_cache.update(at=now, enabled=enabled, note=note)
+    return enabled, note
+
+
+async def _emergency_stop_active(
+    flags_repo: ServiceFlagsRepository,
+) -> tuple[bool, str | None]:
+    """True (with the operator note) when paid LLM ops are paused. Fires the
+    mandatory operator alert as a side effect whenever the stop is found engaged;
+    notify_operator self-throttles on the dedupe_key, so a burst of blocked
+    requests collapses to one alert."""
+    enabled, note = await _llm_paid_ops_enabled(flags_repo)
+    if enabled:
+        return False, None
+    await notify_operator(
+        f"Emergency stop ACTIVE: llm_paid_ops is OFF, rejecting paid LLM ops. "
+        f"Note: {note or '(none)'}",
+        dedupe_key="llm-paid-ops-paused",
+    )
+    return True, note
+
+
+async def _anon_daily_cap_exceeded(llm_usage_repo: LlmUsageRepository) -> bool:
+    """True when anonymous traffic has spent at least the daily cap today, so a
+    new anonymous audit must degrade to static-only. Fires the 80% operator
+    alert as a side effect. A None sum (DATABASE_URL unset) reads as False --
+    there is no journal to cap against."""
+    spend = await llm_usage_repo.sum_anon_spend_today()
+    if spend is None:
+        return False
+    if spend >= DEFAULT_DAILY_SPEND_CAP_USD * _ANON_SPEND_ALERT_FRACTION:
+        await notify_operator(
+            f"Anonymous LLM spend today is ${spend:.2f}, at/over "
+            f"{int(_ANON_SPEND_ALERT_FRACTION * 100)}% of the "
+            f"${DEFAULT_DAILY_SPEND_CAP_USD:.2f} daily cap.",
+            dedupe_key="anon-budget-80",
+        )
+    return spend >= DEFAULT_DAILY_SPEND_CAP_USD
+
+
 async def run_repo_audit(
     repo_url: str, *, llm_client: LLMClient, audit_repo: AuditRepository,
-    repo_fetcher,
+    repo_fetcher, llm_usage_repo: LlmUsageRepository | None = None,
+    job_type: str = "audit",
 ) -> dict | None:
     """Fetch a public GitHub repo, audit it, and persist -- reusing the exact
     pipeline the POST /v1/audits URL path uses: the same content-hash cache
@@ -365,14 +623,38 @@ async def run_repo_audit(
             "reused": True,
         }
 
-    scan = await run_in_threadpool(run_scan, raw, llm_client)
-    persisted = await audit_repo.create(
-        stack=stack.value, file_count=report.file_count,
-        score_total=scan["score"]["total"], score_json=scan["score"],
-        findings_json=scan["findings"], repo_url=repo_url,
-        content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
-    )
+    scan = await _run_scan_offthread(raw, llm_client)
+    # Cost accounting. account_id is None: this path serves system re-audits
+    # (continuous monitoring), whose LLM cost is incurred once per push
+    # regardless of how many subscribers watch the repo -- attributing it to any
+    # single subscriber would be wrong, so it is recorded unattributed.
+    # audit_job_id is None too: monitoring runs have their own table and never
+    # pass through the audit_jobs queue.
+    #
+    # The scan above already spent the money, so the row is written whatever
+    # audit_repo.create does next -- including raise, which is why this is a
+    # try/except/else rather than a line after the call.
+    try:
+        persisted = await audit_repo.create(
+            stack=stack.value, file_count=report.file_count,
+            score_total=scan["score"]["total"], score_json=scan["score"],
+            findings_json=scan["findings"], repo_url=repo_url,
+            content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
+        )
+    except Exception:
+        if llm_usage_repo is not None:
+            await _record_llm_usage(
+                llm_usage_repo, job_type=job_type, job_id=None,
+                account_id=None, llm_stats=scan["llm_usage"],
+            )
+        raise
     audit_id = persisted["id"] if persisted else str(uuid.uuid4())
+    if llm_usage_repo is not None:
+        await _record_llm_usage(
+            llm_usage_repo, job_type=job_type,
+            job_id=persisted["id"] if persisted else None,
+            account_id=None, llm_stats=scan["llm_usage"],
+        )
     return {
         "audit_id": audit_id,
         "findings": scan["findings"],
@@ -413,26 +695,84 @@ def _monitoring_process_token() -> str | None:
     return os.environ.get("MONITORING_PROCESS_TOKEN") or None
 
 
+def _audit_jobs_stats_token() -> str | None:
+    """Bearer token protecting GET /internal/audit-jobs/stats, same env-var
+    pattern as the other internal endpoints.
+
+    Its own token rather than a reused one on purpose: the existing tokens
+    authorise ACTIONS (drain a backlog, flip the kill switch), and the thing
+    that wants queue depth is a monitoring scraper -- something that should be
+    able to read without holding a credential that can also start work. Unset
+    -> the endpoint 503s rather than accept a no-op auth check."""
+    return os.environ.get("AUDIT_JOBS_STATS_TOKEN") or None
+
+
+def _service_flags_token() -> str | None:
+    """Bearer token protecting the emergency-stop toggle endpoint, same env-var
+    pattern as MONITORING_PROCESS_TOKEN. Unset -> the endpoint 503s rather than
+    accept a no-op auth check on a switch that can halt all paid LLM ops."""
+    return os.environ.get("SERVICE_FLAGS_TOKEN") or None
+
+
+def _secret_equals(provided: str, expected: str) -> bool:
+    """Constant-time comparison of a header value against a configured secret.
+
+    `hmac.compare_digest` on two str arguments raises TypeError the moment
+    either side holds a character above 127 -- "comparing strings with
+    non-ASCII characters is not supported". Header values reach us as str, and
+    a client is free to put any byte in one, so a request with a Cyrillic
+    Authorization header used to raise inside the auth check and land in the
+    global handler: a 500, a traceback, and an operator alert, for a request
+    that should simply have been told 401.
+
+    Comparing bytes instead has no such restriction. The two sides are encoded
+    differently on purpose:
+
+      - `provided` came from the wire, and the ASGI server decoded those bytes
+        as latin-1, which is a byte-for-byte mapping. Encoding it back as
+        latin-1 therefore reconstructs exactly what the client sent, and can
+        never fail, because every character is <= 0xFF by construction.
+      - `expected` came from the environment as text, so it encodes as UTF-8,
+        which is what a shell wrote into it.
+
+    That pairing means a non-ASCII secret actually WORKS, rather than being
+    compared against mismatched bytes. An ASCII secret -- every one we have --
+    encodes identically either way, so nothing about today's behaviour moves
+    except that the wrong answer is now 401 instead of 500.
+    """
+    return hmac.compare_digest(
+        provided.encode("latin-1"), expected.encode("utf-8")
+    )
+
+
 def _require_bearer_token(request: Request, token: str) -> None:
     """Constant-time check of `Authorization: Bearer <token>`, raising 401
     on mismatch. The single implementation shared by every internal
     operational endpoint (reaper, USDT poller, Fix Pack processor) so the
     comparison stays constant-time in one place and can't drift."""
     provided = request.headers.get("authorization", "")
-    if not hmac.compare_digest(provided, f"Bearer {token}"):
+    if not _secret_equals(provided, f"Bearer {token}"):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
 
 def _client_key(request: Request) -> str:
-    """Client IP, honoring one reverse-proxy hop (Caddy in prod).
+    """Client IP, honoring exactly one reverse-proxy hop (Caddy in prod).
 
-    Trusts the first X-Forwarded-For entry. Only safe because this
-    endpoint sits behind our own known proxy — do not reuse this helper
-    if the app is ever exposed directly to the internet without one.
+    The LAST X-Forwarded-For entry, not the first. Caddy appends the peer
+    address to whatever header arrived, so on `XFF: 1.2.3.4` from a client the
+    backend sees `1.2.3.4, <real ip>` — reading entry [0] returns a value the
+    client chose. That is the free tier's daily audit quota, so a client
+    rotating the header buys unlimited LLM spend. Entry [-1] is the one our own
+    proxy wrote and is the only entry nobody upstream of it can forge.
+
+    Assumes exactly one trusted hop. If a CDN is ever put in front of Caddy the
+    trusted entry moves and this has to count hops instead. Only safe behind a
+    proxy at all — do not reuse this helper if the app is ever exposed to the
+    internet directly.
     """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -453,23 +793,66 @@ async def health(
         from "process up but the Supabase pooler is unreachable");
       * `fixpack_backlog` / `oldest_paid_seconds` — is the Fix Pack processor
         timer draining the queue, or is a paid job stuck (see
-        FixpackJobRepository.backlog_stats).
+        FixpackJobRepository.backlog_stats);
+      * `github_app` — does GitHub still accept our App credentials. A key
+        that no longer matches the App breaks every Fix Pack delivery on
+        this deployment, and before this it was invisible until a paying
+        customer's job hit a 401. `null` means App auth isn't configured
+        here at all (the PAT path), which is not a fault. Cached for five
+        minutes inside app_auth_ok, so this stays cheap for a pinger.
 
     Deliberately leak-free: only booleans and coarse counts/ages — never ids,
     urls, or error text — so it's safe to expose to a dumb uptime pinger or
     the systemd timer without a token. Always 200: an unconfigured or
     unreachable DB is reported as db:false (a live process honestly saying
     it's degraded), not a transport-level failure the pinger can't read."""
+    # Blocking httpx call, so off the event loop. Never raises by contract.
+    github_app = await run_in_threadpool(app_auth_ok)
     stats = await fixpack_repo.backlog_stats()
     if stats is None:
         # DATABASE_URL unset, or the pool couldn't be built — either way the
         # DB isn't usable. Report degraded rather than 503 (see docstring).
-        return {"db": False, "fixpack_backlog": None, "oldest_paid_seconds": None}
+        return {"db": False, "fixpack_backlog": None,
+                "oldest_paid_seconds": None, "github_app": github_app}
     return {
         "db": True,
         "fixpack_backlog": stats["backlog"],
         "oldest_paid_seconds": stats["oldest_paid_seconds"],
+        "github_app": github_app,
     }
+
+
+async def _json_object_body(request: Request) -> dict:
+    """The request body as a JSON object, or 422.
+
+    `await request.json()` raises on a malformed body, and every endpoint that
+    called it bare turned a typo into a 500 -- which the global handler logs
+    with a traceback AND pages the operator for. A client sending broken JSON
+    is not an incident; it is the client's mistake, and the response should
+    say which.
+
+    Non-objects are refused for the same reason one level down. A body of `[]`
+    or `"hi"` parses fine, and the next line is always `body.get(...)`, so it
+    became AttributeError -- a 500 by a slightly longer route.
+
+    422 rather than 400 to match every other body-shape refusal in this API,
+    including the one place that already guarded this (the service-flags
+    endpoint). Webhook senders retry on any non-2xx, so this does not stop
+    Telegram or PayPal re-delivering an unparseable payload -- but a retry that
+    fails identically is cheap, while a 500 also wakes someone up.
+    """
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        body = None
+
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "invalid_json",
+                    "detail": "request body must be a JSON object"},
+        )
+    return body
 
 
 @app.exception_handler(Exception)
@@ -479,12 +862,20 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     HTTPException here, so the intentional 422/404/503/401 responses raised
     across the API stay normal control flow and never alert.
 
-    This is the one place the request-id correlation gap gets its minimal
-    fix: mint a short id, put it in the 500 log line, the operator alert, and
-    the response body, so a user's report ("I got error abc123") ties to an
-    exact log line and alert without full structured logging. The alert is
-    best-effort and deduped so a crash-loop can't spam the operator."""
-    request_id = uuid.uuid4().hex[:12]
+    The id in the log line, the operator alert and the response body is the one
+    bind_request_context minted, so "I got error abc123" ties to every line of
+    that request rather than to this handler alone. The alert is best-effort and
+    deduped so a crash-loop can't spam the operator.
+
+    It is read off request.state and not the contextvar, because this handler is
+    the one place in the process that cannot see the contextvar: Starlette runs
+    an Exception handler in ServerErrorMiddleware, which sits OUTSIDE the user
+    middleware stack, so by the time the exception reaches here
+    bind_request_context's `with` block has already reset the context. The scope
+    dict travels with the request instead of with the context, so it survives.
+    The same ordering is why this response sets the header itself -- it never
+    passes back through the middleware that would otherwise add it."""
+    request_id = getattr(request.state, "request_id", None)
     logger.exception(
         "unhandled error [request_id=%s] %s %s",
         request_id, request.method, request.url.path,
@@ -497,6 +888,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return JSONResponse(
         status_code=500,
         content={"detail": {"reason": "internal_error", "request_id": request_id}},
+        headers={REQUEST_ID_HEADER: request_id} if request_id else None,
     )
 
 
@@ -551,6 +943,10 @@ async def get_audit(
     # access_token (?token=...), delivered once at creation. A leaked id is
     # not enough. A missing/wrong token is answered 404 (not 403) so this
     # never confirms an id exists to someone who doesn't hold its token.
+    #
+    # Bound before the lookup, not after: a failed authorization is exactly the
+    # request whose logs need the id someone asked for.
+    set_log_context(audit_id=audit_id)
     row = await audit_repo.get_authorized(audit_id, token)
     if row is None:
         raise HTTPException(
@@ -559,7 +955,64 @@ async def get_audit(
                     "detail": "no audit with this id and token, or persistence "
                                "isn't configured on this deployment (see app/db.py)"},
         )
-    return row
+    # Whether a Fix Pack could produce anything for this audit. Computed here,
+    # not in the browser: the answer depends on which rules the Fix Pack knows
+    # how to rewrite, and a second copy of that list in TypeScript would drift
+    # from this one -- which is precisely what #132 was about. The page uses it
+    # to explain instead of offering a purchase that cannot deliver.
+    return {
+        **row,
+        "fixpack_auto_fixable": has_auto_fixable_findings(
+            row.get("findings_json") or []
+        ),
+    }
+
+
+@app.get("/v1/audit-jobs/{job_id}")
+async def get_audit_job(
+    job_id: str,
+    token: str | None = None,
+    audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
+) -> dict:
+    """Poll one queued audit's progress (durable queue, migration 0022).
+
+    Same ownership model as GET /v1/audits/{id}: the per-row access_token,
+    handed to the submitter once at enqueue, is the only key, and anything that
+    doesn't match -- wrong token, no token, unknown id -- is a flat 404 so this
+    never confirms a job id to someone who doesn't hold its token.
+
+    Deliberately narrow. `state` and `audit_id` are what a client polls for
+    (audit_id is null until the job succeeds, then it is the row to fetch via
+    GET /v1/audits/{id}), and `error_code` is the machine-readable reason a
+    terminal job has no result. The internals a caller has no business acting
+    on -- claimed_by, lease_expires_at, attempts, quota_key, idempotency_key,
+    the free-text error_message -- stay server-side, and the job's own
+    access_token is never selected by get_authorized in the first place.
+
+    The one addition is `audit_access_token`: the finished audit is protected by
+    its OWN token, so audit_id alone would leave a poller unable to read the
+    result it waited for. It is null until the job succeeds. Handing it to the
+    holder of the job token is not a widening -- POST /v1/audits returned the
+    audit token directly to that same submitter before the cutover."""
+    set_log_context(job_id=job_id)
+    row = await audit_job_repo.get_authorized(job_id=job_id, access_token=token)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no audit job with this id and token, or "
+                              "persistence isn't configured on this "
+                              "deployment (see app/db.py)"},
+        )
+    return {
+        "id": row["id"],
+        "state": row["state"],
+        "error_code": row["error_code"],
+        "audit_id": row["audit_id"],
+        "audit_access_token": row.get("audit_access_token"),
+        "created_at": row["created_at"],
+        "completed_at": row["completed_at"],
+    }
 
 
 @app.get("/v1/audits/{audit_id}/report")
@@ -571,6 +1024,7 @@ async def get_audit_report(
     """The shareable artifact: the same persisted audit rendered as a
     self-contained, plain-language HTML page. Requires the audit's
     access_token (?token=...) -- same ownership check as GET /v1/audits/{id}."""
+    set_log_context(audit_id=audit_id)
     row = await audit_repo.get_authorized(audit_id, token)
     if row is None:
         raise HTTPException(
@@ -620,12 +1074,51 @@ async def get_account(
     back to free" without the endpoint leaking which keys exist.
     """
     account = await resolve_account(request, account_repo)
+    _bind_account(account)
     tier = account["tier"] if account else TIER_FREE
     entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
     return {
         "tier": tier,
         "authenticated": account is not None,
         "entitlements": entitlements_dict(entitlements),
+    }
+
+
+@app.post("/v1/account/rotate-key")
+async def rotate_account_key(
+    request: Request,
+    account_repo: AccountRepository = Depends(get_account_repo),
+) -> dict:
+    """Issue a new API key for the authenticated account, invalidating the
+    old one. Auth is the CURRENT `Authorization: Bearer <api_key>` — this is
+    the proactive path (rotate a key you still hold, e.g. on suspected
+    leak). The lost-key path is Telegram's /rotatekey, which authenticates
+    by chat ownership instead.
+
+    Returns the new key exactly once (it is never stored). Unlike the
+    graceful-degradation of GET /v1/account, an unrecognized key here 401s:
+    there is no meaningful anonymous rotation, and echoing free-tier success
+    would mislead the caller into thinking a bad key was rotated.
+    """
+    account = await resolve_account(request, account_repo)
+    _bind_account(account)
+    if account is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"reason": "unauthorized",
+                    "detail": "no account recognized for the presented API key"},
+        )
+    rotated = await account_repo.rotate_key(account["id"])
+    if rotated is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"reason": "unauthorized",
+                    "detail": "account could not be rotated"},
+        )
+    return {
+        "api_key": rotated["api_key"],
+        "key_prefix": rotated["key_prefix"],
+        "tier": rotated["tier"],
     }
 
 
@@ -641,8 +1134,9 @@ async def telegram_webhook(
 ) -> dict:
     """Telegram Bot API webhook for Stars payments. Handles the
     pre_checkout_query (approve within 10s), successful_payment (grant pro /
-    Fix Pack / subscription), and subscription (BotSubscriptionUpdated
-    renewal state changes) update types; ignores everything else.
+    Fix Pack / subscription), subscription (BotSubscriptionUpdated renewal
+    state changes) and callback_query (the operator's bank-transfer confirm
+    button) update types; ignores everything else.
 
     Authenticity is Telegram's secret_token: setWebhook is called with a
     secret, echoed back in X-Telegram-Bot-Api-Secret-Token on every
@@ -650,6 +1144,11 @@ async def telegram_webhook(
     endpoint's bearer token. 503 if the bot token or webhook secret
     isn't configured — an unconfigured payment webhook is an operational
     gap to notice, not a silent no-op. See app/billing/telegram_stars.py.
+
+    Note this header proves the update came from TELEGRAM, not from any
+    particular person: it is shared by every user who can message the bot.
+    The callback_query branch therefore does its own owner check against
+    TELEGRAM_ADMIN_CHAT_ID before acting (telegram_stars._is_operator).
     """
     token = telegram_stars.bot_token_from_env()
     secret = telegram_stars.webhook_secret_from_env()
@@ -661,10 +1160,10 @@ async def telegram_webhook(
                               "must both be set on this deployment"},
         )
     provided = request.headers.get("x-telegram-bot-api-secret-token", "")
-    if not hmac.compare_digest(provided, secret):
+    if not _secret_equals(provided, secret):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
-    update = await request.json()
+    update = await _json_object_body(request)
     return await telegram_stars.handle_update(
         update, account_repo=account_repo, payment_repo=payment_repo,
         audit_repo=audit_repo, fixpack_repo=fixpack_repo,
@@ -691,7 +1190,7 @@ def _verify_github_signature(secret: str, body: bytes, header: str) -> bool:
         secret.encode("utf-8"), body, hashlib.sha256
     ).hexdigest()
     provided = header.split("=", 1)[1]
-    return hmac.compare_digest(provided, expected)
+    return _secret_equals(provided, expected)
 
 
 @app.post("/v1/webhooks/github")
@@ -818,6 +1317,7 @@ async def _process_one_monitoring_run(
     run: dict, *, monitoring_repo: MonitoringRunRepository,
     subscription_repo: SubscriptionRepository, audit_repo: AuditRepository,
     llm_client: LLMClient, repo_fetcher, transport,
+    llm_usage_repo: LlmUsageRepository,
 ) -> str:
     """Do the real monitoring work for one claimed run: re-audit the repo, diff
     against its previous audit, and DM every active subscriber the NEW
@@ -838,6 +1338,12 @@ async def _process_one_monitoring_run(
     (the run left stuck 'running') is recovered by the stale-lease reaper."""
     run_id = run["id"]
     repo_full_name = run["repo_full_name"]
+    # Same ambient-context binding _process_one_paid_job does, for the same
+    # reason: this is the other durable queue, and its drain loop is the only
+    # place that knows which run the lines below belong to. Bare set (not
+    # log_context()) matches that function -- the loop is sequential, so each
+    # claimed run overwrites the previous one's ids rather than nesting.
+    set_log_context(job_id=str(run_id))
     try:
         subs = await subscription_repo.list_active_for_repo(repo_full_name)
         if not subs:
@@ -855,6 +1361,7 @@ async def _process_one_monitoring_run(
             result = await run_repo_audit(
                 repo_url_from_full_name(repo_full_name), llm_client=llm_client,
                 audit_repo=audit_repo, repo_fetcher=repo_fetcher,
+                llm_usage_repo=llm_usage_repo, job_type="monitoring",
             )
         except RepoFetchError:
             # Repo went private/was deleted (404, indistinguishable by design).
@@ -865,6 +1372,11 @@ async def _process_one_monitoring_run(
         if result is None:
             await monitoring_repo.mark_done(run_id)
             return "unauditable"
+
+        # The audit this run produced (or reused from the content-hash cache).
+        # run_repo_audit doesn't bind it, so without this the notify half of the
+        # run can't be joined to the audit it is diffing.
+        set_log_context(audit_id=str(result["audit_id"]))
 
         new_findings = new_high_severity_findings(
             previous_findings, result["findings"]
@@ -933,7 +1445,9 @@ def _usdt_receiving_address() -> str | None:
 
 @app.post("/v1/billing/usdt/invoice", status_code=201)
 async def create_usdt_invoice(
+    request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ) -> dict:
     """Open a USDT/TRC20 invoice: returns the fixed receiving address and
     a unique amount to send (base price + sub-cent nonce, so incoming
@@ -952,6 +1466,10 @@ async def create_usdt_invoice(
             detail={"reason": "usdt_not_configured",
                     "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
         )
+    # After the configuration gates, before the write: a client on a
+    # deployment with no address configured should learn that, not be told to
+    # slow down about an endpoint that cannot work anyway.
+    _check_usdt_invoice_rate_limit(request, limiter)
     invoice = await usdt_trc20.create_invoice(payment_repo, address=address)
     if invoice is None:
         raise HTTPException(
@@ -991,6 +1509,7 @@ async def create_fixpack_usdt_invoice(
     audit_id: str,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
 ) -> dict:
     """Open a USDT/TRC20 invoice to buy a Fix Pack for one specific audit.
     Mirrors POST /v1/billing/usdt/invoice (fixed address + unique amount so
@@ -1023,6 +1542,8 @@ async def create_fixpack_usdt_invoice(
                               "open a fix PR against — re-run the audit with your "
                               "GitHub repo URL, then buy a Fix Pack for it."},
         )
+    await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+    _reject_if_nothing_to_fix(audit)
     address = _usdt_receiving_address()
     if not address:
         raise HTTPException(
@@ -1041,6 +1562,399 @@ async def create_fixpack_usdt_invoice(
                               "payment row is created to match payment against)"},
         )
     return invoice
+
+
+# Distinct "I've paid" presses, per client key, per limiter window (24h).
+# This bounds a flood of DIFFERENT invoices from one source; repeat presses of
+# ONE invoice are already collapsed by notify_operator's dedupe_key. Well above
+# what any real payer needs -- a payer opens one invoice, maybe two.
+BANK_TRANSFER_PAID_LIMIT = 10
+
+# Invoices opened per client key per limiter window (24h).
+#
+# Unauthenticated by necessity -- a buyer has no key until they have paid --
+# which until now meant unbounded. Each invoice permanently consumed one of the
+# 99 kopeck suffixes, so a hundred anonymous POSTs switched the operator's
+# whole matching mechanism off. The TTL window in bank_transfer fixed the
+# permanence; this bounds how fast one source can fill the window.
+#
+# Well above any real checkout: a buyer opens one invoice, changes their mind
+# about Pro versus a Fix Pack, maybe reloads a stale page. Fifteen is generous
+# for that and still a hundredth of what saturation needs.
+BANK_TRANSFER_INVOICE_LIMIT = 15
+
+
+def _check_invoice_rate_limit(request: Request, limiter: RateLimiter) -> None:
+    """429 when one client has opened too many invoices today.
+
+    Shared by the Pro and Fix Pack creators on ONE limiter key on purpose:
+    they draw suffixes from the same pool, so a per-endpoint budget would let
+    the same client take twice as much of it.
+    """
+    try:
+        limiter.check(
+            f"bank-transfer-invoice:{_client_key(request)}",
+            limit=BANK_TRANSFER_INVOICE_LIMIT,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {BANK_TRANSFER_INVOICE_LIMIT} bank transfer "
+                          "invoices per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+
+# USDT invoices opened per client key per limiter window (24h).
+#
+# Unauthenticated for the same reason as the bank-transfer pair: a buyer has
+# no API key until they have paid. Until now that meant unbounded -- this was
+# the one anonymous endpoint that writes a row per call with nothing to stop
+# it repeating.
+#
+# A SEPARATE limiter key from BANK_TRANSFER_INVOICE_LIMIT, where the two bank
+# transfer creators deliberately share one. The reason those share is that
+# they draw from the same 99-suffix pool, so one budget is what keeps a client
+# from taking twice as much of it. USDT does not draw from that pool at all:
+# its nonce is a full micro-dollar (base + randbelow(1_000_000)) and an
+# invoice expires after 30 minutes, so exhaustion is not the risk here and a
+# shared budget would only make a USDT invoice eat a bank-transfer one.
+#
+# What IS the risk is anonymous row creation, so the same generous number is
+# right for the same reason: well above any real checkout, far below abuse.
+USDT_INVOICE_LIMIT = 15
+
+
+def _check_usdt_invoice_rate_limit(request: Request, limiter: RateLimiter) -> None:
+    """429 when one client has opened too many USDT invoices today."""
+    try:
+        limiter.check(
+            f"usdt-invoice:{_client_key(request)}",
+            limit=USDT_INVOICE_LIMIT,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {USDT_INVOICE_LIMIT} USDT invoices per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+
+def _reject_if_nothing_to_fix(audit: dict) -> None:
+    """409 when this audit has no finding a Fix Pack could ever rewrite.
+
+    Every rule the Fix Pack knows is fixed; every other finding is advice. An
+    audit whose findings contain none of them has an empty plan before a
+    customer pays, and no amount of running the job changes that.
+
+    Audit 05fa18f5 was sold one anyway: zero eligible findings, job ran, payer
+    got "Nothing to auto-fix" and was charged for it. The check needs no
+    network and no LLM -- only the findings already stored on the audit.
+
+    Deliberately one-directional. It proves "definitely nothing to fix" and
+    never claims the opposite: a finding eligible here can still fall away
+    when the repository is re-fetched, because the code may have moved since
+    the audit. Refusing on the certain case is worth doing; promising a pull
+    request is not something this can honestly do.
+    """
+    if not has_auto_fixable_findings(audit.get("findings_json") or []):
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "no_auto_fixable_findings",
+                    "detail": "This audit has no findings a Fix Pack can fix "
+                              "automatically \u2014 the ones it found are "
+                              "recommendations, or live in comments, docs or "
+                              "tests. Buying one would produce an empty pull "
+                              "request, so it isn't offered."},
+        )
+
+
+async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
+    """409 when this audit already has a Fix Pack job that is paid or running.
+
+    Selling one is the last moment refusing costs nothing. After the payment,
+    every layer below reports success and none of them can undo it:
+    create_paid is idempotent per audit, so a second confirmed payment joins
+    the existing job instead of opening a second fix PR, and the buyer is told
+    "completed" for work that was already bought and paid for once.
+
+    The condition mirrors the ON CONFLICT predicate in create_paid --
+    status in ('paid', 'running') -- and must keep mirroring it. A stricter
+    check here would refuse sales the database would have happily served:
+    re-buying after a 'failed' job is a supported flow, and so is buying again
+    once a previous Fix Pack was delivered and the audit re-run.
+
+    get_by_audit returns the newest job, which is enough: migration 0025's
+    partial unique index allows only one live job per audit, so a newer
+    terminal row can only exist if no live one does.
+
+    No-op when persistence isn't configured (get_by_audit returns None), same
+    contract as every other repository call on this path.
+    """
+    job = await fixpack_repo.get_by_audit(audit_id)
+    if job is None or job.get("status") not in ("paid", "running"):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "reason": "fixpack_already_in_progress",
+            "detail": "a Fix Pack for this audit has already been paid for "
+                      "and is being generated. Watch this audit's page for "
+                      "the pull request — buying a second one would fund no "
+                      "extra work.",
+        },
+    )
+
+
+def _bank_transfer_details() -> dict[str, str]:
+    """The configured payer-facing bank fields, or 503.
+
+    All six or nothing (see bank_transfer.bank_details_from_env): a payer
+    handed a SWIFT code with no account number cannot send anything, so a
+    half-configured deployment must refuse rather than render an invoice that
+    can't be paid."""
+    details = bank_transfer.bank_details_from_env()
+    if details is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "bank_transfer_not_configured",
+                    "detail": "bank transfer is not configured on this "
+                              "deployment (BANK_TRANSFER_CARD, "
+                              "BANK_TRANSFER_BANK_NAME, "
+                              "BANK_TRANSFER_SWIFT, BANK_TRANSFER_BENEFICIARY, "
+                              "BANK_TRANSFER_ACCOUNT and BANK_TRANSFER_ADDRESS "
+                              "must all be set)"},
+        )
+    return details
+
+
+@app.get("/v1/billing/details")
+async def get_billing_details() -> dict:
+    """The publishable payment requisites, for the site footer.
+
+    Public and unauthenticated on purpose: the footer renders on every page,
+    including to visitors who have not started a purchase, and the operator's
+    decision is that these requisites are published information. This endpoint
+    is the single source for them -- they are still never mirrored into a
+    NEXT_PUBLIC_* build variable, so rotating the card is an env change and a
+    restart, with no frontend rebuild.
+
+    Returns 200 with `bank: null` rather than 503 when bank transfer isn't
+    configured. A footer is not a checkout: an unconfigured deployment should
+    render a footer without a requisites block, not an error.
+    """
+    return {"bank": bank_transfer.bank_details_from_env()}
+
+
+class PayerContact(BaseModel):
+    """Who is sending the transfer. Since payment moved to a card number this
+    is not bookkeeping colour, it is the MATCHING KEY: a card-to-card transfer
+    carries no reference field, so the sender's name on the operator's
+    statement is the only handle on the payment, with the email as tie-breaker
+    between two payers of the same name. Hence both fields are now required
+    and so is the request body.
+
+    max_length is abuse protection, not validation -- it stops someone posting a
+    megabyte into a text column. The email check is deliberately the weakest
+    thing that still rejects an obvious non-address: nothing is ever sent here,
+    so a work address with an unusual TLD must not cost a sale. See migration
+    0026.
+    """
+
+    payer_name: str = Field(min_length=1, max_length=200)
+    payer_email: str = Field(min_length=3, max_length=200)
+
+    @field_validator("payer_name", "payer_email")
+    @classmethod
+    def _stripped_and_present(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("must not be blank")
+        return v
+
+    @field_validator("payer_email")
+    @classmethod
+    def _looks_like_an_address(cls, v: str) -> str:
+        if "@" not in v:
+            raise ValueError("must contain @")
+        return v
+
+
+def _bank_transfer_not_persisted_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={"reason": "not_persisted",
+                "detail": "bank transfer invoices require DATABASE_URL (a "
+                          "pending payment row carries the reference code the "
+                          "operator matches against the bank statement)"},
+    )
+
+
+@app.post("/v1/billing/bank-transfer/pro", status_code=201)
+async def create_bank_transfer_invoice(
+    payer: PayerContact,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> dict:
+    """Open a bank-transfer invoice for the Pro tier.
+
+    Returns the card number to pay, the amount, and the reference code that
+    identifies this order. The card transfer itself carries no reference, so
+    the operator matches it by the payer's name and email — both required (422
+    without them, see PayerContact). Poll GET
+    /v1/billing/bank-transfer/{reference} to collect the key once the operator
+    confirms the money arrived.
+
+    Rate limited: unauthenticated, and every invoice takes one of the 99
+    kopeck suffixes for the length of the TTL window.
+
+    503 if bank transfer isn't configured, or if the pending row can't be
+    persisted (no DATABASE_URL / no free reference code)."""
+    _check_invoice_rate_limit(request, limiter)
+    details = _bank_transfer_details()
+    invoice = await bank_transfer.create_invoice(
+        payment_repo, details=details,
+        payer_name=payer.payer_name,
+        payer_email=payer.payer_email,
+    )
+    if invoice is None:
+        raise _bank_transfer_not_persisted_error()
+    return invoice
+
+
+@app.post("/v1/audits/{audit_id}/fixpack/bank-transfer", status_code=201)
+async def create_fixpack_bank_transfer_invoice(
+    audit_id: str,
+    payer: PayerContact,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> dict:
+    """Open a bank-transfer invoice to buy a Fix Pack for one audit. Same
+    reference-code flow and same polling endpoint as the Pro invoice above, at
+    the Fix Pack price and scoped to this audit.
+
+    Same GitHub-URL-only gate as the USDT and PayPal Fix Pack routes: a zip
+    audit has no repository to open a fix PR against, so 422 rather than sell
+    something that can't be fulfilled. 404 if no such audit.
+
+    Rate limited on the same key as the Pro creator: both draw kopeck suffixes
+    from one pool."""
+    _check_invoice_rate_limit(request, limiter)
+    audit = await audit_repo.get(audit_id)
+    if audit is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "audit_not_found",
+                    "detail": "no audit with this id, or persistence isn't "
+                              "configured on this deployment (see app/db.py)"},
+        )
+    if not audit.get("repo_url"):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "not_github_audit",
+                    "detail": "Fix Pack currently only supports audits run "
+                              "from a public GitHub URL. This audit was created "
+                              "from an uploaded zip, so there's no repository to "
+                              "open a fix PR against — re-run the audit with your "
+                              "GitHub repo URL, then buy a Fix Pack for it."},
+        )
+    await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+    _reject_if_nothing_to_fix(audit)
+    details = _bank_transfer_details()
+    invoice = await bank_transfer.create_fixpack_invoice(
+        payment_repo, details=details, audit_id=audit_id,
+        payer_name=payer.payer_name,
+        payer_email=payer.payer_email,
+    )
+    if invoice is None:
+        raise _bank_transfer_not_persisted_error()
+    return invoice
+
+
+@app.get("/v1/billing/bank-transfer/{reference}")
+async def get_bank_transfer_invoice(
+    reference: str,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    account_repo: AccountRepository = Depends(get_account_repo),
+) -> dict:
+    """Poll one bank-transfer invoice. Reveals the API key only once the
+    operator has confirmed the transfer arrived (status 'completed'); a
+    pending or expired invoice never leaks a key. 404 if no such invoice.
+
+    An 'expired' status here is cosmetic: it tells a payer the quote is stale,
+    but the operator can still confirm a transfer that surfaces later, because
+    a slow bank must never become lost money."""
+    status = await bank_transfer.invoice_status(
+        payment_repo, account_repo, reference,
+        details=bank_transfer.bank_details_from_env(),
+    )
+    if status is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no bank transfer invoice with this reference, or "
+                              "persistence isn't configured on this deployment"},
+        )
+    return status
+
+
+@app.post("/v1/billing/bank-transfer/{reference}/paid")
+async def report_bank_transfer_paid(
+    reference: str,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+    transport=Depends(get_billing_transport),
+) -> dict:
+    """The payer pressed "I've paid": notify the operator, grant nothing.
+
+    This writes no state — the row stays 'pending' until a human has seen the
+    money on the statement and pressed the Confirm button carried by the
+    notification. Pressing this without paying achieves exactly nothing.
+
+    Rate limited because it is unauthenticated and its whole job is to push a
+    message to the operator's phone. The per-invoice repeat is already
+    collapsed by notify_operator's dedupe window; this bounds how many
+    DISTINCT invoices one client can page the operator about. 404 if there's
+    no such invoice."""
+    try:
+        limiter.check(
+            f"bank-transfer-paid:{_client_key(request)}",
+            limit=BANK_TRANSFER_PAID_LIMIT,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {BANK_TRANSFER_PAID_LIMIT} bank transfer "
+                          "notifications per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+    result = await bank_transfer.mark_awaiting_confirmation(
+        payment_repo, reference,
+        transport=transport, site_url=telegram_stars.SITE_URL,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no bank transfer invoice with this reference, or "
+                              "persistence isn't configured on this deployment"},
+        )
+    return result
 
 
 def _paypal_not_configured_error() -> HTTPException:
@@ -1067,6 +1981,7 @@ async def create_paypal_order(
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     transport=Depends(get_paypal_transport),
 ) -> dict:
     """Open a PayPal order for a ONE-TIME product (Pro or a Fix Pack), the
@@ -1087,7 +2002,7 @@ async def create_paypal_order(
     if not database_url_from_env():
         raise _paypal_not_persisted_error()
 
-    body = await request.json()
+    body = await _json_object_body(request)
     product = (body.get("product") or "").strip().lower()
 
     if product == "fixpack":
@@ -1115,6 +2030,8 @@ async def create_paypal_order(
                                   "created from an uploaded zip, so there's no "
                                   "repository to open a fix PR against."},
             )
+        await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+        _reject_if_nothing_to_fix(audit)
         try:
             order = await paypal.create_fixpack_order(
                 payment_repo, audit_id=audit_id, transport=transport
@@ -1195,7 +2112,7 @@ async def create_paypal_subscription(
     if not database_url_from_env():
         raise _paypal_not_persisted_error()
 
-    body = await request.json()
+    body = await _json_object_body(request)
     repo_full_name = normalize_repo_full_name(body.get("repo_url"))
     if repo_full_name is None:
         raise HTTPException(
@@ -1250,7 +2167,7 @@ async def paypal_webhook(
                     "detail": "PAYPAL_WEBHOOK_ID is not set on this deployment"},
         )
 
-    event = await request.json()
+    event = await _json_object_body(request)
     try:
         verified = await paypal.verify_webhook_signature(
             headers=request.headers, event=event, webhook_id=webhook_id,
@@ -1295,7 +2212,14 @@ async def get_fixpack_status(
     has been purchased yet (or persistence isn't configured), status is null
     so the frontend can poll a stable shape rather than treat "no job" as an
     error. 404 only when the audit itself doesn't exist.
+
+    On 'failed', failure_kind says whose fault it was: 'infrastructure' when the
+    job was reaped after never completing (a sandbox-runner outage or a crashed
+    worker — nothing to do with the client's code), else null for a genuine
+    generation failure. Derived from the detail the reaper writes, so it needs no
+    schema change; null for every non-failed status.
     """
+    set_log_context(audit_id=audit_id)
     audit = await audit_repo.get(audit_id)
     if audit is None:
         raise HTTPException(
@@ -1306,11 +2230,18 @@ async def get_fixpack_status(
         )
     job = await fixpack_repo.get_by_audit(audit_id)
     if job is None:
-        return {"audit_id": audit_id, "status": None, "pr_url": None}
+        return {"audit_id": audit_id, "status": None, "pr_url": None,
+                "failure_kind": None}
+    status = job.get("status")
+    detail = job.get("detail") or ""
+    failure_kind = None
+    if status == "failed" and detail.startswith(STALE_LEASE_DETAIL_PREFIX):
+        failure_kind = "infrastructure"
     return {
         "audit_id": audit_id,
-        "status": job.get("status"),
+        "status": status,
         "pr_url": job.get("pr_url"),
+        "failure_kind": failure_kind,
     }
 
 
@@ -1388,6 +2319,26 @@ async def poll_usdt(
     Requires `Authorization: Bearer <USDT_POLL_TOKEN>`, constant-time
     compared, exactly like the reap endpoint. 503 if the token or the
     receiving address isn't configured.
+
+    One poll at a time (advisory lock), like the Fix Pack and monitoring
+    processors -- but load-bearing here rather than belt-and-suspenders,
+    because matching a transfer is a read-then-write with no atomic claim
+    behind it. Two overlapping polls both see the same invoice unpaid and both
+    grant it, producing two pro accounts for one payment; see db.usdt_poll_lock
+    for why the unique index on payments(provider, external_ref) doesn't stop
+    that. If another poll holds the lock this returns {"skipped_locked": true},
+    matching the other two endpoints.
+
+    shipit-usdt-poller.timer alone won't overlap two runs on one host (oneshot
+    + OnUnitInactiveSec re-arms only after the previous run exits), but nothing
+    about this endpoint depends on that: it is plain authenticated HTTP, so an
+    operator curl during a scheduled run, two app instances mid-deploy, or a
+    second host all produce a concurrent poll. The lock, not the schedule, is
+    what makes the grant safe.
+
+    Cost of holding it: one of the pool's max_size=5 connections for the whole
+    run, including the TronGrid call (30s timeout in fetch_transfers) -- the
+    same trade-off the Fix Pack and monitoring processors already accept.
     """
     token = usdt_trc20.poll_token_from_env()
     if not token:
@@ -1405,11 +2356,16 @@ async def poll_usdt(
             detail={"reason": "usdt_not_configured",
                     "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
         )
-    return await usdt_trc20.poll_and_match(
-        payment_repo, account_repo, address=address,
-        api_key=usdt_trc20.trongrid_api_key_from_env(), transport=transport,
-        fixpack_repo=fixpack_repo, audit_repo=audit_repo,
-    )
+    try:
+        async with usdt_poll_lock():
+            return await usdt_trc20.poll_and_match(
+                payment_repo, account_repo, address=address,
+                api_key=usdt_trc20.trongrid_api_key_from_env(), transport=transport,
+                fixpack_repo=fixpack_repo, audit_repo=audit_repo,
+            )
+    except ProcessorLockBusy:
+        # Another poll holds the lock — benign. The scheduler logs and moves on.
+        return {"skipped_locked": True}
 
 
 async def _resolve_pr_token(owner: str, repo: str) -> str | None:
@@ -1424,9 +2380,20 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
     # creds look present in the process env yet resolution still yields no
     # token, this pins down whether os.environ actually carries them at
     # call time. Presence/length only — never the secret values.
+    #
+    # Only the contradiction is a warning. Resolving a token is the healthy
+    # path and running with no App configured at all is a supported one (the
+    # GITHUB_PR_TOKEN fallback in the docstring), so both log at debug — this
+    # fires on every PR delivery and used to warn unconditionally. Both PEM
+    # variables are counted, because a deployment on the base64 path has
+    # GITHUB_APP_PRIVATE_KEY unset and is perfectly healthy.
     app_id_env = os.environ.get("GITHUB_APP_ID")
-    pem_env = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-    logger.warning(
+    pem_env = (os.environ.get("GITHUB_APP_PRIVATE_KEY")
+               or os.environ.get("GITHUB_APP_PRIVATE_KEY_B64"))
+    log = (logger.warning
+           if app_creds is None and (app_id_env or pem_env)
+           else logger.debug)
+    log(
         "PR token resolve for %s/%s: GITHUB_APP_ID=%s, "
         "GITHUB_APP_PRIVATE_KEY=%s, app_credentials_from_env=%s",
         owner, repo,
@@ -1462,6 +2429,25 @@ async def _alert_fixpack_failed(job_id, detail: str) -> None:
     await notify_operator(
         f"Drydock: Fix Pack job {job_id} failed — {detail}",
         dedupe_key=f"fixpack-failed:{job_id}",
+    )
+
+
+async def _alert_github_app_auth_failed(detail: str) -> None:
+    """One operator alert for a broken GitHub App credential.
+
+    Deduped on the deployment, NOT on the job: the key is either right or
+    wrong for everyone, so alerting per job would page once per queued Fix
+    Pack for a single cause. The text names the cause and the file to edit,
+    because the useful thing to know at 3am is not that a job failed -- it is
+    that no Fix Pack on this deployment can be delivered until .env changes.
+    """
+    await notify_operator(
+        "Drydock: GitHub App credentials REJECTED — no Fix Pack can open a "
+        f"PR on this deployment until this is fixed. {detail} — check "
+        "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_B64 in .env; the 401 log "
+        "line carries a public-key fingerprint to compare against the App's "
+        "registered key. Affected jobs are queued, not lost.",
+        dedupe_key="github-app-auth-rejected",
     )
 
 
@@ -1510,13 +2496,19 @@ async def _process_one_paid_job(
     repo_fetcher, pr_opener,
 ) -> str:
     """Generate + deliver one paid Fix Pack job. Returns the outcome:
-    'delivered', 'no_fix_needed', 'blocked', or 'failed'. Advances the job's
-    status to match so a re-run of the processor doesn't pick it up again (a
-    'failed' or 'blocked' job stays visible for a human to retry/review
+    'delivered', 'no_fix_needed', 'blocked', 'deferred', or 'failed'. Advances
+    the job's status to match so a re-run of the processor doesn't pick it up
+    again (a 'failed' or 'blocked' job stays visible for a human to retry/review
     rather than silently stuck on 'paid'). 'blocked' means the generated
     fix passed syntax validation but the semantic check (running the
     client's own tests against the patched tree) found a regression, so the
     PR was withheld for manual review.
+
+    'deferred' is the one outcome that does NOT advance the status: the semantic
+    check could not run at all (sandbox runner unreachable), so there is no
+    verdict to act on and the job keeps its 'running' lease to be retried by the
+    existing stale-lease reaper. Delivering would ship an unverified PR; blocking
+    would blame the customer's fix for a test run that never happened.
 
     Every failure is made visible: the full traceback is logged and a short
     reason is written to the job's `detail` column. A job must never land on
@@ -1524,11 +2516,16 @@ async def _process_one_paid_job(
     production failure impossible to diagnose (see the silent-failure
     incident this path was hardened for)."""
     job_id = job["id"]
+    set_log_context(job_id=str(job_id),
+                    audit_id=str(job["audit_id"]) if job.get("audit_id") else None)
+    started = time.monotonic()
     try:
         audit = await audit_repo.get(job["audit_id"]) if job.get("audit_id") else None
         if audit is None or not audit.get("repo_url"):
             detail = "audit missing or has no repo_url to re-fetch"
-            logger.error("Fix Pack job %s failed: %s", job_id, detail)
+            logger.error("Fix Pack job %s failed: %s", job_id, detail,
+                         extra={"step": "load_audit",
+                                "duration_ms": _elapsed_ms(started)})
             await fixpack_repo.mark_status(job_id, "failed", detail=detail)
             await _record_fix_outcome(
                 fix_outcome_repo, job=job, outcome="failed",
@@ -1540,7 +2537,9 @@ async def _process_one_paid_job(
         parsed = _parse_github_repo_url(audit["repo_url"])
         if parsed is None:
             detail = f"unparseable repo_url: {audit['repo_url']!r}"
-            logger.error("Fix Pack job %s failed: %s", job_id, detail)
+            logger.error("Fix Pack job %s failed: %s", job_id, detail,
+                         extra={"step": "parse_repo_url",
+                                "duration_ms": _elapsed_ms(started)})
             await fixpack_repo.mark_status(job_id, "failed", detail=detail)
             await _record_fix_outcome(
                 fix_outcome_repo, job=job, outcome="failed",
@@ -1569,11 +2568,36 @@ async def _process_one_paid_job(
         # tree (in Docker) and refuse to ship if we introduced a regression.
         # Synchronous and slow (real Docker), so off the event loop like the
         # scan. A blocked job is parked for a human, never auto-delivered.
-        semantic = await run_in_threadpool(run_semantic_check, zip_bytes, plan)
+        semantic = await run_in_threadpool(
+            functools.partial(
+                run_semantic_check, zip_bytes, plan,
+                suite_runner=sandbox_client.run_suite,
+                minimal_checker=sandbox_client.minimal_check,
+            )
+        )
+        if semantic.verification_unavailable:
+            # The sandbox runner was unreachable, so nothing was verified. We
+            # must neither deliver (an unverified PR to a paying customer) nor
+            # block (telling them their fix broke tests that never ran). Leave
+            # the 'running' lease alone and return: reap_stale_running puts the
+            # job back to 'paid' once the lease expires, bounded by
+            # MAX_JOB_ATTEMPTS, then fails it terminally. Deliberately no
+            # second attempts counter here — that mechanism already exists.
+            logger.warning(
+                "Fix Pack job %s deferred, verification unavailable: %s",
+                job_id, semantic.detail,
+                extra={"step": "semantic_check",
+                       "duration_ms": _elapsed_ms(started)},
+            )
+            await fixpack_repo.mark_status(job_id, "running", detail=semantic.detail)
+            return "deferred"
+
         if semantic.regression:
             logger.warning(
                 "Fix Pack job %s blocked by semantic check: %s",
                 job_id, semantic.detail,
+                extra={"step": "semantic_check",
+                       "duration_ms": _elapsed_ms(started)},
             )
             await fixpack_repo.mark_status(job_id, "blocked", detail=semantic.detail)
             await _record_fix_outcome(
@@ -1600,12 +2624,43 @@ async def _process_one_paid_job(
             pr_url=opened.html_url,
         )
         return "delivered"
+    except GitHubAppAuthError as exc:
+        # GitHub refused our own App credentials. Nothing about this job or
+        # this customer's repository was reached, so the three things the
+        # generic handler below does would all be wrong here:
+        #
+        #   * 'failed' is terminal, and this job is perfectly deliverable the
+        #     moment an operator fixes the key -- failing it bills a customer
+        #     for our outage and leaves recovery to hand-editing the database;
+        #   * the attempt the claim charged walks it toward the reaper's
+        #     terminal 'failed' for a reason no retry of theirs can fix;
+        #   * a fix_outcomes row would record OUR outage as the outcome of a
+        #     fix, in the one table we intend to learn from later.
+        #
+        # So the job goes back on the queue, unspent, and the operator is told
+        # what is actually broken. Same shape as the verification_unavailable
+        # branch above: when we could not do our job, the customer's job waits.
+        detail = _failure_detail(exc)
+        logger.error(
+            "Fix Pack job %s deferred: GitHub App credentials rejected (%s)",
+            job_id, detail,
+            extra={"step": "github_app_auth",
+                   "duration_ms": _elapsed_ms(started)},
+        )
+        await fixpack_repo.release_to_paid(
+            job_id,
+            f"requeued: GitHub App credentials rejected — {detail}",
+        )
+        await _alert_github_app_auth_failed(detail)
+        return "auth_rejected"
     except Exception as exc:  # noqa: BLE001 — every failure must be recorded
         # Any error in fetch, generation, token exchange, or PR delivery
         # lands here. Log the full traceback (logger.exception attaches it)
         # and persist a short reason so the failure is diagnosable from both
         # the logs and a `select ... from fixpack_jobs` query.
-        logger.exception("Fix Pack job %s failed during processing", job_id)
+        logger.exception("Fix Pack job %s failed during processing", job_id,
+                         extra={"step": "fixpack",
+                                "duration_ms": _elapsed_ms(started)})
         detail = _failure_detail(exc)
         await fixpack_repo.mark_status(job_id, "failed", detail=detail)
         await _record_fix_outcome(
@@ -1646,8 +2701,11 @@ async def process_paid_fixpacks(
 
     Returns a summary the scheduler can log: how many jobs were processed,
     delivered (PR opened), skipped (nothing eligible to fix), blocked,
+    deferred (semantic check could not run — lease left for the reaper),
     failed, and requeued (stale leases put back for retry). If another run
-    already holds the lock, returns {"skipped_locked": true} instead.
+    already holds the lock, returns {"skipped_locked": true} instead; if the
+    sandbox runner is unhealthy, nothing is claimed and the summary carries
+    {"skipped_unhealthy_runner": true}.
     """
     token = _fixpack_process_token()
     if not token:
@@ -1659,7 +2717,7 @@ async def process_paid_fixpacks(
     _require_bearer_token(request, token)
 
     summary = {"processed": 0, "delivered": 0, "skipped": 0,
-               "blocked": 0, "failed": 0, "requeued": 0}
+               "blocked": 0, "failed": 0, "requeued": 0, "deferred": 0}
     try:
         # One processor run at a time (advisory lock), so two overlapping
         # timer firings can't both work the backlog. The per-job claim below
@@ -1675,6 +2733,32 @@ async def process_paid_fixpacks(
             )
             summary["requeued"] = reaped["requeued"]
             summary["failed"] += reaped["failed"]
+            # A lease reaped all the way to 'failed' is a paying customer whose
+            # PR will never open, which is exactly what the operator alert is
+            # for. The reaper writes the row itself, so without this the only
+            # terminal failure nobody hears about would be the reaped one.
+            for reaped_id in reaped.get("failed_ids", []):
+                await _alert_fixpack_failed(
+                    reaped_id,
+                    f"stale lease reaped after {MAX_JOB_ATTEMPTS} attempt(s) — "
+                    f"the job never completed (sandbox runner outage or a "
+                    f"crashed worker)",
+                )
+
+            # Don't claim anything while the sandbox runner is down: the
+            # semantic check would be unable to run, every claim would burn one
+            # of the job's MAX_JOB_ATTEMPTS, and a few minutes of runner
+            # downtime would fail the whole paid backlog. Skipping turns an
+            # outage into a pause — the next timer tick claims normally. Checked
+            # once per run, not per job: a mid-run outage is still handled, by
+            # the per-job 'deferred' path below.
+            if not await run_in_threadpool(sandbox_client.runner_healthy):
+                logger.warning(
+                    "Fix Pack processor: sandbox runner unhealthy, claiming "
+                    "nothing this pass (backlog is untouched, attempts unspent)"
+                )
+                summary["skipped_unhealthy_runner"] = True
+                return summary
 
             # Claim-process-claim until the backlog is drained. Each claim
             # atomically leases one 'paid' job into 'running' (see
@@ -1696,6 +2780,26 @@ async def process_paid_fixpacks(
                     summary["skipped"] += 1
                 elif outcome == "blocked":
                     summary["blocked"] += 1
+                elif outcome == "deferred":
+                    # Still 'running' on purpose; the reaper will re-queue it.
+                    # Stop draining: the runner just went down mid-run, so every
+                    # further claim would only spend another job's attempts.
+                    summary["deferred"] += 1
+                    break
+                elif outcome == "auth_rejected":
+                    # Already back on 'paid' with its attempt refunded, so
+                    # unlike the branch above this one is NOT waiting for the
+                    # reaper -- it is immediately re-claimable, which is exactly
+                    # why the loop must stop. A broken App key rejects every
+                    # job identically, so draining on would spin through the
+                    # whole backlog releasing and re-claiming the same rows.
+                    #
+                    # Reported separately from `deferred` because the two mean
+                    # different things to whoever reads the summary: one is a
+                    # sandbox outage that heals itself, the other needs a human
+                    # to edit .env before any Fix Pack can ever be delivered.
+                    summary["skipped_github_app_auth"] = True
+                    break
                 else:
                     summary["failed"] += 1
     except ProcessorLockBusy:
@@ -1714,6 +2818,8 @@ async def process_pending_monitoring(
     llm_client: LLMClient = Depends(get_llm_client),
     repo_fetcher=Depends(get_repo_fetcher),
     transport=Depends(get_billing_transport),
+    llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
 ) -> dict:
     """Operational endpoint: drain the pending continuous-monitoring backlog.
     The GitHub push webhook enqueues one 'pending' run per eligible push and
@@ -1744,6 +2850,14 @@ async def process_pending_monitoring(
         )
     _require_bearer_token(request, token)
 
+    # Emergency stop applies to monitoring too (each run is an LLM-spending
+    # re-audit). A background drain has no user to 503, so it soft-degrades:
+    # leave the backlog 'pending' and return without claiming anything. The
+    # stop's operator alert has already fired inside _emergency_stop_active.
+    paused, _note = await _emergency_stop_active(service_flags_repo)
+    if paused:
+        return {"skipped_paused": True}
+
     summary = {"processed": 0, "notified": 0, "no_new": 0, "unfetchable": 0,
                "unauditable": 0, "no_subscription": 0, "failed": 0, "requeued": 0}
     try:
@@ -1764,7 +2878,7 @@ async def process_pending_monitoring(
                     run, monitoring_repo=monitoring_repo,
                     subscription_repo=subscription_repo, audit_repo=audit_repo,
                     llm_client=llm_client, repo_fetcher=repo_fetcher,
-                    transport=transport,
+                    transport=transport, llm_usage_repo=llm_usage_repo,
                 )
                 if outcome in summary:
                     summary[outcome] += 1
@@ -1774,6 +2888,326 @@ async def process_pending_monitoring(
         # Another run holds the lock — benign. The scheduler logs and moves on.
         return {"skipped_locked": True}
     return summary
+
+
+@app.get("/internal/audit-jobs/stats")
+async def audit_jobs_stats(
+    request: Request,
+    audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
+) -> dict:
+    """Operational read: how deep the audit queue is, broken down by state.
+
+    /readyz carries the two numbers a health check needs; this is the view for
+    a human or a scraper diagnosing WHY, which needs the whole state histogram.
+    `dead_letter` is the one to watch -- the worker alerts on each new one, and
+    a rising total here is what confirms a pattern rather than a one-off.
+
+    Requires `Authorization: Bearer <AUDIT_JOBS_STATS_TOKEN>`, constant-time
+    compared. 503 if the token isn't configured, and 503 if DATABASE_URL isn't
+    set, because zeros from a queue you cannot see are worse than an error.
+
+    Superseded by GET /internal/stats, which reports this queue alongside the
+    others from the same backlog_stats() call. Kept, unchanged: this path and
+    its response shape are already deployed and hand-curled, and there is no
+    logic here that can drift from the new endpoint -- both are projections of
+    one repository read."""
+    token = _audit_jobs_stats_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "audit_jobs_stats_not_configured",
+                    "detail": "AUDIT_JOBS_STATS_TOKEN is not set on this "
+                              "deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    stats = await audit_job_repo.backlog_stats()
+    if stats is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "persistence isn't configured on this deployment "
+                              "(see app/db.py)"},
+        )
+    return {
+        "states": stats["states"],
+        "queued": stats["queued"],
+        "oldest_queued_seconds": stats["oldest_queued_seconds"],
+        "dead_letter": stats["states"].get("dead_letter", 0),
+    }
+
+
+STATS_RECENT_WINDOW_SECONDS = 3600
+STATS_DAY_WINDOW_SECONDS = 24 * 3600
+
+# When a rule has enough evidence to learn from.
+#
+# 20 labelled outcomes and 5 distinct audits, per rule. The second number is
+# the load-bearing one: twenty merges from one customer's repository say that
+# this fix suits that repository, and generalising from it is how a knowledge
+# base learns something false with confidence. Five audits is not a large
+# sample either, but it is the point past which a signal is at least not one
+# codebase's opinion.
+#
+# These are a stated position, not a derived one -- there is no dataset to
+# derive them from yet, which is rather the point. They live here so the
+# question "is there enough data?" is answered by a query instead of by
+# whoever is asked.
+LEARNING_MIN_LABELLED = 20
+LEARNING_MIN_AUDITS = 5
+
+
+@app.get("/internal/stats")
+async def internal_stats(
+    request: Request,
+    audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+    fix_outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
+) -> dict:
+    """Every queue and the LLM bill, aggregated, in one authenticated read.
+
+    The deployment is a single VPS whose spare memory is already contended for
+    by the Fix Pack sandbox containers, so there is no Prometheus and no
+    metrics process: the aggregates are computed on demand from the tables that
+    already hold the facts (audit_jobs, fixpack_jobs, llm_usage), and this is
+    what a scraper or a human polls. Counts and percentiles only, never rows,
+    so the response size does not grow with the size of the queues.
+
+    Same auth as /internal/audit-jobs/stats and deliberately the same token:
+    AUDIT_JOBS_STATS_TOKEN exists so a monitoring reader can see queue depth
+    without holding a credential that can also start work, which is exactly
+    this endpoint's audience. A second token for the same reader would be two
+    secrets to rotate for one job.
+
+    Every number comes from a repository method, several of which /readyz and
+    /internal/audit-jobs/stats already call, so "backlog" and "oldest queued"
+    have one definition in the codebase rather than one per reader.
+
+    503 rather than zeros when the token or the database is missing: a stats
+    endpoint answering 200 with empty counters while it cannot see the queue is
+    worse than one that fails, because a dashboard cannot tell the difference
+    and a silent zero reads as healthy."""
+    token = _audit_jobs_stats_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "audit_jobs_stats_not_configured",
+                    "detail": "AUDIT_JOBS_STATS_TOKEN is not set on this "
+                              "deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    audit_backlog = await audit_job_repo.backlog_stats()
+    if audit_backlog is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "persistence isn't configured on this deployment "
+                              "(see app/db.py)"},
+        )
+    # Past this point the pool is known to exist, so the remaining reads
+    # cannot return the not-configured None.
+    audit_recent = await audit_job_repo.recent_outcomes(
+        window_seconds=STATS_RECENT_WINDOW_SECONDS)
+    fixpack_backlog = await fixpack_repo.backlog_stats()
+    fixpack_statuses = await fixpack_repo.status_counts()
+    spend_hour = await llm_usage_repo.spend_since(
+        window_seconds=STATS_RECENT_WINDOW_SECONDS)
+    spend_day = await llm_usage_repo.spend_since(
+        window_seconds=STATS_DAY_WINDOW_SECONDS)
+    learning = await fix_outcome_repo.learning_readiness(
+        min_labelled=LEARNING_MIN_LABELLED,
+        min_audits=LEARNING_MIN_AUDITS,
+    )
+
+    return {
+        "window_seconds": STATS_RECENT_WINDOW_SECONDS,
+        "audit_jobs": {
+            "states": audit_backlog["states"],
+            "queued": audit_backlog["queued"],
+            "oldest_queued_seconds": audit_backlog["oldest_queued_seconds"],
+            "recent": audit_recent,
+        },
+        "fixpack_jobs": {
+            "statuses": fixpack_statuses,
+            "paid_backlog": fixpack_backlog["backlog"],
+            "oldest_paid_seconds": fixpack_backlog["oldest_paid_seconds"],
+        },
+        "llm_usage": {
+            "last_hour": _spend_view(spend_hour),
+            "last_24h": _spend_view(spend_day),
+        },
+        # audit_jobs only, and named so rather than presented as a service-wide
+        # figure it is not: fixpack_jobs stamps no timestamp on a terminal
+        # transition, so "failed in the last hour" is not computable for that
+        # queue without a schema change, and quietly folding in its lifetime
+        # totals would make the ratio mean nothing.
+        "errors": {
+            "source": "audit_jobs",
+            "window_seconds": STATS_RECENT_WINDOW_SECONDS,
+            "terminal_total": audit_recent["terminal_total"],
+            "failed": audit_recent["failed"],
+            "error_rate": audit_recent["error_rate"],
+            "top_error_codes": audit_recent["top_error_codes"],
+        },
+        # Lifetime, not windowed like everything above it: the question this
+        # answers is "has enough evidence accumulated to learn from", and an
+        # hour of it is not evidence.
+        "learning": learning,
+    }
+
+
+def _spend_view(spend: dict) -> dict:
+    """One llm_usage window as JSON. cost_usd is quantized to the column's own
+    numeric(12,6) scale and then floated -- the repository hands back a Decimal
+    so nothing rounds before it must, and this is where it must, because JSON
+    has no decimal type."""
+    return {
+        "calls": spend["calls"],
+        "cost_usd": float(spend["cost_usd"].quantize(Decimal("0.000001"))),
+    }
+
+
+@app.post("/internal/payments/{payment_id}/refund")
+async def refund_payment(
+    payment_id: str,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+) -> dict:
+    """Record that a completed payment was given back.
+
+    Body: JSON {"reason": str}. Requires `Authorization: Bearer
+    <SERVICE_FLAGS_TOKEN>`.
+
+    This endpoint moves no money, and no endpoint here could. A bank transfer
+    lands on a private individual's account and goes back the same way, by
+    hand; Telegram Stars and USDT have no refund call this deployment holds a
+    credential for. The operator sends the money and then tells the system, in
+    that order.
+
+    So the value is the record. Until now a refunded payment stayed
+    `completed` for ever, and a month later nothing distinguished money kept
+    from money returned -- an error that is always in the flattering
+    direction. It became concrete on 2026-08-01, when DRY-UPRQKH charged 10.79
+    for a Fix Pack on an audit with nothing a Fix Pack could fix. The customer
+    was the operator testing his own product; the next one will not be.
+
+    SERVICE_FLAGS_TOKEN rather than a token of its own. It is already the
+    operator-privileged credential -- it can halt every paid LLM operation --
+    and this is the same audience. AUDIT_JOBS_STATS_TOKEN would be wrong for
+    the reason its own docstring gives: it exists so a monitoring reader can
+    see queue depth WITHOUT holding a credential that can also act.
+
+    404 when the payment does not exist OR is not `completed`: an invoice
+    nobody paid has no refund to record, and the two cases are deliberately
+    not distinguished to an unauthenticated-by-id caller. Repeating the call
+    is a no-op for the same reason -- one refund must not become two entries
+    because a command was run twice.
+
+    Deliberately does NOT revoke anything. A Fix Pack PR that was delivered
+    stays delivered; Pro access stays granted. Whether a refund should take
+    back what it paid for is a policy question with a different cost of being
+    wrong, and mixing it into the record-keeping would mean neither could be
+    changed alone.
+    """
+    token = _service_flags_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "SERVICE_FLAGS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    body = await _json_object_body(request)
+    reason = body.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request",
+                    "detail": "body must be JSON with a non-empty 'reason'"},
+        )
+
+    try:
+        uuid.UUID(payment_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request", "detail": "payment_id must be a UUID"},
+        )
+
+    payment = await payment_repo.mark_refunded(payment_id, reason=reason.strip())
+    if payment is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_refundable",
+                    "detail": "no completed payment with that id"},
+        )
+    return payment
+
+
+@app.post("/internal/service-flags/llm_paid_ops")
+async def set_llm_paid_ops(
+    request: Request,
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
+) -> dict:
+    """Operator-only emergency stop toggle for all paid LLM operations.
+
+    Body: JSON {"enabled": bool, "note": str?}. Setting enabled=false pauses new
+    /v1/audits (they 503 service_paused) and the monitoring drain (it no-ops,
+    leaving the backlog pending); enabled=true resumes. The note is echoed to
+    callers in the 503 detail, so use it to say who paused and why.
+
+    Requires `Authorization: Bearer <SERVICE_FLAGS_TOKEN>`, constant-time
+    compared. 503 if the token isn't configured -- a kill switch with no auth is
+    worse than none. 503 too if DATABASE_URL isn't set: there is no flag store to
+    write, so a caller must not believe a pause took effect when it didn't."""
+    token = _service_flags_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "service_flags_not_configured",
+                    "detail": "SERVICE_FLAGS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    # This endpoint already guarded the parse by hand; _json_object_body is
+    # that same guard, so the local try/except would now only catch what it
+    # already raised as a 422. The value check below stays -- the helper knows
+    # the body is an object, not what belongs in it.
+    body = await _json_object_body(request)
+    if not isinstance(body.get("enabled"), bool):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request",
+                    "detail": "body must be JSON with a boolean 'enabled'"},
+        )
+    enabled = body["enabled"]
+    note = body.get("note")
+    if note is not None and not isinstance(note, str):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request", "detail": "'note' must be a string"},
+        )
+
+    row = await service_flags_repo.set("llm_paid_ops", enabled=enabled, note=note)
+    if row is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "no flag store (DATABASE_URL is not set)"},
+        )
+    # Make the new value visible immediately rather than after the TTL, and
+    # alert the operator when the stop is engaged (mandatory on emergency stop).
+    _reset_service_flag_cache()
+    if not enabled:
+        await notify_operator(
+            f"Emergency stop ENGAGED via API: llm_paid_ops set OFF. "
+            f"Note: {note or '(none)'}",
+            dedupe_key="llm-paid-ops-paused",
+        )
+    return {"key": "llm_paid_ops", "enabled": enabled, "note": note}
 
 
 @app.post("/v1/audits", status_code=202)
@@ -1788,11 +3222,32 @@ async def create_audit(
                     "private repos, no other hosts.",
     ),
     limiter: RateLimiter = Depends(get_rate_limiter),
-    llm_client: LLMClient = Depends(get_llm_client),
     audit_repo: AuditRepository = Depends(get_audit_repo),
     account_repo: AccountRepository = Depends(get_account_repo),
     repo_fetcher=Depends(get_repo_fetcher),
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
+    audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> dict:
+    """Accept an audit and hand back a job to poll.
+
+    Asynchronous since Stage 2: the scan itself runs in the audit worker
+    (`python -m app.worker`), and this endpoint returns as soon as the job is
+    durably queued. Everything that can be decided from the submission alone
+    still happens here, before the enqueue, and still answers with the same
+    status codes it always did -- intake shape, the emergency stop, the repo
+    fetch, zip validation, stack detection, the daily quota. Rejecting those at
+    intake keeps the queue free of jobs that are already known to be dead, and
+    keeps a client's error for a bad upload immediate instead of arriving two
+    polls later.
+
+    The content-hash cache is likewise still checked here, and a hit still
+    returns the finished audit inline with no job created at all: the result
+    already exists, so making the client poll for it would be slower for no
+    gain.
+
+    Response on a miss is 202 {job_id, access_token, state}. See
+    GET /v1/audit-jobs/{job_id}."""
     # Exactly one intake method: not both, not neither. Both-None and
     # both-present are the two cases where the equality holds.
     if (archive is None) == (repo_url is None):
@@ -1803,10 +3258,23 @@ async def create_audit(
                               "or 'repo_url' (public GitHub repo URL)"},
         )
 
+    # Emergency stop: a direct API caller gets a clear 503 (with the operator's
+    # note) before any repo fetch or scan work is done. Checked here, at the
+    # very start, so a paused service spends nothing. The mandatory operator
+    # alert fires inside _emergency_stop_active.
+    intake_started = time.monotonic()
+    paused, note = await _emergency_stop_active(service_flags_repo)
+    if paused:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "service_paused", "detail": note},
+        )
+
     # Resolve the caller's tier from an optional API key. No key -> None ->
     # free, with no DB call, so anonymous traffic is byte-for-byte unchanged.
     # The only entitlement enforced here is daily_audit_limit (below).
     account = await resolve_account(request, account_repo)
+    _bind_account(account)
     tier = account["tier"] if account else TIER_FREE
     entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
 
@@ -1853,10 +3321,16 @@ async def create_audit(
                 detail={"reason": exc.reason, "detail": exc.detail},
             ) from exc
 
+    logger.info(
+        "audit intake: source read (%s bytes)", len(raw),
+        extra={"step": "read_source", "duration_ms": _elapsed_ms(intake_started)},
+    )
+
     buf = io.BytesIO(raw)
 
+    stage_started = time.monotonic()
     try:
-        report = validate_zip(buf, size_bytes=len(raw))
+        validate_zip(buf, size_bytes=len(raw))
     except ArchiveValidationError as exc:
         raise HTTPException(
             status_code=422,
@@ -1865,6 +3339,10 @@ async def create_audit(
 
     buf.seek(0)
     stack = detect_stack(buf)
+    logger.info(
+        "audit intake: archive validated as %s", stack.value,
+        extra={"step": "validate", "duration_ms": _elapsed_ms(stage_started)},
+    )
     if stack is Stack.UNSUPPORTED:
         raise HTTPException(
             status_code=422,
@@ -1909,9 +3387,16 @@ async def create_audit(
     # prior result only if it was produced by the current audit engine, so an
     # engine change (AUDIT_ENGINE_VERSION bump) recomputes rather than serving
     # a stale row. See app/scan/pipeline.py and AuditRepository.get_by_content_hash.
+    stage_started = time.monotonic()
     digest = content_digest(raw)
     cached = await audit_repo.get_by_content_hash(digest, AUDIT_ENGINE_VERSION)
+    logger.info(
+        "audit intake: cache %s for digest %s",
+        "hit" if cached is not None else "miss", digest[:12],
+        extra={"step": "cache_lookup", "duration_ms": _elapsed_ms(stage_started)},
+    )
     if cached is not None:
+        set_log_context(audit_id=str(cached["id"]))
         return {
             "audit_id": cached["id"],
             # The reused audit's own token, so the client can open its page.
@@ -1929,33 +3414,151 @@ async def create_audit(
             "reused": True,
         }
 
-    # Off the event loop: the LLM stage does real network I/O and can
-    # take up to ~2 minutes. Moves to the arq worker + queue in phase 2.
-    scan = await run_in_threadpool(run_scan, raw, llm_client)
-
-    persisted = await audit_repo.create(
-        stack=stack.value, file_count=report.file_count,
-        score_total=scan["score"]["total"], score_json=scan["score"],
-        findings_json=scan["findings"], repo_url=source_url,
-        content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
+    stage_started = time.monotonic()
+    enqueued = await _enqueue_audit_job(
+        audit_job_repo,
+        raw=raw if archive is not None else None,
+        source_kind="zip" if archive is not None else "repo_url",
+        source_url=source_url,
+        digest=digest,
+        stack=stack.value,
+        account_id=account["id"] if account else None,
+        quota_key=quota_key,
+        idempotency_key=(
+            idempotency_key
+            or _audit_idempotency_key(
+                digest, account["id"] if account else None)
+        ),
     )
-    audit_id = persisted["id"] if persisted else str(uuid.uuid4())
+    logger.info(
+        "audit intake: queued job %s", enqueued["job_id"],
+        extra={"step": "enqueue", "duration_ms": _elapsed_ms(stage_started)},
+    )
+    return enqueued
+
+
+def _audit_idempotency_key(digest: str, account_id: str | None) -> str:
+    """The default key for a submission the client did not label itself.
+
+    (content, engine version, submitter) -- so a double-clicked upload joins the
+    job already running instead of queueing a second identical scan, while two
+    different callers submitting the same bytes stay independent (they have
+    separate quotas, and one's job going terminal must not decide the other's
+    outcome). The engine version is in the key for the same reason it is in the
+    cache key: after a bump the same content is genuinely different work."""
+    material = f"{digest}|{AUDIT_ENGINE_VERSION}|{account_id or 'anon'}"
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+async def _enqueue_audit_job(
+    audit_job_repo: AuditJobRepository, *, raw: bytes | None, source_kind: str,
+    source_url: str | None, digest: str, stack: str, account_id: str | None,
+    quota_key: str | None, idempotency_key: str,
+) -> dict:
+    """Queue one validated submission and return the 202 body.
+
+    A repo_url job is inserted straight into 'queued': its whole payload is the
+    URL, which is already in the row. An uploaded archive exists only in this
+    request's memory, so it goes through 'created' -- insert, write the bytes to
+    the spool, and only then mark_queued. A worker can never claim a 'created'
+    row, so a crash between the insert and the write cannot produce a claimable
+    job pointing at a file that was never written (see migration 0022).
+
+    The id is minted here rather than by the database because the spool filename
+    IS the job id, so it must be known before the archive can be staged, which
+    is before the row can be flipped to 'queued'.
+
+    A duplicate submission (inserted=False) returns the live job it collided
+    with, and deliberately does NOT re-stage: that job's payload is already on
+    disk, and rewriting it under a worker that may be mid-read buys nothing."""
+    job_id = str(uuid.uuid4())
+    job = await audit_job_repo.enqueue(
+        job_id=job_id,
+        initial_state="created" if source_kind == "zip" else "queued",
+        source_kind=source_kind,
+        # Filled in below for a zip, once the bytes are actually on disk.
+        source_ref=None if source_kind == "zip" else source_url,
+        content_hash=digest,
+        engine_version=AUDIT_ENGINE_VERSION,
+        stack=stack,
+        account_id=account_id,
+        quota_key=quota_key,
+        idempotency_key=idempotency_key,
+    )
+    if job is None:
+        # No DATABASE_URL: there is no queue to accept the job and no worker to
+        # run it. Before the cutover this deployment could still scan inline and
+        # return an unpersisted result; it cannot now, and saying so is better
+        # than handing back a job id that does not exist.
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "queue_unavailable",
+                    "detail": "audit persistence isn't configured on this "
+                              "deployment (see app/db.py)"},
+        )
+
+    # job["id"] rather than the minted job_id: on a duplicate collision the row
+    # returned is the live job this submission matched, not the one we minted,
+    # and the id a caller will poll with is the one worth logging.
+    set_log_context(job_id=str(job["id"]))
+
+    if source_kind == "zip" and job.get("inserted"):
+        await _stage_and_queue(audit_job_repo, job_id=str(job["id"]), raw=raw)
 
     return {
-        "audit_id": audit_id,
-        # The ownership token for this audit, delivered exactly once here.
-        # None on an unpersisted (no-DATABASE_URL) deployment, where there is
-        # no stored row to protect and the id is ephemeral anyway.
-        "access_token": persisted.get("access_token") if persisted else None,
-        "persisted": persisted is not None,
-        "status": "completed",
-        "stack": stack.value,
-        "file_count": report.file_count,
-        "score": scan["score"],
-        "findings": scan["findings"],
-        "repo_url": source_url,
-        "llm": scan["llm"],
+        "job_id": str(job["id"]),
+        # The job's ownership token, delivered exactly once, here. It is the key
+        # to GET /v1/audit-jobs/{job_id} and, through it, to the finished audit.
+        "access_token": job.get("access_token"),
+        "state": "queued",
     }
+
+
+async def _stage_and_queue(
+    audit_job_repo: AuditJobRepository, *, job_id: str, raw: bytes
+) -> None:
+    """Write a zip job's payload to the spool, then make the job claimable.
+
+    On any staging failure the job is dead-lettered rather than left in
+    'created'. That is not cosmetic: the live-job idempotency index covers
+    'created', so an abandoned row would hold this submission's key and the
+    caller's retry would be told to poll a job no worker will ever claim.
+    Marking it terminal frees the key immediately, and the caller gets a 503 it
+    can act on. (reap_stuck_created is the backstop for the one case this cannot
+    cover -- the API process dying between the insert and here.)"""
+    try:
+        path = await run_in_threadpool(stage_archive, job_id, raw)
+    except SpoolFull as exc:
+        await audit_job_repo.abandon_created(
+            job_id=job_id, error_code="spool_full", error_message=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "spool_full",
+                    "detail": "the upload spool is full; retry shortly"},
+        ) from exc
+    except OSError as exc:
+        await audit_job_repo.abandon_created(
+            job_id=job_id, error_code="staging_failed",
+            error_message=f"{type(exc).__name__}: {exc}")
+        logger.exception("staging the upload for job %s failed", job_id,
+                         extra={"step": "stage"})
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "staging_failed",
+                    "detail": "could not stage the upload; retry shortly"},
+        ) from exc
+
+    if not await audit_job_repo.mark_queued(job_id=job_id, source_ref=path):
+        # The row left 'created' while we were writing -- only
+        # reap_stuck_created does that, so the write took longer than its age
+        # bound. Nothing will read the file now.
+        await run_in_threadpool(cleanup_staged_archive, path)
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "staging_failed",
+                    "detail": "the job was abandoned while its upload was "
+                              "being staged; please resubmit"},
+        )
 
 
 @app.get("/v1/fixpacks/{job_id}")
@@ -1969,6 +3572,7 @@ async def get_fixpack(
     # not enough. A missing/wrong token is answered 404 (not 403) so this
     # never confirms an id exists to someone who doesn't hold its token --
     # same model as GET /v1/audits/{id} (migration 0012 mirrors 0010).
+    set_log_context(job_id=job_id)
     row = await fixpack_repo.get_authorized(job_id, token)
     if row is None:
         raise HTTPException(
@@ -2062,6 +3666,9 @@ async def create_fixpack(
                 detail={"reason": "bad_audit_id",
                         "detail": "audit_id must be a valid UUID"},
             )
+        # Bound only once the value is known to be a UUID, so a malformed
+        # client string never reaches a log field.
+        set_log_context(audit_id=audit_id)
 
     # Validate deliver_to before any expensive build or GitHub call: it's
     # user input that lands directly in GitHub REST API paths (owner/repo
@@ -2096,6 +3703,19 @@ async def create_fixpack(
         raise HTTPException(
             status_code=422,
             detail={"reason": "unsupported_stack", "detail": str(exc)},
+        )
+    except WorkspaceTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail={"reason": "workspace_too_large", "detail": str(exc)},
+        )
+    except SandboxRunnerUnavailable as exc:
+        # A live preview genuinely can't be built without the runner. The
+        # non-preview verify path degrades to verified=None inside
+        # run_deploy_pack; the preview path surfaces 503 so the caller retries.
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "sandbox_runner_unavailable", "detail": str(exc)},
         )
 
     persisted_job = await fixpack_repo.create(
@@ -2148,3 +3768,9 @@ async def create_fixpack(
         "pr": pr,
         "preview": result["preview"],
     }
+
+
+# Production operations endpoints.
+from app.ops_endpoints import router as ops_router
+
+app.include_router(ops_router)

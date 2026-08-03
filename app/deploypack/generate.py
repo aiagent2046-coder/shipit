@@ -151,12 +151,25 @@ def _fastapi_pack(files: dict[str, str]) -> dict[str, str]:
             "RUN pip install --no-cache-dir -r requirements.txt"
         )
 
+    # Runs as a non-root uid, like the Vite pack (nginx-unprivileged, uid 101)
+    # and the Fix Pack runner's forced --user: this image runs untrusted client
+    # code. Two details are deliberate. The uid is NUMERIC (1000:1000) rather
+    # than a named user, because python:3.12-slim ships no non-root account and
+    # no guarantee of the shell tooling a `useradd` step would need. And USER
+    # comes AFTER the install steps, so pip still writes to system paths as
+    # root; only the finished app runs unprivileged. Safe on the exposed port:
+    # 8000 is above 1024, so no privileged bind is needed.
+    #
+    # This lives in the Dockerfile, not in sandbox.py's --user flag, because the
+    # Dockerfile is what the client takes with them when they `docker compose
+    # up` on their own host; the runner flag stays behind.
     dockerfile = (
         "FROM python:3.12-slim\n"
         "WORKDIR /app\n"
         f"{install}\n"
-        "COPY . .\n"
+        "COPY --chown=1000:1000 . .\n"
         "EXPOSE 8000\n"
+        "USER 1000:1000\n"
         f'CMD ["uvicorn", "{entry}", "--host", "0.0.0.0", "--port", "8000"]\n'
     )
 
@@ -211,6 +224,14 @@ def _vite_react_pack(files: dict[str, str]) -> dict[str, str]:
     })
 
     build_args_block = "".join(f"ARG {v}\nENV {v}=${{{v}}}\n" for v in env_vars)
+    # Serve via nginx-unprivileged (runs as uid 101, listens on 8080), NOT the
+    # stock nginx:alpine. The stock image's master runs as root and chowns its
+    # temp dirs (/var/cache/nginx/*) to the worker uid on boot; under the
+    # sandbox's --cap-drop=ALL + --read-only that chown fails
+    # ("chown(...client_temp, 101) failed (1: Operation not permitted)") and
+    # nginx aborts before it can serve. The unprivileged image never runs as
+    # root, so it skips the chown/setuid entirely and boots cleanly under the
+    # hardened run. See app/deploypack/sandbox.py.
     dockerfile = (
         "FROM node:20-slim AS build\n"
         "WORKDIR /app\n"
@@ -220,10 +241,10 @@ def _vite_react_pack(files: dict[str, str]) -> dict[str, str]:
         f"{build_args_block}"
         "RUN npm run build\n"
         "\n"
-        "FROM nginx:alpine\n"
+        "FROM nginxinc/nginx-unprivileged:alpine\n"
         "COPY --from=build /app/dist /usr/share/nginx/html\n"
         "COPY nginx.conf /etc/nginx/conf.d/default.conf\n"
-        "EXPOSE 80\n"
+        "EXPOSE 8080\n"
     )
 
     build_args_yaml = "".join(f"        {v}: ${{{v}}}\n" for v in env_vars)
@@ -233,12 +254,12 @@ def _vite_react_pack(files: dict[str, str]) -> dict[str, str]:
         "    build:\n"
         "      context: .\n"
         + ("      args:\n" + build_args_yaml if env_vars else "")
-        + '    ports: ["8080:80"]\n'
+        + '    ports: ["8080:8080"]\n'
     )
 
     nginx_conf = (
         "server {\n"
-        "    listen 80;\n"
+        "    listen 8080;\n"
         "    server_name _;\n"
         "    root /usr/share/nginx/html;\n"
         "    index index.html;\n"
@@ -250,7 +271,7 @@ def _vite_react_pack(files: dict[str, str]) -> dict[str, str]:
     )
 
     env_extra = "".join(f"{v}=\n" for v in env_vars)
-    ci = _boot_check_ci_workflow(port=8080, container_port=80)
+    ci = _boot_check_ci_workflow(port=8080, container_port=8080)
     return {
         "Dockerfile": dockerfile,
         "docker-compose.yml": compose,
@@ -331,10 +352,19 @@ def _nextjs_pack(files: dict[str, str]) -> dict[str, str]:
         # run, and it must ship in the Pack the user gets.
         "ENV HOSTNAME=0.0.0.0\n"
         "ENV PORT=3000\n"
-        "COPY --from=build /app/.next/standalone ./\n"
-        "COPY --from=build /app/.next/static ./.next/static\n"
-        "COPY --from=build /app/public ./public\n"
+        # Owned by and run as `node` (uid 1000, built into node:20-slim), not
+        # root. Same reason the Vite pack serves via nginx-unprivileged and the
+        # Fix Pack runner forces a non-root --user: this image runs untrusted
+        # client code. It belongs in the Dockerfile rather than in sandbox.py's
+        # --user flag, because the client takes the Dockerfile with them when
+        # they `docker compose up` on their own host -- the runner flag stays
+        # behind. Safe on the exposed port: 3000 is above 1024, so no
+        # privileged bind is needed.
+        "COPY --from=build --chown=node:node /app/.next/standalone ./\n"
+        "COPY --from=build --chown=node:node /app/.next/static ./.next/static\n"
+        "COPY --from=build --chown=node:node /app/public ./public\n"
         "EXPOSE 3000\n"
+        "USER node\n"
         'CMD ["node", "server.js"]\n'
     )
 

@@ -1,0 +1,41 @@
+-- At most ONE live Fix Pack job per audit.
+--
+-- This is the database half of the fix for a permanent-money-loss bug in
+-- app/billing/grant_fixpack. That function writes two rows with no transaction
+-- around them (the whole of app/db.py is autocommit): it completes the payment
+-- and it creates the fixpack_jobs row. A crash between the two used to leave
+-- the payment 'completed' with no job -- and because grant_fixpack early-returns
+-- on an already-completed payment, the retry could never create the missing job.
+-- Money taken, nothing delivered, forever.
+--
+-- The fix reverses the two writes so a crash leaves the payment 'pending'
+-- (retryable), which only works if create_paid is idempotent -- otherwise the
+-- retry would create a SECOND job for the same audit and open two fix PRs for
+-- one payment. This index is what makes it idempotent: it is the ON CONFLICT
+-- arbiter create_paid names by repeating this predicate.
+--
+-- fixpack_jobs.audit_id is nullable and only plainly indexed today
+-- (fixpack_jobs_audit_id_idx, migration 0001). Multiple NULLs stay allowed --
+-- Postgres treats NULLs as distinct -- so a job with no audit is unaffected.
+--
+-- PARTIAL, on the two live statuses only, and every excluded status is excluded
+-- for a reason a broader index would break:
+--   * 'generated' -- the Deploy Pack flow (migration 0007) writes rows with this
+--     status and SHARES audit_id with a Fix Pack job for the same audit;
+--   * 'delivered' / 'no_fix_needed' / 'blocked' -- terminal, and a re-purchase
+--     after one must be allowed to insert a fresh row;
+--   * 'failed' -- re-purchase after a failure is deliberately supported
+--     (FixpackJobRepository.get_by_audit returns newest-first precisely so the
+--     latest attempt surfaces).
+-- 'running' is included alongside 'paid' because the stale-lease reaper moves a
+-- row back 'running' -> 'paid', so the two are one live set, not a sequence.
+--
+-- PRE-DEPLOY CHECK. CREATE UNIQUE INDEX fails on existing duplicates, which
+-- would abort the migration. Run this first and reconcile by hand if it returns
+-- any row:
+--
+--   select audit_id, count(*) from fixpack_jobs
+--    where status in ('paid', 'running')
+--    group by audit_id having count(*) > 1;
+create unique index if not exists fixpack_jobs_audit_live_idx
+    on fixpack_jobs (audit_id) where status in ('paid', 'running');

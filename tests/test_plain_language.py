@@ -12,7 +12,11 @@ def _all_static_rule_ids():
         src = open(path).read()
         # SecretRule("id", ... / CheckFinding("id", ...
         ids |= set(re.findall(r'(?:SecretRule|CheckFinding)\(\s*\n?\s*"([a-z0-9-]+)"', src))
-        ids |= set(re.findall(r'"([a-z0-9-]+)", "', src))
+        # Fallback for rule ids the constructor regex misses. Requires a
+        # leading letter and three characters minimum: without that it also
+        # matches any adjacent pair of short string literals, and picked up
+        # "--" from the comment-prefix tuple in secrets.py as a rule id.
+        ids |= set(re.findall(r'"([a-z][a-z0-9-]{2,})", "', src))
     return {i for i in ids if "-" in i}
 
 

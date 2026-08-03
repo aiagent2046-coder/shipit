@@ -11,8 +11,15 @@ principle as tests/test_fixpack_api.py.
 import io
 import zipfile
 
+import pytest
+
 import app.deploypack.pipeline as pipeline_mod
-from app.deploypack.pipeline import _free_port, run_deploy_pack
+from app.deploypack.pipeline import (
+    MAX_WORKSPACE_BYTES,
+    WorkspaceTooLarge,
+    _free_port,
+    run_deploy_pack,
+)
 from app.deploypack.sandbox import SandboxResult
 from app.ingest.stack_detect import Stack
 
@@ -66,3 +73,32 @@ def test_verify_uses_dynamic_host_port_not_the_fixed_8000(monkeypatch):
     assert all(p != 8000 for p in captured)
     # and two runs are free to pick different ports (no forced collision).
     assert len(set(captured)) >= 1  # both valid; distinctness proven above
+
+
+def test_oversized_workspace_is_rejected_before_verify(monkeypatch):
+    # A zip-bomb-ish archive whose uncompressed size exceeds the cap must be
+    # rejected up front — never extracted, never handed to docker build.
+    called = False
+
+    def fake_verify(*a, **k):
+        nonlocal called
+        called = True
+        return SandboxResult(ok=True, detail="HTTP 200 on /")
+
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", fake_verify)
+
+    # One highly-compressible member that inflates past the limit.
+    raw = make_zip_bytes({"big.bin": b"\0" * (MAX_WORKSPACE_BYTES + 1)})
+    with pytest.raises(WorkspaceTooLarge):
+        run_deploy_pack(raw, Stack.FASTAPI)
+    assert called is False
+
+
+def test_normal_workspace_is_not_rejected(monkeypatch):
+    def fake_verify(build_dir, host_port, container_port, *a, **k):
+        return SandboxResult(ok=True, detail="HTTP 200 on /")
+
+    monkeypatch.setattr(pipeline_mod, "verify_deploy_pack", fake_verify)
+    raw = make_zip_bytes(FASTAPI_ZIP)
+    result = run_deploy_pack(raw, Stack.FASTAPI)
+    assert result["verified"] is True

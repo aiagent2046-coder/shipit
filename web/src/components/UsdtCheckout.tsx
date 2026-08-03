@@ -276,6 +276,15 @@ function ProCompleted({
             Keep it secret — anyone with it has your pro access.
           </p>
         </>
+      ) : completed.key_already_delivered ? (
+        <p className="mt-2 text-sm text-muted">
+          This key was already delivered once — on this page, or to Telegram if
+          you claimed the payment with <span className="font-mono">/link</span>.
+          For security it is shown only once and is never stored, so it can&apos;t
+          be shown again. Lost it? Send <span className="font-mono">/rotatekey</span>{" "}
+          to the bot for a new key, or contact the operator with invoice id{" "}
+          <span className="font-mono">{completed.invoice_id}</span>.
+        </p>
       ) : (
         <p className="mt-2 text-sm text-muted">
           Payment recorded, but the key wasn&apos;t returned. Contact the

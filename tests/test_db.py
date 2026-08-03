@@ -512,7 +512,7 @@ class TestFixpackLeaseNotConfigured:
         result = await FixpackJobRepository().reap_stale_running(
             max_age_minutes=15, max_attempts=3
         )
-        assert result == {"requeued": 0, "failed": 0}
+        assert result == {"requeued": 0, "failed": 0, "failed_ids": []}
 
     async def test_processor_lock_is_a_silent_noop(self):
         # No pool to lock against, so it just yields -- nothing to serialize.
@@ -555,7 +555,7 @@ class TestFixpackLeaseWithFakePool:
             max_age_minutes=15, max_attempts=3
         )
 
-        assert result == {"requeued": 0, "failed": 0}
+        assert result == {"requeued": 0, "failed": 0, "failed_ids": []}
         requeue_q, requeue_p = fake.calls[0]
         assert "set status = 'paid'" in requeue_q
         assert "make_interval(mins => %s)" in requeue_q
@@ -563,6 +563,23 @@ class TestFixpackLeaseWithFakePool:
         fail_q, fail_p = fake.calls[1]
         assert "set status = 'failed'" in fail_q
         assert fail_p[1:] == (15, 3)  # (detail, max_age_minutes, max_attempts)
+        # the detail carries the prefix the status endpoint reads to tell the
+        # customer this was our infrastructure, not their code
+        assert fail_p[0].startswith(db_mod.STALE_LEASE_DETAIL_PREFIX)
+
+    async def test_reap_returns_the_ids_it_failed(self, monkeypatch):
+        # The processor alerts an operator per reaped-to-failed id; without the
+        # ids a paying customer's dead job would be silent.
+        failed_id = uuid.uuid4()
+        fake = FakePool(fetchone_result=[{"id": failed_id}])
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        result = await FixpackJobRepository().reap_stale_running(
+            max_age_minutes=15, max_attempts=3
+        )
+
+        assert result["failed_ids"] == [str(failed_id)]
+        assert result["failed"] == 1
 
     async def test_processor_lock_acquires_and_releases(self, monkeypatch):
         fake = FakePool(fetchone_result={"locked": True})
@@ -591,9 +608,9 @@ class TestAccountRepositoryNotConfigured:
         result = await repo.create(api_key="sk_live_x", tier="pro")
         assert result is None
 
-    async def test_get_by_api_key_returns_none(self):
+    async def test_rotate_key_returns_none(self):
         repo = AccountRepository()
-        assert await repo.get_by_api_key("sk_live_x") is None
+        assert await repo.rotate_key(str(uuid.uuid4())) is None
 
 
 class TestAccountRepositoryWithFakePool:
@@ -641,27 +658,48 @@ class TestAccountRepositoryWithFakePool:
         assert "from accounts where key_hash" in query
         assert params == ("deadbeef",)
 
-    async def test_get_by_api_key_fallback_returns_row(self, monkeypatch):
-        # Transitional plaintext fallback for pre-0009 keys.
+    async def test_rotate_key_updates_hash_and_returns_new_plaintext(self, monkeypatch):
+        # A made-up test pepper, never the real one.
+        monkeypatch.setenv("API_KEY_PEPPER", "test-pepper-not-real")
         account_id = uuid.uuid4()
         fake = FakePool(fetchone_result={
-            "id": account_id, "api_key": "sk_live_x", "key_prefix": None,
-            "key_hash": None, "tier": "pro",
+            "id": account_id, "key_prefix": "sk_live_new1",
+            "key_hash": "unused-in-return", "tier": "pro",
             "created_at": "2026-07-14T10:00:00Z",
         })
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
         repo = AccountRepository()
-        result = await repo.get_by_api_key("sk_live_x")
-        assert result["id"] == str(account_id)
-        query, params = fake.calls[0]
-        assert "from accounts where api_key" in query
-        assert params == ("sk_live_x",)
 
-    async def test_get_by_api_key_returns_none_for_missing_row(self, monkeypatch):
+        result = await repo.rotate_key(str(account_id))
+
+        assert result["id"] == str(account_id)
+        assert result["tier"] == "pro"
+        # The freshly minted plaintext is surfaced once for delivery.
+        assert result["api_key"].startswith("sk_live_")
+
+        query, params = fake.calls[0]
+        assert "update accounts" in query
+        assert "set key_prefix" in query and "key_hash" in query
+        # What is WRITTEN is prefix + hash, never the plaintext key.
+        assert result["api_key"] not in query
+        assert params[0] == result["api_key"][:12]  # prefix (KEY_PREFIX_LEN=12)
+        assert params[1] != result["api_key"]  # a hash, not the key
+        assert len(params[1]) == 64  # sha256 hex digest
+        assert params[2] == account_id  # scoped to the account id
+
+    async def test_rotate_key_returns_none_for_missing_row(self, monkeypatch):
+        monkeypatch.setenv("API_KEY_PEPPER", "test-pepper-not-real")
         fake = FakePool(fetchone_result=None)
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
         repo = AccountRepository()
-        assert await repo.get_by_api_key("sk_live_absent") is None
+        assert await repo.rotate_key(str(uuid.uuid4())) is None
+
+    async def test_rotate_key_returns_none_for_bad_uuid(self, monkeypatch):
+        monkeypatch.setenv("API_KEY_PEPPER", "test-pepper-not-real")
+        fake = FakePool(fetchone_result=None)
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        repo = AccountRepository()
+        assert await repo.rotate_key("not-a-uuid") is None
 
 
 class TestPaymentRepositoryNotConfigured:
@@ -701,8 +739,12 @@ class TestPaymentRepositoryWithFakePool:
         assert result["account_id"] == str(account_id)
         query, params = fake.calls[0]
         assert "insert into payments" in query
+        # The two trailing Nones after paypal_order_id are payer_name and
+        # payer_email: supplied only by bank_transfer, so every other provider
+        # writes the row exactly as it did before migration 0026.
         assert params == (account_id, "usdt_trc20", "0xabc", 9.99, "USD",
-                          "completed", "pro", "pro_tier", None, None)
+                          "completed", "pro", "pro_tier", None, None,
+                          None, None)
 
     async def test_amount_numeric_is_cast_to_json_number_not_string(self, monkeypatch):
         """Postgres `numeric` -> decimal.Decimal renders as a JSON *string*

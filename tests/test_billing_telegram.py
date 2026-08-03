@@ -11,10 +11,12 @@ tapping Pay; see scripts/verify_telegram_stars_locally.py.
 from __future__ import annotations
 
 import datetime
+import re
 import uuid
 
 import httpx
 
+from app.accounts import api_key_prefix
 from app.billing import telegram_stars, usdt_trc20
 from app.main import (
     app,
@@ -23,34 +25,18 @@ from app.main import (
     get_payment_repo,
 )
 from fastapi.testclient import TestClient
+from tests.conftest import (
+    FakeAccountRepo,
+    FakeCompletionCasMixin,
+    FakeKeyDeliveryMixin,
+)
 
 client = TestClient(app)
 
 
 # --- in-memory repo fakes ---
 
-class FakeAccountRepo:
-    def __init__(self):
-        self.by_id: dict[str, dict] = {}
-        self.by_key: dict[str, dict] = {}
-
-    async def create(self, *, api_key: str, tier: str):
-        row = {
-            "id": str(uuid.uuid4()), "api_key": api_key, "tier": tier,
-            "created_at": "2026-07-14T10:00:00Z",
-        }
-        self.by_id[row["id"]] = row
-        self.by_key[api_key] = row
-        return row
-
-    async def get_by_id(self, account_id: str):
-        return self.by_id.get(account_id)
-
-    async def get_by_api_key(self, api_key: str):
-        return self.by_key.get(api_key)
-
-
-class FakePaymentRepo:
+class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
@@ -75,14 +61,6 @@ class FakePaymentRepo:
             if r["provider"] == provider and r["external_ref"] == external_ref:
                 return r
         return None
-
-    async def mark_completed(self, payment_id, *, account_id, external_ref):
-        r = self.rows[payment_id]
-        r.update(status="completed", account_id=account_id, external_ref=external_ref)
-
-    async def mark_completed_fixpack(self, payment_id, *, external_ref):
-        r = self.rows[payment_id]
-        r.update(status="completed", external_ref=external_ref)
 
     async def get_completed_by_telegram_chat_id(self, telegram_chat_id: str):
         found = [
@@ -243,7 +221,8 @@ async def test_successful_payment_grants_pro_and_dms_key():
         account_repo=accounts, payment_repo=payments,
         token="t", transport=transport,
     )
-    assert result == {"ok": True, "handled": "successful_payment", "persisted": True}
+    assert result == {"ok": True, "handled": "successful_payment",
+                      "persisted": True, "key_delivered": True}
     # exactly one account, tier pro, key delivered by sendMessage
     assert len(accounts.by_id) == 1
     account = next(iter(accounts.by_id.values()))
@@ -251,7 +230,12 @@ async def test_successful_payment_grants_pro_and_dms_key():
     send_calls = [c for c in calls if c[0] == "sendMessage"]
     assert len(send_calls) == 1
     text = send_calls[0][1]["text"]
-    assert account["api_key"] in text
+    # The key is delivered straight out of the grant that minted it, in this
+    # same handler. It is never re-read from the account row, because the row
+    # does not have it (migration 0019) -- assert that absence directly, since
+    # a fake that carried the key here is what hid this bug in the first place.
+    assert "api_key" not in account
+    assert api_key_prefix(_delivered_key(text)) == account["key_prefix"]
     # Pro is a general subscription, not tied to any one audit, so the DM
     # must NOT dangle a report link (there is no report for this purchase);
     # it points at the run-an-audit landing page instead.
@@ -278,11 +262,17 @@ async def test_duplicate_successful_payment_is_idempotent():
     # No second account, no second payment — same charge id.
     assert len(accounts.by_id) == 1
     assert len(payments.rows) == 1
-    # The key is re-delivered on the retry (same key), so the payer who
-    # missed the first DM still gets it.
+    # The retry cannot re-deliver the key: it was minted once, in the first
+    # call, and is stored nowhere. So instead of crashing on a key that isn't
+    # there (the bug this replaced) the payer gets a plain explanation and the
+    # /rotatekey recovery path -- which works, because the chat_id was stamped.
     send_calls = [c for c in calls if c[0] == "sendMessage"]
     assert len(send_calls) == 2
-    assert send_calls[0][1]["text"] == send_calls[1][1]["text"]
+    first, second = send_calls[0][1]["text"], send_calls[1][1]["text"]
+    assert _delivered_key(first) is not None
+    assert _delivered_key(second) is None
+    assert "already delivered" in second
+    assert "/rotatekey" in second
 
 
 # --- 4. webhook endpoint rejects wrong/missing secret token ---
@@ -364,18 +354,33 @@ def _last_text(calls):
     return sends[-1][1]["text"] if sends else None
 
 
-async def test_mykey_returns_key_for_linked_account():
+def _delivered_key(msg):
+    """The API key a bot message actually handed over, or None if it handed
+    over none. Read out of the message text on purpose: the key exists only in
+    what was delivered, never in the account row (migration 0019), so scraping
+    the DM is the only way to assert on it -- and a test that reaches into the
+    repo for it would be asserting against a fake that lies."""
+    found = re.search(r"sk_live_[A-Za-z0-9_-]+", msg or "")
+    return found.group(0) if found else None
+
+
+async def test_mykey_shows_prefix_and_never_the_full_key():
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
     # A Stars purchase links this chat_id (555) to the account automatically.
     await _send(_successful_payment_update("charge_mykey", 555),
                 accounts, payments, calls)
     account = next(iter(accounts.by_id.values()))
+    purchase_key = _delivered_key(_last_text(calls))
 
     calls.clear()
     result = await _send(_text_update("/mykey", 555), accounts, payments, calls)
     assert result["handled"] == "mykey" and result["found"] is True
-    # The delivery text (same copy as purchase) carrying the exact key.
-    assert account["api_key"] in _last_text(calls)
+    msg = _last_text(calls)
+    # The full secret is never re-sent; only the safe prefix is shown, and the
+    # user is pointed at /rotatekey to recover a lost key.
+    assert purchase_key not in msg
+    assert account["key_prefix"] in msg
+    assert "/rotatekey" in msg
 
 
 async def test_mykey_no_account_returns_helpful_message():
@@ -386,6 +391,32 @@ async def test_mykey_no_account_returns_helpful_message():
     # Explains both recovery paths, leaks no key.
     assert "Stars" in msg and "/link" in msg
     assert "sk_live_" not in msg
+
+
+async def test_rotatekey_mints_new_key_for_linked_account():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    await _send(_successful_payment_update("charge_rot", 555),
+                accounts, payments, calls)
+    account = next(iter(accounts.by_id.values()))
+    old_key = _delivered_key(_last_text(calls))
+
+    calls.clear()
+    result = await _send(_text_update("/rotatekey", 555), accounts, payments, calls)
+    assert result["handled"] == "rotatekey" and result["found"] is True
+    msg = _last_text(calls)
+    # The freshly minted key is delivered; it is not the old one, and it is now
+    # the account's current key (the stored prefix moved with it).
+    new_key = _delivered_key(msg)
+    assert new_key != old_key
+    assert old_key not in msg
+    assert api_key_prefix(new_key) == account["key_prefix"]
+
+
+async def test_rotatekey_no_account_returns_helpful_message():
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    result = await _send(_text_update("/rotatekey", 999), accounts, payments, calls)
+    assert result["handled"] == "rotatekey" and result["found"] is False
+    assert "sk_live_" not in _last_text(calls)
 
 
 # --- 6. /link USDT payment claiming ---
@@ -411,19 +442,58 @@ async def test_link_valid_unlinked_payment_links_and_returns_key():
     result = await _send(_text_update("/link 0xabc", 777),
                          accounts, payments, calls)
     assert result["result"] == "linked"
-    assert acct["api_key"] in _last_text(calls)
+    # /link mints the key it hands over. The plaintext the poller minted when
+    # it credited this payment was discarded and is NOT what gets sent -- it
+    # could not be, since nothing stored it.
+    delivered = _delivered_key(_last_text(calls))
+    assert delivered != acct["api_key"]
+    assert acct["api_key"] not in _last_text(calls)
+    assert api_key_prefix(delivered) == accounts.by_id[acct["id"]]["key_prefix"]
     # Persisted the association so a later /mykey works.
     assert row["telegram_chat_id"] == "777"
 
 
 async def test_link_is_idempotent_for_same_chat():
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
-    acct, _ = await _completed_usdt_payment(payments, accounts, "0xdup")
-    for _ in range(2):
-        result = await _send(_text_update("/link 0xdup", 777),
-                             accounts, payments, calls)
-        assert result["result"] == "linked"
-    assert acct["api_key"] in _last_text(calls)
+    await _completed_usdt_payment(payments, accounts, "0xdup")
+    first = await _send(_text_update("/link 0xdup", 777), accounts, payments, calls)
+    assert first["result"] == "linked"
+    delivered = _delivered_key(_last_text(calls))
+    assert delivered is not None
+
+    # Re-running /link is safe but delivers no second key: the payment's one
+    # delivery was already spent above. Rotating again here would silently kill
+    # the key the payer is already holding.
+    second = await _send(_text_update("/link 0xdup", 777), accounts, payments, calls)
+    assert second["result"] == "already_delivered"
+    assert _delivered_key(_last_text(calls)) is None
+    assert "/rotatekey" in _last_text(calls)
+    assert accounts.rotations == [next(iter(accounts.by_id))]
+
+
+async def test_link_after_web_checkout_already_took_the_key():
+    """The two doors to one USDT payment. If the payer already saw the key on
+    the web checkout page, /link must not hand out a second one -- and must not
+    blow up reaching for a key that was never stored (the original bug: /link
+    read api_key straight off get_by_id)."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    acct, row = await _completed_usdt_payment(payments, accounts, "0xweb")
+
+    # The browser polled first and was handed the key.
+    web = await usdt_trc20.invoice_status(
+        payments, accounts, row["id"], address="T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb")
+    assert web["api_key"] is not None
+
+    result = await _send(_text_update("/link 0xweb", 777), accounts, payments, calls)
+    assert result["result"] == "already_delivered"
+    msg = _last_text(calls)
+    assert _delivered_key(msg) is None
+    assert "/rotatekey" in msg
+    # The claim still linked the chat, so /rotatekey really is usable from here.
+    assert row["telegram_chat_id"] == "777"
+    rotate = await _send(_text_update("/rotatekey", 777), accounts, payments, calls)
+    assert rotate["found"] is True
+    assert _delivered_key(_last_text(calls)) not in (None, web["api_key"])
 
 
 async def test_link_already_claimed_by_other_chat_is_rejected():
@@ -790,3 +860,66 @@ async def test_subscription_payment_not_configured_reports_gracefully():
     assert result == {"ok": True, "handled": "subscription_payment",
                       "persisted": False}
     assert any(c[0] == "sendMessage" for c in calls)
+
+
+# --- /link with a Fix Pack reference ---
+#
+# A Fix Pack payment is completed and matches a DRY- reference like any other,
+# but grants no account: it is delivered as a pull request. /link used to stamp
+# the chat onto it FIRST and discover that second, which is what broke a Pro
+# payer's key recovery -- see tests/test_billing_concurrency_postgres.py for
+# the half of this that needs a real database.
+
+
+async def _completed_fixpack_payment(payments, reference: str):
+    row = await payments.create(
+        account_id=None, provider="bank_transfer", external_ref=reference,
+        amount=29.07, currency="USD", status="completed",
+        tier_granted=None, product="fixpack",
+    )
+    return row
+
+
+async def test_link_with_a_fixpack_reference_claims_nothing():
+    """The order is the fix. The chat must not end up on a payment that has no
+    key to give -- once stamped, nothing ever removes it."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    row = await _completed_fixpack_payment(payments, "DRY-FXPK23")
+
+    result = await _send(_text_update("/link DRY-FXPK23", 777),
+                         accounts, payments, calls)
+
+    assert result["result"] == "no_account"
+    assert row.get("telegram_chat_id") is None, "the chat was stamped anyway"
+
+
+async def test_link_with_a_fixpack_reference_explains_instead_of_alarming():
+    """The old text said the account 'could not be loaded' and sent the payer
+    to support -- describing a failure to someone whose payment worked, about a
+    key that was never meant to exist."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    await _completed_fixpack_payment(payments, "DRY-FXPK24")
+
+    await _send(_text_update("/link DRY-FXPK24", 777), accounts, payments, calls)
+
+    text = _last_text(calls)
+    assert "Fix Pack" in text
+    assert "pull request" in text
+    assert "contact support" not in text
+    # The reassurance is the point: someone who typed a command and got an
+    # unexpected answer assumes they broke something.
+    assert "/mykey" in text and "still work" in text
+
+
+async def test_a_pro_link_is_untouched_by_the_new_check():
+    """The guard sits above the claim, so it must not intercept the ordinary
+    path -- a Pro payment still links and still delivers exactly one key."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    _acct, row = await _completed_usdt_payment(payments, accounts, "0xpro")
+
+    result = await _send(_text_update("/link 0xpro", 777),
+                         accounts, payments, calls)
+
+    assert result["result"] == "linked"
+    assert row["telegram_chat_id"] == "777"
+    assert _delivered_key(_last_text(calls)) is not None

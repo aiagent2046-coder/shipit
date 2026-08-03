@@ -9,18 +9,29 @@ findings are discarded, never shown.
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 import zipfile
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import BinaryIO
 
+from app.llm import pricing
 from app.llm.client import LLMClient
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import ScoredFinding
 
 MAX_FILE_CHARS = 24_000          # per-file cap in prompt
 MAX_TOTAL_CHARS = 360_000        # ~90-100K tokens per rubric prompt
+
+# Per-job spend ceiling for a single scan's sequential .complete() loop. When
+# the running cost estimate (summed from each call's returned usage, priced by
+# app/llm/pricing.py) crosses this, the loop stops and returns whatever it has
+# with stats.cost_cap_exceeded = True -- an honest partial result, never a 500.
+# A degenerate cap (<=0 from a bad env value) is ignored so a typo can't wedge
+# the loop to zero calls; the intended off-switch is a large number, not 0.
+JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "3.00"))
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "venv/")
 _CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".py", ".sql", ".toml", ".yaml", ".yml", ".json")
 
@@ -92,6 +103,21 @@ class LLMScanStats:
     # providers configured). Lets a consumer tell those two apart without
     # inspecting the field's type -- see app/scan/pipeline.py.
     skipped_reason: str | None = None
+    # Cost-accounting totals, summed across every client.complete() call this
+    # scan made (passes x rubrics). `calls` == 0 means no LLM ran (no
+    # rubric-relevant files), which is the signal app/main.py uses to write NO
+    # llm_usage row. `model` is the last served model seen; all calls in a scan
+    # use the same configured model, so last-seen is representative. These flow
+    # out unchanged via run_scan()["llm"] to the cost recorder in main.py.
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str | None = None
+    # True when the per-job spend ceiling (JOB_COST_CAP_USD) was hit mid-loop
+    # and the scan stopped early. The findings returned are still real and
+    # verified -- just a partial set. app/scan/pipeline.py surfaces this in the
+    # response's llm block so a truncated scan is visible, not silent.
+    cost_cap_exceeded: bool = False
 
 
 def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
@@ -197,6 +223,7 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
 def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                  rubrics: tuple[str, ...] = ("auth", "security"),
                  passes: int = 1,
+                 stats: LLMScanStats | None = None,
                  ) -> tuple[list[ScoredFinding], LLMScanStats]:
     """`passes` > 1 = union-of-N mode: repeat every rubric prompt N
     times and merge findings via the same (file, line) dedup. Measured
@@ -207,21 +234,35 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     pass — score and criticals are stable, which is what the shareable
     report leads with. The paid Fix Pack uses passes=2 for completeness
     of scope; the extra LLM cost is covered by the Pack price. See
-    docs/shipit-architecture.md 2.2, v0.3 note."""
-    stats = LLMScanStats()
+    docs/shipit-architecture.md 2.2, v0.3 note.
+
+    `stats` lets the CALLER own the accumulator instead of receiving it back on
+    return. That is the difference between recording and losing the money when
+    client.complete() raises on the second rubric: the tokens the first call
+    already burned are in the caller's object, whereas a locally-created one is
+    discarded with the frame. app/scan/pipeline.py passes one in for exactly
+    that reason; the default keeps every other caller unchanged."""
+    stats = stats if stats is not None else LLMScanStats()
     with zipfile.ZipFile(fileobj) as zf:
         files = _iter_code_files(zf)
     files_by_name = dict(files)
 
     findings: list[ScoredFinding] = []
     for _pass in range(max(1, passes)):
+      if stats.cost_cap_exceeded:
+          break
       for rubric in rubrics:
           selected = select_files(files, rubric)
           if not selected:
               continue
           stats.prompts += 1
-          raw = client.complete(SYSTEM_PROMPT, build_prompt(selected, rubric),
-                                    max_tokens=8192)
+          raw, usage = client.complete(SYSTEM_PROMPT,
+                                       build_prompt(selected, rubric),
+                                       max_tokens=8192)
+          stats.calls += 1
+          stats.input_tokens += usage.input_tokens
+          stats.output_tokens += usage.output_tokens
+          stats.model = usage.model
           for f in parse_findings(raw):
               stats.raw_findings += 1
               if not verify_finding(f, files_by_name):
@@ -239,6 +280,15 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   explanation=str(f.get("explanation", ""))[:600],
                   fix_hint=str(f.get("fix_hint", ""))[:300],
               ))
+          # Cost cap: price the tokens accumulated so far (all calls this scan
+          # used the same served model) and stop before the NEXT call if we've
+          # crossed the ceiling. Checked after the call, not before: the cap
+          # bounds total spend, and a job is allowed its first call regardless.
+          if JOB_COST_CAP_USD > 0 and pricing.cost_usd(
+                  stats.model, stats.input_tokens,
+                  stats.output_tokens) >= JOB_COST_CAP_USD:
+              stats.cost_cap_exceeded = True
+              break
     # Dedup here (not in the pipeline): this is the seam where the two
     # rubrics' outputs — and repeated passes in union-of-N mode — are
     # combined, so same-location collisions arise and are resolved here.

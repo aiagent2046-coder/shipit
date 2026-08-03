@@ -154,7 +154,6 @@ def entitlements_dict(ent: Entitlements) -> dict[str, Any]:
 
 class _AccountLookup(Protocol):
     async def get_by_key_hash(self, key_hash: str) -> dict[str, Any] | None: ...
-    async def get_by_api_key(self, api_key: str) -> dict[str, Any] | None: ...
 
 
 def api_key_from_request(request: Any) -> str | None:
@@ -177,21 +176,15 @@ async def resolve_account(
     both return None (the repo's not-configured contract), i.e. fall back
     to free, never raise.
 
-    Primary path: hash the presented key and match on key_hash. Only when
-    the pepper is configured — on a DB-less/hashing-less deployment we skip
-    straight to the fallback rather than raising, so the "unknown key ->
-    free, never error" contract holds (a real deployment with a DB is
-    guaranteed to have a pepper by the startup guard).
+    Keys are matched only by HMAC hash on key_hash. Without a configured
+    pepper we can't hash, so we return None (fall back to free) rather than
+    raising — a real deployment with a DB is guaranteed to have a pepper by
+    the startup guard. Plaintext at rest no longer exists (migration 0019
+    dropped the api_key column), so there is no recoverable-key path.
     """
     key = api_key_from_request(request)
     if not key:
         return None
-    if pepper_is_configured():
-        account = await account_repo.get_by_key_hash(hash_api_key(key))
-        if account is not None:
-            return account
-    # Backward-compat fallback: keys issued before this migration have
-    # key_hash NULL until scripts/backfill_api_key_hashes.py runs, so match
-    # them by plaintext api_key. REMOVE after backfill + deprecation window
-    # (together with the api_key column — see migration 0009).
-    return await account_repo.get_by_api_key(key)
+    if not pepper_is_configured():
+        return None
+    return await account_repo.get_by_key_hash(hash_api_key(key))

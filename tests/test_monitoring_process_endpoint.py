@@ -125,7 +125,8 @@ def _capture_dms(monkeypatch):
 
 
 def _audit_returns(monkeypatch, findings):
-    async def fake_audit(repo_url, *, llm_client, audit_repo, repo_fetcher):
+    async def fake_audit(repo_url, *, llm_client, audit_repo, repo_fetcher,
+                         llm_usage_repo=None, job_type="audit"):
         return {"audit_id": "a-new", "findings": findings,
                 "repo_url": repo_url, "reused": False}
 
@@ -133,7 +134,8 @@ def _audit_returns(monkeypatch, findings):
 
 
 def _audit_raises(monkeypatch, exc):
-    async def fake_audit(repo_url, *, llm_client, audit_repo, repo_fetcher):
+    async def fake_audit(repo_url, *, llm_client, audit_repo, repo_fetcher,
+                         llm_usage_repo=None, job_type="audit"):
         raise exc
 
     monkeypatch.setattr(main_mod, "run_repo_audit", fake_audit)
@@ -255,7 +257,8 @@ def test_unauditable_repo_is_benign_done(monkeypatch):
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     _capture_dms(monkeypatch)
 
-    async def fake_audit(repo_url, *, llm_client, audit_repo, repo_fetcher):
+    async def fake_audit(repo_url, *, llm_client, audit_repo, repo_fetcher,
+                         llm_usage_repo=None, job_type="audit"):
         return None
 
     monkeypatch.setattr(main_mod, "run_repo_audit", fake_audit)

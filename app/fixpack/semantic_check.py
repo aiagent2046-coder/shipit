@@ -42,6 +42,7 @@ import subprocess
 import tempfile
 import zipfile
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from app.fixpack.generate import FixpackPlan, _repo_relative
 
@@ -65,6 +66,57 @@ FIXPACK_DOCKER_RUNTIME = os.environ.get("FIXPACK_DOCKER_RUNTIME", "runc")
 # between the (separate) install and test containers.
 _PY_DEPS_DIR = ".shipit_pydeps"
 
+# Coarse zip-bomb / disk-fill guard: cap the total UNCOMPRESSED size of a
+# client repo we will extract and bind-mount into a container, on top of the
+# per-member zip-slip check in _extract_repo_relative. A genuine client repo
+# is far under this; anything larger is not something we run synchronously.
+MAX_WORKSPACE_BYTES = 512 * 1024 * 1024  # 512 MiB uncompressed
+
+# Cap how much container stdout/stderr we pull back into this process's memory.
+# capture_output buffers the whole stream, so a hostile suite printing
+# gigabytes could otherwise blow up backend RAM. We keep only head+tail.
+MAX_CAPTURED_OUTPUT_BYTES = 64 * 1024
+
+# Read-only container rootfs (requirement 3.3). Both steps write only to the
+# bind-mounted /work (writable regardless of --read-only) plus scratch in /tmp
+# and the tool home caches (~/.npm, pip build temp); we give those as tmpfs and
+# lock the rest of the rootfs read-only. Toggle off (FIXPACK_READONLY_ROOTFS=0)
+# for an image that genuinely needs a writable rootfs, rather than deleting the
+# flag in code -- see PHASE3 plan §5.2.
+FIXPACK_READONLY_ROOTFS = (
+    os.environ.get("FIXPACK_READONLY_ROOTFS", "1").lower() not in ("0", "false", "")
+)
+
+# Fixed non-root uid:gid used inside the container when the backend itself runs
+# as root (the prod systemd unit has no User=, so os.getuid() == 0 there).
+# Mirroring root into the container would leave the untrusted code running as
+# container-root and defeat requirement 3.3, so we drop to a fixed unprivileged
+# id instead. The bind-mounted /work is chown'd to this id before the run (see
+# _chown_workdir), so the non-root process can still read/write it.
+_NONROOT_FALLBACK_UID = 1000
+_NONROOT_FALLBACK_GID = 1000
+
+
+def _default_run_as_user() -> str:
+    """The --user value when FIXPACK_RUN_AS_USER is unset. Never resolves to
+    root: if the backend runs as root (uid 0), fall back to a fixed non-root id
+    rather than mirroring 0:0 into the container; otherwise reuse the backend's
+    own uid:gid (it created /work, so no chown is needed)."""
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0:
+        return f"{_NONROOT_FALLBACK_UID}:{_NONROOT_FALLBACK_GID}"
+    return f"{uid}:{gid}"
+
+
+# Run the untrusted container as a non-root user (requirement 3.3). Defaults via
+# _default_run_as_user() (never root). Override with FIXPACK_RUN_AS_USER
+# ("1000:1000", or "" to run as the image's own default user). An explicit env
+# value of "" disables --user; only an *unset* env falls back to the default.
+_env_run_as_user = os.environ.get("FIXPACK_RUN_AS_USER")
+FIXPACK_RUN_AS_USER = (
+    _default_run_as_user() if _env_run_as_user is None else _env_run_as_user
+)
+
 
 @dataclass(frozen=True)
 class TestRunner:
@@ -85,6 +137,22 @@ class RunResult:
     failed: int
     timed_out: bool
     error: str | None       # infra/parse error, secret-free
+    # True only when the sandbox-runner itself could not be reached, so this
+    # suite never executed at all. Deliberately narrower than `error`: an error
+    # the runner *reports* (a failed dependency install, a missing docker CLI on
+    # its side) means the runner answered and the fact is about the client's
+    # repo, so it stays a plain `error` and keeps its existing meaning.
+    unavailable: bool = False
+
+
+class RegressionVerdict(NamedTuple):
+    """`is_regression`'s three-way outcome. The third state matters: "we could
+    not verify" is neither "clean" nor "the patch broke things", and collapsing
+    it into the bool is what let an unreachable runner deliver unverified PRs."""
+
+    regression: bool                # True => do NOT open a PR
+    detail: str
+    verification_unavailable: bool  # True => nothing ran; no verdict exists
 
 
 @dataclass(frozen=True)
@@ -98,6 +166,9 @@ class SemanticCheckResult:
     regression: bool                # True => do NOT open a PR
     detail: str                     # secret-free explanation for the job row
     pr_note: str | None             # optional line to append to the PR body
+    # The check could not be performed (sandbox-runner unreachable). Neither a
+    # pass nor a regression: the caller must defer the job, not deliver or block.
+    verification_unavailable: bool = False
 
 
 # --- Test-runner detection -------------------------------------------------
@@ -108,6 +179,13 @@ _PY_MARKERS = ("requirements.txt", "pyproject.toml", "setup.py", "setup.cfg")
 def _zip_names(zip_bytes: bytes) -> list[str]:
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         return zf.namelist()
+
+
+def _zip_uncompressed_size(zip_bytes: bytes) -> int:
+    """Total uncompressed size declared by the archive's central directory.
+    Used as a coarse zip-bomb guard before extraction (see MAX_WORKSPACE_BYTES)."""
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        return sum(info.file_size for info in zf.infolist())
 
 
 def _read_package_json_scripts(zip_bytes: bytes, entry: str) -> dict:
@@ -238,12 +316,34 @@ def _parse_counts(ecosystem: str, output: str) -> tuple[int, int]:
 
 # --- Docker execution ------------------------------------------------------
 
+def _clip(text: str | None) -> str | None:
+    """Bound one captured stream to MAX_CAPTURED_OUTPUT_BYTES, keeping the head
+    and tail (both usually matter: the reporter summary is at the end, the
+    first error at the top). None/short input passes through untouched."""
+    if not text or len(text) <= MAX_CAPTURED_OUTPUT_BYTES:
+        return text
+    keep = MAX_CAPTURED_OUTPUT_BYTES // 2
+    dropped = len(text) - 2 * keep
+    return f"{text[:keep]}\n...[truncated {dropped} chars]...\n{text[-keep:]}"
+
+
+def _truncate_output(cp: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
+    """Clip a completed process's captured stdout/stderr in place, so an
+    adversarial client suite cannot balloon this process's memory via a
+    multi-gigabyte print. Counts are parsed from the clipped head+tail, which
+    still contains any real reporter summary."""
+    cp.stdout = _clip(cp.stdout)
+    cp.stderr = _clip(cp.stderr)
+    return cp
+
+
 def _run(argv: list[str], *, timeout: int) -> subprocess.CompletedProcess:
     """The single subprocess seam (mocked in tests). Captures text output;
-    never raises on non-zero exit — callers inspect returncode."""
-    return subprocess.run(
+    never raises on non-zero exit — callers inspect returncode. Captured
+    streams are clipped to bound memory (see _truncate_output)."""
+    return _truncate_output(subprocess.run(
         argv, capture_output=True, text=True, timeout=timeout, check=False,
-    )
+    ))
 
 
 def _extract_repo_relative(zip_bytes: bytes, dest: str) -> None:
@@ -270,19 +370,59 @@ def _extract_repo_relative(zip_bytes: bytes, dest: str) -> None:
 #   --security-opt=no-new-privileges block setuid privilege escalation inside
 #   --cap-drop=ALL                   drop all Linux capabilities (none are
 #                                    needed to install deps or run a test)
-# NOTE: --read-only is deliberately NOT added. Both the install step
-# (pip --target / npm writing node_modules into /work) and the test step
-# (pytest caches, /tmp) need to write, and pip/npm also write outside the
-# mounted /work (into the image's own site dirs, ~/.cache, /tmp). A correct
-# read-only setup would need a writable /work plus an explicit `--tmpfs /tmp`
-# and possibly more tmpfs carve-outs, which risks silently breaking installs;
-# left as a follow-up rather than added blindly here.
+# --ulimit nofile / fsize bound open descriptors and max file size, so a client
+#   can't exhaust host FDs or fill the disk with one giant file (complements
+#   --pids-limit / --memory). fsize is generous (1 GiB) so real installs and
+#   test artefacts are unaffected.
+# --read-only / --user are applied separately (see _readonly_argv / _user_argv)
+#   because they are conditional on env toggles.
 _CONTAINER_HARDENING = [
     "--pids-limit=256",
     "--cpus=1",
     "--security-opt=no-new-privileges",
     "--cap-drop=ALL",
+    "--ulimit", "nofile=1024:1024",
+    "--ulimit", "fsize=1073741824",
 ]
+
+
+def _readonly_argv() -> list[str]:
+    """--read-only rootfs plus the minimal writable tmpfs carve-outs both steps
+    need: /tmp (pip build temp, pytest scratch) and /root (npm's ~/.npm cache,
+    pip's ~/.cache). /work is a bind mount and stays writable regardless. Empty
+    when FIXPACK_READONLY_ROOTFS is disabled."""
+    if not FIXPACK_READONLY_ROOTFS:
+        return []
+    return ["--read-only", "--tmpfs", "/tmp", "--tmpfs", "/root"]
+
+
+def _user_argv() -> list[str]:
+    """--user <uid:gid> to run untrusted client code as non-root. Empty string
+    disables (image default user)."""
+    return ["--user", FIXPACK_RUN_AS_USER] if FIXPACK_RUN_AS_USER else []
+
+
+def _chown_workdir(workdir: str) -> None:
+    """Hand ownership of the bind-mounted /work to the container's --user, so a
+    non-root container process can read the extracted repo and write deps into
+    it. Only relevant (and only permitted) when the backend runs as root — a
+    non-root backend already owns the tempdir it created. No-op when --user is
+    disabled or its value is a named user rather than a numeric uid:gid."""
+    if os.getuid() != 0 or not FIXPACK_RUN_AS_USER:
+        return
+    parts = FIXPACK_RUN_AS_USER.split(":", 1)
+    try:
+        uid = int(parts[0])
+        gid = int(parts[1]) if len(parts) > 1 else uid
+    except ValueError:
+        return  # e.g. "node" — can't resolve a name to an id here; skip
+    os.lchown(workdir, uid, gid)
+    for root, dirs, files in os.walk(workdir):
+        for name in dirs + files:
+            try:
+                os.lchown(os.path.join(root, name), uid, gid)
+            except OSError:
+                pass
 
 # Egress allowlist for the install step. The install container needs the
 # network (pip/npm fetch packages), but "the network" should mean the package
@@ -348,8 +488,10 @@ def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
     return [
         "docker", "run", "--rm",
         *_runtime_argv(),
+        *_user_argv(),
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,
+        *_readonly_argv(),
         *_install_proxy_argv(),
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
@@ -361,9 +503,11 @@ def _docker_test_argv(image: str, workdir: str, script: str) -> list[str]:
     return [
         "docker", "run", "--rm",
         *_runtime_argv(),
+        *_user_argv(),
         "--network", "none",
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,
+        *_readonly_argv(),
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
     ]
@@ -373,9 +517,18 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
     """Install (net on) then test (net off) one version in Docker; return
     parsed counts. Any infra failure is captured as `error` (secret-free) —
     we never surface client output verbatim into a persisted field."""
+    if _zip_uncompressed_size(zip_bytes) > MAX_WORKSPACE_BYTES:
+        # Symmetric across original/patched (both are the same repo ± the
+        # patch), so is_regression treats this as "could not verify", never a
+        # false regression — same contract as a missing docker binary.
+        return RunResult(0, 0, False, "client workspace exceeds size limit")
+
     workdir = tempfile.mkdtemp(prefix="shipit-semcheck-")
     try:
         _extract_repo_relative(zip_bytes, workdir)
+        # mkdtemp is 0o700 owned by this process; if the container runs as a
+        # different (non-root) uid, hand it ownership so it can use /work.
+        _chown_workdir(workdir)
 
         install = _run(
             _docker_install_argv(runner.image, workdir, runner.install_script),
@@ -412,32 +565,57 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
 
 # --- Decision --------------------------------------------------------------
 
-def is_regression(original: RunResult, patched: RunResult) -> tuple[bool, str]:
-    """Did the patch make the suite worse? Returns (regression, detail).
+def is_regression(original: RunResult, patched: RunResult) -> RegressionVerdict:
+    """Did the patch make the suite worse? Returns a RegressionVerdict.
 
-    "Worse" means, in order:
+    Before comparing anything, either side being `unavailable` short-circuits to
+    "could not verify". That case is not a comparison at all — nothing ran:
+      * both unavailable → we have no baseline and no patched result. Reporting
+        "no regression" here would ship a PR whose only verification never
+        happened.
+      * only patched unavailable → the old code called this a regression and told
+        the customer their fix broke the tests. That is a false accusation about
+        a run that never started.
+      * only original unavailable → the patched run would be compared against
+        `original.failed == 0`, which means "no tests ran", not "tests passed",
+        making the verdict a coin flip.
+
+    Otherwise "worse" means, in order:
       1. patched errored where original ran clean (we broke the environment);
       2. patched timed out where original completed (we made it hang);
       3. patched has strictly more failures than original.
     A suite that was already red/timed-out/errored BEFORE our patch is the
     client's baseline, not our regression — we only ever compare against it.
+    An `error` the runner reported (e.g. "dependency install failed") is such a
+    baseline fact and keeps its existing meaning; only `unavailable` is special.
     """
+    if original.unavailable or patched.unavailable:
+        if original.unavailable and patched.unavailable:
+            which = "neither run"
+        else:
+            which = "the original run" if original.unavailable else "the patched run"
+        return RegressionVerdict(False, (
+            f"could not verify: the sandbox runner was unreachable, so {which} "
+            f"executed ({(patched if patched.unavailable else original).error})"
+        ), True)
     if patched.error and not original.error:
-        return True, f"patched run failed to execute: {patched.error}"
+        return RegressionVerdict(
+            True, f"patched run failed to execute: {patched.error}", False)
     if patched.timed_out and not original.timed_out:
-        return True, "patched tests timed out where the original completed"
+        return RegressionVerdict(
+            True, "patched tests timed out where the original completed", False)
     if patched.failed > original.failed:
         delta = patched.failed - original.failed
-        return True, (
+        return RegressionVerdict(True, (
             f"patch introduced {delta} new test failure(s) "
             f"(original: {original.failed} failed / {original.passed} passed, "
             f"patched: {patched.failed} failed / {patched.passed} passed)"
-        )
-    return False, (
+        ), False)
+    return RegressionVerdict(False, (
         f"no regression (original: {original.failed} failed / "
         f"{original.passed} passed, patched: {patched.failed} failed / "
         f"{patched.passed} passed)"
-    )
+    ), False)
 
 
 # --- Minimal check (no client test suite) ----------------------------------
@@ -504,18 +682,48 @@ def minimal_check(plan: FixpackPlan) -> RunResult:
 
 # --- Orchestration ---------------------------------------------------------
 
-def run_semantic_check(original_zip: bytes, plan: FixpackPlan) -> SemanticCheckResult:
+def run_semantic_check(
+    original_zip: bytes,
+    plan: FixpackPlan,
+    *,
+    suite_runner=None,
+    minimal_checker=None,
+) -> SemanticCheckResult:
     """Top-level gate. Detect the client's test runner; if present, run both
     versions in Docker and compare; if absent, do the minimal check and
     attach a soft recommendation note.
 
+    Orchestration and all pure steps (detect / build_patched_zip / compare)
+    run in-process; the two docker-touching seams are injectable. The backend
+    passes the sandbox-runner HTTP client (Variant A) so it never execs docker;
+    the defaults are the real local implementations, which the runner itself
+    uses.
+
     This is synchronous and may take minutes (real Docker) — callers MUST run
     it in a threadpool, exactly like `run_scan` (see main.py).
     """
+    # Resolve at call time (not as default arg values) so a module-level
+    # monkeypatch of run_suite / minimal_check still takes effect, and so the
+    # backend can inject the sandbox-runner client.
+    suite_runner = suite_runner or run_suite
+    minimal_checker = minimal_checker or minimal_check
+
     runner = detect_test_runner(original_zip)
 
     if runner is None:
-        mc = minimal_check(plan)
+        mc = minimal_checker(plan)
+        if mc.unavailable:
+            # Not "syntax-only verification passed": the syntax check never ran.
+            # Saying "no client test suite detected" here would report an
+            # infrastructure outage as a clean, if shallow, verification.
+            return SemanticCheckResult(
+                ran=False, ecosystem=None, original=None, patched=None,
+                regression=False,
+                detail=("could not verify: no client test suite detected, and "
+                        f"the sandbox runner was unreachable for the "
+                        f"syntax-only check ({mc.error})"),
+                pr_note=None, verification_unavailable=True,
+            )
         if mc.failed > 0:
             return SemanticCheckResult(
                 ran=False, ecosystem=None, original=None, patched=None,
@@ -531,13 +739,16 @@ def run_semantic_check(original_zip: bytes, plan: FixpackPlan) -> SemanticCheckR
         )
 
     patched_zip = build_patched_zip(original_zip, plan)
-    original = run_suite(original_zip, runner)
-    patched = run_suite(patched_zip, runner)
-    regression, detail = is_regression(original, patched)
+    original = suite_runner(original_zip, runner)
+    patched = suite_runner(patched_zip, runner)
+    verdict = is_regression(original, patched)
     return SemanticCheckResult(
-        ran=True, ecosystem=runner.ecosystem,
+        # `ran` claims a real client suite executed, so an unreachable runner
+        # must not set it: detecting a runner is not running one.
+        ran=not verdict.verification_unavailable, ecosystem=runner.ecosystem,
         original=original, patched=patched,
-        regression=regression, detail=detail, pr_note=None,
+        regression=verdict.regression, detail=verdict.detail, pr_note=None,
+        verification_unavailable=verdict.verification_unavailable,
     )
 
 

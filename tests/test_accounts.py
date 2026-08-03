@@ -36,29 +36,57 @@ client = TestClient(app)
 TEST_PEPPER = "test-pepper-not-a-real-secret"
 
 
-class FakeAccountRepo:
-    """In-memory AccountRepository stand-in. Indexes accounts by both the
-    HMAC key_hash (primary lookup) and the plaintext api_key (transitional
-    fallback), so it exercises whichever path resolve_account takes.
-    Unknown key -> None, like the real repo's miss / not-configured
-    contract."""
+@pytest.fixture(autouse=True)
+def _pepper_set(monkeypatch):
+    """Accounts are only usable with a pepper configured (post-0009 keys are
+    matched purely by HMAC hash). Default every test to a configured pepper;
+    the few tests that assert the unset/wrong-pepper behavior override this
+    with their own monkeypatch.delenv/setenv, which wins."""
+    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
 
-    def __init__(self, by_key: dict | None = None):
-        self._by_key = by_key or {}
+
+class FakeAccountRepo:
+    """In-memory AccountRepository stand-in. Indexes accounts by their HMAC
+    key_hash only — the plaintext api_key column no longer exists (migration
+    0019), so a key is resolvable solely by hashing it. Unknown hash -> None,
+    like the real repo's miss / not-configured contract."""
+
+    def __init__(self, accounts: list | None = None):
         self._by_hash: dict = {}
-        for acct in self._by_key.values():
+        for acct in accounts or []:
             if acct.get("key_hash"):
                 self._by_hash[acct["key_hash"]] = acct
 
     async def get_by_key_hash(self, key_hash: str):
         return self._by_hash.get(key_hash)
 
-    async def get_by_api_key(self, api_key: str):
-        return self._by_key.get(api_key)
+    async def rotate_key(self, account_id: str):
+        acct = next(
+            (a for a in self._by_hash.values() if a["id"] == account_id), None
+        )
+        if acct is None:
+            return None
+        old_hash = acct["key_hash"]
+        new_key = generate_api_key()
+        acct["key_prefix"] = api_key_prefix(new_key)
+        acct["key_hash"] = hash_api_key(new_key)
+        acct["api_key"] = new_key
+        self._by_hash.pop(old_hash, None)
+        self._by_hash[acct["key_hash"]] = acct
+        return acct
+
+
+def _account_for(key: str, *, account_id: str = "acct-1", tier: str = "pro"):
+    return {
+        "id": account_id,
+        "key_prefix": api_key_prefix(key),
+        "key_hash": hash_api_key(key),
+        "tier": tier,
+    }
 
 
 def _pro_repo(key: str = "sk_live_prokey"):
-    return FakeAccountRepo({key: {"id": "acct-1", "api_key": key, "tier": "pro"}})
+    return FakeAccountRepo([_account_for(key)])
 
 
 def _override_account_repo(repo):
@@ -168,48 +196,42 @@ def test_api_key_prefix_is_short_and_nonrevealing():
     assert len(api_key_prefix(key)) < len(key)
 
 
-# --- resolve_account: hashed lookup + backward-compat fallback ---
+# --- resolve_account: hashed lookup only ---
 
 class _Request:
     def __init__(self, key: str | None):
         self.headers = {"authorization": f"Bearer {key}"} if key else {}
 
 
-async def test_resolve_account_finds_by_hash(monkeypatch):
-    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
+async def test_resolve_account_finds_by_hash():
     key = "sk_live_realkey"
-    acct = {"id": "acct-1", "api_key": None,
-            "key_hash": hash_api_key(key), "tier": "pro"}
-    repo = FakeAccountRepo({"ignored": acct})  # indexed by key_hash
+    acct = _account_for(key)
+    repo = FakeAccountRepo([acct])  # indexed by key_hash
 
     found = await resolve_account(_Request(key), repo)
     assert found is acct
 
 
-async def test_resolve_account_wrong_key_not_found(monkeypatch):
-    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
-    good = "sk_live_realkey"
-    acct = {"id": "acct-1", "api_key": None,
-            "key_hash": hash_api_key(good), "tier": "pro"}
-    repo = FakeAccountRepo({"ignored": acct})
+async def test_resolve_account_wrong_key_not_found():
+    acct = _account_for("sk_live_realkey")
+    repo = FakeAccountRepo([acct])
 
     assert await resolve_account(_Request("sk_live_wrongkey"), repo) is None
 
 
-async def test_resolve_account_falls_back_to_plaintext_for_prebackfill_key(monkeypatch):
-    # Account issued before migration 0009: key_hash is NULL, only plaintext
-    # api_key exists. The hashed lookup misses; the fallback finds it.
-    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
-    key = "sk_live_legacykey"
-    acct = {"id": "acct-legacy", "api_key": key, "key_hash": None, "tier": "pro"}
-    repo = FakeAccountRepo({key: acct})  # only plaintext-indexed (no key_hash)
+async def test_resolve_account_without_pepper_is_anonymous(monkeypatch):
+    # No pepper -> can't hash the presented key, so fall back to free rather
+    # than raise. (A real DB deployment is guaranteed a pepper by the startup
+    # guard; this is the degrade-to-free safety net.)
+    key = "sk_live_realkey"
+    acct = _account_for(key)
+    repo = FakeAccountRepo([acct])
+    monkeypatch.delenv(API_KEY_PEPPER_ENV, raising=False)
 
-    found = await resolve_account(_Request(key), repo)
-    assert found is acct
+    assert await resolve_account(_Request(key), repo) is None
 
 
-async def test_resolve_account_no_key_is_anonymous(monkeypatch):
-    monkeypatch.setenv(API_KEY_PEPPER_ENV, TEST_PEPPER)
+async def test_resolve_account_no_key_is_anonymous():
     repo = _pro_repo()
     assert await resolve_account(_Request(None), repo) is None
 
@@ -284,6 +306,78 @@ def test_account_endpoint_valid_key_returns_pro_entitlements():
     }
     # the endpoint never echoes the secret back
     assert "api_key" not in json.dumps(body)
+
+
+# --- key rotation: repo + POST /v1/account/rotate-key ---
+
+async def test_rotate_key_invalidates_old_and_resolves_new():
+    key = "sk_live_prokey"
+    repo = _pro_repo(key)
+
+    rotated = await repo.rotate_key("acct-1")
+    new_key = rotated["api_key"]
+    assert new_key != key
+    assert rotated["tier"] == "pro"  # tier preserved across rotation
+
+    # old key no longer resolves; new key does
+    assert await resolve_account(_Request(key), repo) is None
+    found = await resolve_account(_Request(new_key), repo)
+    assert found["id"] == "acct-1"
+
+
+async def test_rotate_key_unknown_account_returns_none():
+    repo = _pro_repo("sk_live_prokey")
+    assert await repo.rotate_key("acct-does-not-exist") is None
+
+
+def test_rotate_endpoint_requires_recognized_key():
+    _override_account_repo(FakeAccountRepo())  # knows no keys
+    try:
+        resp = client.post(
+            "/v1/account/rotate-key",
+            headers={"Authorization": "Bearer sk_live_nope"},
+        )
+    finally:
+        _clear_account_repo()
+    assert resp.status_code == 401
+
+
+def test_rotate_endpoint_anonymous_is_401():
+    _override_account_repo(_pro_repo("sk_live_prokey"))
+    try:
+        resp = client.post("/v1/account/rotate-key")  # no Authorization
+    finally:
+        _clear_account_repo()
+    assert resp.status_code == 401
+
+
+def test_rotate_endpoint_mints_new_key_and_invalidates_old():
+    repo = _pro_repo("sk_live_prokey")
+    _override_account_repo(repo)
+    try:
+        resp = client.post(
+            "/v1/account/rotate-key",
+            headers={"Authorization": "Bearer sk_live_prokey"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        new_key = body["api_key"]
+        assert new_key.startswith("sk_live_")
+        assert new_key != "sk_live_prokey"
+        assert body["tier"] == "pro"
+        assert body["key_prefix"] == api_key_prefix(new_key)
+
+        # old key is now rejected, new key is accepted by GET /v1/account
+        old = client.get(
+            "/v1/account", headers={"Authorization": "Bearer sk_live_prokey"}
+        )
+        assert old.json()["tier"] == "free"
+        new = client.get(
+            "/v1/account", headers={"Authorization": f"Bearer {new_key}"}
+        )
+        assert new.json()["tier"] == "pro"
+    finally:
+        _clear_account_repo()
 
 
 # --- tier-aware rate limiting on /v1/audits ---

@@ -18,11 +18,28 @@ import io
 import zipfile
 
 from fastapi import HTTPException
+import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.main import app, get_fixpack_repo
+
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_runner_is_healthy(monkeypatch):
+    """The processor refuses to claim while the sandbox runner is unhealthy, and
+    in tests there is no runner at all. Default it to healthy so these tests keep
+    exercising the delivery path; the gate itself is covered by its own tests,
+    which override this."""
+    monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
+    # Same reason for the check itself: with no runner, sandbox_client would
+    # report "unavailable" and the processor would (correctly) defer every job.
+    # The local implementation needs no docker for the plans these tests use.
+    monkeypatch.setattr(main_mod.sandbox_client, "minimal_check",
+                        local_minimal_check)
 
 
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
@@ -66,6 +83,9 @@ def test_health_db_up_reports_backlog():
     assert resp.status_code == 200
     assert resp.json() == {
         "db": True, "fixpack_backlog": 2, "oldest_paid_seconds": 43.0,
+        # None, not False: App auth simply isn't configured in the test
+        # environment, which is not the same as a rejected key.
+        "github_app": None,
     }
 
 
@@ -80,6 +100,7 @@ def test_health_db_unconfigured_is_200_with_db_false():
     assert resp.status_code == 200          # live process reporting degraded
     assert resp.json() == {
         "db": False, "fixpack_backlog": None, "oldest_paid_seconds": None,
+        "github_app": None,
     }
 
 
@@ -92,6 +113,7 @@ def test_health_empty_backlog_has_null_age():
         _clear()
     assert resp.json() == {
         "db": True, "fixpack_backlog": 0, "oldest_paid_seconds": None,
+        "github_app": None,
     }
 
 

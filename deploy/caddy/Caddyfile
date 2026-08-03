@@ -1,0 +1,31 @@
+# Caddy config for the production VPS (v2.11.4 as deployed).
+#
+# Under version control because the app's trust assumptions depend on it:
+# app/main.py _client_key resolves the rate-limit key from X-Forwarded-For,
+# and whether that header can be forged is decided entirely here.
+#
+# Deliberately minimal. Caddy >= 2.5 ignores incoming X-Forwarded-* values
+# unless trusted_proxies is set, so with no trusted_proxies the backend
+# receives exactly one entry -- the real peer -- and a client-supplied header
+# is discarded at the edge. An explicit
+# `header_up X-Forwarded-For {remote_host}` would only restate that default.
+#
+# If a CDN is ever put in front of Caddy, trusted_proxies becomes necessary
+# AND the whole incoming header is then forwarded upstream, untrusted entries
+# included. _client_key reads the last entry for that case; revisit both
+# together, never one alone.
+#
+# No `log` block: Caddy writes no per-request access log without one, and
+# audit access tokens travel as ?token=... Adding access logging here means
+# adding the query filter in the same change:
+#
+#   log {
+#       format filter {
+#           wrap json
+#           fields { request>uri query { delete token } }
+#       }
+#   }
+
+45-10-40-169.sslip.io {
+	reverse_proxy 127.0.0.1:8000
+}

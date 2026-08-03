@@ -10,7 +10,7 @@ import zipfile
 
 import httpx
 
-from app.llm.client import LLMClient, Provider
+from app.llm.client import LLMClient, LLMUsage, Provider
 from app.scan.llm_scan import (
     LLMScanStats,
     build_prompt,
@@ -38,16 +38,20 @@ def make_zip(entries: dict[str, bytes]) -> io.BytesIO:
 
 
 class FakeLLM(LLMClient):
-    """Returns a canned response; records the prompts it received."""
+    """Returns a canned response; records the prompts it received. Reports a
+    fixed usage per call so the scan's cost-accounting aggregation is
+    exercised."""
 
     def __init__(self, response: str):
         super().__init__(providers=[])
         self.response = response
         self.prompts: list[str] = []
 
-    def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
+    def complete(self, system: str, user: str,
+                 max_tokens: int = 4096) -> tuple[str, LLMUsage]:
         self.prompts.append(user)
-        return self.response
+        return self.response, LLMUsage(
+            model="fake-model", input_tokens=100, output_tokens=20)
 
 
 # --- file selection & prompt ---
@@ -166,7 +170,9 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
     buf = make_zip({"src/auth.ts": VULN_TS.encode()})
     findings, stats = run_llm_scan(buf, FakeLLM(response), rubrics=("auth",))
 
-    assert stats == LLMScanStats(prompts=1, raw_findings=2, verified=1, discarded=1)
+    assert stats == LLMScanStats(
+        prompts=1, raw_findings=2, verified=1, discarded=1,
+        calls=1, input_tokens=100, output_tokens=20, model="fake-model")
     assert len(findings) == 1
     f = findings[0]
     assert f.rule_id == "llm-auth" and f.category == "Auth"
@@ -203,7 +209,8 @@ def test_client_falls_back_to_second_provider(monkeypatch):
         ],
         transport=httpx.MockTransport(handler),
     )
-    assert client.complete("s", "u") == "[]"
+    text, _usage = client.complete("s", "u")
+    assert text == "[]"
     assert calls == ["primary.example"] * 3 + ["api.anthropic.com"]
 
 
@@ -247,7 +254,8 @@ def test_transient_5xx_retried_then_succeeds(monkeypatch):
     c = LLMClient(
         providers=[Provider("openai_compat", "https://fake", "k", "m")],
         transport=httpx.MockTransport(handler))
-    assert c.complete("s", "u") == "[]"
+    text, _usage = c.complete("s", "u")
+    assert text == "[]"
     assert calls["n"] == 3  # 500, 500, 200
 
 
@@ -304,7 +312,7 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     class FakeClient:
         providers = [object()]
         def complete(self, system, user, max_tokens=4096):
-            return next(responses)
+            return next(responses), LLMUsage(model="fake-model")
 
     findings, stats = run_llm_scan(io.BytesIO(buf.getvalue()), FakeClient(),
                                    passes=2)

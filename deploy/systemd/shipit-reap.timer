@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule ShipIt expired preview cleanup
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=1h
+AccuracySec=10s
+Unit=shipit-reap.service
+
+[Install]
+WantedBy=timers.target

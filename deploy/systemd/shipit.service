@@ -1,0 +1,47 @@
+# The base unit the three drop-ins in shipit.service.d/ modify.
+#
+# Recorded from /etc/systemd/system/shipit.service on the production VPS,
+# verbatim. It was the one file in this deployment that existed only on the
+# host: the drop-ins were versioned, the thing they override was not, so
+# `deploy/systemd/` could not actually provision the service from scratch --
+# systemd would have had nothing to apply them to.
+#
+# Two things here are deliberately NOT fixed, so that recording the current
+# state and changing it stay separate commits:
+#
+#   * OnFailure=, StartLimitIntervalSec=, StartLimitBurst=, Restart= and
+#     RestartSec= are repeated, identically, in
+#     10-production-operations.conf. One copy is redundant. Removing the
+#     wrong one silently drops the alerting or the restart policy, so it is
+#     its own change with its own daemon-reload.
+#
+#   * Requires=docker.service stops this unit whenever docker stops, and the
+#     API does not exec docker: it reaches the sandbox runner over
+#     /run/shipit-runner/sandbox.sock (app/sandbox_client.py), and
+#     run_semantic_check is explicitly documented as taking that client "so
+#     it never execs docker". Wants= would give the same ordering without the
+#     cascade. Verify no other API path (PreviewRegistry) execs docker before
+#     changing it.
+#
+# ExecStart here points at /opt/shipit/.venv, which the release layout does
+# not build -- 20-release-layout.conf resets and replaces it with the
+# /srv/shipit/current venv. This unit is therefore not runnable on its own in
+# the release layout; it is the base the drop-ins require.
+
+[Unit]
+Description=ShipIt API
+After=network.target docker.service
+Requires=docker.service
+OnFailure=shipit-alert@%n.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+WorkingDirectory=/opt/shipit
+EnvironmentFile=/opt/shipit/.env
+ExecStart=/opt/shipit/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

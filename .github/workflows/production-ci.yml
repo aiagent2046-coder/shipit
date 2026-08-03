@@ -1,0 +1,263 @@
+name: production-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-ci:
+    name: production-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    env:
+      API_KEY_PEPPER: ci-pepper-not-a-real-secret
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check whitespace errors
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              git diff --check "$BASE_SHA" "$HEAD_SHA"
+              ;;
+            push)
+              if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+                git diff-tree --check --root -r "$GITHUB_SHA"
+              else
+                git diff --check "$BEFORE_SHA" "$GITHUB_SHA"
+              fi
+              ;;
+            workflow_dispatch)
+              git diff-tree --check --root -r HEAD
+              ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Scan added lines for strong secret signatures
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          empty_tree="$(git hash-object -t tree /dev/null)"
+
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              scan_base="$BASE_SHA"
+              scan_head="$HEAD_SHA"
+              ;;
+            push)
+              scan_head="$GITHUB_SHA"
+
+              if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+                scan_base="$empty_tree"
+              else
+                scan_base="$BEFORE_SHA"
+              fi
+              ;;
+            workflow_dispatch)
+              scan_head="$GITHUB_SHA"
+
+              if git rev-parse "${GITHUB_SHA}^" >/dev/null 2>&1; then
+                scan_base="${GITHUB_SHA}^"
+              else
+                scan_base="$empty_tree"
+              fi
+              ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          python3 .github/scripts/scan-added-secrets.py             "$scan_base"             "$scan_head"
+
+      - name: Validate shell syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          checked=0
+
+          while IFS= read -r -d '' script; do
+            echo "Checking $script"
+            bash -n "$script"
+            checked=$((checked + 1))
+          done < <(git ls-files -z '*.sh')
+
+          ((checked > 0))
+          echo "Validated $checked shell scripts"
+
+      # bash -n above is a syntax check and nothing more. It passed happily on
+      # a deploy script whose rollback reported success after failing, because
+      # that bug was semantic: a function invoked under `||` runs with errexit
+      # disabled for its whole body. shellcheck names exactly that (SC2310),
+      # which is why check-set-e-suppressed is enabled explicitly rather than
+      # relying on the default severity, where it does not fire.
+      #
+      # Scoped to that one optional check on purpose. Turning on --enable=all
+      # adds nine SC2312 findings that have nothing to do with this class of
+      # bug, and a gate that fails for unrelated reasons is a gate people
+      # start skipping.
+      - name: Lint shell scripts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+
+          git ls-files -z '*.sh' | xargs -0 shellcheck \
+            --severity=info \
+            --enable=check-set-e-suppressed
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install locked application and development dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          python -m pip install \
+            --require-hashes \
+            -r requirements.txt \
+            -r requirements-dev.txt
+
+          python -m pip install -e . --no-deps
+
+      - name: Validate workflow YAML
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          python - <<'PY'
+          from pathlib import Path
+
+          import yaml
+
+          paths = sorted(Path(".github/workflows").glob("*.y*ml"))
+          if not paths:
+              raise SystemExit("No workflow files found")
+
+          for path in paths:
+              with path.open("r", encoding="utf-8") as stream:
+                  document = yaml.safe_load(stream)
+
+              if not isinstance(document, dict):
+                  raise SystemExit(f"{path}: top-level YAML must be a mapping")
+
+              print(f"Validated {path}")
+          PY
+
+      - name: Prepare production-like systemd validation environment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sudo mkdir -p /opt
+
+          if [[ -e /opt/shipit || -L /opt/shipit ]]; then
+            test "$(readlink -f /opt/shipit)" = "$GITHUB_WORKSPACE"
+          else
+            sudo ln -s "$GITHUB_WORKSPACE" /opt/shipit
+          fi
+
+          touch .env
+          mkdir -p .venv/bin
+          ln -sf "$(command -v python)" .venv/bin/python
+
+          sudo mkdir -p /srv/shipit
+
+          if [[
+            -e /srv/shipit/current ||
+            -L /srv/shipit/current
+          ]]; then
+            test "$(
+              readlink -f /srv/shipit/current
+            )" = "$GITHUB_WORKSPACE"
+          else
+            sudo ln -s               "$GITHUB_WORKSPACE"               /srv/shipit/current
+          fi
+
+          test -x             /srv/shipit/current/.venv/bin/python
+
+          if ! id shipit-ops >/dev/null 2>&1; then
+            sudo useradd \
+              --system \
+              --no-create-home \
+              --shell /usr/sbin/nologin \
+              shipit-ops
+          fi
+
+          cat > /tmp/shipit.service <<'UNIT'
+          [Unit]
+          Description=ShipIt CI dependency stub
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/true
+          UNIT
+
+      - name: Validate systemd units
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          mapfile -t units < <(
+            find deploy/systemd \
+              -maxdepth 1 \
+              -type f \
+              \( -name '*.service' -o -name '*.timer' \) \
+              -print |
+            sort
+          )
+
+          ((${#units[@]} > 0))
+
+          printf 'Validating %d systemd units\n' "${#units[@]}"
+
+          systemd-analyze verify \
+            /tmp/shipit.service \
+            "${units[@]}"
+
+      - name: Run test suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pytest -q

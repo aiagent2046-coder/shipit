@@ -1,0 +1,20 @@
+[Unit]
+Description=ShipIt PostgreSQL backup
+After=network-online.target
+Wants=network-online.target
+OnFailure=shipit-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/shipit
+EnvironmentFile=/opt/shipit/.env
+Environment=BACKUP_DIR=/var/backups/shipit/postgres
+Environment=BACKUP_KEEP_DAYS=14
+ExecStart=/opt/shipit/deploy/scripts/backup-postgres.sh
+TimeoutStartSec=1800
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/shipit
