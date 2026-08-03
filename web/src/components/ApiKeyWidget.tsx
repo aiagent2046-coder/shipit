@@ -97,7 +97,7 @@ export function ApiKeyWidget() {
               placeholder="sk_live_…"
               autoComplete="off"
               spellCheck={false}
-              className="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-sm outline-none focus:border-accent"
+              className="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-sm outline-hidden focus:border-accent"
             />
             <div className="flex gap-2">
               <button
