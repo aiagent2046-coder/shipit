@@ -455,9 +455,11 @@ def test_unknown_key_audit_is_limited_as_free():
 # --- session cookie and its CSRF gate ---
 #
 # The key used to sit in sessionStorage, readable by any script on the page.
-# It now travels in an HttpOnly cookie, which costs a CSRF defence: the cookie
-# must be SameSite=None (the frontend is a different site from this API), so
-# the browser attaches it to cross-site requests too. CSRF_HEADER is the gate.
+# It now travels in an HttpOnly cookie. SameSite=Lax is the CSRF defence and
+# is only possible because the API shares a registrable domain with the
+# frontend (#172); CSRF_HEADER is the second lock, for same-site callers Lax
+# cannot distinguish -- a Deploy Pack preview on a drydock.co subdomain
+# running a customer's code.
 
 PRO_KEY = "sk_live_prokey"
 
@@ -472,8 +474,9 @@ class _Req:
 
 
 def test_cookie_without_the_csrf_header_is_not_a_key():
-    """The whole point. Ten POST endpoints here parse no body, so a bare
-    cookie would be a CSRF primitive on every one of them."""
+    """SameSite=Lax already keeps this cookie off a cross-site request. This
+    check is for the same-site one it cannot see: ten POST endpoints here
+    parse no body, so a bare cookie would be a CSRF primitive on each."""
     req = _Req(cookies={API_KEY_COOKIE: PRO_KEY})
     assert api_key_from_request(req) is None
 
@@ -517,7 +520,7 @@ def test_login_sets_an_httponly_session_cookie():
         assert API_KEY_COOKIE in raw
         assert "HttpOnly" in raw            # unreadable from JavaScript
         assert "Secure" in raw
-        assert "samesite=none" in raw.lower()
+        assert "samesite=lax" in raw.lower()   # not None: see #172
         assert "max-age" not in raw.lower() # dies with the browser session,
         assert "expires" not in raw.lower() # exactly like sessionStorage did
     finally:

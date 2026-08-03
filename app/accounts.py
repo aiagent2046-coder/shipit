@@ -158,22 +158,25 @@ class _AccountLookup(Protocol):
 
 API_KEY_COOKIE = "shipit_api_key"
 
-# Presence of this header is the CSRF defence for the cookie path. Its value
-# is deliberately never checked, because the value is not the mechanism: a
-# cross-origin request carrying ANY header outside the CORS-safelisted set
-# forces the browser to preflight, and the preflight is answered against
-# CORS_ALLOWED_ORIGINS. An attacker's page never gets to send the real
-# request, so there is nothing for it to guess.
+# Not the CSRF mechanism. SameSite=Lax is -- see set_api_key_cookie. This is
+# the second lock, and it exists for a specific hole Lax leaves open rather
+# than as a general precaution.
 #
-# A double-submit token would give the same guarantee here and cost a second
-# cookie, a generator and a comparison. The topology already provides the
-# protection; adding a token would be re-implementing the preflight in
-# application code.
+# SameSite draws its boundary at the registrable domain, so EVERY subdomain of
+# drydock.co is same-site and gets the cookie. Deploy Pack previews are meant
+# to be served per job (README: the `{job_id}.preview.*` URL still needs a
+# real domain), and a preview runs the CUSTOMER'S code. Put those on a
+# drydock.co subdomain -- the obvious choice -- and Lax alone would hand that
+# code a customer's session.
 #
-# This is only needed because the cookie must be SameSite=None. The frontend
-# is a separate origin (Vercel) from this API, so every call is cross-site
-# and SameSite=Lax would simply never send the cookie. None restores that,
-# and hands CSRF back to us to solve -- which is what this header does.
+# This header closes that: a request carrying any header outside the
+# CORS-safelisted set must be preflighted, and the preflight is answered
+# against CORS_ALLOWED_ORIGINS, which a preview subdomain is not in. The value
+# is deliberately never checked, because the value is not the mechanism --
+# there is nothing here for an attacker to guess.
+#
+# A double-submit token would add a second cookie, a generator and a
+# comparison for the same guarantee the preflight already gives.
 CSRF_HEADER = "x-drydock-web"
 
 
@@ -187,11 +190,12 @@ def api_key_from_request(request: Any) -> str | None:
     will not pass. Scripts, curl and the docs page keep working untouched.
 
     The cookie is the browser's path, and it is only honoured alongside
-    CSRF_HEADER. Without that check a cookie would ride along on any
-    cross-site request the victim's browser can be made to issue, and ten of
-    this API's POST endpoints parse no body at all -- /v1/account/rotate-key
-    among them, which would let any page a customer visits invalidate the key
-    they paid for.
+    CSRF_HEADER. SameSite=Lax already stops a cross-SITE request from
+    carrying it; this check stops a same-site one, which a Deploy Pack
+    preview on a drydock.co subdomain would be while running customer code.
+    Ten of this API's POST endpoints parse no body at all --
+    /v1/account/rotate-key among them, which would let such a page invalidate
+    the key a customer paid for.
 
     An unaccompanied cookie reads as no key rather than an error, matching
     what resolve_account already does with an unknown one: fall back to
@@ -223,15 +227,25 @@ def set_api_key_cookie(response: Any, api_key: str) -> None:
     what sessionStorage did, and matching it keeps this change to one
     variable: the key stops being readable, and nothing else moves.
 
-    SameSite=None because the frontend is a different site from this API;
-    Secure is mandatory with it and correct regardless.
+    SameSite=Lax, which is the CSRF defence: the browser will not attach this
+    cookie to a cross-site POST at all, so the ten body-less POST endpoints
+    here stop being reachable from anyone else's page.
+
+    Lax is only available because the API moved to api.drydock.co (#172).
+    Against the old 45-10-40-169.sslip.io host this was a different site from
+    the frontend, which forced SameSite=None -- and a None cookie is a
+    third-party cookie, which Safari and Firefox block outright. The earlier
+    shape of this change would have failed silently in both.
+
+    Secure regardless: the only thing served over anything but https here is
+    a developer's localhost, which browsers already treat as secure.
     """
     response.set_cookie(
         API_KEY_COOKIE,
         api_key,
         httponly=True,
         secure=True,
-        samesite="none",
+        samesite="lax",
         path="/",
     )
 
@@ -240,7 +254,7 @@ def clear_api_key_cookie(response: Any) -> None:
     """Drop the session cookie. Needed for parity: "forget this key" used to
     be a sessionStorage removal the frontend could do by itself, and an
     HttpOnly cookie can only be cleared by the server that set it."""
-    response.delete_cookie(API_KEY_COOKIE, path="/", secure=True, samesite="none")
+    response.delete_cookie(API_KEY_COOKIE, path="/", secure=True, samesite="lax")
 
 
 async def resolve_account(
