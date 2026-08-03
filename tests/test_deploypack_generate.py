@@ -1,6 +1,7 @@
 """Tests for Deploy Pack generation — deterministic, no LLM involved."""
 
 import io
+import pytest
 import zipfile
 
 import yaml
@@ -363,3 +364,34 @@ def test_unsupported_stack_raises():
         assert False, "expected UnsupportedForDeployPack for UNSUPPORTED"
     except UnsupportedForDeployPack:
         pass
+
+
+# --- .dockerignore (every stack) ---
+
+@pytest.mark.parametrize("stack,files", [
+    (Stack.FASTAPI, {"requirements.txt": "fastapi\n", "app/main.py": "app = 1\n"}),
+    (Stack.VITE_REACT, {"package.json": '{"name":"x"}\n', "vite.config.js": "\n"}),
+    (Stack.NEXTJS, _next_files()),
+])
+def test_pack_excludes_env_and_git_from_the_image(stack, files):
+    """Every Dockerfile we hand out does COPY . ., so the build context is the
+    image. A customer with an .env next to it would ship their credentials in
+    a layer -- the exact thing the audit that preceded the pack warns about."""
+    pack = generate_deploy_pack(stack, files)
+
+    assert ".dockerignore" in pack, f"{stack} pack has no .dockerignore"
+    lines = [ln.strip() for ln in pack[".dockerignore"].splitlines()]
+    assert ".env" in lines
+    assert ".env.*" in lines
+    assert "!.env.example" in lines, "the example is documentation, not a secret"
+    assert ".git" in lines, "history keeps deleted secrets alive in old objects"
+    assert "node_modules" in lines
+
+
+def test_dockerignore_does_not_starve_compose_of_its_env():
+    """Excluding .env from the image is only safe because compose reads it from
+    the host at run time. If that ever stops being true, this test should be
+    the thing that notices."""
+    files = {"requirements.txt": "fastapi\n", "app/main.py": "app = 1\n"}
+    pack = generate_deploy_pack(Stack.FASTAPI, files)
+    assert "env_file: [.env]" in pack["docker-compose.yml"]
