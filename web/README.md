@@ -36,7 +36,7 @@ the Vercel project settings for deploys.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | `https://45-10-40-169.sslip.io` | Base URL of the live FastAPI backend. Override to point at a local backend. |
+| `NEXT_PUBLIC_API_BASE_URL` | `https://api.drydock.co` | Base URL of the live FastAPI backend. Override to point at a local backend. |
 | `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` | *(blank)* | Telegram bot username (no `@`) for the Stars deep link `https://t.me/<username>`. The backend code hardcodes no username, so you must supply your real bot's handle. Left blank, the Pay-with-Stars button renders an "unconfigured" state rather than guessing a fake handle. |
 
 ## Backend API used

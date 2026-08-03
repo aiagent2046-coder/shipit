@@ -368,9 +368,17 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   `EnvironmentFile=/opt/shipit/.env`, `Restart=on-failure`. Runs as
   `shipit-ops`, not root, with `SupplementaryGroups=shipit-runner` for the
   sandbox socket — see `deploy/systemd/shipit.service.d/30-service-user.conf`.
-- Caddy terminates TLS for `45-10-40-169.sslip.io` (sslip.io wildcard
-  DNS — no owned domain yet) and reverse-proxies to 8000. The public
-  `{job_id}.preview.*` URL still needs a real domain; previews are
+- Caddy terminates TLS for `api.drydock.co` and, still, for
+  `45-10-40-169.sslip.io`, and reverse-proxies both to 8000. The sslip name
+  predates owning the domain and keeps answering: delivered audit reports
+  carry absolute links to it. Certificates are per-name and automatic;
+  api.drydock.co needs an A record to 45.10.40.169 before Caddy can complete
+  the HTTP-01 challenge for it.
+- The subdomain is not cosmetic. `drydock.co` and `api.drydock.co` are the
+  same site, so a session cookie set by the API is first-party and
+  `SameSite=Lax` applies; against an unrelated host it is a third-party
+  cookie, which Safari and Firefox block by default. See PR #171.
+- The public `{job_id}.preview.*` URL still needs its own name; previews are
   reachable as `http://45.10.40.169:<port>` (ufw opens 20000–30000).
 - `shipit-reap.timer` (systemd, hourly) replaces the GitHub Actions
   reaper cron on this deployment — the endpoint is the same
