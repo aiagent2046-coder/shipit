@@ -320,3 +320,86 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     # оба ответа указывают на одну (file, line): дедуп оставил тяжёлую
     assert len(findings) == 1
     assert findings[0].severity == "high"
+
+
+# --- non-production context damping ---
+#
+# The static rules damp a credential found in tests/ to medium; the LLM pass
+# used to rate the identical line critical at full weight, and both reached
+# the report because dedup_cross_rubric never merges across producers.
+
+def _scan_one(path: str, **overrides):
+    """Run one verified finding at `path` through the scan, return it."""
+    response = json.dumps([valid_finding(file=path, **overrides)])
+    buf = make_zip({path: VULN_TS.encode()})
+    findings, _ = run_llm_scan(buf, FakeLLM(response), rubrics=("auth",))
+    assert len(findings) == 1, f"expected one finding for {path}"
+    return findings[0]
+
+
+def test_llm_finding_in_test_path_is_damped_not_dropped():
+    f = _scan_one("tests/auth.test.ts")
+    assert f.severity == "medium"          # capped, exactly like the static rules
+    assert f.confidence == 0.32            # 0.9 * 0.35
+    assert f.context == "test_file"        # so the report groups it explicitly
+
+
+def test_llm_finding_in_docs_is_damped():
+    f = _scan_one("docs/auth.ts")
+    assert f.severity == "medium"
+    assert f.context == "doc_example"
+
+
+def test_llm_finding_in_production_path_is_untouched():
+    f = _scan_one("src/auth.ts")
+    assert f.severity == "critical"
+    assert f.confidence == 0.9
+    assert f.context is None
+
+
+def test_llm_finding_in_migration_keeps_full_severity():
+    """A migration is applied state. is_non_production_path excludes it, and
+    the damper must make the same exception or the two disagree."""
+    f = _scan_one("migrations/0001_init.ts")
+    assert f.severity == "critical"
+    assert f.context is None
+
+
+def test_damping_agrees_with_path_predicate():
+    """The damper and is_non_production_path are two answers to one question.
+    They are separate functions, so pin that they never disagree."""
+    from app.scan.secrets import (
+        damp_for_non_production_path, is_non_production_path,
+    )
+    paths = [
+        "tests/test_x.py", "src/app.py", "docs/guide.md", "migrations/0001.sql",
+        "examples/demo.js", "__tests__/a.js", "app/main.py", "README.md",
+        "test/helper.rb", "supabase/migrations/0002.sql", "fixtures/data.json",
+    ]
+    for p in paths:
+        _, _, context = damp_for_non_production_path(p, "critical", 1.0)
+        assert (context is not None) == is_non_production_path(p), p
+
+
+def test_fixtures_alone_no_longer_zero_the_security_score():
+    """The reason this exists. 14 undamped criticals cost 2.0 * confidence
+    each against a category budget of 10, so a repo whose only findings were
+    its own test fixtures scored Security 0.0 -- measured on this repository,
+    where every one of them was a fixture and seven would have been enough."""
+    from app.scan.scoring import ScoredFinding, compute_scores
+    from app.scan.secrets import damp_for_non_production_path
+
+    paths = [f"tests/test_{i}.py" for i in range(14)]
+
+    undamped = [ScoredFinding(rule_id="llm-security", title="Hardcoded credential",
+                              severity="critical", confidence=0.8,
+                              category="Security", file=p, line=1) for p in paths]
+    assert compute_scores(undamped)["categories"]["Security"] == 0.0
+
+    damped = []
+    for p in paths:
+        sev, conf, ctx = damp_for_non_production_path(p, "critical", 0.8)
+        damped.append(ScoredFinding(rule_id="llm-security", title="Hardcoded credential",
+                                    severity=sev, confidence=conf,
+                                    category="Security", file=p, line=1, context=ctx))
+    assert compute_scores(damped)["categories"]["Security"] > 8.0
