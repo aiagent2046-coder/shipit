@@ -451,9 +451,17 @@ values) and breaking the `jq` runbook below.
 
 ### Installing the timers
 
-`deploy-production.sh` swaps the release and restarts `shipit.service`. It does
-**not** touch systemd units, so installing them is host provisioning: done once
-per host, and again by hand whenever a unit file in `deploy/systemd/` changes.
+`deploy-production.sh` swaps the release and restarts `shipit.service` and
+`shipit-audit-worker.service`. Two services, not one, because the worker is a
+long-lived process out of the `current` symlink: swapping the symlink leaves
+the running Python on the previous release, so an engine change would ship,
+pass its health gates and never reach an audit. Restarting it is the deploy's
+job; the timers are not, since a oneshot re-execs on its next firing and picks
+up the new release by itself.
+
+Installing the unit *files* is still host provisioning. The deploy restarts
+units, it does not write them: done once per host, and again by hand whenever
+a unit file in `deploy/systemd/` changes.
 
 Copy from **`/srv/shipit/current`**, the symlink to the release that is
 actually running. Not from `/opt/shipit`: that is the control checkout, no

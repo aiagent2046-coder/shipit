@@ -6,6 +6,7 @@ RELEASE_ROOT="${SHIPIT_RELEASE_ROOT:-/srv/shipit}"
 ENV_FILE="${SHIPIT_ENV_FILE:-/opt/shipit/.env}"
 RELEASE_ENV="${SHIPIT_RELEASE_ENV:-/opt/shipit/.release-env}"
 SERVICE="${SHIPIT_SERVICE:-shipit.service}"
+WORKER_SERVICE="${SHIPIT_WORKER_SERVICE:-shipit-audit-worker.service}"
 LOCK_FILE="${SHIPIT_DEPLOY_LOCK:-/run/lock/shipit-deploy.lock}"
 KEEP_RELEASES="${SHIPIT_KEEP_RELEASES:-5}"
 
@@ -313,6 +314,39 @@ if [[ "$deployment_ok" -ne 1 ]]; then
 
   echo >&2
   echo "Production deployment: FAILED (rolled back to $CURRENT_SHA)" >&2
+  exit 1
+fi
+
+# The audit worker runs the scan itself, and it is a long-lived Type=simple
+# process: swapping the `current` symlink does not touch the Python already
+# running out of the previous release. Nothing here restarted it, so every
+# deployment before this one left the scanner on old code until something
+# unrelated -- a crash, a reboot, a human -- happened to bounce it. An engine
+# fix could ship, pass both health gates, print PASSED, and never reach a
+# single audit. That is not hypothetical: it is how 2026-08-03's false-positive
+# fix behaved until the worker was restarted by hand.
+#
+# After the health gates, deliberately. If the new release is bad we roll back
+# without ever having pointed the worker at it, which is why the rollback path
+# above says nothing about the worker -- there is nothing to undo.
+#
+# Restarting mid-job is safe by construction: the queue claims each job into a
+# lease and re-queues leases older than 15 minutes, up to 3 attempts.
+if ! systemctl cat "$WORKER_SERVICE" >/dev/null 2>&1; then
+  echo
+  echo "NOTE: $WORKER_SERVICE is not installed here, so it was not restarted."
+  echo "      That unit is what scans audits. If this host is meant to run"
+  echo "      them, install it (see README, 'Installing the timers')."
+elif ! systemctl restart "$WORKER_SERVICE"; then
+  echo >&2
+  echo "Production deployment: the API is live on $TARGET_SHA, but" >&2
+  echo "$WORKER_SERVICE did not restart." >&2
+  echo >&2
+  echo "Deliberately NOT rolled back: the release passed both health gates," >&2
+  echo "so the API is serving it correctly and undoing that would trade a" >&2
+  echo "working API for a broken one. What is broken is the scanner, which" >&2
+  echo "is either down or still running the previous release." >&2
+  echo "Next: systemctl status $WORKER_SERVICE" >&2
   exit 1
 fi
 

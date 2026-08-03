@@ -268,3 +268,57 @@ def test_first_ever_deployment_has_nothing_to_roll_back_to(tmp: Path):
     assert r.returncode == 1
     assert "no previous release exists" in r.stderr
     assert "Automatic rollback completed" not in r.stdout
+
+
+# --- the audit worker ---
+#
+# The scan runs in shipit-audit-worker.service, a long-lived process out of
+# the `current` symlink. Swapping the symlink leaves it on the old code, and
+# nothing here used to restart it: an engine fix could ship, pass both health
+# gates, print PASSED, and never reach a single audit.
+
+WORKER = "shipit-audit-worker.service"
+
+
+def test_successful_deployment_restarts_the_audit_worker(tmp: Path):
+    r = _run(tmp)
+    assert r.returncode == 0, r.stderr
+    assert f"systemctl restart {WORKER}" in _calls(tmp)
+
+
+def test_worker_restarts_after_the_health_gates_not_before(tmp: Path):
+    """Order matters: if the release is bad we roll back without ever having
+    pointed the worker at it."""
+    calls = _run(tmp) and _calls(tmp)
+    lines = calls.splitlines()
+    gate = max(i for i, ln in enumerate(lines) if "health_gate" in ln)
+    worker = next(i for i, ln in enumerate(lines) if f"restart {WORKER}" in ln)
+    assert worker > gate, f"worker restarted before the last health gate:\n{calls}"
+
+
+def test_failed_deployment_never_touches_the_worker(tmp: Path):
+    """Rolled back means the worker was never pointed at the bad release, so
+    the rollback path has nothing to undo -- and must not pretend otherwise."""
+    r = _run(tmp, [DEPLOYMENT_FAILS])
+    assert r.returncode == 1
+    assert f"restart {WORKER}" not in _calls(tmp)
+
+
+def test_worker_that_will_not_restart_fails_the_run_without_rolling_back(tmp: Path):
+    """The release itself is fine -- both gates passed. Undoing it would trade
+    a working API for a broken one. Exit non-zero so the operator sees it."""
+    r = _run(tmp, [{"patterns": ["restart", WORKER], "occurrence": 1}])
+    assert r.returncode == 1
+    assert "did not restart" in r.stderr
+    assert "NOT rolled back" in r.stderr
+    assert "Automatic rollback completed" not in r.stdout
+
+
+def test_absent_worker_unit_is_reported_not_fatal(tmp: Path):
+    """A host that does not run the scanner still deploys, but silence is how
+    this bug survived, so it says so."""
+    r = _run(tmp, [{"patterns": ["cat", WORKER], "occurrence": 1}])
+    assert r.returncode == 0, r.stderr
+    assert "is not installed here" in r.stdout
+    assert "Production deployment: PASSED" in r.stdout
+    assert f"restart {WORKER}" not in _calls(tmp)
