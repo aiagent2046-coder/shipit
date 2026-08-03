@@ -31,6 +31,20 @@ updates:
       interval: weekly
       day: monday
       time: "04:30"
+    # TypeScript 7 is the native port, and it deliberately does not ship the
+    # JavaScript compiler API that Next.js links against:
+    #
+    #   TypeScript 7.0.2 does not provide the compiler API required by
+    #   Next.js. Enable experimental.useTypeScriptCli in your Next.js
+    #   config to use the TypeScript CLI, or install TypeScript 6 instead.
+    #
+    # That was #161, which failed web-build. The escape hatch exists, but it
+    # is an experimental Next.js flag, and swapping the type checker the whole
+    # frontend depends on is not a change to make because a bot offered it.
+    # Revisit when Next.js supports TypeScript 7 outside experimental.
+    ignore:
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
