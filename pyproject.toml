@@ -4,13 +4,13 @@ version = "0.1.0"
 description = "Autonomous rescue for vibe-coded apps: production audit + verified Fix Packs"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.0",
     "python-multipart>=0.0.9",
     "httpx>=0.27",
     "pyjwt[crypto]>=2.8",
     "psycopg[binary,pool]>=3.1",
-    "redis[hiredis]>=5",
+    "redis[hiredis]>=8.1.0",
 ]
 
 [project.optional-dependencies]
