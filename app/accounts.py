@@ -156,13 +156,91 @@ class _AccountLookup(Protocol):
     async def get_by_key_hash(self, key_hash: str) -> dict[str, Any] | None: ...
 
 
+API_KEY_COOKIE = "shipit_api_key"
+
+# Presence of this header is the CSRF defence for the cookie path. Its value
+# is deliberately never checked, because the value is not the mechanism: a
+# cross-origin request carrying ANY header outside the CORS-safelisted set
+# forces the browser to preflight, and the preflight is answered against
+# CORS_ALLOWED_ORIGINS. An attacker's page never gets to send the real
+# request, so there is nothing for it to guess.
+#
+# A double-submit token would give the same guarantee here and cost a second
+# cookie, a generator and a comparison. The topology already provides the
+# protection; adding a token would be re-implementing the preflight in
+# application code.
+#
+# This is only needed because the cookie must be SameSite=None. The frontend
+# is a separate origin (Vercel) from this API, so every call is cross-site
+# and SameSite=Lax would simply never send the cookie. None restores that,
+# and hands CSRF back to us to solve -- which is what this header does.
+CSRF_HEADER = "x-drydock-web"
+
+
 def api_key_from_request(request: Any) -> str | None:
     """Pull the API key out of `Authorization: Bearer <key>`, matching the
-    reap endpoint's header scheme. Missing/other schemes -> None."""
+    reap endpoint's header scheme, then out of the session cookie.
+
+    Header first, and it is unconditional: a caller that sets Authorization
+    holds the key already, which is CSRF-immune by construction -- a third
+    party's page cannot set that header cross-origin without a preflight it
+    will not pass. Scripts, curl and the docs page keep working untouched.
+
+    The cookie is the browser's path, and it is only honoured alongside
+    CSRF_HEADER. Without that check a cookie would ride along on any
+    cross-site request the victim's browser can be made to issue, and ten of
+    this API's POST endpoints parse no body at all -- /v1/account/rotate-key
+    among them, which would let any page a customer visits invalidate the key
+    they paid for.
+
+    An unaccompanied cookie reads as no key rather than an error, matching
+    what resolve_account already does with an unknown one: fall back to
+    anonymous, never raise. The endpoints that cannot serve anonymous
+    (rotate-key) answer 401 on their own.
+    """
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
         return auth[len("Bearer "):].strip() or None
-    return None
+    cookies = getattr(request, "cookies", None) or {}
+    key = (cookies.get(API_KEY_COOKIE) or "").strip()
+    if not key:
+        return None
+    if not request.headers.get(CSRF_HEADER):
+        return None
+    return key
+
+
+def set_api_key_cookie(response: Any, api_key: str) -> None:
+    """Hand the browser the key in a form its JavaScript cannot read.
+
+    HttpOnly is the whole point: an XSS on the frontend, or a compromised
+    dependency, can no longer read the credential out of sessionStorage and
+    keep it. It can still act as the user while the page is open -- HttpOnly
+    stops exfiltration, not abuse -- but a stolen key works forever and an
+    open tab does not.
+
+    No max_age, so this expires with the browser session. That is exactly
+    what sessionStorage did, and matching it keeps this change to one
+    variable: the key stops being readable, and nothing else moves.
+
+    SameSite=None because the frontend is a different site from this API;
+    Secure is mandatory with it and correct regardless.
+    """
+    response.set_cookie(
+        API_KEY_COOKIE,
+        api_key,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        path="/",
+    )
+
+
+def clear_api_key_cookie(response: Any) -> None:
+    """Drop the session cookie. Needed for parity: "forget this key" used to
+    be a sessionStorage removal the frontend could do by itself, and an
+    HttpOnly cookie can only be cleared by the server that set it."""
+    response.delete_cookie(API_KEY_COOKIE, path="/", secure=True, samesite="none")
 
 
 async def resolve_account(
@@ -185,6 +263,21 @@ async def resolve_account(
     key = api_key_from_request(request)
     if not key:
         return None
+    return await account_for_key(key, account_repo)
+
+
+async def account_for_key(
+    api_key: str, account_repo: _AccountLookup
+) -> dict[str, Any] | None:
+    """Look up an account by the key itself, for the one caller that has the
+    key without a request to read it from: POST /v1/auth/login, where it
+    arrives in the body.
+
+    Extracted from resolve_account rather than duplicated there. Two copies of
+    "how a key becomes an account" is how one of them ends up skipping the
+    pepper check."""
+    if not api_key:
+        return None
     if not pepper_is_configured():
         return None
-    return await account_repo.get_by_key_hash(hash_api_key(key))
+    return await account_repo.get_by_key_hash(hash_api_key(api_key))

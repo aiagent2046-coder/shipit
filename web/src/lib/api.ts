@@ -46,8 +46,17 @@ export class ApiError extends Error {
   }
 }
 
-function authHeaders(apiKey?: string | null): Record<string, string> {
-  return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+// Sent on every call, value irrelevant. A header outside the CORS-safelisted
+// set forces a preflight, and the preflight is answered against the backend's
+// origin allowlist -- which is what stops another site from riding along on
+// the session cookie. See CSRF_HEADER in app/accounts.py.
+const CSRF_HEADER = "X-Drydock-Web";
+
+// No Authorization branch any more: the page cannot read the key, so it can
+// never set that header. The backend still accepts it -- that path is for
+// scripts and curl -- but nothing in this app has a key to put there.
+function authHeaders(): Record<string, string> {
+  return { [CSRF_HEADER]: "1" };
 }
 
 async function parse<T>(res: Response): Promise<T> {
@@ -82,7 +91,9 @@ async function parse<T>(res: Response): Promise<T> {
 // always get an ApiError with a human message rather than a raw TypeError.
 async function request(input: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(input, init);
+    // The session cookie is HttpOnly, so this is the only way it travels:
+    // the page cannot attach it by hand even if it wanted to.
+    return await fetch(input, { ...init, credentials: "include" });
   } catch (e) {
     throw new ApiError(
       `Could not reach the backend at ${API_BASE_URL}. It may be down, or ` +
@@ -93,9 +104,30 @@ async function request(input: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-export async function getAccount(apiKey?: string | null): Promise<Account> {
+// Trade an API key for a session cookie the page cannot read. Answers with
+// the same shape as getAccount, so a successful login needs no follow-up
+// request. Throws ApiError(401) when the key is not recognized.
+export async function login(apiKey: string): Promise<Account> {
+  const res = await request(`${API_BASE_URL}/v1/auth/login`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey.trim() }),
+  });
+  return parse<Account>(res);
+}
+
+// Drop the session cookie. Must be a request: an HttpOnly cookie can only be
+// cleared by the server that set it.
+export async function logout(): Promise<void> {
+  await request(`${API_BASE_URL}/v1/auth/logout`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+}
+
+export async function getAccount(): Promise<Account> {
   const res = await request(`${API_BASE_URL}/v1/account`, {
-    headers: { ...authHeaders(apiKey) },
+    headers: { ...authHeaders() },
   });
   return parse<Account>(res);
 }
@@ -106,7 +138,6 @@ export async function getAccount(apiKey?: string | null): Promise<Account> {
 // isAuditJobAccepted to tell them apart.
 export async function createAudit(
   input: { repoUrl?: string; file?: File },
-  apiKey?: string | null,
 ): Promise<CreateAuditResponse> {
   const form = new FormData();
   if (input.file) {
@@ -116,7 +147,7 @@ export async function createAudit(
   }
   const res = await request(`${API_BASE_URL}/v1/audits`, {
     method: "POST",
-    headers: { ...authHeaders(apiKey) },
+    headers: { ...authHeaders() },
     body: form,
   });
   return parse<CreateAuditResponse>(res);

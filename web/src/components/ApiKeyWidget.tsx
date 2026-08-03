@@ -5,7 +5,10 @@ import { useApiKey } from "./providers";
 import { Spinner } from "./Spinner";
 
 export function ApiKeyWidget() {
-  const { apiKey, account, loading, error, setKey, clearKey } = useApiKey();
+  const { account, loading, error, setKey, clearKey } = useApiKey();
+  // The key itself is no longer readable from here -- it is in an HttpOnly
+  // cookie. Whether a session exists is what this widget ever needed.
+  const hasSession = account?.authenticated ?? false;
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const popRef = useRef<HTMLDivElement>(null);
@@ -49,7 +52,7 @@ export function ApiKeyWidget() {
           />
         )}
         <span className="hidden sm:inline">
-          {isPro ? "Pro" : apiKey ? "Free" : "I have a key"}
+          {isPro ? "Pro" : hasSession ? "Free" : "I have a key"}
         </span>
       </button>
 
@@ -107,7 +110,7 @@ export function ApiKeyWidget() {
               >
                 Save key
               </button>
-              {apiKey && (
+              {hasSession && (
                 <button
                   type="button"
                   onClick={() => {
