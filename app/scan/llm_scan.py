@@ -20,8 +20,8 @@ from typing import BinaryIO
 from app.llm import pricing
 from app.llm.client import LLMClient
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.secrets import damp_for_non_production_path
 from app.scan.scoring import ScoredFinding
+from app.scan.secrets import damp_for_non_production_path
 
 MAX_FILE_CHARS = 24_000          # per-file cap in prompt
 MAX_TOTAL_CHARS = 360_000        # ~90-100K tokens per rubric prompt
