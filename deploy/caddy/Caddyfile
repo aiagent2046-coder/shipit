@@ -26,6 +26,22 @@
 #       }
 #   }
 
-45-10-40-169.sslip.io {
+# Two names, one upstream. api.drydock.co is the address the product uses;
+# the sslip.io host stays answering rather than redirecting, and not out of
+# caution alone:
+#
+#   * HTML audit reports already delivered to customers carry absolute links
+#     to this host. A redirect keeps GETs working but the reports are the
+#     product, and they should not depend on a hop.
+#   * The GitHub App's configured URLs point here. Those change in GitHub's
+#     settings, not in this file, so the two are not swapped atomically.
+#   * API clients POST. A 308 preserves the method, but the preflight is
+#     answered by the FIRST host, and a redirected cross-origin request is a
+#     class of breakage that is tedious to debug from a customer's console.
+#
+# The move that matters is which name the frontend calls, and that lives in
+# NEXT_PUBLIC_API_BASE_URL. Retiring the sslip name is a later, separate
+# decision once the logs show nothing reaching it.
+api.drydock.co, 45-10-40-169.sslip.io {
 	reverse_proxy 127.0.0.1:8000
 }
