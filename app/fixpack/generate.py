@@ -37,7 +37,11 @@ import zipfile
 from dataclasses import dataclass, field
 
 from app.scan.checks import find_committed_env_files, gitignore_covers_env
-from app.scan.secrets import RULES, iter_secret_matches
+from app.scan.secrets import (
+    NON_PRODUCTION_CONTEXTS,
+    RULES,
+    iter_secret_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +321,48 @@ def _find_entry(raw_names: list[str], repo_rel: str) -> str | None:
     return None
 
 
+def _is_fixable_rule(finding: dict) -> bool:
+    """Is this finding's rule one the Fix Pack knows how to rewrite at all?
+
+    Most rules are advice -- "no tests", "no Dockerfile" -- and no amount of
+    code generation turns them into a pull request.
+    """
+    return finding.get("rule_id") in (SECRET_RULE_IDS | _CHECK_RULE_IDS)
+
+
+def _is_production_code(finding: dict) -> bool:
+    """Is it somewhere worth rewriting? See the note in build_fixpack_plan:
+    editing a comment, a doc example or a test fixture buys no security."""
+    return (
+        finding.get("context") not in NON_PRODUCTION_CONTEXTS
+        and not _is_test_path(finding.get("file", ""))
+    )
+
+
+def has_auto_fixable_findings(findings: list[dict]) -> bool:
+    """Could a Fix Pack for these findings produce anything at all?
+
+    Answers one question reliably -- "there is definitely nothing to fix" --
+    and does NOT promise the opposite. A finding eligible here can still fall
+    away when the repository is re-fetched, because the code may have moved on
+    since the audit ran. So this is a filter against selling a Fix Pack that
+    was empty before the customer paid, not a guarantee of a pull request.
+
+    That case is not hypothetical. Audit 05fa18f5 was sold a Fix Pack with
+    zero eligible findings: the job ran, found nothing, and the payer got
+    "Nothing to auto-fix" for their money. It was computable in advance from
+    the stored findings, with no network and no LLM.
+
+    Shares _is_fixable_rule and _is_production_code with build_fixpack_plan on
+    purpose. A second copy of "what counts as fixable" is exactly what drifted
+    in #132, where the plan builder knew one non-production context and the
+    report knew four.
+    """
+    return any(
+        _is_fixable_rule(f) and _is_production_code(f) for f in findings
+    )
+
+
 def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     """Build the changeset for a Fix Pack from fresh repo bytes and the
     audit's persisted findings. Never opens a PR and never touches the
@@ -324,12 +370,44 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     side stays separate."""
     plan = FixpackPlan()
 
-    eligible = [
-        f for f in findings
-        if f.get("context") != "test_fixture"
-        and not _is_test_path(f.get("file", ""))
-        and f.get("rule_id") in (SECRET_RULE_IDS | _CHECK_RULE_IDS)
-    ]
+    # NON_PRODUCTION_CONTEXTS, not a single literal. The scanner already
+    # classifies a match as test_fixture, test_file, comment or doc_example,
+    # and #125 taught the REPORT to damp all four -- but this filter only knew
+    # the first, so the Fix Pack kept editing the other three.
+    #
+    # It shipped a PR that rewrote an illustrative string inside a comment
+    # documenting one of our own scanner rules, added a bogus variable to
+    # .env.example, and told the customer to rotate a credential that never
+    # existed.
+    #
+    # Editing a secret out of a comment buys no security whatsoever: the value
+    # is in git history either way and must be rotated regardless, and a
+    # comment executes nothing, so there is no running code to disarm. The
+    # entire value of a code fix is absent, and only the damage remains.
+    #
+    # They stay in the report -- damped, as #125 left them. Noticing something
+    # and declining to rewrite it automatically is not the same as hiding it.
+    eligible = []
+    for f in findings:
+        if not _is_fixable_rule(f):
+            continue
+        context = f.get("context")
+        if not _is_production_code(f):
+            # Recorded rather than dropped silently, so the PR body can show
+            # that the finding was seen and deliberately left alone.
+            plan.skipped.append(SkippedFinding(
+                rule_id=f.get("rule_id", ""),
+                file=_repo_relative(f.get("file", "")),
+                line=f.get("line", 0),
+                reason=(
+                    f"{context or 'test path'} — not executable code, so "
+                    "editing it would change nothing an attacker can use; "
+                    "reported instead of rewritten"
+                ),
+            ))
+            continue
+        eligible.append(f)
+
     if not eligible:
         return plan
 

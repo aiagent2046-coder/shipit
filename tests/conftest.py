@@ -22,6 +22,8 @@ explicitly, per test, where it wants the configured-path behavior.
 
 from __future__ import annotations
 
+import os
+import urllib.parse
 import uuid
 
 import pytest
@@ -31,6 +33,61 @@ import app.db as db_mod
 from app.accounts import api_key_prefix, generate_api_key
 from app.main import app, get_audit_job_repo, get_rate_limiter
 from app.ratelimit import RateLimiter
+
+
+
+# Hosts a test suite is allowed to write to. An empty hostname is a Unix
+# socket (postgresql://user@/db?host=/tmp/pg), which cannot reach a hosted
+# database.
+DISPOSABLE_DB_HOSTS = frozenset({"", "localhost", "127.0.0.1", "::1"})
+
+
+def is_disposable_database(url: str) -> bool:
+    """Whether DATABASE_URL points somewhere this suite may write to.
+
+    On 2026-07-22 tests/test_db_postgres_smoke.py was run four times against
+    the PRODUCTION database. It writes a fix_outcomes row and then calls
+    set_pr_merged_by_pr_url on its own fabricated PR link, so production ended
+    up holding four outcomes claiming a merged pull request that never
+    existed. They were still there on 2026-08-02, one distinct audit short of
+    declaring two rules ready to learn from, on a 100% merge rate that was
+    entirely our own test data.
+
+    Nothing failed at the time. The suite passed, because from its point of
+    view it had done exactly what it meant to.
+
+    The check is on the HOST, not the database name. A name is a convention
+    someone can match by accident -- a hosted database called `shipit_test`
+    is still hosted -- while a local socket or loopback address cannot reach
+    anyone else's data by construction.
+
+    Deliberately no override. An escape hatch would be one more environment
+    variable to export by mistake, and the mistake this exists to prevent was
+    exporting an environment variable. If a remote throwaway database is ever
+    genuinely needed, add the hatch then, on purpose.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    return (parsed.hostname or "") in DISPOSABLE_DB_HOSTS
+
+
+def pytest_configure(config):
+    """Refuse to start rather than refuse to write.
+
+    Before collection, so it lands before any fixture, any import side effect
+    and any connection -- the point is that nothing gets a chance to write.
+    """
+    url = os.environ.get("DATABASE_URL", "")
+    if not url or is_disposable_database(url):
+        return
+
+    host = urllib.parse.urlsplit(url).hostname
+    raise pytest.UsageError(
+        f"DATABASE_URL points at host {host!r}, which is not a disposable "
+        "test database. This suite writes real rows and cleans up nothing; "
+        "run it against localhost or a Unix socket. "
+        "(On 2026-07-22 it was pointed at production and seeded the "
+        "fix_outcomes knowledge base with four fabricated merge verdicts.)"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -381,7 +438,13 @@ def _no_ambient_production_integrations(monkeypatch):
 
     The production VPS exports real GitHub App and sandbox-runner settings.
     Tests that need these values must set or monkeypatch them explicitly.
+
+    Also drops app_auth_ok's cached verdict, which is module-level and would
+    otherwise let one test's credentials answer another test's health probe.
     """
+    from app.deploypack.github_app import reset_app_auth_cache
+
+    reset_app_auth_cache()
     variables = (
         "GITHUB_APP_ID",
         "GITHUB_APP_PRIVATE_KEY",
@@ -393,10 +456,24 @@ def _no_ambient_production_integrations(monkeypatch):
         "SANDBOX_RUNNER_TOKEN",
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_WEBHOOK_SECRET",
+        # The operator's own Telegram id. Stripped for two reasons: it is the
+        # allowlist the bank-transfer confirm button checks against, and its
+        # absence is itself a behaviour under test (an unset allowlist must
+        # reject everyone, never allow everyone).
+        "TELEGRAM_ADMIN_CHAT_ID",
         "PAYPAL_CLIENT_ID",
         "PAYPAL_CLIENT_SECRET",
         "PAYPAL_WEBHOOK_ID",
         "USDT_POLL_TOKEN",
+        # A private individual's real banking details on the production host.
+        "BANK_TRANSFER_CARD",
+        "BANK_TRANSFER_BANK_NAME",
+        "BANK_TRANSFER_SWIFT",
+        "BANK_TRANSFER_BENEFICIARY",
+        "BANK_TRANSFER_ACCOUNT",
+        "BANK_TRANSFER_ADDRESS",
+        "BANK_TRANSFER_PRO_PRICE_USD",
+        "BANK_TRANSFER_FIXPACK_PRICE_USD",
     )
 
     for variable in variables:

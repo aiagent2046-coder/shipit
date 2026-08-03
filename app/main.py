@@ -29,6 +29,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.alerts import notify_operator
@@ -40,7 +41,7 @@ from app.accounts import (
     resolve_account,
     validate_api_key_pepper_configured,
 )
-from app.billing import paypal, telegram_stars, usdt_trc20
+from app.billing import bank_transfer, paypal, telegram_stars, usdt_trc20
 from app.db import (
     AccountRepository,
     AuditJobRepository,
@@ -62,7 +63,9 @@ from app.db import (
 from app.deploypack.delivery import DeliveryError, open_pull_request, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.github_app import (
+    GitHubAppAuthError,
     GitHubAppError,
+    app_auth_ok,
     app_credentials_from_env,
     build_install_url,
     installation_exists_for_repo,
@@ -71,6 +74,7 @@ from app.deploypack.github_app import (
 from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
 from app.fixpack.generate import (
+    has_auto_fixable_findings,
     build_fixpack_plan,
     render_pr_body as render_fixpack_pr_body,
     render_pr_title as render_fixpack_pr_title,
@@ -710,13 +714,44 @@ def _service_flags_token() -> str | None:
     return os.environ.get("SERVICE_FLAGS_TOKEN") or None
 
 
+def _secret_equals(provided: str, expected: str) -> bool:
+    """Constant-time comparison of a header value against a configured secret.
+
+    `hmac.compare_digest` on two str arguments raises TypeError the moment
+    either side holds a character above 127 -- "comparing strings with
+    non-ASCII characters is not supported". Header values reach us as str, and
+    a client is free to put any byte in one, so a request with a Cyrillic
+    Authorization header used to raise inside the auth check and land in the
+    global handler: a 500, a traceback, and an operator alert, for a request
+    that should simply have been told 401.
+
+    Comparing bytes instead has no such restriction. The two sides are encoded
+    differently on purpose:
+
+      - `provided` came from the wire, and the ASGI server decoded those bytes
+        as latin-1, which is a byte-for-byte mapping. Encoding it back as
+        latin-1 therefore reconstructs exactly what the client sent, and can
+        never fail, because every character is <= 0xFF by construction.
+      - `expected` came from the environment as text, so it encodes as UTF-8,
+        which is what a shell wrote into it.
+
+    That pairing means a non-ASCII secret actually WORKS, rather than being
+    compared against mismatched bytes. An ASCII secret -- every one we have --
+    encodes identically either way, so nothing about today's behaviour moves
+    except that the wrong answer is now 401 instead of 500.
+    """
+    return hmac.compare_digest(
+        provided.encode("latin-1"), expected.encode("utf-8")
+    )
+
+
 def _require_bearer_token(request: Request, token: str) -> None:
     """Constant-time check of `Authorization: Bearer <token>`, raising 401
     on mismatch. The single implementation shared by every internal
     operational endpoint (reaper, USDT poller, Fix Pack processor) so the
     comparison stays constant-time in one place and can't drift."""
     provided = request.headers.get("authorization", "")
-    if not hmac.compare_digest(provided, f"Bearer {token}"):
+    if not _secret_equals(provided, f"Bearer {token}"):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
 
@@ -758,23 +793,66 @@ async def health(
         from "process up but the Supabase pooler is unreachable");
       * `fixpack_backlog` / `oldest_paid_seconds` — is the Fix Pack processor
         timer draining the queue, or is a paid job stuck (see
-        FixpackJobRepository.backlog_stats).
+        FixpackJobRepository.backlog_stats);
+      * `github_app` — does GitHub still accept our App credentials. A key
+        that no longer matches the App breaks every Fix Pack delivery on
+        this deployment, and before this it was invisible until a paying
+        customer's job hit a 401. `null` means App auth isn't configured
+        here at all (the PAT path), which is not a fault. Cached for five
+        minutes inside app_auth_ok, so this stays cheap for a pinger.
 
     Deliberately leak-free: only booleans and coarse counts/ages — never ids,
     urls, or error text — so it's safe to expose to a dumb uptime pinger or
     the systemd timer without a token. Always 200: an unconfigured or
     unreachable DB is reported as db:false (a live process honestly saying
     it's degraded), not a transport-level failure the pinger can't read."""
+    # Blocking httpx call, so off the event loop. Never raises by contract.
+    github_app = await run_in_threadpool(app_auth_ok)
     stats = await fixpack_repo.backlog_stats()
     if stats is None:
         # DATABASE_URL unset, or the pool couldn't be built — either way the
         # DB isn't usable. Report degraded rather than 503 (see docstring).
-        return {"db": False, "fixpack_backlog": None, "oldest_paid_seconds": None}
+        return {"db": False, "fixpack_backlog": None,
+                "oldest_paid_seconds": None, "github_app": github_app}
     return {
         "db": True,
         "fixpack_backlog": stats["backlog"],
         "oldest_paid_seconds": stats["oldest_paid_seconds"],
+        "github_app": github_app,
     }
+
+
+async def _json_object_body(request: Request) -> dict:
+    """The request body as a JSON object, or 422.
+
+    `await request.json()` raises on a malformed body, and every endpoint that
+    called it bare turned a typo into a 500 -- which the global handler logs
+    with a traceback AND pages the operator for. A client sending broken JSON
+    is not an incident; it is the client's mistake, and the response should
+    say which.
+
+    Non-objects are refused for the same reason one level down. A body of `[]`
+    or `"hi"` parses fine, and the next line is always `body.get(...)`, so it
+    became AttributeError -- a 500 by a slightly longer route.
+
+    422 rather than 400 to match every other body-shape refusal in this API,
+    including the one place that already guarded this (the service-flags
+    endpoint). Webhook senders retry on any non-2xx, so this does not stop
+    Telegram or PayPal re-delivering an unparseable payload -- but a retry that
+    fails identically is cheap, while a 500 also wakes someone up.
+    """
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        body = None
+
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "invalid_json",
+                    "detail": "request body must be a JSON object"},
+        )
+    return body
 
 
 @app.exception_handler(Exception)
@@ -877,7 +955,17 @@ async def get_audit(
                     "detail": "no audit with this id and token, or persistence "
                                "isn't configured on this deployment (see app/db.py)"},
         )
-    return row
+    # Whether a Fix Pack could produce anything for this audit. Computed here,
+    # not in the browser: the answer depends on which rules the Fix Pack knows
+    # how to rewrite, and a second copy of that list in TypeScript would drift
+    # from this one -- which is precisely what #132 was about. The page uses it
+    # to explain instead of offering a purchase that cannot deliver.
+    return {
+        **row,
+        "fixpack_auto_fixable": has_auto_fixable_findings(
+            row.get("findings_json") or []
+        ),
+    }
 
 
 @app.get("/v1/audit-jobs/{job_id}")
@@ -1046,8 +1134,9 @@ async def telegram_webhook(
 ) -> dict:
     """Telegram Bot API webhook for Stars payments. Handles the
     pre_checkout_query (approve within 10s), successful_payment (grant pro /
-    Fix Pack / subscription), and subscription (BotSubscriptionUpdated
-    renewal state changes) update types; ignores everything else.
+    Fix Pack / subscription), subscription (BotSubscriptionUpdated renewal
+    state changes) and callback_query (the operator's bank-transfer confirm
+    button) update types; ignores everything else.
 
     Authenticity is Telegram's secret_token: setWebhook is called with a
     secret, echoed back in X-Telegram-Bot-Api-Secret-Token on every
@@ -1055,6 +1144,11 @@ async def telegram_webhook(
     endpoint's bearer token. 503 if the bot token or webhook secret
     isn't configured — an unconfigured payment webhook is an operational
     gap to notice, not a silent no-op. See app/billing/telegram_stars.py.
+
+    Note this header proves the update came from TELEGRAM, not from any
+    particular person: it is shared by every user who can message the bot.
+    The callback_query branch therefore does its own owner check against
+    TELEGRAM_ADMIN_CHAT_ID before acting (telegram_stars._is_operator).
     """
     token = telegram_stars.bot_token_from_env()
     secret = telegram_stars.webhook_secret_from_env()
@@ -1066,10 +1160,10 @@ async def telegram_webhook(
                               "must both be set on this deployment"},
         )
     provided = request.headers.get("x-telegram-bot-api-secret-token", "")
-    if not hmac.compare_digest(provided, secret):
+    if not _secret_equals(provided, secret):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
-    update = await request.json()
+    update = await _json_object_body(request)
     return await telegram_stars.handle_update(
         update, account_repo=account_repo, payment_repo=payment_repo,
         audit_repo=audit_repo, fixpack_repo=fixpack_repo,
@@ -1096,7 +1190,7 @@ def _verify_github_signature(secret: str, body: bytes, header: str) -> bool:
         secret.encode("utf-8"), body, hashlib.sha256
     ).hexdigest()
     provided = header.split("=", 1)[1]
-    return hmac.compare_digest(provided, expected)
+    return _secret_equals(provided, expected)
 
 
 @app.post("/v1/webhooks/github")
@@ -1351,7 +1445,9 @@ def _usdt_receiving_address() -> str | None:
 
 @app.post("/v1/billing/usdt/invoice", status_code=201)
 async def create_usdt_invoice(
+    request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ) -> dict:
     """Open a USDT/TRC20 invoice: returns the fixed receiving address and
     a unique amount to send (base price + sub-cent nonce, so incoming
@@ -1370,6 +1466,10 @@ async def create_usdt_invoice(
             detail={"reason": "usdt_not_configured",
                     "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
         )
+    # After the configuration gates, before the write: a client on a
+    # deployment with no address configured should learn that, not be told to
+    # slow down about an endpoint that cannot work anyway.
+    _check_usdt_invoice_rate_limit(request, limiter)
     invoice = await usdt_trc20.create_invoice(payment_repo, address=address)
     if invoice is None:
         raise HTTPException(
@@ -1409,6 +1509,7 @@ async def create_fixpack_usdt_invoice(
     audit_id: str,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
 ) -> dict:
     """Open a USDT/TRC20 invoice to buy a Fix Pack for one specific audit.
     Mirrors POST /v1/billing/usdt/invoice (fixed address + unique amount so
@@ -1441,6 +1542,8 @@ async def create_fixpack_usdt_invoice(
                               "open a fix PR against — re-run the audit with your "
                               "GitHub repo URL, then buy a Fix Pack for it."},
         )
+    await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+    _reject_if_nothing_to_fix(audit)
     address = _usdt_receiving_address()
     if not address:
         raise HTTPException(
@@ -1459,6 +1562,399 @@ async def create_fixpack_usdt_invoice(
                               "payment row is created to match payment against)"},
         )
     return invoice
+
+
+# Distinct "I've paid" presses, per client key, per limiter window (24h).
+# This bounds a flood of DIFFERENT invoices from one source; repeat presses of
+# ONE invoice are already collapsed by notify_operator's dedupe_key. Well above
+# what any real payer needs -- a payer opens one invoice, maybe two.
+BANK_TRANSFER_PAID_LIMIT = 10
+
+# Invoices opened per client key per limiter window (24h).
+#
+# Unauthenticated by necessity -- a buyer has no key until they have paid --
+# which until now meant unbounded. Each invoice permanently consumed one of the
+# 99 kopeck suffixes, so a hundred anonymous POSTs switched the operator's
+# whole matching mechanism off. The TTL window in bank_transfer fixed the
+# permanence; this bounds how fast one source can fill the window.
+#
+# Well above any real checkout: a buyer opens one invoice, changes their mind
+# about Pro versus a Fix Pack, maybe reloads a stale page. Fifteen is generous
+# for that and still a hundredth of what saturation needs.
+BANK_TRANSFER_INVOICE_LIMIT = 15
+
+
+def _check_invoice_rate_limit(request: Request, limiter: RateLimiter) -> None:
+    """429 when one client has opened too many invoices today.
+
+    Shared by the Pro and Fix Pack creators on ONE limiter key on purpose:
+    they draw suffixes from the same pool, so a per-endpoint budget would let
+    the same client take twice as much of it.
+    """
+    try:
+        limiter.check(
+            f"bank-transfer-invoice:{_client_key(request)}",
+            limit=BANK_TRANSFER_INVOICE_LIMIT,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {BANK_TRANSFER_INVOICE_LIMIT} bank transfer "
+                          "invoices per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+
+# USDT invoices opened per client key per limiter window (24h).
+#
+# Unauthenticated for the same reason as the bank-transfer pair: a buyer has
+# no API key until they have paid. Until now that meant unbounded -- this was
+# the one anonymous endpoint that writes a row per call with nothing to stop
+# it repeating.
+#
+# A SEPARATE limiter key from BANK_TRANSFER_INVOICE_LIMIT, where the two bank
+# transfer creators deliberately share one. The reason those share is that
+# they draw from the same 99-suffix pool, so one budget is what keeps a client
+# from taking twice as much of it. USDT does not draw from that pool at all:
+# its nonce is a full micro-dollar (base + randbelow(1_000_000)) and an
+# invoice expires after 30 minutes, so exhaustion is not the risk here and a
+# shared budget would only make a USDT invoice eat a bank-transfer one.
+#
+# What IS the risk is anonymous row creation, so the same generous number is
+# right for the same reason: well above any real checkout, far below abuse.
+USDT_INVOICE_LIMIT = 15
+
+
+def _check_usdt_invoice_rate_limit(request: Request, limiter: RateLimiter) -> None:
+    """429 when one client has opened too many USDT invoices today."""
+    try:
+        limiter.check(
+            f"usdt-invoice:{_client_key(request)}",
+            limit=USDT_INVOICE_LIMIT,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {USDT_INVOICE_LIMIT} USDT invoices per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+
+def _reject_if_nothing_to_fix(audit: dict) -> None:
+    """409 when this audit has no finding a Fix Pack could ever rewrite.
+
+    Every rule the Fix Pack knows is fixed; every other finding is advice. An
+    audit whose findings contain none of them has an empty plan before a
+    customer pays, and no amount of running the job changes that.
+
+    Audit 05fa18f5 was sold one anyway: zero eligible findings, job ran, payer
+    got "Nothing to auto-fix" and was charged for it. The check needs no
+    network and no LLM -- only the findings already stored on the audit.
+
+    Deliberately one-directional. It proves "definitely nothing to fix" and
+    never claims the opposite: a finding eligible here can still fall away
+    when the repository is re-fetched, because the code may have moved since
+    the audit. Refusing on the certain case is worth doing; promising a pull
+    request is not something this can honestly do.
+    """
+    if not has_auto_fixable_findings(audit.get("findings_json") or []):
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "no_auto_fixable_findings",
+                    "detail": "This audit has no findings a Fix Pack can fix "
+                              "automatically \u2014 the ones it found are "
+                              "recommendations, or live in comments, docs or "
+                              "tests. Buying one would produce an empty pull "
+                              "request, so it isn't offered."},
+        )
+
+
+async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
+    """409 when this audit already has a Fix Pack job that is paid or running.
+
+    Selling one is the last moment refusing costs nothing. After the payment,
+    every layer below reports success and none of them can undo it:
+    create_paid is idempotent per audit, so a second confirmed payment joins
+    the existing job instead of opening a second fix PR, and the buyer is told
+    "completed" for work that was already bought and paid for once.
+
+    The condition mirrors the ON CONFLICT predicate in create_paid --
+    status in ('paid', 'running') -- and must keep mirroring it. A stricter
+    check here would refuse sales the database would have happily served:
+    re-buying after a 'failed' job is a supported flow, and so is buying again
+    once a previous Fix Pack was delivered and the audit re-run.
+
+    get_by_audit returns the newest job, which is enough: migration 0025's
+    partial unique index allows only one live job per audit, so a newer
+    terminal row can only exist if no live one does.
+
+    No-op when persistence isn't configured (get_by_audit returns None), same
+    contract as every other repository call on this path.
+    """
+    job = await fixpack_repo.get_by_audit(audit_id)
+    if job is None or job.get("status") not in ("paid", "running"):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "reason": "fixpack_already_in_progress",
+            "detail": "a Fix Pack for this audit has already been paid for "
+                      "and is being generated. Watch this audit's page for "
+                      "the pull request — buying a second one would fund no "
+                      "extra work.",
+        },
+    )
+
+
+def _bank_transfer_details() -> dict[str, str]:
+    """The configured payer-facing bank fields, or 503.
+
+    All six or nothing (see bank_transfer.bank_details_from_env): a payer
+    handed a SWIFT code with no account number cannot send anything, so a
+    half-configured deployment must refuse rather than render an invoice that
+    can't be paid."""
+    details = bank_transfer.bank_details_from_env()
+    if details is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "bank_transfer_not_configured",
+                    "detail": "bank transfer is not configured on this "
+                              "deployment (BANK_TRANSFER_CARD, "
+                              "BANK_TRANSFER_BANK_NAME, "
+                              "BANK_TRANSFER_SWIFT, BANK_TRANSFER_BENEFICIARY, "
+                              "BANK_TRANSFER_ACCOUNT and BANK_TRANSFER_ADDRESS "
+                              "must all be set)"},
+        )
+    return details
+
+
+@app.get("/v1/billing/details")
+async def get_billing_details() -> dict:
+    """The publishable payment requisites, for the site footer.
+
+    Public and unauthenticated on purpose: the footer renders on every page,
+    including to visitors who have not started a purchase, and the operator's
+    decision is that these requisites are published information. This endpoint
+    is the single source for them -- they are still never mirrored into a
+    NEXT_PUBLIC_* build variable, so rotating the card is an env change and a
+    restart, with no frontend rebuild.
+
+    Returns 200 with `bank: null` rather than 503 when bank transfer isn't
+    configured. A footer is not a checkout: an unconfigured deployment should
+    render a footer without a requisites block, not an error.
+    """
+    return {"bank": bank_transfer.bank_details_from_env()}
+
+
+class PayerContact(BaseModel):
+    """Who is sending the transfer. Since payment moved to a card number this
+    is not bookkeeping colour, it is the MATCHING KEY: a card-to-card transfer
+    carries no reference field, so the sender's name on the operator's
+    statement is the only handle on the payment, with the email as tie-breaker
+    between two payers of the same name. Hence both fields are now required
+    and so is the request body.
+
+    max_length is abuse protection, not validation -- it stops someone posting a
+    megabyte into a text column. The email check is deliberately the weakest
+    thing that still rejects an obvious non-address: nothing is ever sent here,
+    so a work address with an unusual TLD must not cost a sale. See migration
+    0026.
+    """
+
+    payer_name: str = Field(min_length=1, max_length=200)
+    payer_email: str = Field(min_length=3, max_length=200)
+
+    @field_validator("payer_name", "payer_email")
+    @classmethod
+    def _stripped_and_present(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("must not be blank")
+        return v
+
+    @field_validator("payer_email")
+    @classmethod
+    def _looks_like_an_address(cls, v: str) -> str:
+        if "@" not in v:
+            raise ValueError("must contain @")
+        return v
+
+
+def _bank_transfer_not_persisted_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={"reason": "not_persisted",
+                "detail": "bank transfer invoices require DATABASE_URL (a "
+                          "pending payment row carries the reference code the "
+                          "operator matches against the bank statement)"},
+    )
+
+
+@app.post("/v1/billing/bank-transfer/pro", status_code=201)
+async def create_bank_transfer_invoice(
+    payer: PayerContact,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> dict:
+    """Open a bank-transfer invoice for the Pro tier.
+
+    Returns the card number to pay, the amount, and the reference code that
+    identifies this order. The card transfer itself carries no reference, so
+    the operator matches it by the payer's name and email — both required (422
+    without them, see PayerContact). Poll GET
+    /v1/billing/bank-transfer/{reference} to collect the key once the operator
+    confirms the money arrived.
+
+    Rate limited: unauthenticated, and every invoice takes one of the 99
+    kopeck suffixes for the length of the TTL window.
+
+    503 if bank transfer isn't configured, or if the pending row can't be
+    persisted (no DATABASE_URL / no free reference code)."""
+    _check_invoice_rate_limit(request, limiter)
+    details = _bank_transfer_details()
+    invoice = await bank_transfer.create_invoice(
+        payment_repo, details=details,
+        payer_name=payer.payer_name,
+        payer_email=payer.payer_email,
+    )
+    if invoice is None:
+        raise _bank_transfer_not_persisted_error()
+    return invoice
+
+
+@app.post("/v1/audits/{audit_id}/fixpack/bank-transfer", status_code=201)
+async def create_fixpack_bank_transfer_invoice(
+    audit_id: str,
+    payer: PayerContact,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+) -> dict:
+    """Open a bank-transfer invoice to buy a Fix Pack for one audit. Same
+    reference-code flow and same polling endpoint as the Pro invoice above, at
+    the Fix Pack price and scoped to this audit.
+
+    Same GitHub-URL-only gate as the USDT and PayPal Fix Pack routes: a zip
+    audit has no repository to open a fix PR against, so 422 rather than sell
+    something that can't be fulfilled. 404 if no such audit.
+
+    Rate limited on the same key as the Pro creator: both draw kopeck suffixes
+    from one pool."""
+    _check_invoice_rate_limit(request, limiter)
+    audit = await audit_repo.get(audit_id)
+    if audit is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "audit_not_found",
+                    "detail": "no audit with this id, or persistence isn't "
+                              "configured on this deployment (see app/db.py)"},
+        )
+    if not audit.get("repo_url"):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "not_github_audit",
+                    "detail": "Fix Pack currently only supports audits run "
+                              "from a public GitHub URL. This audit was created "
+                              "from an uploaded zip, so there's no repository to "
+                              "open a fix PR against — re-run the audit with your "
+                              "GitHub repo URL, then buy a Fix Pack for it."},
+        )
+    await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+    _reject_if_nothing_to_fix(audit)
+    details = _bank_transfer_details()
+    invoice = await bank_transfer.create_fixpack_invoice(
+        payment_repo, details=details, audit_id=audit_id,
+        payer_name=payer.payer_name,
+        payer_email=payer.payer_email,
+    )
+    if invoice is None:
+        raise _bank_transfer_not_persisted_error()
+    return invoice
+
+
+@app.get("/v1/billing/bank-transfer/{reference}")
+async def get_bank_transfer_invoice(
+    reference: str,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    account_repo: AccountRepository = Depends(get_account_repo),
+) -> dict:
+    """Poll one bank-transfer invoice. Reveals the API key only once the
+    operator has confirmed the transfer arrived (status 'completed'); a
+    pending or expired invoice never leaks a key. 404 if no such invoice.
+
+    An 'expired' status here is cosmetic: it tells a payer the quote is stale,
+    but the operator can still confirm a transfer that surfaces later, because
+    a slow bank must never become lost money."""
+    status = await bank_transfer.invoice_status(
+        payment_repo, account_repo, reference,
+        details=bank_transfer.bank_details_from_env(),
+    )
+    if status is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no bank transfer invoice with this reference, or "
+                              "persistence isn't configured on this deployment"},
+        )
+    return status
+
+
+@app.post("/v1/billing/bank-transfer/{reference}/paid")
+async def report_bank_transfer_paid(
+    reference: str,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+    transport=Depends(get_billing_transport),
+) -> dict:
+    """The payer pressed "I've paid": notify the operator, grant nothing.
+
+    This writes no state — the row stays 'pending' until a human has seen the
+    money on the statement and pressed the Confirm button carried by the
+    notification. Pressing this without paying achieves exactly nothing.
+
+    Rate limited because it is unauthenticated and its whole job is to push a
+    message to the operator's phone. The per-invoice repeat is already
+    collapsed by notify_operator's dedupe window; this bounds how many
+    DISTINCT invoices one client can page the operator about. 404 if there's
+    no such invoice."""
+    try:
+        limiter.check(
+            f"bank-transfer-paid:{_client_key(request)}",
+            limit=BANK_TRANSFER_PAID_LIMIT,
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {BANK_TRANSFER_PAID_LIMIT} bank transfer "
+                          "notifications per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+    result = await bank_transfer.mark_awaiting_confirmation(
+        payment_repo, reference,
+        transport=transport, site_url=telegram_stars.SITE_URL,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found",
+                    "detail": "no bank transfer invoice with this reference, or "
+                              "persistence isn't configured on this deployment"},
+        )
+    return result
 
 
 def _paypal_not_configured_error() -> HTTPException:
@@ -1485,6 +1981,7 @@ async def create_paypal_order(
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     transport=Depends(get_paypal_transport),
 ) -> dict:
     """Open a PayPal order for a ONE-TIME product (Pro or a Fix Pack), the
@@ -1505,7 +2002,7 @@ async def create_paypal_order(
     if not database_url_from_env():
         raise _paypal_not_persisted_error()
 
-    body = await request.json()
+    body = await _json_object_body(request)
     product = (body.get("product") or "").strip().lower()
 
     if product == "fixpack":
@@ -1533,6 +2030,8 @@ async def create_paypal_order(
                                   "created from an uploaded zip, so there's no "
                                   "repository to open a fix PR against."},
             )
+        await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
+        _reject_if_nothing_to_fix(audit)
         try:
             order = await paypal.create_fixpack_order(
                 payment_repo, audit_id=audit_id, transport=transport
@@ -1613,7 +2112,7 @@ async def create_paypal_subscription(
     if not database_url_from_env():
         raise _paypal_not_persisted_error()
 
-    body = await request.json()
+    body = await _json_object_body(request)
     repo_full_name = normalize_repo_full_name(body.get("repo_url"))
     if repo_full_name is None:
         raise HTTPException(
@@ -1668,7 +2167,7 @@ async def paypal_webhook(
                     "detail": "PAYPAL_WEBHOOK_ID is not set on this deployment"},
         )
 
-    event = await request.json()
+    event = await _json_object_body(request)
     try:
         verified = await paypal.verify_webhook_signature(
             headers=request.headers, event=event, webhook_id=webhook_id,
@@ -1933,6 +2432,25 @@ async def _alert_fixpack_failed(job_id, detail: str) -> None:
     )
 
 
+async def _alert_github_app_auth_failed(detail: str) -> None:
+    """One operator alert for a broken GitHub App credential.
+
+    Deduped on the deployment, NOT on the job: the key is either right or
+    wrong for everyone, so alerting per job would page once per queued Fix
+    Pack for a single cause. The text names the cause and the file to edit,
+    because the useful thing to know at 3am is not that a job failed -- it is
+    that no Fix Pack on this deployment can be delivered until .env changes.
+    """
+    await notify_operator(
+        "Drydock: GitHub App credentials REJECTED — no Fix Pack can open a "
+        f"PR on this deployment until this is fixed. {detail} — check "
+        "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_B64 in .env; the 401 log "
+        "line carries a public-key fingerprint to compare against the App's "
+        "registered key. Affected jobs are queued, not lost.",
+        dedupe_key="github-app-auth-rejected",
+    )
+
+
 def _rule_ids_from_plan(plan) -> list[str]:
     """The deduplicated, sorted rule_ids a Fix Pack plan actually fixes --
     across both secret_fixes and config_fixes (one plan fixes many findings).
@@ -2106,6 +2624,35 @@ async def _process_one_paid_job(
             pr_url=opened.html_url,
         )
         return "delivered"
+    except GitHubAppAuthError as exc:
+        # GitHub refused our own App credentials. Nothing about this job or
+        # this customer's repository was reached, so the three things the
+        # generic handler below does would all be wrong here:
+        #
+        #   * 'failed' is terminal, and this job is perfectly deliverable the
+        #     moment an operator fixes the key -- failing it bills a customer
+        #     for our outage and leaves recovery to hand-editing the database;
+        #   * the attempt the claim charged walks it toward the reaper's
+        #     terminal 'failed' for a reason no retry of theirs can fix;
+        #   * a fix_outcomes row would record OUR outage as the outcome of a
+        #     fix, in the one table we intend to learn from later.
+        #
+        # So the job goes back on the queue, unspent, and the operator is told
+        # what is actually broken. Same shape as the verification_unavailable
+        # branch above: when we could not do our job, the customer's job waits.
+        detail = _failure_detail(exc)
+        logger.error(
+            "Fix Pack job %s deferred: GitHub App credentials rejected (%s)",
+            job_id, detail,
+            extra={"step": "github_app_auth",
+                   "duration_ms": _elapsed_ms(started)},
+        )
+        await fixpack_repo.release_to_paid(
+            job_id,
+            f"requeued: GitHub App credentials rejected — {detail}",
+        )
+        await _alert_github_app_auth_failed(detail)
+        return "auth_rejected"
     except Exception as exc:  # noqa: BLE001 — every failure must be recorded
         # Any error in fetch, generation, token exchange, or PR delivery
         # lands here. Log the full traceback (logger.exception attaches it)
@@ -2238,6 +2785,20 @@ async def process_paid_fixpacks(
                     # Stop draining: the runner just went down mid-run, so every
                     # further claim would only spend another job's attempts.
                     summary["deferred"] += 1
+                    break
+                elif outcome == "auth_rejected":
+                    # Already back on 'paid' with its attempt refunded, so
+                    # unlike the branch above this one is NOT waiting for the
+                    # reaper -- it is immediately re-claimable, which is exactly
+                    # why the loop must stop. A broken App key rejects every
+                    # job identically, so draining on would spin through the
+                    # whole backlog releasing and re-claiming the same rows.
+                    #
+                    # Reported separately from `deferred` because the two mean
+                    # different things to whoever reads the summary: one is a
+                    # sandbox outage that heals itself, the other needs a human
+                    # to edit .env before any Fix Pack can ever be delivered.
+                    summary["skipped_github_app_auth"] = True
                     break
                 else:
                     summary["failed"] += 1
@@ -2379,6 +2940,22 @@ async def audit_jobs_stats(
 STATS_RECENT_WINDOW_SECONDS = 3600
 STATS_DAY_WINDOW_SECONDS = 24 * 3600
 
+# When a rule has enough evidence to learn from.
+#
+# 20 labelled outcomes and 5 distinct audits, per rule. The second number is
+# the load-bearing one: twenty merges from one customer's repository say that
+# this fix suits that repository, and generalising from it is how a knowledge
+# base learns something false with confidence. Five audits is not a large
+# sample either, but it is the point past which a signal is at least not one
+# codebase's opinion.
+#
+# These are a stated position, not a derived one -- there is no dataset to
+# derive them from yet, which is rather the point. They live here so the
+# question "is there enough data?" is answered by a query instead of by
+# whoever is asked.
+LEARNING_MIN_LABELLED = 20
+LEARNING_MIN_AUDITS = 5
+
 
 @app.get("/internal/stats")
 async def internal_stats(
@@ -2386,6 +2963,7 @@ async def internal_stats(
     audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
     fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+    fix_outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
 ) -> dict:
     """Every queue and the LLM bill, aggregated, in one authenticated read.
 
@@ -2438,6 +3016,10 @@ async def internal_stats(
         window_seconds=STATS_RECENT_WINDOW_SECONDS)
     spend_day = await llm_usage_repo.spend_since(
         window_seconds=STATS_DAY_WINDOW_SECONDS)
+    learning = await fix_outcome_repo.learning_readiness(
+        min_labelled=LEARNING_MIN_LABELLED,
+        min_audits=LEARNING_MIN_AUDITS,
+    )
 
     return {
         "window_seconds": STATS_RECENT_WINDOW_SECONDS,
@@ -2469,6 +3051,10 @@ async def internal_stats(
             "error_rate": audit_recent["error_rate"],
             "top_error_codes": audit_recent["top_error_codes"],
         },
+        # Lifetime, not windowed like everything above it: the question this
+        # answers is "has enough evidence accumulated to learn from", and an
+        # hour of it is not evidence.
+        "learning": learning,
     }
 
 
@@ -2481,6 +3067,84 @@ def _spend_view(spend: dict) -> dict:
         "calls": spend["calls"],
         "cost_usd": float(spend["cost_usd"].quantize(Decimal("0.000001"))),
     }
+
+
+@app.post("/internal/payments/{payment_id}/refund")
+async def refund_payment(
+    payment_id: str,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+) -> dict:
+    """Record that a completed payment was given back.
+
+    Body: JSON {"reason": str}. Requires `Authorization: Bearer
+    <SERVICE_FLAGS_TOKEN>`.
+
+    This endpoint moves no money, and no endpoint here could. A bank transfer
+    lands on a private individual's account and goes back the same way, by
+    hand; Telegram Stars and USDT have no refund call this deployment holds a
+    credential for. The operator sends the money and then tells the system, in
+    that order.
+
+    So the value is the record. Until now a refunded payment stayed
+    `completed` for ever, and a month later nothing distinguished money kept
+    from money returned -- an error that is always in the flattering
+    direction. It became concrete on 2026-08-01, when DRY-UPRQKH charged 10.79
+    for a Fix Pack on an audit with nothing a Fix Pack could fix. The customer
+    was the operator testing his own product; the next one will not be.
+
+    SERVICE_FLAGS_TOKEN rather than a token of its own. It is already the
+    operator-privileged credential -- it can halt every paid LLM operation --
+    and this is the same audience. AUDIT_JOBS_STATS_TOKEN would be wrong for
+    the reason its own docstring gives: it exists so a monitoring reader can
+    see queue depth WITHOUT holding a credential that can also act.
+
+    404 when the payment does not exist OR is not `completed`: an invoice
+    nobody paid has no refund to record, and the two cases are deliberately
+    not distinguished to an unauthenticated-by-id caller. Repeating the call
+    is a no-op for the same reason -- one refund must not become two entries
+    because a command was run twice.
+
+    Deliberately does NOT revoke anything. A Fix Pack PR that was delivered
+    stays delivered; Pro access stays granted. Whether a refund should take
+    back what it paid for is a policy question with a different cost of being
+    wrong, and mixing it into the record-keeping would mean neither could be
+    changed alone.
+    """
+    token = _service_flags_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "SERVICE_FLAGS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    body = await _json_object_body(request)
+    reason = body.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request",
+                    "detail": "body must be JSON with a non-empty 'reason'"},
+        )
+
+    try:
+        uuid.UUID(payment_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request", "detail": "payment_id must be a UUID"},
+        )
+
+    payment = await payment_repo.mark_refunded(payment_id, reason=reason.strip())
+    if payment is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_refundable",
+                    "detail": "no completed payment with that id"},
+        )
+    return payment
 
 
 @app.post("/internal/service-flags/llm_paid_ops")
@@ -2508,11 +3172,12 @@ async def set_llm_paid_ops(
         )
     _require_bearer_token(request, token)
 
-    try:
-        body = await request.json()
-    except (json.JSONDecodeError, ValueError):
-        body = None
-    if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+    # This endpoint already guarded the parse by hand; _json_object_body is
+    # that same guard, so the local try/except would now only catch what it
+    # already raised as a 422. The value check below stays -- the helper knows
+    # the body is an object, not what belongs in it.
+    body = await _json_object_body(request)
+    if not isinstance(body.get("enabled"), bool):
         raise HTTPException(
             status_code=422,
             detail={"reason": "bad_request",

@@ -378,8 +378,9 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
 - `shipit-fixpack.timer` (systemd) should call
   `POST /internal/fixpack/process-paid` (bearer token `FIXPACK_PROCESS_TOKEN`
   from `.env`) on a short interval (2–5 min) to drain paid Fix Pack jobs into
-  fix PRs. Like the reaper/USDT poller, **this repo ships no unit file** —
-  wire one up. The endpoint is safe to fire on a timer even while a previous
+  fix PRs. The unit files are `deploy/systemd/shipit-fixpack.{service,timer}`
+  — install them, do not write your own (see "Installing the timers" below).
+  The endpoint is safe to fire on a timer even while a previous
   run is still working: it takes a Postgres advisory lock (a second firing
   returns `{"skipped_locked": true}`) and claims each job atomically into a
   `running` lease, so overlapping runs never open a duplicate PR. A run also
@@ -392,12 +393,21 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   backlog: each pending run re-audits its repo, diffs the findings, and DMs
   subscribers. Same durable-queue shape as `shipit-fixpack.timer` (advisory
   lock → `{"skipped_locked": true}` on overlap, atomic per-run claim, 15 min /
-  3-attempt stale-lease reaper) and **no unit file is shipped** — wire one up. A
+  3-attempt stale-lease reaper). The unit files are
+  `deploy/systemd/shipit-monitoring.{service,timer}` — install them, do not
+  write your own (see "Installing the timers" below). A
   **longer interval than Fix Pack** is right (~5 min, `OnUnitActiveSec=5min`): a
   repo is re-audited at most once per 24h and a pending run only needs to drain
   within a few minutes of a push. The push webhook only enqueues the run and
   ACKs immediately, so nothing gets audited until this timer fires (see
   `MONITORING_ASYNC_PLAN.md`).
+- `shipit-usdt-poller.timer` (systemd, 2 min) calls
+  `POST /internal/billing/poll-usdt` (bearer token `USDT_POLL_TOKEN`) to match
+  incoming TRC20 transfers against pending invoices. Unit files are
+  `deploy/systemd/shipit-usdt-poller.{service,timer}`. This endpoint 503s when
+  `USDT_TRC20_ADDRESS` is unparseable, which is a whole-feature outage that
+  looks like silence: no payment is ever confirmed, and nobody complains,
+  because a customer who paid just sees an invoice that stays `pending`.
 
 ### Host provisioning — one-time, not part of a deploy
 
@@ -421,6 +431,16 @@ as root and would not notice, but
 `shipit-ops` and opens the file itself — on a `0600 root:root` `.env` the unit
 fails to start.
 
+Given `--env-file`, the validator reads **only** that file and ignores its own
+process environment: the validating process is not the service, so a variable
+exported in an operator's shell is one the service will never see. Running the
+command by hand therefore gives the same verdict systemd gets. If the file
+defines no `ENVIRONMENT`, the production checks are skipped and the script says
+so on stderr rather than silently reporting success. Without `--env-file` it
+validates the ambient environment, which is what the `10-production-operations`
+drop-in relies on — there `ExecStartPre` has already inherited
+`EnvironmentFile=` from the unit.
+
 `/opt/shipit/.env` is the host's own file and is never overwritten by a deploy,
 so it can drift from `.env.example`. One such value is worth knowing about when
 rebuilding a host: production already carries `LOG_FORMAT=json`, set by hand
@@ -428,6 +448,58 @@ after Stage 5 shipped the JSON formatter. `.env.example` now ships `json` too,
 so a `.env` seeded from it matches the running host instead of silently
 downgrading it to `text` (the code-level fallback for unset/unrecognized
 values) and breaking the `jq` runbook below.
+
+### Installing the timers
+
+`deploy-production.sh` swaps the release and restarts `shipit.service`. It does
+**not** touch systemd units, so installing them is host provisioning: done once
+per host, and again by hand whenever a unit file in `deploy/systemd/` changes.
+
+Copy from **`/srv/shipit/current`**, the symlink to the release that is
+actually running. Not from `/opt/shipit`: that is the control checkout, no
+deploy updates its working tree, and it can be many releases behind. An
+earlier version of this section said `/opt/shipit`, and on 2026-08-02 that
+silently installed stale units -- the copy succeeded, `daemon-reload`
+succeeded, and the change simply was not there. Verify afterwards rather than
+trusting the exit code; the last command below is that check.
+
+```bash
+sudo cp /srv/shipit/current/deploy/systemd/*.service \
+        /srv/shipit/current/deploy/systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now shipit-fixpack.timer shipit-monitoring.timer \
+                          shipit-usdt-poller.timer shipit-reap.timer
+systemctl list-timers --all | grep shipit
+
+# Prove that what systemd LOADED is what the release ships. `systemctl cat`
+# reads the loaded unit, so a stale copy shows up here and nowhere else; its
+# first line is the path it read, hence the tail. No output means they match.
+diff <(systemctl cat shipit-fixpack.service | tail -n +2) \
+     /srv/shipit/current/deploy/systemd/shipit-fixpack.service
+```
+
+Run the `.service` once by hand before enabling its `.timer` — a oneshot unit
+reports its exit code immediately, and a broken one is much easier to read in
+`journalctl -u <unit>` than as a silent no-op every two minutes.
+
+**Do not hand-write a unit that curls the endpoint directly.** On 2026-08-02
+this host was found running three such units under names that no longer
+matched anything in this repo, and they were worse in ways that are easy to
+miss:
+
+- one had the bearer token written into the unit file, so it sat in plaintext
+  under `/etc/systemd/system` and was echoed by `systemctl cat`;
+- another interpolated the token into a `bash -c` command line, putting it in
+  `ps aux` for every local user each time it fired;
+- both called the **public** HTTPS URL rather than `127.0.0.1:8000`, ran as
+  root, and had no `OnFailure=`, so their failures alerted no one.
+
+The shipped units avoid all of that: `call-internal-endpoint.sh` writes the
+header into a `curl` config file with mode `0600` so it never reaches `ps`,
+the token comes from `.env` in one place, and `OnFailure=shipit-alert@%n`
+means a failed run is reported. The missing alert is not academic — the USDT
+poller had been failing on every run since 2026-07-31 and nobody knew, because
+the hand-written unit had nothing to tell.
 
 ### GitHub webhook — two jobs (`pr_merged` + continuous monitoring)
 
@@ -614,10 +686,18 @@ Everything rides Postgres and the Telegram bot that already exist (see
 
 - **`GET /health`** (public, unauthenticated, leak-free) reports what
   actually fails here: `{"db": <bool>, "fixpack_backlog": <n|null>,
-  "oldest_paid_seconds": <secs|null>}`. `db:false` means the database is
+  "oldest_paid_seconds": <secs|null>, "github_app": <bool|null>}`. `db:false`
+  means the database is
   unset or unreachable (a live process honestly reporting degraded — still
   `200`, so a dumb uptime pinger can read it). A growing `oldest_paid_seconds`
   past the `shipit-fixpack.timer` interval means the processor isn't draining.
+  `github_app:false` means GitHub no longer accepts this deployment's App
+  credentials, so **no** Fix Pack can open a PR until `GITHUB_APP_ID` /
+  `GITHUB_APP_PRIVATE_KEY_B64` are fixed — affected jobs stay queued rather
+  than failing, and the 401 log line carries a non-secret public-key
+  fingerprint to compare against the App's registered key. `null` means App
+  auth isn't configured here at all (the PAT path), which is not a fault. The
+  verdict is cached for five minutes, so the probe stays cheap.
   Returns only booleans/coarse counts — no ids, urls, or error text — so it's
   safe to expose without a token, unlike the side-effecting `/internal/*`
   endpoints.
@@ -764,6 +844,33 @@ occur. Allowed methods are `GET, POST` (the only methods the API uses);
 allowed request headers are `Authorization` and `Content-Type`.
 
 ## Known gaps (honest list, post-deploy)
+
+- **Every foreign key is `ON DELETE NO ACTION`, and that is deliberate.**
+  Reviewed 2026-08-02 across all ten of them: `audit_jobs.{audit_id,
+  account_id}`, `fixpack_jobs.audit_id`, `fix_outcomes.{audit_id,
+  fixpack_job_id}`, `llm_usage.{account_id,audit_job_id}`,
+  `payments.{account_id,audit_id}`, `subscriptions.account_id`.
+
+  `NO ACTION` does not produce orphans — a foreign key makes orphans
+  impossible by definition. It refuses a delete that would create one, which
+  is the fail-safe direction. Nothing in the application deletes a parent row:
+  there is no account-deletion endpoint, no retention job, no GDPR erasure
+  path, and no `delete from` anywhere outside `scripts/verify_db_locally.py`
+  (which removes its own fixtures, children first, in the order the
+  constraints require).
+
+  Adding `ON DELETE CASCADE` would therefore fix nothing that is broken and
+  would introduce something that is not: four of these keys reach money
+  (`payments.account_id`, `payments.audit_id`, `subscriptions.account_id`,
+  `llm_usage.account_id`). Cascading them means deleting an account silently
+  takes its payment history with it, where today the database would refuse and
+  make a human stop and think. `SET NULL` is gentler but still changes what
+  the data means: a payment with no owner is money received that no longer
+  appears in any account's history.
+
+  Decide the semantics when there is a requirement to decide them against — an
+  erasure request, or a retention policy for old audits. Choosing now would be
+  guessing, and the guess is recorded in the `payments` table.
 
 - `POST /v1/audits` intake now accepts a public GitHub `repo_url` as an
   alternative to a zip upload (see above). Still NOT supported by design:

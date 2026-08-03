@@ -1,0 +1,24 @@
+-- An index for the read the kopeck-suffix reservation does on every checkout.
+--
+-- bank_transfer quotes each open invoice a unique amount (5.00 -> 5.07) so the
+-- operator can tell two incoming card transfers apart on the statement.
+-- Reserving that suffix reads the currently-open invoices, and before this
+-- there was no index on `status` at all: the planner took a sequential scan of
+-- the whole payments table to answer it. Harmless while list_pending was only
+-- the USDT poller's hourly read; not harmless on a button press.
+--
+-- created_at is in the index for two reasons: the reservation bounds its read
+-- to the invoice TTL window, and `order by created_at desc` is the query's
+-- existing sort.
+--
+-- NOT a unique index on amount, though that was the first thing tried. A
+-- unique index cannot tell the race apart from the deliberate saturation
+-- fallback: when all 99 suffixes are in flight the code quotes the bare price
+-- on purpose, and a second such invoice would then fail to insert with no
+-- suffix left to re-pick. That converts a graceful degradation -- two payers
+-- share an amount, and the operator separates them by payer name and email as
+-- designed -- into a hard outage of the whole payment method, reachable by
+-- anyone willing to open a hundred invoices. The race is closed in the
+-- application instead, with an advisory lock (db.bank_transfer_amount_lock).
+create index if not exists payments_provider_status_created_idx
+    on payments (provider, status, created_at desc);

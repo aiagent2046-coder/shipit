@@ -19,6 +19,14 @@ interface View {
   score: Score;
   findings: Finding[];
   repoUrl: string | null;
+  /**
+   * From the API's `fixpack_auto_fixable`. Undefined when the page renders
+   * from the just-finished run held in sessionStorage, which doesn't carry
+   * it -- the purchase block is then shown, and the sell endpoints answer 409
+   * if there is genuinely nothing to fix. Hiding the block is the courtesy;
+   * the refusal is the protection.
+   */
+  autoFixable?: boolean;
 }
 
 function fromResult(r: AuditResult): View {
@@ -88,6 +96,7 @@ function AuditPageInner() {
             score: row.score_json,
             findings: row.findings_json ?? [],
             repoUrl: row.repo_url ?? null,
+            autoFixable: row.fixpack_auto_fixable,
           });
           setLoading(false);
           return;
@@ -185,7 +194,11 @@ function AuditPageInner() {
             </div>
           </div>
 
-          <FixpackPurchase auditId={view.id} repoUrl={view.repoUrl} />
+          <FixpackPurchase
+            auditId={view.id}
+            repoUrl={view.repoUrl}
+            autoFixable={view.autoFixable}
+          />
 
           <MonitoringPurchase auditId={view.id} repoUrl={view.repoUrl} />
 

@@ -114,6 +114,15 @@ export interface PersistedAudit {
   findings_json: Finding[] | null;
   repo_url: string | null;
   created_at: string;
+  /**
+   * Whether a Fix Pack could produce anything for this audit. Computed by the
+   * API from the findings and the rules the Fix Pack knows how to rewrite --
+   * not derivable here without copying that list into TypeScript, where it
+   * would drift.
+   *
+   * Optional so an older API (or a cached response) simply reads as unknown.
+   */
+  fixpack_auto_fixable?: boolean;
 }
 
 export interface Entitlements {
@@ -165,6 +174,80 @@ export type UsdtInvoiceStatus =
 // GET /v1/billing/usdt/invoice/{id} endpoint as the Pro invoice.
 export interface FixpackUsdtInvoice extends UsdtInvoice {
   audit_id: string;
+}
+
+// The payer-facing bank fields. Served by GET /v1/billing/details and echoed
+// in the invoice response, never published as NEXT_PUBLIC_* — the backend env
+// stays the single source, so rotating the card needs no frontend rebuild.
+export interface BankDetails {
+  // The only field the checkout page shows: the payer copies this and pays.
+  // The rest are the full requisites behind that card, rendered in the footer.
+  card: string;
+  bank_name: string;
+  swift: string;
+  beneficiary: string;
+  account: string;
+  address: string;
+}
+
+// POST /v1/billing/bank-transfer/pro and
+// POST /v1/audits/{id}/fixpack/bank-transfer.
+export interface BankTransferInvoice {
+  payment_id: string;
+  // Goes in the transfer's payment-reference field. THIS, not the amount, is
+  // what the operator matches against the bank statement.
+  reference: string;
+  amount: string;
+  currency: string;
+  bank: BankDetails;
+  expires_at: string;
+  audit_id?: string;
+}
+
+// GET /v1/billing/details — public, unauthenticated, the single source for the
+// requisites the footer renders. `bank` is null when the deployment has no
+// bank transfer configured, and the footer then omits the block.
+export interface BillingDetails {
+  bank: BankDetails | null;
+}
+
+// GET /v1/billing/bank-transfer/{reference}. "expired" is cosmetic: the quote
+// is stale, but the operator can still confirm a transfer that arrives later.
+export type BankTransferStatus =
+  | {
+      reference: string;
+      status: "pending";
+      product: "pro_tier" | "fixpack";
+      amount: string | null;
+      currency: string;
+      expires_at: string;
+      bank?: BankDetails;
+      audit_id?: string;
+    }
+  | {
+      reference: string;
+      status: "completed";
+      product: "pro_tier";
+      tier: "pro";
+      // Same one-shot delivery as UsdtInvoiceStatus above.
+      api_key: string | null;
+      key_already_delivered?: boolean;
+    }
+  | {
+      reference: string;
+      status: "completed";
+      product: "fixpack";
+      audit_id?: string;
+    }
+  | { reference: string; status: "expired" };
+
+// POST /v1/billing/bank-transfer/{reference}/paid — "I've paid". Grants
+// nothing; `notified` says whether the operator's phone actually buzzed
+// (false when alerting is unconfigured or the repeat was throttled).
+export interface BankTransferPaidResult {
+  reference: string;
+  status: string;
+  notified: boolean;
 }
 
 // fixpack_jobs status progression (app/db.py). null = no purchase yet.

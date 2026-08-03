@@ -1,0 +1,33 @@
+-- Who says they are sending a bank transfer, recorded when the invoice is
+-- opened.
+--
+-- The bank_transfer provider (migration-free, added on top of 0004's
+-- (provider, external_ref) index) has no payer identity at all: the only link
+-- between a real transfer and an invoice is the DRY-XXXXXX reference code the
+-- payer types into the transfer's reference field by hand. That is enough to
+-- match the money, but it is not enough for the operator's own books --
+-- payments land on a private individual's account, so they need a record of
+-- who paid for accounting and tax reporting on those receipts.
+--
+-- Both columns are nullable and stay nullable. They are optional to supply
+-- (the checkout form creates an invoice perfectly well with both blank), so
+-- every existing row is valid as NULL and no backfill is needed. A NOT NULL
+-- with a default would be worse than useless here: it would invent a payer
+-- name for every historical Stars/USDT/PayPal payment that never had one.
+--
+-- Deliberately NOT validated and NOT unique:
+--
+--   * No email format check, at any layer. This is a note-to-self for the
+--     operator, not an authentication or delivery channel -- nothing is ever
+--     sent to this address. Rejecting a payer's invoice because they typed a
+--     work address with an unusual TLD would cost a sale to enforce a rule
+--     nothing depends on.
+--   * No index. The only read is "show these two lines in the Telegram
+--     message that carries the Confirm button", which already has the row in
+--     hand by id or by reference.
+--
+-- Only bank_transfer writes these. The other providers already carry an
+-- identity of their own (a Telegram chat_id, a PayPal payer, an on-chain
+-- sender) and pass neither column, so their rows keep both as NULL.
+alter table payments add column if not exists payer_name text;
+alter table payments add column if not exists payer_email text;

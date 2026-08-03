@@ -24,6 +24,16 @@ def require_sandbox_token(request: Request) -> None:
             detail={"reason": "runner_not_configured",
                     "detail": "SANDBOX_RUNNER_TOKEN is not set on this runner"},
         )
+    # Compared as bytes, not str: hmac.compare_digest raises TypeError on two
+    # str arguments if either holds a character above 127, and a caller can put
+    # any byte in a header -- which turned a bad token into a 500 instead of a
+    # 401. Encodings differ by side because the header arrived as bytes the
+    # ASGI server decoded latin-1, while the token came from the env as text.
+    # Same reasoning, and the same wording, as _secret_equals in app/main.py;
+    # this module deliberately mirrors the backend rather than importing it.
     provided = request.headers.get("authorization", "")
-    if not hmac.compare_digest(provided, f"Bearer {SANDBOX_RUNNER_TOKEN}"):
+    expected = f"Bearer {SANDBOX_RUNNER_TOKEN}"
+    if not hmac.compare_digest(
+        provided.encode("latin-1"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail={"reason": "unauthorized"})

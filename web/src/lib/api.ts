@@ -5,6 +5,10 @@ import type {
   Account,
   AuditJobStatus,
   AuditResult,
+  BankTransferInvoice,
+  BankTransferPaidResult,
+  BankTransferStatus,
+  BillingDetails,
   CreateAuditResponse,
   FixpackStatus,
   FixpackUsdtInvoice,
@@ -175,6 +179,77 @@ export async function createFixpackUsdtInvoice(
     { method: "POST" },
   );
   return parse<FixpackUsdtInvoice>(res);
+}
+
+// Who the payer says they are. Both required by the backend: a card transfer
+// carries no reference field, so the payer's name and email are the only thing
+// the operator can match an incoming transfer against.
+export interface PayerContact {
+  payer_name: string;
+  payer_email: string;
+}
+
+function payerBody(payer: PayerContact): RequestInit {
+  return {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      payer_name: payer.payer_name.trim(),
+      payer_email: payer.payer_email.trim(),
+    }),
+  };
+}
+
+// The published payment requisites for the footer. Public and uncached-by-us:
+// the backend env is the single source, so a rotated card takes effect on the
+// next page load with no rebuild.
+export async function getBillingDetails(): Promise<BillingDetails> {
+  const res = await request(`${API_BASE_URL}/v1/billing/details`);
+  return parse<BillingDetails>(res);
+}
+
+// Open a bank-transfer invoice for Pro. The response carries the card number
+// to pay and the reference code that identifies the order.
+export async function createBankTransferInvoice(
+  payer: PayerContact,
+): Promise<BankTransferInvoice> {
+  const res = await request(`${API_BASE_URL}/v1/billing/bank-transfer/pro`, {
+    method: "POST",
+    ...payerBody(payer),
+  });
+  return parse<BankTransferInvoice>(res);
+}
+
+// Same, scoped to one audit's Fix Pack. Polled with getBankTransferInvoice.
+export async function createFixpackBankTransferInvoice(
+  auditId: string,
+  payer: PayerContact,
+): Promise<BankTransferInvoice> {
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/bank-transfer`,
+    { method: "POST", ...payerBody(payer) },
+  );
+  return parse<BankTransferInvoice>(res);
+}
+
+export async function getBankTransferInvoice(
+  reference: string,
+): Promise<BankTransferStatus> {
+  const res = await request(
+    `${API_BASE_URL}/v1/billing/bank-transfer/${encodeURIComponent(reference)}`,
+  );
+  return parse<BankTransferStatus>(res);
+}
+
+// "I've paid" — pages the operator to go look at their statement. Grants
+// nothing on its own; the invoice stays pending until a human confirms.
+export async function reportBankTransferPaid(
+  reference: string,
+): Promise<BankTransferPaidResult> {
+  const res = await request(
+    `${API_BASE_URL}/v1/billing/bank-transfer/${encodeURIComponent(reference)}/paid`,
+    { method: "POST" },
+  );
+  return parse<BankTransferPaidResult>(res);
 }
 
 export async function getFixpackStatus(auditId: string): Promise<FixpackStatus> {
