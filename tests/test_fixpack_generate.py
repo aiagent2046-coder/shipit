@@ -174,9 +174,13 @@ def test_untracked_env_keys_are_recorded_in_the_example():
     no record that the app ever needed it, so every name is carried into
     `.env.example` — names only, never the values, which ship in the PR."""
     zip_bytes = make_zip({
-        ".env": "DATABASE_URL=postgres://user:hunter2@db/prod\n"
+        # Values are deliberately not secret-shaped: CI scans added lines for
+        # real signatures, and a realistic connection string here would fail
+        # the build exactly as a live credential would.
+        ".env": "DATABASE_URL=fake-value-hunter2\n"
                 "# a comment, not a variable\n"
                 "\n"
+                "SESSION_KEY=placeholder==\n"
                 "APP_MODE=production\n",
         "app.py": "print('hi')\n",
     })
@@ -188,10 +192,12 @@ def test_untracked_env_keys_are_recorded_in_the_example():
     example = plan.files[".env.example"]
     assert "DATABASE_URL=changeme" in example
     assert "APP_MODE=changeme" in example
+    # Split on the FIRST '=' only, or a padded value truncates the name.
+    assert "SESSION_KEY=changeme" in example
     assert "a comment" not in example
     # The safety invariant: names travel, values never do.
     assert "hunter2" not in example
-    assert "postgres://" not in example
+    assert "placeholder" not in example
     assert "hunter2" not in render_pr_body(plan)
 
 
@@ -202,7 +208,7 @@ def test_pr_body_does_not_promise_the_env_file_survives_the_merge():
     the merge deletes their working copy, and because the same commit
     gitignores the path, `git status` stays clean so the loss is silent."""
     zip_bytes = make_zip({
-        ".env": "DATABASE_URL=postgres://user:hunter2@db/prod\n",
+        ".env": "DATABASE_URL=fake-value-hunter2\n",
         "app.py": "print('hi')\n",
     })
     findings = [finding(rule_id="env-file-committed", file=".env", line=0)]
