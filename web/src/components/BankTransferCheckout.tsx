@@ -13,6 +13,7 @@ import {
 import { useApiKey } from "./providers";
 import { Field } from "./UsdtCheckout";
 import { Spinner } from "./Spinner";
+import { SupportEmail } from "./SupportEmail";
 
 type CompletedStatus = Extract<BankTransferStatus, { status: "completed" }>;
 
@@ -103,7 +104,7 @@ export function BankTransferCheckout({
         e instanceof ApiError
           ? e.reason === "bank_transfer_not_configured" ||
             e.reason === "not_persisted"
-            ? "Card payment isn't configured on the backend yet. Try another payment method, or contact support."
+            ? "Card payment isn't configured on the backend yet. Try another payment method, or email support@drydock.co."
             : e.message
           : "Could not create an invoice.",
       );
@@ -378,8 +379,8 @@ export function BankTransferCheckout({
             <p className="rounded-md border border-high/40 bg-high/10 p-3 text-xs text-high">
               This quote is more than a week old. Your transfer can still be
               confirmed if it arrives — nothing is lost — but if you haven&apos;t
-              paid yet, contact support to re-check the amount and the card
-              number first.
+              paid yet, email <SupportEmail /> to re-check the amount and the
+              card number first.
             </p>
           )}
         </div>
@@ -508,7 +509,7 @@ export function ProCompleted({
           security it is shown only once and is never stored, so it can&apos;t be
           shown again. Lost it? Send{" "}
           <span className="font-mono">/rotatekey</span> to the bot for a new key,
-          or contact the operator with reference{" "}
+          or email <SupportEmail /> with reference{" "}
           <span className="font-mono">{completed.reference}</span>.
         </p>
       )}

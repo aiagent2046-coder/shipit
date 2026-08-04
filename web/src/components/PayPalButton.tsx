@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { useApiKey } from "./providers";
 import { Spinner } from "./Spinner";
+import { SupportEmail } from "./SupportEmail";
 
 // Minimal shape of the parts of the PayPal JS SDK we actually call. Declared
 // here (rather than pulling in @paypal/* type packages) because the SDK is
@@ -315,13 +316,13 @@ function ProKeyReveal({
         <p className="mt-2 text-sm text-muted">
           This key was already delivered once. For security it is shown only
           once and is never stored, so it can&apos;t be shown again — if you
-          didn&apos;t save it, contact the operator with order id{" "}
+          didn&apos;t save it, email <SupportEmail /> with order id{" "}
           <span className="font-mono">{orderId}</span> to have it reissued.
         </p>
       ) : (
         <p className="mt-2 text-sm text-muted">
-          Payment recorded, but the key wasn&apos;t returned yet. Contact the
-          operator with order id{" "}
+          Payment recorded, but the key wasn&apos;t returned yet. Email{" "}
+          <SupportEmail /> with order id{" "}
           <span className="font-mono">{orderId}</span>.
         </p>
       )}
