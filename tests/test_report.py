@@ -15,6 +15,15 @@ def result(findings: list[dict]) -> dict:
     }
 
 
+def _finding() -> dict:
+    """The plainest production finding: enough to render a row, nothing more."""
+    return {
+        "severity": "critical", "confidence": 0.9,
+        "title": "AWS key in code", "file": "src/config.ts", "line": 3,
+        "masked": "AKIA****(20 chars)",
+    }
+
+
 def test_report_contains_score_stack_and_findings():
     html = render_report(result([{
         "severity": "critical", "confidence": 0.9,
@@ -207,3 +216,43 @@ def test_migration_findings_stay_in_the_production_section():
         "file": "examples/migrations/0007_seed.sql", "line": 4,
     }]))
     assert "In tests, examples and documentation" not in html
+
+
+def test_static_only_report_carries_no_readiness_score():
+    """A free static scan must not publish a number.
+
+    The score RISES when fewer checks run, because the findings that would lower
+    it were never looked for: 7.2 with the auth and injection rubrics on audit
+    ed402e63, 9.1 without them, Auth reading 10.0 for a repo whose subscriptions
+    table has no write RLS policies. A static-only report carrying a score would
+    be reassurance pointing the wrong way.
+    """
+    r = result([_finding()])
+    r["score"]["basis"] = "static_only"
+    html = render_report(r)
+
+    assert "6.4" not in html                    # the total, gone everywhere
+    assert 'class="ring"' not in html           # and its circle
+    assert "Static scan" in html
+    assert "no readiness score" in html
+    # Category bars are part of the score and go with it.
+    assert "Correctness" not in html
+    # og:title must not leak the number into a link preview either.
+    og = next(line for line in html.split("\n") if "og:title" in line)
+    assert "6.4" not in og and "/10" not in og
+
+
+def test_full_report_is_unchanged_and_missing_basis_keeps_its_score():
+    """The paid shape still scores, and so does an audit from before `basis`.
+
+    Rows written before the field existed must keep rendering as they always
+    did rather than silently losing their score to a policy they predate.
+    """
+    scored = result([_finding()])
+    scored["score"]["basis"] = "static+llm"
+    html = render_report(scored)
+    assert 'class="ring"' in html and "6.4" in html
+
+    legacy = result([_finding()])          # no basis key at all
+    html2 = render_report(legacy)
+    assert 'class="ring"' in html2 and "6.4" in html2
