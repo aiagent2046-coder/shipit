@@ -4,7 +4,7 @@ import io
 import zipfile
 
 from app.scan.checks import run_checks
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.scoring import CATEGORIES, ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
 
 
@@ -81,8 +81,9 @@ def test_score_v2_total_is_weighted_mean_of_categories():
     assert scores["categories"]["Security"] == 7.5
     assert scores["categories"]["Testing"] == 9.6
     assert scores["categories"]["Deploy"] == 10.0
-    # total = 7.5×.25 + 10×.20 + 10×.15 + 10×.10 + 9.6×.15 + 10×.15 = 9.3
-    assert scores["total"] == 9.3
+    # Weights are the raw 0.25/0.20/0.15/0.15 normalised over their own sum:
+    # total = (7.5×.25 + 10×.20 + 9.6×.15 + 10×.15) / .75 = 9.1
+    assert scores["total"] == 9.1
 
 
 def test_saturated_category_does_not_zero_total():
@@ -91,14 +92,17 @@ def test_saturated_category_does_not_zero_total():
     findings = [_f("critical", 1.0)] * 10  # all Security
     scores = compute_scores(findings)
     assert scores["categories"]["Security"] == 0.0
-    assert scores["total"] == 7.5  # everything except Security intact
+    # Everything except Security intact. This is the floor of the scale for a
+    # single failed category, and it moved from 7.5 to 6.7 when the two
+    # producer-less categories were dropped (issue #181) -- 25% of the weight
+    # was previously a constant 10.0 propping every total up.
+    assert scores["total"] == 6.7
 
 
 def test_findings_across_all_categories_still_reach_zero():
-    findings = [
-        _f("critical", 1.0, cat) for cat in
-        ("Security", "Auth", "Correctness", "Config", "Testing", "Deploy")
-    ] * 10
+    # Driven off CATEGORIES itself so this cannot quietly stop covering a
+    # category the way it did when the tuple was written out by hand.
+    findings = [_f("critical", 1.0, cat) for cat in CATEGORIES] * 10
     assert compute_scores(findings)["total"] == 0.0
 
 
@@ -144,7 +148,7 @@ def test_score_is_deterministic_regardless_of_finding_order():
 
     findings = [
         _f("critical", 1.0, "Security"), _f("high", 0.5, "Auth"),
-        _f("medium", 0.7, "Correctness"), _f("low", 0.3, "Config"),
+        _f("medium", 0.7, "Testing"), _f("low", 0.3, "Deploy"),
         _f("high", 0.9, "Testing"), _f("medium", 0.4, "Deploy"),
         _f("low", 0.2, "Security"), _f("high", 0.6, "Auth"),
     ]
@@ -153,3 +157,22 @@ def test_score_is_deterministic_regardless_of_finding_order():
         shuffled = findings[:]
         random.shuffle(shuffled)
         assert compute_scores(shuffled) == baseline
+
+
+def test_finding_in_a_category_we_no_longer_score_is_ignored_not_fatal():
+    """A finding whose category is not in CATEGORIES must neither raise nor move
+    the total.
+
+    Not hypothetical: "Correctness" and "Config" were dropped in #181, stored
+    audits still carry findings labelled with them, and a future producer could
+    emit a name before the constant learns about it. compute_scores filters by
+    CATEGORIES, so such a finding is silently absent from the score while still
+    being listed in the report -- which is the tolerable behaviour, but only if
+    it is deliberate rather than discovered in production.
+    """
+    baseline = compute_scores([_f("high", 0.5, "Auth")])
+    with_ghost = compute_scores([
+        _f("high", 0.5, "Auth"), _f("critical", 1.0, "Correctness"),
+    ])
+    assert with_ghost == baseline
+    assert "Correctness" not in with_ghost["categories"]
