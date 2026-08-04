@@ -24,29 +24,40 @@ import { DemoReport } from "@/components/DemoReport";
  * No prices here: /pricing owns the numbers so they change in one place.
  */
 
-const LOOKS_FOR: { title: string; body: string }[] = [
+// `free` marks what the static scan finds on its own. The two that are not free
+// are the LLM rubrics in app/scan/llm_scan.py, which anonymous audits no longer
+// run: they cost about $0.81 an audit, where everything else costs nothing.
+// Flagged item by item rather than hidden, because a visitor who reads this list
+// and then gets four of the six has been misled by omission.
+const LOOKS_FOR: { title: string; body: string; free: boolean }[] = [
   {
     title: "Credentials sitting in the code",
+    free: true,
     body: "AWS keys, GitHub tokens, Stripe live keys, Supabase service keys, bot tokens, private keys — committed to the repository, where anyone who gets the code gets them too.",
   },
   {
     title: "Secrets that slipped into git",
+    free: true,
     body: "A .env committed by mistake, or a .gitignore that never covered the files holding your keys. Both are quiet until they aren't.",
   },
   {
     title: "Authentication that isn't",
+    free: false,
     body: "Routes that change data without checking who asked, hand-rolled token verification, passwords compared without hashing, a server trusting whatever user id the browser sends it, row-level security left switched off.",
   },
   {
     title: "Ways in for a stranger",
+    free: false,
     body: "SQL and command injection, user input reaching somewhere dangerous unchecked, CORS open to any site with credentials, secrets shipped to the browser in NEXT_PUBLIC_ variables, webhooks that accept anything.",
   },
   {
     title: "Nothing catching mistakes",
+    free: true,
     body: "No tests at all, so nothing tells you the login broke — until a user does.",
   },
   {
     title: "No way to run it anywhere else",
+    free: true,
     body: "No CI and no Dockerfile, so the app only really exists inside the tool that generated it.",
   },
 ];
@@ -102,7 +113,14 @@ export default function LandingPage() {
               key={item.title}
               className="rounded-xl border border-border bg-elevated p-5"
             >
-              <h3 className="font-medium">{item.title}</h3>
+              <div className="flex flex-wrap items-baseline gap-2">
+                <h3 className="font-medium">{item.title}</h3>
+                {!item.free && (
+                  <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                    not in the free scan
+                  </span>
+                )}
+              </div>
               <p className="mt-2 text-sm text-muted">{item.body}</p>
             </li>
           ))}
@@ -114,17 +132,24 @@ export default function LandingPage() {
       <section className="border-t border-border pt-14 pb-16">
         <div className="mx-auto max-w-3xl">
           <h2 className="text-center text-2xl font-semibold tracking-tight sm:text-3xl">
-            Finding it is free. Fixing it is what you pay for.
+            The scan is free. The fix is what you pay for.
           </h2>
 
           <div className="mt-10 grid gap-6 sm:grid-cols-2">
             <div className="rounded-xl border border-border bg-elevated p-6">
-              <h3 className="font-medium">Free, every time</h3>
+              <h3 className="font-medium">Free, no account, no card</h3>
               <p className="mt-3 text-sm text-muted">
-                The audit, the score out of 10, and the full report: every
-                finding with the file, the line, what a stranger could do with
-                it, and how to fix it yourself. No account, no card, nothing
-                held back to make you pay.
+                The static scan and its full report: credentials committed to
+                the repository, a committed .env, a .gitignore that misses
+                secret files, no tests, no CI, no Dockerfile — each with the
+                file, the line, what a stranger could do with it, and how to fix
+                it yourself.
+              </p>
+              <p className="mt-3 text-sm text-muted">
+                It gives no score out of 10, on purpose. Two of the four scored
+                categories depend on checks the free scan doesn&apos;t run, and a
+                score computed from the rest climbs as fewer things are
+                examined — it would tell you the opposite of the truth.
               </p>
             </div>
 
@@ -143,13 +168,34 @@ export default function LandingPage() {
           <div className="mt-6 rounded-xl border border-border p-6">
             <h3 className="font-medium">What a Fix Pack will not touch</h3>
             <p className="mt-3 text-sm text-muted">
-              Authentication, injection, missing tests and missing CI come back
-              as findings with guidance — not as code we wrote for you.
-              Rewriting the login of an app we saw for the first time ten
-              seconds ago is how an audit tool locks you out of your own
-              product, so we don&apos;t. And when there is nothing a Fix Pack
-              can safely change, checkout refuses the sale instead of taking
-              your money and reporting that it found nothing to do.
+              Missing tests and missing CI come back as findings with guidance —
+              not as code we wrote for you. Nor would we rewrite a login: doing
+              that to an app we saw for the first time ten seconds ago is how an
+              audit tool locks you out of your own product. And when there is
+              nothing a Fix Pack can safely change, checkout refuses the sale
+              instead of taking your money and reporting that it found nothing
+              to do.
+            </p>
+          </div>
+
+          {/* Same shape as the Enterprise block on /pricing: dashed, muted, no
+              CTA, because there is nothing to buy here yet. Stating the gap is
+              better than a visitor discovering after paying that the two
+              deepest checks were never part of it. */}
+          <div className="mt-6 rounded-xl border border-dashed border-border bg-surface/40 p-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-medium text-muted">The deeper review</h3>
+              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                not on sale yet
+              </span>
+            </div>
+            <p className="mt-3 text-sm text-muted">
+              Whether your routes verify who is calling them, whether passwords
+              are hashed, whether row-level security is on, whether user input
+              reaches somewhere dangerous. It is also what the score out of 10
+              is computed from. Today it is not something you can buy on its own
+              — we&apos;re wiring it into the Fix Pack. Listed here so you know
+              it exists, rather than finding the gap afterwards.
             </p>
           </div>
 
@@ -168,7 +214,9 @@ export default function LandingPage() {
             See what you get
           </h2>
           <p className="mt-2 text-muted">
-            A sample report, exactly as it renders for a real audit.
+            A sample report, rendered exactly as a real one is. This one is the
+            full review, so it carries a score; the free scan shows the same
+            per-finding detail without it.
           </p>
         </div>
         <DemoReport />
