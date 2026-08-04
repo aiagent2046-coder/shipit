@@ -1813,6 +1813,39 @@ def _bank_transfer_details() -> dict[str, str]:
     return details
 
 
+@app.get("/v1/pricing")
+async def get_pricing() -> dict:
+    """What is on sale and what it costs, for the storefront.
+
+    Read from the same accessor the invoice creator calls
+    (bank_transfer.fixpack_price_usd) so the advertised figure cannot drift
+    from the charged one. That is the whole reason this exists as an endpoint
+    instead of a number typed into the page: /pricing previously showed no
+    price at all, and the comparison table it did show had been stale since
+    the free tier dropped to 3 audits.
+
+    FIX PACK ONLY, by product decision. The free tier is static-only and
+    costs us nothing to run, so Pro's single live benefit -- a higher daily
+    audit limit -- is not something we are willing to take money for. The Pro
+    purchase routes stay reachable for the existing customer and the bot;
+    they are simply no longer advertised.
+
+    USD only. Telegram Stars and USDT carry their own prices from their own
+    accessors, and quoting those here without the channel they belong to
+    would invite exactly the mismatch this endpoint exists to prevent.
+
+    Deliberately separate from /v1/billing/details: that payload carries a
+    card number for the footer, and a page that only needs a price should not
+    have to fetch a payment instrument to get one.
+    """
+    return {
+        "fixpack": {
+            "amount": bank_transfer.fixpack_price_usd(),
+            "currency": bank_transfer.CURRENCY,
+        },
+    }
+
+
 @app.get("/v1/billing/details")
 async def get_billing_details() -> dict:
     """The publishable payment requisites, for the site footer.

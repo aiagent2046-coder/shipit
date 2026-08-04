@@ -1161,13 +1161,24 @@ async def _handle_fixpack_payment(
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "fixpack_payment", "persisted": False}
-    await send_message(
-        chat_id,
+    # A Fix Pack IS bought for one specific audit, so link that audit's report
+    # directly (the /audit/{id} route), not the bare site root. The token is
+    # NOT optional: GET /v1/audits/{id} authorises on the row's own token, so
+    # a bare link is a flat 404 for the person who just paid. Named
+    # audit_token, not token -- `token` in this scope is the bot's.
+    audit_token = await audit_repo.get_access_token(audit_id)
+    lines = [
         f"Payment received — your Drydock Fix Pack for audit {audit_id[:8]} "
-        "is queued. You'll get the pull request once it's generated.\n\n"
-        # A Fix Pack IS bought for one specific audit, so link that audit's
-        # report directly (the /audit/{id} route), not the bare site root.
-        f"View this audit: {SITE_URL}/audit/{audit_id}",
+        "is queued. You'll get the pull request once it's generated.",
+    ]
+    if audit_token:
+        lines.append(f"View this audit: {SITE_URL}/audit/{audit_id}"
+                     f"?token={audit_token}")
+    # No token found (row gone, or persistence off): send no link at all
+    # rather than one that 404s. A missing line asks nothing of the buyer; a
+    # dead link tells them their paid order does not exist.
+    await send_message(
+        chat_id, "\n\n".join(lines),
         token=token, transport=transport,
     )
     return {"ok": True, "handled": "fixpack_payment", "persisted": True}

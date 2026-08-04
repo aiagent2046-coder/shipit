@@ -321,6 +321,44 @@ def test_fixpack_invoice_503_when_bank_details_unset():
         _clear()
 
 
+def test_pricing_publishes_the_fixpack_price(monkeypatch):
+    """The storefront's only source for what anything costs. /pricing showed no
+    price at all before this endpoint existed, so the figure was unknowable
+    until a buyer had already started a checkout."""
+    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_USD", raising=False)
+    r = client.get("/v1/pricing")
+    assert r.status_code == 200
+    assert r.json() == {"fixpack": {"amount": "10.00", "currency": "USD"}}
+
+
+def test_pricing_follows_the_configured_price(monkeypatch):
+    """Read through the same accessor the invoice creator uses, so the page
+    cannot advertise one figure while checkout charges another. A number typed
+    into the frontend would drift the first time this env var moved."""
+    monkeypatch.setenv("BANK_TRANSFER_FIXPACK_PRICE_USD", "14")
+    assert client.get("/v1/pricing").json()["fixpack"]["amount"] == "14.00"
+
+
+async def test_advertised_price_is_what_the_invoice_charges(monkeypatch):
+    """The anti-drift assertion that matters: the advertised amount and the
+    amount actually demanded must agree to the dollar. They differ in kopecks
+    by design -- the suffix is the per-order matching key -- so compare the
+    whole-dollar part and require the surcharge to stay under one unit."""
+    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_USD", raising=False)
+    advertised = client.get("/v1/pricing").json()["fixpack"]
+
+    payments = FakePaymentRepo()
+    invoice = await bank_transfer.create_fixpack_invoice(
+        payments, details=BANK_DETAILS, audit_id=str(uuid.uuid4()),
+        payer_name=PAYER["payer_name"], payer_email=PAYER["payer_email"],
+    )
+
+    assert invoice["currency"] == advertised["currency"]
+    charged, quoted = float(invoice["amount"]), float(advertised["amount"])
+    assert int(charged) == int(quoted)
+    assert 0 <= charged - quoted < 1
+
+
 def test_billing_details_publishes_the_requisites(monkeypatch):
     """The footer's source. Public and unauthenticated by the operator's own
     decision -- these requisites are published information, and this endpoint

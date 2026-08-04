@@ -17,6 +17,7 @@ import type {
   PaypalOrderStatus,
   PaypalSubscription,
   PersistedAudit,
+  Pricing,
   UsdtInvoice,
   UsdtInvoiceStatus,
 } from "./types";
@@ -236,6 +237,15 @@ function payerBody(payer: PayerContact): RequestInit {
 export async function getBillingDetails(): Promise<BillingDetails> {
   const res = await request(`${API_BASE_URL}/v1/billing/details`);
   return parse<BillingDetails>(res);
+}
+
+// What things cost. Fetched rather than baked into the build for the same
+// reason as the requisites above: the backend accessor the invoice creator
+// calls is the single source, so the page can never advertise a figure that
+// checkout then contradicts.
+export async function getPricing(): Promise<Pricing> {
+  const res = await request(`${API_BASE_URL}/v1/pricing`);
+  return parse<Pricing>(res);
 }
 
 // Open a bank-transfer invoice for Pro. The response carries the card number
