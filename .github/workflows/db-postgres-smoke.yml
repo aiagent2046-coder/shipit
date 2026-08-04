@@ -126,3 +126,28 @@ jobs:
       # in the default suite.
       - name: "Real-Postgres /internal/stats aggregate tests"
         run: pytest -q tests/test_internal_stats.py
+
+      # Both files below were written with a real-Postgres half and then never
+      # ran it. They are skipped in the default suite (DATABASE_URL unset) and
+      # were not listed here, so the compare-and-set logic they exist to check
+      # had never executed anywhere -- the tests passed by being skipped.
+      #
+      # Refunds: no endpoint here moves money, so the record is the whole
+      # product, and the two ways it can lie -- refunding a payment nobody
+      # made, double-counting one refund -- are both compare-and-set in SQL. A
+      # fake dict cannot express either. The file's own docstring names the
+      # occasion: on 2026-08-01 two payments 19 cents apart, one captured and
+      # one pending, where refunding the wrong one records a payout that never
+      # happened and leaves the real charge looking clean.
+      - name: "Real-Postgres refund recording tests"
+        run: pytest -q tests/test_payment_refunds.py
+
+      # Spend accounting: an llm_usage row used to be written only after a
+      # successful audit, so every path that spent money and then failed --
+      # provider dying mid-rubric, lost lease, attempts exhausted into
+      # dead_letter -- was charged at the provider and recorded nothing. The
+      # Postgres half proves the retry arithmetic: three attempts leave three
+      # rows under one audit_jobs.id and sum_by_audit_job adds them up. That is
+      # "what did this job actually cost", and it is unaskable with a fake.
+      - name: "Real-Postgres LLM spend accounting tests"
+        run: pytest -q tests/test_llm_usage_failed_attempts.py
