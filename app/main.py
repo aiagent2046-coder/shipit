@@ -96,7 +96,8 @@ from app.monitor import normalize_repo_full_name, repo_url_from_full_name
 from app.monitor.diff import new_high_severity_findings
 from app.report.html import render_report
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest, run_scan
+from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
+                              basis_for_account, content_digest, run_scan)
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
@@ -617,7 +618,11 @@ async def run_repo_audit(
         return None
 
     digest = content_digest(raw)
-    cached = await audit_repo.get_by_content_hash(digest, AUDIT_ENGINE_VERSION)
+    # BASIS_FULL, not the caller's tier: this path always runs the LLM stage
+    # (see _run_scan_offthread below, called with no llm_skip_reason), so a
+    # static-only row is not a valid result for it to reuse.
+    cached = await audit_repo.get_by_content_hash(
+        digest, AUDIT_ENGINE_VERSION, BASIS_FULL)
     if cached is not None:
         return {
             "audit_id": cached["id"],
@@ -3459,7 +3464,11 @@ async def create_audit(
     # a stale row. See app/scan/pipeline.py and AuditRepository.get_by_content_hash.
     stage_started = time.monotonic()
     digest = content_digest(raw)
-    cached = await audit_repo.get_by_content_hash(digest, AUDIT_ENGINE_VERSION)
+    # Third element of the cache key: the scan depth this caller is entitled to.
+    # Without it an anonymous intake would reuse a paying account's full audit.
+    cached = await audit_repo.get_by_content_hash(
+        digest, AUDIT_ENGINE_VERSION,
+        basis_for_account(account["id"] if account else None))
     logger.info(
         "audit intake: cache %s for digest %s",
         "hit" if cached is not None else "miss", digest[:12],

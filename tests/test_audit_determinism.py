@@ -31,7 +31,7 @@ from fastapi.testclient import TestClient
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.main import app, get_audit_repo, get_llm_client
 from app.scan.pipeline import content_digest
-from tests.conftest import drain_audit_queue
+from tests.conftest import drain_audit_queue, force_pro_account
 
 client = TestClient(app)
 
@@ -89,7 +89,7 @@ class FakeAuditRepo:
         self.rows.append(row)
         return row
 
-    async def get_by_content_hash(self, content_hash, engine_version):
+    async def get_by_content_hash(self, content_hash, engine_version, basis):
         matches = [r for r in self.rows
                    if r["content_hash"] == content_hash
                    and r["engine_version"] == engine_version
@@ -132,8 +132,15 @@ def _post(archive: io.BytesIO):
     )
 
 
-async def test_identical_content_returns_identical_score_via_cache(audit_queue):
+async def test_identical_content_returns_identical_score_via_cache(
+    audit_queue, monkeypatch
+):
     repo = FakeAuditRepo()
+    # As a payer. The determinism this test guards is a property of the LLM
+    # stage -- it returns a different findings set per run -- and that stage now
+    # runs only for a paying account. Anonymously the scan is static-only and
+    # therefore deterministic on its own, so the test would prove nothing.
+    force_pro_account(monkeypatch)
     # First audit finds a high issue; every later call finds nothing. So a
     # *re-scan* of the same code would score HIGHER -> without caching the
     # second request would differ, exactly the prod bug.

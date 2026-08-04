@@ -87,7 +87,7 @@ class _Audits:
         self.rows.append(row)
         return row
 
-    async def get_by_content_hash(self, content_hash, engine_version):
+    async def get_by_content_hash(self, content_hash, engine_version, basis):
         return None
 
 
@@ -107,6 +107,32 @@ class _LLM(LLMClient):
             model="claude-sonnet-4.6", input_tokens=1000, output_tokens=200)
 
 
+# Every test in this file is about LLM spend, and only a paying account
+# reaches the provider now: the free tier is static-only by policy
+# (basis_for_account in app/scan/pipeline.py). An anonymous job here would
+# record nothing and the file would pass while testing nothing.
+_ACCOUNT_ID = "22222222-2222-2222-2222-222222222222"
+
+_real_account_id: str | None = None
+
+
+async def _account_row_id() -> str:
+    """A real accounts row id, cached for the module.
+
+    The in-memory paths here can use any uuid, but audit_jobs.account_id is a
+    foreign key: the two tests that enqueue through the real Postgres queue need
+    an account that actually exists.
+    """
+    global _real_account_id
+    if _real_account_id is None:
+        from app.accounts import generate_api_key
+        from app.db import AccountRepository
+        acct = await AccountRepository().create(
+            api_key=generate_api_key(), tier="pro")
+        _real_account_id = str(acct["id"])
+    return _real_account_id
+
+
 def _job(raw: bytes, *, attempts: int = 1) -> dict:
     from app.audit_spool import stage_archive
 
@@ -115,7 +141,7 @@ def _job(raw: bytes, *, attempts: int = 1) -> dict:
         "id": job_id,
         "source_kind": "zip",
         "source_ref": stage_archive(job_id, raw),
-        "account_id": None,
+        "account_id": _ACCOUNT_ID,
         "attempts": attempts,
         "max_attempts": 3,
     }
@@ -298,7 +324,8 @@ async def _enqueue_zip_job(jobs: AuditJobRepository, raw: bytes) -> dict:
     return await jobs.enqueue(
         source_kind="zip", source_ref=staged,
         content_hash=f"hash-{uuid.uuid4().hex[:12]}",
-        engine_version="test-engine-1", stack="nextjs", account_id=None,
+        engine_version="test-engine-1", stack="nextjs",
+        account_id=await _account_row_id(),
         quota_key="ip:203.0.113.1", idempotency_key=f"idem-{uuid.uuid4().hex}",
     )
 
@@ -360,7 +387,7 @@ async def test_every_attempt_of_a_retried_job_is_billed(
                 return None
             return await self.real.create(**kwargs)
 
-        async def get_by_content_hash(self, content_hash, engine_version):
+        async def get_by_content_hash(self, content_hash, engine_version, basis):
             return None
 
     audits = _FlakyAudits()

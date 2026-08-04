@@ -105,7 +105,7 @@ async def test_all_repository_write_paths(real_db):
     # ---- AuditRepository.create -----------------------------------------
     audit = await audit_repo.create(
         stack="fastapi", file_count=3, score_total=8.5,
-        score_json={"total": 8.5, "categories": {}}, findings_json=[],
+        score_json={"total": 8.5, "categories": {}, "basis": "static+llm"}, findings_json=[],
         repo_url="https://github.com/acme/app",
         content_hash=f"smoke-{run}", engine_version="smoke-engine-1",
     )
@@ -114,14 +114,18 @@ async def test_all_repository_write_paths(real_db):
     uuid.UUID(audit_id)  # a real uuid string
     assert audit["access_token"]  # minted by the column default (migration 0010)
     assert isinstance(audit["score_total"], float)  # numeric -> float, not str
-    assert audit["score_json"] == {"total": 8.5, "categories": {}}  # jsonb round-trip
+    assert audit["score_json"] == {"total": 8.5, "categories": {}, "basis": "static+llm"}  # jsonb round-trip
 
     # Read-back paths (bonus -- the focus is writes, but these exercise the
     # SELECTs and prove the row is really there with sane types).
     assert (await audit_repo.get(audit_id))["stack"] == "fastapi"
     # status defaults to 'completed' (migration 0001), so the content-hash cache
-    # lookup finds this row.
-    cached = await audit_repo.get_by_content_hash(f"smoke-{run}", "smoke-engine-1")
+    # lookup finds this row -- provided score_json carries a basis, which is the
+    # third element of the cache key. A row written without one (there are such
+    # rows, from before basis existed) matches no depth and falls through to a
+    # recompute, which is the safe direction.
+    cached = await audit_repo.get_by_content_hash(
+        f"smoke-{run}", "smoke-engine-1", "static+llm")
     assert cached is not None and cached["id"] == audit_id
     assert (
         await audit_repo.get_authorized(audit_id, audit["access_token"])

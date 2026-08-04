@@ -82,7 +82,7 @@ class FakeAuditRepo:
             return None
         return {k: v for k, v in row.items() if k != "access_token"}
 
-    async def get_by_content_hash(self, content_hash, engine_version):
+    async def get_by_content_hash(self, content_hash, engine_version, basis):
         return None
 
 
