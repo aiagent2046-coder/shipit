@@ -167,6 +167,45 @@ export function BankTransferCheckout({
 
       {!invoice && (
         <>
+          {/* Who is being paid, before anything is typed. A card-to-card
+              transfer to a personal account abroad is the single most
+              suspicious thing we ask of a stranger, and saying nothing about
+              it does not make it less suspicious -- it just means the buyer
+              works it out alone at the moment they are deciding to trust us.
+              Every claim here is checkable on the next screen. */}
+          <div className="mt-4 rounded-md border border-border bg-surface p-3 text-xs text-muted">
+            <p className="font-medium text-text">Who you are paying</p>
+            <p className="mt-1">
+              Drydock is built by one person, so the transfer goes to a named
+              individual&apos;s account, not a company account. You will see the
+              recipient&apos;s name, bank and country on the next screen, before
+              you send anything — and in full on our{" "}
+              <a
+                href="/payment-details"
+                className="text-accent underline underline-offset-2"
+              >
+                payment details
+              </a>{" "}
+              page.
+            </p>
+            <p className="mt-2">
+              A person checks each transfer by hand and then releases your
+              order, so there is a wait between paying and delivery. This is a
+              one-time payment: no card details reach us, nothing is stored,
+              and nothing can recur.
+            </p>
+            <p className="mt-2">
+              If anything goes wrong, email{" "}
+              <a
+                href="mailto:support@drydock.co"
+                className="text-accent underline underline-offset-2"
+              >
+                support@drydock.co
+              </a>{" "}
+              with the name you paid under and the exact amount.
+            </p>
+          </div>
+
           {/* Required, and required for a concrete reason: a card transfer
               arrives with nothing on it but the sender's name, so this is how
               the operator knows which order the money belongs to. */}
@@ -244,6 +283,18 @@ export function BankTransferCheckout({
                 {copied === "card" ? "✓" : "Copy"}
               </button>
             </div>
+            {invoice.bank.beneficiary && (
+              /* The recipient's name, promised on the previous screen. Sending
+                 money to a bare card number with no idea who holds it is what
+                 made this checkout feel like a scam. */
+              <p className="mt-2 text-xs">
+                <span className="text-muted">Recipient: </span>
+                <span className="font-medium">{invoice.bank.beneficiary}</span>
+                {invoice.bank.address ? (
+                  <span className="text-muted"> — {invoice.bank.address}</span>
+                ) : null}
+              </p>
+            )}
             <p className="mt-2 text-xs text-muted">
               Send the exact amount, kopecks included — they identify your order.
               Pay from a card in the name you entered. No comment or reference is

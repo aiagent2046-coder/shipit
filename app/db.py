@@ -627,6 +627,35 @@ class AuditRepository:
             row = await cur.fetchone()
         return _row_to_audit(row) if row else None
 
+    async def get_access_token(self, audit_id: str) -> str | None:
+        """The row's own access token, for building a link the buyer can open.
+
+        Deliberately a narrow method rather than a column added to `get()`:
+        `get()` feeds request handlers, and widening its select would put the
+        token one careless `return audit` away from a response body. The only
+        caller is the delivery path, which has just taken money and must not
+        send a bare /audit/{id} link -- without the token that URL is a flat
+        404 for the person who paid.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(audit_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "select access_token from audits where id = %s",
+                (parsed_id,),
+            )
+            row = await cur.fetchone()
+        if not row:
+            return None
+        value = row.get("access_token")
+        return str(value) if value else None
+
     async def get_authorized(
         self, audit_id: str, access_token: str | None
     ) -> dict[str, Any] | None:

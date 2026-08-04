@@ -55,8 +55,10 @@ class FakeAuditRepo:
     # because these tests are about invoice mechanics, and since the sell
     # endpoints refuse an audit with nothing auto-fixable, an audit with no
     # findings at all is no longer a neutral fixture -- it is the refusal case.
-    def add(self, *, stack="fastapi", repo_url=REPO_URL, findings=None):
+    def add(self, *, stack="fastapi", repo_url=REPO_URL, findings=None,
+            access_token="tok-abc123"):
         row = {"id": str(uuid.uuid4()), "stack": stack, "repo_url": repo_url,
+               "access_token": access_token,
                "findings_json": [{"rule_id": "aws-access-key-id",
                                   "file": "config.py", "line": 1,
                                   "title": "AWS Access Key ID",
@@ -72,6 +74,10 @@ class FakeAuditRepo:
         # The real one checks the per-row access token; these tests are about
         # the payload, not the ownership check, which has its own coverage.
         return self.by_id.get(audit_id)
+
+    async def get_access_token(self, audit_id: str):
+        row = self.by_id.get(audit_id)
+        return (row or {}).get("access_token")
 
 
 class FakeFixpackRepo:
@@ -300,7 +306,30 @@ async def test_fixpack_payment_creates_job_and_not_a_pro_account():
     assert "sk_live_" not in dm
     # A Fix Pack is bought for one audit, so the DM links that audit's
     # report directly (the /audit/{id} route) -- not a bare homepage link.
-    assert f"https://drydock.co/audit/{audit['id']}" in dm
+    # WITH the row's access token: GET /v1/audits/{id} authorises on it, so
+    # the bare URL this used to send was a flat 404 for the person who just
+    # paid. Asserting only the prefix let that ship, so assert the whole URL.
+    assert f"https://drydock.co/audit/{audit['id']}?token=tok-abc123" in dm
+
+
+async def test_fixpack_payment_sends_no_link_when_the_token_is_unavailable():
+    """No token means no openable report URL. Send the confirmation without a
+    link rather than with one that 404s: a missing line asks nothing of the
+    buyer, a dead link tells them the order they paid for does not exist."""
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(repo_url=REPO_URL, access_token=None)
+
+    result = await _send(_fixpack_payment_update("charge_no_tok", audit["id"]),
+                         audits=audits, payments=payments,
+                         fixpacks=fixpacks, accounts=accounts, calls=calls)
+
+    # The purchase itself still completes -- delivery is unaffected.
+    assert result == {"ok": True, "handled": "fixpack_payment", "persisted": True}
+    assert len(fixpacks.rows) == 1
+    dm = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+    assert "Payment received" in dm
+    assert "/audit/" not in dm
 
 
 async def test_duplicate_fixpack_payment_is_idempotent():

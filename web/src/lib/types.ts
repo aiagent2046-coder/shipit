@@ -214,6 +214,15 @@ export interface BillingDetails {
   bank: BankDetails | null;
 }
 
+// GET /v1/pricing — what is on sale and what it costs. Read from the same
+// accessor the invoice creator uses, so a price shown here cannot drift from
+// the one charged at checkout. Fix Pack only and USD only, by product
+// decision: the free tier is static-only and costs nothing to run, so the Pro
+// tier's higher audit limit is not something we charge for.
+export interface Pricing {
+  fixpack: { amount: string; currency: string };
+}
+
 // GET /v1/billing/bank-transfer/{reference}. "expired" is cosmetic: the quote
 // is stale, but the operator can still confirm a transfer that arrives later.
 export type BankTransferStatus =
