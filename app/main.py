@@ -584,7 +584,7 @@ async def _anon_daily_cap_exceeded(llm_usage_repo: LlmUsageRepository) -> bool:
 async def run_repo_audit(
     repo_url: str, *, llm_client: LLMClient, audit_repo: AuditRepository,
     repo_fetcher, llm_usage_repo: LlmUsageRepository | None = None,
-    job_type: str = "audit",
+    job_type: str = "audit", zip_bytes: bytes | None = None,
 ) -> dict | None:
     """Fetch a public GitHub repo, audit it, and persist -- reusing the exact
     pipeline the POST /v1/audits URL path uses: the same content-hash cache
@@ -605,12 +605,20 @@ async def run_repo_audit(
     audit with NO LLM call, so a push that didn't change the audited content is
     free and produces an empty findings diff. RepoFetchError propagates to the
     caller (e.g. a repo that went private -> 404, indistinguishable by design;
-    see app/ingest/github_fetch.py)."""
+    see app/ingest/github_fetch.py).
+
+    `zip_bytes`, when given, is used instead of fetching: the paid Fix Pack
+    path has the archive in hand already, and re-downloading it would not only
+    waste the round trip but could pick up a push that landed in between --
+    leaving the review describing code the fix was not built against, and a
+    content_hash that disagrees with the plan. Same bytes, one fetch, two uses.
+    """
     parsed = _parse_github_repo_url(repo_url)
     if parsed is None:
         return None
     owner, repo = parsed
-    raw = await run_in_threadpool(repo_fetcher, owner, repo)
+    raw = (zip_bytes if zip_bytes is not None
+           else await run_in_threadpool(repo_fetcher, owner, repo))
     buf = io.BytesIO(raw)
     try:
         report = validate_zip(buf, size_bytes=len(raw))
@@ -633,6 +641,9 @@ async def run_repo_audit(
             "findings": cached["findings_json"] or [],
             "repo_url": cached.get("repo_url"),
             "access_token": cached.get("access_token"),
+            # Always BASIS_FULL here -- that is what the lookup asked for --
+            # but reported anyway so callers never have to know that.
+            "basis": (cached.get("score_json") or {}).get("basis"),
             "reused": True,
         }
 
@@ -673,6 +684,11 @@ async def run_repo_audit(
         "findings": scan["findings"],
         "repo_url": repo_url,
         "access_token": persisted.get("access_token") if persisted else None,
+        # Reported because it can be static_only even here: run_scan catches
+        # LLMError and degrades rather than raising, so a provider failure
+        # mid-audit produces a persisted static-only row. A caller that sells
+        # depth has to be able to tell that apart from success.
+        "basis": (scan["score"] or {}).get("basis"),
         "reused": False,
     }
 
@@ -2632,10 +2648,83 @@ async def _record_fix_outcome(
         )
 
 
+# What a Fix Pack buyer gets on top of the fix: one full-depth review of the
+# same code, which the free static-only audit does not include. Delivered as a
+# link in the PR body, with the audit row's own token -- GET /v1/audits/{id}
+# authorises on it, so a bare URL would 404 (the defect that was #187).
+_REVIEW_JOB_TYPE = "fixpack_review"
+
+
+async def _deep_review_section(
+    repo_url: str, zip_bytes: bytes, *, llm_client: LLMClient,
+    audit_repo: AuditRepository, repo_fetcher,
+    llm_usage_repo: LlmUsageRepository | None,
+) -> str | None:
+    """Run the full audit the buyer just paid for and return the PR section
+    linking it, or None if it could not be produced.
+
+    Placed after the semantic check and before the PR is composed, so the LLM
+    is only paid for on jobs that are actually about to deliver: an empty plan
+    or a blocked fix returns earlier and spends nothing.
+
+    A NEW audit row, never an upgrade of the buyer's original: the free audit's
+    archive is long gone (audit_spool cleans up), the Fix Pack works from a
+    fresh copy, and writing findings from these bytes onto that row would leave
+    its content_hash describing bytes that no longer match -- and that hash is
+    the whole cache key.
+
+    No leak: the row is `static+llm`, and anonymous callers ask the cache for
+    `static_only`, so they cannot match it. run_repo_audit checks the full-basis
+    cache first, so a second buyer of byte-identical content pays no LLM cost.
+
+    Returns None rather than raising: the fix is already generated and verified,
+    and losing a working PR because a bonus review failed would be the worse
+    trade. The caller alerts instead.
+    """
+    result = await run_repo_audit(
+        repo_url, llm_client=llm_client, audit_repo=audit_repo,
+        repo_fetcher=repo_fetcher, llm_usage_repo=llm_usage_repo,
+        job_type=_REVIEW_JOB_TYPE, zip_bytes=zip_bytes,
+    )
+    if result is None:
+        return None
+    if result.get("basis") != BASIS_FULL:
+        # run_scan catches LLMError and degrades to static-only instead of
+        # raising -- a 402 or a timeout mid-audit lands here with a persisted
+        # static-only row. Linking that as "your full review" would be exactly
+        # the false claim this feature exists to stop making, so treat it as a
+        # failed review: the caller alerts and the fix still ships.
+        logger.warning(
+            "Fix Pack deep review degraded to %s; not advertising it as the "
+            "full review", result.get("basis"),
+        )
+        return None
+    audit_id, access_token = result["audit_id"], result.get("access_token")
+    if not audit_id or not access_token:
+        # Without the token the link is a 404. Say nothing rather than hand a
+        # paying customer a dead URL -- same rule as the payment confirmation.
+        return None
+    link = (f"{telegram_stars.SITE_URL}/audit/{audit_id}"
+            f"?token={access_token}")
+    return (
+        "### Your full review\n\n"
+        "Your free audit was a static scan. This one adds the depth it left "
+        "out -- authentication and access rules, injection risk in your "
+        "queries -- and carries a readiness score, which a static-only audit "
+        "deliberately does not:\n\n"
+        f"{link}\n\n"
+        "It was run against the code fetched for this pull request, so it "
+        "reflects your repository as it is now, not as it was when you first "
+        "audited it. Keep the link: it is the only way in, and we cannot "
+        "reissue it."
+    )
+
+
 async def _process_one_paid_job(
     job: dict, *, audit_repo: AuditRepository,
     fixpack_repo: FixpackJobRepository, fix_outcome_repo: FixOutcomeRepository,
-    repo_fetcher, pr_opener,
+    repo_fetcher, pr_opener, llm_client: LLMClient,
+    llm_usage_repo: LlmUsageRepository | None = None,
 ) -> str:
     """Generate + deliver one paid Fix Pack job. Returns the outcome:
     'delivered', 'no_fix_needed', 'blocked', 'deferred', or 'failed'. Advances
@@ -2753,6 +2842,32 @@ async def _process_one_paid_job(
         body = render_fixpack_pr_body(plan)
         if semantic.pr_note:
             body = f"{body}\n\n{semantic.pr_note}"
+
+        # The second half of what was bought. Failure here must not cost the
+        # customer the fix they also paid for, so the PR still opens and the
+        # operator is told the review is owed.
+        try:
+            review = await _deep_review_section(
+                audit["repo_url"], zip_bytes, llm_client=llm_client,
+                audit_repo=audit_repo, repo_fetcher=repo_fetcher,
+                llm_usage_repo=llm_usage_repo,
+            )
+        except Exception:  # noqa: BLE001 - the PR must ship regardless
+            logger.exception(
+                "Fix Pack job %s: deep review failed, delivering the fix "
+                "without it", job_id,
+                extra={"step": "deep_review",
+                       "duration_ms": _elapsed_ms(started)},
+            )
+            review = None
+        if review:
+            body = f"{body}\n\n---\n\n{review}"
+        else:
+            await notify_operator(
+                f"Drydock: Fix Pack {job_id} delivered WITHOUT the full "
+                "review the purchase includes. The PR is fine; the review "
+                "is owed. Re-run it manually and send the buyer the link."
+            )
         token = await _resolve_pr_token(owner, repo)
         opened = await run_in_threadpool(
             pr_opener, owner, repo, plan.files,
@@ -2821,6 +2936,8 @@ async def process_paid_fixpacks(
     fix_outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
     repo_fetcher=Depends(get_repo_fetcher),
     pr_opener=Depends(get_pr_opener),
+    llm_client: LLMClient = Depends(get_llm_client),
+    llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
 ) -> dict:
     """Operational endpoint: drain the paid-but-not-yet-generated Fix Pack
     backlog and turn each job into a real fix PR — re-fetch the audited
@@ -2915,6 +3032,7 @@ async def process_paid_fixpacks(
                     job, audit_repo=audit_repo, fixpack_repo=fixpack_repo,
                     fix_outcome_repo=fix_outcome_repo,
                     repo_fetcher=repo_fetcher, pr_opener=pr_opener,
+                    llm_client=llm_client, llm_usage_repo=llm_usage_repo,
                 )
                 if outcome == "delivered":
                     summary["delivered"] += 1
