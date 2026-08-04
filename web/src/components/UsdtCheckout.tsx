@@ -5,6 +5,7 @@ import type { UsdtInvoice, UsdtInvoiceStatus } from "@/lib/types";
 import { createUsdtInvoice, getUsdtInvoice, ApiError } from "@/lib/api";
 import { useApiKey } from "./providers";
 import { Spinner } from "./Spinner";
+import { SupportEmail } from "./SupportEmail";
 
 type CompletedStatus = Extract<UsdtInvoiceStatus, { status: "completed" }>;
 
@@ -282,13 +283,13 @@ function ProCompleted({
           you claimed the payment with <span className="font-mono">/link</span>.
           For security it is shown only once and is never stored, so it can&apos;t
           be shown again. Lost it? Send <span className="font-mono">/rotatekey</span>{" "}
-          to the bot for a new key, or contact the operator with invoice id{" "}
+          to the bot for a new key, or email <SupportEmail /> with invoice id{" "}
           <span className="font-mono">{completed.invoice_id}</span>.
         </p>
       ) : (
         <p className="mt-2 text-sm text-muted">
-          Payment recorded, but the key wasn&apos;t returned. Contact the
-          operator with invoice id{" "}
+          Payment recorded, but the key wasn&apos;t returned. Email{" "}
+          <SupportEmail /> with invoice id{" "}
           <span className="font-mono">{completed.invoice_id}</span>.
         </p>
       )}

@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { BankTransferCheckout } from "./BankTransferCheckout";
 import { Spinner } from "./Spinner";
+import { SupportEmail } from "./SupportEmail";
 
 const POLL_MS = 10_000;
 
@@ -241,6 +242,27 @@ function InstallGate({
   );
 }
 
+/**
+ * The way out of a paid order that did not deliver.
+ *
+ * These three branches used to say "contact the operator" with no address
+ * anywhere in this file. That is the branch which decides whether a failed
+ * sale becomes a refund conversation or an accusation of fraud, and it is
+ * reachable through no fault of the buyer: the sandbox runner being down, the
+ * repository changing between audit and purchase, or the App being uninstalled
+ * after the install gate above passed.
+ *
+ * Names what to include, because a card transfer carries no order number and
+ * the payer's name plus the exact amount is what the operator matches on.
+ */
+function SupportContact() {
+  return (
+    <>
+      email <SupportEmail /> with the name you paid under and the exact amount
+    </>
+  );
+}
+
 function FixpackStatusArea({ auditId }: { auditId: string }) {
   const [status, setStatus] = useState<FixpackStatus | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -319,8 +341,8 @@ function FixpackStatusArea({ auditId }: { auditId: string }) {
             An automated check found a potential problem in the generated fix
             (it made the repository&apos;s tests worse), so the pull request was
             not opened and the change is held for manual review by our team.
-            Your payment was received — please contact the operator and we&apos;ll
-            sort it out.
+            Your payment was received — <SupportContact /> and we&apos;ll sort it
+            out.
           </p>
         )}
 
@@ -329,13 +351,14 @@ function FixpackStatusArea({ auditId }: { auditId: string }) {
             <p className="rounded-md border border-critical/40 bg-critical/10 p-3 text-sm text-critical">
               We couldn&apos;t run the fix on our side — our build environment
               was unavailable, so nothing was checked against your repository.
-              This is on us, not your code. Your payment was received — contact
-              the operator and we&apos;ll re-run it.
+              This is on us, not your code. Your payment was received —{" "}
+              <SupportContact /> and we&apos;ll re-run it.
             </p>
           ) : (
             <p className="rounded-md border border-critical/40 bg-critical/10 p-3 text-sm text-critical">
               Fix Pack generation failed. Your payment was received but the fix
-              PR couldn&apos;t be opened — contact the operator to sort it out.
+              PR couldn&apos;t be opened — <SupportContact /> and we&apos;ll sort
+              it out.
             </p>
           ))}
       </div>
