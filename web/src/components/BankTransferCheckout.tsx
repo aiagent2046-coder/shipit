@@ -276,10 +276,16 @@ export function BankTransferCheckout({
             copied={copied === "reference"}
           />
           <p className="text-xs text-muted">
-            Keep this if you need to reach support about the order, or to claim
-            your key from the Telegram bot with{" "}
-            <span className="font-mono">/link</span>. You don&apos;t need to put
-            it anywhere in the transfer.
+            Keep this. Confirmation is manual and often arrives after this tab
+            is gone, so the order number is how you collect your key later:{" "}
+            <Link
+              href={`/link?ref=${encodeURIComponent(invoice.reference)}`}
+              className="text-accent underline underline-offset-2 hover:opacity-80"
+            >
+              drydock.co/link
+            </Link>{" "}
+            , or <span className="font-mono">/link</span> to the Telegram bot.
+            You don&apos;t need to put it anywhere in the transfer.
           </p>
 
           <p className="text-xs text-muted">
@@ -396,7 +402,10 @@ export function ProBankTransferCheckout() {
   );
 }
 
-function ProCompleted({
+// Exported for /link, the recovery page. One definition of "here is your key,
+// and here is why you can't have it twice" -- the wording is a security
+// contract, and two copies of it would drift.
+export function ProCompleted({
   completed,
   copy,
   copied,
