@@ -161,6 +161,67 @@ jobs:
 
           python -m pip install -e . --no-deps
 
+      # requirements-dev.txt is compiled with --extra=dev, so it is meant to be
+      # requirements.txt plus the test tooling. It silently stopped being that:
+      # redis[hiredis] was added to the runtime dependencies and only
+      # requirements.txt was recompiled, so the dev lock was short two packages
+      # for weeks. Nothing here caught it, because this job installs BOTH files
+      # and so had redis either way. The jobs that install only the dev lock --
+      # db-postgres-smoke, e2e-sandbox-runner -- survived only because they run
+      # named test files rather than the whole suite; a plain `pytest` on a
+      # fresh clone aborted during collection on tests/test_ratelimit_redis.py,
+      # taking all 1153 tests with it.
+      #
+      # Compares the pinned sets rather than recompiling: pip-compile output
+      # depends on the interpreter it runs under (requirements.txt says 3.14 in
+      # its header, this job is 3.12), so a recompile-and-diff check would fail
+      # on the machine rather than on the lock.
+      - name: Check the dev lock still contains the runtime lock
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          python - <<'PY'
+          import re
+          import sys
+
+
+          def pinned(path):
+              text = open(path, encoding="utf-8").read()
+              return {
+                  m.group(1).lower(): m.group(2)
+                  for m in re.finditer(
+                      r"^([A-Za-z0-9_.\-]+)==(\S+?)\s*\\?$", text, re.MULTILINE
+                  )
+              }
+
+
+          runtime = pinned("requirements.txt")
+          dev = pinned("requirements-dev.txt")
+
+          missing = sorted(set(runtime) - set(dev))
+          conflicting = sorted(
+              f"{name}: requirements.txt=={runtime[name]} "
+              f"requirements-dev.txt=={dev[name]}"
+              for name in set(runtime) & set(dev)
+              if runtime[name] != dev[name]
+          )
+
+          if missing or conflicting:
+              for name in missing:
+                  print(f"missing from requirements-dev.txt: {name}=={runtime[name]}")
+              for line in conflicting:
+                  print(f"version conflict: {line}")
+              print(
+                  "\nRecompile the dev lock:\n"
+                  "  pip-compile --extra=dev --generate-hashes --strip-extras \\\n"
+                  "      --output-file=requirements-dev.txt pyproject.toml"
+              )
+              sys.exit(1)
+
+          print(f"requirements-dev.txt covers all {len(runtime)} runtime pins")
+          PY
+
       - name: Validate workflow YAML
         shell: bash
         run: |
