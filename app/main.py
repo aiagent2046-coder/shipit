@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 
 from fastapi import (
-    Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile,
+    Depends, FastAPI, Form, Header, HTTPException, Request, Response, UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -35,10 +35,14 @@ from starlette.concurrency import run_in_threadpool
 from app.alerts import notify_operator
 from app.audit_spool import SpoolFull, cleanup_staged_archive, stage_archive
 from app.accounts import (
+    CSRF_HEADER,
     TIER_FREE,
+    account_for_key,
+    clear_api_key_cookie,
     entitlements_dict,
     entitlements_for_tier,
     resolve_account,
+    set_api_key_cookie,
     validate_api_key_pepper_configured,
 )
 from app.billing import bank_transfer, paypal, telegram_stars, usdt_trc20
@@ -156,7 +160,7 @@ def configure_cors(target: FastAPI) -> None:
         allow_origin_regex=origin_regex,
         allow_credentials=bool(origins) or allow_previews,
         allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", CSRF_HEADER],
     )
 
 
@@ -1055,6 +1059,72 @@ async def get_audit_report(
         "form-action 'none'; frame-ancestors 'none'"
     )
     return HTMLResponse(content=html, headers={"Content-Security-Policy": csp})
+
+
+@app.post("/v1/auth/login")
+async def auth_login(
+    request: Request,
+    response: Response,
+    limiter: RateLimiter = Depends(get_rate_limiter),
+    account_repo: AccountRepository = Depends(get_account_repo),
+) -> dict:
+    """Exchange an API key for a session cookie the page cannot read.
+
+    The one place that sets the cookie. The key is revealed by several
+    endpoints -- rotate-key and each payment poll -- and it was tempting to
+    set the cookie on all of them; that spreads a credential-handling
+    decision across five handlers that otherwise share nothing. The frontend
+    already funnels every "I have a key" event through one call, so this
+    stays one handler with one test.
+
+    Answers exactly like GET /v1/account, so the caller needs no second
+    request to learn what the key bought. An unrecognized key 401s rather
+    than quietly returning the free tier: the caller asserted they have a
+    key, and silently downgrading them would look like a working login that
+    bought nothing.
+    """
+    body = await _json_object_body(request)
+    api_key = str(body.get("api_key") or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_intake", "detail": "'api_key' is required"},
+        )
+
+    account = await account_for_key(api_key, account_repo)
+    if account is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"reason": "unauthorized",
+                    "detail": "no account recognized for the presented API key"},
+        )
+
+    _bind_account(account)
+    set_api_key_cookie(response, api_key)
+    entitlements = entitlements_for_tier(
+        account["tier"], free_daily_limit=limiter.limit)
+    return {
+        "tier": account["tier"],
+        "authenticated": True,
+        "entitlements": entitlements_dict(entitlements),
+    }
+
+
+@app.post("/v1/auth/logout")
+async def auth_logout(response: Response) -> dict:
+    """Forget the session cookie.
+
+    Parity, not a feature: "forget this key" used to be a sessionStorage
+    removal the page did by itself. An HttpOnly cookie can only be cleared by
+    the server that set it, so without this the UI's clear button would leave
+    the session live -- worse than what it replaced.
+
+    Unauthenticated on purpose. Clearing your own cookie is not a privileged
+    act, and requiring a valid session to log out means a stale one can never
+    be cleared.
+    """
+    clear_api_key_cookie(response)
+    return {"ok": True}
 
 
 @app.get("/v1/account")

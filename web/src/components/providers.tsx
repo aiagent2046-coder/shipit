@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import type { Account } from "@/lib/types";
-import { getAccount } from "@/lib/api";
+import { getAccount, login, logout } from "@/lib/api";
 
 /* ---------------- Theme ---------------- */
 
@@ -67,10 +67,10 @@ export function useTheme(): ThemeCtx {
 
 /* ---------------- API key / account ---------------- */
 
-const KEY_STORAGE = "shipit-api-key";
-
 interface KeyCtx {
-  apiKey: string | null;
+  // No apiKey here any more. The key lives in an HttpOnly cookie the backend
+  // sets at /v1/auth/login, so this page cannot read it -- which is the
+  // point. `account.authenticated` is what callers actually needed from it.
   account: Account | null;
   loading: boolean;
   error: string | null;
@@ -80,16 +80,16 @@ interface KeyCtx {
 const KeyContext = createContext<KeyCtx | null>(null);
 
 function KeyProvider({ children }: { children: React.ReactNode }) {
-  const [apiKey, setApiKey] = useState<string | null>(null);
   const [account, setAccount] = useState<Account | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async (key: string | null) => {
+  const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const acct = await getAccount(key);
+      // No argument: the cookie rides along on its own.
+      const acct = await getAccount();
       setAccount(acct);
     } catch (e) {
       setAccount(null);
@@ -99,40 +99,40 @@ function KeyProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // The API key lives in sessionStorage, not localStorage: it's a bearer
-  // credential, so it should not sit persisted across browser restarts where
-  // a later XSS could harvest it. sessionStorage scopes it to the tab session
-  // and clears it on close, shrinking the exposure window. The trade-off is
-  // the key is re-entered each new session (theme, below, stays persistent).
+  // The key used to sit in sessionStorage, where any script on the page --
+  // an XSS, a compromised dependency -- could read it and keep it. It now
+  // lives in an HttpOnly cookie, so there is nothing here to read and nothing
+  // to restore on mount: one unauthenticated-looking call to /v1/account
+  // either comes back with the session the cookie carries, or with the free
+  // tier. Same tab-scoped lifetime as before; the cookie has no max-age.
   useEffect(() => {
-    const stored = window.sessionStorage.getItem(KEY_STORAGE);
-    if (stored) {
-      setApiKey(stored);
-      void refresh(stored);
-    } else {
-      void refresh(null);
-    }
+    void refresh();
   }, [refresh]);
 
   const setKey = useCallback(
     async (key: string) => {
-      const trimmed = key.trim();
-      window.sessionStorage.setItem(KEY_STORAGE, trimmed);
-      setApiKey(trimmed);
-      await refresh(trimmed);
+      setLoading(true);
+      setError(null);
+      try {
+        setAccount(await login(key));
+      } catch (e) {
+        setAccount(null);
+        setError(e instanceof Error ? e.message : "Failed to resolve account");
+      } finally {
+        setLoading(false);
+      }
     },
-    [refresh],
+    [],
   );
 
   const clearKey = useCallback(() => {
-    window.sessionStorage.removeItem(KEY_STORAGE);
-    setApiKey(null);
-    void refresh(null);
+    // Server-side: the cookie is HttpOnly, so the page cannot drop it itself.
+    void logout().finally(() => void refresh());
   }, [refresh]);
 
   return (
     <KeyContext.Provider
-      value={{ apiKey, account, loading, error, setKey, clearKey }}
+      value={{ account, loading, error, setKey, clearKey }}
     >
       {children}
     </KeyContext.Provider>

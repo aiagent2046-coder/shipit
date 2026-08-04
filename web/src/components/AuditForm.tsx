@@ -4,7 +4,6 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createAudit, ApiError } from "@/lib/api";
 import { isAuditJobAccepted } from "@/lib/types";
-import { useApiKey } from "./providers";
 import { Spinner } from "./Spinner";
 
 type Mode = "url" | "file";
@@ -17,7 +16,6 @@ export const RESULT_PREFIX = "shipit-audit-";
 
 export function AuditForm() {
   const router = useRouter();
-  const { apiKey } = useApiKey();
   const [mode, setMode] = useState<Mode>("url");
   const [repoUrl, setRepoUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -38,9 +36,9 @@ export function AuditForm() {
     }
     setSubmitting(true);
     try {
+      // No key argument: the session cookie travels with the request.
       const result = await createAudit(
         mode === "url" ? { repoUrl: repoUrl.trim() } : { file: file! },
-        apiKey,
       );
       if (isAuditJobAccepted(result)) {
         // The scan is queued for the worker. The waiting page owns the poll,

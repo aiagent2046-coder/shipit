@@ -15,7 +15,9 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.accounts import (
+    API_KEY_COOKIE,
     API_KEY_PEPPER_ENV,
+    CSRF_HEADER,
     PRO_DAILY_AUDIT_LIMIT,
     Entitlements,
     api_key_from_request,
@@ -448,3 +450,136 @@ def test_unknown_key_audit_is_limited_as_free():
     finally:
         _clear_account_repo()
         app.dependency_overrides.pop(get_rate_limiter, None)
+
+
+# --- session cookie and its CSRF gate ---
+#
+# The key used to sit in sessionStorage, readable by any script on the page.
+# It now travels in an HttpOnly cookie. SameSite=Lax is the CSRF defence and
+# is only possible because the API shares a registrable domain with the
+# frontend (#172); CSRF_HEADER is the second lock, for same-site callers Lax
+# cannot distinguish -- a Deploy Pack preview on a drydock.co subdomain
+# running a customer's code.
+
+PRO_KEY = "sk_live_prokey"
+
+
+class _Req:
+    """Minimal duck-typed request: api_key_from_request only reads .headers
+    and .cookies."""
+
+    def __init__(self, headers=None, cookies=None):
+        self.headers = headers or {}
+        self.cookies = cookies or {}
+
+
+def test_cookie_without_the_csrf_header_is_not_a_key():
+    """SameSite=Lax already keeps this cookie off a cross-site request. This
+    check is for the same-site one it cannot see: ten POST endpoints here
+    parse no body, so a bare cookie would be a CSRF primitive on each."""
+    req = _Req(cookies={API_KEY_COOKIE: PRO_KEY})
+    assert api_key_from_request(req) is None
+
+
+def test_cookie_with_the_csrf_header_is_a_key():
+    req = _Req(headers={CSRF_HEADER: "1"}, cookies={API_KEY_COOKIE: PRO_KEY})
+    assert api_key_from_request(req) == PRO_KEY
+
+
+def test_the_csrf_header_value_is_never_checked():
+    """Presence is the mechanism -- it forces a preflight the attacker's
+    origin cannot pass. A value would be a secret to leak for no gain."""
+    for value in ("1", "anything", "0", "false"):
+        req = _Req(headers={CSRF_HEADER: value}, cookies={API_KEY_COOKIE: PRO_KEY})
+        assert api_key_from_request(req) == PRO_KEY
+
+
+def test_authorization_header_needs_no_csrf_header():
+    """A caller that sets Authorization already holds the key, and cannot be
+    made to by a third party's page. curl and scripts keep working."""
+    req = _Req(headers={"authorization": f"Bearer {PRO_KEY}"})
+    assert api_key_from_request(req) == PRO_KEY
+
+
+def test_authorization_header_wins_over_a_cookie():
+    req = _Req(headers={"authorization": "Bearer sk_live_fromheader",
+                        CSRF_HEADER: "1"},
+               cookies={API_KEY_COOKIE: "sk_live_fromcookie"})
+    assert api_key_from_request(req) == "sk_live_fromheader"
+
+
+def test_login_sets_an_httponly_session_cookie():
+    _override_account_repo(_pro_repo(PRO_KEY))
+    try:
+        r = client.post("/v1/auth/login", json={"api_key": PRO_KEY})
+        assert r.status_code == 200
+        assert r.json()["authenticated"] is True
+        assert r.json()["tier"] == "pro"
+
+        raw = r.headers["set-cookie"]
+        assert API_KEY_COOKIE in raw
+        assert "HttpOnly" in raw            # unreadable from JavaScript
+        assert "Secure" in raw
+        assert "samesite=lax" in raw.lower()   # not None: see #172
+        assert "max-age" not in raw.lower() # dies with the browser session,
+        assert "expires" not in raw.lower() # exactly like sessionStorage did
+    finally:
+        _clear_account_repo()
+
+
+def test_login_rejects_an_unknown_key_instead_of_downgrading_it():
+    """The caller asserted they hold a key. Answering 200-free would look
+    like a login that worked and bought nothing."""
+    _override_account_repo(FakeAccountRepo([]))
+    try:
+        r = client.post("/v1/auth/login", json={"api_key": "sk_live_nope"})
+        assert r.status_code == 401
+        assert "set-cookie" not in r.headers
+    finally:
+        _clear_account_repo()
+
+
+def test_login_without_a_key_is_422_not_500():
+    _override_account_repo(_pro_repo(PRO_KEY))
+    try:
+        assert client.post("/v1/auth/login", json={}).status_code == 422
+        assert client.post("/v1/auth/login", json={"api_key": "  "}).status_code == 422
+    finally:
+        _clear_account_repo()
+
+
+def test_logout_clears_the_cookie_and_needs_no_session():
+    """Parity with the old sessionStorage removal, which the page could do
+    itself. Unauthenticated on purpose: a stale session must be clearable."""
+    r = client.post("/v1/auth/logout")
+    assert r.status_code == 200
+    raw = r.headers["set-cookie"]
+    assert API_KEY_COOKIE in raw
+    assert 'max-age=0' in raw.lower() or "1970" in raw
+
+
+def test_the_cookie_authenticates_a_real_request_end_to_end():
+    # An https base URL, because the cookie is Secure and no client will send
+    # a Secure cookie over http. That refusal is the flag working, not a test
+    # inconvenience -- over http this session would simply not exist.
+    secure = TestClient(app, base_url="https://testserver")
+    _override_account_repo(_pro_repo(PRO_KEY))
+    try:
+        assert secure.post("/v1/auth/login", json={"api_key": PRO_KEY}).status_code == 200
+
+        # The cookie jar now holds it, so this is the browser's next call.
+        r = secure.get("/v1/account", headers={CSRF_HEADER: "1"})
+        assert r.json()["authenticated"] is True
+
+        # Same cookie, no CSRF header: what a third party's page could send.
+        r = secure.get("/v1/account")
+        assert r.json()["authenticated"] is False
+        assert r.json()["tier"] == "free"
+
+        # And after logout the cookie stops working even with the header.
+        assert secure.post("/v1/auth/logout").status_code == 200
+        r = secure.get("/v1/account", headers={CSRF_HEADER: "1"})
+        assert r.json()["authenticated"] is False
+    finally:
+        secure.cookies.clear()
+        _clear_account_repo()

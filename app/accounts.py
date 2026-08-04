@@ -156,13 +156,105 @@ class _AccountLookup(Protocol):
     async def get_by_key_hash(self, key_hash: str) -> dict[str, Any] | None: ...
 
 
+API_KEY_COOKIE = "shipit_api_key"
+
+# Not the CSRF mechanism. SameSite=Lax is -- see set_api_key_cookie. This is
+# the second lock, and it exists for a specific hole Lax leaves open rather
+# than as a general precaution.
+#
+# SameSite draws its boundary at the registrable domain, so EVERY subdomain of
+# drydock.co is same-site and gets the cookie. Deploy Pack previews are meant
+# to be served per job (README: the `{job_id}.preview.*` URL still needs a
+# real domain), and a preview runs the CUSTOMER'S code. Put those on a
+# drydock.co subdomain -- the obvious choice -- and Lax alone would hand that
+# code a customer's session.
+#
+# This header closes that: a request carrying any header outside the
+# CORS-safelisted set must be preflighted, and the preflight is answered
+# against CORS_ALLOWED_ORIGINS, which a preview subdomain is not in. The value
+# is deliberately never checked, because the value is not the mechanism --
+# there is nothing here for an attacker to guess.
+#
+# A double-submit token would add a second cookie, a generator and a
+# comparison for the same guarantee the preflight already gives.
+CSRF_HEADER = "x-drydock-web"
+
+
 def api_key_from_request(request: Any) -> str | None:
     """Pull the API key out of `Authorization: Bearer <key>`, matching the
-    reap endpoint's header scheme. Missing/other schemes -> None."""
+    reap endpoint's header scheme, then out of the session cookie.
+
+    Header first, and it is unconditional: a caller that sets Authorization
+    holds the key already, which is CSRF-immune by construction -- a third
+    party's page cannot set that header cross-origin without a preflight it
+    will not pass. Scripts, curl and the docs page keep working untouched.
+
+    The cookie is the browser's path, and it is only honoured alongside
+    CSRF_HEADER. SameSite=Lax already stops a cross-SITE request from
+    carrying it; this check stops a same-site one, which a Deploy Pack
+    preview on a drydock.co subdomain would be while running customer code.
+    Ten of this API's POST endpoints parse no body at all --
+    /v1/account/rotate-key among them, which would let such a page invalidate
+    the key a customer paid for.
+
+    An unaccompanied cookie reads as no key rather than an error, matching
+    what resolve_account already does with an unknown one: fall back to
+    anonymous, never raise. The endpoints that cannot serve anonymous
+    (rotate-key) answer 401 on their own.
+    """
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
         return auth[len("Bearer "):].strip() or None
-    return None
+    cookies = getattr(request, "cookies", None) or {}
+    key = (cookies.get(API_KEY_COOKIE) or "").strip()
+    if not key:
+        return None
+    if not request.headers.get(CSRF_HEADER):
+        return None
+    return key
+
+
+def set_api_key_cookie(response: Any, api_key: str) -> None:
+    """Hand the browser the key in a form its JavaScript cannot read.
+
+    HttpOnly is the whole point: an XSS on the frontend, or a compromised
+    dependency, can no longer read the credential out of sessionStorage and
+    keep it. It can still act as the user while the page is open -- HttpOnly
+    stops exfiltration, not abuse -- but a stolen key works forever and an
+    open tab does not.
+
+    No max_age, so this expires with the browser session. That is exactly
+    what sessionStorage did, and matching it keeps this change to one
+    variable: the key stops being readable, and nothing else moves.
+
+    SameSite=Lax, which is the CSRF defence: the browser will not attach this
+    cookie to a cross-site POST at all, so the ten body-less POST endpoints
+    here stop being reachable from anyone else's page.
+
+    Lax is only available because the API moved to api.drydock.co (#172).
+    Against the old 45-10-40-169.sslip.io host this was a different site from
+    the frontend, which forced SameSite=None -- and a None cookie is a
+    third-party cookie, which Safari and Firefox block outright. The earlier
+    shape of this change would have failed silently in both.
+
+    Secure regardless: the only thing served over anything but https here is
+    a developer's localhost, which browsers already treat as secure.
+    """
+    response.set_cookie(
+        API_KEY_COOKIE,
+        api_key,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+def clear_api_key_cookie(response: Any) -> None:
+    """Drop the session cookie. Needed for parity: "forget this key" used to
+    be a sessionStorage removal the frontend could do by itself, and an
+    HttpOnly cookie can only be cleared by the server that set it."""
+    response.delete_cookie(API_KEY_COOKIE, path="/", secure=True, samesite="lax")
 
 
 async def resolve_account(
@@ -185,6 +277,21 @@ async def resolve_account(
     key = api_key_from_request(request)
     if not key:
         return None
+    return await account_for_key(key, account_repo)
+
+
+async def account_for_key(
+    api_key: str, account_repo: _AccountLookup
+) -> dict[str, Any] | None:
+    """Look up an account by the key itself, for the one caller that has the
+    key without a request to read it from: POST /v1/auth/login, where it
+    arrives in the body.
+
+    Extracted from resolve_account rather than duplicated there. Two copies of
+    "how a key becomes an account" is how one of them ends up skipping the
+    pepper check."""
+    if not api_key:
+        return None
     if not pepper_is_configured():
         return None
-    return await account_repo.get_by_key_hash(hash_api_key(key))
+    return await account_repo.get_by_key_hash(hash_api_key(api_key))
