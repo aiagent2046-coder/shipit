@@ -34,6 +34,7 @@ from app.main import (
     get_monitoring_repo,
     get_subscription_repo,
 )
+from tests.conftest import enable_monitoring
 
 client = TestClient(app)
 
@@ -203,6 +204,7 @@ def _clear():
 
 
 def test_push_scenario_a_no_subscription_no_enqueue(monkeypatch):
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
@@ -221,6 +223,7 @@ def test_push_scenario_a_no_subscription_no_enqueue(monkeypatch):
 
 
 def test_push_scenario_b_within_24h_no_enqueue(monkeypatch):
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
@@ -245,6 +248,7 @@ def test_push_eligible_enqueues_and_acks_fast(monkeypatch):
     single 'pending' run, then ACKs 200 immediately -- no audit, no diff, no DM
     on the HTTP path (run_repo_audit is booby-trapped to fail if called). The
     real work is drained later by /internal/monitoring/process-pending."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
@@ -266,6 +270,39 @@ def test_push_eligible_enqueues_and_acks_fast(monkeypatch):
     assert body["run_id"] == "run-1"
     assert runs.enqueued == ["acme/app"]         # exactly one run queued
     assert len(subs.claims) == 1 and subs.claims[0][0] == "acme/app"
+
+
+def test_push_does_not_enqueue_while_monitoring_is_withdrawn(monkeypatch):
+    """The test that makes #184 actually closed. Note what this fixture is: an
+    ACTIVE subscription, last monitored two days ago, on a default-branch push
+    -- the exact shape that enqueues in test_push_eligible_enqueues_and_acks_fast
+    above. Gating only the sale surfaces would leave this row auditing on every
+    push, at full LLM cost, attributed to the anonymous bucket. So the check
+    sits before the subscription lookup and nothing is queued or claimed.
+
+    Deliberately no enable_monitoring(): this test asserts the shipped default.
+    """
+    monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
+    _fail_if_audited(monkeypatch)
+
+    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+    subs = FakeSubscriptionRepo([
+        {"repo_full_name": "acme/app", "telegram_chat_id": "111",
+         "telegram_user_id": "111", "last_monitored_at": old},
+    ])
+    runs = FakeMonitoringRepo()
+    _override(subscription_repo=subs, monitoring_repo=runs)
+    try:
+        resp = _post_push(_push_payload())
+    finally:
+        _clear()
+
+    assert resp.status_code == 200          # still ACK, GitHub must not retry
+    body = resp.json()
+    assert body["ignored"] is True
+    assert body["reason"] == "monitoring_not_for_sale"
+    assert runs.enqueued == []              # no run, so no LLM spend
+    assert subs.claims == []                # and the 24h claim is untouched
 
 
 def test_push_non_default_branch_ignored(monkeypatch):
@@ -293,6 +330,7 @@ def test_push_repo_matched_case_insensitively(monkeypatch):
     is differently-cased than the stored subscription still matches and enqueues
     under the canonical name. (list_active_for_repo is keyed on the normalized
     name, so the push side must normalize identically.)"""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
@@ -319,6 +357,7 @@ def test_push_second_push_within_24h_is_claimed_out(monkeypatch):
     UPDATE). The first wins the claim and enqueues one run; the second finds the
     row already stamped and no-ops -- exactly one queued run per repo per 24h, no
     double-audit and no double-notify downstream."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 

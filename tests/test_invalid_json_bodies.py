@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from tests.conftest import enable_monitoring
 
 
 client = TestClient(app, raise_server_exceptions=False)
@@ -55,6 +56,12 @@ def _configured(monkeypatch):
         ("SERVICE_FLAGS_TOKEN", "f"),
     ):
         monkeypatch.setenv(name, value)
+    # /v1/paypal/subscriptions refuses with 503 monitoring_not_for_sale before
+    # it parses anything (#184). Enabled here rather than dropped from the
+    # sweep: the invariant is about that endpoint's body handling being right,
+    # and keeping it under test means the guard is already proven whenever
+    # monitoring goes back on sale.
+    enable_monitoring(monkeypatch)
 
 
 @pytest.mark.parametrize("path,headers", BODY_PARSING_ENDPOINTS)

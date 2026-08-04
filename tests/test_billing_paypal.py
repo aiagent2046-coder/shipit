@@ -33,6 +33,7 @@ from app.main import (
 )
 from fastapi.testclient import TestClient
 from tests.conftest import (
+    enable_monitoring,
     FakeAccountRepo,
     FakeCompletionCasMixin,
     FakeKeyDeliveryMixin,
@@ -631,7 +632,25 @@ def test_orders_endpoint_fixpack_missing_audit_id(monkeypatch):
         _clear()
 
 
+def test_subscriptions_endpoint_503_while_monitoring_is_withdrawn(monkeypatch):
+    """Configured deployment, plan set, database set -- everything the route
+    needs. It still refuses, and with its OWN reason: reporting
+    paypal_plan_not_configured here would send someone to fix an env var that
+    is already correct."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://x")
+    monkeypatch.setenv("PAYPAL_MONITOR_PLAN_ID", "P-PLAN-1")
+    _override(transport=_paypal_transport([]))
+    try:
+        r = client.post("/v1/paypal/subscriptions",
+                        json={"repo_url": "https://github.com/o/r"})
+        assert r.status_code == 503
+        assert r.json()["detail"]["reason"] == "monitoring_not_for_sale"
+    finally:
+        _clear()
+
+
 def test_subscriptions_endpoint_503_when_plan_unset(monkeypatch):
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgres://x")
     monkeypatch.delenv("PAYPAL_MONITOR_PLAN_ID", raising=False)
     _override(transport=_paypal_transport([]))
@@ -645,6 +664,7 @@ def test_subscriptions_endpoint_503_when_plan_unset(monkeypatch):
 
 
 def test_subscriptions_endpoint_creates_subscription(monkeypatch):
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgres://x")
     monkeypatch.setenv("PAYPAL_MONITOR_PLAN_ID", "P-PLAN")
     subs = FakeSubscriptionRepo()

@@ -17,6 +17,24 @@ from __future__ import annotations
 
 import re
 
+# Monitoring is NOT FOR SALE. Three things were true at the same time (#184):
+# the price was a placeholder 1 star; the LLM spend a run drives is attributed
+# to the anonymous bucket because a subscriber has no account row; and since
+# the free tier became static-only that bucket's daily cap guards nothing,
+# because free audits stopped contributing to it. Net effect: every push to a
+# subscribed repository triggered an uncapped, effectively unpaid full audit.
+#
+# Withdrawn rather than repriced. The price, the spend attribution and the cap
+# are three separate decisions and none of them has been made, so guessing at
+# one of them would just move the leak.
+#
+# Read at three sale surfaces (/subscribe and /monitor in the bot, the PayPal
+# subscription route) AND at the push-webhook enqueue, which is the one that
+# matters: gating only the sales would leave any already-active subscription
+# row spending on every push. The flag, not a migration, so re-enabling is a
+# one-line revert and no paid row is destroyed in the meantime.
+MONITORING_FOR_SALE = False
+
 # owner/repo are the two path segments of a github.com URL. Case-insensitive
 # host match (a stored repo_url always has a lowercase host from intake, but a
 # push payload's repository.html_url may not); owner/repo casing is captured as
