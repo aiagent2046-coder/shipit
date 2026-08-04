@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { getBankTransferInvoice } from "@/lib/api";
+import { ApiError, getBankTransferInvoice } from "@/lib/api";
 import type { BankTransferStatus } from "@/lib/types";
 import { ProCompleted } from "@/components/BankTransferCheckout";
 import { Spinner } from "@/components/Spinner";
@@ -87,16 +87,24 @@ export default function LinkPage() {
     try {
       setState({ kind: "found", status: await getBankTransferInvoice(reference) });
     } catch (e) {
-      // A 404 is the ordinary answer to a wrong code, not a failure worth a
-      // stack trace in the UI. Anything else is ours and says so.
-      const message = e instanceof Error ? e.message : "";
-      if (/404|not[_ ]found/i.test(message)) {
+      // A 404 is the ordinary answer to a wrong code, not a failure worth a red
+      // box. Keyed on ApiError.status, not on the message text: this endpoint's
+      // 404 detail reads "no bank transfer invoice with this reference, or
+      // persistence isn't configured on this deployment", which contains
+      // neither "404" nor "not found". Matching on wording therefore sent every
+      // mistyped code down the error path and showed the payer a backend note
+      // about persistence, while the panel written for exactly this case never
+      // rendered at all.
+      if (e instanceof ApiError && e.status === 404) {
         setState({ kind: "not_found" });
         return;
       }
       setState({
         kind: "error",
-        message: message || "Could not reach the server. Try again in a moment.",
+        message:
+          e instanceof Error && e.message
+            ? e.message
+            : "Could not reach the server. Try again in a moment.",
       });
     }
   }, []);
