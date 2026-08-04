@@ -9,11 +9,14 @@
 
 export type Severity = "critical" | "high" | "medium" | "low";
 
+// Mirrors CATEGORIES in app/scan/scoring.py. "Correctness" and "Config" were
+// removed there in #181 because no producer ever assigned them, so both scored
+// a constant 10.0 while carrying 25% of the weight. Note this constant is
+// currently referenced nowhere; it duplicates a backend list, which is how the
+// two drift.
 export const CATEGORY_NAMES = [
   "Security",
   "Auth",
-  "Correctness",
-  "Config",
   "Testing",
   "Deploy",
 ] as const;

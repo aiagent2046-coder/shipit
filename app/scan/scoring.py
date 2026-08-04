@@ -19,15 +19,35 @@ from dataclasses import dataclass
 
 SEVERITY_WEIGHT = {"critical": 2.0, "high": 1.0, "medium": 0.4, "low": 0.1}
 
-CATEGORIES = ("Security", "Auth", "Correctness", "Config", "Testing", "Deploy")
+# Only categories a producer can actually assign. "Correctness" and "Config"
+# used to be here and were removed: nothing ever emitted a finding in either,
+# so both scored a constant 10.0 and together carried 25% of the weight. The
+# effect was a scale whose bottom half was unreachable -- a repository with a
+# totally failed Security category still totalled 7.5, and audit 0a043539
+# (vercel/nextjs-subscription-payments) scored 8.1 while holding a committed
+# .env, a subscriptions table with no write RLS policies and two open
+# redirects. See issue #181.
+#
+# Producers, for whoever adds the next category: app/scan/checks.py emits
+# Security, Testing and Deploy; the secret rules in app/scan/secrets.py emit
+# Security; the two rubrics in app/scan/llm_scan.py map to Auth and Security.
+# Adding a name here without adding a producer re-creates the same dead weight.
+CATEGORIES = ("Security", "Auth", "Testing", "Deploy")
 
-# Weighted mean for the total. Security and Auth dominate because the
-# product's wedge is "safe to put in production"; weights are a tunable
-# product constant, must sum to 1.
-CATEGORY_WEIGHT = {
-    "Security": 0.25, "Auth": 0.20, "Correctness": 0.15,
-    "Config": 0.10, "Testing": 0.15, "Deploy": 0.15,
+# Weighted mean for the total. Security and Auth dominate because the product's
+# wedge is "safe to put in production".
+#
+# Declared as the original raw weights and normalised, rather than as
+# pre-divided decimals: it keeps the relative importance of the four survivors
+# exactly as it was chosen (0.25 : 0.20 : 0.15 : 0.15), makes "sums to 1" true
+# by construction instead of by assertion, and means dropping or adding a
+# category is a one-line edit that cannot silently stop summing to 1.
+_RAW_CATEGORY_WEIGHT = {
+    "Security": 0.25, "Auth": 0.20, "Testing": 0.15, "Deploy": 0.15,
 }
+_RAW_TOTAL = sum(_RAW_CATEGORY_WEIGHT.values())
+CATEGORY_WEIGHT = {k: v / _RAW_TOTAL for k, v in _RAW_CATEGORY_WEIGHT.items()}
+assert set(CATEGORY_WEIGHT) == set(CATEGORIES)
 assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
 
 

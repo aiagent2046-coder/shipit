@@ -72,7 +72,9 @@ export const DEMO_FINDINGS: Finding[] = [
     title: "No CI workflow",
     severity: "low",
     confidence: 0.7,
-    category: "Config",
+    // Deploy, not Config: that is what app/scan/checks.py actually emits for
+    // no-ci, and Config is no longer a scored category at all.
+    category: "Deploy",
     file: "",
     line: 0,
     masked: "",
@@ -89,13 +91,19 @@ export const DEMO_AUDIT: AuditResult = {
   status: "completed",
   stack: "nextjs",
   file_count: 128,
+  // Four categories, matching CATEGORIES in app/scan/scoring.py after #181.
+  // total is the weighted mean the real formula would give these four:
+  // (1.8×.25 + 6.2×.20 + 6.4×.15 + 8.5×.15) / .75 = 5.23 -> 5.2. It was 4.6,
+  // which no combination of category scores could produce.
+  //
+  // The category values themselves are still hand-chosen rather than derived
+  // from DEMO_FINDINGS below. Deriving them would mean a second copy of the
+  // scoring formula in TypeScript, which is the drift #132 was about.
   score: {
-    total: 4.6,
+    total: 5.2,
     categories: {
       Security: 1.8,
       Auth: 6.2,
-      Correctness: 8.0,
-      Config: 7.4,
       Testing: 6.4,
       Deploy: 8.5,
     },
