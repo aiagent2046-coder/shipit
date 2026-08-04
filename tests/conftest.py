@@ -493,6 +493,23 @@ def _no_ambient_production_integrations(monkeypatch):
     monkeypatch.setattr(sandbox_client_mod, "SANDBOX_RUNNER_TOKEN", "")
 
 
+def enable_monitoring(monkeypatch):
+    """Opt this test into monitoring being on sale.
+
+    MONITORING_FOR_SALE is False (#184): the price was a placeholder, the LLM
+    spend was attributed to the anonymous bucket, and that bucket's cap stopped
+    guarding anything once free audits went static-only. The machinery was NOT
+    deleted, only withdrawn from sale, so its tests keep exercising it by
+    flipping the flag.
+
+    Both bindings, because two modules imported the name and a test that
+    patched only one would pass while the other half stayed off.
+    """
+    for target in ("app.main.MONITORING_FOR_SALE",
+                   "app.billing.telegram_stars.MONITORING_FOR_SALE"):
+        monkeypatch.setattr(target, True)
+
+
 def force_pro_account(monkeypatch, account_id="11111111-1111-1111-1111-111111111111"):
     """Make requests in this test authenticate as a paying account.
 

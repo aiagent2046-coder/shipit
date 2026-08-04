@@ -26,6 +26,7 @@ from app.main import (
 )
 from fastapi.testclient import TestClient
 from tests.conftest import (
+    enable_monitoring,
     FakeAccountRepo,
     FakeCompletionCasMixin,
     FakeKeyDeliveryMixin,
@@ -692,7 +693,38 @@ async def test_create_invoice_link_builds_subscription_link():
     assert body["prices"] == [{"label": telegram_stars.SUBSCRIPTION_TITLE, "amount": 1}]
 
 
+async def test_subscribe_mints_no_invoice_while_monitoring_is_withdrawn():
+    """No enable_monitoring(): the shipped default. The refusal has to come
+    before createInvoiceLink, because a subscription link is a payable deep
+    link -- once minted it lives in a chat and can be tapped later, long after
+    we decided not to sell it."""
+    calls: list = []
+    result = await _send_sub(_text_update("/subscribe", 888), calls=calls)
+
+    assert result == {"ok": True, "handled": "subscribe",
+                     "result": "not_for_sale"}
+    assert not any(c[0] == "createInvoiceLink" for c in calls)
+    assert not any(c[0] == "sendInvoice" for c in calls)
+    dm = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+    assert "isn't on sale" in dm
+    assert "haven't been charged" in dm
+
+
+async def test_monitor_command_mints_no_invoice_while_withdrawn():
+    """The other sale surface. /monitor takes an audit id, but the refusal must
+    not depend on that lookup succeeding -- there is nothing to validate for a
+    product we will not sell."""
+    calls: list = []
+    result = await _send_sub(_text_update("/monitor some-audit-id", 888),
+                             calls=calls)
+
+    assert result == {"ok": True, "handled": "monitor",
+                     "result": "not_for_sale"}
+    assert not any(c[0] == "createInvoiceLink" for c in calls)
+
+
 async def test_subscribe_exports_invoice_link_and_dms_it(monkeypatch):
+    enable_monitoring(monkeypatch)
     # /subscribe must NOT call sendInvoice (that 400-looped in prod). It exports
     # a link via createInvoiceLink, then DMs the link to the user.
     monkeypatch.delenv("SUBSCRIPTION_STARS", raising=False)

@@ -92,7 +92,11 @@ from app.llm.client import LLMClient
 from app.llm import pricing
 from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging
-from app.monitor import normalize_repo_full_name, repo_url_from_full_name
+from app.monitor import (
+    MONITORING_FOR_SALE,
+    normalize_repo_full_name,
+    repo_url_from_full_name,
+)
 from app.monitor.diff import new_high_severity_findings
 from app.report.html import render_report
 from app.ratelimit import RateLimitExceeded, RateLimiter, limiter_from_env
@@ -1370,6 +1374,12 @@ async def _handle_monitoring_push(
     if repo_full_name is None:
         return {"ignored": True, "reason": "unparseable_repo"}
 
+    # Checked BEFORE the subscription lookup, deliberately: an already-active
+    # row must not drive spend either, and this is the single place a push
+    # turns into an audit. See MONITORING_FOR_SALE.
+    if not MONITORING_FOR_SALE:
+        return {"ignored": True, "reason": "monitoring_not_for_sale"}
+
     subs = await subscription_repo.list_active_for_repo(repo_full_name)
     if not subs:
         return {"ignored": True, "reason": "no_active_subscription"}
@@ -2191,6 +2201,20 @@ async def get_paypal_order(
     return status
 
 
+def _monitoring_not_for_sale_error() -> HTTPException:
+    """503 rather than 404: the route exists and works, the product is
+    withdrawn. 404 would read as a client mistake and send someone hunting for
+    a typo in a URL that is correct."""
+    return HTTPException(
+        status_code=503,
+        detail={"reason": "monitoring_not_for_sale",
+                "detail": "continuous monitoring is not on sale right now. Its "
+                          "price, its spend attribution and its spend cap are "
+                          "unresolved, so it was withdrawn rather than sold at "
+                          "a placeholder price. Nothing was charged."},
+    )
+
+
 @app.post("/v1/paypal/subscriptions", status_code=201)
 async def create_paypal_subscription(
     request: Request,
@@ -2209,7 +2233,13 @@ async def create_paypal_subscription(
     503 if PayPal isn't configured, if PAYPAL_MONITOR_PLAN_ID (the billing plan)
     isn't set, or if DATABASE_URL isn't set (checked before creating the
     subscription at PayPal). 422 on a repo_url that isn't a clean github.com
-    owner/repo."""
+    owner/repo.
+
+    503 before any of those when monitoring is withdrawn from sale, which it
+    currently is -- see MONITORING_FOR_SALE. Checked first so a withdrawn
+    product and an unconfigured deployment never report each other's reason."""
+    if not MONITORING_FOR_SALE:
+        raise _monitoring_not_for_sale_error()
     if not paypal.is_configured():
         raise _paypal_not_configured_error()
     plan_id = paypal.monitor_plan_id_from_env()

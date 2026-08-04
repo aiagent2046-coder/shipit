@@ -41,6 +41,12 @@ from typing import Any
 
 import httpx
 
+# Module level, unlike this file's other app.monitor use (a local import inside
+# _handle_monitor): tests patch the name in the consuming module, and having
+# both call sites read one binding keeps the patch target the same everywhere.
+# app.monitor imports nothing from app, so there is no cycle.
+from app.monitor import MONITORING_FOR_SALE
+
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API = "https://api.telegram.org"
@@ -831,10 +837,39 @@ def _subscribe_prompt_text(url: str) -> str:
     )
 
 
+# What both subscription commands say instead of minting an invoice. States the
+# reason and that no money moved, because "unavailable" alone reads as a bug.
+_MONITORING_WITHDRAWN_TEXT = (
+    "Continuous monitoring isn't on sale right now.\n\n"
+    "It was priced as a placeholder and its audit spend wasn't capped or "
+    "attributed to the subscriber, so we withdrew it instead of charging for "
+    "something we hadn't finished costing. You haven't been charged.\n\n"
+    "A Fix Pack is still available per audit \u2014 that one we can price "
+    "honestly."
+)
+
+
+async def _reject_monitoring_sale(
+    chat_id: int, handled: str, *, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    await send_message(
+        chat_id, _MONITORING_WITHDRAWN_TEXT, token=token, transport=transport,
+    )
+    return {"ok": True, "handled": handled, "result": "not_for_sale"}
+
+
 async def _handle_subscribe(
     message: dict[str, Any], *, token: str,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
+    # Withdrawn from sale -- see monitor.MONITORING_FOR_SALE. Checked before
+    # createInvoiceLink so no payable link is ever minted.
+    if not MONITORING_FOR_SALE:
+        return await _reject_monitoring_sale(
+            message["chat"]["id"], "subscribe",
+            token=token, transport=transport,
+        )
     # A recurring Stars invoice CANNOT be sent with sendInvoice -- Telegram
     # returns 400 SUBSCRIPTION_EXPORT_MISSING (see build_invoice_payload). A
     # subscription invoice must be exported as a deep link via createInvoiceLink
@@ -1084,6 +1119,12 @@ async def _handle_monitor(
     from app.monitor import normalize_repo_full_name
 
     chat_id = message["chat"]["id"]
+    # Withdrawn from sale -- see monitor.MONITORING_FOR_SALE. Before the audit
+    # lookup: there is nothing to validate for a product we will not sell.
+    if not MONITORING_FOR_SALE:
+        return await _reject_monitoring_sale(
+            chat_id, "monitor", token=token, transport=transport,
+        )
     parts = text.split(maxsplit=1)
     audit_id = parts[1].strip() if len(parts) > 1 else ""
     if not audit_id:
