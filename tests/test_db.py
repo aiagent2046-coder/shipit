@@ -283,6 +283,35 @@ class TestAuditRepositoryWithFakePool:
         assert "score_json->>'basis' = %s" in query
         assert params == ("abc123", "2026-07-19-1", "static+llm")
 
+    async def test_get_latest_by_repo_url_filters_on_scan_depth(self,
+                                                               monkeypatch):
+        """The monitoring diff baseline must be a full audit, never a free one.
+
+        This query had no depth filter and no test at all -- 1272 passing tests
+        did not notice when it was temporarily broken. Unfiltered, one anonymous
+        static-only audit of a watched repository becomes the baseline, and the
+        next monitoring run (always full depth) reports every auth and injection
+        finding as newly appeared: a DM to a paying subscriber about problems
+        that were already there, triggered by a stranger with the URL.
+        """
+        audit_id = uuid.uuid4()
+        fake = FakePool(fetchone_result={
+            "id": audit_id, "stack": "nextjs", "status": "completed",
+            "file_count": 12, "score_total": 7.2,
+            "score_json": {"total": 7.2, "basis": "static+llm"},
+            "findings_json": [], "repo_url": "https://github.com/o/r",
+            "created_at": "2026-08-04T10:00:00Z",
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+
+        repo = AuditRepository()
+        result = await repo.get_latest_by_repo_url("o/r", "static+llm")
+
+        assert result["id"] == str(audit_id)
+        query, params = fake.calls[0]
+        assert "score_json->>'basis' = %s" in query
+        assert params == ("o/r", "static+llm")
+
     async def test_get_returns_none_for_missing_row(self, monkeypatch):
         fake = FakePool(fetchone_result=None)
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))

@@ -561,16 +561,26 @@ class AuditRepository:
         return _row_to_audit(row) if row else None
 
     async def get_latest_by_repo_url(
-        self, repo_full_name: str
+        self, repo_full_name: str, basis: str
     ) -> dict[str, Any] | None:
-        """Most recent completed audit for a repo, matched by a canonical
+        """Most recent completed audit for a repo AT THIS SCAN DEPTH, matched
+        by a canonical
         'owner/repo' (Phase C monitoring's diff baseline). audits.repo_url is
         stored as typed at intake (full github URL, 0006); this normalizes it in
         SQL -- extract owner/repo, drop a trailing '.git'/slash, lowercase -- so
         it matches regardless of the casing/suffix the audit was created with.
         The same normalization app/monitor.normalize_repo_full_name does in
         Python, kept in lockstep so a push and a stored audit for the same repo
-        always join. Returns None when DATABASE_URL isn't set."""
+        always join. Returns None when DATABASE_URL isn't set.
+
+        `basis` has no default, for the same reason get_by_content_hash has none:
+        the two scan depths must never be compared with each other. This backs
+        the monitoring diff, which always re-audits at full depth. Left
+        unfiltered, one anonymous free audit of a watched repository --
+        static-only, and anyone holding the URL can run one -- became the
+        baseline, and the next monitoring run reported every auth and injection
+        finding as newly appeared. That is a DM to a paying subscriber about
+        problems that were already there, triggered by a stranger."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -587,10 +597,11 @@ class AuditRepository:
                           '^https://github\\.com/(.+?)(\\.git)?/?$',
                           '\\1')) = %s
                       and status = 'completed'
+                      and score_json->>'basis' = %s
                 order by created_at desc
                 limit 1
                 """,
-                (repo_full_name,),
+                (repo_full_name, basis),
             )
             row = await cur.fetchone()
         return _row_to_audit(row) if row else None
