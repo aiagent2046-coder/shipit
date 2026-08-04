@@ -512,10 +512,20 @@ class AuditRepository:
         return _row_to_audit(row)
 
     async def get_by_content_hash(
-        self, content_hash: str, engine_version: str
+        self, content_hash: str, engine_version: str, basis: str
     ) -> dict[str, Any] | None:
-        """Most recent completed audit for this exact content produced by
-        this exact engine version, or None.
+        """Most recent completed audit for this exact content, produced by this
+        exact engine version AT THIS SCAN DEPTH, or None.
+
+        `basis` has no default, deliberately: every caller must state which
+        depth it is entitled to reuse. Without it the cache crossed the pricing
+        boundary in both directions -- an anonymous visitor auditing a repo a
+        paying account had already scanned would be handed the full paid result,
+        and a paying account would be handed a free static-only row. Both were
+        silent.
+
+        A row written before `basis` existed in score_json matches neither value
+        and therefore falls through to a recompute, which is the safe direction.
 
         The reproducibility backstop: an identical re-audit reuses this
         row instead of re-running the LLM scan, which returns a different
@@ -541,10 +551,11 @@ class AuditRepository:
                 from audits
                 where content_hash = %s and engine_version = %s
                       and status = 'completed'
+                      and score_json->>'basis' = %s
                 order by created_at desc
                 limit 1
                 """,
-                (content_hash, engine_version),
+                (content_hash, engine_version, basis),
             )
             row = await cur.fetchone()
         return _row_to_audit(row) if row else None

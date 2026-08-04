@@ -189,7 +189,7 @@ class CachedAuditRepo:
     def __init__(self, row):
         self.row = row
 
-    async def get_by_content_hash(self, content_hash, engine_version):
+    async def get_by_content_hash(self, content_hash, engine_version, basis):
         return self.row
 
     async def create(self, **fields):  # pragma: no cover - must never be called

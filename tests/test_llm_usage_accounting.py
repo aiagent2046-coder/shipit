@@ -21,7 +21,11 @@ from fastapi.testclient import TestClient
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.llm import pricing
 from app.main import app, get_audit_repo
-from tests.conftest import drain_audit_queue, run_audit_job
+from tests.conftest import (drain_audit_queue, force_pro_account,
+                           run_audit_job)
+
+# Only a paying account reaches the provider: the free tier is static-only.
+_ACCOUNT_ID = "33333333-3333-3333-3333-333333333333"
 
 client = TestClient(app)
 
@@ -57,7 +61,7 @@ class FakeAuditRepo:
         self.rows.append(row)
         return row
 
-    async def get_by_content_hash(self, content_hash, engine_version):
+    async def get_by_content_hash(self, content_hash, engine_version, basis):
         matches = [r for r in self.rows
                    if r["content_hash"] == content_hash
                    and r["engine_version"] == engine_version
@@ -159,12 +163,15 @@ async def test_audit_records_one_usage_row_with_cost():
     await run_audit_job(
         _auth_zip().getvalue(), llm_client=FakeLLM("[]"),
         audit_repo=audit_repo, llm_usage_repo=usage_repo,
+        account_id=_ACCOUNT_ID,
     )
 
     assert len(usage_repo.rows) == 1
     row = usage_repo.rows[0]
     assert row["job_type"] == "audit"
-    assert row["account_id"] is None            # anonymous caller
+    # Attributed to the payer. An anonymous caller would produce no row at all:
+    # the free tier is static-only and never reaches the provider.
+    assert row["account_id"] == _ACCOUNT_ID
     assert row["model"] == "claude-sonnet-4.6"
     # Only the 'auth' rubric matches this content, so one .complete() call.
     assert row["calls"] == 1
@@ -176,11 +183,14 @@ async def test_audit_records_one_usage_row_with_cost():
     assert row["job_id"] == audit_repo.rows[0]["id"]
 
 
-async def test_cache_hit_records_no_usage_row(audit_queue):
+async def test_cache_hit_records_no_usage_row(audit_queue, monkeypatch):
     # Driven through the endpoint, because the cache hit IS an endpoint
     # behaviour: it answers inline, queues no job, and so reaches no scan.
     audit_repo = FakeAuditRepo()
     usage_repo = FakeUsageRepo()
+    # As a payer: an anonymous first request would record no usage row either,
+    # and the test would pass without demonstrating anything about the cache.
+    force_pro_account(monkeypatch)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     try:
         r1 = client.post(

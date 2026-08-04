@@ -20,6 +20,10 @@ from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan.pipeline import run_scan
 from tests.conftest import run_audit_job
 
+# The LLM stage only runs for a paying account now (free tier is
+# static-only), so these tests must supply one to have a stage to observe.
+_ACCOUNT_ID = "44444444-4444-4444-4444-444444444444"
+
 NEXT_PKG = json.dumps({"dependencies": {"next": "15.0.0", "react": "19.0.0"}}).encode()
 
 
@@ -82,6 +86,7 @@ async def test_llm_findings_merged_when_providers_configured():
     row = await run_audit_job(
         make_zip(AUTH_ZIP).getvalue(),
         llm_client=FakeLLM(response=json.dumps([finding])),
+        account_id=_ACCOUNT_ID,
     )
     # The provider chain the worker was handed reached the merge, and the
     # merged finding is in the row a user will read -- not just in scan output.
@@ -92,6 +97,7 @@ async def test_llm_failure_degrades_to_static_only_not_500():
     row = await run_audit_job(
         make_zip(AUTH_ZIP).getvalue(),
         llm_client=FakeLLM(error=LLMError("all providers unreachable")),
+        account_id=_ACCOUNT_ID,
     )
     # An unreachable provider must not fail the job: the audit still lands,
     # with its static findings, scored as static_only.

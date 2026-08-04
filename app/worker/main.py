@@ -61,7 +61,9 @@ from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
 from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
+from app.scan.pipeline import (AUDIT_ENGINE_VERSION,
+                              FREE_TIER_LLM_SKIP_REASON,
+                              basis_for_account, content_digest)
 
 # Reused rather than reimplemented, which is the whole point: the worker must
 # run the same scan, under the same concurrency bound, with the same spend
@@ -296,18 +298,33 @@ async def _execute_job(
     # since intake, so the hash the API recorded can be stale. The audits row
     # and the cache key must describe the content actually scanned.
     digest = content_digest(raw)
-    cached = await audit_repo.get_by_content_hash(digest, AUDIT_ENGINE_VERSION)
+    cached = await audit_repo.get_by_content_hash(
+        digest, AUDIT_ENGINE_VERSION, basis_for_account(job.get("account_id")))
     if cached is not None:
         # Someone audited identical content while this job waited in the queue.
         # Point the job at that result instead of paying for the same scan
         # twice -- the same reuse create_audit does, just later in the timeline.
         return str(cached["id"])
 
-    llm_skip_reason: str | None = None
-    if job.get("account_id") is None and await _anon_daily_cap_exceeded(
-        llm_usage_repo
-    ):
-        llm_skip_reason = "daily_spend_cap"
+    # The free tier is static-only by policy, not by accident. The static rules
+    # and secret scanning cost nothing to run and are what find committed
+    # credentials; the LLM rubrics (auth, injection) are the paid depth.
+    #
+    # This replaces a daily-spend-cap check. That check now guards nothing on
+    # this path -- an anonymous audit never reaches the provider at all -- and
+    # the anonymous budget it read is still spent by monitoring re-audits, which
+    # have a null account_id and have never consulted it. See the follow-up
+    # issue; do not read DEFAULT_DAILY_SPEND_CAP_USD as protection for this path.
+    llm_skip_reason: str | None = (
+        None if job.get("account_id") else FREE_TIER_LLM_SKIP_REASON)
+    if llm_skip_reason is not None:
+        # Called for its alert side effect only; the return value decides
+        # nothing now. Anonymous-attributed spend still accrues -- monitoring
+        # re-audits write usage rows with a null account_id and have never
+        # consulted this cap -- and this remains the only place that warns the
+        # operator when it climbs. Dropping the call would silently remove that
+        # alert along with the degrade it used to gate.
+        await _anon_daily_cap_exceeded(llm_usage_repo)
 
     scan = await _run_scan_offthread(
         raw, llm_client, llm_skip_reason=llm_skip_reason)

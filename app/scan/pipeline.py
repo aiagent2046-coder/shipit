@@ -43,6 +43,35 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 AUDIT_ENGINE_VERSION = "2026-08-04-1"
 
 
+# The two values `score["basis"]` can take, named because they are now a
+# pricing boundary and not only a diagnostic. BASIS_STATIC_ONLY used to mean
+# "something went wrong or the budget ran out"; it is now also what the free
+# tier deliberately delivers.
+BASIS_FULL = "static+llm"
+BASIS_STATIC_ONLY = "static_only"
+
+# Passed as llm_skip_reason when the caller is not a paying account. Distinct
+# from "daily_spend_cap" on purpose: that reason means we ran out of money, this
+# one means we never intended to spend any.
+FREE_TIER_LLM_SKIP_REASON = "free_tier"
+
+
+def basis_for_account(account_id: object | None) -> str:
+    """Which scan depth this caller is entitled to.
+
+    One definition, because three places need to agree: the worker deciding
+    whether to call the LLM, and the two cache lookups deciding which stored
+    result may be reused. When they disagreed, an anonymous visitor could be
+    served a paid full audit out of the cache and a paying account could be
+    served a free static one.
+
+    Static-only for anonymous is not a degradation to apologise for. It is the
+    free product: the static rules and secret scanning cost nothing to run, and
+    they are what found the committed .env in audit ed402e63.
+    """
+    return BASIS_FULL if account_id else BASIS_STATIC_ONLY
+
+
 def content_digest(data: bytes) -> str:
     """Canonical SHA-256 identity of an uploaded archive's *contents*.
 
@@ -134,9 +163,9 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # The basis travels inside score_json so it persists to the
             # DB and reaches every consumer of the score, not just ones
             # that also read `llm`.
-            "basis": "static+llm" if (isinstance(llm_summary, dict)
-                                      and llm_summary.get("skipped_reason") is None)
-            else "static_only",
+            "basis": BASIS_FULL if (isinstance(llm_summary, dict)
+                                    and llm_summary.get("skipped_reason") is None)
+            else BASIS_STATIC_ONLY,
         },
         "findings": findings,
         "llm": llm_summary,

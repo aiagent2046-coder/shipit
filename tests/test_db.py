@@ -270,12 +270,18 @@ class TestAuditRepositoryWithFakePool:
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
 
         repo = AuditRepository()
-        result = await repo.get_by_content_hash("abc123", "2026-07-19-1")
+        result = await repo.get_by_content_hash(
+            "abc123", "2026-07-19-1", "static+llm")
 
         assert result["id"] == str(audit_id)
         query, params = fake.calls[0]
         assert "content_hash = %s and engine_version = %s" in query
-        assert params == ("abc123", "2026-07-19-1")
+        # The scan depth is part of the key, not an afterthought: without this
+        # predicate the cache crossed the pricing boundary in both directions --
+        # an anonymous visitor could be served a paying account's full audit,
+        # and a paying account a free static-only row.
+        assert "score_json->>'basis' = %s" in query
+        assert params == ("abc123", "2026-07-19-1", "static+llm")
 
     async def test_get_returns_none_for_missing_row(self, monkeypatch):
         fake = FakePool(fetchone_result=None)

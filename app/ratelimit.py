@@ -22,7 +22,11 @@ import threading
 import time
 from dataclasses import dataclass
 
-DEFAULT_LIMIT = 5
+# Three free audits per IP per day. Was 5. Each free audit is static-only and
+# costs nothing to run, so this is a fairness and noise bound rather than a
+# spend one -- one audit is enough to see the product, three leaves room for
+# a re-run after a fix.
+DEFAULT_LIMIT = 3
 DEFAULT_WINDOW_SECONDS = 24 * 60 * 60  # 24h, matches shipit-architecture.md
 
 

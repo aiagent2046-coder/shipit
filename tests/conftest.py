@@ -343,7 +343,7 @@ class RecordingAuditRepo:
         self.rows.append(row)
         return row
 
-    async def get_by_content_hash(self, content_hash, engine_version):
+    async def get_by_content_hash(self, content_hash, engine_version, basis):
         return None
 
 
@@ -491,3 +491,18 @@ def _no_ambient_production_integrations(monkeypatch):
         "/tmp/shipit-pytest-no-sandbox-runner.sock",
     )
     monkeypatch.setattr(sandbox_client_mod, "SANDBOX_RUNNER_TOKEN", "")
+
+
+def force_pro_account(monkeypatch, account_id="11111111-1111-1111-1111-111111111111"):
+    """Make requests in this test authenticate as a paying account.
+
+    Patches resolve_account instead of wiring a real key and its HMAC: these
+    tests are about what the scan and the cache do for a paying caller, and the
+    free tier is static-only by policy, so without an account there is no LLM
+    stage left to observe at all.
+    """
+    async def _resolve(request, account_repo):
+        return {"id": account_id, "tier": "pro"}
+
+    monkeypatch.setattr("app.main.resolve_account", _resolve)
+    return account_id

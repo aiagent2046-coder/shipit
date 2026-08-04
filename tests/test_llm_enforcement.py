@@ -45,6 +45,7 @@ from app.main import (
     get_repo_fetcher,
     get_billing_transport,
 )
+from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
 from tests.conftest import drain_audit_queue
 
 client = TestClient(app)
@@ -120,6 +121,7 @@ def test_cost_cap_not_tripped_runs_full_scan():
 class FakeAuditRepo:
     def __init__(self):
         self.rows: list[dict] = []
+        self.basis_queries: list[str] = []
 
     async def create(self, *, stack, file_count, score_total, score_json,
                      findings_json, repo_url=None, content_hash=None,
@@ -132,8 +134,17 @@ class FakeAuditRepo:
         self.rows.append(row)
         return row
 
-    async def get_by_content_hash(self, content_hash, engine_version):
-        return None
+    async def get_by_content_hash(self, content_hash, engine_version, basis):
+        # Honours basis, like the real repository: a fake that ignored it would
+        # make the pricing-boundary test below pass vacuously.
+        self.basis_queries.append(basis)
+        return next(
+            (r for r in self.rows
+             if r["content_hash"] == content_hash
+             and r["engine_version"] == engine_version
+             and (r["score_json"] or {}).get("basis") == basis),
+            None,
+        )
 
 
 class FakeUsageRepo:
@@ -218,19 +229,30 @@ async def test_anon_daily_cap_soft_degrades_to_static_only(monkeypatch,
     finally:
         _clear()
 
-    # Soft-degrade: the submission is still accepted and still produces a real
-    # report -- the LLM stage is what gets dropped, not the audit.
+    # Still accepted, still a real report -- the LLM stage is what is absent.
+    # Note the cap is no longer what causes this: anonymous audits are
+    # static-only at any spend level (see the test below). This case is kept
+    # because being over the cap must not break the audit either.
     assert resp.status_code == 202
     assert audit_repo.rows[0]["score_json"]["basis"] == "static_only"
     assert llm.calls == 0                  # no LLM spend past the cap
     assert usage_repo.rows == []           # calls=0 -> no usage row
 
 
-async def test_anon_under_cap_runs_llm(monkeypatch, audit_queue):
+async def test_anon_is_static_only_even_far_under_the_cap(monkeypatch,
+                                                          audit_queue):
+    """The free tier is static-only by policy, not because money ran out.
+
+    This used to assert the opposite -- an anonymous audit under the cap ran the
+    LLM. The product changed: the static rules and secret scanning are free to
+    run and are what find committed credentials, while the auth and injection
+    rubrics are the paid depth. Spend is now irrelevant to this decision, which
+    is why the budget here is nearly untouched and the LLM still never runs.
+    """
     _reset_cache_before()
     _capture_alerts(monkeypatch)
     audit_repo = FakeAuditRepo()
-    usage_repo = FakeUsageRepo(anon_spend=Decimal("0.10"))  # well under cap
+    usage_repo = FakeUsageRepo(anon_spend=Decimal("0.10"))  # nowhere near it
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     try:
@@ -242,9 +264,9 @@ async def test_anon_under_cap_runs_llm(monkeypatch, audit_queue):
         _clear()
 
     assert resp.status_code == 202
-    assert audit_repo.rows[0]["score_json"]["basis"] == "static+llm"
-    assert llm.calls == 1
-    assert len(usage_repo.rows) == 1
+    assert audit_repo.rows[0]["score_json"]["basis"] == "static_only"
+    assert llm.calls == 0
+    assert usage_repo.rows == []
 
 
 # --------------------------------------------------------------------------
@@ -394,7 +416,11 @@ async def test_alert_fires_at_80_percent_of_daily_cap(monkeypatch, audit_queue):
     finally:
         _clear()
 
-    assert llm.calls == 1                                  # under cap: LLM ran
+    # The LLM does not run for an anonymous caller at any spend level, but the
+    # operator alert must still fire: monitoring re-audits write usage rows with
+    # a null account_id and never consult this cap, so this is the only warning
+    # that anonymous-attributed spend is climbing.
+    assert llm.calls == 0
     assert any(k == "anon-budget-80" for _t, k in alerts)
 
 
@@ -451,3 +477,52 @@ def test_toggle_rejects_non_boolean_enabled(monkeypatch):
     finally:
         app.dependency_overrides.pop(get_service_flags_repo, None)
     assert resp.status_code == 422
+
+
+async def test_anonymous_caller_is_not_served_a_paid_audit_from_the_cache(
+    monkeypatch, audit_queue
+):
+    """The content-hash cache must not cross the pricing boundary.
+
+    Before the scan depth became part of the cache key, a repository that a
+    paying account had already audited would be handed to the next anonymous
+    visitor complete with its LLM findings and its score: the paid product,
+    free, with nothing in the logs to notice. The mirror case is as bad -- a
+    payer served a free static-only row.
+    """
+    _reset_cache_before()
+    _capture_alerts(monkeypatch)
+    raw = _auth_zip().getvalue()
+    audit_repo = FakeAuditRepo()
+    # Exactly what a paying account's audit of this content would have left.
+    await audit_repo.create(
+        stack="nextjs", file_count=2, score_total=4.2,
+        score_json={"total": 4.2, "categories": {}, "basis": "static+llm"},
+        findings_json=[{"rule_id": "llm-auth", "title": "paid-only finding",
+                        "severity": "high", "confidence": 0.9,
+                        "category": "Auth"}],
+        content_hash=content_digest(raw), engine_version=AUDIT_ENGINE_VERSION,
+    )
+    llm = CountingLLM(input_tokens=1000, output_tokens=200)
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
+    try:
+        resp = client.post(
+            "/v1/audits",
+            files={"archive": ("app.zip", io.BytesIO(raw), "application/zip")},
+        )
+        await drain_audit_queue(audit_queue, audit_repo=audit_repo,
+                                llm_client=llm)
+    finally:
+        _clear()
+
+    assert resp.status_code == 202
+    # Asked only for free depth, never for the paid row.
+    assert audit_repo.basis_queries
+    assert set(audit_repo.basis_queries) == {"static_only"}
+    # A second row, scanned fresh at free depth, rather than the seeded one.
+    assert len(audit_repo.rows) == 2
+    fresh = audit_repo.rows[1]
+    assert fresh["score_json"]["basis"] == "static_only"
+    assert not any((f.get("rule_id") or "").startswith("llm-")
+                   for f in fresh["findings_json"])
+    assert llm.calls == 0
