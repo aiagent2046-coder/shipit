@@ -381,9 +381,23 @@ async def test_all_repository_write_paths(real_db):
     uuid.UUID(enq["id"])  # a real uuid string
     assert isinstance(enq["created_at"], datetime.datetime)  # timestamptz round-trip
 
+    # pending_summary reads the backlog WITHOUT consuming it -- the guard that
+    # refuses to drain while monitoring is withdrawn from sale (#184) relies on
+    # that, and on `count(*) over ()` plus dict-row access, neither of which a
+    # fake can prove. Asserted here because a query only a stub has ever
+    # executed is how #185 shipped a reference to an undefined name.
+    summary = await monitoring_repo.pending_summary(limit=100)
+    assert summary is not None, "DATABASE_URL not reaching get_pool -- false green"
+    assert summary["total"] >= 1
+    ours = [r for r in summary["runs"] if r["id"] == enq["id"]]
+    assert ours, "the row just enqueued is missing from the pending summary"
+    assert ours[0]["repo_full_name"] == mon_repo_name
+    assert isinstance(ours[0]["created_at"], datetime.datetime)
+
     # claim_one_pending returns exactly the row we just enqueued (oldest pending;
     # this run terminalizes every row it creates, so no leftovers precede it),
     # leased pending -> running with started_at stamped and attempts bumped.
+    # Reaching 'running' also proves pending_summary left the row claimable.
     claimed_run = await monitoring_repo.claim_one_pending()
     assert claimed_run is not None
     assert claimed_run["id"] == enq["id"]

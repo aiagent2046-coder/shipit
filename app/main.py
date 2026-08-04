@@ -3118,6 +3118,35 @@ async def process_pending_monitoring(
     if paused:
         return {"skipped_paused": True}
 
+    # Monitoring is withdrawn from sale (#184). Gating only the webhook closed
+    # the entrance and left this drain able to process whatever was already
+    # queued. Production's queue happened to be empty when that shipped, but
+    # "happened to be" is not a guarantee, and every run here is an
+    # LLM-spending re-audit of a product nobody can buy.
+    #
+    # Soft-degrade like the emergency stop above: a background drain has no
+    # user to 503, so leave the backlog untouched and say so. Unlike the
+    # emergency stop, ALERT -- a pending run existing at all while the product
+    # is withdrawn means something got past the webhook gate or predates it,
+    # and the operator needs the row id to find out which.
+    if not MONITORING_FOR_SALE:
+        queued = await monitoring_repo.pending_summary()
+        total = (queued or {}).get("total", 0)
+        if total:
+            listed = ", ".join(
+                f"{r['id']} ({r['repo_full_name']})"
+                for r in (queued or {}).get("runs", [])
+            )
+            await notify_operator(
+                f"Drydock: {total} monitoring run(s) are queued while "
+                f"monitoring is WITHDRAWN from sale. Nothing was processed and "
+                f"nothing was charged, but a push got past the webhook gate or "
+                f"these rows predate it \u2014 worth finding out which.\n\n"
+                f"Oldest first: {listed}\n\n"
+                f"Inspect: select * from monitoring_runs where id in (...);"
+            )
+        return {"skipped_not_for_sale": True, "pending": total}
+
     summary = {"processed": 0, "notified": 0, "no_new": 0, "unfetchable": 0,
                "unauditable": 0, "no_subscription": 0, "failed": 0, "requeued": 0}
     try:

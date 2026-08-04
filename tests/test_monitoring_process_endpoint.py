@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_mod
 from app.ingest.github_fetch import RepoFetchError
+from tests.conftest import enable_monitoring
 from app.main import (
     app,
     get_audit_repo,
@@ -60,6 +61,19 @@ class FakeMonitoringRepo:
         self.runs = {r["id"]: dict(r) for r in runs}
         self.order = [r["id"] for r in runs]
         self.claims = 0
+
+    async def pending_summary(self, limit: int = 5):
+        # Read-only, like the real one: the withdrawn-product guard must be
+        # able to report a backlog without consuming it.
+        pending = [self.runs[i] for i in self.order
+                   if self.runs[i].get("status", "pending") == "pending"]
+        return {
+            "total": len(pending),
+            "runs": [{"id": r["id"],
+                      "repo_full_name": r["repo_full_name"],
+                      "created_at": r.get("created_at")}
+                     for r in pending[:limit]],
+        }
 
     async def reap_stale_running(self, *, max_age_minutes, max_attempts):
         requeued = failed = 0
@@ -148,6 +162,7 @@ def auth(token="montoken"):
 # --- auth / configuration guards ------------------------------------------
 
 def test_503_when_token_not_configured(monkeypatch):
+    enable_monitoring(monkeypatch)
     monkeypatch.delenv("MONITORING_PROCESS_TOKEN", raising=False)
     resp = client.post("/internal/monitoring/process-pending")
     assert resp.status_code == 503
@@ -155,12 +170,14 @@ def test_503_when_token_not_configured(monkeypatch):
 
 
 def test_401_when_no_auth_header(monkeypatch):
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     resp = client.post("/internal/monitoring/process-pending")
     assert resp.status_code == 401
 
 
 def test_401_when_wrong_token(monkeypatch):
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     resp = client.post("/internal/monitoring/process-pending", headers=auth("nope"))
     assert resp.status_code == 401
@@ -171,6 +188,7 @@ def test_401_when_wrong_token(monkeypatch):
 def test_new_critical_notifies_all_subscribers(monkeypatch):
     """A pending run re-audits, diffs against the baseline (r1), finds a new
     critical (r2), DMs every active subscriber, and marks the run done."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     sent = _capture_dms(monkeypatch)
     _audit_returns(monkeypatch, [_f("r1", "a.py", "critical"),
@@ -204,6 +222,7 @@ def test_new_critical_notifies_all_subscribers(monkeypatch):
 def test_no_new_findings_is_silent(monkeypatch):
     """Re-audit surfaces the same findings as the baseline (only line drift) ->
     nothing new -> no DM, run still closed out as done."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     sent = _capture_dms(monkeypatch)
     _audit_returns(monkeypatch, [_f("r1", "a.py", "critical", line=99)])
@@ -229,6 +248,7 @@ def test_no_new_findings_is_silent(monkeypatch):
 def test_unfetchable_repo_is_benign_done(monkeypatch):
     """Repo went private/deleted (RepoFetchError) -> benign terminal 'done',
     counted as unfetchable, no DM."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     sent = _capture_dms(monkeypatch)
     _audit_raises(monkeypatch, RepoFetchError("404"))
@@ -254,6 +274,7 @@ def test_unfetchable_repo_is_benign_done(monkeypatch):
 def test_unauditable_repo_is_benign_done(monkeypatch):
     """run_repo_audit returns None (unsupported stack / bad zip) -> benign
     terminal 'done', counted as unauditable."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     _capture_dms(monkeypatch)
 
@@ -282,6 +303,7 @@ def test_unauditable_repo_is_benign_done(monkeypatch):
 def test_no_subscription_at_process_time_is_benign(monkeypatch):
     """Every subscription lapsed between enqueue and processing -> nothing to
     notify. The audit is never even run; the run is closed out as done."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     _capture_dms(monkeypatch)
 
@@ -308,6 +330,7 @@ def test_unexpected_error_marks_failed_with_detail_and_logs(monkeypatch, caplog)
     """Regression guard mirroring the Fix Pack silent-failure hardening: an
     unexpected error during processing must land the run on 'failed' with a
     diagnosable error AND log a full traceback — never a silent 'failed' row."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     _capture_dms(monkeypatch)
     _audit_raises(monkeypatch, RuntimeError("scan blew up: boom"))
@@ -338,6 +361,7 @@ def test_unexpected_error_marks_failed_with_detail_and_logs(monkeypatch, caplog)
 def test_one_bad_dm_does_not_abort_the_rest(monkeypatch):
     """A single failing subscriber DM must not abort the run: the other
     subscriber is still notified and the run lands on 'done', not 'failed'."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     _audit_returns(monkeypatch, [_f("r2", "b.py", "critical")])
     monkeypatch.setattr(main_mod.telegram_stars, "bot_token_from_env",
@@ -390,6 +414,7 @@ def test_stale_running_run_requeued_then_delivered_once(monkeypatch):
     """Restart recovery without a duplicate notify: a run left 'running' by a
     crashed worker (old lease, attempts < MAX) is reaped back to 'pending',
     re-claimed, audited, and delivered — DMs fire exactly once."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     sent = _capture_dms(monkeypatch)
     _audit_returns(monkeypatch, [_f("r2", "b.py", "critical")])
@@ -419,6 +444,7 @@ def test_stale_running_run_requeued_then_delivered_once(monkeypatch):
 def test_poison_pill_fails_after_max_attempts(monkeypatch):
     """A run that has already exhausted its attempts and is found stale is
     failed (not re-queued forever) — bounded retries. No audit, no DM."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     sent = _capture_dms(monkeypatch)
 
@@ -443,6 +469,7 @@ def test_poison_pill_fails_after_max_attempts(monkeypatch):
 
 
 def test_no_pending_runs_returns_zero_summary(monkeypatch):
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
     runs = FakeMonitoringRepo([])
     _override(subscription_repo=FakeSubscriptionRepo([]), monitoring_repo=runs,
@@ -458,9 +485,75 @@ def test_no_pending_runs_returns_zero_summary(monkeypatch):
     }
 
 
+def test_withdrawn_monitoring_does_not_drain_a_queued_backlog(monkeypatch):
+    """The hole #195 left. Withdrawing monitoring gated the webhook, which
+    closed the entrance -- but this drain could still process anything already
+    queued, at full LLM cost, for a product nobody can buy. Production's queue
+    happened to be empty when that shipped; "happened to be" is not a guarantee.
+
+    No enable_monitoring(): this asserts the shipped default."""
+    monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
+    alerts: list[str] = []
+
+    async def _capture(text):
+        alerts.append(text)
+
+    monkeypatch.setattr(main_mod, "notify_operator", _capture)
+
+    runs = FakeMonitoringRepo([
+        {"id": "run-1", "repo_full_name": "acme/app", "status": "pending",
+         "attempts": 0},
+    ])
+    _override(subscription_repo=FakeSubscriptionRepo([]), monitoring_repo=runs,
+              audit_repo=FakeAuditRepo(previous=None))
+    try:
+        resp = client.post("/internal/monitoring/process-pending", headers=auth())
+    finally:
+        _clear()
+
+    assert resp.json() == {"skipped_not_for_sale": True, "pending": 1}
+    # The backlog is left exactly as found -- not claimed, not failed, not
+    # consumed. A guard that ate the queue would hide the problem it exists
+    # to surface.
+    assert runs.claims == 0
+    assert runs.runs["run-1"]["status"] == "pending"
+
+    # And the operator is told, with the row id: a pending run while the
+    # product is withdrawn means something got past the webhook gate.
+    assert len(alerts) == 1
+    assert "run-1" in alerts[0]
+    assert "acme/app" in alerts[0]
+    assert "WITHDRAWN" in alerts[0]
+
+
+def test_withdrawn_monitoring_with_an_empty_queue_is_silent(monkeypatch):
+    """The timer fires every few minutes. Alerting on "nothing happened" would
+    page the operator forever and train them to ignore the channel -- which is
+    how the one real alert gets missed."""
+    monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
+    alerts: list[str] = []
+
+    async def _capture(text):
+        alerts.append(text)
+
+    monkeypatch.setattr(main_mod, "notify_operator", _capture)
+
+    runs = FakeMonitoringRepo([])
+    _override(subscription_repo=FakeSubscriptionRepo([]), monitoring_repo=runs,
+              audit_repo=FakeAuditRepo(previous=None))
+    try:
+        resp = client.post("/internal/monitoring/process-pending", headers=auth())
+    finally:
+        _clear()
+
+    assert resp.json() == {"skipped_not_for_sale": True, "pending": 0}
+    assert alerts == []
+
+
 def test_lock_busy_returns_skipped_locked(monkeypatch):
     """When another run already holds the advisory lock, the processor does no
     work and reports skipped_locked rather than stampeding the backlog."""
+    enable_monitoring(monkeypatch)
     monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
 
     @asynccontextmanager
