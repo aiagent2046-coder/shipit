@@ -136,6 +136,85 @@ def test_committed_env_with_secret_is_deleted_not_emitted_as_file():
     assert stripe_key not in render_pr_body(plan)
 
 
+def test_typescript_env_reference_is_narrowed_for_strict_mode():
+    """`process.env.X` is typed `string | undefined`. Passing it where a
+    `string` is required is TS2345 under `strict`, and `strict` is the
+    create-next-app default — so a bare reference shipped a paid PR that did
+    not compile for most of the market. Reproduced against real tsc before
+    this test existed."""
+    zip_bytes = make_zip({"lib/aws.ts": f'const key = "{AWS_KEY}";\n'})
+    findings = [finding(rule_id="aws-access-key-id",
+                        file="acme-app-deadbeef/lib/aws.ts", line=1)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    new_text = plan.files["lib/aws.ts"]
+    assert "process.env.AWS_ACCESS_KEY_ID!" in new_text
+    assert AWS_KEY not in new_text
+
+
+def test_plain_javascript_keeps_the_bare_env_reference():
+    """The narrowing above is a TypeScript constraint only. Emitting `!` into
+    a .js file would be a syntax error, so the suffix check must not widen."""
+    zip_bytes = make_zip({"lib/aws.js": f'const key = "{AWS_KEY}";\n'})
+    findings = [finding(rule_id="aws-access-key-id",
+                        file="acme-app-deadbeef/lib/aws.js", line=1)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    new_text = plan.files["lib/aws.js"]
+    assert "process.env.AWS_ACCESS_KEY_ID" in new_text
+    assert "process.env.AWS_ACCESS_KEY_ID!" not in new_text
+    assert AWS_KEY not in new_text
+
+
+def test_untracked_env_keys_are_recorded_in_the_example():
+    """Untracking `.env` also removes it from the customer's working copy
+    when they pull the merge. A key that lived only there would vanish with
+    no record that the app ever needed it, so every name is carried into
+    `.env.example` — names only, never the values, which ship in the PR."""
+    zip_bytes = make_zip({
+        ".env": "DATABASE_URL=postgres://user:hunter2@db/prod\n"
+                "# a comment, not a variable\n"
+                "\n"
+                "APP_MODE=production\n",
+        "app.py": "print('hi')\n",
+    })
+    findings = [finding(rule_id="env-file-committed", file=".env", line=0)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+
+    assert ".env" in plan.deletions
+    example = plan.files[".env.example"]
+    assert "DATABASE_URL=changeme" in example
+    assert "APP_MODE=changeme" in example
+    assert "a comment" not in example
+    # The safety invariant: names travel, values never do.
+    assert "hunter2" not in example
+    assert "postgres://" not in example
+    assert "hunter2" not in render_pr_body(plan)
+
+
+def test_pr_body_does_not_promise_the_env_file_survives_the_merge():
+    """The body used to say the file was "kept on your disk", which is true
+    for whoever runs `git rm --cached` locally and false for the only person
+    who reads it — the customer merging our PR. Verified against git: pulling
+    the merge deletes their working copy, and because the same commit
+    gitignores the path, `git status` stays clean so the loss is silent."""
+    zip_bytes = make_zip({
+        ".env": "DATABASE_URL=postgres://user:hunter2@db/prod\n",
+        "app.py": "print('hi')\n",
+    })
+    findings = [finding(rule_id="env-file-committed", file=".env", line=0)]
+
+    plan = build_fixpack_plan(zip_bytes, findings)
+    body = render_pr_body(plan)
+
+    assert "kept on your disk" not in body
+    assert "before you merge" in body
+    assert "git history" in body
+
+
 def test_missing_gitignore_case_creates_gitignore():
     zip_bytes = make_zip({"app.py": "print('hi')\n"})
     findings = [finding(rule_id="gitignore-missing-secrets", file=".gitignore", line=0)]

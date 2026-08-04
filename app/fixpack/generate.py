@@ -87,6 +87,9 @@ ROTATE_GUIDANCE = {
 }
 
 _JS_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+# Checked BEFORE _JS_SUFFIXES, which also contains them: TypeScript needs a
+# narrowed reference where plain JavaScript does not. See _env_reference.
+_TS_SUFFIXES = (".ts", ".tsx")
 
 # Full secret-file pattern set for the gitignore-missing-secrets fix,
 # mirroring what the scan rule and env-file detection care about (.env and
@@ -166,9 +169,36 @@ def _is_test_path(path: str) -> bool:
     return any(seg in _TEST_DIR_SEGMENTS for seg in segments)
 
 
+def _env_key_names(body: str) -> set[str]:
+    """Variable names declared in a dotenv-style body, values discarded.
+
+    Names only, never values: this feeds `.env.example`, which ships in the
+    PR, and the bodies it reads are the customer's real secrets."""
+    names: set[str] = set()
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name = line.split("=", 1)[0].strip()
+        if name.startswith("export "):
+            name = name[len("export "):].strip()
+        if name:
+            names.add(name)
+    return names
+
+
 def _env_reference(path: str, env_var: str) -> str:
     """The idiomatic way to read an env var in this file's language."""
     lower = path.lower()
+    if lower.endswith(_TS_SUFFIXES):
+        # `process.env.X` is typed `string | undefined`, which does not
+        # satisfy a `string` parameter under `strict` — and `strict` is the
+        # create-next-app default, so a bare reference makes the PR we sell
+        # fail to compile for most of the market (TS2345). The non-null
+        # assertion keeps the "this must be set" contract, is the idiomatic
+        # form in this ecosystem, and surfaces a missing variable at first
+        # use rather than substituting a plausible-looking empty secret.
+        return f"process.env.{env_var}!"
     if lower.endswith(_JS_SUFFIXES):
         return f"process.env.{env_var}"
     if lower.endswith(".py"):
@@ -510,11 +540,20 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     gitignore_body = contents.get(gitignore_entry, "") if gitignore_entry else ""
 
     required_gitignore: list[str] = []
+    # Names declared in the env files we are about to untrack. Recorded so
+    # they survive in `.env.example`: untracking removes the file from the
+    # customer's working copy on pull, and a key that lived only there would
+    # otherwise vanish with no record that the app ever needed it.
+    untracked_env_names: set[str] = set()
 
     if "env-file-committed" in check_rule_ids:
         committed = find_committed_env_files(files_list)
         if committed:
             plan.deletions.extend(committed)
+            for env_path in committed:
+                entry = _find_entry(raw_names, env_path)
+                if entry:
+                    untracked_env_names |= _env_key_names(contents.get(entry, ""))
             # A committed .env re-appears on the next `git add` without an
             # ignore rule, so untracking without this is a half-fix.
             for p in (".env",):
@@ -525,8 +564,12 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                 title="Environment file committed to repository",
                 detail="Untracked "
                        + ", ".join(f"`{c}`" for c in committed)
-                       + " (git rm --cached — kept on your disk, removed from "
-                         "version control) and added it to `.gitignore`.",
+                       + " and added it to `.gitignore`. **Copy the current "
+                         "values somewhere safe before you merge** — removing "
+                         "the file from version control also removes it from "
+                         "your working copy when you pull this merge. The "
+                         "values remain in your git history, which is why "
+                         "they must be rotated at their providers.",
             ))
         else:
             plan.skipped.append(SkippedFinding(
@@ -568,16 +611,14 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     for path in plan.deletions:
         plan.files.pop(path, None)
 
-    # --- .env.example: record every substituted var (placeholder only). --
-    if env_vars_used:
+    # --- .env.example: record every substituted var and every key from an
+    # env file we untracked (placeholder values only, never the real ones). --
+    wanted_env_names = set(env_vars_used) | untracked_env_names
+    if wanted_env_names:
         example_entry = _find_entry(raw_names, ".env.example")
         example_body = contents.get(example_entry, "") if example_entry else ""
-        existing_names = {
-            line.split("=", 1)[0].strip()
-            for line in example_body.splitlines()
-            if "=" in line and not line.lstrip().startswith("#")
-        }
-        additions = [f"{name}=changeme" for name in sorted(env_vars_used)
+        existing_names = _env_key_names(example_body)
+        additions = [f"{name}=changeme" for name in sorted(wanted_env_names)
                      if name not in existing_names]
         if additions:
             new_example = _append_missing(example_body, additions)
