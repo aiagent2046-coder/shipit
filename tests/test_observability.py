@@ -222,6 +222,17 @@ def _run_process(monkeypatch, *, opener, jobs):
 
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    # Stub the deep review as succeeding. It is not what these tests measure,
+    # and a review that cannot run fires its own (correct) operator alert --
+    # "the PR is fine, the review is owed" -- which would show up in the alert
+    # counts asserted below and make "a delivered job is silent" untestable.
+    # Its own behaviour is covered in tests/test_fixpack_process_endpoint.py.
+    async def _review_ok(*args, **kwargs):
+        return "### Your full review\n\nhttps://drydock.co/audit/r1?token=t1"
+
+    monkeypatch.setattr(main_mod, "_deep_review_section", _review_ok)
+
     zip_bytes = _make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     repo = _FakeFixpackRepo(jobs)
 

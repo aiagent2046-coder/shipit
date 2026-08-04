@@ -9,8 +9,10 @@ suite never touches the network or a database.
 
 import asyncio
 import io
+import json
 import logging
 import zipfile
+from decimal import Decimal
 from contextlib import asynccontextmanager
 
 import pytest
@@ -20,10 +22,13 @@ import app.main as main_mod
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
+from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.main import (
     app,
     get_audit_repo,
     get_fixpack_repo,
+    get_llm_client,
+    get_llm_usage_repo,
     get_pr_opener,
     get_repo_fetcher,
 )
@@ -59,9 +64,93 @@ def make_zip(entries: dict[str, str]) -> bytes:
 class FakeAuditRepo:
     def __init__(self, audits: dict[str, dict]):
         self._audits = audits
+        # Rows the deep review writes. Separate from _audits, which holds the
+        # buyer's ORIGINAL audit: the review creates a new row rather than
+        # upgrading that one, because the Fix Pack re-fetches and the original
+        # row's content_hash must keep describing the bytes it was made from.
+        self.rows: list[dict] = []
 
     async def get(self, audit_id):
         return self._audits.get(audit_id)
+
+    async def create(self, *, stack, file_count, score_total, score_json,
+                     findings_json, repo_url=None, content_hash=None,
+                     engine_version=None):
+        row = {
+            "id": f"review-{len(self.rows) + 1}", "stack": stack,
+            "status": "completed", "file_count": file_count,
+            "score_total": score_total, "score_json": score_json,
+            "findings_json": findings_json, "repo_url": repo_url,
+            "content_hash": content_hash, "engine_version": engine_version,
+            "access_token": f"revtok{len(self.rows) + 1}",
+        }
+        self.rows.append(row)
+        return row
+
+    async def get_by_content_hash(self, content_hash, engine_version, basis):
+        # basis-aware ON PURPOSE, unlike some other fakes: the no-leak claim is
+        # that the review's static+llm row cannot be handed to an anonymous
+        # caller, who asks for static_only. A fake that ignored basis would let
+        # a leak pass its own test.
+        for row in reversed(self.rows):
+            if (row["content_hash"] == content_hash
+                    and row["engine_version"] == engine_version
+                    and (row["score_json"] or {}).get("basis") == basis):
+                return row
+        return None
+
+
+class FakeUsageRepo:
+    def __init__(self):
+        self.rows: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.rows.append(kwargs)
+        return {"id": "usage-1", **kwargs}
+
+    async def sum_anon_spend_today(self):
+        return Decimal("0")
+
+
+class FakeLLM(LLMClient):
+    """Returns one finding so the review has something to persist, and reports
+    usage so the accounting row is real."""
+
+    def __init__(self, response: str | None = None):
+        super().__init__(providers=[Provider("anthropic", "https://x", "k", "m")])
+        self._response = response if response is not None else json.dumps(
+            {"findings": [{
+                "title": "Route has no authentication check",
+                "severity": "high", "category": "Auth",
+                "file": "app/auth.ts", "line": 1,
+                "explanation": "anyone can call it", "confidence": 0.8,
+            }]}
+        )
+
+    def complete(self, system, user, max_tokens=4096):
+        return self._response, LLMUsage(
+            model="claude-sonnet-4.6", input_tokens=1000, output_tokens=200)
+
+
+class ExplodingLLM(LLMClient):
+    def __init__(self):
+        super().__init__(providers=[Provider("anthropic", "https://x", "k", "m")])
+
+    def complete(self, system, user, max_tokens=4096):
+        raise RuntimeError("model unavailable")
+
+
+class DegradingLLM(LLMClient):
+    """Fails the way a real provider fails: LLMError, which run_scan CATCHES.
+    The scan then returns a persisted static-only audit instead of raising, so
+    this is the case where a naive implementation links a static scan under the
+    heading "your full review"."""
+
+    def __init__(self):
+        super().__init__(providers=[Provider("anthropic", "https://x", "k", "m")])
+
+    def complete(self, system, user, max_tokens=4096):
+        raise LLMError("402 payment required mid-run")
 
 
 class FakeFixpackRepo:
@@ -117,7 +206,8 @@ def fake_fetcher_returning(zip_bytes: bytes):
     return _fetch
 
 
-def override(audit_repo=None, fixpack_repo=None, repo_fetcher=None, pr_opener=None):
+def override(audit_repo=None, fixpack_repo=None, repo_fetcher=None,
+            pr_opener=None, llm_client=None, llm_usage_repo=None):
     if audit_repo is not None:
         app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     if fixpack_repo is not None:
@@ -126,10 +216,15 @@ def override(audit_repo=None, fixpack_repo=None, repo_fetcher=None, pr_opener=No
         app.dependency_overrides[get_repo_fetcher] = lambda: repo_fetcher
     if pr_opener is not None:
         app.dependency_overrides[get_pr_opener] = lambda: pr_opener
+    if llm_client is not None:
+        app.dependency_overrides[get_llm_client] = lambda: llm_client
+    if llm_usage_repo is not None:
+        app.dependency_overrides[get_llm_usage_repo] = lambda: llm_usage_repo
 
 
 def clear_overrides():
-    for dep in (get_audit_repo, get_fixpack_repo, get_repo_fetcher, get_pr_opener):
+    for dep in (get_audit_repo, get_fixpack_repo, get_repo_fetcher, get_pr_opener,
+                get_llm_client, get_llm_usage_repo):
         app.dependency_overrides.pop(dep, None)
 
 
@@ -258,6 +353,183 @@ def test_semantic_note_is_appended_to_pr_body(monkeypatch):
 
 
 # --- the happy path + outcome accounting ----------------------------------
+
+def _review_zip() -> bytes:
+    # A Next.js app whose auth.ts matches the 'auth' rubric, so the LLM stage
+    # actually runs, plus a real secret so there is something to fix and the
+    # job reaches the review at all.
+    return make_zip({
+        "package.json": json.dumps(
+            {"dependencies": {"next": "15.0.0", "react": "19.0.0"}}),
+        "config.py": f'API_KEY = "{AWS_KEY}"\n',
+        "app/auth.ts": "const password = 'x'  // check auth token\n",
+    })
+
+
+def _capturing_opener(captured: dict):
+    def _open(owner, repo, files, *, title, body, branch_prefix,
+              deletions=None, token=None, job_id=None):
+        captured.update(title=title, body=body)
+        return PullRequestResult(
+            html_url="https://github.com/acme/app/pull/9",
+            branch="drydock/fix-pack-deadbeef",
+        )
+    return _open
+
+
+def _review_job_setup():
+    audits = {"a1": {
+        "repo_url": "https://github.com/acme/app",
+        "findings_json": [
+            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
+             "title": "AWS Access Key ID", "context": None},
+        ],
+    }}
+    return FakeAuditRepo(audits), FakeFixpackRepo(
+        [{"id": "j1", "audit_id": "a1", "status": "paid"}])
+
+
+def test_paid_fixpack_delivers_the_deep_review_link(monkeypatch):
+    """#188: a Fix Pack buys the fix AND one full-depth review of the same code,
+    which the free static-only audit does not include.
+
+    The link must carry the row's access token -- GET /v1/audits/{id} authorises
+    on it, so a bare URL is a flat 404. That was #187 on the payment
+    confirmation and must not be reintroduced here."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    audits, fixpack_repo = _review_job_setup()
+    usage, captured = FakeUsageRepo(), {}
+    override(audits, fixpack_repo, fake_fetcher_returning(_review_zip()),
+             _capturing_opener(captured),
+             llm_client=FakeLLM(), llm_usage_repo=usage)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["delivered"] == 1
+
+    # A NEW row, not an upgrade of the buyer's original audit.
+    assert len(audits.rows) == 1
+    review = audits.rows[0]
+    assert review["score_json"]["basis"] == "static+llm"
+    assert review["repo_url"] == "https://github.com/acme/app"
+
+    body = captured["body"]
+    assert f"/audit/{review['id']}?token={review['access_token']}" in body
+    assert "Your full review" in body
+    # The fix section is still there: the review is additive, not a replacement.
+    assert "Drydock Fix Pack" in body
+
+    # Spend is recorded under its own job_type so the journal can tell this
+    # paid depth apart from free traffic (see #184).
+    assert [r["job_type"] for r in usage.rows] == ["fixpack_review"]
+
+
+def test_deep_review_reuses_a_full_audit_of_identical_bytes(monkeypatch):
+    """Cache first, so two buyers of byte-identical content don't pay for the
+    same scan twice. The LLM is booby-trapped: if it is called, the test fails
+    rather than quietly costing $0.80."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    zip_bytes = _review_zip()
+    audits, fixpack_repo = _review_job_setup()
+    # Seed a full-basis row for exactly these bytes, as a previous purchase
+    # would have left behind.
+    from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
+    audits.rows.append({
+        "id": "already-there", "status": "completed",
+        "content_hash": content_digest(zip_bytes),
+        "engine_version": AUDIT_ENGINE_VERSION,
+        "score_json": {"basis": "static+llm", "total": 7.0},
+        "findings_json": [], "repo_url": "https://github.com/acme/app",
+        "access_token": "seededtok",
+    })
+
+    usage, captured = FakeUsageRepo(), {}
+    override(audits, fixpack_repo, fake_fetcher_returning(zip_bytes),
+             _capturing_opener(captured),
+             llm_client=ExplodingLLM(), llm_usage_repo=usage)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["delivered"] == 1
+    assert len(audits.rows) == 1          # nothing new written
+    assert usage.rows == []               # nothing spent
+    assert "/audit/already-there?token=seededtok" in captured["body"]
+
+
+def test_a_degraded_review_is_not_advertised_as_the_full_one(monkeypatch):
+    """The subtle half of the same bug. run_scan catches LLMError and degrades
+    to static-only rather than raising -- a 402 mid-audit produces a PERSISTED
+    static-only row and no exception for the caller to notice. Linking that as
+    the full review would sell depth we did not deliver, and would carry no
+    score, which is precisely what the free tier already gives away."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    alerts: list[str] = []
+
+    async def _capture_alert(text):
+        alerts.append(text)
+
+    monkeypatch.setattr(main_mod, "notify_operator", _capture_alert)
+
+    audits, fixpack_repo = _review_job_setup()
+    captured = {}
+    override(audits, fixpack_repo, fake_fetcher_returning(_review_zip()),
+             _capturing_opener(captured),
+             llm_client=DegradingLLM(), llm_usage_repo=FakeUsageRepo())
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["delivered"] == 1
+    # The degraded row exists -- the scan persisted it -- but it is NOT sold.
+    assert len(audits.rows) == 1
+    assert audits.rows[0]["score_json"]["basis"] == "static_only"
+    assert "Your full review" not in captured["body"]
+    assert audits.rows[0]["id"] not in captured["body"]
+    assert any("WITHOUT the full" in a for a in alerts)
+
+
+def test_a_failed_deep_review_still_delivers_the_fix(monkeypatch):
+    """The customer paid for both halves. Losing a generated, semantically
+    verified PR because the bonus review failed would be the worse trade, so
+    the PR ships without the section and the operator is told the review is
+    owed."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+
+    alerts: list[str] = []
+
+    async def _capture_alert(text):
+        alerts.append(text)
+
+    monkeypatch.setattr(main_mod, "notify_operator", _capture_alert)
+
+    audits, fixpack_repo = _review_job_setup()
+    captured = {}
+    override(audits, fixpack_repo, fake_fetcher_returning(_review_zip()),
+             _capturing_opener(captured),
+             llm_client=ExplodingLLM(), llm_usage_repo=FakeUsageRepo())
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    assert resp.json()["delivered"] == 1
+    assert fixpack_repo.delivered["j1"] == "https://github.com/acme/app/pull/9"
+    assert "Your full review" not in captured["body"]
+    assert "Drydock Fix Pack" in captured["body"]
+    assert any("WITHOUT the full" in a for a in alerts)
+
 
 def test_paid_job_opens_pr_and_marks_delivered(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")

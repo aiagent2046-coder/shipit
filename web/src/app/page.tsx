@@ -178,24 +178,24 @@ export default function LandingPage() {
             </p>
           </div>
 
-          {/* Same shape as the Enterprise block on /pricing: dashed, muted, no
-              CTA, because there is nothing to buy here yet. Stating the gap is
-              better than a visitor discovering after paying that the two
-              deepest checks were never part of it. */}
-          <div className="mt-6 rounded-xl border border-dashed border-border bg-surface/40 p-6">
+          {/* No longer dashed and no longer "not on sale yet": the deep review
+              now ships with every Fix Pack (#188). The copy and the code moved
+              in the same commit on purpose -- the whole lesson of #186 was that
+              this block went stale the moment behaviour changed under it. */}
+          <div className="mt-6 rounded-xl border border-accent/40 bg-accent/5 p-6">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="font-medium text-muted">The deeper review</h3>
-              <span className="rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                not on sale yet
+              <h3 className="font-medium">The deeper review</h3>
+              <span className="rounded-full border border-accent/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-accent">
+                included with a Fix Pack
               </span>
             </div>
             <p className="mt-3 text-sm text-muted">
               Whether your routes verify who is calling them, whether passwords
               are hashed, whether row-level security is on, whether user input
               reaches somewhere dangerous. It is also what the score out of 10
-              is computed from. Today it is not something you can buy on its own
-              — we&apos;re wiring it into the Fix Pack. Listed here so you know
-              it exists, rather than finding the gap afterwards.
+              is computed from, which is why a free scan carries no score. You
+              can&apos;t buy it on its own — buy a Fix Pack and the pull request
+              arrives with a link to the full review of the same code.
             </p>
           </div>
 

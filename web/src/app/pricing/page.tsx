@@ -44,6 +44,15 @@ const FREE_OMITS = [
   "No review of injection risk in your queries",
 ];
 
+// What the Fix Pack adds on top of the fix itself (#188). Kept as its own list
+// rather than folded into FIXPACK_INCLUDES: those items are all things the diff
+// does, this one is a separate deliverable that arrives as a link.
+const FIXPACK_REVIEW = [
+  "A readiness score out of 10",
+  "Authentication and access rules reviewed",
+  "Injection risk in your queries reviewed",
+];
+
 // Everything the paid pull request contains. Each line maps to real generator
 // behaviour in app/fixpack/generate.py — nothing aspirational.
 const FIXPACK_INCLUDES = [
@@ -175,6 +184,24 @@ export default function PricingPage() {
               </li>
             ))}
           </ul>
+
+          <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted">
+            Plus the full review the free scan leaves out
+          </p>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {FIXPACK_REVIEW.map((item) => (
+              <li key={item} className="flex gap-2">
+                <span aria-hidden="true" className="text-accent">
+                  ✓
+                </span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-sm text-muted">
+            Linked from the pull request, run against the same code. One review
+            per Fix Pack — it is not a subscription.
+          </p>
 
           <p className="mt-4 text-sm text-muted">
             Nothing is merged for you. The pull request sits there until you
