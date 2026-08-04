@@ -2512,6 +2512,43 @@ class MonitoringRunRepository:
             row = await cur.fetchone()
         return _row_to_monitoring_run(row) if row else None
 
+    async def pending_summary(self, limit: int = 5) -> dict[str, Any] | None:
+        """How much is queued, and which rows, without claiming anything.
+
+        Exists for the withdrawn-product guard (#184). The drain refuses to
+        claim while monitoring is off sale, but a refusal that says nothing
+        lets the queue grow unobserved -- and a pending run existing at all,
+        while the product cannot be bought, means something got past the
+        webhook gate or predates it. Either way a human should look, and they
+        need the row id and the repository to find out which.
+
+        Read-only on purpose: the guard must not mutate a backlog it is
+        declining to process.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, repo_full_name, created_at,
+                       count(*) over () as total
+                  from monitoring_runs
+                 where status = 'pending'
+                 order by created_at
+                 limit %s
+                """,
+                (limit,),
+            )
+            rows = await cur.fetchall()
+        return {
+            "total": int(rows[0]["total"]) if rows else 0,
+            "runs": [{"id": str(r["id"]),
+                      "repo_full_name": r["repo_full_name"],
+                      "created_at": r["created_at"]} for r in rows],
+        }
+
     async def claim_one_pending(self) -> dict[str, Any] | None:
         """Atomically claim the oldest 'pending' monitoring run into a 'running'
         lease, and return it -- or None when there is nothing to claim (or
