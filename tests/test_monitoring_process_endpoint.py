@@ -45,7 +45,7 @@ class FakeAuditRepo:
     def __init__(self, previous=None):
         self._previous = previous
 
-    async def get_latest_by_repo_url(self, repo_full_name):
+    async def get_latest_by_repo_url(self, repo_full_name, basis):
         return self._previous
 
 

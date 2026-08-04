@@ -39,8 +39,11 @@ export function MonitoringPurchase({
         <p className="mt-2 max-w-2xl text-sm text-muted">
           We re-audit the repository on each push to its default branch (at most
           once a day) and send you a Telegram message the moment a{" "}
-          <span className="font-medium text-text">new</span> critical or high
-          finding appears. It&apos;s a recurring subscription — with Telegram
+          {/* Explicit {" "}: JSX drops the space between the closing tag and
+              the next line's first word, and the compiled bundle rendered
+              "newcritical". Same pattern as the {" "} before the span. */}
+          <span className="font-medium text-text">new</span>{" "}
+          critical or high finding appears. It&apos;s a recurring subscription — with Telegram
           Stars the bot shows the current price for confirmation before
           anything is charged (cancel anytime with{" "}
           <code className="font-mono">/unsubscribe</code>).

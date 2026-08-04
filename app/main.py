@@ -1429,7 +1429,11 @@ async def _process_one_monitoring_run(
 
         # Baseline BEFORE the new audit persists, so the diff reflects only what
         # this push introduced.
-        previous = await audit_repo.get_latest_by_repo_url(repo_full_name)
+        # BASIS_FULL: this path re-audits at full depth, so only a full prior
+        # audit is a comparable baseline. A free static-only row as the baseline
+        # would make every LLM finding look newly appeared.
+        previous = await audit_repo.get_latest_by_repo_url(
+            repo_full_name, BASIS_FULL)
         previous_findings = (previous or {}).get("findings_json") or []
 
         try:
