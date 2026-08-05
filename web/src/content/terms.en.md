@@ -40,7 +40,7 @@ We may suspend or terminate access for anyone who violates these Terms.
 - The Fix Pack price is shown on the pricing page and again at checkout, and may change going forward; a change does not affect an already-completed purchase.
 - Payment is by **bank transfer to a payment card**, in US dollars. You transfer the amount shown at checkout to the card number and named recipient displayed there. We never receive, see, or store your card number — you send from your own bank, and all we learn is the name your bank puts on the transfer.
 - **Confirmation is manual.** A person checks that the transfer arrived and then releases your order, so there is a delay between paying and delivery. It is usually well under a day, but it is a human, not a payment processor, and we do not promise an exact time.
-- We identify your payment by **the name you entered at checkout and the amount**. Pay from an account in that name, or tell us at **support@drydock.co** what name to expect, otherwise we may not be able to match your transfer to your order.
+- Every order gets a reference like **DRY-XXXXXX**, shown to you at checkout. **Quote it in your transfer's comment or reference field if your bank offers one** — that is how we identify your payment. Not every bank provides that field on a card-to-card transfer, so we also match on the name you entered; if neither is possible, write to **support@drydock.co** with your reference and the amount and we will find it by hand.
 - **Refunds:** if we fail to deliver the paid product — for example, a Fix Pack purchase where no pull request is generated — you are entitled to a full refund if you request it within **14 days** of the payment. Write to **support@drydock.co** with the name you paid under and the amount, and we will return the money to the account it came from. Outside of a delivery failure, purchases are otherwise final, consistent with the nature of an on-demand digital service.
 - **What we do not sell.** Continuous Monitoring and the Pro tier are not currently on sale. Any reference to them elsewhere describes a product you cannot buy today, and no recurring charge of any kind exists: every payment is a one-off and nothing can renew.
 
@@ -52,7 +52,7 @@ You confirm that you have the right to submit the code you audit (e.g. it's your
 
 ## 6. Third-party services
 
-The Service relies on third parties — including an AI model provider, GitHub, Telegram, PayPal, and hosting providers — to operate. Your use of those integrations (e.g. installing our GitHub App, using Telegram to pay) is also subject to that provider's own terms. We are not responsible for those providers' outages, policy changes, or actions.
+The Service relies on third parties — including an AI model provider, GitHub, Telegram, and hosting providers — to operate. Your use of those integrations (for example, installing our GitHub App) is also subject to that provider's own terms. We are not responsible for those providers' outages, policy changes, or actions.
 
 ## 7. Disclaimers and limitation of liability
 
