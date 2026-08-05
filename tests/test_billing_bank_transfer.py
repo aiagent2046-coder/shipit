@@ -389,7 +389,9 @@ def test_pro_invoice_returns_details_and_reference(monkeypatch):
     assert bank_transfer.REFERENCE_RE.match(body["reference"])
     assert body["currency"] == "USD"
     # 5.00 plus a kopeck suffix, never the bare price and never a discount.
-    assert 501 <= bank_transfer.amount_to_cents(float(body["amount"])) <= 599
+    # The quoted amount is the price exactly -- no kopeck nonce. The storefront
+    # advertising one figure while checkout demanded another is what removed it.
+    assert body["amount"] == bank_transfer.pro_price_usd()
     # The card is what the checkout page renders and the payer copies; the rest
     # ride along for the footer, and none of it is ever NEXT_PUBLIC_* config.
     assert body["bank"]["card"] == BANK_ENV["BANK_TRANSFER_CARD"]
@@ -399,111 +401,6 @@ def test_pro_invoice_returns_details_and_reference(monkeypatch):
     assert row["status"] == "pending"
     assert row["provider"] == "bank_transfer"
     assert row["account_id"] is None
-
-
-async def test_open_invoices_get_distinct_kopeck_suffixes(monkeypatch):
-    """The point of the suffix: the operator reads 5.07 off the statement and
-    knows which order paid, without waiting on the payer."""
-    _configure_bank(monkeypatch)
-    payments = FakePaymentRepo()
-    amounts = [
-        (await bank_transfer.create_invoice(
-            payments, details=dict(BANK_DETAILS)))["amount"]
-        for _ in range(20)
-    ]
-    assert len(set(amounts)) == 20
-    for a in amounts:
-        assert 501 <= bank_transfer.amount_to_cents(float(a)) <= 599
-
-
-async def test_pro_and_fixpack_suffixes_cannot_collide(monkeypatch):
-    """Both creators draw from the same pending set. At different base prices
-    they cannot collide anyway, but the shared set is what makes that hold even
-    if an operator ever sets the two prices equal."""
-    _configure_bank(monkeypatch)
-    monkeypatch.setenv("BANK_TRANSFER_FIXPACK_PRICE_USD", "5.00")
-    payments = FakePaymentRepo()
-    pro = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
-    fix = await bank_transfer.create_fixpack_invoice(
-        payments, details=dict(BANK_DETAILS), audit_id="a1")
-    assert pro["amount"] != fix["amount"]
-
-
-async def test_a_completed_invoice_frees_its_suffix(monkeypatch):
-    """Only OPEN invoices reserve a suffix. A 99-invoice-per-week ceiling that
-    counted settled orders too would run out for no reason."""
-    _configure_bank(monkeypatch)
-    payments = FakePaymentRepo()
-    first = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
-    payments.rows[first["payment_id"]]["status"] = "completed"
-    taken = set()
-    for _ in range(99):
-        inv = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
-        taken.add(inv["amount"])
-    # All 99 slots were available again, the freed one among them.
-    assert len(taken) == 99
-    assert first["amount"] in taken
-
-
-async def test_an_abandoned_invoice_stops_holding_its_suffix(monkeypatch):
-    """THE regression this window exists for.
-
-    Nothing moves an abandoned checkout out of 'pending': no cancel endpoint,
-    no sweeper, and deliberately no expiry status (that would make a late
-    transfer unconfirmable). So before the window, 99 people who opened the
-    payment page and walked away switched the suffix off permanently -- every
-    later buyer quoted the same bare price, with nothing in any report saying
-    the operator's matching hint had stopped existing.
-    """
-    _configure_bank(monkeypatch)
-    payments = FakePaymentRepo()
-    stale = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-        seconds=bank_transfer.INVOICE_TTL_SECONDS + 60)
-    # 99 abandoned invoices, all older than the TTL window.
-    for cents in range(1, 100):
-        payments.rows[str(uuid.uuid4())] = {
-            "id": str(uuid.uuid4()), "provider": "bank_transfer",
-            "status": "pending", "amount": 5.0 + cents / 100,
-            "created_at": stale, "external_ref": f"DRY-OLD{cents:03d}",
-        }
-
-    invoice = await bank_transfer.create_invoice(
-        payments, details=dict(BANK_DETAILS))
-
-    # A real suffix, not the saturation fallback.
-    assert invoice["amount"] != "5.00"
-    assert 501 <= bank_transfer.amount_to_cents(float(invoice["amount"])) <= 599
-
-
-async def test_a_recent_invoice_still_holds_its_suffix(monkeypatch):
-    """The other half: the window must not be so eager that it hands out a
-    suffix another payer is currently looking at."""
-    _configure_bank(monkeypatch)
-    payments = FakePaymentRepo()
-    first = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
-    second = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
-    assert first["amount"] != second["amount"]
-
-
-async def test_the_window_is_the_invoice_ttl(monkeypatch):
-    """The window reuses INVOICE_TTL_SECONDS rather than a constant of its own.
-    Two numbers here would drift, and the drift is silent in both directions:
-    too short hands out a suffix a payer is still looking at, too long brings
-    the saturation back."""
-    _configure_bank(monkeypatch)
-    payments = FakePaymentRepo()
-    seen = {}
-
-    async def spy(provider, *, created_after=None):
-        seen["created_after"] = created_after
-        return []
-
-    payments.list_pending = spy
-    await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-    age = (now - seen["created_after"]).total_seconds()
-    assert abs(age - bank_transfer.INVOICE_TTL_SECONDS) < 5
 
 
 async def test_saturation_falls_back_to_the_bare_price(monkeypatch):
@@ -873,7 +770,9 @@ async def test_pending_status_carries_what_the_page_needs(monkeypatch):
     # The amount the payer was quoted, suffix included -- not the catalogue
     # price, or the page would tell them to send the wrong figure.
     assert status["amount"] == f"{float(invoice['amount']):.2f}"
-    assert 501 <= bank_transfer.amount_to_cents(float(status["amount"])) <= 599
+    # The quoted amount is the price exactly -- no kopeck nonce. The storefront
+    # advertising one figure while checkout demanded another is what removed it.
+    assert status["amount"] == bank_transfer.pro_price_usd()
     assert status["currency"] == "USD"
     assert status["bank"]["bank_name"] == BANK_ENV["BANK_TRANSFER_BANK_NAME"]
     assert "api_key" not in status
