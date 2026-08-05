@@ -1940,21 +1940,30 @@ async def create_bank_transfer_invoice(
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     limiter: RateLimiter = Depends(get_rate_limiter),
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
 ) -> dict:
     """Open a bank-transfer invoice for the Pro tier.
 
     Returns the card number to pay, the amount, and the reference code that
-    identifies this order. The card transfer itself carries no reference, so
-    the operator matches it by the payer's name and email — both required (422
-    without them, see PayerContact). Poll GET
-    /v1/billing/bank-transfer/{reference} to collect the key once the operator
-    confirms the money arrived.
+    identifies this order. Many banks carry that reference in the transfer's
+    comment field and some do not, so the payer's name and email stay required
+    (422 without them, see PayerContact) as the fallback the operator matches
+    on. Poll GET /v1/billing/bank-transfer/{reference} to collect the key once
+    the operator confirms the money arrived.
 
-    Rate limited: unauthenticated, and every invoice takes one of the 99
-    kopeck suffixes for the length of the TTL window.
+    Rate limited because it is unauthenticated and writes a row per call.
 
-    503 if bank transfer isn't configured, or if the pending row can't be
-    persisted (no DATABASE_URL / no free reference code)."""
+    Gated by the same emergency stop as the Fix Pack creator: a stop that left
+    either invoice creator open would not stop sales.
+
+    503 if bank transfer isn't configured, if the service is paused, or if the
+    pending row can't be persisted (no DATABASE_URL / no free reference code)."""
+    paused, note = await _emergency_stop_active(service_flags_repo)
+    if paused:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "service_paused", "detail": note},
+        )
     _check_invoice_rate_limit(request, limiter)
     details = _bank_transfer_details()
     invoice = await bank_transfer.create_invoice(
@@ -1976,6 +1985,7 @@ async def create_fixpack_bank_transfer_invoice(
     audit_repo: AuditRepository = Depends(get_audit_repo),
     fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     limiter: RateLimiter = Depends(get_rate_limiter),
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
 ) -> dict:
     """Open a bank-transfer invoice to buy a Fix Pack for one audit. Same
     reference-code flow and same polling endpoint as the Pro invoice above, at
@@ -1985,8 +1995,20 @@ async def create_fixpack_bank_transfer_invoice(
     audit has no repository to open a fix PR against, so 422 rather than sell
     something that can't be fulfilled. 404 if no such audit.
 
-    Rate limited on the same key as the Pro creator: both draw kopeck suffixes
-    from one pool."""
+    Rate limited on the same key as the Pro creator, which is also why both are
+    gated by the same emergency stop: this is the only live payment rail, so a
+    stop that did not close it would not stop sales."""
+    # Emergency stop closes the checkout, not just the work. Checked before the
+    # rate limiter so a paused service neither spends nor consumes the caller's
+    # quota, exactly as create_audit does it. Until this existed the stop paused
+    # the Fix Pack worker while leaving the invoice creator open, so engaging it
+    # mid-incident would have kept taking money for work that could not run.
+    paused, note = await _emergency_stop_active(service_flags_repo)
+    if paused:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "service_paused", "detail": note},
+        )
     _check_invoice_rate_limit(request, limiter)
     audit = await audit_repo.get(audit_id)
     if audit is None:

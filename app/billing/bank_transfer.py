@@ -442,14 +442,17 @@ def _notification_text(row: dict[str, Any], *, site_url: str | None = None) -> s
     lines = [
         f"Bank transfer reported — {what}",
         "",
-        # Amount first: the kopeck suffix is unique per open invoice, so on a
-        # same-currency transfer this line alone identifies the payment.
-        f"Expect exactly: {quoted} {row.get('currency') or CURRENCY}",
+        # Reference first, because it is the only field that differs between two
+        # open orders. The amount used to carry a unique kopeck suffix and no
+        # longer does -- every invoice is now the exact advertised price -- so
+        # leading with the amount would point at the one line that cannot tell
+        # two orders apart.
         f"Reference: {row.get('external_ref')}",
+        f"Expect at least: {quoted} {row.get('currency') or CURRENCY}",
     ]
     # This message is the only place the payer contact from migration 0026 is
-    # ever read, and it is the fallback the kopeck suffix above degrades to when
-    # the payer's bank converted the amount. Rows created before card payments
+    # ever read, and it is what the reference degrades to when the payer's bank
+    # offered no comment field to carry it. Rows created before card payments
     # may still have these blank, so the lines stay conditional -- a "Payer: "
     # with nothing after it tells the operator less than no line.
     payer_name = (row.get("payer_name") or "").strip()
@@ -464,17 +467,18 @@ def _notification_text(row: dict[str, Any], *, site_url: str | None = None) -> s
             lines.append(f"{site_url.rstrip('/')}/audit/{row['audit_id']}")
     lines += [
         "",
-        # Deliberately "should be" and not "is". Two cases make the kopecks
-        # non-unique and neither is visible from this row: the payer's bank
-        # converted the amount, or all 99 suffixes were in flight and this
-        # invoice got the bare price. Asserting uniqueness the operator can
-        # then disprove is worse than not asserting it -- the first time the
-        # message is wrong, every later one stops being read.
-        "Find the incoming card transfer by the exact amount above: its "
-        "kopecks should be unique to this order. If two transfers match, or "
-        "the payer's bank converted and the kopecks are gone, match on the "
-        "payer name instead and check the amount is sufficient. Only then "
-        "press Confirm.",
+        # Deliberately hedged on where the reference will be, because that is
+        # not knowable from this row: many banks carry a comment on a card-to-
+        # card transfer and some do not. Every invoice is now the same amount,
+        # so the amount is stated as a floor to check rather than a key to match
+        # on. Asserting something the operator can immediately disprove is worse
+        # than not asserting it -- the first time this message is wrong, every
+        # later one stops being read.
+        "Match the incoming transfer by the reference above if the payer's "
+        "bank carried it in the comment. Many banks don't, so otherwise match "
+        "on the payer name below. Every order is the same amount, so the "
+        "amount identifies nothing on its own -- only check it is not short. "
+        "Only then press Confirm.",
     ]
     return "\n".join(lines)
 
