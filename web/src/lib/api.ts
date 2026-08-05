@@ -79,7 +79,17 @@ async function parse<T>(res: Response): Promise<T> {
     if (detail && typeof detail === "object") {
       const d = detail as { reason?: string; detail?: string };
       reason = d.reason;
-      message = d.detail || d.reason || message;
+      // `service_paused` is the one reason whose `detail` is operator-authored
+      // free text -- the note typed into service_flags when engaging the
+      // emergency stop. Surfacing it verbatim showed a visitor our internal
+      // state. Replaced here rather than in each component so a future caller
+      // cannot reintroduce the leak by forgetting to special-case it.
+      message =
+        d.reason === "service_paused"
+          ? "Drydock is paused for maintenance right now. Nothing was charged " +
+            "and nothing was started. Try again shortly, or email " +
+            "support@drydock.co if it stays paused."
+          : d.detail || d.reason || message;
     } else if (typeof detail === "string") {
       message = detail;
     }

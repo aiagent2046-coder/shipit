@@ -104,7 +104,7 @@ export function BankTransferCheckout({
         e instanceof ApiError
           ? e.reason === "bank_transfer_not_configured" ||
             e.reason === "not_persisted"
-            ? "Card payment isn't configured on the backend yet. Try another payment method, or email support@drydock.co."
+            ? "Card payment isn't configured on the backend right now. Email support@drydock.co and we'll sort it out by hand."
             : e.message
           : "Could not create an invoice.",
       );
