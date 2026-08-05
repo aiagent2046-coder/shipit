@@ -289,7 +289,8 @@ async def _execute_job(
     if stack is Stack.UNSUPPORTED:
         raise JobExecutionError(
             "unsupported_stack",
-            "MVP supports Next.js and FastAPI only",
+            "We can audit Next.js, Vite + React, and FastAPI projects. "
+            "This repository looks like none of them.",
             permanent=True,
         )
 

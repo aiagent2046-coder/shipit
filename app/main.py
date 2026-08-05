@@ -3636,7 +3636,9 @@ async def create_audit(
         raise HTTPException(
             status_code=422,
             detail={"reason": "unsupported_stack",
-                    "detail": "MVP supports Next.js and FastAPI only"},
+                    "detail": "We can audit Next.js, Vite + React, and FastAPI "
+                              "projects. This repository looks like none of "
+                              "them."},
         )
 
     # Consume quota only after the upload proves to be real work: validation
