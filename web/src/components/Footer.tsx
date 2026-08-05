@@ -54,6 +54,12 @@ export function Footer() {
               >
                 @{SUPPORT_TELEGRAM}
               </a>
+              {/* Labelled like the addresses above it: the bot was the one
+                  channel with no stated purpose, so a visitor could not tell
+                  whether it was support, sales, or something else. */}
+              <span className="block text-xs opacity-70">
+                collecting or recovering a purchased key
+              </span>
             </li>
           </ul>
         </section>

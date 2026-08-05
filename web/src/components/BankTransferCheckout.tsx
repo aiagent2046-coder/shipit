@@ -231,10 +231,10 @@ export function BankTransferCheckout({
               disabled={creating}
             />
             <p className="text-xs text-muted">
-              A card transfer carries no order number, so your name and email
-              are how we recognise your payment. Use the name on the card you
-              pay from. We don&apos;t email you — this page is where your order
-              updates.
+              We match your payment by the order number you&apos;ll get on the
+              next screen, and by your name if your bank doesn&apos;t let you
+              attach one. Use the name on the card you pay from. We don&apos;t
+              email you — this page is where your order updates.
             </p>
           </div>
 
