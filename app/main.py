@@ -495,6 +495,12 @@ DEFAULT_DAILY_SPEND_CAP_USD = Decimal(
     os.environ.get("DEFAULT_DAILY_SPEND_CAP_USD", "2.00"))
 _ANON_SPEND_ALERT_FRACTION = Decimal("0.8")
 
+# How often an engaged emergency stop re-pages the operator. Half an hour, not
+# alerts.DEFAULT_THROTTLE_SECONDS (60s): the audit worker consults the stop once
+# per loop pass, so the default meant one Telegram message per minute for as
+# long as the stop was on.
+_PAUSED_ALERT_THROTTLE_S = 1800.0
+
 # Emergency-stop flag cache. The kill switch is read on the request path, so it
 # is cached for a few seconds to avoid a DB round-trip per request; a pause thus
 # takes effect within _FLAG_TTL_S, which is well inside "emergency" tolerance.
@@ -551,7 +557,16 @@ async def _emergency_stop_active(
     """True (with the operator note) when paid LLM ops are paused. Fires the
     mandatory operator alert as a side effect whenever the stop is found engaged;
     notify_operator self-throttles on the dedupe_key, so a burst of blocked
-    requests collapses to one alert."""
+    requests collapses to one alert.
+
+    The window is _PAUSED_ALERT_THROTTLE_S, not the 60s default, because the
+    audit worker asks once per loop pass: at the default, an engaged stop paged
+    the operator every single minute for as long as it stayed engaged. A
+    reminder is wanted -- forgetting the stop is on means silently selling
+    nothing -- but one a minute forever is how an operator learns to ignore
+    alerts. Deliberately not a per-caller parameter: fifteen tests stub this
+    function, so a new keyword would break them all and every future stub would
+    have to remember it. One window for one alert is enough."""
     enabled, note = await _llm_paid_ops_enabled(flags_repo)
     if enabled:
         return False, None
@@ -559,6 +574,7 @@ async def _emergency_stop_active(
         f"Emergency stop ACTIVE: llm_paid_ops is OFF, rejecting paid LLM ops. "
         f"Note: {note or '(none)'}",
         dedupe_key="llm-paid-ops-paused",
+        throttle_seconds=_PAUSED_ALERT_THROTTLE_S,
     )
     return True, note
 
