@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { FixpackStatus, InstallationStatus } from "@/lib/types";
+import type { FixpackStatus, InstallationStatus, Pricing } from "@/lib/types";
 import {
   createFixpackBankTransferInvoice,
   getFixpackStatus,
   getInstallationStatus,
+  getPricing,
 } from "@/lib/api";
 import { BankTransferCheckout } from "./BankTransferCheckout";
 import { Spinner } from "./Spinner";
@@ -57,6 +58,28 @@ export function FixpackPurchase({
    */
   autoFixable?: boolean;
 }) {
+  // Fetched, never hardcoded, for the same reason /pricing fetches it: a
+  // figure typed into this file is how a page starts contradicting what
+  // checkout charges, which is the bait-price shape a stranger walks away
+  // from. This block used to promise "the price is shown below" and then show
+  // nothing until a name and an email had been handed over.
+  const [price, setPrice] = useState<Pricing | null>(null);
+  const [priceFailed, setPriceFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPricing()
+      .then((p) => {
+        if (!cancelled) setPrice(p);
+      })
+      .catch(() => {
+        if (!cancelled) setPriceFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (repoUrl && autoFixable === false) {
     // Nothing here can be fixed automatically, and that was knowable before
     // anyone paid. Audit 05fa18f5 was sold a Fix Pack in exactly this state:
@@ -103,8 +126,33 @@ export function FixpackPurchase({
         </h2>
         <p className="mt-2 max-w-2xl text-sm text-muted">
           A Fix Pack generates real fixes for the issues above and opens a pull
-          request against your repository automatically. Pay once by card —
-          the price is shown below.
+          request against your repository automatically, and includes one
+          full-depth review of the same code. Paid once by card — not a
+          subscription, and nothing recurs.
+        </p>
+        {/* The price, up front. This block used to promise "the price is shown
+            below" and then show nothing until the buyer had handed over a name
+            and an email to generate an invoice. Fetched from /v1/pricing so it
+            cannot drift from what checkout charges. */}
+        <p className="mt-3 text-sm" aria-live="polite">
+          {price ? (
+            <>
+              <span className="font-mono text-2xl font-semibold">
+                ${price.fixpack.amount}
+              </span>
+              <span className="ml-2 text-muted">
+                {price.fixpack.currency}, per audit
+              </span>
+            </>
+          ) : priceFailed ? (
+            <span className="text-muted">
+              We couldn&apos;t load the current price. Email{" "}
+              <SupportEmail /> and we&apos;ll confirm it before you pay
+              anything.
+            </span>
+          ) : (
+            <span className="text-muted">Loading the price…</span>
+          )}
         </p>
       </header>
 

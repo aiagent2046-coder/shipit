@@ -1,8 +1,10 @@
 # Terms of Service
 
-**Last updated:** July 21, 2026
+**Last updated:** August 5, 2026
 
-These Terms of Service ("Terms") govern your use of Drydock's website, API, Telegram bot, and GitHub App (together, the "Service"), operated by Individual Entrepreneur (Индивидуальный предприниматель) Trubitsyna Irina Yuryevna, registered in the Russian Federation ("Drydock," "we," "us"). Registration details (INN/OGRNIP) will be added here once issued.
+These Terms of Service ("Terms") govern your use of Drydock's website, API, Telegram bot, and GitHub App (together, the "Service"), operated by **Anatolii Trubitsyn**, a private individual resident in Almaty, Kazakhstan ("Drydock," "we," "us").
+
+**There is no company.** Drydock is run by one person and no legal entity has been registered for it. Payment therefore goes to a named individual's personal bank account, not to a business account, and the recipient's name is shown to you before you send anything. If that is not acceptable to you, please do not pay — we would rather lose the sale than have you send money somewhere you are not comfortable sending it.
 
 By using the Service, you agree to these Terms. If you do not agree, do not use the Service.
 
@@ -35,10 +37,12 @@ We may suspend or terminate access for anyone who violates these Terms.
 
 ## 4. Payment, pricing, and refunds
 
-- Prices for Pro, Fix Pack, and Continuous Monitoring are shown at the time of purchase and may change going forward; a change does not affect an already-completed purchase or an active subscription period.
-- We accept payment via Telegram Stars, USDT (TRC20), and PayPal. Each method is processed by that method's own provider; we never see your card number or bank details.
-- **Refunds:** if we fail to deliver the paid product — for example, a Fix Pack purchase where no pull request is generated, or a Pro/Monitoring payment where no access is granted — you are entitled to a full refund if you request it within **14 days** of the payment. Refunds are processed back through the original payment method where the provider supports it; where it doesn't (e.g. an on-chain USDT transfer), we will arrange an equivalent alternative with you directly at **aiagent2046@gmail.com**. Outside of a delivery failure, purchases are otherwise final, consistent with the nature of an on-demand digital service.
-- **Continuous Monitoring** is a recurring subscription; it renews automatically each period until you cancel. Canceling stops future renewals but does not refund the period already paid for, and monitoring continues until that period ends.
+- The Fix Pack price is shown on the pricing page and again at checkout, and may change going forward; a change does not affect an already-completed purchase.
+- Payment is by **bank transfer to a payment card**, in US dollars. You transfer the amount shown at checkout to the card number and named recipient displayed there. We never receive, see, or store your card number — you send from your own bank, and all we learn is the name your bank puts on the transfer.
+- **Confirmation is manual.** A person checks that the transfer arrived and then releases your order, so there is a delay between paying and delivery. It is usually well under a day, but it is a human, not a payment processor, and we do not promise an exact time.
+- Every order gets a reference like **DRY-XXXXXX**, shown to you at checkout. **Quote it in your transfer's comment or reference field if your bank offers one** — that is how we identify your payment. Not every bank provides that field on a card-to-card transfer, so we also match on the name you entered; if neither is possible, write to **support@drydock.co** with your reference and the amount and we will find it by hand.
+- **Refunds:** if we fail to deliver the paid product — for example, a Fix Pack purchase where no pull request is generated — you are entitled to a full refund if you request it within **14 days** of the payment. Write to **support@drydock.co** with the name you paid under and the amount, and we will return the money to the account it came from. Outside of a delivery failure, purchases are otherwise final, consistent with the nature of an on-demand digital service.
+- **What we do not sell.** Continuous Monitoring and the Pro tier are not currently on sale. Any reference to them elsewhere describes a product you cannot buy today, and no recurring charge of any kind exists: every payment is a one-off and nothing can renew.
 
 ## 5. Your code, our license to use it
 
@@ -48,7 +52,7 @@ You confirm that you have the right to submit the code you audit (e.g. it's your
 
 ## 6. Third-party services
 
-The Service relies on third parties — including an AI model provider, GitHub, Telegram, PayPal, and hosting providers — to operate. Your use of those integrations (e.g. installing our GitHub App, using Telegram to pay) is also subject to that provider's own terms. We are not responsible for those providers' outages, policy changes, or actions.
+The Service relies on third parties — including an AI model provider, GitHub, Telegram, and hosting providers — to operate. Your use of those integrations (for example, installing our GitHub App) is also subject to that provider's own terms. We are not responsible for those providers' outages, policy changes, or actions.
 
 ## 7. Disclaimers and limitation of liability
 
@@ -64,8 +68,8 @@ We may change, suspend, or discontinue any part of the Service at any time. We m
 
 ## 9. Governing law and disputes
 
-These Terms are governed by the laws of the Russian Federation, without regard to conflict-of-laws principles. Any dispute will be resolved in accordance with Russian law; we will make a genuine attempt to resolve any dispute informally before either party resorts to formal proceedings — contact us first at **aiagent2046@gmail.com**.
+These Terms are governed by the laws of the Republic of Kazakhstan, where the operator resides, without regard to conflict-of-laws principles. We will make a genuine attempt to resolve any dispute informally before either party resorts to formal proceedings — contact us first at **support@drydock.co**.
 
 ## 10. Contact
 
-Questions about these Terms: **aiagent2046@gmail.com**.
+Questions about these Terms: **support@drydock.co**.

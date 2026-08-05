@@ -3,7 +3,14 @@ import Link from "next/link";
 // Support contacts. Static on purpose: unlike the bank requisites these are
 // brand addresses that change with the brand, not with the operator's banking,
 // so a rebuild is the right cost for changing them.
-const SUPPORT_EMAILS = ["support@drydock.co", "info@drydock.co", "email@drydock.co"];
+// Labelled, because three near-identical addresses with no stated difference
+// read as sloppiness on a page where a stranger is deciding whether to trust
+// us with money. support@ is the one the rest of the product points at.
+const SUPPORT_EMAILS: { address: string; label: string }[] = [
+  { address: "support@drydock.co", label: "technical support, orders, refunds" },
+  { address: "info@drydock.co", label: "advertising and partnerships" },
+  { address: "email@drydock.co", label: "the developer, directly" },
+];
 const SUPPORT_TELEGRAM = "drydocksupport_bot";
 
 /**
@@ -27,14 +34,15 @@ export function Footer() {
         <section>
           <h2 className="font-medium text-text">Contact</h2>
           <ul className="mt-2 space-y-1">
-            {SUPPORT_EMAILS.map((email) => (
-              <li key={email}>
+            {SUPPORT_EMAILS.map(({ address, label }) => (
+              <li key={address}>
                 <a
-                  href={`mailto:${email}`}
+                  href={`mailto:${address}`}
                   className="transition-colors hover:text-text"
                 >
-                  {email}
+                  {address}
                 </a>
+                <span className="block text-xs opacity-70">{label}</span>
               </li>
             ))}
             <li>

@@ -37,11 +37,11 @@ const POLL_MS = 20_000;
  *  - Nothing is automatic. The operator finds the transfer in their banking
  *    app by hand, so the wait is measured in business days and the page says
  *    so rather than showing a countdown that implies minutes.
- *  - The payer is shown ONE thing to act on: the card number. A card-to-card
- *    transfer has no payment-reference field, so quoting a code through the
- *    bank is impossible and the operator matches by the payer's name and
- *    email instead — which is why both inputs below are required, not
- *    optional. The full requisites behind the card live on /payment-details
+ *  - The payer is shown the card number and their order reference. Many
+ *    card-to-card transfers do carry a comment field, so the reference is the
+ *    primary matching key; where a bank omits it the operator falls back to
+ *    the payer's name, which is why both inputs below are required rather
+ *    than optional. The full requisites behind the card live on /payment-details
  *    for the rare payer whose bank asks for SWIFT/IBAN; this screen stays a
  *    card number and a Copy button.
  *
@@ -190,10 +190,11 @@ export function BankTransferCheckout({
               page.
             </p>
             <p className="mt-2">
-              A person checks each transfer by hand and then releases your
-              order, so there is a wait between paying and delivery. This is a
-              one-time payment: no card details reach us, nothing is stored,
-              and nothing can recur.
+              <span className="font-medium text-text">Drydock is in beta.</span> There
+              is no card processor yet, so payment is a plain transfer and a person
+              checks each one by hand before releasing your order — expect a wait,
+              usually well under a day. That also means no card details reach us,
+              nothing is stored, and nothing can recur: every payment is a one-off.
             </p>
             <p className="mt-2">
               If anything goes wrong, email{" "}
@@ -296,10 +297,28 @@ export function BankTransferCheckout({
                 ) : null}
               </p>
             )}
+            {/* The order reference, prominently: it is now the primary way a payment
+                is identified. The kopeck nonce that used to do this made the
+                storefront advertise one price and checkout demand another, so it is
+                gone. Not every bank offers a comment field on a card-to-card
+                transfer, hence a fallback rather than a promise. */}
+            <p className="mt-3 text-xs">
+              <span className="text-muted">Your order number: </span>
+              <code className="font-mono font-semibold">{invoice.reference}</code>
+              <button
+                type="button"
+                onClick={() => copy(invoice.reference, "ref")}
+                className="ml-2 rounded border border-border px-2 py-0.5 text-[10px] text-muted hover:text-text"
+              >
+                {copied === "ref" ? "✓" : "Copy"}
+              </button>
+            </p>
             <p className="mt-2 text-xs text-muted">
-              Send the exact amount, kopecks included — they identify your order.
-              Pay from a card in the name you entered. No comment or reference is
-              needed.
+              Send exactly {invoice.amount} {invoice.currency}, and put your order
+              number in the transfer&apos;s comment field if your bank offers one —
+              that is how we recognise your payment. Many banks don&apos;t offer that
+              field for a card-to-card transfer, so pay from a card in the name you
+              entered and we&apos;ll match it that way instead.
             </p>
           </div>
 

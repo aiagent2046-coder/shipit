@@ -10,7 +10,6 @@ import { ScoreRing, CategoryBars } from "@/components/ScoreRing";
 import { FindingsList, SeveritySummary } from "@/components/FindingsList";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
-import { MonitoringPurchase } from "@/components/MonitoringPurchase";
 
 interface View {
   id: string;
@@ -241,8 +240,6 @@ function AuditPageInner() {
             repoUrl={view.repoUrl}
             autoFixable={view.autoFixable}
           />
-
-          <MonitoringPurchase auditId={view.id} repoUrl={view.repoUrl} />
 
           <div className="mt-8">
             <h2 className="mb-3 text-lg font-semibold">

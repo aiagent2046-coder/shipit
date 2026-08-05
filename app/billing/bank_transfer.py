@@ -32,7 +32,7 @@ The suffix is a HINT, never a key, and the ordering matters:
     what lands is a converted figure and the kopecks are gone -- which is why
     amount cannot be the primary key here the way it is for USDT.
   - There are 99 slots. Under saturation the price is quoted bare and identity
-    is all that is left (see _reserve_unique_amount).
+    is all that is left.
 
 This module deliberately does not try to record the amount that actually
 arrived -- the operator eyeballs sufficiency before confirming, and storing a
@@ -152,34 +152,28 @@ def fixpack_price_usd() -> str:
     )
 
 
-# The kopeck nonce added to every quoted price, so two open invoices are never
-# quoted the same amount and the operator can tell one incoming card transfer
-# from another. Same idea as usdt_trc20._reserve_unique_amount, at two decimals
-# instead of six -- which is the whole difference that matters:
+# The quoted amount is the price, exactly.
 #
-#  - 99 slots, not a million. Exhaustion is reachable (100 invoices open inside
-#    the TTL window), so _reserve_unique_amount walks the free slots instead of
-#    re-rolling blind, and falls back to the bare price rather than duplicating
-#    an amount that is already in flight.
-#    The window is what makes 99 a THROUGHPUT and not a lifetime budget. The
-#    first version of this counted every 'pending' row ever written, and since
-#    nothing moves an abandoned checkout out of 'pending' -- no cancel endpoint,
-#    no sweeper, and deliberately no expiry status (see below) -- 99 abandoned
-#    invoices switched the whole mechanism off permanently, quoting every later
-#    buyer the same bare price with nothing in the report to say so.
-#  - The nonce is 1..99, never 0: an invoice quoted at a round 5.00 carries no
-#    information, and this is the only provider where a human, not an exact
-#    integer comparison, does the matching.
+# It used to carry a 1..99 kopeck nonce so the operator could tell two open
+# orders apart on a bank statement. That made the storefront advertise $10.00
+# while checkout demanded $10.89, with the difference explained only after the
+# buyer had already handed over their name and email. A stranger reading that
+# sees a bait price, and no matching convenience is worth looking like one.
 #
-# It raises the price by under a dollar, and always UPWARDS, so a nonce can
-# never undercharge -- the same direction usdt_trc20 adds its nonce in.
-_CENTS_NONCE_MIN = 1
-_CENTS_NONCE_MAX = 99
-
+# Matching is now on payer name plus amount, which the nonce's own docstring
+# already called the primary handle: the suffix never survived a converting
+# bank, and it silently degraded to the bare price once 99 invoices were open.
+# The cost is real and accepted -- two buyers quoted the same price on the same
+# day are separated by name alone -- so the Terms now ask payers to send from an
+# account in the name they entered, and say what to do when they cannot.
 
 def _amount_lock():
-    """The advisory lock serializing suffix reservation (see
+    """The advisory lock serializing reference reservation (see
     db.bank_transfer_amount_lock).
+
+    It used to guard the kopeck suffix too; that is gone, but the reference
+    must still be picked and written under one lock or two concurrent
+    checkouts can mint the same order code.
 
     Imported lazily, like app.alerts below, so this module stays importable
     and testable without a database: with DATABASE_URL unset the lock yields
@@ -195,66 +189,6 @@ def amount_to_cents(amount: float) -> int:
     506.9999... in binary float and int() would truncate it to 506. Same
     reasoning and same fix as usdt_trc20.amount_to_micros."""
     return int(round(amount * 100))
-
-
-async def _reserve_unique_amount(payment_repo: Any, price: str) -> str:
-    """`price` plus a kopeck nonce no currently-open invoice is already quoted.
-
-    "Currently open" means pending AND created inside INVOICE_TTL_SECONDS. That
-    window is deliberately a different question from the one the USDT poller
-    asks of the same rows: the poller must keep matching a transfer that shows
-    up on day nine, while a suffix only has to be unique among the quotes a
-    payer might still be looking at. Sharing one answer between the two is what
-    made the pool a lifetime budget instead of a throughput.
-
-    Reusing a suffix after the window has a cost, and it is the right one to
-    pay: a nine-day-late transfer can land on an amount now quoted to someone
-    else, and the operator then has two candidate rows. Payer name and email
-    separate them -- that is exactly the fallback they exist for. The
-    alternative, refusing late transfers, turns a slow bank into lost money.
-
-    The nonce is what makes the amount a MATCHING HINT rather than noise: the
-    operator sees 5.07 on the statement and knows which of two open orders it
-    belongs to without waiting for the payer to confirm their name.
-
-    It is a hint and not a key, deliberately, and the caller must not treat it
-    as one:
-
-      - It only survives a same-currency transfer. If the payer's bank converts,
-        what lands is a converted figure and the kopecks are gone. Payer name
-        and email stay the primary handle for exactly this reason.
-      - With all 99 slots taken it returns the bare price. Two invoices then
-        share an amount, which name and email still disambiguate -- whereas
-        blocking a sale because a hundred invoices are open would be absurd.
-
-    Shared by the Pro and Fix Pack creators, both drawing from the same pending
-    set and comparing whole amounts, so a Pro and a Fix Pack invoice cannot
-    collide with each other either.
-    """
-    base_cents = amount_to_cents(float(price))
-    window_start = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-        seconds=INVOICE_TTL_SECONDS
-    )
-    pending = await payment_repo.list_pending(PROVIDER, created_after=window_start)
-    taken = {
-        amount_to_cents(p["amount"])
-        for p in pending
-        if p.get("amount") is not None
-    }
-
-    free = [
-        base_cents + n
-        for n in range(_CENTS_NONCE_MIN, _CENTS_NONCE_MAX + 1)
-        if base_cents + n not in taken
-    ]
-    if not free:
-        logger.warning(
-            "every kopeck nonce for %s is in flight; quoting the bare price and "
-            "leaving the payer's name as the only handle on this payment",
-            price,
-        )
-        return price
-    return f"{secrets.choice(free) / 100:.2f}"
 
 
 def generate_reference() -> str:
@@ -362,7 +296,7 @@ async def create_invoice(
     # Reservation and insert under one lock: a suffix picked but not yet
     # written is invisible to the next reader, and that gap is the race.
     async with _amount_lock():
-        amount = await _reserve_unique_amount(payment_repo, pro_price_usd())
+        amount = pro_price_usd()
         row = await payment_repo.create(
             account_id=None, provider=PROVIDER, external_ref=reference,
             amount=float(amount), currency=CURRENCY, status="pending",
@@ -390,7 +324,7 @@ async def create_fixpack_invoice(
     # suffixes from one pending set, so serializing them separately would let
     # them collide with each other.
     async with _amount_lock():
-        amount = await _reserve_unique_amount(payment_repo, fixpack_price_usd())
+        amount = fixpack_price_usd()
         row = await payment_repo.create(
             account_id=None, provider=PROVIDER, external_ref=reference,
             amount=float(amount), currency=CURRENCY, status="pending",

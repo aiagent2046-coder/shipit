@@ -30,7 +30,8 @@ import { Spinner } from "@/components/Spinner";
  * which is a real gap and a separate change, not a reason to leave payers with
  * no door.
  *
- * Bank transfer only. USDT recovery keys off the transaction hash, which the
+ * Bank transfer only — the only rail on the storefront. USDT recovery keyed
+ * off a transaction hash, which the
  * payer always has from their wallet, and only the bot accepts it; the HTTP
  * side is keyed by an invoice id that vanishes with the same tab. Adding a
  * tx-hash claim endpoint is its own change, so this page says so rather than
@@ -191,33 +192,6 @@ export default function LinkPage() {
           <Found status={state.status} copy={copy} copied={copied} />
         </div>
       )}
-
-      <section className="mt-10 border-t border-border pt-6 text-sm text-muted">
-        <h2 className="font-medium text-text">Paid with USDT instead?</h2>
-        <p className="mt-2">
-          Recovery for a crypto payment uses your transaction hash, which is in
-          your wallet rather than on a page you might have closed. Send{" "}
-          <span className="font-mono">/link &lt;tx_hash&gt;</span> to{" "}
-          <a
-            href="https://t.me/drydocksupport_bot"
-            className="text-accent underline"
-          >
-            @drydocksupport_bot
-          </a>
-          .
-        </p>
-        <p className="mt-4">
-          Still stuck? Email{" "}
-          <a href="mailto:support@drydock.co" className="text-accent underline">
-            support@drydock.co
-          </a>{" "}
-          with your reference, or go back to{" "}
-          <Link href="/pricing" className="text-accent underline">
-            pricing
-          </Link>
-          .
-        </p>
-      </section>
     </div>
   );
 }
