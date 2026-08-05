@@ -26,7 +26,10 @@ const TERMINAL: ReadonlySet<AuditJobState> = new Set<AuditJobState>([
 function humanError(code: string | null): string {
   switch (code) {
     case "unsupported_stack":
-      return "We can only audit Next.js and FastAPI projects right now.";
+      return (
+        "We can audit Next.js, Vite + React, and FastAPI projects. " +
+        "This repository looks like none of them."
+      );
     case "zip_bomb":
     case "too_large":
     case "bad_archive":

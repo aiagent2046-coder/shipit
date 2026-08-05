@@ -1,7 +1,8 @@
 """Stack detection over a validated archive's file listing.
 
 MVP supports exactly two stacks (architecture doc, principle 4):
-Next.js and FastAPI. Anything else is an honest `unsupported`.
+Next.js, Vite + React (what Lovable and Bolt generate), and FastAPI.
+Anything else is an honest `unsupported`.
 """
 
 from __future__ import annotations
