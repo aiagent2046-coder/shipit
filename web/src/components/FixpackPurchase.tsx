@@ -300,8 +300,9 @@ function InstallGate({
  * repository changing between audit and purchase, or the App being uninstalled
  * after the install gate above passed.
  *
- * Names what to include, because a card transfer carries no order number and
- * the payer's name plus the exact amount is what the operator matches on.
+ * Names what to include, because the operator matches an incoming transfer on
+ * the order number where the bank carried one and on the payer's name and
+ * amount where it did not.
  */
 function SupportContact() {
   return (

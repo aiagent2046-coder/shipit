@@ -51,9 +51,10 @@ export default function PaymentDetailsPage() {
             unique to your order and are how we recognise your transfer.
           </li>
           <li>
-            Pay from a card in the name you entered at checkout. A card transfer
-            carries no order number, so your name is the other half of how we
-            match the payment.
+            Quote your order number in the transfer&apos;s comment field if your
+            bank offers one. Not every bank does for a card-to-card transfer, so
+            also pay from a card in the name you entered at checkout — that is
+            the other half of how we match the payment.
           </li>
           <li>
             Confirmation is manual. Allow up to one business day, and the order
