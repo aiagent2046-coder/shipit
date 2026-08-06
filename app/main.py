@@ -2968,6 +2968,13 @@ async def _process_one_paid_job(
         return "failed"
 
 
+# A verified build may consume two long sandbox-runner requests. Keep one
+# paid job inside each timer invocation so the operational timeout is a real,
+# deterministic per-run budget. The timer schedules the next job after this
+# service invocation becomes inactive.
+FIXPACK_JOBS_PER_RUN = 1
+
+
 @app.post("/internal/fixpack/process-paid")
 async def process_paid_fixpacks(
     request: Request,
@@ -2979,8 +2986,8 @@ async def process_paid_fixpacks(
     llm_client: LLMClient = Depends(get_llm_client),
     llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
 ) -> dict:
-    """Operational endpoint: drain the paid-but-not-yet-generated Fix Pack
-    backlog and turn each job into a real fix PR — re-fetch the audited
+    """Operational endpoint: process a bounded paid Fix Pack batch and turn each
+    claimed job into a real fix PR — re-fetch the audited
     repo, remove hardcoded secrets, harden config, open the PR, and advance
     the job to 'delivered'. Meant for a scheduled caller (a systemd timer,
     same as the reaper and the USDT poller — this repo ships no unit file).
@@ -2989,9 +2996,9 @@ async def process_paid_fixpacks(
     Durable-processing model (see PHASE3_QUEUE_PLAN.md): the run takes a
     session advisory lock so two overlapping timer firings don't stampede;
     it first reaps stale 'running' leases (a crashed worker's job) back to
-    'paid' (bounded by attempts) or to 'failed'; then it claims jobs one at
-    a time, each atomically leased 'paid' -> 'running' so a single job can
-    never be processed by two runs at once (no duplicate PR per payment).
+    'paid' (bounded by attempts) or to 'failed'; then it claims at most
+    FIXPACK_JOBS_PER_RUN jobs, each atomically leased 'paid' -> 'running',
+    so a single job can never be processed by two runs at once.
 
     Requires `Authorization: Bearer <FIXPACK_PROCESS_TOKEN>`, constant-time
     compared via the same helper the reaper and USDT poller use. 503 if the
@@ -3059,11 +3066,10 @@ async def process_paid_fixpacks(
                 summary["skipped_unhealthy_runner"] = True
                 return summary
 
-            # Claim-process-claim until the backlog is drained. Each claim
-            # atomically leases one 'paid' job into 'running' (see
-            # claim_one_paid), so a re-queued or newly purchased job is
-            # picked up in the same run.
-            while True:
+            # Bound one timer invocation to a deterministic number of paid
+            # jobs. This matters once verified builds are enabled: original
+            # and patched verification can each consume a long runner request.
+            for _ in range(FIXPACK_JOBS_PER_RUN):
                 job = await fixpack_repo.claim_one_paid()
                 if job is None:
                     break
