@@ -479,6 +479,27 @@ def compare_verification_stages(
         for stage in patched
     }
 
+    # Install is network-dependent and runs independently for original and
+    # patched workspaces. A failed original install followed by a successful
+    # patched install is not evidence that the patch improved the repository:
+    # it may only reflect a transient registry/proxy result. Never establish a
+    # deliverable baseline from that asymmetric pair.
+    if (
+        original_by_name["install"].status != "passed"
+        and patched_by_name["install"].status == "passed"
+    ):
+        return VerificationReport(
+            profile=profile,
+            original=original,
+            patched=patched,
+            regression=False,
+            deliverable=False,
+            detail=(
+                "original dependency install did not pass; "
+                "verification baseline is invalid"
+            ),
+        )
+
     regression_names = [
         name
         for name in expected_names

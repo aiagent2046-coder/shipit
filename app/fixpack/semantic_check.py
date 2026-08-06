@@ -562,6 +562,25 @@ def _runtime_argv() -> list[str]:
     return ["--runtime", rt] if rt and rt != "runc" else []
 
 
+def _tool_home_argv() -> list[str]:
+    """Writable, disposable tool home for non-root read-only containers.
+
+    Image-specific homes are unsafe to assume: node:20-slim uses /home/node,
+    while other images may have no passwd entry for our fixed uid. All tool
+    state therefore lives under the existing writable /tmp tmpfs.
+    """
+
+    home = "/tmp/shipit-home"
+
+    return [
+        "-e", f"HOME={home}",
+        "-e", f"XDG_CACHE_HOME={home}/.cache",
+        "-e", f"XDG_CONFIG_HOME={home}/.config",
+        "-e", f"npm_config_cache={home}/.npm",
+        "-e", f"PIP_CACHE_DIR={home}/.cache/pip",
+    ]
+
+
 def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
     """Step 1: network ON *but only through the egress-allowlist proxy*; deps
     installed into the mounted work dir. See _install_proxy_argv."""
@@ -572,6 +591,7 @@ def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,
         *_readonly_argv(),
+        *_tool_home_argv(),
         *_install_proxy_argv(),
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
@@ -588,6 +608,7 @@ def _docker_test_argv(image: str, workdir: str, script: str) -> list[str]:
         "--memory", MEMORY_LIMIT,
         *_CONTAINER_HARDENING,
         *_readonly_argv(),
+        *_tool_home_argv(),
         "-v", f"{workdir}:/work", "-w", "/work",
         image, "sh", "-c", script,
     ]
