@@ -16,7 +16,7 @@ from typing import Literal
 from app.fixpack.generate import _repo_relative
 
 
-StageName = Literal["compile", "typecheck", "build", "import", "tests"]
+StageName = Literal["install", "compile", "typecheck", "build", "import", "tests"]
 StageStatus = Literal[
     "pending",
     "passed",
