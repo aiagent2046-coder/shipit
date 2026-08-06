@@ -454,6 +454,7 @@ def _no_ambient_production_integrations(monkeypatch):
         "SANDBOX_RUNNER_URL",
         "SANDBOX_RUNNER_UDS",
         "SANDBOX_RUNNER_TOKEN",
+        "SANDBOX_RUNNER_VERIFICATION_TIMEOUT_S",
         "FIXPACK_VERIFIED_BUILD_GATE",
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_WEBHOOK_SECRET",
@@ -492,6 +493,11 @@ def _no_ambient_production_integrations(monkeypatch):
         "/tmp/shipit-pytest-no-sandbox-runner.sock",
     )
     monkeypatch.setattr(sandbox_client_mod, "SANDBOX_RUNNER_TOKEN", "")
+    monkeypatch.setattr(
+        sandbox_client_mod,
+        "SANDBOX_RUNNER_VERIFICATION_TIMEOUT_S",
+        960.0,
+    )
 
 
 def enable_monitoring(monkeypatch):
