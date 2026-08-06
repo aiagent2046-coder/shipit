@@ -55,6 +55,12 @@ import httpx
 
 from app.deploypack.sandbox import SandboxResult
 from app.fixpack.semantic_check import RunResult, TestRunner
+from app.fixpack.verification import (
+    VerificationProfile,
+    VerificationStage,
+    verification_profile_to_wire,
+    verification_stage_from_wire,
+)
 
 # Unix socket the runner listens on. A TCP fallback (SANDBOX_RUNNER_URL) is
 # supported for environments without a UDS, but UDS is the default and the
@@ -278,6 +284,97 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
         passed=data["passed"], failed=data["failed"],
         timed_out=data["timed_out"], error=data["error"],
     )
+
+
+def _verification_unavailable_stages(
+    profile: VerificationProfile,
+    detail: str,
+) -> tuple[VerificationStage, ...]:
+    return (
+        VerificationStage(
+            name="install",
+            status="unavailable",
+            command=profile.install_command,
+            detail=detail,
+        ),
+        *(
+            VerificationStage(
+                name=step.name,
+                status="unavailable",
+                command=step.command,
+                detail=detail,
+            )
+            for step in profile.steps
+        ),
+    )
+
+
+def run_verification_profile(
+    zip_bytes: bytes,
+    profile: VerificationProfile,
+) -> tuple[VerificationStage, ...]:
+    """Execute a structured profile through the sandbox runner."""
+
+    manifest = {
+        "profile": verification_profile_to_wire(
+            profile
+        )
+    }
+
+    try:
+        data = _post(
+            "/fixpack/run-verification",
+            content=zip_bytes,
+            manifest=manifest,
+        )
+    except SandboxRunnerUnavailable as exc:
+        return _verification_unavailable_stages(
+            profile,
+            (
+                "sandbox runner unavailable: "
+                f"{exc}"
+            ),
+        )
+
+    try:
+        raw_stages = data["stages"]
+
+        if not isinstance(raw_stages, list):
+            raise ValueError(
+                "stages is not an array"
+            )
+
+        stages = tuple(
+            verification_stage_from_wire(stage)
+            for stage in raw_stages
+        )
+    except (KeyError, TypeError, ValueError):
+        return _verification_unavailable_stages(
+            profile,
+            (
+                "sandbox runner returned an invalid "
+                "verification response"
+            ),
+        )
+
+    expected_names = (
+        "install",
+        *(step.name for step in profile.steps),
+    )
+
+    if tuple(
+        stage.name
+        for stage in stages
+    ) != expected_names:
+        return _verification_unavailable_stages(
+            profile,
+            (
+                "sandbox runner returned an invalid "
+                "verification stage contract"
+            ),
+        )
+
+    return stages
 
 
 def minimal_check(plan) -> RunResult:

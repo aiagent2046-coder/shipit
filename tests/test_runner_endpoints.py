@@ -224,3 +224,104 @@ def test_minimal_check_rebuilds_plan_from_json_body(monkeypatch):
     assert resp.json()["passed"] == 1
     assert captured["files"] == {"a.js": "const x = 1;"}
     assert captured["deletions"] == ["old.js"]
+
+
+def test_run_verification_rebuilds_profile_and_passes_zip(
+    monkeypatch,
+):
+    from app.fixpack.verification import (
+        VerificationStage,
+    )
+
+    captured = {}
+
+    def fake_run_verification(
+        raw,
+        profile,
+    ):
+        captured["raw"] = raw
+        captured["profile"] = profile
+
+        return (
+            VerificationStage(
+                name="install",
+                status="passed",
+                command=profile.install_command,
+                exit_code=0,
+                duration_ms=10,
+            ),
+            VerificationStage(
+                name="build",
+                status="passed",
+                command=profile.steps[0].command,
+                exit_code=0,
+                duration_ms=20,
+            ),
+        )
+
+    monkeypatch.setattr(
+        runner_main,
+        "run_verification_profile",
+        fake_run_verification,
+    )
+
+    manifest = {
+        "profile": {
+            "ecosystem": "node",
+            "framework": "vite",
+            "image": "node:20-slim",
+            "install_command": (
+                "npm ci --no-audit --no-fund"
+            ),
+            "steps": [
+                {
+                    "name": "build",
+                    "command": "npm run build",
+                    "required": True,
+                }
+            ],
+        }
+    }
+
+    resp = client.post(
+        "/fixpack/run-verification",
+        content=b"ZIP-VERIFICATION",
+        headers=_auth_headers(
+            _manifest_header(manifest)
+        ),
+    )
+
+    assert resp.status_code == 200
+
+    assert resp.json() == {
+        "stages": [
+            {
+                "name": "install",
+                "status": "passed",
+                "command": (
+                    "npm ci --no-audit --no-fund"
+                ),
+                "exit_code": 0,
+                "duration_ms": 10,
+                "detail": None,
+            },
+            {
+                "name": "build",
+                "status": "passed",
+                "command": "npm run build",
+                "exit_code": 0,
+                "duration_ms": 20,
+                "detail": None,
+            },
+        ]
+    }
+
+    assert captured["raw"] == b"ZIP-VERIFICATION"
+
+    profile = captured["profile"]
+
+    assert profile.ecosystem == "node"
+    assert profile.framework == "vite"
+    assert profile.image == "node:20-slim"
+    assert profile.steps[0].name == "build"
+    assert profile.steps[0].required is True

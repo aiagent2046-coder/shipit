@@ -483,3 +483,208 @@ def test_runner_healthy_uses_short_timeout(monkeypatch):
     assert sc.runner_healthy() is True
     assert seen["timeout"] == sc.SANDBOX_RUNNER_HEALTH_TIMEOUT_S
     assert seen["timeout"] < sc.SANDBOX_RUNNER_TIMEOUT_S
+
+
+def test_run_verification_profile_marshals_profile_and_stages(
+    monkeypatch,
+):
+    from app.fixpack.verification import (
+        VerificationProfile,
+        VerificationStep,
+    )
+
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["manifest"] = json.loads(
+            request.headers["x-sandbox-request"]
+        )
+        seen["body"] = request.content
+
+        return httpx.Response(
+            200,
+            json={
+                "stages": [
+                    {
+                        "name": "install",
+                        "status": "passed",
+                        "command": "npm ci",
+                        "exit_code": 0,
+                        "duration_ms": 11,
+                        "detail": None,
+                    },
+                    {
+                        "name": "build",
+                        "status": "passed",
+                        "command": "npm run build",
+                        "exit_code": 0,
+                        "duration_ms": 22,
+                        "detail": None,
+                    },
+                ]
+            },
+        )
+
+    _install(monkeypatch, handler)
+
+    profile = VerificationProfile(
+        ecosystem="node",
+        framework="vite",
+        image="node:20-slim",
+        install_command="npm ci",
+        steps=(
+            VerificationStep(
+                name="build",
+                command="npm run build",
+                required=True,
+            ),
+        ),
+    )
+
+    stages = sc.run_verification_profile(
+        b"ZIPBYTES",
+        profile,
+    )
+
+    assert seen["path"] == (
+        "/fixpack/run-verification"
+    )
+
+    assert seen["body"] == b"ZIPBYTES"
+
+    assert seen["manifest"] == {
+        "profile": {
+            "ecosystem": "node",
+            "framework": "vite",
+            "image": "node:20-slim",
+            "install_command": "npm ci",
+            "steps": [
+                {
+                    "name": "build",
+                    "command": "npm run build",
+                    "required": True,
+                }
+            ],
+        }
+    }
+
+    assert [stage.name for stage in stages] == [
+        "install",
+        "build",
+    ]
+
+    assert [stage.status for stage in stages] == [
+        "passed",
+        "passed",
+    ]
+
+    assert stages[1].duration_ms == 22
+
+
+def test_run_verification_profile_returns_unavailable_on_outage(
+    monkeypatch,
+):
+    from app.fixpack.verification import (
+        VerificationProfile,
+        VerificationStep,
+    )
+
+    def handler(request):
+        raise httpx.ConnectError(
+            "refused",
+            request=request,
+        )
+
+    _install(monkeypatch, handler)
+
+    profile = VerificationProfile(
+        ecosystem="node",
+        framework="nextjs",
+        image="node:20-slim",
+        install_command="npm ci",
+        steps=(
+            VerificationStep(
+                name="typecheck",
+                command="npm run typecheck",
+                required=True,
+            ),
+            VerificationStep(
+                name="build",
+                command="npm run build",
+                required=True,
+            ),
+        ),
+    )
+
+    stages = sc.run_verification_profile(
+        b"ZIP",
+        profile,
+    )
+
+    assert [stage.name for stage in stages] == [
+        "install",
+        "typecheck",
+        "build",
+    ]
+
+    assert all(
+        stage.status == "unavailable"
+        for stage in stages
+    )
+
+    assert all(
+        "sandbox runner unavailable"
+        in (stage.detail or "")
+        for stage in stages
+    )
+
+
+def test_run_verification_profile_rejects_malformed_response(
+    monkeypatch,
+):
+    from app.fixpack.verification import (
+        VerificationProfile,
+        VerificationStep,
+    )
+
+    _install(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200,
+            json={"stages": "not-an-array"},
+        ),
+    )
+
+    profile = VerificationProfile(
+        ecosystem="node",
+        framework="vite",
+        image="node:20-slim",
+        install_command="npm install",
+        steps=(
+            VerificationStep(
+                name="build",
+                command="npm run build",
+                required=True,
+            ),
+        ),
+    )
+
+    stages = sc.run_verification_profile(
+        b"ZIP",
+        profile,
+    )
+
+    assert all(
+        stage.status == "unavailable"
+        for stage in stages
+    )
+
+    assert all(
+        stage.detail
+        == (
+            "sandbox runner returned an invalid "
+            "verification response"
+        )
+        for stage in stages
+    )
