@@ -304,6 +304,7 @@ rollback_after_failure() {
     fi
   fi
 
+  # shellcheck disable=SC2310
   if ! resume_fixpack_timer; then
     echo \
       "ROLLBACK FAILED at step 'timer': $original_sha is healthy, but" \
@@ -314,6 +315,7 @@ rollback_after_failure() {
   echo "Automatic rollback completed: $original_sha"
 }
 
+# shellcheck disable=SC2310
 if ! quiesce_fixpack_timer; then
   echo "Production deployment: FAILED before release activation" >&2
   exit 1
@@ -322,6 +324,7 @@ fi
 if ! "$SYSTEMD_UNIT_SYNC" --release "$RELEASE_ROOT/releases/$TARGET_SHA"; then
   echo "Production deployment: systemd unit installation failed" >&2
 
+  # shellcheck disable=SC2310
   if ! resume_fixpack_timer; then
     echo "WARNING: $FIXPACK_TIMER also failed to restart" >&2
   fi
@@ -339,6 +342,7 @@ then
     "Production deployment: failed to activate $TARGET_SHA" \
     >&2
 
+  # shellcheck disable=SC2310
   if ! rollback_after_failure "$CURRENT_SHA"; then
     echo >&2
     echo \
@@ -401,6 +405,7 @@ if [[ "$deployment_ok" -ne 1 ]]; then
   exit 1
 fi
 
+# shellcheck disable=SC2310
 if ! resume_fixpack_timer; then
   echo >&2
   echo "Production deployment: the API is live on $TARGET_SHA, but" >&2
