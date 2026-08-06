@@ -75,6 +75,17 @@ SANDBOX_RUNNER_TOKEN = os.environ.get("SANDBOX_RUNNER_TOKEN", "")
 # budget, or the backend gives up while the runner is still building.
 SANDBOX_RUNNER_TIMEOUT_S = float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_S", "600"))
 
+# One structured verification HTTP request executes one complete profile.
+# The longest current profile has an 840-second executor budget; the extra
+# 120 seconds covers runner and transport overhead without lengthening
+# ordinary sandbox operations.
+SANDBOX_RUNNER_VERIFICATION_TIMEOUT_S = float(
+    os.environ.get(
+        "SANDBOX_RUNNER_VERIFICATION_TIMEOUT_S",
+        "960",
+    )
+)
+
 # Health probe must answer "is the runner ready *right now*", so it gets its own
 # short timeout instead of the multi-minute build budget above. Kept just above
 # the runner's own 10s `docker version` subprocess timeout, so a slow-but-alive
@@ -131,11 +142,12 @@ def _client(timeout: float | None = None) -> httpx.Client:
 
 
 def _request_once(path: str, *, content: bytes | None,
-                  manifest: dict | None, json_body: dict | None) -> httpx.Response:
+                  manifest: dict | None, json_body: dict | None,
+                  timeout: float | None = None) -> httpx.Response:
     headers = {}
     if manifest is not None:
         headers["X-Sandbox-Request"] = json.dumps(manifest)
-    with _client() as client:
+    with _client(timeout=timeout) as client:
         if json_body is not None:
             return client.post(path, json=json_body, headers=headers)
         headers.setdefault("Content-Type", "application/octet-stream")
@@ -143,7 +155,8 @@ def _request_once(path: str, *, content: bytes | None,
 
 
 def _post(path: str, *, content: bytes | None = None,
-          manifest: dict | None = None, json_body: dict | None = None) -> dict:
+          manifest: dict | None = None, json_body: dict | None = None,
+          timeout: float | None = None) -> dict:
     """POST to the runner and return the parsed JSON, or raise
     SandboxRunnerUnavailable on any transport-level failure.
 
@@ -153,8 +166,13 @@ def _post(path: str, *, content: bytes | None = None,
     and retrying a 4xx (bad token, bad request) can only fail again."""
     for delay in (*SANDBOX_RUNNER_RETRY_DELAYS_S, None):
         try:
-            resp = _request_once(path, content=content, manifest=manifest,
-                                 json_body=json_body)
+            resp = _request_once(
+                path,
+                content=content,
+                manifest=manifest,
+                json_body=json_body,
+                timeout=timeout,
+            )
             break
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             if delay is None:
@@ -326,6 +344,7 @@ def run_verification_profile(
             "/fixpack/run-verification",
             content=zip_bytes,
             manifest=manifest,
+            timeout=SANDBOX_RUNNER_VERIFICATION_TIMEOUT_S,
         )
     except SandboxRunnerUnavailable as exc:
         return _verification_unavailable_stages(
