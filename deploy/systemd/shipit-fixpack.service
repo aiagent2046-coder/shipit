@@ -11,7 +11,11 @@ User=shipit-ops
 WorkingDirectory=/opt/shipit
 EnvironmentFile=/opt/shipit/.env
 Environment=SHIPIT_INTERNAL_BASE_URL=http://127.0.0.1:8000
-ExecStart=/opt/shipit/deploy/scripts/call-internal-endpoint.sh /internal/fixpack/process-paid FIXPACK_PROCESS_TOKEN 1200
+# One bounded processor invocation handles at most one paid job. A verified
+# build makes two sequential runner requests: original and patched, each with
+# a 960-second transport budget. Add 120 seconds for repository fetch, planning,
+# comparison, persistence and delivery around those runner calls.
+ExecStart=/opt/shipit/deploy/scripts/call-internal-endpoint.sh /internal/fixpack/process-paid FIXPACK_PROCESS_TOKEN 2040
 # A SIGTERM is not a failure here. These units Require=shipit.service, so
 # restarting the API -- every deploy does -- stops them too, and a run that
 # happens to be in flight is killed mid-curl. The work is idempotent and the
@@ -19,7 +23,10 @@ ExecStart=/opt/shipit/deploy/scripts/call-internal-endpoint.sh /internal/fixpack
 # and OnFailure= paged the operator about a deploy they had just triggered.
 # A real kill is SIGKILL (9, an OOM), which still fails and still alerts.
 SuccessExitStatus=SIGTERM
-TimeoutStartSec=1200
+# Keep systemd outside curl's complete request budget. The extra 120 seconds
+# lets curl report and exit cleanly instead of systemd killing it at the same
+# instant as its own deadline.
+TimeoutStartSec=2160
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
