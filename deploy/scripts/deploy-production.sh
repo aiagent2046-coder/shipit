@@ -7,6 +7,8 @@ ENV_FILE="${SHIPIT_ENV_FILE:-/opt/shipit/.env}"
 RELEASE_ENV="${SHIPIT_RELEASE_ENV:-/opt/shipit/.release-env}"
 SERVICE="${SHIPIT_SERVICE:-shipit.service}"
 WORKER_SERVICE="${SHIPIT_WORKER_SERVICE:-shipit-audit-worker.service}"
+FIXPACK_TIMER="${SHIPIT_FIXPACK_TIMER:-shipit-fixpack.timer}"
+SYSTEMD_UNIT_SYNC="${SHIPIT_SYSTEMD_UNIT_SYNC:-$CONTROL_ROOT/deploy/scripts/sync-release-systemd-unit.sh}"
 LOCK_FILE="${SHIPIT_DEPLOY_LOCK:-/run/lock/shipit-deploy.lock}"
 KEEP_RELEASES="${SHIPIT_KEEP_RELEASES:-5}"
 
@@ -117,6 +119,7 @@ for file in \
   "$MANAGER" \
   "$MIGRATION_GATE" \
   "$HEALTH_GATE" \
+  "$SYSTEMD_UNIT_SYNC" \
   "$ENV_FILE"
 do
   if [[ ! -f "$file" ]]; then
@@ -151,6 +154,38 @@ TARGET_RELEASE="$RELEASE_ROOT/releases/$TARGET_SHA"
 python3 "$MIGRATION_GATE" \
   --release "$TARGET_RELEASE" \
   --env-file "$ENV_FILE"
+
+FIXPACK_TIMER_WAS_ACTIVE=0
+FIXPACK_TIMER_QUIESCED=0
+
+quiesce_fixpack_timer() {
+  if systemctl is-active --quiet "$FIXPACK_TIMER"; then
+    FIXPACK_TIMER_WAS_ACTIVE=1
+
+    if ! systemctl stop "$FIXPACK_TIMER"; then
+      echo "ERROR: could not stop $FIXPACK_TIMER before unit replacement" >&2
+      return 1
+    fi
+  fi
+
+  FIXPACK_TIMER_QUIESCED=1
+}
+
+resume_fixpack_timer() {
+  if [[ "$FIXPACK_TIMER_QUIESCED" -ne 1 ]]; then
+    return 0
+  fi
+
+  if [[ "$FIXPACK_TIMER_WAS_ACTIVE" -eq 1 ]]; then
+    if ! systemctl start "$FIXPACK_TIMER"; then
+      echo "ERROR: could not restart $FIXPACK_TIMER" >&2
+      return 1
+    fi
+  fi
+
+  FIXPACK_TIMER_QUIESCED=0
+}
+
 
 # EVERY step below is checked explicitly, and that is not a style choice.
 #
@@ -210,6 +245,14 @@ rollback_after_failure() {
     return 1
   fi
 
+  if ! "$SYSTEMD_UNIT_SYNC" --release "$original_release"; then
+    echo \
+      "ROLLBACK FAILED at step 'systemd unit': could not install the unit from" \
+      "$original_sha. The active release was not switched and the timer" \
+      "remains stopped." >&2
+    return 1
+  fi
+
   if ! python3 "$MANAGER" \
     --root "$RELEASE_ROOT" \
     activate \
@@ -217,9 +260,9 @@ rollback_after_failure() {
     --release-env "$RELEASE_ENV"
   then
     echo \
-      "ROLLBACK FAILED at step 'activate': could not point current at" \
-      "$original_sha. The symlink may be in either state -- check it before" \
-      "restarting anything." >&2
+      "ROLLBACK FAILED at step 'activate': the unit from $original_sha was" \
+      "installed, but current could not be pointed at that release. The" \
+      "symlink may be in either state; the timer remains stopped." >&2
     return 1
   fi
 
@@ -261,14 +304,55 @@ rollback_after_failure() {
     fi
   fi
 
+  if ! resume_fixpack_timer; then
+    echo \
+      "ROLLBACK FAILED at step 'timer': $original_sha is healthy, but" \
+      "$FIXPACK_TIMER could not be restarted." >&2
+    return 1
+  fi
+
   echo "Automatic rollback completed: $original_sha"
 }
 
-python3 "$MANAGER" \
+if ! quiesce_fixpack_timer; then
+  echo "Production deployment: FAILED before release activation" >&2
+  exit 1
+fi
+
+if ! "$SYSTEMD_UNIT_SYNC" --release "$RELEASE_ROOT/releases/$TARGET_SHA"; then
+  echo "Production deployment: systemd unit installation failed" >&2
+
+  if ! resume_fixpack_timer; then
+    echo "WARNING: $FIXPACK_TIMER also failed to restart" >&2
+  fi
+
+  exit 1
+fi
+
+if ! python3 "$MANAGER" \
   --root "$RELEASE_ROOT" \
   activate \
   --sha "$TARGET_SHA" \
   --release-env "$RELEASE_ENV"
+then
+  echo \
+    "Production deployment: failed to activate $TARGET_SHA" \
+    >&2
+
+  if ! rollback_after_failure "$CURRENT_SHA"; then
+    echo >&2
+    echo \
+      "Production deployment: FAILED, AND ROLLBACK FAILED" \
+      >&2
+    exit 1
+  fi
+
+  echo >&2
+  echo \
+    "Production deployment: FAILED (rolled back to $CURRENT_SHA)" \
+    >&2
+  exit 1
+fi
 
 deployment_ok=1
 
@@ -314,6 +398,16 @@ if [[ "$deployment_ok" -ne 1 ]]; then
 
   echo >&2
   echo "Production deployment: FAILED (rolled back to $CURRENT_SHA)" >&2
+  exit 1
+fi
+
+if ! resume_fixpack_timer; then
+  echo >&2
+  echo "Production deployment: the API is live on $TARGET_SHA, but" >&2
+  echo "$FIXPACK_TIMER did not restart." >&2
+  echo >&2
+  echo "Deliberately NOT rolled back: the release passed its health gates." >&2
+  echo "Next: systemctl status $FIXPACK_TIMER" >&2
   exit 1
 fi
 

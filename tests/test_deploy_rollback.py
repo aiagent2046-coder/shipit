@@ -36,11 +36,37 @@ SCRIPT = (
     Path(__file__).resolve().parents[1] / "deploy" / "scripts" / "deploy-production.sh"
 )
 
+ROLLBACK_SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / "deploy"
+    / "scripts"
+    / "rollback-production.sh"
+)
+
 # The rolled-back-to release is only ever a directory name and the target of
 # `current`, so a synthetic hex string is fine. The DEPLOYED one is not: the
 # script resolves it with `git rev-parse --verify`, so it has to be a real
 # commit in the control checkout, discovered after that repo is created.
 OLD_SHA = "a" * 40
+
+SYNC_SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / "deploy"
+    / "scripts"
+    / "sync-release-systemd-unit.sh"
+)
+FIXPACK_TIMER = "shipit-fixpack.timer"
+
+
+def _unit_text(sha: str) -> str:
+    return f"""\
+[Unit]
+Description=Fix Pack processor for {sha}
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+"""
 
 # Failing the deployment's own health check is how every rollback test gets the
 # script into the rollback branch in the first place. Occurrence 1 because the
@@ -113,7 +139,7 @@ def _stub_bin(tmp: Path, rules: list[dict]) -> Path:
             link.symlink_to(tmp / "srv" / "releases" / sha)
         sys.exit(0)
     """
-    for name in ("python3", "systemctl"):
+    for name in ("python3", "systemctl", "systemd-analyze"):
         _write(bin_dir / name, stub, executable=True)
 
     for name in ("flock", "git", "readlink", "basename", "mkdir", "ln", "dirname",
@@ -136,6 +162,12 @@ def _layout(tmp: Path) -> tuple[dict[str, str], str]:
         _write(control / "deploy" / "scripts" / name, "")
     _write(control / ".env", "X=1\n")
 
+    sync_script = (
+        control / "deploy" / "scripts" / "sync-release-systemd-unit.sh"
+    )
+    shutil.copy2(SYNC_SCRIPT, sync_script)
+    sync_script.chmod(0o755)
+
     subprocess.run(["git", "init", "-q", str(control)], check=True)
     subprocess.run(["git", "-C", str(control), "add", "-A"], check=True)
     subprocess.run(
@@ -151,6 +183,16 @@ def _layout(tmp: Path) -> tuple[dict[str, str], str]:
         _write(rel / ".venv" / "bin" / "python", "#!/usr/bin/env bash\nexit 0\n",
                executable=True)
         _write(rel / "deploy" / "scripts" / "validate-production-env.py", "")
+        _write(
+            rel / "deploy" / "systemd" / "shipit-fixpack.service",
+            _unit_text(sha),
+        )
+
+    unit_dest = (
+        tmp / "etc" / "systemd" / "system" / "shipit-fixpack.service"
+    )
+    _write(unit_dest, _unit_text(OLD_SHA))
+
     (srv / "current").symlink_to(srv / "releases" / OLD_SHA)
 
     return {
@@ -159,6 +201,8 @@ def _layout(tmp: Path) -> tuple[dict[str, str], str]:
         "SHIPIT_ENV_FILE": str(control / ".env"),
         "SHIPIT_RELEASE_ENV": str(control / ".release-env"),
         "SHIPIT_SERVICE": "stub.service",
+        "SHIPIT_FIXPACK_TIMER": FIXPACK_TIMER,
+        "SHIPIT_FIXPACK_UNIT_DEST": str(unit_dest),
         "SHIPIT_DEPLOY_LOCK": str(tmp / "deploy.lock"),
     }, new_sha
 
@@ -322,3 +366,374 @@ def test_absent_worker_unit_is_reported_not_fatal(tmp: Path):
     assert "is not installed here" in r.stdout
     assert "Production deployment: PASSED" in r.stdout
     assert f"restart {WORKER}" not in _calls(tmp)
+
+
+
+# --- release-owned Fix Pack systemd unit ---
+
+
+def _installed_fixpack_unit(tmp: Path) -> Path:
+    return (
+        tmp / "etc" / "systemd" / "system" / "shipit-fixpack.service"
+    )
+
+
+def test_successful_deployment_installs_target_fixpack_unit(tmp: Path):
+    r = _run(tmp)
+
+    assert r.returncode == 0, r.stderr
+
+    active_sha = (tmp / "srv" / "current").resolve().name
+    assert active_sha != OLD_SHA
+    assert _installed_fixpack_unit(tmp).read_text() == _unit_text(active_sha)
+
+    calls = _calls(tmp)
+    assert "systemd-analyze verify" in calls
+    assert "systemctl daemon-reload" in calls
+
+
+def test_deployment_quiesces_fixpack_timer_until_health_passes(tmp: Path):
+    r = _run(tmp)
+
+    assert r.returncode == 0, r.stderr
+
+    calls = _calls(tmp)
+    lines = calls.splitlines()
+
+    stop_timer = next(
+        i for i, line in enumerate(lines)
+        if f"systemctl stop {FIXPACK_TIMER}" in line
+    )
+    verify_unit = next(
+        i for i, line in enumerate(lines)
+        if "systemd-analyze verify" in line
+    )
+    restart_api = next(
+        i for i, line in enumerate(lines)
+        if "systemctl restart stub.service" in line
+    )
+    last_health = max(
+        i for i, line in enumerate(lines)
+        if "health_gate.py" in line
+    )
+    start_timer = next(
+        i for i, line in enumerate(lines)
+        if f"systemctl start {FIXPACK_TIMER}" in line
+    )
+
+    assert stop_timer < verify_unit < restart_api
+    assert restart_api < last_health < start_timer
+
+
+def test_failed_deployment_restores_previous_fixpack_unit_and_timer(
+    tmp: Path,
+):
+    r = _run(tmp, [DEPLOYMENT_FAILS])
+
+    assert r.returncode == 1
+    assert "Automatic rollback completed" in r.stdout
+    assert (tmp / "srv" / "current").resolve().name == OLD_SHA
+    assert _installed_fixpack_unit(tmp).read_text() == _unit_text(OLD_SHA)
+
+    lines = _calls(tmp).splitlines()
+
+    stop_timer = next(
+        i for i, line in enumerate(lines)
+        if f"systemctl stop {FIXPACK_TIMER}" in line
+    )
+    start_timer = next(
+        i for i, line in enumerate(lines)
+        if f"systemctl start {FIXPACK_TIMER}" in line
+    )
+    verifies = [
+        i for i, line in enumerate(lines)
+        if "systemd-analyze verify" in line
+    ]
+    restarts = [
+        i for i, line in enumerate(lines)
+        if "systemctl restart stub.service" in line
+    ]
+    health_checks = [
+        i for i, line in enumerate(lines)
+        if "health_gate.py" in line
+    ]
+
+    assert len(verifies) == 2
+    assert len(restarts) == 2
+    assert len(health_checks) == 2
+
+    # Target unit is installed before the failed target startup.
+    assert stop_timer < verifies[0] < restarts[0] < health_checks[0]
+
+    # Previous unit is restored before the old API restarts, and the timer
+    # returns only after the restored release passes its health check.
+    rollback_activation = next(
+        i for i, line in enumerate(lines)
+        if f"activate --sha {OLD_SHA}" in line
+    )
+
+    assert (
+        health_checks[0]
+        < verifies[1]
+        < rollback_activation
+        < restarts[1]
+        < health_checks[1]
+        < start_timer
+    )
+
+
+def test_failed_rollback_unit_sync_is_loud_and_keeps_timer_stopped(
+    tmp: Path,
+):
+    r = _run(
+        tmp,
+        [
+            DEPLOYMENT_FAILS,
+            {
+                "patterns": ["verify", OLD_SHA],
+                "occurrence": 1,
+            },
+        ],
+    )
+
+    assert r.returncode == 1
+    assert "Automatic rollback completed" not in r.stdout
+    assert "ROLLBACK FAILED at step 'systemd unit'" in r.stderr
+    assert "FAILED, AND ROLLBACK FAILED" in r.stderr
+
+    # Unit verification failed before activation, so the active symlink and
+    # installed unit must both remain on the failed deployment target.
+    active_sha = (tmp / "srv" / "current").resolve().name
+    assert active_sha != OLD_SHA
+
+    calls = _calls(tmp)
+    assert calls.count("systemctl restart stub.service") == 1
+    assert f"systemctl start {FIXPACK_TIMER}" not in calls
+    assert _installed_fixpack_unit(tmp).read_text() == _unit_text(active_sha)
+
+
+# --- manual rollback release-owned unit ---
+
+
+def _run_manual_rollback(
+    tmp: Path,
+    rules: list[dict] | None = None,
+    public_base_url: str | None = None,
+) -> tuple[subprocess.CompletedProcess, str]:
+    env = dict(os.environ)
+    layout, current_sha = _layout(tmp)
+    env.update(layout)
+
+    release_root = Path(layout["SHIPIT_RELEASE_ROOT"])
+    current_link = release_root / "current"
+
+    current_link.unlink()
+    current_link.symlink_to(release_root / "releases" / current_sha)
+
+    _installed_fixpack_unit(tmp).write_text(_unit_text(current_sha))
+
+    env["PATH"] = f"{_stub_bin(tmp, rules or [])}:{env['PATH']}"
+
+    src = ROLLBACK_SCRIPT.read_text().replace(
+        'if [[ "$EUID" -ne 0 ]]; then',
+        "if false; then",
+    )
+
+    harness = tmp / "rollback-under-test.sh"
+    _write(harness, src, executable=True)
+
+    command = [
+        "bash",
+        str(harness),
+        "--sha",
+        OLD_SHA,
+    ]
+
+    if public_base_url is not None:
+        command.extend(["--public-base-url", public_base_url])
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+
+    return result, current_sha
+
+
+def test_manual_rollback_installs_target_unit_and_resumes_timer_after_health(
+    tmp: Path,
+):
+    result, current_sha = _run_manual_rollback(tmp)
+
+    assert result.returncode == 0, result.stderr
+    assert current_sha != OLD_SHA
+    assert (tmp / "srv" / "current").resolve().name == OLD_SHA
+    assert _installed_fixpack_unit(tmp).read_text() == _unit_text(OLD_SHA)
+
+    lines = _calls(tmp).splitlines()
+
+    stop_timer = next(
+        i for i, line in enumerate(lines)
+        if f"systemctl stop {FIXPACK_TIMER}" in line
+    )
+    verify_target = next(
+        i for i, line in enumerate(lines)
+        if "systemd-analyze verify" in line
+    )
+    activate_target = next(
+        i for i, line in enumerate(lines)
+        if f"activate --sha {OLD_SHA}" in line
+    )
+    restart_api = next(
+        i for i, line in enumerate(lines)
+        if "systemctl restart stub.service" in line
+    )
+    health = next(
+        i for i, line in enumerate(lines)
+        if "health_gate.py" in line
+    )
+    start_timer = next(
+        i for i, line in enumerate(lines)
+        if f"systemctl start {FIXPACK_TIMER}" in line
+    )
+
+    assert (
+        stop_timer
+        < verify_target
+        < activate_target
+        < restart_api
+        < health
+        < start_timer
+    )
+
+
+def test_failed_manual_rollback_restores_current_unit_and_timer(
+    tmp: Path,
+):
+    public_url = "https://rollback.example"
+
+    result, current_sha = _run_manual_rollback(
+        tmp,
+        [
+            {
+                "patterns": ["health_gate.py", "127.0.0.1:8000"],
+                "occurrence": 1,
+            },
+        ],
+        public_base_url=public_url,
+    )
+
+    assert result.returncode == 1
+    assert (tmp / "srv" / "current").resolve().name == current_sha
+    assert _installed_fixpack_unit(tmp).read_text() == _unit_text(current_sha)
+
+    lines = _calls(tmp).splitlines()
+
+    verifies = [
+        i for i, line in enumerate(lines)
+        if "systemd-analyze verify" in line
+    ]
+    activations = [
+        i for i, line in enumerate(lines)
+        if "activate --sha" in line
+    ]
+    restarts = [
+        i for i, line in enumerate(lines)
+        if "systemctl restart stub.service" in line
+    ]
+    health_checks = [
+        i for i, line in enumerate(lines)
+        if "health_gate.py" in line
+    ]
+    start_timer = next(
+        i for i, line in enumerate(lines)
+        if f"systemctl start {FIXPACK_TIMER}" in line
+    )
+
+    assert len(verifies) == 2
+    assert len(activations) == 2
+    assert len(restarts) == 2
+    assert len(health_checks) == 3
+
+    assert "127.0.0.1:8000" in lines[health_checks[1]]
+    assert public_url in lines[health_checks[2]]
+
+    assert (
+        verifies[0]
+        < activations[0]
+        < restarts[0]
+        < health_checks[0]
+        < verifies[1]
+        < activations[1]
+        < restarts[1]
+        < health_checks[1]
+        < health_checks[2]
+        < start_timer
+    )
+
+
+def test_failed_deployment_activation_restores_previous_unit_and_timer(
+    tmp: Path,
+):
+    result = _run(
+        tmp,
+        [
+            {
+                "patterns": ["release_manager.py", "activate"],
+                "occurrence": 1,
+            },
+        ],
+    )
+
+    assert result.returncode == 1
+    assert (tmp / "srv" / "current").resolve().name == OLD_SHA
+    assert _installed_fixpack_unit(tmp).read_text() == _unit_text(OLD_SHA)
+
+    calls = _calls(tmp)
+
+    assert calls.count("systemd-analyze verify") == 2
+    assert f"systemctl start {FIXPACK_TIMER}" in calls
+    assert "Automatic rollback completed" in result.stdout
+
+
+def test_failed_manual_rollback_activation_restores_current_unit_and_timer(
+    tmp: Path,
+):
+    public_url = "https://rollback.example"
+
+    result, current_sha = _run_manual_rollback(
+        tmp,
+        [
+            {
+                "patterns": ["release_manager.py", "activate"],
+                "occurrence": 1,
+            },
+        ],
+        public_base_url=public_url,
+    )
+
+    assert result.returncode == 1
+    assert (tmp / "srv" / "current").resolve().name == current_sha
+    assert _installed_fixpack_unit(tmp).read_text() == _unit_text(current_sha)
+
+    calls = _calls(tmp)
+    lines = calls.splitlines()
+
+    health_checks = [
+        i for i, line in enumerate(lines)
+        if "health_gate.py" in line
+    ]
+    start_timer = next(
+        i for i, line in enumerate(lines)
+        if f"systemctl start {FIXPACK_TIMER}" in line
+    )
+
+    assert calls.count("systemd-analyze verify") == 2
+    assert len(health_checks) == 2
+    assert "127.0.0.1:8000" in lines[health_checks[0]]
+    assert public_url in lines[health_checks[1]]
+    assert health_checks[0] < health_checks[1] < start_timer
+    assert "failed to activate rollback target" in result.stderr
