@@ -495,7 +495,13 @@ def test_test_argv_has_no_proxy_and_stays_offline():
     assert "--network" in argv and "none" in argv
     assert not any(a.startswith("--add-host") for a in argv)
     assert not any("PROXY" in a or "proxy" in a for a in argv)
-    assert "-e" not in argv
+    # Non-proxy environment variables such as HOME and cache locations are
+    # required for read-only, non-root containers. What must be absent here
+    # are specifically the proxy environment variables.
+    assert not any(
+        "PROXY=" in argument.upper()
+        for argument in argv
+    )
     assert "--env" not in argv
 
 
@@ -526,7 +532,13 @@ def test_install_proxy_is_configurable_and_optional(monkeypatch):
     monkeypatch.setattr(sc, "FIXPACK_INSTALL_PROXY_URL", "")
     argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
     assert not any(a.startswith("--add-host") for a in argv)
-    assert "-e" not in argv
+    # Non-proxy environment variables such as HOME and cache locations are
+    # required for read-only, non-root containers. What must be absent here
+    # are specifically the proxy environment variables.
+    assert not any(
+        "PROXY=" in argument.upper()
+        for argument in argv
+    )
 
 
 # --- container runtime selection (gVisor opt-in) ---------------------------
