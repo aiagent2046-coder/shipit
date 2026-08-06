@@ -40,11 +40,18 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from typing import NamedTuple
 
 from app.fixpack.generate import FixpackPlan, _repo_relative
+from app.fixpack.verification import (
+    StageStatus,
+    VerificationProfile,
+    VerificationStage,
+    VerificationStep,
+)
 
 # --- Tunables --------------------------------------------------------------
 # Small, explicit, and conservative. A test run that needs more than this is
@@ -562,6 +569,307 @@ def run_suite(zip_bytes: bytes, runner: TestRunner) -> RunResult:
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
+
+
+# --- Structured build verification -----------------------------------------
+
+def _verification_duration_ms(started: float) -> int:
+    """Return a non-negative whole-millisecond duration."""
+
+    return max(
+        0,
+        int((time.monotonic() - started) * 1000),
+    )
+
+
+def _verification_not_run(
+    steps: tuple[VerificationStep, ...],
+    *,
+    status: StageStatus,
+    detail: str,
+) -> tuple[VerificationStage, ...]:
+    """Create explicit results for commands that never executed."""
+
+    return tuple(
+        VerificationStage(
+            name=step.name,
+            status=status,
+            command=step.command,
+            detail=detail,
+        )
+        for step in steps
+    )
+
+
+def run_verification_profile(
+    zip_bytes: bytes,
+    profile: VerificationProfile,
+) -> tuple[VerificationStage, ...]:
+    """Execute one repository version using a verification profile.
+
+    Dependency installation uses the existing network-enabled, proxy-routed
+    container. Every compile, typecheck, build, import and test command uses
+    the existing offline container with the same resource and privilege
+    restrictions as the legacy semantic test gate.
+
+    Client stdout and stderr are deliberately not copied into the returned
+    stages. Persisted details contain only bounded status information generated
+    by ShipIt itself.
+    """
+
+    if _zip_uncompressed_size(zip_bytes) > MAX_WORKSPACE_BYTES:
+        detail = "client workspace exceeds size limit"
+
+        return (
+            VerificationStage(
+                name="install",
+                status="unavailable",
+                command=profile.install_command,
+                detail=detail,
+            ),
+            *_verification_not_run(
+                profile.steps,
+                status="unavailable",
+                detail=detail,
+            ),
+        )
+
+    workdir = tempfile.mkdtemp(
+        prefix="shipit-verification-",
+    )
+
+    try:
+        _extract_repo_relative(
+            zip_bytes,
+            workdir,
+        )
+        _chown_workdir(workdir)
+
+        stages: list[VerificationStage] = []
+
+        install_started = time.monotonic()
+
+        try:
+            install = _run(
+                _docker_install_argv(
+                    profile.image,
+                    workdir,
+                    profile.install_command,
+                ),
+                timeout=INSTALL_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            detail = (
+                "dependency install timed out after "
+                f"{INSTALL_TIMEOUT_SECONDS} seconds"
+            )
+
+            return (
+                VerificationStage(
+                    name="install",
+                    status="failed",
+                    command=profile.install_command,
+                    duration_ms=_verification_duration_ms(
+                        install_started
+                    ),
+                    detail=detail,
+                ),
+                *_verification_not_run(
+                    profile.steps,
+                    status="skipped",
+                    detail="dependency install did not complete",
+                ),
+            )
+        except FileNotFoundError:
+            detail = "docker CLI not available"
+
+            return (
+                VerificationStage(
+                    name="install",
+                    status="unavailable",
+                    command=profile.install_command,
+                    duration_ms=_verification_duration_ms(
+                        install_started
+                    ),
+                    detail=detail,
+                ),
+                *_verification_not_run(
+                    profile.steps,
+                    status="unavailable",
+                    detail=detail,
+                ),
+            )
+        except OSError as exc:
+            detail = (
+                "docker invocation error: "
+                f"{type(exc).__name__}"
+            )
+
+            return (
+                VerificationStage(
+                    name="install",
+                    status="unavailable",
+                    command=profile.install_command,
+                    duration_ms=_verification_duration_ms(
+                        install_started
+                    ),
+                    detail=detail,
+                ),
+                *_verification_not_run(
+                    profile.steps,
+                    status="unavailable",
+                    detail=detail,
+                ),
+            )
+
+        if install.returncode != 0:
+            detail = (
+                "dependency install failed "
+                f"(exit {install.returncode})"
+            )
+
+            return (
+                VerificationStage(
+                    name="install",
+                    status="failed",
+                    command=profile.install_command,
+                    exit_code=install.returncode,
+                    duration_ms=_verification_duration_ms(
+                        install_started
+                    ),
+                    detail=detail,
+                ),
+                *_verification_not_run(
+                    profile.steps,
+                    status="skipped",
+                    detail="dependency install failed",
+                ),
+            )
+
+        stages.append(
+            VerificationStage(
+                name="install",
+                status="passed",
+                command=profile.install_command,
+                exit_code=0,
+                duration_ms=_verification_duration_ms(
+                    install_started
+                ),
+            )
+        )
+
+        for index, step in enumerate(profile.steps):
+            stage_started = time.monotonic()
+
+            try:
+                result = _run(
+                    _docker_test_argv(
+                        profile.image,
+                        workdir,
+                        step.command,
+                    ),
+                    timeout=RUN_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                stages.append(
+                    VerificationStage(
+                        name=step.name,
+                        status="failed",
+                        command=step.command,
+                        duration_ms=_verification_duration_ms(
+                            stage_started
+                        ),
+                        detail=(
+                            f"{step.name} timed out after "
+                            f"{RUN_TIMEOUT_SECONDS} seconds"
+                        ),
+                    )
+                )
+                continue
+            except FileNotFoundError:
+                detail = "docker CLI not available"
+
+                stages.append(
+                    VerificationStage(
+                        name=step.name,
+                        status="unavailable",
+                        command=step.command,
+                        duration_ms=_verification_duration_ms(
+                            stage_started
+                        ),
+                        detail=detail,
+                    )
+                )
+                stages.extend(
+                    _verification_not_run(
+                        profile.steps[index + 1 :],
+                        status="unavailable",
+                        detail=detail,
+                    )
+                )
+                break
+            except OSError as exc:
+                detail = (
+                    "docker invocation error: "
+                    f"{type(exc).__name__}"
+                )
+
+                stages.append(
+                    VerificationStage(
+                        name=step.name,
+                        status="unavailable",
+                        command=step.command,
+                        duration_ms=_verification_duration_ms(
+                            stage_started
+                        ),
+                        detail=detail,
+                    )
+                )
+                stages.extend(
+                    _verification_not_run(
+                        profile.steps[index + 1 :],
+                        status="unavailable",
+                        detail=detail,
+                    )
+                )
+                break
+
+            if result.returncode == 0:
+                stages.append(
+                    VerificationStage(
+                        name=step.name,
+                        status="passed",
+                        command=step.command,
+                        exit_code=0,
+                        duration_ms=_verification_duration_ms(
+                            stage_started
+                        ),
+                    )
+                )
+                continue
+
+            stages.append(
+                VerificationStage(
+                    name=step.name,
+                    status="failed",
+                    command=step.command,
+                    exit_code=result.returncode,
+                    duration_ms=_verification_duration_ms(
+                        stage_started
+                    ),
+                    detail=(
+                        f"{step.name} failed "
+                        f"(exit {result.returncode})"
+                    ),
+                )
+            )
+
+        return tuple(stages)
+    finally:
+        shutil.rmtree(
+            workdir,
+            ignore_errors=True,
+        )
 
 # --- Decision --------------------------------------------------------------
 
