@@ -32,6 +32,11 @@ from app.deploypack.preview import reconcile_previews
 from app.deploypack.sandbox import verify_deploy_pack
 from app.fixpack.generate import FixpackPlan
 from app.fixpack.semantic_check import RunResult, TestRunner, minimal_check, run_suite
+from app.fixpack.semantic_check import run_verification_profile
+from app.fixpack.verification import (
+    verification_profile_from_wire,
+    verification_stage_to_wire,
+)
 from app.runner.auth import require_sandbox_token
 
 app = FastAPI(title="shipit-sandbox-runner", version="0.1.0")
@@ -163,6 +168,34 @@ async def fixpack_run_suite(
     result: RunResult = await _guarded(run_suite, raw, runner)
     return {"passed": result.passed, "failed": result.failed,
             "timed_out": result.timed_out, "error": result.error}
+
+
+@app.post("/fixpack/run-verification")
+async def fixpack_run_verification(
+    request: Request,
+    _: None = Depends(require_sandbox_token),
+) -> dict:
+    """Run one structured verification profile against one ZIP."""
+
+    raw = await request.body()
+    manifest = _manifest(request)
+
+    profile = verification_profile_from_wire(
+        manifest["profile"]
+    )
+
+    stages = await _guarded(
+        run_verification_profile,
+        raw,
+        profile,
+    )
+
+    return {
+        "stages": [
+            verification_stage_to_wire(stage)
+            for stage in stages
+        ]
+    }
 
 
 @app.post("/fixpack/minimal-check")

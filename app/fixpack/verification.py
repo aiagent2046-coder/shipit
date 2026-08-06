@@ -602,3 +602,258 @@ def compare_verification_stages(
         deliverable=True,
         detail="; ".join(details),
     )
+
+
+# --- Runner wire contract --------------------------------------------------
+
+_MAX_WIRE_TEXT_BYTES = 16 * 1024
+
+_VALID_STAGE_NAMES = {
+    "install",
+    "compile",
+    "typecheck",
+    "build",
+    "import",
+    "tests",
+}
+
+_VALID_STAGE_STATUSES = {
+    "pending",
+    "passed",
+    "failed",
+    "skipped",
+    "unavailable",
+}
+
+
+def _wire_text(
+    value: object,
+    field: str,
+    *,
+    allow_none: bool = False,
+) -> str | None:
+    if value is None and allow_none:
+        return None
+
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+
+    if not value.strip():
+        raise ValueError(f"{field} must not be empty")
+
+    if "\x00" in value:
+        raise ValueError(f"{field} contains a null byte")
+
+    if len(value.encode("utf-8")) > _MAX_WIRE_TEXT_BYTES:
+        raise ValueError(f"{field} exceeds size limit")
+
+    return value
+
+
+def verification_profile_to_wire(
+    profile: VerificationProfile,
+) -> dict[str, object]:
+    """Serialize a trusted detected profile for the sandbox runner."""
+
+    return {
+        "ecosystem": profile.ecosystem,
+        "framework": profile.framework,
+        "image": profile.image,
+        "install_command": profile.install_command,
+        "steps": [
+            {
+                "name": step.name,
+                "command": step.command,
+                "required": step.required,
+            }
+            for step in profile.steps
+        ],
+    }
+
+
+def verification_profile_from_wire(
+    value: object,
+) -> VerificationProfile:
+    """Rebuild and validate a profile received by the runner."""
+
+    if not isinstance(value, dict):
+        raise ValueError("profile must be an object")
+
+    ecosystem = value.get("ecosystem")
+    framework = value.get("framework")
+
+    if ecosystem not in {"node", "python"}:
+        raise ValueError("unsupported verification ecosystem")
+
+    if framework not in {"nextjs", "vite", "fastapi"}:
+        raise ValueError("unsupported verification framework")
+
+    expected_ecosystem = (
+        "python"
+        if framework == "fastapi"
+        else "node"
+    )
+
+    if ecosystem != expected_ecosystem:
+        raise ValueError(
+            "verification framework/ecosystem mismatch"
+        )
+
+    image = _wire_text(
+        value.get("image"),
+        "profile.image",
+    )
+
+    install_command = _wire_text(
+        value.get("install_command"),
+        "profile.install_command",
+    )
+
+    raw_steps = value.get("steps")
+
+    if not isinstance(raw_steps, list):
+        raise ValueError("profile.steps must be an array")
+
+    if not 1 <= len(raw_steps) <= 8:
+        raise ValueError(
+            "profile.steps must contain 1 to 8 stages"
+        )
+
+    steps: list[VerificationStep] = []
+    seen_names: set[str] = set()
+
+    for index, raw_step in enumerate(raw_steps):
+        if not isinstance(raw_step, dict):
+            raise ValueError(
+                f"profile.steps[{index}] must be an object"
+            )
+
+        name = raw_step.get("name")
+
+        if (
+            name not in _VALID_STAGE_NAMES
+            or name == "install"
+        ):
+            raise ValueError(
+                f"profile.steps[{index}].name is invalid"
+            )
+
+        if name in seen_names:
+            raise ValueError(
+                f"duplicate verification stage: {name}"
+            )
+
+        seen_names.add(name)
+
+        command = _wire_text(
+            raw_step.get("command"),
+            f"profile.steps[{index}].command",
+        )
+
+        required = raw_step.get("required")
+
+        if not isinstance(required, bool):
+            raise ValueError(
+                f"profile.steps[{index}].required "
+                "must be boolean"
+            )
+
+        steps.append(
+            VerificationStep(
+                name=name,
+                command=command,
+                required=required,
+            )
+        )
+
+    return VerificationProfile(
+        ecosystem=ecosystem,
+        framework=framework,
+        image=image,
+        install_command=install_command,
+        steps=tuple(steps),
+    )
+
+
+def verification_stage_to_wire(
+    stage: VerificationStage,
+) -> dict[str, object]:
+    return {
+        "name": stage.name,
+        "status": stage.status,
+        "command": stage.command,
+        "exit_code": stage.exit_code,
+        "duration_ms": stage.duration_ms,
+        "detail": stage.detail,
+    }
+
+
+def verification_stage_from_wire(
+    value: object,
+) -> VerificationStage:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "verification stage must be an object"
+        )
+
+    name = value.get("name")
+    status = value.get("status")
+
+    if name not in _VALID_STAGE_NAMES:
+        raise ValueError(
+            "verification stage name is invalid"
+        )
+
+    if status not in _VALID_STAGE_STATUSES:
+        raise ValueError(
+            "verification stage status is invalid"
+        )
+
+    command = value.get("command")
+
+    if command is not None:
+        command = _wire_text(
+            command,
+            "verification stage command",
+        )
+
+    exit_code = value.get("exit_code")
+
+    if (
+        exit_code is not None
+        and (
+            isinstance(exit_code, bool)
+            or not isinstance(exit_code, int)
+        )
+    ):
+        raise ValueError(
+            "verification stage exit_code is invalid"
+        )
+
+    duration_ms = value.get("duration_ms", 0)
+
+    if (
+        isinstance(duration_ms, bool)
+        or not isinstance(duration_ms, int)
+        or duration_ms < 0
+    ):
+        raise ValueError(
+            "verification stage duration_ms is invalid"
+        )
+
+    detail = value.get("detail")
+
+    if detail is not None:
+        detail = _wire_text(
+            detail,
+            "verification stage detail",
+        )
+
+    return VerificationStage(
+        name=name,
+        status=status,
+        command=command,
+        exit_code=exit_code,
+        duration_ms=duration_ms,
+        detail=detail,
+    )
