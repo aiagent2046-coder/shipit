@@ -2842,6 +2842,7 @@ async def _process_one_paid_job(
                 run_semantic_check, zip_bytes, plan,
                 suite_runner=sandbox_client.run_suite,
                 minimal_checker=sandbox_client.minimal_check,
+                profile_runner=sandbox_client.run_verification_profile,
             )
         )
         if semantic.verification_unavailable:
@@ -2861,7 +2862,7 @@ async def _process_one_paid_job(
             await fixpack_repo.mark_status(job_id, "running", detail=semantic.detail)
             return "deferred"
 
-        if semantic.regression:
+        if semantic.regression or semantic.blocked:
             logger.warning(
                 "Fix Pack job %s blocked by semantic check: %s",
                 job_id, semantic.detail,
@@ -2871,7 +2872,8 @@ async def _process_one_paid_job(
             await fixpack_repo.mark_status(job_id, "blocked", detail=semantic.detail)
             await _record_fix_outcome(
                 fix_outcome_repo, job=job, outcome="blocked",
-                rule_ids=_rule_ids_from_plan(plan), is_regression=True,
+                rule_ids=_rule_ids_from_plan(plan),
+                is_regression=semantic.regression,
                 pr_url=None,
             )
             return "blocked"

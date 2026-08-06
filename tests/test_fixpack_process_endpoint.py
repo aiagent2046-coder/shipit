@@ -1450,3 +1450,160 @@ def test_an_uninstalled_app_still_fails_terminally(monkeypatch):
     assert resp.json()["failed"] == 1
     assert fixpack_repo.statuses["j1"] == "failed"
     assert fixpack_repo.released == []
+
+
+def test_verified_build_block_without_regression_withholds_pr(
+    monkeypatch,
+):
+    """A conclusive required-build failure blocks delivery without being
+    mislabeled as a regression."""
+
+    monkeypatch.setenv(
+        "FIXPACK_PROCESS_TOKEN",
+        "secret123",
+    )
+
+    monkeypatch.setattr(
+        main_mod,
+        "app_credentials_from_env",
+        lambda: None,
+    )
+
+    from app.fixpack.semantic_check import (
+        SemanticCheckResult,
+    )
+
+    def fake_check(
+        zip_bytes,
+        plan,
+        **kwargs,
+    ):
+        return SemanticCheckResult(
+            ran=True,
+            ecosystem="node",
+            original=None,
+            patched=None,
+            regression=False,
+            detail=(
+                "verified build (nextjs): "
+                "patched required verification failed: build"
+            ),
+            pr_note=None,
+            blocked=True,
+        )
+
+    monkeypatch.setattr(
+        main_mod,
+        "run_semantic_check",
+        fake_check,
+    )
+
+    recorded = []
+
+    async def fake_record(
+        *args,
+        **kwargs,
+    ):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        main_mod,
+        "_record_fix_outcome",
+        fake_record,
+    )
+
+    zip_bytes = make_zip(
+        {
+            "config.py": (
+                f'API_KEY = "{AWS_KEY}"\n'
+            )
+        }
+    )
+
+    audits = {
+        "a1": {
+            "repo_url": (
+                "https://github.com/acme/app"
+            ),
+            "findings_json": [
+                {
+                    "rule_id": (
+                        "aws-access-key-id"
+                    ),
+                    "file": "config.py",
+                    "line": 1,
+                    "title": (
+                        "AWS Access Key ID"
+                    ),
+                    "context": None,
+                }
+            ],
+        }
+    }
+
+    jobs = [
+        {
+            "id": "j1",
+            "audit_id": "a1",
+            "status": "paid",
+        }
+    ]
+
+    opened = {
+        "n": 0,
+    }
+
+    def fake_opener(*args, **kwargs):
+        opened["n"] += 1
+
+        return PullRequestResult(
+            html_url="x",
+            branch="y",
+        )
+
+    fixpack_repo = FakeFixpackRepo(jobs)
+
+    override(
+        FakeAuditRepo(audits),
+        fixpack_repo,
+        fake_fetcher_returning(
+            zip_bytes
+        ),
+        fake_opener,
+    )
+
+    try:
+        response = client.post(
+            "/internal/fixpack/process-paid",
+            headers=auth(),
+        )
+    finally:
+        clear_overrides()
+
+    assert response.json() == {
+        "processed": 1,
+        "delivered": 0,
+        "skipped": 0,
+        "blocked": 1,
+        "failed": 0,
+        "requeued": 0,
+        "deferred": 0,
+    }
+
+    assert opened["n"] == 0
+    assert (
+        fixpack_repo.statuses["j1"]
+        == "blocked"
+    )
+
+    blocked_rows = [
+        row
+        for row in recorded
+        if row["outcome"] == "blocked"
+    ]
+
+    assert len(blocked_rows) == 1
+    assert (
+        blocked_rows[0]["is_regression"]
+        is False
+    )
