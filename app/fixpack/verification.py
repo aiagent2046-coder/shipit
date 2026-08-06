@@ -400,3 +400,205 @@ def detect_verification_profile(
     finally:
         archive.close()
         buffer.close()
+
+
+def compare_verification_stages(
+    profile: VerificationProfile,
+    original: tuple[VerificationStage, ...],
+    patched: tuple[VerificationStage, ...],
+) -> VerificationReport:
+    """Compare original and patched verification stages.
+
+    Delivery is allowed only when every required patched stage passes and no
+    optional check introduces a new failure. Existing optional test failures
+    may remain, but they are reported explicitly and do not qualify as full
+    regression verification.
+    """
+
+    expected_names = (
+        "install",
+        *(step.name for step in profile.steps),
+    )
+
+    original_names = tuple(
+        stage.name
+        for stage in original
+    )
+    patched_names = tuple(
+        stage.name
+        for stage in patched
+    )
+
+    if (
+        original_names != expected_names
+        or patched_names != expected_names
+    ):
+        return VerificationReport(
+            profile=profile,
+            original=original,
+            patched=patched,
+            regression=False,
+            deliverable=False,
+            detail="verification stage contract mismatch",
+        )
+
+    all_stages = (*original, *patched)
+
+    if any(
+        stage.status == "unavailable"
+        for stage in all_stages
+    ):
+        return VerificationReport(
+            profile=profile,
+            original=original,
+            patched=patched,
+            regression=False,
+            deliverable=False,
+            detail="verification infrastructure unavailable",
+        )
+
+    if any(
+        stage.status == "pending"
+        for stage in all_stages
+    ):
+        return VerificationReport(
+            profile=profile,
+            original=original,
+            patched=patched,
+            regression=False,
+            deliverable=False,
+            detail="verification report is incomplete",
+        )
+
+    original_by_name = {
+        stage.name: stage
+        for stage in original
+    }
+    patched_by_name = {
+        stage.name: stage
+        for stage in patched
+    }
+
+    regression_names = [
+        name
+        for name in expected_names
+        if (
+            original_by_name[name].status == "passed"
+            and patched_by_name[name].status != "passed"
+        )
+    ]
+
+    if regression_names:
+        return VerificationReport(
+            profile=profile,
+            original=original,
+            patched=patched,
+            regression=True,
+            deliverable=False,
+            detail=(
+                "new verification regression: "
+                + ", ".join(regression_names)
+            ),
+        )
+
+    required_names = {
+        "install",
+        *(
+            step.name
+            for step in profile.steps
+            if step.required
+        ),
+    }
+
+    required_failures = [
+        name
+        for name in expected_names
+        if (
+            name in required_names
+            and patched_by_name[name].status != "passed"
+        )
+    ]
+
+    if required_failures:
+        return VerificationReport(
+            profile=profile,
+            original=original,
+            patched=patched,
+            regression=False,
+            deliverable=False,
+            detail=(
+                "patched required verification failed: "
+                + ", ".join(required_failures)
+            ),
+        )
+
+    optional_names = {
+        step.name
+        for step in profile.steps
+        if not step.required
+    }
+
+    optional_incomplete = [
+        name
+        for name in expected_names
+        if (
+            name in optional_names
+            and patched_by_name[name].status != "passed"
+            and original_by_name[name].status != "failed"
+        )
+    ]
+
+    if optional_incomplete:
+        return VerificationReport(
+            profile=profile,
+            original=original,
+            patched=patched,
+            regression=False,
+            deliverable=False,
+            detail=(
+                "optional verification could not be compared: "
+                + ", ".join(optional_incomplete)
+            ),
+        )
+
+    baseline_optional_failures = [
+        name
+        for name in expected_names
+        if (
+            name in optional_names
+            and original_by_name[name].status == "failed"
+            and patched_by_name[name].status == "failed"
+        )
+    ]
+
+    improvements = [
+        name
+        for name in expected_names
+        if (
+            original_by_name[name].status == "failed"
+            and patched_by_name[name].status == "passed"
+        )
+    ]
+
+    details = ["required patched verification passed"]
+
+    if baseline_optional_failures:
+        details.append(
+            "baseline optional failures remain: "
+            + ", ".join(baseline_optional_failures)
+        )
+
+    if improvements:
+        details.append(
+            "improvements: "
+            + ", ".join(improvements)
+        )
+
+    return VerificationReport(
+        profile=profile,
+        original=original,
+        patched=patched,
+        regression=False,
+        deliverable=True,
+        detail="; ".join(details),
+    )
