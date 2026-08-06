@@ -1607,3 +1607,71 @@ def test_verified_build_block_without_regression_withholds_pr(
         blocked_rows[0]["is_regression"]
         is False
     )
+
+
+
+def test_processor_claims_at_most_one_paid_job_per_run(monkeypatch):
+    """A successful invocation leaves the next paid job for the next timer
+    tick, making the service timeout a deterministic per-job budget."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(
+        main_mod,
+        "app_credentials_from_env",
+        lambda: None,
+    )
+
+    zip_bytes = make_zip({
+        "config.py": f'API_KEY = "{AWS_KEY}"\n',
+    })
+
+    repo = LeaseFixpackRepo([
+        {
+            "id": "j1",
+            "audit_id": "a1",
+            "status": "paid",
+            "attempts": 0,
+        },
+        {
+            "id": "j2",
+            "audit_id": "a1",
+            "status": "paid",
+            "attempts": 0,
+        },
+    ])
+
+    opened = {"count": 0}
+
+    def fake_opener(*args, **kwargs):
+        opened["count"] += 1
+        return PullRequestResult(
+            html_url="https://github.com/acme/app/pull/10",
+            branch="b",
+        )
+
+    override(
+        FakeAuditRepo(_aws_audit()),
+        repo,
+        fake_fetcher_returning(zip_bytes),
+        fake_opener,
+    )
+
+    try:
+        response = client.post(
+            "/internal/fixpack/process-paid",
+            headers=auth(),
+        )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    assert response.json()["processed"] == 1
+    assert response.json()["delivered"] == 1
+
+    assert opened["count"] == 1
+    assert repo.claims == 1
+
+    assert repo.jobs["j1"]["status"] == "delivered"
+    assert repo.jobs["j1"]["attempts"] == 1
+
+    assert repo.jobs["j2"]["status"] == "paid"
+    assert repo.jobs["j2"]["attempts"] == 0
