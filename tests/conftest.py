@@ -454,6 +454,7 @@ def _no_ambient_production_integrations(monkeypatch):
         "SANDBOX_RUNNER_URL",
         "SANDBOX_RUNNER_UDS",
         "SANDBOX_RUNNER_TOKEN",
+        "FIXPACK_VERIFIED_BUILD_GATE",
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_WEBHOOK_SECRET",
         # The operator's own Telegram id. Stripped for two reasons: it is the

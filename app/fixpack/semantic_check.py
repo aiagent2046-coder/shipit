@@ -49,6 +49,7 @@ from app.fixpack.generate import FixpackPlan, _repo_relative
 from app.fixpack.verification import (
     StageStatus,
     VerificationProfile,
+    VerificationReport,
     VerificationStage,
     VerificationStep,
 )
@@ -58,6 +59,32 @@ from app.fixpack.verification import (
 # not something we want to gate a PR on synchronously anyway.
 INSTALL_TIMEOUT_SECONDS = 300
 RUN_TIMEOUT_SECONDS = 180
+
+FIXPACK_VERIFIED_BUILD_GATE_ENV = (
+    "FIXPACK_VERIFIED_BUILD_GATE"
+)
+
+_TRUE_ENV_VALUES = {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+
+def verified_build_gate_enabled() -> bool:
+    """Return the rollout flag, read at call time.
+
+    The default is deliberately disabled. Unknown values are also disabled,
+    so a typo cannot unexpectedly change paid-job verification behavior.
+    """
+
+    raw = os.environ.get(
+        FIXPACK_VERIFIED_BUILD_GATE_ENV,
+        "",
+    )
+
+    return raw.strip().lower() in _TRUE_ENV_VALUES
 MEMORY_LIMIT = "512m"
 PYTHON_IMAGE = "python:3.12-slim"
 NODE_IMAGE = "node:20-slim"
@@ -176,6 +203,52 @@ class SemanticCheckResult:
     # The check could not be performed (sandbox-runner unreachable). Neither a
     # pass nor a regression: the caller must defer the job, not deliver or block.
     verification_unavailable: bool = False
+    # A conclusive verification result forbids delivery, but the patch did not
+    # necessarily introduce a regression. Example: the required build already
+    # failed in original and still fails in patched.
+    blocked: bool = False
+
+
+def semantic_result_from_verification_report(
+    report: VerificationReport,
+) -> SemanticCheckResult:
+    """Adapt the structured report without losing delivery semantics."""
+
+    stages = (
+        *report.original,
+        *report.patched,
+    )
+
+    verification_unavailable = any(
+        stage.status in {
+            "unavailable",
+            "pending",
+        }
+        for stage in stages
+    )
+
+    blocked = (
+        not report.deliverable
+        and not verification_unavailable
+    )
+
+    return SemanticCheckResult(
+        ran=not verification_unavailable,
+        ecosystem=report.profile.ecosystem,
+        # Structured stages remain in VerificationReport. Fabricating aggregate
+        # RunResult counts here would discard typecheck/build/import meaning.
+        original=None,
+        patched=None,
+        regression=report.regression,
+        detail=(
+            "verified build "
+            f"({report.profile.framework}): "
+            f"{report.detail}"
+        ),
+        pr_note=None,
+        verification_unavailable=verification_unavailable,
+        blocked=blocked,
+    )
 
 
 # --- Test-runner detection -------------------------------------------------
@@ -996,6 +1069,8 @@ def run_semantic_check(
     *,
     suite_runner=None,
     minimal_checker=None,
+    profile_runner=None,
+    verified_build_enabled: bool | None = None,
 ) -> SemanticCheckResult:
     """Top-level gate. Detect the client's test runner; if present, run both
     versions in Docker and compare; if absent, do the minimal check and
@@ -1010,6 +1085,29 @@ def run_semantic_check(
     This is synchronous and may take minutes (real Docker) — callers MUST run
     it in a threadpool, exactly like `run_scan` (see main.py).
     """
+    if verified_build_enabled is None:
+        verified_build_enabled = (
+            verified_build_gate_enabled()
+        )
+
+    if verified_build_enabled:
+        # Lazy import avoids a module cycle: verified_build reuses the protected
+        # executor and patched-ZIP builder defined in this module.
+        from app.fixpack.verified_build import (
+            run_verified_build_gate,
+        )
+
+        verification_report = run_verified_build_gate(
+            original_zip,
+            plan,
+            profile_runner=profile_runner,
+        )
+
+        if verification_report is not None:
+            return semantic_result_from_verification_report(
+                verification_report
+            )
+
     # Resolve at call time (not as default arg values) so a module-level
     # monkeypatch of run_suite / minimal_check still takes effect, and so the
     # backend can inject the sandbox-runner client.
