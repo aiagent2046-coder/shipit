@@ -145,6 +145,7 @@ python3 "$MIGRATION_GATE" \
   --release "$TARGET_RELEASE" \
   --env-file "$ENV_FILE"
 
+# shellcheck disable=SC2310
 if ! quiesce_fixpack_timer; then
   echo "Production rollback: FAILED before release activation" >&2
   exit 1
@@ -153,6 +154,7 @@ fi
 if ! "$SYSTEMD_UNIT_SYNC" --release "$TARGET_RELEASE"; then
   echo "Production rollback: target systemd unit installation failed" >&2
 
+  # shellcheck disable=SC2310
   if ! resume_fixpack_timer; then
     echo "WARNING: $FIXPACK_TIMER also failed to restart" >&2
   fi
@@ -240,6 +242,7 @@ then
       exit 1
     fi
   fi
+  # shellcheck disable=SC2310
   if ! resume_fixpack_timer; then
     echo \
       "ERROR: restored $CURRENT_SHA, but $FIXPACK_TIMER did not restart" \
@@ -321,6 +324,7 @@ if [[ "$rollback_ok" -ne 1 ]]; then
     fi
   fi
 
+  # shellcheck disable=SC2310
   if ! resume_fixpack_timer; then
     echo \
       "ERROR: restored $CURRENT_SHA, but $FIXPACK_TIMER did not restart" \
@@ -331,6 +335,7 @@ if [[ "$rollback_ok" -ne 1 ]]; then
   exit 1
 fi
 
+# shellcheck disable=SC2310
 if ! resume_fixpack_timer; then
   echo \
     "Production rollback: $TARGET_SHA is healthy, but" \
