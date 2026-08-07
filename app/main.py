@@ -32,16 +32,21 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from app import accounts, alerts
+from app.service_flags import (  # noqa: F401  (re-exported for the test suite)
+    _emergency_stop_active,
+    _llm_paid_ops_enabled,
+    _reset_service_flag_cache,
+)
 from app.audit_spool import SpoolFull, cleanup_staged_archive, stage_archive
 from app.accounts import (
     CSRF_HEADER,
     TIER_FREE,
-    entitlements_dict,
     entitlements_for_tier,
     validate_api_key_pepper_configured,
 )
 from app.billing import bank_transfer, telegram_stars, usdt_trc20
 from app.ops_endpoints import router as ops_router
+from app.routes.accounts import router as accounts_router
 from app.routes.billing import router as billing_router
 from app.routes.operator import router as operator_router
 from app.routes.paypal import router as paypal_router
@@ -279,7 +284,6 @@ from app.routes._shared import (  # noqa: E402
     _json_object_body,
     _require_bearer_token,
     _secret_equals,
-    _service_flags_token,
     _usdt_receiving_address,
 )
 from app.routes.dependencies import (  # noqa: E402
@@ -424,23 +428,13 @@ DEFAULT_DAILY_SPEND_CAP_USD = Decimal(
     os.environ.get("DEFAULT_DAILY_SPEND_CAP_USD", "2.00"))
 _ANON_SPEND_ALERT_FRACTION = Decimal("0.8")
 
-# How often an engaged emergency stop re-pages the operator. Half an hour, not
-# alerts.DEFAULT_THROTTLE_SECONDS (60s): the audit worker consults the stop once
-# per loop pass, so the default meant one Telegram message per minute for as
-# long as the stop was on.
-_PAUSED_ALERT_THROTTLE_S = 1800.0
-
-# Emergency-stop flag cache. The kill switch is read on the request path, so it
-# is cached for a few seconds to avoid a DB round-trip per request; a pause thus
-# takes effect within _FLAG_TTL_S, which is well inside "emergency" tolerance.
-_FLAG_TTL_S = 8.0
-_llm_paid_ops_cache: dict[str, object] = {"at": 0.0, "enabled": True, "note": None}
 
 
-def _reset_service_flag_cache() -> None:
-    """Force the next _llm_paid_ops_enabled call to re-read the DB. Used by the
-    toggle endpoint (so a just-set value is visible immediately) and by tests."""
-    _llm_paid_ops_cache["at"] = 0.0
+
+
+
+
+
 
 
 async def _run_scan_offthread(*args, **kwargs):
@@ -461,51 +455,10 @@ async def _run_scan_offthread(*args, **kwargs):
     return await run_in_threadpool(run_scan, *args, **kwargs)
 
 
-async def _llm_paid_ops_enabled(
-    flags_repo: ServiceFlagsRepository,
-) -> tuple[bool, str | None]:
-    """(enabled, note) for the 'llm_paid_ops' emergency stop, cached for
-    _FLAG_TTL_S. A missing row or unconfigured DB reads as enabled (fail-open):
-    the kill switch must be an explicit operator action, never the accident of a
-    missing table -- an unconfigured dev box must still run scans."""
-    now = time.monotonic()
-    if now - float(_llm_paid_ops_cache["at"]) < _FLAG_TTL_S:
-        return bool(_llm_paid_ops_cache["enabled"]), _llm_paid_ops_cache["note"]  # type: ignore[return-value]
-    flag = await flags_repo.get("llm_paid_ops")
-    if flag is None:
-        enabled, note = True, None
-    else:
-        enabled, note = bool(flag["enabled"]), flag.get("note")
-    _llm_paid_ops_cache.update(at=now, enabled=enabled, note=note)
-    return enabled, note
 
 
-async def _emergency_stop_active(
-    flags_repo: ServiceFlagsRepository,
-) -> tuple[bool, str | None]:
-    """True (with the operator note) when paid LLM ops are paused. Fires the
-    mandatory operator alert as a side effect whenever the stop is found engaged;
-    notify_operator self-throttles on the dedupe_key, so a burst of blocked
-    requests collapses to one alert.
 
-    The window is _PAUSED_ALERT_THROTTLE_S, not the 60s default, because the
-    audit worker asks once per loop pass: at the default, an engaged stop paged
-    the operator every single minute for as long as it stayed engaged. A
-    reminder is wanted -- forgetting the stop is on means silently selling
-    nothing -- but one a minute forever is how an operator learns to ignore
-    alerts. Deliberately not a per-caller parameter: fifteen tests stub this
-    function, so a new keyword would break them all and every future stub would
-    have to remember it. One window for one alert is enough."""
-    enabled, note = await _llm_paid_ops_enabled(flags_repo)
-    if enabled:
-        return False, None
-    await alerts.notify_operator(
-        f"Emergency stop ACTIVE: llm_paid_ops is OFF, rejecting paid LLM ops. "
-        f"Note: {note or '(none)'}",
-        dedupe_key="llm-paid-ops-paused",
-        throttle_seconds=_PAUSED_ALERT_THROTTLE_S,
-    )
-    return True, note
+
 
 
 async def _anon_daily_cap_exceeded(llm_usage_repo: LlmUsageRepository) -> bool:
@@ -744,69 +697,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 
-@app.get("/v1/account")
-async def get_account(
-    request: Request,
-    limiter: RateLimiter = Depends(get_rate_limiter),
-    account_repo: AccountRepository = Depends(get_account_repo),
-) -> dict:
-    """The caller's tier and entitlements, resolved from an optional
-    `Authorization: Bearer <api_key>` header. No key / unknown key /
-    unconfigured database all return the anonymous free set — this never
-    401s, matching the rest of this codebase's graceful-degradation tone
-    (there's no "invalid session", only "not recognized as paying").
-
-    Never echoes the API key back. `authenticated` says whether a real
-    account was matched, so a caller can tell "my key worked" from "fell
-    back to free" without the endpoint leaking which keys exist.
-    """
-    account = await accounts.resolve_account(request, account_repo)
-    _bind_account(account)
-    tier = account["tier"] if account else TIER_FREE
-    entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
-    return {
-        "tier": tier,
-        "authenticated": account is not None,
-        "entitlements": entitlements_dict(entitlements),
-    }
 
 
-@app.post("/v1/account/rotate-key")
-async def rotate_account_key(
-    request: Request,
-    account_repo: AccountRepository = Depends(get_account_repo),
-) -> dict:
-    """Issue a new API key for the authenticated account, invalidating the
-    old one. Auth is the CURRENT `Authorization: Bearer <api_key>` — this is
-    the proactive path (rotate a key you still hold, e.g. on suspected
-    leak). The lost-key path is Telegram's /rotatekey, which authenticates
-    by chat ownership instead.
 
-    Returns the new key exactly once (it is never stored). Unlike the
-    graceful-degradation of GET /v1/account, an unrecognized key here 401s:
-    there is no meaningful anonymous rotation, and echoing free-tier success
-    would mislead the caller into thinking a bad key was rotated.
-    """
-    account = await accounts.resolve_account(request, account_repo)
-    _bind_account(account)
-    if account is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"reason": "unauthorized",
-                    "detail": "no account recognized for the presented API key"},
-        )
-    rotated = await account_repo.rotate_key(account["id"])
-    if rotated is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"reason": "unauthorized",
-                    "detail": "account could not be rotated"},
-        )
-    return {
-        "api_key": rotated["api_key"],
-        "key_prefix": rotated["key_prefix"],
-        "tier": rotated["tier"],
-    }
+
 
 
 @app.post("/v1/webhooks/telegram")
@@ -2290,67 +2184,7 @@ async def process_pending_monitoring(
 
 
 
-@app.post("/internal/service-flags/llm_paid_ops")
-async def set_llm_paid_ops(
-    request: Request,
-    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
-) -> dict:
-    """Operator-only emergency stop toggle for all paid LLM operations.
 
-    Body: JSON {"enabled": bool, "note": str?}. Setting enabled=false pauses new
-    /v1/audits (they 503 service_paused) and the monitoring drain (it no-ops,
-    leaving the backlog pending); enabled=true resumes. The note is echoed to
-    callers in the 503 detail, so use it to say who paused and why.
-
-    Requires `Authorization: Bearer <SERVICE_FLAGS_TOKEN>`, constant-time
-    compared. 503 if the token isn't configured -- a kill switch with no auth is
-    worse than none. 503 too if DATABASE_URL isn't set: there is no flag store to
-    write, so a caller must not believe a pause took effect when it didn't."""
-    token = _service_flags_token()
-    if not token:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "service_flags_not_configured",
-                    "detail": "SERVICE_FLAGS_TOKEN is not set on this deployment"},
-        )
-    _require_bearer_token(request, token)
-
-    # This endpoint already guarded the parse by hand; _json_object_body is
-    # that same guard, so the local try/except would now only catch what it
-    # already raised as a 422. The value check below stays -- the helper knows
-    # the body is an object, not what belongs in it.
-    body = await _json_object_body(request)
-    if not isinstance(body.get("enabled"), bool):
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "bad_request",
-                    "detail": "body must be JSON with a boolean 'enabled'"},
-        )
-    enabled = body["enabled"]
-    note = body.get("note")
-    if note is not None and not isinstance(note, str):
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "bad_request", "detail": "'note' must be a string"},
-        )
-
-    row = await service_flags_repo.set("llm_paid_ops", enabled=enabled, note=note)
-    if row is None:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "not_configured",
-                    "detail": "no flag store (DATABASE_URL is not set)"},
-        )
-    # Make the new value visible immediately rather than after the TTL, and
-    # alert the operator when the stop is engaged (mandatory on emergency stop).
-    _reset_service_flag_cache()
-    if not enabled:
-        await alerts.notify_operator(
-            f"Emergency stop ENGAGED via API: llm_paid_ops set OFF. "
-            f"Note: {note or '(none)'}",
-            dedupe_key="llm-paid-ops-paused",
-        )
-    return {"key": "llm_paid_ops", "enabled": enabled, "note": note}
 
 
 @app.post("/v1/audits", status_code=202)
@@ -2902,6 +2736,7 @@ async def create_fixpack(
 # Routers are imported at the top of the module; include_router must run here,
 # after `app` is constructed. Extracted route modules live in app/routes/.
 app.include_router(ops_router)
+app.include_router(accounts_router)
 app.include_router(billing_router)
 app.include_router(operator_router)
 app.include_router(paypal_router)
