@@ -17,6 +17,7 @@ import json
 from fastapi import HTTPException, Request
 
 import hmac
+import os
 
 from app.fixpack.generate import has_auto_fixable_findings
 
@@ -188,3 +189,10 @@ def _client_key(request: Request) -> str:
     if forwarded:
         return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _service_flags_token() -> str | None:
+    """Bearer token protecting the emergency-stop toggle endpoint, same env-var
+    pattern as MONITORING_PROCESS_TOKEN. Unset -> the endpoint 503s rather than
+    accept a no-op auth check on a switch that can halt all paid LLM ops."""
+    return os.environ.get("SERVICE_FLAGS_TOKEN") or None
