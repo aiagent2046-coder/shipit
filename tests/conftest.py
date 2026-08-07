@@ -509,10 +509,12 @@ def enable_monitoring(monkeypatch):
     deleted, only withdrawn from sale, so its tests keep exercising it by
     flipping the flag.
 
-    Both bindings, because two modules imported the name and a test that
-    patched only one would pass while the other half stayed off.
+    Every binding, because each module that imported the name holds its own
+    reference and a test that patched only some of them would pass while the
+    rest stayed off. Add a target here when a new module imports the flag.
     """
     for target in ("app.main.MONITORING_FOR_SALE",
+                   "app.routes.paypal.MONITORING_FOR_SALE",
                    "app.billing.telegram_stars.MONITORING_FOR_SALE"):
         monkeypatch.setattr(target, True)
 
