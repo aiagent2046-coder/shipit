@@ -24,7 +24,8 @@ from app.db import (
     SubscriptionRepository,
     database_url_from_env,
 )
-from app.monitor import MONITORING_FOR_SALE, normalize_repo_full_name
+from app import monitor
+from app.monitor import normalize_repo_full_name
 from app.routes._shared import (
     _json_object_body,
     _reject_if_fixpack_already_live,
@@ -203,7 +204,7 @@ async def create_paypal_subscription(
     503 before any of those when monitoring is withdrawn from sale, which it
     currently is -- see MONITORING_FOR_SALE. Checked first so a withdrawn
     product and an unconfigured deployment never report each other's reason."""
-    if not MONITORING_FOR_SALE:
+    if not monitor.MONITORING_FOR_SALE:
         raise _monitoring_not_for_sale_error()
     if not paypal.is_configured():
         raise _paypal_not_configured_error()

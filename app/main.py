@@ -31,7 +31,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from app import accounts, alerts
+from app import accounts, alerts, monitor
 from app.service_flags import (  # noqa: F401  (re-exported for the test suite)
     _emergency_stop_active,
     _llm_paid_ops_enabled,
@@ -98,7 +98,6 @@ from app.llm import pricing
 from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging
 from app.monitor import (
-    MONITORING_FOR_SALE,
     normalize_repo_full_name,
     repo_url_from_full_name,
 )
@@ -879,7 +878,7 @@ async def _handle_monitoring_push(
     # Checked BEFORE the subscription lookup, deliberately: an already-active
     # row must not drive spend either, and this is the single place a push
     # turns into an audit. See MONITORING_FOR_SALE.
-    if not MONITORING_FOR_SALE:
+    if not monitor.MONITORING_FOR_SALE:
         return {"ignored": True, "reason": "monitoring_not_for_sale"}
 
     subs = await subscription_repo.list_active_for_repo(repo_full_name)
@@ -2115,7 +2114,7 @@ async def process_pending_monitoring(
     # emergency stop, ALERT -- a pending run existing at all while the product
     # is withdrawn means something got past the webhook gate or predates it,
     # and the operator needs the row id to find out which.
-    if not MONITORING_FOR_SALE:
+    if not monitor.MONITORING_FOR_SALE:
         queued = await monitoring_repo.pending_summary()
         total = (queued or {}).get("total", 0)
         if total:

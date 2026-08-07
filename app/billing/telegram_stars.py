@@ -45,7 +45,7 @@ import httpx
 # _handle_monitor): tests patch the name in the consuming module, and having
 # both call sites read one binding keeps the patch target the same everywhere.
 # app.monitor imports nothing from app, so there is no cycle.
-from app.monitor import MONITORING_FOR_SALE
+from app import monitor
 
 logger = logging.getLogger(__name__)
 
@@ -865,7 +865,7 @@ async def _handle_subscribe(
 ) -> dict[str, Any]:
     # Withdrawn from sale -- see monitor.MONITORING_FOR_SALE. Checked before
     # createInvoiceLink so no payable link is ever minted.
-    if not MONITORING_FOR_SALE:
+    if not monitor.MONITORING_FOR_SALE:
         return await _reject_monitoring_sale(
             message["chat"]["id"], "subscribe",
             token=token, transport=transport,
@@ -1121,7 +1121,7 @@ async def _handle_monitor(
     chat_id = message["chat"]["id"]
     # Withdrawn from sale -- see monitor.MONITORING_FOR_SALE. Before the audit
     # lookup: there is nothing to validate for a product we will not sell.
-    if not MONITORING_FOR_SALE:
+    if not monitor.MONITORING_FOR_SALE:
         return await _reject_monitoring_sale(
             chat_id, "monitor", token=token, transport=transport,
         )
