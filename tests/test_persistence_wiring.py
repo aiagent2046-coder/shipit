@@ -15,7 +15,6 @@ process that writes it moved. Fixpacks are still synchronous and untouched.
 """
 
 import io
-import json
 import uuid
 import zipfile
 

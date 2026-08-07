@@ -230,7 +230,7 @@ async def test_a_reaped_worker_writes_nothing_to_the_row_it_lost(
     afterwards -- the thing the choice exists to protect."""
     monkeypatch.setattr(worker, "AUDIT_WORKER_HEARTBEAT_SECONDS", 0.01)
     jobs = AuditJobRepository()
-    enqueued = await jobs.enqueue(**_enqueue_kwargs())
+    await jobs.enqueue(**_enqueue_kwargs())
 
     stalled = await jobs.claim_one(worker_id="stalled", lease_seconds=-1)
     await jobs.reap_expired(error_message="lease expired")

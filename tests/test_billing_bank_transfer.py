@@ -1097,7 +1097,7 @@ async def test_confirming_a_second_payment_warns_the_operator(monkeypatch):
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
     accounts, payments = FakeAccountRepo(), FakePaymentRepo()
-    audits, fixpacks, calls = FakeAuditRepo(), FakeFixpackRepo(), []
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
     audit = audits.add()
 
     first_invoice = await bank_transfer.create_fixpack_invoice(

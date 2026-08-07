@@ -6,7 +6,6 @@ import datetime
 import subprocess
 import threading
 
-import pytest
 
 import app.deploypack.preview as preview
 from app.deploypack.preview import PreviewRegistry, reconcile_previews
