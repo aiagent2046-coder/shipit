@@ -356,3 +356,69 @@ def test_build_creates_venv_at_permanent_release_path(
         expected_release,
         sha,
     )
+
+
+def make_git_repo(path: Path) -> str:
+    """A throwaway repo with one commit. Returns its SHA."""
+    import subprocess
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(path), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    path.mkdir(parents=True, exist_ok=True)
+    git("init", "-q")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Test")
+    (path / "file.txt").write_text("content", encoding="utf-8")
+    git("add", "file.txt")
+    git("commit", "-q", "-m", "initial")
+
+    return git("rev-parse", "HEAD")
+
+
+def test_describe_revision_labels_a_tagged_commit(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    sha = make_git_repo(repo)
+
+    import subprocess
+
+    subprocess.run(
+        ["git", "-C", str(repo), "tag", "-a", "v2026.08.07-1", "-m", "release"],
+        check=True,
+        capture_output=True,
+    )
+
+    assert release_manager.describe_revision(repo, sha) == "v2026.08.07-1"
+
+
+def test_describe_revision_falls_back_to_a_short_sha_when_untagged(
+    tmp_path: Path,
+) -> None:
+    """The no-tags case must still produce a label, not None.
+
+    Regression guard: `git describe --dirty <commit-ish>` is rejected by git
+    outright ("option '--dirty' and commit-ishes cannot be used together"),
+    which silently degraded every single release label to None.
+    """
+    repo = tmp_path / "repo"
+    sha = make_git_repo(repo)
+
+    described = release_manager.describe_revision(repo, sha)
+
+    assert described is not None
+    assert sha.startswith(described)
+
+
+def test_describe_revision_returns_none_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    """A build must never fail because `git describe` did."""
+    not_a_repo = tmp_path / "empty"
+    not_a_repo.mkdir()
+
+    assert release_manager.describe_revision(not_a_repo, "a" * 40) is None
