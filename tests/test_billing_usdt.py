@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 import app.main as main_mod
+import app.routes.billing as billing_routes
 from app.accounts import api_key_prefix
 from app.billing import usdt_trc20
 from app.main import (
@@ -508,13 +509,12 @@ def test_usdt_invoice_creation_is_rate_limited(monkeypatch):
     until they have paid -- and each call writes a pending row. This was the
     one anonymous endpoint that wrote a row per call with nothing to stop it
     repeating; its bank-transfer siblings have been bounded since #126."""
-    import app.main as main_mod
     from app.main import get_rate_limiter
     from app.ratelimit import RateLimiter
 
     monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
     payments = FakePaymentRepo()
-    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 2)
+    monkeypatch.setattr(billing_routes, "USDT_INVOICE_LIMIT", 2)
     limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
     app.dependency_overrides[get_rate_limiter] = lambda: limiter
     app.dependency_overrides[get_payment_repo] = lambda: payments
@@ -545,12 +545,11 @@ def test_usdt_has_its_own_budget_separate_from_bank_transfer(monkeypatch):
     in 30 minutes -- so a shared budget would only make a USDT invoice eat a
     bank-transfer one.
     """
-    import app.main as main_mod
     from app.main import get_rate_limiter
     from app.ratelimit import RateLimiter
 
     monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 1)
+    monkeypatch.setattr(billing_routes, "USDT_INVOICE_LIMIT", 1)
     limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
     app.dependency_overrides[get_rate_limiter] = lambda: limiter
     app.dependency_overrides[get_payment_repo] = lambda: FakePaymentRepo()
@@ -572,12 +571,11 @@ def test_an_unconfigured_deployment_says_so_rather_than_rate_limits(monkeypatch)
     """Order of the two gates. A client on a deployment with no address should
     learn that, not be told to slow down about an endpoint that cannot work
     for them at any rate."""
-    import app.main as main_mod
     from app.main import get_rate_limiter
     from app.ratelimit import RateLimiter
 
     monkeypatch.delenv("USDT_TRC20_ADDRESS", raising=False)
-    monkeypatch.setattr(main_mod, "USDT_INVOICE_LIMIT", 1)
+    monkeypatch.setattr(billing_routes, "USDT_INVOICE_LIMIT", 1)
     limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
     app.dependency_overrides[get_rate_limiter] = lambda: limiter
     app.dependency_overrides[get_payment_repo] = lambda: FakePaymentRepo()

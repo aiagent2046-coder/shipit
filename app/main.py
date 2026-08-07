@@ -1130,42 +1130,7 @@ def _monitoring_alert_text(repo_full_name: str, new_findings: list[dict]) -> str
 
 
 
-@app.post("/v1/billing/usdt/invoice", status_code=201)
-async def create_usdt_invoice(
-    request: Request,
-    payment_repo: PaymentRepository = Depends(get_payment_repo),
-    limiter: RateLimiter = Depends(get_rate_limiter),
-) -> dict:
-    """Open a USDT/TRC20 invoice: returns the fixed receiving address and
-    a unique amount to send (base price + sub-cent nonce, so incoming
-    transfers can be matched back to invoices without per-invoice
-    addresses). Poll GET /v1/billing/usdt/invoice/{id} to collect the API
-    key once the on-chain transfer is seen. See app/billing/usdt_trc20.py.
 
-    503 if the receiving address isn't configured, or if DATABASE_URL
-    isn't set (the pending invoice row can't be persisted, so there'd be
-    nothing to match a later payment against).
-    """
-    address = _usdt_receiving_address()
-    if not address:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "usdt_not_configured",
-                    "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
-        )
-    # After the configuration gates, before the write: a client on a
-    # deployment with no address configured should learn that, not be told to
-    # slow down about an endpoint that cannot work anyway.
-    _check_usdt_invoice_rate_limit(request, limiter)
-    invoice = await usdt_trc20.create_invoice(payment_repo, address=address)
-    if invoice is None:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "not_persisted",
-                    "detail": "USDT invoices require DATABASE_URL (a pending "
-                              "payment row is created to match payment against)"},
-        )
-    return invoice
 
 
 
@@ -1218,42 +1183,10 @@ def _check_invoice_rate_limit(request: Request, limiter: RateLimiter) -> None:
         ) from exc
 
 
-# USDT invoices opened per client key per limiter window (24h).
-#
-# Unauthenticated for the same reason as the bank-transfer pair: a buyer has
-# no API key until they have paid. Until now that meant unbounded -- this was
-# the one anonymous endpoint that writes a row per call with nothing to stop
-# it repeating.
-#
-# A SEPARATE limiter key from BANK_TRANSFER_INVOICE_LIMIT, where the two bank
-# transfer creators deliberately share one. The reason those share is that
-# they draw from the same 99-suffix pool, so one budget is what keeps a client
-# from taking twice as much of it. USDT does not draw from that pool at all:
-# its nonce is a full micro-dollar (base + randbelow(1_000_000)) and an
-# invoice expires after 30 minutes, so exhaustion is not the risk here and a
-# shared budget would only make a USDT invoice eat a bank-transfer one.
-#
-# What IS the risk is anonymous row creation, so the same generous number is
-# right for the same reason: well above any real checkout, far below abuse.
-USDT_INVOICE_LIMIT = 15
 
 
-def _check_usdt_invoice_rate_limit(request: Request, limiter: RateLimiter) -> None:
-    """429 when one client has opened too many USDT invoices today."""
-    try:
-        limiter.check(
-            f"usdt-invoice:{_client_key(request)}",
-            limit=USDT_INVOICE_LIMIT,
-        )
-    except RateLimitExceeded as exc:
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "reason": "rate_limited",
-                "detail": f"max {USDT_INVOICE_LIMIT} USDT invoices per day",
-            },
-            headers={"Retry-After": str(exc.retry_after)},
-        ) from exc
+
+
 
 
 def _reject_if_nothing_to_fix(audit: dict) -> None:
