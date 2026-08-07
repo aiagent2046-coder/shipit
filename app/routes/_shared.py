@@ -16,6 +16,8 @@ import json
 
 from fastapi import HTTPException, Request
 
+import hmac
+
 from app.fixpack.generate import has_auto_fixable_findings
 
 
@@ -116,3 +118,73 @@ async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
                       "extra work.",
         },
     )
+
+
+# --- Bearer-token and client-identity helpers -------------------------------
+#
+# Moved here from app/main.py because the operator-only endpoints that use them
+# are spread across several route modules. main.py re-exports _secret_equals
+# and _client_key: tests/test_non_ascii_auth_headers.py and
+# tests/test_ratelimit.py import them from app.main.
+
+
+def _secret_equals(provided: str, expected: str) -> bool:
+    """Constant-time comparison of a header value against a configured secret.
+
+    `hmac.compare_digest` on two str arguments raises TypeError the moment
+    either side holds a character above 127 -- "comparing strings with
+    non-ASCII characters is not supported". Header values reach us as str, and
+    a client is free to put any byte in one, so a request with a Cyrillic
+    Authorization header used to raise inside the auth check and land in the
+    global handler: a 500, a traceback, and an operator alert, for a request
+    that should simply have been told 401.
+
+    Comparing bytes instead has no such restriction. The two sides are encoded
+    differently on purpose:
+
+      - `provided` came from the wire, and the ASGI server decoded those bytes
+        as latin-1, which is a byte-for-byte mapping. Encoding it back as
+        latin-1 therefore reconstructs exactly what the client sent, and can
+        never fail, because every character is <= 0xFF by construction.
+      - `expected` came from the environment as text, so it encodes as UTF-8,
+        which is what a shell wrote into it.
+
+    That pairing means a non-ASCII secret actually WORKS, rather than being
+    compared against mismatched bytes. An ASCII secret -- every one we have --
+    encodes identically either way, so nothing about today's behaviour moves
+    except that the wrong answer is now 401 instead of 500.
+    """
+    return hmac.compare_digest(
+        provided.encode("latin-1"), expected.encode("utf-8")
+    )
+
+
+def _require_bearer_token(request: Request, token: str) -> None:
+    """Constant-time check of `Authorization: Bearer <token>`, raising 401
+    on mismatch. The single implementation shared by every internal
+    operational endpoint (reaper, USDT poller, Fix Pack processor) so the
+    comparison stays constant-time in one place and can't drift."""
+    provided = request.headers.get("authorization", "")
+    if not _secret_equals(provided, f"Bearer {token}"):
+        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
+
+
+def _client_key(request: Request) -> str:
+    """Client IP, honoring exactly one reverse-proxy hop (Caddy in prod).
+
+    The LAST X-Forwarded-For entry, not the first. Caddy appends the peer
+    address to whatever header arrived, so on `XFF: 1.2.3.4` from a client the
+    backend sees `1.2.3.4, <real ip>` — reading entry [0] returns a value the
+    client chose. That is the free tier's daily audit quota, so a client
+    rotating the header buys unlimited LLM spend. Entry [-1] is the one our own
+    proxy wrote and is the only entry nobody upstream of it can forge.
+
+    Assumes exactly one trusted hop. If a CDN is ever put in front of Caddy the
+    trusted entry moves and this has to count hops instead. Only safe behind a
+    proxy at all — do not reuse this helper if the app is ever exposed to the
+    internet directly.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"

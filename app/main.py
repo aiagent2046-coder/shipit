@@ -285,6 +285,12 @@ def _bind_account(account: dict | None) -> None:
 # below tells ruff they are intentional re-exports rather than dead imports.
 # Removing one is a breaking change for the test suite -- delete only together
 # with the imports in tests/.
+from app.routes._shared import (  # noqa: E402
+    _client_key,
+    _json_object_body,
+    _require_bearer_token,
+    _secret_equals,
+)
 from app.routes.dependencies import (  # noqa: E402
     get_account_repo,
     get_audit_job_repo,
@@ -310,6 +316,8 @@ from app.routes.dependencies import (  # noqa: E402
 # dead imports. Keep in sync with the import block above.
 __all__ = [
     "app",
+    "_client_key",
+    "_secret_equals",
     "get_account_repo",
     "get_audit_job_repo",
     "get_audit_repo",
@@ -689,66 +697,13 @@ def _service_flags_token() -> str | None:
     return os.environ.get("SERVICE_FLAGS_TOKEN") or None
 
 
-def _secret_equals(provided: str, expected: str) -> bool:
-    """Constant-time comparison of a header value against a configured secret.
-
-    `hmac.compare_digest` on two str arguments raises TypeError the moment
-    either side holds a character above 127 -- "comparing strings with
-    non-ASCII characters is not supported". Header values reach us as str, and
-    a client is free to put any byte in one, so a request with a Cyrillic
-    Authorization header used to raise inside the auth check and land in the
-    global handler: a 500, a traceback, and an operator alert, for a request
-    that should simply have been told 401.
-
-    Comparing bytes instead has no such restriction. The two sides are encoded
-    differently on purpose:
-
-      - `provided` came from the wire, and the ASGI server decoded those bytes
-        as latin-1, which is a byte-for-byte mapping. Encoding it back as
-        latin-1 therefore reconstructs exactly what the client sent, and can
-        never fail, because every character is <= 0xFF by construction.
-      - `expected` came from the environment as text, so it encodes as UTF-8,
-        which is what a shell wrote into it.
-
-    That pairing means a non-ASCII secret actually WORKS, rather than being
-    compared against mismatched bytes. An ASCII secret -- every one we have --
-    encodes identically either way, so nothing about today's behaviour moves
-    except that the wrong answer is now 401 instead of 500.
-    """
-    return hmac.compare_digest(
-        provided.encode("latin-1"), expected.encode("utf-8")
-    )
 
 
-def _require_bearer_token(request: Request, token: str) -> None:
-    """Constant-time check of `Authorization: Bearer <token>`, raising 401
-    on mismatch. The single implementation shared by every internal
-    operational endpoint (reaper, USDT poller, Fix Pack processor) so the
-    comparison stays constant-time in one place and can't drift."""
-    provided = request.headers.get("authorization", "")
-    if not _secret_equals(provided, f"Bearer {token}"):
-        raise HTTPException(status_code=401, detail={"reason": "unauthorized"})
 
 
-def _client_key(request: Request) -> str:
-    """Client IP, honoring exactly one reverse-proxy hop (Caddy in prod).
 
-    The LAST X-Forwarded-For entry, not the first. Caddy appends the peer
-    address to whatever header arrived, so on `XFF: 1.2.3.4` from a client the
-    backend sees `1.2.3.4, <real ip>` — reading entry [0] returns a value the
-    client chose. That is the free tier's daily audit quota, so a client
-    rotating the header buys unlimited LLM spend. Entry [-1] is the one our own
-    proxy wrote and is the only entry nobody upstream of it can forge.
 
-    Assumes exactly one trusted hop. If a CDN is ever put in front of Caddy the
-    trusted entry moves and this has to count hops instead. Only safe behind a
-    proxy at all — do not reuse this helper if the app is ever exposed to the
-    internet directly.
-    """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
+
 
 
 @app.get("/healthz")
@@ -797,37 +752,7 @@ async def health(
     }
 
 
-async def _json_object_body(request: Request) -> dict:
-    """The request body as a JSON object, or 422.
 
-    `await request.json()` raises on a malformed body, and every endpoint that
-    called it bare turned a typo into a 500 -- which the global handler logs
-    with a traceback AND pages the operator for. A client sending broken JSON
-    is not an incident; it is the client's mistake, and the response should
-    say which.
-
-    Non-objects are refused for the same reason one level down. A body of `[]`
-    or `"hi"` parses fine, and the next line is always `body.get(...)`, so it
-    became AttributeError -- a 500 by a slightly longer route.
-
-    422 rather than 400 to match every other body-shape refusal in this API,
-    including the one place that already guarded this (the service-flags
-    endpoint). Webhook senders retry on any non-2xx, so this does not stop
-    Telegram or PayPal re-delivering an unparseable payload -- but a retry that
-    fails identically is cheap, while a 500 also wakes someone up.
-    """
-    try:
-        body = await request.json()
-    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-        body = None
-
-    if not isinstance(body, dict):
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "invalid_json",
-                    "detail": "request body must be a JSON object"},
-        )
-    return body
 
 
 @app.exception_handler(Exception)
