@@ -31,7 +31,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from app.alerts import notify_operator
+from app import alerts
 from app.audit_spool import SpoolFull, cleanup_staged_archive, stage_archive
 from app.accounts import (
     CSRF_HEADER,
@@ -500,7 +500,7 @@ async def _emergency_stop_active(
     enabled, note = await _llm_paid_ops_enabled(flags_repo)
     if enabled:
         return False, None
-    await notify_operator(
+    await alerts.notify_operator(
         f"Emergency stop ACTIVE: llm_paid_ops is OFF, rejecting paid LLM ops. "
         f"Note: {note or '(none)'}",
         dedupe_key="llm-paid-ops-paused",
@@ -518,7 +518,7 @@ async def _anon_daily_cap_exceeded(llm_usage_repo: LlmUsageRepository) -> bool:
     if spend is None:
         return False
     if spend >= DEFAULT_DAILY_SPEND_CAP_USD * _ANON_SPEND_ALERT_FRACTION:
-        await notify_operator(
+        await alerts.notify_operator(
             f"Anonymous LLM spend today is ${spend:.2f}, at/over "
             f"{int(_ANON_SPEND_ALERT_FRACTION * 100)}% of the "
             f"${DEFAULT_DAILY_SPEND_CAP_USD:.2f} daily cap.",
@@ -715,7 +715,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         "unhandled error [request_id=%s] %s %s",
         request_id, request.method, request.url.path,
     )
-    await notify_operator(
+    await alerts.notify_operator(
         f"Drydock: unhandled 5xx [{request_id}] on {request.method} "
         f"{request.url.path} — {type(exc).__name__}",
         dedupe_key=f"unhandled-5xx:{request.url.path}:{type(exc).__name__}",
@@ -1669,7 +1669,7 @@ async def _alert_fixpack_failed(job_id, detail: str) -> None:
     secret-free (see `_failure_detail`). Per-job dedupe key so a crash-loop on
     one job can't spam, but distinct jobs each notify. Never raises —
     `notify_operator` swallows its own errors."""
-    await notify_operator(
+    await alerts.notify_operator(
         f"Drydock: Fix Pack job {job_id} failed — {detail}",
         dedupe_key=f"fixpack-failed:{job_id}",
     )
@@ -1684,7 +1684,7 @@ async def _alert_github_app_auth_failed(detail: str) -> None:
     because the useful thing to know at 3am is not that a job failed -- it is
     that no Fix Pack on this deployment can be delivered until .env changes.
     """
-    await notify_operator(
+    await alerts.notify_operator(
         "Drydock: GitHub App credentials REJECTED — no Fix Pack can open a "
         f"PR on this deployment until this is fixed. {detail} — check "
         "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_B64 in .env; the 401 log "
@@ -1950,7 +1950,7 @@ async def _process_one_paid_job(
         if review:
             body = f"{body}\n\n---\n\n{review}"
         else:
-            await notify_operator(
+            await alerts.notify_operator(
                 f"Drydock: Fix Pack {job_id} delivered WITHOUT the full "
                 "review the purchase includes. The PR is fine; the review "
                 "is owed. Re-run it manually and send the buyer the link."
@@ -2230,7 +2230,7 @@ async def process_pending_monitoring(
                 f"{r['id']} ({r['repo_full_name']})"
                 for r in (queued or {}).get("runs", [])
             )
-            await notify_operator(
+            await alerts.notify_operator(
                 f"Drydock: {total} monitoring run(s) are queued while "
                 f"monitoring is WITHDRAWN from sale. Nothing was processed and "
                 f"nothing was charged, but a push got past the webhook gate or "
@@ -2346,7 +2346,7 @@ async def set_llm_paid_ops(
     # alert the operator when the stop is engaged (mandatory on emergency stop).
     _reset_service_flag_cache()
     if not enabled:
-        await notify_operator(
+        await alerts.notify_operator(
             f"Emergency stop ENGAGED via API: llm_paid_ops set OFF. "
             f"Note: {note or '(none)'}",
             dedupe_key="llm-paid-ops-paused",

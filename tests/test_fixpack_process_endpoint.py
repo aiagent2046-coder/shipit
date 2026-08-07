@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app import alerts as alerts_mod
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
@@ -478,7 +479,7 @@ def test_a_degraded_review_is_not_advertised_as_the_full_one(monkeypatch):
     async def _capture_alert(text):
         alerts.append(text)
 
-    monkeypatch.setattr(main_mod, "notify_operator", _capture_alert)
+    monkeypatch.setattr(alerts_mod, "notify_operator", _capture_alert)
 
     audits, fixpack_repo = _review_job_setup()
     captured = {}
@@ -512,7 +513,7 @@ def test_a_failed_deep_review_still_delivers_the_fix(monkeypatch):
     async def _capture_alert(text):
         alerts.append(text)
 
-    monkeypatch.setattr(main_mod, "notify_operator", _capture_alert)
+    monkeypatch.setattr(alerts_mod, "notify_operator", _capture_alert)
 
     audits, fixpack_repo = _review_job_setup()
     captured = {}
@@ -1132,7 +1133,7 @@ def test_deferred_job_eventually_fails_and_alerts_after_max_attempts(monkeypatch
         alerts.append(text)
         return True
 
-    monkeypatch.setattr(main_mod, "notify_operator", recorder)
+    monkeypatch.setattr(alerts_mod, "notify_operator", recorder)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     repo = LeaseFixpackRepo([{
