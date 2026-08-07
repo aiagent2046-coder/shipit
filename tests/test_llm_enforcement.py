@@ -31,6 +31,7 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app import alerts
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.scan.llm_scan import run_llm_scan
 from app.main import (
@@ -187,7 +188,7 @@ def _capture_alerts(monkeypatch):
         sent.append((text, dedupe_key))
         return True
 
-    monkeypatch.setattr(main_mod, "notify_operator", fake_notify)
+    monkeypatch.setattr(alerts, "notify_operator", fake_notify)
     return sent
 
 

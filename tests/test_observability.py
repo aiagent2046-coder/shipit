@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app import alerts
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.main import app, get_fixpack_repo
@@ -140,7 +141,7 @@ app.add_api_route("/__test__/teapot", _teapot, methods=["GET"])
 
 def test_unhandled_500_fires_one_alert_with_request_id(monkeypatch):
     recorder = _AlertRecorder()
-    monkeypatch.setattr(main_mod, "notify_operator", recorder)
+    monkeypatch.setattr(alerts, "notify_operator", recorder)
     # raise_server_exceptions=False so we observe the handler's JSONResponse
     # rather than the exception being re-raised into the test.
     client = TestClient(app, raise_server_exceptions=False)
@@ -157,7 +158,7 @@ def test_unhandled_500_fires_one_alert_with_request_id(monkeypatch):
 
 def test_intentional_httpexception_does_not_alert(monkeypatch):
     recorder = _AlertRecorder()
-    monkeypatch.setattr(main_mod, "notify_operator", recorder)
+    monkeypatch.setattr(alerts, "notify_operator", recorder)
     client = TestClient(app)
 
     resp = client.get("/__test__/teapot")
@@ -254,7 +255,7 @@ def _run_process(monkeypatch, *, opener, jobs):
 
 def test_failed_job_fires_one_alert(monkeypatch):
     recorder = _AlertRecorder()
-    monkeypatch.setattr(main_mod, "notify_operator", recorder)
+    monkeypatch.setattr(alerts, "notify_operator", recorder)
 
     def failing_opener(*a, **k):
         raise DeliveryError("open pull request failed: 422 base branch not found")
@@ -271,7 +272,7 @@ def test_failed_job_fires_one_alert(monkeypatch):
 
 def test_delivered_job_fires_no_alert(monkeypatch):
     recorder = _AlertRecorder()
-    monkeypatch.setattr(main_mod, "notify_operator", recorder)
+    monkeypatch.setattr(alerts, "notify_operator", recorder)
 
     def ok_opener(*a, **k):
         return PullRequestResult(html_url="https://github.com/acme/app/pull/5",

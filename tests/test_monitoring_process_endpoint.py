@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app import alerts as alerts_mod
 from app.ingest.github_fetch import RepoFetchError
 from tests.conftest import enable_monitoring
 from app.main import (
@@ -498,7 +499,7 @@ def test_withdrawn_monitoring_does_not_drain_a_queued_backlog(monkeypatch):
     async def _capture(text):
         alerts.append(text)
 
-    monkeypatch.setattr(main_mod, "notify_operator", _capture)
+    monkeypatch.setattr(alerts_mod, "notify_operator", _capture)
 
     runs = FakeMonitoringRepo([
         {"id": "run-1", "repo_full_name": "acme/app", "status": "pending",
@@ -536,7 +537,7 @@ def test_withdrawn_monitoring_with_an_empty_queue_is_silent(monkeypatch):
     async def _capture(text):
         alerts.append(text)
 
-    monkeypatch.setattr(main_mod, "notify_operator", _capture)
+    monkeypatch.setattr(alerts_mod, "notify_operator", _capture)
 
     runs = FakeMonitoringRepo([])
     _override(subscription_repo=FakeSubscriptionRepo([]), monitoring_repo=runs,
