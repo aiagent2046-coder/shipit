@@ -19,6 +19,7 @@ from fastapi import HTTPException, Request
 import hmac
 import os
 
+from app.billing import usdt_trc20
 from app.fixpack.generate import has_auto_fixable_findings
 from app.log_context import set_log_context
 
@@ -210,3 +211,17 @@ def _bind_account(account: dict | None) -> None:
     """
     if account is not None:
         set_log_context(account_id=str(account["id"]))
+
+
+def _usdt_receiving_address() -> str | None:
+    """Configured receiving address as a base58check "T..." string, or None
+    if unset. A set-but-malformed USDT_TRC20_ADDRESS is a 503 (misconfig)
+    rather than a 500 or, far worse, a bad address handed to a payer."""
+    try:
+        return usdt_trc20.receiving_address_from_env()
+    except usdt_trc20.InvalidTronAddressError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "usdt_misconfigured",
+                    "detail": f"USDT_TRC20_ADDRESS is not a valid TRON address: {exc}"},
+        )

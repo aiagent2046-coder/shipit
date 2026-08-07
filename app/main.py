@@ -43,6 +43,7 @@ from app.accounts import (
 )
 from app.billing import bank_transfer, telegram_stars, usdt_trc20
 from app.ops_endpoints import router as ops_router
+from app.routes.billing import router as billing_router
 from app.routes.operator import router as operator_router
 from app.routes.paypal import router as paypal_router
 from app.routes.reads import router as reads_router
@@ -280,6 +281,7 @@ from app.routes._shared import (  # noqa: E402
     _require_bearer_token,
     _secret_equals,
     _service_flags_token,
+    _usdt_receiving_address,
 )
 from app.routes.dependencies import (  # noqa: E402
     get_account_repo,
@@ -1125,18 +1127,7 @@ def _monitoring_alert_text(repo_full_name: str, new_findings: list[dict]) -> str
     return "\n".join(lines)
 
 
-def _usdt_receiving_address() -> str | None:
-    """Configured receiving address as a base58check "T..." string, or None
-    if unset. A set-but-malformed USDT_TRC20_ADDRESS is a 503 (misconfig)
-    rather than a 500 or, far worse, a bad address handed to a payer."""
-    try:
-        return usdt_trc20.receiving_address_from_env()
-    except usdt_trc20.InvalidTronAddressError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "usdt_misconfigured",
-                    "detail": f"USDT_TRC20_ADDRESS is not a valid TRON address: {exc}"},
-        )
+
 
 
 @app.post("/v1/billing/usdt/invoice", status_code=201)
@@ -1177,87 +1168,10 @@ async def create_usdt_invoice(
     return invoice
 
 
-@app.get("/v1/billing/usdt/invoice/{invoice_id}")
-async def get_usdt_invoice(
-    invoice_id: str,
-    payment_repo: PaymentRepository = Depends(get_payment_repo),
-    account_repo: AccountRepository = Depends(get_account_repo),
-) -> dict:
-    """Poll one USDT invoice. Reveals the API key only once the invoice is
-    `completed` (payment confirmed on-chain by the poller); pending or
-    expired invoices never leak a key. 404 if no such invoice."""
-    address = _usdt_receiving_address() or ""
-    status = await usdt_trc20.invoice_status(
-        payment_repo, account_repo, invoice_id, address=address
-    )
-    if status is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"reason": "not_found",
-                    "detail": "no USDT invoice with this id, or persistence "
-                               "isn't configured on this deployment (see app/db.py)"},
-        )
-    return status
 
 
-@app.post("/v1/audits/{audit_id}/fixpack/usdt-invoice", status_code=201)
-async def create_fixpack_usdt_invoice(
-    audit_id: str,
-    payment_repo: PaymentRepository = Depends(get_payment_repo),
-    audit_repo: AuditRepository = Depends(get_audit_repo),
-    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
-) -> dict:
-    """Open a USDT/TRC20 invoice to buy a Fix Pack for one specific audit.
-    Mirrors POST /v1/billing/usdt/invoice (fixed address + unique amount so
-    transfers match without per-invoice addresses; poll the same GET
-    /v1/billing/usdt/invoice/{id} to watch it), but at the Fix Pack price
-    and scoped to this audit.
 
-    V1 supports GitHub-URL audits only: an audit created from a zip upload
-    has no repository to open a fix PR against, so this returns 422 with a
-    clear explanation rather than sell a Fix Pack that can't be fulfilled.
 
-    404 if no such audit. 503 if the receiving address isn't configured, or
-    if DATABASE_URL isn't set (the pending invoice row can't be persisted).
-    """
-    audit = await audit_repo.get(audit_id)
-    if audit is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"reason": "audit_not_found",
-                    "detail": "no audit with this id, or persistence isn't "
-                              "configured on this deployment (see app/db.py)"},
-        )
-    if not audit.get("repo_url"):
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "not_github_audit",
-                    "detail": "Fix Pack currently only supports audits run "
-                              "from a public GitHub URL. This audit was created "
-                              "from an uploaded zip, so there's no repository to "
-                              "open a fix PR against — re-run the audit with your "
-                              "GitHub repo URL, then buy a Fix Pack for it."},
-        )
-    await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
-    _reject_if_nothing_to_fix(audit)
-    address = _usdt_receiving_address()
-    if not address:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "usdt_not_configured",
-                    "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
-        )
-    invoice = await usdt_trc20.create_fixpack_invoice(
-        payment_repo, address=address, audit_id=audit_id
-    )
-    if invoice is None:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "not_persisted",
-                    "detail": "USDT invoices require DATABASE_URL (a pending "
-                              "payment row is created to match payment against)"},
-        )
-    return invoice
 
 
 # Distinct "I've paid" presses, per client key, per limiter window (24h).
@@ -1583,31 +1497,7 @@ async def create_fixpack_bank_transfer_invoice(
     return invoice
 
 
-@app.get("/v1/billing/bank-transfer/{reference}")
-async def get_bank_transfer_invoice(
-    reference: str,
-    payment_repo: PaymentRepository = Depends(get_payment_repo),
-    account_repo: AccountRepository = Depends(get_account_repo),
-) -> dict:
-    """Poll one bank-transfer invoice. Reveals the API key only once the
-    operator has confirmed the transfer arrived (status 'completed'); a
-    pending or expired invoice never leaks a key. 404 if no such invoice.
 
-    An 'expired' status here is cosmetic: it tells a payer the quote is stale,
-    but the operator can still confirm a transfer that surfaces later, because
-    a slow bank must never become lost money."""
-    status = await bank_transfer.invoice_status(
-        payment_repo, account_repo, reference,
-        details=bank_transfer.bank_details_from_env(),
-    )
-    if status is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"reason": "not_found",
-                    "detail": "no bank transfer invoice with this reference, or "
-                              "persistence isn't configured on this deployment"},
-        )
-    return status
 
 
 @app.post("/v1/billing/bank-transfer/{reference}/paid")
@@ -3080,6 +2970,7 @@ async def create_fixpack(
 # Routers are imported at the top of the module; include_router must run here,
 # after `app` is constructed. Extracted route modules live in app/routes/.
 app.include_router(ops_router)
+app.include_router(billing_router)
 app.include_router(operator_router)
 app.include_router(paypal_router)
 app.include_router(reads_router)
