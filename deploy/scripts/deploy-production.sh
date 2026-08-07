@@ -82,7 +82,12 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 if [[ "$SKIP_FETCH" -eq 0 ]]; then
-  git fetch --prune origin main
+  # --tags is not redundant. Tag auto-following only applies to the refs being
+  # fetched, and this fetch is branch-scoped, so a release tag would never
+  # arrive and `git rev-parse v2026.08.07-1^{commit}` below would fail with
+  # "Needed a single revision" -- deploying by tag would be impossible on a
+  # host that had not seen the tag by some other route.
+  git fetch --prune --tags origin main
 fi
 
 TARGET_SHA="$(
@@ -109,6 +114,31 @@ if git show-ref --verify --quiet refs/remotes/origin/main; then
       >&2
     exit 1
   fi
+fi
+
+# Bring the control checkout itself to the revision being deployed, BEFORE the
+# tooling below is located and run.
+#
+# The deploy tooling is versioned with the application but executed from this
+# long-lived working tree, not from the release being built. `git fetch`
+# updates refs and leaves the working tree alone, so without this the build is
+# performed by whatever builder was checked out last -- an OLD builder
+# producing a NEW release. That is not hypothetical: the first CalVer release
+# deployed cleanly and still reported `version: null`, because the previous
+# builder wrote the metadata and knew nothing about the git_describe field the
+# new code reads.
+#
+# Safe to replace this very script mid-run: `git checkout` writes a new file
+# and renames it, so the inode bash is reading from is unchanged and the
+# running process finishes from the original text. (Verified: an in-place
+# truncating writer such as `cat >` WOULD corrupt a running script; git does
+# not do that.) The updated script takes effect on the next invocation.
+#
+# The working tree is known clean -- the preflight above refuses to run with
+# uncommitted changes -- so this cannot silently discard local edits.
+if [[ "$(git rev-parse HEAD)" != "$TARGET_SHA" ]]; then
+  echo "Syncing control checkout: $(git rev-parse --short HEAD) -> ${TARGET_SHA:0:7}"
+  git checkout --quiet --detach "$TARGET_SHA"
 fi
 
 MANAGER="$CONTROL_ROOT/deploy/scripts/release_manager.py"

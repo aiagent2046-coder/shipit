@@ -449,6 +449,16 @@ can never point at unreviewed work. It fetches tags first, so two people
 tagging on the same day see each other's counter instead of racing to the same
 number.
 
+`deploy-production.sh` checks the control repository out at the revision being
+deployed before it builds. The deploy tooling is versioned with the application
+but runs from `/opt/shipit`, and `git fetch` updates refs without touching the
+working tree — so without that step a new release is built by whatever builder
+was last checked out. The first CalVer release hit exactly this: it deployed
+cleanly and still reported `version: null`, because the previous builder wrote
+the metadata and did not know about the `git_describe` field. Replacing the
+script mid-run is safe, since `git checkout` renames a new file into place and
+the running shell keeps reading the original inode.
+
 ### Host provisioning — one-time, not part of a deploy
 
 These set up **host** state, so they survive every release swap and
