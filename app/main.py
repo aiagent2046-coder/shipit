@@ -31,14 +31,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from app import alerts
+from app import accounts, alerts
 from app.audit_spool import SpoolFull, cleanup_staged_archive, stage_archive
 from app.accounts import (
     CSRF_HEADER,
     TIER_FREE,
     entitlements_dict,
     entitlements_for_tier,
-    resolve_account,
     validate_api_key_pepper_configured,
 )
 from app.billing import bank_transfer, telegram_stars, usdt_trc20
@@ -761,7 +760,7 @@ async def get_account(
     account was matched, so a caller can tell "my key worked" from "fell
     back to free" without the endpoint leaking which keys exist.
     """
-    account = await resolve_account(request, account_repo)
+    account = await accounts.resolve_account(request, account_repo)
     _bind_account(account)
     tier = account["tier"] if account else TIER_FREE
     entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
@@ -788,7 +787,7 @@ async def rotate_account_key(
     there is no meaningful anonymous rotation, and echoing free-tier success
     would mislead the caller into thinking a bad key was rotated.
     """
-    account = await resolve_account(request, account_repo)
+    account = await accounts.resolve_account(request, account_repo)
     _bind_account(account)
     if account is None:
         raise HTTPException(
@@ -2417,7 +2416,7 @@ async def create_audit(
     # Resolve the caller's tier from an optional API key. No key -> None ->
     # free, with no DB call, so anonymous traffic is byte-for-byte unchanged.
     # The only entitlement enforced here is daily_audit_limit (below).
-    account = await resolve_account(request, account_repo)
+    account = await accounts.resolve_account(request, account_repo)
     _bind_account(account)
     tier = account["tier"] if account else TIER_FREE
     entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
