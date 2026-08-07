@@ -459,6 +459,66 @@ the metadata and did not know about the `git_describe` field. Replacing the
 script mid-run is safe, since `git checkout` renames a new file into place and
 the running shell keeps reading the original inode.
 
+### Deploying from CI
+
+`.github/workflows/deploy-production.yml` deploys a release tag over SSH. It is
+**manual only** (`workflow_dispatch`) — merging something never ships it, and
+cutting a tag never ships it either. Run it from Actions → deploy-production,
+with the tag as the input.
+
+The key it uses is **not** a general-purpose root key. On the host it is pinned
+to a forced command that accepts exactly one request — `deploy <CalVer tag>` —
+and refuses everything else, including an interactive shell and any attempt to
+read `/opt/shipit/.env`. A leaked key can deploy an already-reviewed, already-
+tagged release and do nothing else.
+
+One-time setup on the host:
+
+```bash
+# 1. Generate a key pair FOR THIS PURPOSE ONLY (run anywhere; keep the private
+#    half only long enough to paste it into the secret, then delete it).
+ssh-keygen -t ed25519 -N '' -f ./ci-deploy -C 'ci-deploy@shipit'
+
+# 2. Install the public half against the forced command, as root on the host.
+#    The restrictions matter as much as the command= does: without them the
+#    key could still forward ports into the private network.
+sudo tee -a /root/.ssh/authorized_keys >/dev/null <<EOF
+command="/opt/shipit/deploy/scripts/ci-deploy-command.sh",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding $(cat ./ci-deploy.pub)
+EOF
+sudo chmod 600 /root/.ssh/authorized_keys
+
+# 3. Collect the host's public keys for pinning (never StrictHostKeyChecking=no).
+ssh-keyscan -t ed25519 <host> 2>/dev/null
+```
+
+Then set these on the **`Production` environment** (Settings → Environments →
+Production → Environment secrets), not as repository secrets — an environment
+is what lets you require a reviewer before a deployment runs:
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_SSH_KEY` | contents of the private `ci-deploy` file |
+| `DEPLOY_HOST` | production host or IP |
+| `DEPLOY_KNOWN_HOSTS` | output of the `ssh-keyscan` above |
+| `DEPLOY_USER` | optional, defaults to `root` |
+| `DEPLOY_PUBLIC_BASE_URL` | optional, defaults to `https://api.drydock.co` |
+
+**Add a required reviewer to the `Production` environment.** Without one,
+anyone who can trigger a workflow can deploy. The workflow deliberately does
+not implement its own approval step — GitHub's environment protection already
+does it properly, and an in-workflow check would be theatre.
+
+Verify the restriction actually took effect, from a machine holding the key:
+
+```bash
+ssh -i ./ci-deploy root@<host> 'cat /opt/shipit/.env'   # must print: refused
+ssh -i ./ci-deploy root@<host>                          # must not open a shell
+```
+
+After deploying, the workflow re-reads `/version` and fails if the SHA serving
+traffic is not the one it deployed — a deployment that silently left the
+previous release running does not pass.
+
 ### Host provisioning — one-time, not part of a deploy
 
 These set up **host** state, so they survive every release swap and

@@ -1,0 +1,186 @@
+name: deploy-production
+
+# Deploy a release tag to production over SSH.
+#
+# Manual only (workflow_dispatch). Deployment stays a deliberate act: this
+# does NOT fire on push or on tag creation, so merging something cannot ship
+# it. Cutting a tag and deciding to run it are two separate decisions.
+#
+# The key in DEPLOY_SSH_KEY is NOT a general-purpose root key. It is pinned on
+# the host to a forced command (deploy/scripts/ci-deploy-command.sh) that
+# accepts exactly one request shape -- `deploy <CalVer tag>` -- and refuses
+# everything else, including an interactive shell and any attempt to read
+# /opt/shipit/.env. See that script's header, and the README section
+# "Deploying from CI", for the authorized_keys line that installs it.
+#
+# Requires an environment named `Production` carrying the secrets. Add a
+# required reviewer to that environment to gate deployments on human approval;
+# this workflow deliberately does not implement its own approval step, because
+# GitHub's environment protection already does it properly and an in-workflow
+# check would only be theatre.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy (e.g. v2026.08.07-2)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Never let two deployments overlap. cancel-in-progress is deliberately FALSE:
+# a deployment that is halfway through switching symlinks and restarting units
+# must be allowed to finish or roll itself back. Killing it mid-flight is how
+# a host ends up in a state neither release owns.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.tag }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: Production
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate the tag exists and is on main
+        env:
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # Shape first. The forced command on the host enforces this too, but
+          # failing here gives a readable error instead of a bare "refused"
+          # from sshd, and avoids spending an SSH round trip on a typo.
+          if [[ ! "$TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]]; then
+            echo "::error::Not a release tag: '$TAG' (expected vYYYY.MM.DD-N)"
+            exit 1
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag does not exist: $TAG"
+            echo "Cut it first: deploy/scripts/tag-release.sh --push"
+            exit 1
+          fi
+
+          SHA="$(git rev-parse "refs/tags/$TAG^{commit}")"
+
+          # An annotated tag can be moved by force-push. Re-checking ancestry
+          # here means a tag that was repointed at unreviewed work after being
+          # cut still cannot be deployed.
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$TAG ($SHA) is not an ancestor of origin/main"
+            exit 1
+          fi
+
+          echo "Deploying $TAG -> $SHA"
+          echo "TARGET_SHA=$SHA" >> "$GITHUB_ENV"
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          for name in DEPLOY_SSH_KEY DEPLOY_HOST DEPLOY_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing secret: $name (set it on the Production environment)"
+              exit 1
+            fi
+          done
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Written by redirection, never echoed: `echo "$KEY"` would land the
+          # private key in the step log if the shell ever traced it.
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Pinned host keys, not StrictHostKeyChecking=no. Accepting an
+          # unknown key would let anything that can answer on that address
+          # collect a deploy attempt.
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'root' }}
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # The remote command is data, not instructions: sshd ignores it and
+          # runs the forced command, which re-validates the tag before doing
+          # anything. -T because the forced command needs no terminal.
+          ssh -T \
+            -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy $TAG"
+
+      - name: Verify the running release
+        env:
+          BASE_URL: ${{ secrets.DEPLOY_PUBLIC_BASE_URL || 'https://api.drydock.co' }}
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # The deploy script has its own health gates and rolls itself back on
+          # failure. This step answers a different question: is the code now
+          # serving traffic the code we asked for? A green deploy that left the
+          # old release running would otherwise look identical to success.
+          #
+          # Retried: the unit has just restarted, and a single probe can also
+          # lose to a transient network stall.
+          for attempt in 1 2 3 4 5; do
+            BODY="$(curl -fsS --max-time 20 "$BASE_URL/version" || true)"
+            if [[ -n "$BODY" ]]; then
+              break
+            fi
+            echo "attempt $attempt: no response yet"
+            sleep 6
+          done
+
+          if [[ -z "$BODY" ]]; then
+            echo "::error::$BASE_URL/version did not respond after the deployment"
+            exit 1
+          fi
+
+          echo "$BODY"
+
+          RUNNING_SHA="$(printf '%s' "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("release") or "")')"
+          RUNNING_VERSION="$(printf '%s' "$BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")')"
+
+          if [[ "$RUNNING_SHA" != "$TARGET_SHA" ]]; then
+            echo "::error::Production reports $RUNNING_SHA, expected $TARGET_SHA"
+            exit 1
+          fi
+
+          # A label mismatch is reported but not fatal: the correct code IS
+          # running, which is what matters. It means the release metadata was
+          # written by an older builder -- see the README note on the control
+          # checkout.
+          if [[ "$RUNNING_VERSION" != "$TAG" ]]; then
+            echo "::warning::Production reports version '$RUNNING_VERSION', expected '$TAG'"
+          fi
+
+          echo "Deployed $TAG ($TARGET_SHA) and verified live."
