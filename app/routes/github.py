@@ -21,15 +21,18 @@ import json
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from app import monitor
+from app.deploypack import github_app
+from app.deploypack.github_app import GitHubAppError
 from app.db import (
     FixOutcomeRepository,
     MonitoringRunRepository,
     SubscriptionRepository,
 )
 from app.monitor import normalize_repo_full_name
-from app.routes._shared import _secret_equals
+from app.routes._shared import _VALID_OWNER_REPO_SEGMENT, _secret_equals
 from app.routes.dependencies import (
     get_fix_outcome_repo,
     get_monitoring_repo,
@@ -184,3 +187,59 @@ async def github_webhook(
         )
 
     return {"ignored": True, "reason": "event_not_handled"}
+
+
+@router.get("/v1/github/installation-status")
+async def github_installation_status(owner: str, repo: str) -> dict:
+    """Is the Drydock GitHub App installed on owner/repo? The audit results
+    page checks this before offering a Fix Pack: a Fix Pack opens a real PR,
+    which needs the App installed on the target repo (see
+    app/deploypack/github_app.py). Audit intake itself is public-only and
+    needs no App — this gate is Fix-Pack-specific.
+
+    Reuses the same per-repo installation lookup the PR-delivery path uses
+    (github_app.installation_exists_for_repo -> GET /repos/{owner}/{repo}/installation),
+    so there is one source of truth for "installed on this repo" and no
+    stored installation_id to drift.
+
+    Shape:
+      - app_configured=false: the App isn't set up on this deployment at all
+        (PR delivery falls back to the operator PAT), so `installed` is null
+        and the frontend should not gate on it.
+      - app_configured=true, installed=true: good to go, install_url null.
+      - app_configured=true, installed=false: install_url points the repo
+        owner at the App's public install page, carrying state=owner/repo.
+    """
+    if not (_VALID_OWNER_REPO_SEGMENT.match(owner)
+            and _VALID_OWNER_REPO_SEGMENT.match(repo)):
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_owner_repo",
+                    "detail": "owner and repo must each match ^[A-Za-z0-9._-]+$"},
+        )
+
+    app_creds = github_app.app_credentials_from_env()
+    if app_creds is None:
+        return {"owner": owner, "repo": repo, "app_configured": False,
+                "installed": None, "install_url": None}
+
+    app_id, private_key = app_creds
+    try:
+        # Off the event loop: github_app.installation_exists_for_repo does blocking
+        # network I/O, same as the token resolution the delivery path runs.
+        installed = await run_in_threadpool(
+            github_app.installation_exists_for_repo, owner, repo,
+            app_id=app_id, private_key=private_key,
+        )
+    except GitHubAppError as exc:
+        # The App IS configured but the check itself failed (bad key, GitHub
+        # down). Surface as an upstream error rather than a misleading
+        # "not installed" — same fault/caller split create_audit draws.
+        raise HTTPException(
+            status_code=502,
+            detail={"reason": "installation_check_failed", "detail": str(exc)},
+        ) from exc
+
+    install_url = None if installed else github_app.build_install_url(f"{owner}/{repo}")
+    return {"owner": owner, "repo": repo, "app_configured": True,
+            "installed": installed, "install_url": install_url}
