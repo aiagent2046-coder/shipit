@@ -509,14 +509,14 @@ def enable_monitoring(monkeypatch):
     deleted, only withdrawn from sale, so its tests keep exercising it by
     flipping the flag.
 
-    Every binding, because each module that imported the name holds its own
-    reference and a test that patched only some of them would pass while the
-    rest stayed off. Add a target here when a new module imports the flag.
+    ONE target, because callers read the flag as monitor.MONITORING_FOR_SALE
+    through the module rather than importing the name. This used to list a
+    binding per importing module, and a module added later would silently keep
+    the flag off for its own reads -- which is exactly what happened when the
+    PayPal handlers moved into their own module. Patching the definition site
+    cannot drift that way, so no target needs adding when a caller relocates.
     """
-    for target in ("app.main.MONITORING_FOR_SALE",
-                   "app.routes.paypal.MONITORING_FOR_SALE",
-                   "app.billing.telegram_stars.MONITORING_FOR_SALE"):
-        monkeypatch.setattr(target, True)
+    monkeypatch.setattr("app.monitor.MONITORING_FOR_SALE", True)
 
 
 def force_pro_account(monkeypatch, account_id="11111111-1111-1111-1111-111111111111"):
