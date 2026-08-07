@@ -417,6 +417,38 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   looks like silence: no payment is ever confirmed, and nobody complains,
   because a customer who paid just sees an invoice that stays `pending`.
 
+### Release tags (CalVer)
+
+Releases are tagged `v<YYYY.MM.DD>-<n>` in **UTC**, with `n` counting the
+releases tagged on that same day: `v2026.08.07-1`, `v2026.08.07-2`. Tags are
+annotated and never moved — a release tag is a permanent record of what was
+shipped.
+
+CalVer rather than semver because this is a continuously deployed service, not
+a library anyone imports. Its public contract is already versioned in the URL
+path (`/v1/...`), so semver major/minor/patch on the *deployment* would have to
+be assigned by taste, and "how old is production" — the question actually asked
+during an incident — would still need a lookup. A date answers it directly.
+
+    # tag origin/main, then publish the tag
+    deploy/scripts/tag-release.sh --push
+
+    # then deploy the tag it printed
+    deploy/scripts/deploy-production.sh --revision v2026.08.07-1
+
+**Tag before you deploy, not after.** `release_manager.py build` records
+`git describe` into `.shipit-release.json` at build time, and `GET /version`
+reports it from there. A tag pushed *after* the build cannot reach the metadata
+that was already written, so the running release keeps reporting a bare short
+SHA until it is rebuilt. Tagging afterwards still marks history correctly, but
+it buys nothing at runtime.
+
+`tag-release.sh` refuses to tag a commit that is not an ancestor of
+`origin/main` — the same gate `deploy-production.sh` applies — so a release tag
+can never point at unreviewed work. It fetches tags first, so two people
+tagging on the same day see each other's counter instead of racing to the same
+number.
+
 ### Host provisioning — one-time, not part of a deploy
 
 These set up **host** state, so they survive every release swap and
