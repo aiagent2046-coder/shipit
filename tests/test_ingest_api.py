@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import Stack, detect_stack
-from app.ingest.validators import MAX_ARCHIVE_BYTES
 from app.main import app, get_repo_fetcher
 
 client = TestClient(app)

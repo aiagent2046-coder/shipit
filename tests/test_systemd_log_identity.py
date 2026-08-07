@@ -57,7 +57,7 @@ def test_logging_unit_declares_its_service_name(unit: str, expected: str) -> Non
     # systemd applies env directives in file order, so an EnvironmentFile= loaded
     # afterwards would win over the value above.
     assignment = lines.index(f"Environment=SHIPIT_SERVICE={expected}")
-    later_files = [l for l in lines[assignment + 1 :] if l.startswith("EnvironmentFile=")]
+    later_files = [line for line in lines[assignment + 1 :] if line.startswith("EnvironmentFile=")]
     assert not later_files, (
         f"{unit} loads {later_files} after Environment=SHIPIT_SERVICE=, which would "
         "let a stray key in that file override the unit's own name."

@@ -14,7 +14,27 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pyyaml>=6.0", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8.0", "pyyaml>=6.0", "pytest-asyncio>=0.23", "ruff>=0.16"]
+
+[tool.ruff]
+# 120, not the ruff default of 88: this codebase already reads comfortably at
+# ~100-110 columns, and 88 would flag 110 pre-existing lines — a diff that
+# churns working code without making it clearer. 120 flags only genuine
+# outliers.
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# Deliberately narrow: F (pyflakes — real bugs: unused/undefined names) and
+# E (pycodestyle errors). Style-only rule families (I, N, UP, B, ...) are NOT
+# enabled — they would rewrite large amounts of working code for no
+# behavioural gain. Widen this list only with a specific reason.
+select = ["F", "E"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixture connection string with invented credentials, kept on one line so the
+# accompanying "# scan-allow" marker stays attached to it.
+"tests/test_database_guard.py" = ["E501"]
 
 [tool.setuptools.packages.find]
 # smoke/ and scripts/ are fixtures/tooling, not part of the shipit

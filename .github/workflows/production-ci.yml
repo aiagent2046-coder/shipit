@@ -317,6 +317,18 @@ jobs:
             /tmp/shipit.service \
             "${units[@]}"
 
+      # Lint before the suite: ruff catches undefined names, unused imports and
+      # dead locals in seconds, so a typo that would only surface as a confusing
+      # test failure (or not at all, in a branch tests do not reach) fails fast
+      # and cheap. Rules are pinned in pyproject.toml [tool.ruff] -- F and E
+      # only, deliberately narrow. Keep this step BEFORE "Run test suite".
+      - name: Lint Python with ruff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ruff --version
+          ruff check .
+
       - name: Run test suite
         shell: bash
         run: |

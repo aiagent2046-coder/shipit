@@ -9,7 +9,6 @@ since the LLM call alone can take up to ~2 minutes.
 
 from __future__ import annotations
 
-import asyncio
 import datetime
 import functools
 import hashlib
@@ -46,6 +45,7 @@ from app.accounts import (
     validate_api_key_pepper_configured,
 )
 from app.billing import bank_transfer, paypal, telegram_stars, usdt_trc20
+from app.ops_endpoints import router as ops_router
 from app.db import (
     AccountRepository,
     AuditJobRepository,
@@ -4111,7 +4111,6 @@ async def create_fixpack(
     }
 
 
-# Production operations endpoints.
-from app.ops_endpoints import router as ops_router
-
+# Production operations endpoints. The router is imported at the top of the
+# module; include_router must run here, after `app` is constructed.
 app.include_router(ops_router)

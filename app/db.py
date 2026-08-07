@@ -50,9 +50,9 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-logger = logging.getLogger(__name__)
-
 from app.accounts import api_key_prefix, generate_api_key, hash_api_key
+
+logger = logging.getLogger(__name__)
 
 DATABASE_URL_ENV = "DATABASE_URL"
 

@@ -857,7 +857,7 @@ async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db):
 
     class CrashAfterCreatePaid(FixpackJobRepository):
         async def create_paid(self, **kwargs):
-            row = await super().create_paid(**kwargs)
+            await super().create_paid(**kwargs)
             crashed_in.append("create_paid")
             raise RuntimeError("connection lost after create_paid")
 

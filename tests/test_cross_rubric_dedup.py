@@ -2,7 +2,6 @@
 issue at the same (file, line); we keep one, note the other, and never
 double-count it in the score."""
 
-from dataclasses import replace
 
 from app.scan.cross_rubric_dedup import (
     dedup_cross_rubric,

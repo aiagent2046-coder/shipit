@@ -14,12 +14,12 @@ import logging
 import zipfile
 
 from app.llm.client import LLMClient, LLMError
-
-logger = logging.getLogger(__name__)
-from app.scan.llm_scan import LLMScanStats, run_llm_scan
 from app.scan.collapse import collapse_repeats
+from app.scan.llm_scan import LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
+
+logger = logging.getLogger(__name__)
 
 _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
                   "category", "file", "line", "masked", "explanation",

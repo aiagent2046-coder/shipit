@@ -17,7 +17,6 @@ import app.db as db_mod
 from app.db import (
     AccountRepository,
     AuditRepository,
-    DatabaseNotConfigured,
     FixpackJobRepository,
     PaymentRepository,
     SubscriptionRepository,
