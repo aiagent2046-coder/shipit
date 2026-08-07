@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app.deploypack import github_app
 from app import alerts as alerts_mod
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
@@ -261,7 +262,7 @@ def test_semantic_regression_blocks_pr_and_marks_job(monkeypatch):
     and the job parked as 'blocked' with the reason in detail — never
     auto-delivered."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     from app.fixpack.semantic_check import RunResult, SemanticCheckResult
 
@@ -311,7 +312,7 @@ def test_semantic_note_is_appended_to_pr_body(monkeypatch):
     """No client suite -> not a regression, but a soft recommendation note is
     appended to the PR body."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     from app.fixpack.semantic_check import SemanticCheckResult
 
@@ -398,7 +399,7 @@ def test_paid_fixpack_delivers_the_deep_review_link(monkeypatch):
     on it, so a bare URL is a flat 404. That was #187 on the payment
     confirmation and must not be reintroduced here."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     audits, fixpack_repo = _review_job_setup()
     usage, captured = FakeUsageRepo(), {}
@@ -434,7 +435,7 @@ def test_deep_review_reuses_a_full_audit_of_identical_bytes(monkeypatch):
     same scan twice. The LLM is booby-trapped: if it is called, the test fails
     rather than quietly costing $0.80."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     zip_bytes = _review_zip()
     audits, fixpack_repo = _review_job_setup()
@@ -472,7 +473,7 @@ def test_a_degraded_review_is_not_advertised_as_the_full_one(monkeypatch):
     the full review would sell depth we did not deliver, and would carry no
     score, which is precisely what the free tier already gives away."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     alerts: list[str] = []
 
@@ -506,7 +507,7 @@ def test_a_failed_deep_review_still_delivers_the_fix(monkeypatch):
     the PR ships without the section and the operator is told the review is
     owed."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     alerts: list[str] = []
 
@@ -534,7 +535,7 @@ def test_a_failed_deep_review_still_delivers_the_fix(monkeypatch):
 
 def test_paid_job_opens_pr_and_marks_delivered(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
@@ -581,7 +582,7 @@ def test_paid_job_opens_pr_and_marks_delivered(monkeypatch):
 
 def test_zero_eligible_findings_does_not_open_pr(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
@@ -616,7 +617,7 @@ def test_zero_eligible_findings_does_not_open_pr(monkeypatch):
 
 def test_delivery_error_marks_job_failed(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
@@ -646,7 +647,7 @@ def test_delivery_error_marks_job_failed(monkeypatch):
 
 def test_missing_audit_marks_job_failed(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     jobs = [{"id": "j1", "audit_id": "gone", "status": "paid"}]
     fixpack_repo = FakeFixpackRepo(jobs)
@@ -669,7 +670,7 @@ def test_delivery_error_records_detail_and_logs(monkeypatch, caplog):
     job's `detail` must be populated and a full traceback logged — not a
     'failed' row with null detail and nothing in the logs."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
@@ -715,7 +716,7 @@ def test_github_app_token_error_marks_failed_with_detail(monkeypatch, caplog):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     # App IS configured, so _resolve_pr_token tries the installation-token
     # exchange — which raises for a repo the App isn't installed on.
-    monkeypatch.setattr(main_mod, "app_credentials_from_env",
+    monkeypatch.setattr(github_app, "app_credentials_from_env",
                         lambda: ("Iv23appid", "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"))
 
     def raising_token(owner, repo, *, app_id, private_key):
@@ -724,7 +725,7 @@ def test_github_app_token_error_marks_failed_with_detail(monkeypatch, caplog):
             "the repo owner needs to install it first"
         )
 
-    monkeypatch.setattr(main_mod, "installation_token_for_repo", raising_token)
+    monkeypatch.setattr(github_app, "installation_token_for_repo", raising_token)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
@@ -775,7 +776,7 @@ def test_committed_env_with_secret_is_untracked_not_committed(monkeypatch):
     entries for `.env` (a blob and a deletion), a self-contradictory
     changeset."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     stripe_key = "sk_live_" + "a" * 30
     zip_bytes = make_zip({
@@ -903,7 +904,7 @@ def test_happy_path_paid_running_delivered(monkeypatch):
     """(a) The clean state transition: a 'paid' job is leased into 'running'
     (attempts 0 -> 1), processed, and lands on 'delivered'."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     repo = LeaseFixpackRepo(
@@ -935,7 +936,7 @@ def test_stale_running_job_requeued_then_delivered_once(monkeypatch):
     crashed worker (old lease) is reaped back to 'paid', re-claimed, and
     delivered — and the PR opener fires exactly once, not once per run."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     # attempts=1 (< MAX), lease taken 30m ago (> 15m stale threshold).
@@ -1053,7 +1054,7 @@ def _runner_down(monkeypatch):
 
 def test_unverifiable_job_is_deferred_not_delivered(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
     _runner_down(monkeypatch)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
@@ -1091,7 +1092,7 @@ def test_deferred_job_records_no_fix_outcome_row(monkeypatch):
     # A deferred job is not terminal. Writing a row here is what poisoned the
     # Phase-B analytics with is_regression=True for runs that never happened.
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
     _runner_down(monkeypatch)
 
     recorded = []
@@ -1124,7 +1125,7 @@ def test_deferred_job_eventually_fails_and_alerts_after_max_attempts(monkeypatch
     stale and its attempts are spent lands on 'failed', and the operator hears
     about it (the reaper writes that row itself, so the processor must alert)."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
     _runner_down(monkeypatch)
 
     alerts = []
@@ -1207,7 +1208,7 @@ def test_unhealthy_runner_still_reaps_stale_leases(monkeypatch):
 
 def test_healthy_runner_claims_normally(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
     monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
@@ -1245,9 +1246,9 @@ def _resolve(owner="acme", repo="app"):
 
 def test_pr_token_resolve_is_quiet_on_the_healthy_path(monkeypatch, caplog):
     """App configured and resolving: the normal path of every PR delivery."""
-    monkeypatch.setattr(main_mod, "app_credentials_from_env",
+    monkeypatch.setattr(github_app, "app_credentials_from_env",
                         lambda: ("Iv23appid", FAKE_PEM))
-    monkeypatch.setattr(main_mod, "installation_token_for_repo",
+    monkeypatch.setattr(github_app, "installation_token_for_repo",
                         lambda owner, repo, *, app_id, private_key: "ghs-token")
 
     with caplog.at_level(logging.DEBUG, logger="app.main"):
@@ -1264,7 +1265,7 @@ def test_pr_token_resolve_is_quiet_when_no_app_is_configured(monkeypatch, caplog
     monkeypatch.delenv("GITHUB_APP_ID", raising=False)
     monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY", raising=False)
     monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY_B64", raising=False)
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     with caplog.at_level(logging.DEBUG, logger="app.main"):
         assert _resolve() is None
@@ -1278,7 +1279,7 @@ def test_pr_token_resolve_warns_when_creds_are_present_but_unresolved(
     env carries App credentials yet resolution still yields nothing."""
     monkeypatch.setenv("GITHUB_APP_ID", "4278482")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", FAKE_PEM)
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     with caplog.at_level(logging.DEBUG, logger="app.main"):
         assert _resolve() is None
@@ -1297,7 +1298,7 @@ def test_pr_token_resolve_counts_the_base64_pem_variable(monkeypatch, caplog):
     monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY", raising=False)
     monkeypatch.setenv("GITHUB_APP_ID", "4278482")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_B64", "Zm9vYmFy")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     with caplog.at_level(logging.DEBUG, logger="app.main"):
         _resolve()
@@ -1318,8 +1319,7 @@ def test_pr_token_resolve_counts_the_base64_pem_variable(monkeypatch, caplog):
 
 def _auth_rejected_setup(monkeypatch, jobs):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(
-        main_mod, "app_credentials_from_env",
+    monkeypatch.setattr(github_app, "app_credentials_from_env",
         # Any non-empty string: installation_token_for_repo is replaced
         # below, so nothing ever parses this. A PEM header here would only
         # trip the added-lines secret scanner in CI, for no benefit.
@@ -1332,7 +1332,7 @@ def _auth_rejected_setup(monkeypatch, jobs):
             'could not be decoded"}'
         )
 
-    monkeypatch.setattr(main_mod, "installation_token_for_repo", rejecting_token)
+    monkeypatch.setattr(github_app, "installation_token_for_repo", rejecting_token)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
@@ -1418,8 +1418,7 @@ def test_an_uninstalled_app_still_fails_terminally(monkeypatch):
     and stays a real failure -- relaxing the auth case must not relax that,
     or a repo that will never work would be retried forever."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(
-        main_mod, "app_credentials_from_env",
+    monkeypatch.setattr(github_app, "app_credentials_from_env",
         # Any non-empty string: installation_token_for_repo is replaced
         # below, so nothing ever parses this. A PEM header here would only
         # trip the added-lines secret scanner in CI, for no benefit.
@@ -1429,7 +1428,7 @@ def test_an_uninstalled_app_still_fails_terminally(monkeypatch):
     def not_installed(owner, repo, *, app_id, private_key):
         raise GitHubAppError(f"GitHub App is not installed on {owner}/{repo}")
 
-    monkeypatch.setattr(main_mod, "installation_token_for_repo", not_installed)
+    monkeypatch.setattr(github_app, "installation_token_for_repo", not_installed)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
@@ -1464,9 +1463,7 @@ def test_verified_build_block_without_regression_withholds_pr(
         "secret123",
     )
 
-    monkeypatch.setattr(
-        main_mod,
-        "app_credentials_from_env",
+    monkeypatch.setattr(github_app, "app_credentials_from_env",
         lambda: None,
     )
 
@@ -1615,9 +1612,7 @@ def test_processor_claims_at_most_one_paid_job_per_run(monkeypatch):
     """A successful invocation leaves the next paid job for the next timer
     tick, making the service timeout a deterministic per-job budget."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(
-        main_mod,
-        "app_credentials_from_env",
+    monkeypatch.setattr(github_app, "app_credentials_from_env",
         lambda: None,
     )
 

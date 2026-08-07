@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app.deploypack import github_app
 from app import alerts
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
@@ -222,7 +223,7 @@ def _run_process(monkeypatch, *, opener, jobs):
     from app.main import get_audit_repo, get_pr_opener, get_repo_fetcher
 
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     # Stub the deep review as succeeding. It is not what these tests measure,
     # and a review that cannot run fires its own (correct) operator alert --
