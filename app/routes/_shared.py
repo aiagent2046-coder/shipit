@@ -18,6 +18,7 @@ from fastapi import HTTPException, Request
 
 import hmac
 import os
+import re
 
 from app.billing import usdt_trc20
 from app.fixpack.generate import has_auto_fixable_findings
@@ -225,3 +226,37 @@ def _usdt_receiving_address() -> str | None:
             detail={"reason": "usdt_misconfigured",
                     "detail": f"USDT_TRC20_ADDRESS is not a valid TRON address: {exc}"},
         )
+
+
+# --- GitHub owner/repo parsing ------------------------------------------------
+#
+# Moved here from app/main.py: used by the installation-status endpoint (now in
+# app/routes/github.py) and by three code paths still in main.py, so it belongs
+# with the other cross-module helpers rather than in either one.
+
+
+# GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
+# Permissive-but-safe guard so a user-supplied deliver_to can't smuggle
+# extra path segments (extra "/" or "..") into a GitHub REST API path.
+_VALID_OWNER_REPO_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+# Shape guard for the repo_url intake path. Host must be EXACTLY
+# github.com (the literal `github.com/` right after the scheme rejects
+# userinfo tricks like https://github.com@evil.com/... and any
+# subdomain or :port), scheme must be https. The two path segments are
+# then re-validated with _VALID_OWNER_REPO_SEGMENT — same rule as
+# deliver_to, no second charset — so nothing but a clean owner/repo can
+# reach the fetch. This runs before any network call: it is the SSRF guard.
+_GITHUB_REPO_URL = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$")
+
+
+def _parse_github_repo_url(repo_url: str) -> tuple[str, str] | None:
+    m = _GITHUB_REPO_URL.match(repo_url.strip())
+    if not m:
+        return None
+    owner, repo = m.group(1), m.group(2)
+    if not (_VALID_OWNER_REPO_SEGMENT.match(owner)
+            and _VALID_OWNER_REPO_SEGMENT.match(repo)):
+        return None
+    return owner, repo

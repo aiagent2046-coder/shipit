@@ -14,7 +14,6 @@ import hashlib
 import io
 import logging
 import os
-import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -268,7 +267,9 @@ def _elapsed_ms(started: float) -> int:
 # Removing one is a breaking change for the test suite -- delete only together
 # with the imports in tests/.
 from app.routes._shared import (  # noqa: E402
+    _VALID_OWNER_REPO_SEGMENT,
     _bind_account,
+    _parse_github_repo_url,
     _client_key,
     _require_bearer_token,
     _secret_equals,
@@ -324,30 +325,12 @@ __all__ = [
 ]
 
 
-# GitHub owner/repo names: alphanumerics, hyphen, underscore, period.
-# Permissive-but-safe guard so a user-supplied deliver_to can't smuggle
-# extra path segments (extra "/" or "..") into a GitHub REST API path.
-_VALID_OWNER_REPO_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
-
-# Shape guard for the repo_url intake path. Host must be EXACTLY
-# github.com (the literal `github.com/` right after the scheme rejects
-# userinfo tricks like https://github.com@evil.com/... and any
-# subdomain or :port), scheme must be https. The two path segments are
-# then re-validated with _VALID_OWNER_REPO_SEGMENT — same rule as
-# deliver_to, no second charset — so nothing but a clean owner/repo can
-# reach the fetch. This runs before any network call: it is the SSRF guard.
-_GITHUB_REPO_URL = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$")
 
 
-def _parse_github_repo_url(repo_url: str) -> tuple[str, str] | None:
-    m = _GITHUB_REPO_URL.match(repo_url.strip())
-    if not m:
-        return None
-    owner, repo = m.group(1), m.group(2)
-    if not (_VALID_OWNER_REPO_SEGMENT.match(owner)
-            and _VALID_OWNER_REPO_SEGMENT.match(repo)):
-        return None
-    return owner, repo
+
+
+
+
 
 
 async def _record_llm_usage(
@@ -1189,60 +1172,7 @@ async def report_bank_transfer_paid(
 
 
 
-@app.get("/v1/github/installation-status")
-async def github_installation_status(owner: str, repo: str) -> dict:
-    """Is the Drydock GitHub App installed on owner/repo? The audit results
-    page checks this before offering a Fix Pack: a Fix Pack opens a real PR,
-    which needs the App installed on the target repo (see
-    app/deploypack/github_app.py). Audit intake itself is public-only and
-    needs no App — this gate is Fix-Pack-specific.
 
-    Reuses the same per-repo installation lookup the PR-delivery path uses
-    (github_app.installation_exists_for_repo -> GET /repos/{owner}/{repo}/installation),
-    so there is one source of truth for "installed on this repo" and no
-    stored installation_id to drift.
-
-    Shape:
-      - app_configured=false: the App isn't set up on this deployment at all
-        (PR delivery falls back to the operator PAT), so `installed` is null
-        and the frontend should not gate on it.
-      - app_configured=true, installed=true: good to go, install_url null.
-      - app_configured=true, installed=false: install_url points the repo
-        owner at the App's public install page, carrying state=owner/repo.
-    """
-    if not (_VALID_OWNER_REPO_SEGMENT.match(owner)
-            and _VALID_OWNER_REPO_SEGMENT.match(repo)):
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "bad_owner_repo",
-                    "detail": "owner and repo must each match ^[A-Za-z0-9._-]+$"},
-        )
-
-    app_creds = github_app.app_credentials_from_env()
-    if app_creds is None:
-        return {"owner": owner, "repo": repo, "app_configured": False,
-                "installed": None, "install_url": None}
-
-    app_id, private_key = app_creds
-    try:
-        # Off the event loop: github_app.installation_exists_for_repo does blocking
-        # network I/O, same as the token resolution the delivery path runs.
-        installed = await run_in_threadpool(
-            github_app.installation_exists_for_repo, owner, repo,
-            app_id=app_id, private_key=private_key,
-        )
-    except GitHubAppError as exc:
-        # The App IS configured but the check itself failed (bad key, GitHub
-        # down). Surface as an upstream error rather than a misleading
-        # "not installed" — same fault/caller split create_audit draws.
-        raise HTTPException(
-            status_code=502,
-            detail={"reason": "installation_check_failed", "detail": str(exc)},
-        ) from exc
-
-    install_url = None if installed else github_app.build_install_url(f"{owner}/{repo}")
-    return {"owner": owner, "repo": repo, "app_configured": True,
-            "installed": installed, "install_url": install_url}
 
 
 @app.post("/internal/billing/poll-usdt")
