@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 
 from fastapi import (
-    Depends, FastAPI, Form, Header, HTTPException, Request, Response, UploadFile,
+    Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -36,12 +36,9 @@ from app.audit_spool import SpoolFull, cleanup_staged_archive, stage_archive
 from app.accounts import (
     CSRF_HEADER,
     TIER_FREE,
-    account_for_key,
-    clear_api_key_cookie,
     entitlements_dict,
     entitlements_for_tier,
     resolve_account,
-    set_api_key_cookie,
     validate_api_key_pepper_configured,
 )
 from app.billing import bank_transfer, telegram_stars, usdt_trc20
@@ -49,6 +46,7 @@ from app.ops_endpoints import router as ops_router
 from app.routes.operator import router as operator_router
 from app.routes.paypal import router as paypal_router
 from app.routes.reads import router as reads_router
+from app.routes.session import router as session_router
 from app.routes.storefront import router as storefront_router
 from app.db import (
     AccountRepository,
@@ -72,7 +70,6 @@ from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.github_app import (
     GitHubAppAuthError,
     GitHubAppError,
-    app_auth_ok,
     app_credentials_from_env,
     build_install_url,
     installation_exists_for_repo,
@@ -260,17 +257,7 @@ def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
-def _bind_account(account: dict | None) -> None:
-    """Put the resolved account on the log context for the rest of the request.
 
-    Anonymous traffic leaves the field as None rather than writing a
-    placeholder, so "account_id absent" reads as "no key presented" instead of
-    being confusable with a real account. Safe to call unscoped:
-    bind_request_context binds account_id too, so its reset on the way out
-    clears whatever a handler set here.
-    """
-    if account is not None:
-        set_log_context(account_id=str(account["id"]))
 
 
 
@@ -287,6 +274,7 @@ def _bind_account(account: dict | None) -> None:
 # Removing one is a breaking change for the test suite -- delete only together
 # with the imports in tests/.
 from app.routes._shared import (  # noqa: E402
+    _bind_account,
     _client_key,
     _json_object_body,
     _require_bearer_token,
@@ -691,50 +679,10 @@ def _monitoring_process_token() -> str | None:
 
 
 
-@app.get("/healthz")
-def healthz() -> dict:
-    return {"status": "ok"}
 
 
-@app.get("/health")
-async def health(
-    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
-) -> dict:
-    """Richer, still-public health probe. Unlike the static /healthz (kept
-    for the race-after-restart liveness check the README documents), this
-    reports two things that actually fail in this system:
 
-      * `db` — is the database reachable at all (distinguishes "process up"
-        from "process up but the Supabase pooler is unreachable");
-      * `fixpack_backlog` / `oldest_paid_seconds` — is the Fix Pack processor
-        timer draining the queue, or is a paid job stuck (see
-        FixpackJobRepository.backlog_stats);
-      * `github_app` — does GitHub still accept our App credentials. A key
-        that no longer matches the App breaks every Fix Pack delivery on
-        this deployment, and before this it was invisible until a paying
-        customer's job hit a 401. `null` means App auth isn't configured
-        here at all (the PAT path), which is not a fault. Cached for five
-        minutes inside app_auth_ok, so this stays cheap for a pinger.
 
-    Deliberately leak-free: only booleans and coarse counts/ages — never ids,
-    urls, or error text — so it's safe to expose to a dumb uptime pinger or
-    the systemd timer without a token. Always 200: an unconfigured or
-    unreachable DB is reported as db:false (a live process honestly saying
-    it's degraded), not a transport-level failure the pinger can't read."""
-    # Blocking httpx call, so off the event loop. Never raises by contract.
-    github_app = await run_in_threadpool(app_auth_ok)
-    stats = await fixpack_repo.backlog_stats()
-    if stats is None:
-        # DATABASE_URL unset, or the pool couldn't be built — either way the
-        # DB isn't usable. Report degraded rather than 503 (see docstring).
-        return {"db": False, "fixpack_backlog": None,
-                "oldest_paid_seconds": None, "github_app": github_app}
-    return {
-        "db": True,
-        "fixpack_backlog": stats["backlog"],
-        "oldest_paid_seconds": stats["oldest_paid_seconds"],
-        "github_app": github_app,
-    }
 
 
 
@@ -789,70 +737,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 
-@app.post("/v1/auth/login")
-async def auth_login(
-    request: Request,
-    response: Response,
-    limiter: RateLimiter = Depends(get_rate_limiter),
-    account_repo: AccountRepository = Depends(get_account_repo),
-) -> dict:
-    """Exchange an API key for a session cookie the page cannot read.
-
-    The one place that sets the cookie. The key is revealed by several
-    endpoints -- rotate-key and each payment poll -- and it was tempting to
-    set the cookie on all of them; that spreads a credential-handling
-    decision across five handlers that otherwise share nothing. The frontend
-    already funnels every "I have a key" event through one call, so this
-    stays one handler with one test.
-
-    Answers exactly like GET /v1/account, so the caller needs no second
-    request to learn what the key bought. An unrecognized key 401s rather
-    than quietly returning the free tier: the caller asserted they have a
-    key, and silently downgrading them would look like a working login that
-    bought nothing.
-    """
-    body = await _json_object_body(request)
-    api_key = str(body.get("api_key") or "").strip()
-    if not api_key:
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "bad_intake", "detail": "'api_key' is required"},
-        )
-
-    account = await account_for_key(api_key, account_repo)
-    if account is None:
-        raise HTTPException(
-            status_code=401,
-            detail={"reason": "unauthorized",
-                    "detail": "no account recognized for the presented API key"},
-        )
-
-    _bind_account(account)
-    set_api_key_cookie(response, api_key)
-    entitlements = entitlements_for_tier(
-        account["tier"], free_daily_limit=limiter.limit)
-    return {
-        "tier": account["tier"],
-        "authenticated": True,
-        "entitlements": entitlements_dict(entitlements),
-    }
 
 
-@app.post("/v1/auth/logout")
-async def auth_logout(response: Response) -> dict:
-    """Forget the session cookie.
 
-    Parity, not a feature: "forget this key" used to be a sessionStorage
-    removal the page did by itself. An HttpOnly cookie can only be cleared by
-    the server that set it, so without this the UI's clear button would leave
-    the session live -- worse than what it replaced.
 
-    Unauthenticated on purpose. Clearing your own cookie is not a privileged
-    act, and requiring a valid session to log out means a stale one can never
-    be cleared.
-    """
-    clear_api_key_cookie(response)
-    return {"ok": True}
 
 
 @app.get("/v1/account")
@@ -3195,4 +3083,5 @@ app.include_router(ops_router)
 app.include_router(operator_router)
 app.include_router(paypal_router)
 app.include_router(reads_router)
+app.include_router(session_router)
 app.include_router(storefront_router)
