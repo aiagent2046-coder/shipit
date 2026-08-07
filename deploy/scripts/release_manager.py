@@ -102,6 +102,37 @@ def normalize_sha(repo: Path, revision: str) -> str:
     return sha
 
 
+def describe_revision(repo: Path, sha: str) -> str | None:
+    """Human-readable name for `sha`, or None when git can't produce one.
+
+    Purely descriptive: it labels the release for operators and for /version,
+    and nothing dispatches on it. A build must therefore never fail because
+    `git describe` did (a shallow clone with no tags in range is the normal
+    case), so every error collapses to None.
+
+    No `--dirty`: git rejects it outright when a commit-ish is given
+    ("option '--dirty' and commit-ishes cannot be used together"), which would
+    silently turn every label into None. It would be meaningless here anyway —
+    the release is built from a specific commit, not from the working tree.
+    """
+    try:
+        described = capture(
+            [
+                "git",
+                "-C",
+                repo,
+                "describe",
+                "--tags",
+                "--always",
+                sha,
+            ]
+        )
+    except (ReleaseError, OSError):
+        return None
+
+    return described or None
+
+
 def release_path(root: Path, sha: str) -> Path:
     if not SHA_RE.fullmatch(sha):
         raise ReleaseError(
@@ -519,6 +550,8 @@ def build_release(
             final / METADATA_FILE,
             {
                 "git_sha": sha,
+                "git_ref": revision,
+                "git_describe": describe_revision(repo, sha),
                 "built_at": utc_now(),
                 "source_repository": str(repo),
                 "python": str(python),

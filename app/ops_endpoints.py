@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.db import AuditJobRepository, FixpackJobRepository
 from app.logging_config import environment_from_env, release_from_env
+from app.release_info import release_labels
 
 
 logger = logging.getLogger(__name__)
@@ -69,11 +70,18 @@ async def readyz() -> JSONResponse:
 
 
 @router.get("/version", include_in_schema=False)
-async def version() -> dict[str, str]:
-    # Same source the `release`/`env` fields of every JSON log record read, so
-    # a line in journalctl and this endpoint can never disagree about which
-    # build is running.
+async def version() -> dict[str, str | None]:
+    # `release` and `environment` come from the same source the `release`/`env`
+    # fields of every JSON log record read, so a line in journalctl and this
+    # endpoint can never disagree about which build is running.
+    #
+    # `version` and `built_at` are additive labels for the same release, read
+    # from the metadata the builder wrote next to the code. `release` answers
+    # "which commit" precisely but unreadably; these answer "which release,
+    # and how old" for a human during an incident. Both are null on a source
+    # checkout, which is a truthful "not a built release", not an error.
     return {
         "release": release_from_env(),
         "environment": environment_from_env(),
+        **release_labels(),
     }
