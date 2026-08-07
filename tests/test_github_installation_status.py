@@ -11,7 +11,7 @@ we stub that boundary function to drive the endpoint's own branching
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as main_mod
+from app.deploypack import github_app
 from app.deploypack.github_app import GitHubAppError
 from app.main import app
 
@@ -47,7 +47,7 @@ def test_installed_true_has_no_install_url(app_configured, monkeypatch):
         assert (owner, repo) == ("acme", "app")
         return True
 
-    monkeypatch.setattr(main_mod, "installation_exists_for_repo", fake_exists)
+    monkeypatch.setattr(github_app, "installation_exists_for_repo", fake_exists)
     resp = client.get("/v1/github/installation-status",
                       params={"owner": "acme", "repo": "app"})
     assert resp.status_code == 200
@@ -57,8 +57,7 @@ def test_installed_true_has_no_install_url(app_configured, monkeypatch):
 
 
 def test_not_installed_returns_install_url_with_state(app_configured, monkeypatch):
-    monkeypatch.setattr(
-        main_mod, "installation_exists_for_repo",
+    monkeypatch.setattr(github_app, "installation_exists_for_repo",
         lambda owner, repo, *, app_id, private_key: False,
     )
     resp = client.get("/v1/github/installation-status",
@@ -77,7 +76,7 @@ def test_upstream_failure_is_502(app_configured, monkeypatch):
     def boom(owner, repo, *, app_id, private_key):
         raise GitHubAppError("resolve installation failed: 401 bad jwt")
 
-    monkeypatch.setattr(main_mod, "installation_exists_for_repo", boom)
+    monkeypatch.setattr(github_app, "installation_exists_for_repo", boom)
     resp = client.get("/v1/github/installation-status",
                       params={"owner": "acme", "repo": "app"})
     assert resp.status_code == 502

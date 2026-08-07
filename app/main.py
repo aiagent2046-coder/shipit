@@ -67,16 +67,10 @@ from app.db import (
     monitoring_processor_lock,
     usdt_poll_lock,
 )
+from app.deploypack import github_app
+from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
 from app.deploypack.delivery import DeliveryError, render_pr_body
 from app.deploypack.generate import UnsupportedForDeployPack
-from app.deploypack.github_app import (
-    GitHubAppAuthError,
-    GitHubAppError,
-    app_credentials_from_env,
-    build_install_url,
-    installation_exists_for_repo,
-    installation_token_for_repo,
-)
 from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
 from app.fixpack.generate import (
@@ -1204,7 +1198,7 @@ async def github_installation_status(owner: str, repo: str) -> dict:
     needs no App — this gate is Fix-Pack-specific.
 
     Reuses the same per-repo installation lookup the PR-delivery path uses
-    (installation_exists_for_repo -> GET /repos/{owner}/{repo}/installation),
+    (github_app.installation_exists_for_repo -> GET /repos/{owner}/{repo}/installation),
     so there is one source of truth for "installed on this repo" and no
     stored installation_id to drift.
 
@@ -1224,17 +1218,17 @@ async def github_installation_status(owner: str, repo: str) -> dict:
                     "detail": "owner and repo must each match ^[A-Za-z0-9._-]+$"},
         )
 
-    app_creds = app_credentials_from_env()
+    app_creds = github_app.app_credentials_from_env()
     if app_creds is None:
         return {"owner": owner, "repo": repo, "app_configured": False,
                 "installed": None, "install_url": None}
 
     app_id, private_key = app_creds
     try:
-        # Off the event loop: installation_exists_for_repo does blocking
+        # Off the event loop: github_app.installation_exists_for_repo does blocking
         # network I/O, same as the token resolution the delivery path runs.
         installed = await run_in_threadpool(
-            installation_exists_for_repo, owner, repo,
+            github_app.installation_exists_for_repo, owner, repo,
             app_id=app_id, private_key=private_key,
         )
     except GitHubAppError as exc:
@@ -1246,7 +1240,7 @@ async def github_installation_status(owner: str, repo: str) -> dict:
             detail={"reason": "installation_check_failed", "detail": str(exc)},
         ) from exc
 
-    install_url = None if installed else build_install_url(f"{owner}/{repo}")
+    install_url = None if installed else github_app.build_install_url(f"{owner}/{repo}")
     return {"owner": owner, "repo": repo, "app_configured": True,
             "installed": installed, "install_url": install_url}
 
@@ -1325,7 +1319,7 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
     single-operator GITHUB_PR_TOKEN. Same resolution the Deploy Pack flow
     does inline in create_fixpack — kept identical so both PR paths behave
     the same."""
-    app_creds = app_credentials_from_env()
+    app_creds = github_app.app_credentials_from_env()
     # Diagnostic for the "no GitHub token configured" incident: when App
     # creds look present in the process env yet resolution still yields no
     # token, this pins down whether os.environ actually carries them at
@@ -1345,7 +1339,7 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
            else logger.debug)
     log(
         "PR token resolve for %s/%s: GITHUB_APP_ID=%s, "
-        "GITHUB_APP_PRIVATE_KEY=%s, app_credentials_from_env=%s",
+        "GITHUB_APP_PRIVATE_KEY=%s, github_app.app_credentials_from_env=%s",
         owner, repo,
         len(app_id_env) if app_id_env else "MISSING",
         len(pem_env) if pem_env else "MISSING",
@@ -1355,7 +1349,7 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
         return None
     app_id, private_key = app_creds
     return await run_in_threadpool(
-        installation_token_for_repo, owner, repo,
+        github_app.installation_token_for_repo, owner, repo,
         app_id=app_id, private_key=private_key,
     )
 
@@ -2511,11 +2505,11 @@ async def create_fixpack(
             body = render_pr_body("deploy", result["files"], result["detail"])
             try:
                 token: str | None = None
-                app_creds = app_credentials_from_env()
+                app_creds = github_app.app_credentials_from_env()
                 if app_creds is not None:
                     app_id, private_key = app_creds
                     token = await run_in_threadpool(
-                        installation_token_for_repo, owner, repo,
+                        github_app.installation_token_for_repo, owner, repo,
                         app_id=app_id, private_key=private_key,
                     )
                 opened = await run_in_threadpool(

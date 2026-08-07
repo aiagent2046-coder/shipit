@@ -21,6 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+from app.deploypack import github_app
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import PullRequestResult
 from app.main import (
@@ -170,7 +171,7 @@ def _run_processor():
 
 def test_records_delivered_outcome(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     from app.fixpack.semantic_check import SemanticCheckResult
 
@@ -214,7 +215,7 @@ def test_records_delivered_outcome(monkeypatch):
 
 def test_records_blocked_outcome_with_regression_flag(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     from app.fixpack.semantic_check import RunResult, SemanticCheckResult
 
@@ -252,7 +253,7 @@ def test_records_blocked_outcome_with_regression_flag(monkeypatch):
 
 def test_records_failed_outcome(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     # Audit has no repo_url -> early 'failed' branch, before any plan.
     audits = {"a1": {"repo_url": None, "findings_json": []}}
@@ -278,7 +279,7 @@ def test_records_failed_outcome(monkeypatch):
 
 def test_records_no_fix_needed_outcome(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     # A repo with nothing to fix and an audit with no findings -> empty plan.
     zip_bytes = make_zip({"README.md": "# hi\n"})
@@ -306,7 +307,7 @@ def test_recording_failure_does_not_break_delivery(monkeypatch):
     """A fix_outcomes write that raises must be swallowed: the job still
     delivers and the endpoint still reports success."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
     from app.fixpack.semantic_check import SemanticCheckResult
 

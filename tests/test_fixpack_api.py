@@ -16,7 +16,7 @@ import zipfile
 from fastapi.testclient import TestClient
 
 import app.deploypack.pipeline as pipeline_mod
-import app.main as main_mod
+from app.deploypack import github_app
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.deploypack.github_app import GitHubAppError
 from app.deploypack.preview import PreviewResult
@@ -315,9 +315,9 @@ def test_deliver_to_uses_github_app_token_when_configured(monkeypatch):
         pipeline_mod, "verify_deploy_pack",
         lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
     )
-    monkeypatch.setattr(main_mod, "app_credentials_from_env",
+    monkeypatch.setattr(github_app, "app_credentials_from_env",
                          lambda: ("999", "fake-pem"))
-    monkeypatch.setattr(main_mod, "installation_token_for_repo",
+    monkeypatch.setattr(github_app, "installation_token_for_repo",
                          lambda owner, repo, **k: "ghs_app_token")
     captured = {}
 
@@ -341,7 +341,7 @@ def test_deliver_to_falls_back_to_pat_when_app_not_configured(monkeypatch):
         pipeline_mod, "verify_deploy_pack",
         lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
     )
-    monkeypatch.setattr(main_mod, "app_credentials_from_env", lambda: None)
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
     captured = {}
 
     def fake_opener(owner, repo, files, token=None, **kwargs):
@@ -364,13 +364,13 @@ def test_deliver_to_reports_github_app_not_installed(monkeypatch):
         pipeline_mod, "verify_deploy_pack",
         lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
     )
-    monkeypatch.setattr(main_mod, "app_credentials_from_env",
+    monkeypatch.setattr(github_app, "app_credentials_from_env",
                          lambda: ("999", "fake-pem"))
 
     def raise_not_installed(owner, repo, **k):
         raise GitHubAppError(f"GitHub App is not installed on {owner}/{repo}")
 
-    monkeypatch.setattr(main_mod, "installation_token_for_repo", raise_not_installed)
+    monkeypatch.setattr(github_app, "installation_token_for_repo", raise_not_installed)
 
     resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app")
     body = resp.json()
