@@ -526,9 +526,13 @@ def force_pro_account(monkeypatch, account_id="11111111-1111-1111-1111-111111111
     tests are about what the scan and the cache do for a paying caller, and the
     free tier is static-only by policy, so without an account there is no LLM
     stage left to observe at all.
+
+    Patched on app.accounts, the module that defines it, so this keeps working
+    no matter which route module the calling handler lives in. Callers reach it
+    as accounts.resolve_account(...) rather than importing the name.
     """
     async def _resolve(request, account_repo):
         return {"id": account_id, "tier": "pro"}
 
-    monkeypatch.setattr("app.main.resolve_account", _resolve)
+    monkeypatch.setattr("app.accounts.resolve_account", _resolve)
     return account_id

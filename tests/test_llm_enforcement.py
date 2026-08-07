@@ -31,7 +31,7 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app import alerts
+from app import accounts, alerts
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.scan.llm_scan import run_llm_scan
 from app.main import (
@@ -281,7 +281,7 @@ async def test_pro_account_not_subject_to_dollar_cap(monkeypatch, audit_queue):
     async def fake_resolve(request, account_repo):
         return {"id": str(uuid.uuid4()), "tier": "pro"}
 
-    monkeypatch.setattr(main_mod, "resolve_account", fake_resolve)
+    monkeypatch.setattr(accounts, "resolve_account", fake_resolve)
 
     audit_repo = FakeAuditRepo()
     usage_repo = FakeUsageRepo(anon_spend=Decimal("99.00"))  # anon is way over
