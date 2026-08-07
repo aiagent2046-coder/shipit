@@ -86,7 +86,7 @@ from app.sandbox_client import SandboxRunnerUnavailable
 from app.llm.client import LLMClient
 from app.llm import pricing
 from app.log_context import log_context, set_log_context
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, environment_from_env
 from app.monitor import (
     repo_url_from_full_name,
 )
@@ -116,7 +116,30 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Drydock", version="0.1.0", lifespan=lifespan)
+# The interactive schema is a development tool, not a public one. On any
+# non-development deployment /docs, /redoc and /openapi.json are switched off:
+# the source repository is public, so an attacker who reads it already knows
+# the code, but a live, machine-readable inventory of every route and request
+# shape on the running host is a different thing -- it is reconnaissance
+# handed over pre-formatted, and it tracks the deployment rather than the
+# repository.
+#
+# Keyed on ENVIRONMENT, the same variable /version and every JSON log record
+# already report, so there is one notion of "which deployment is this" rather
+# than a second flag that can disagree with it. It defaults to "development",
+# which means a plain local run keeps the docs and only a deliberately
+# configured deployment loses them -- the safe direction is the one that
+# requires no action.
+_DOCS_ENABLED = environment_from_env() == "development"
+
+app = FastAPI(
+    title="Drydock",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 
 
 # Vercel preview deploys get unpredictable per-deploy subdomains
