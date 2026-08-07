@@ -20,6 +20,7 @@ import hmac
 import os
 
 from app.fixpack.generate import has_auto_fixable_findings
+from app.log_context import set_log_context
 
 
 async def _json_object_body(request: Request) -> dict:
@@ -196,3 +197,16 @@ def _service_flags_token() -> str | None:
     pattern as MONITORING_PROCESS_TOKEN. Unset -> the endpoint 503s rather than
     accept a no-op auth check on a switch that can halt all paid LLM ops."""
     return os.environ.get("SERVICE_FLAGS_TOKEN") or None
+
+
+def _bind_account(account: dict | None) -> None:
+    """Put the resolved account on the log context for the rest of the request.
+
+    Anonymous traffic leaves the field as None rather than writing a
+    placeholder, so "account_id absent" reads as "no key presented" instead of
+    being confusable with a real account. Safe to call unscoped:
+    bind_request_context binds account_id too, so its reset on the way out
+    clears whatever a handler set here.
+    """
+    if account is not None:
+        set_log_context(account_id=str(account["id"]))
