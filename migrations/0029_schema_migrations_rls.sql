@@ -1,0 +1,20 @@
+-- rollback-safe: yes
+--
+-- The ledger table this very manager writes to, shipit_schema_migrations,
+-- had Row Level Security disabled. Every other application table has RLS
+-- enabled (see migration_manager.py's APP_TABLES and the create_ledger()
+-- DDL below it) -- this one was missed, and it is exactly the kind of gap
+-- this product exists to find in OTHER people's repositories: an ERROR-level
+-- Supabase advisor lint, "RLS Disabled in Public", meaning the anon key
+-- (public by design) could read and write every row via PostgREST.
+--
+-- The application itself never goes through PostgREST -- app/db.py connects
+-- with psycopg directly against DATABASE_URL, which is how this manager
+-- also operates (see run_psql / apply_one above). RLS only gates the
+-- PostgREST/anon path, so enabling it here changes nothing about how this
+-- script or the app read and write the ledger.
+--
+-- No policies added: nothing needs to reach this table through the anon or
+-- authenticated role. Enabling RLS with zero policies is the same
+-- default-deny posture every other table in APP_TABLES already has.
+alter table shipit_schema_migrations enable row level security;
