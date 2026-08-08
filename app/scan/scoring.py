@@ -30,25 +30,47 @@ SEVERITY_WEIGHT = {"critical": 2.0, "high": 1.0, "medium": 0.4, "low": 0.1}
 #
 # Producers, for whoever adds the next category: app/scan/checks.py emits
 # Security, Testing and Deploy; the secret rules in app/scan/secrets.py emit
-# Security; the two rubrics in app/scan/llm_scan.py map to Auth and Security.
-# Adding a name here without adding a producer re-creates the same dead weight.
-CATEGORIES = ("Security", "Auth", "Testing", "Deploy")
+# Security; the rubrics in app/scan/llm_scan.py map to Auth, Security and
+# Money & Data. Adding a name here without adding a producer re-creates the
+# same dead weight.
+CATEGORIES = ("Security", "Auth", "Testing", "Deploy", "Money & Data")
 
 # Weighted mean for the total. Security and Auth dominate because the product's
 # wedge is "safe to put in production".
 #
 # Declared as the original raw weights and normalised, rather than as
-# pre-divided decimals: it keeps the relative importance of the four survivors
-# exactly as it was chosen (0.25 : 0.20 : 0.15 : 0.15), makes "sums to 1" true
-# by construction instead of by assertion, and means dropping or adding a
-# category is a one-line edit that cannot silently stop summing to 1.
+# pre-divided decimals: it keeps the relative importance of the survivors
+# exactly as it was chosen, makes "sums to 1" true by construction instead of
+# by assertion, and means dropping or adding a category is a one-line edit
+# that cannot silently stop summing to 1.
+#
+# "Money & Data" sits level with Auth because what it finds costs the owner
+# directly and needs no attacker: a battle-pass purchase that never deducts
+# the currency (blitz-blueprint, every player premium for free), a cron firing
+# paid LLM calls every five minutes (next-ai-news, ~1,700 calls/day), a
+# webhook with no idempotency guard against the provider's own retries
+# (nextjs-subscription-payments). Measured on ten real repositories before
+# being given this weight.
 _RAW_CATEGORY_WEIGHT = {
     "Security": 0.25, "Auth": 0.20, "Testing": 0.15, "Deploy": 0.15,
+    "Money & Data": 0.20,
 }
 _RAW_TOTAL = sum(_RAW_CATEGORY_WEIGHT.values())
 CATEGORY_WEIGHT = {k: v / _RAW_TOTAL for k, v in _RAW_CATEGORY_WEIGHT.items()}
 assert set(CATEGORY_WEIGHT) == set(CATEGORIES)
 assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
+
+# Categories only the LLM stage can fill. A static-only audit never runs it,
+# so these sit at a perfect 10.0 for reasons that have nothing to do with the
+# repository -- dead weight in the precise sense of issue #181, just arriving
+# by a different route: not "no producer exists" but "no producer ran".
+#
+# It was already happening and already visible: across the audits holding
+# category data, static-only ones average 8.99 against 7.79 for full ones,
+# and Auth reads exactly 10.0 in 25 of 25 of them. The free tier was telling
+# people their auth was perfect when nothing had looked at it. Adding a second
+# LLM-only category would have taken 42% of the weight to a constant 10.0.
+LLM_ONLY_CATEGORIES = frozenset({"Auth", "Money & Data"})
 
 
 @dataclass(frozen=True)
@@ -107,35 +129,78 @@ def _score(findings: list[ScoredFinding]) -> float:
 # score is pulled down to the ceiling and no further. Of those same 72 audits
 # 40 fail the gate -- a majority, which is the expected shape for a product
 # that audits vibe-coded repos, not evidence the threshold is wrong.
-GATED_CATEGORIES = ("Security", "Auth")
+#
+# Money & Data gates for the same reason the other two do, not a softer one.
+# blitz-blueprint scores 2.9 there -- purchasePremiumPass marks the pass
+# premium without ever deducting the 1000 currency, and the store grants the
+# item before checking the balance -- while Security 9.2, Testing 10.0 and
+# Deploy 10.0 carried its mean to 8.3. "Every player gets premium free" is not
+# a repository that should present an 8.3, and no amount of clean Testing
+# makes it one. The gate is about the headline never contradicting the
+# finding underneath it, which is as true of revenue as of an auth hole.
+GATED_CATEGORIES = ("Security", "Auth", "Money & Data")
 
 # Set at 7.0 because that is where these subscores stop meaning "some issues"
-# and start meaning "an attacker has something to work with": both real audits
-# that motivated this sat just under it (5.9/6.2 and 6.5). A repo at 7.0+ in
-# both still gets its averaged score.
+# and start meaning "something is actually going wrong here": the audits that
+# motivated this sat just under it (Security 5.9 / Auth 6.2, and 6.5). A repo
+# at 7.0+ in all of them still gets its averaged score.
 GATE_THRESHOLD = 7.0
 
-# Deliberately just under GATE_THRESHOLD: a repo that fails the safety gate
-# must never present a headline number that reads as passing. Not lower --
-# the ceiling's job is to stop the flattering read, and the weighted mean
-# below it is still the honest relative measure.
-GATE_CEILING = 6.9
+# The top of the band a gated repo is compressed into: just under
+# GATE_THRESHOLD, so a failing repo can never present a passing headline.
+GATED_MAX = 6.9
 
 
-def _ceiling(by_cat: dict[str, float]) -> float:
-    """GATE_CEILING when either safety category is failing, else no ceiling."""
-    if any(by_cat[c] < GATE_THRESHOLD for c in GATED_CATEGORIES):
-        return GATE_CEILING
-    return 10.0
+def _apply_gate(total: float, by_cat: dict[str, float],
+                counted: list[str]) -> float:
+    """Compress a failing repo's mean into [0, GATED_MAX], preserving order.
+
+    A flat ceiling was tried first: total = min(mean, GATED_MAX). It stopped
+    the flattering headline but flattened the top of the failing range,
+    because a repo's mean is usually well above 6.9 even when one category
+    fails. Measured on the 42 full audits, 17 of them -- 40% -- would have
+    printed exactly 6.9, making a repo failing one category indistinguishable
+    from one failing three. That is the same loss of resolution this module's
+    docstring describes at the bottom of the v1 scale, relocated to the middle.
+
+    Scaling instead of clamping keeps the ordering intact everywhere: the mean
+    is still the measure, 6.9 is merely the top of the range it is expressed
+    in. Monotonic by construction, so a worse repo always scores lower, and
+    nothing collapses to a constant.
+    """
+    gated = [c for c in GATED_CATEGORIES if c in counted]
+    if any(by_cat[c] < GATE_THRESHOLD for c in gated):
+        return total * (GATED_MAX / 10.0)
+    return total
 
 
-def compute_scores(findings: list[ScoredFinding]) -> dict:
+def compute_scores(findings: list[ScoredFinding],
+                   llm_ran: bool = True) -> dict:
+    """Per-category subscores and their weighted mean.
+
+    `llm_ran=False` marks a static-only audit, where LLM_ONLY_CATEGORIES had
+    no producer and their 10.0 means "not examined", not "clean". Those
+    categories are still reported -- hiding them would make the report look
+    like the audit covered less than it did -- but they are excluded from the
+    mean, and the remaining weights renormalise over themselves. A number
+    nothing measured must not vote on the total.
+
+    The default is True so every existing caller keeps the full-audit
+    behaviour; only the pipeline, which knows whether the stage ran, passes
+    False.
+    """
     by_cat = {
         cat: _score([f for f in findings if f.category == cat])
         for cat in CATEGORIES
     }
-    total = round(sum(by_cat[c] * CATEGORY_WEIGHT[c] for c in CATEGORIES), 1)
-    total = min(total, _ceiling(by_cat))
+    counted = [c for c in CATEGORIES
+               if llm_ran or c not in LLM_ONLY_CATEGORIES]
+    divisor = sum(_RAW_CATEGORY_WEIGHT[c] for c in counted)
+    total = sum(by_cat[c] * _RAW_CATEGORY_WEIGHT[c] for c in counted) / divisor
+    # The gate reads only categories that were actually examined, for the same
+    # reason: an unexamined Auth sitting at 10.0 must not be able to clear a
+    # gate, and an unexamined one cannot fail it either.
+    total = round(_apply_gate(total, by_cat, counted), 1)
     if findings and total == 10.0:
         total = 9.9  # a perfect 10 with a non-empty findings list is a lie
     return {"total": total, "categories": by_cat}

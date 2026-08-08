@@ -6,6 +6,7 @@ finding must never reach the user.
 
 import io
 import json
+import re
 import zipfile
 
 import httpx
@@ -13,6 +14,7 @@ import pytest
 
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.scan.llm_scan import (
+    RUBRICS,
     LLMScanStats,
     build_prompt,
     parse_findings,
@@ -20,6 +22,7 @@ from app.scan.llm_scan import (
     select_files,
     verify_finding,
 )
+from app.scan.scoring import CATEGORIES
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -175,6 +178,40 @@ def test_verify_rejects_unhashable_file():
     # when f["file"] is a list/dict -- that crashed verify_finding itself
     # rather than returning False.
     assert not verify_finding(valid_finding(file=["src/auth.ts"]), FILES)
+
+
+# --- rubric -> score category wiring ---
+
+def test_every_rubric_scores_into_a_category_the_scorer_knows():
+    # A rubric whose category is not in CATEGORIES contributes to no subscore:
+    # compute_scores iterates CATEGORIES, so those findings are displayed but
+    # score as free. Asserted at import in llm_scan; pinned here so the reason
+    # is written down where a future rubric author will look.
+    for name, rubric in RUBRICS.items():
+        assert rubric["category"] in CATEGORIES, f"{name} scores nowhere"
+
+
+def test_findings_take_the_category_their_rubric_declares(monkeypatch):
+    """A third rubric must land in its own category, not be inferred into Auth.
+
+    The call site used to read `"Security" if rubric == "security" else
+    "Auth"`. With only the two shipped rubrics that binary is indistinguishable
+    from the declared mapping, so no existing test can tell them apart -- the
+    bug only appears the moment a third rubric exists, silently filing every
+    one of its findings under Auth. This test supplies that third rubric.
+    """
+    monkeypatch.setitem(RUBRICS, "cost", {
+        "category": "Deploy",
+        "keywords": re.compile(r"jwt|token", re.I),
+        "instructions": "irrelevant, the LLM is stubbed",
+    })
+    buf = make_zip({"src/auth.ts": VULN_TS.encode()})
+
+    findings, _ = run_llm_scan(
+        buf, FakeLLM(json.dumps([valid_finding()])), rubrics=("cost",))
+
+    assert [f.category for f in findings] == ["Deploy"]
+    assert findings[0].rule_id == "llm-cost"
 
 
 # --- end to end with mocked LLM ---
