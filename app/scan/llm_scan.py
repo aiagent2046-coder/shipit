@@ -75,6 +75,71 @@ RUBRICS: dict[str, dict] = {
             "signature checks on webhooks."
         ),
     },
+    # The third axis. Both rubrics above look for an attacker; this one looks
+    # for what a normal year in production does to code written fast. Measured
+    # on ten real repositories before being wired in: findings in 5, and the
+    # ones it finds are not reachable from the other two -- blitz-blueprint's
+    # premium pass sets is_premium without ever deducting the 1000 currency
+    # (every player premium, free, no attacker involved), next-ai-news fires
+    # paid LLM calls from a five-minute cron (~1,700 calls/day against an
+    # account nobody warned), nextjs-subscription-payments re-runs its whole
+    # Stripe webhook body on the provider's own at-least-once retries.
+    #
+    # Keywords are anchored on word boundaries. A first draft used bare
+    # substrings (pay, order, limit, token) and selected a Spinner component
+    # and a terms-of-service page: select_files fills a fixed budget
+    # smallest-first, so an irrelevant match does not merely come along, it
+    # takes a relevant file's place -- 232 matched, only 112 could be sent.
+    "money": {
+        "category": "Money & Data",
+        "keywords": re.compile(
+            r"\b(stripe|paypal|checkout|invoice|billing|subscription|refund|"
+            r"payout|coupon|discount|currency|idempotenc\w*|webhook)\b"
+            r"|\bdrop\s+table\b|\btruncate\b|\bon\s+delete\s+cascade\b"
+            r"|\b(migration|rollback|soft.?delete)\b"
+            r"|\b(openai|anthropic|cron|setInterval|max_tokens|backoff)\b"
+            r"|\brate.?limit\w*\b",
+            re.I,
+        ),
+        "instructions": (
+            "Review for ways this app loses its owner money, loses user data, "
+            "or runs up a bill -- WITHOUT an attacker. Assume every user "
+            "behaves normally and the code still runs in production for a "
+            "year. Report only concrete issues you can point at a line for.\n"
+            "\n"
+            "Money taken or lost wrongly: a price, amount or currency read "
+            "from the client request instead of looked up on the server; a "
+            "payment or webhook handler with no idempotency key or duplicate "
+            "check, so the provider's normal retry credits the order twice; "
+            "an order marked paid before the provider confirms; a purchase "
+            "that grants the item without deducting the price; a refund, "
+            "discount or credit computed client-side; a balance updated by "
+            "read-modify-write from client state, so concurrent grants "
+            "overwrite each other; money held in a float instead of a decimal "
+            "or integer minor units; a paid feature gated only in the UI.\n"
+            "\n"
+            "Data lost for good: destructive SQL in a migration (DROP TABLE, "
+            "TRUNCATE, DELETE or UPDATE with no WHERE) with nothing guarding "
+            "it; ON DELETE CASCADE reaching user-created content or content "
+            "other users depend on; a multi-step write with no transaction, "
+            "so a mid-way failure leaves half-written state; a delete path "
+            "with no soft delete, no backup and no confirmation.\n"
+            "\n"
+            "A bill nobody expects: a paid API, LLM or third-party call "
+            "inside a loop, recursion or per-row iteration with no cap; a "
+            "scheduled job running far more often than its work needs; an "
+            "expensive endpoint reachable without auth or rate limiting; a "
+            "query with no LIMIT or pagination over a table that grows "
+            "forever; an append-only table with no retention policy; retry "
+            "logic with no maximum attempts or backoff; an LLM call with no "
+            "token ceiling.\n"
+            "\n"
+            "Do NOT report attacker-driven vulnerabilities -- injection, "
+            "XSS, auth bypass, SSRF. Other rubrics cover those, and a "
+            "duplicate here spends a finding slot on something already "
+            "reported."
+        ),
+    },
 }
 
 # A rubric whose category the scorer does not know contributes nothing to any
@@ -256,7 +321,7 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
 
 
 def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
-                 rubrics: tuple[str, ...] = ("auth", "security"),
+                 rubrics: tuple[str, ...] = ("auth", "security", "money"),
                  passes: int = 1,
                  stats: LLMScanStats | None = None,
                  ) -> tuple[list[ScoredFinding], LLMScanStats]:

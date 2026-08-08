@@ -40,7 +40,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # byte-identical content recompute instead of reusing a now-stale row,
 # which is what stops an engine improvement (or bug fix) from being frozen
 # out by a result produced under the old engine.
-AUDIT_ENGINE_VERSION = "2026-08-08-3"
+AUDIT_ENGINE_VERSION = "2026-08-08-4"
 
 
 # The two values `score["basis"]` can take, named because they are now a
@@ -153,9 +153,21 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
 
     findings = collapse_repeats(findings)
 
+    # One expression, read twice: it decides the reported basis AND which
+    # categories are allowed to vote on the total. Computing it once is what
+    # stops the two from drifting apart -- a score whose basis says
+    # static-only while Auth still carries weight is the exact lie this
+    # replaced.
+    llm_ran = (isinstance(llm_summary, dict)
+               and llm_summary.get("skipped_reason") is None)
+
     return {
         "score": {
-            **compute_scores([ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f}) for f in findings]),
+            **compute_scores(
+                [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
+                 for f in findings],
+                llm_ran=llm_ran,
+            ),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0
             # with the LLM stage present scored 9.2 without it (seen in
@@ -163,9 +175,11 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # The basis travels inside score_json so it persists to the
             # DB and reaches every consumer of the score, not just ones
             # that also read `llm`.
-            "basis": BASIS_FULL if (isinstance(llm_summary, dict)
-                                    and llm_summary.get("skipped_reason") is None)
-            else BASIS_STATIC_ONLY,
+            #
+            # The same flag now also keeps Auth and Money & Data out of the
+            # mean on a static-only audit: nothing ran that could have filled
+            # them, and their 10.0 means "not examined", not "clean".
+            "basis": BASIS_FULL if llm_ran else BASIS_STATIC_ONLY,
         },
         "findings": findings,
         "llm": llm_summary,

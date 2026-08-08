@@ -8,9 +8,9 @@ import pytest
 from app.scan.checks import run_checks
 from app.scan.scoring import (
     CATEGORIES,
-    GATE_CEILING,
     GATE_THRESHOLD,
     GATED_CATEGORIES,
+    GATED_MAX,
     ScoredFinding,
     compute_scores,
 )
@@ -90,9 +90,10 @@ def test_score_v2_total_is_weighted_mean_of_categories():
     assert scores["categories"]["Security"] == 7.5
     assert scores["categories"]["Testing"] == 9.6
     assert scores["categories"]["Deploy"] == 10.0
-    # Weights are the raw 0.25/0.20/0.15/0.15 normalised over their own sum:
-    # total = (7.5×.25 + 10×.20 + 9.6×.15 + 10×.15) / .75 = 9.1
-    assert scores["total"] == 9.1
+    # Weights are the raw values normalised over their own sum:
+    # (7.5×.25 + 10×.20 + 9.6×.15 + 10×.15 + 10×.20) / .95 = 9.3
+    # Not gated: Security 7.5 clears GATE_THRESHOLD, so the mean stands.
+    assert scores["total"] == 9.3
 
 
 def test_saturated_category_does_not_zero_total():
@@ -101,11 +102,13 @@ def test_saturated_category_does_not_zero_total():
     findings = [_f("critical", 1.0)] * 10  # all Security
     scores = compute_scores(findings)
     assert scores["categories"]["Security"] == 0.0
-    # Everything except Security intact. This is the floor of the scale for a
-    # single failed category, and it moved from 7.5 to 6.7 when the two
-    # producer-less categories were dropped (issue #181) -- 25% of the weight
-    # was previously a constant 10.0 propping every total up.
-    assert scores["total"] == 6.7
+    # Everything except Security intact. The number has moved twice since:
+    # to 6.7 when the two producer-less categories were dropped (issue #181),
+    # and to 5.1 once a failing safety category began compressing the mean
+    # into the sub-threshold band. The property under test is unchanged and
+    # is the point -- a single saturated category must not zero the total.
+    assert scores["total"] == 5.1
+    assert scores["total"] > 0.0
 
 
 def test_findings_across_all_categories_still_reach_zero():
@@ -115,9 +118,9 @@ def test_findings_across_all_categories_still_reach_zero():
     assert compute_scores(findings)["total"] == 0.0
 
 
-# --- safety gate: Security/Auth cap the headline number ---
+# --- safety gate: a failing category keeps the headline out of passing range ---
 
-def test_failing_safety_category_caps_the_total():
+def test_failing_safety_category_keeps_total_below_threshold():
     # The motivating real case, audit 0a043539
     # (vercel/nextjs-subscription-payments): an open redirect, a service-role
     # client that silently no-ops when misconfigured, and a subscriptions
@@ -129,10 +132,11 @@ def test_failing_safety_category_caps_the_total():
     scores = compute_scores(findings)
 
     assert scores["categories"]["Security"] < GATE_THRESHOLD
-    assert scores["total"] == GATE_CEILING
+    assert scores["total"] < GATE_THRESHOLD
+    assert scores["total"] <= GATED_MAX
 
 
-@pytest.mark.parametrize("category", ["Security", "Auth"])
+@pytest.mark.parametrize("category", ["Security", "Auth", "Money & Data"])
 def test_either_safety_category_alone_triggers_the_gate(category: str) -> None:
     """Both halves gate independently.
 
@@ -147,7 +151,8 @@ def test_either_safety_category_alone_triggers_the_gate(category: str) -> None:
     scores = compute_scores(findings)
 
     assert scores["categories"][category] < GATE_THRESHOLD
-    assert scores["total"] == GATE_CEILING
+    assert scores["total"] < GATE_THRESHOLD
+    assert scores["total"] <= GATED_MAX
 
 
 def test_gate_does_not_fire_on_hygiene_only_findings():
@@ -160,7 +165,8 @@ def test_gate_does_not_fire_on_hygiene_only_findings():
 
     assert scores["categories"]["Security"] == 10.0
     assert scores["categories"]["Auth"] == 10.0
-    assert scores["total"] > GATE_CEILING
+    assert scores["categories"]["Money & Data"] == 10.0
+    assert scores["total"] > GATE_THRESHOLD
 
 
 def test_gate_preserves_ordering_among_failing_repos():
@@ -261,3 +267,83 @@ def test_finding_in_a_category_we_no_longer_score_is_ignored_not_fatal():
     ])
     assert with_ghost == baseline
     assert "Correctness" not in with_ghost["categories"]
+
+
+def test_gate_scales_rather_than_clamping():
+    """Two repos failing the gate by different amounts must not print the same
+    number.
+
+    A flat ceiling (total = min(mean, GATED_MAX)) was the first design. It
+    stopped the flattering headline but flattened the failing range, because a
+    repo's mean sits well above 6.9 even when one category fails: on the 42
+    real full audits, 17 of them -- 40% -- would have printed exactly 6.9,
+    making one failing category indistinguishable from three.
+
+    Both fixtures here fail only on Security and are strong everywhere else,
+    so both means land above GATED_MAX -- which is exactly where a clamp
+    erases the difference between them and a scale keeps it.
+    """
+    mild = [_f("critical", 1.0), _f("high", 1.0), _f("medium", 1.0)]   # Security 6.6
+    worse = [_f("critical", 1.0), _f("critical", 1.0), _f("high", 1.0)]  # Security 5.0
+
+    mild_scores = compute_scores(mild)
+    worse_scores = compute_scores(worse)
+
+    # Precondition: an unscaled mean above the band top, or a clamp would be
+    # indistinguishable from a scale here and the test would prove nothing.
+    assert mild_scores["categories"]["Security"] < GATE_THRESHOLD
+    assert worse_scores["categories"]["Security"] < GATE_THRESHOLD
+
+    assert worse_scores["total"] < mild_scores["total"], (
+        f'gate flattened {worse_scores["total"]} == {mild_scores["total"]}')
+    assert mild_scores["total"] < GATE_THRESHOLD
+
+
+def test_no_gated_repo_can_present_a_passing_score():
+    """The one invariant the gate exists for, over the whole input space."""
+    import random
+
+    random.seed(20260808)
+    for _ in range(3000):
+        findings = [
+            _f(random.choice(["critical", "high", "medium", "low"]),
+               random.random(), cat)
+            for cat in CATEGORIES
+            for _ in range(random.randint(0, 4))
+        ]
+        scores = compute_scores(findings)
+        failing = [c for c in GATED_CATEGORIES
+                   if scores["categories"][c] < GATE_THRESHOLD]
+        if failing:
+            assert scores["total"] < GATE_THRESHOLD, (failing, scores)
+
+
+# --- basis-aware weighting ---
+
+def test_static_only_audit_does_not_count_categories_nothing_examined():
+    """Auth and Money & Data have no static producer.
+
+    On a static-only audit their 10.0 means "not examined", not "clean", and
+    letting it vote is how the free tier came to average 8.99 against 7.79 for
+    full audits -- with Auth reading exactly 10.0 in 25 of 25 of them. The
+    subscores are still reported; they just no longer carry weight.
+    """
+    findings = [_f("critical", 0.9), _f("medium", 0.8, "Testing")]
+
+    full = compute_scores(findings, llm_ran=True)
+    static_only = compute_scores(findings, llm_ran=False)
+
+    assert static_only["categories"]["Auth"] == 10.0        # still shown
+    assert static_only["categories"]["Money & Data"] == 10.0
+    assert static_only["total"] < full["total"], (
+        "unexamined categories must not prop up a static-only total")
+
+
+def test_unexamined_category_cannot_trigger_the_gate():
+    # The mirror of the above: an Auth of 10.0 that nothing looked at must not
+    # clear the gate, and an unexamined category must not fail it either.
+    hygiene_only = [_f("medium", 0.8, "Testing"), _f("low", 0.9, "Deploy")]
+
+    scores = compute_scores(hygiene_only, llm_ran=False)
+
+    assert scores["total"] > GATE_THRESHOLD
