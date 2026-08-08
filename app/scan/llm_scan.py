@@ -203,7 +203,13 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
         return False
     if f["severity"] not in _SEVERITIES:
         return False
-    text = files.get(f["file"])
+    try:
+        text = files.get(f["file"])
+    except TypeError:
+        # f["file"] came back as a list/dict instead of a string -- unhashable,
+        # so dict.get() itself raises. Same "the model's JSON can be anything"
+        # trust boundary as the line_start/line_end conversion below.
+        return False
     if text is None:
         return False
     lines = text.splitlines()
@@ -212,6 +218,16 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
     except (TypeError, ValueError):
         return False
     if not (1 <= start <= end <= len(lines)):
+        return False
+    # confidence is only *used* downstream (float(f["confidence"]) in
+    # run_llm_scan), but it must be validated here: this is the one gate a
+    # finding passes through before that conversion runs unguarded. A model
+    # returning "high" or null instead of a number must be discarded like any
+    # other malformed finding, not crash the whole scan after money was
+    # already spent on the call that produced it.
+    try:
+        float(f["confidence"])
+    except (TypeError, ValueError):
         return False
     evidence = str(f["evidence"]).strip()
     if len(evidence) < 4:

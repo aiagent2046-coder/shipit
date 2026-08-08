@@ -83,12 +83,59 @@ def _score(findings: list[ScoredFinding]) -> float:
     return round(max(0.0, min(10.0, 10.0 - penalty)), 1)
 
 
+# A weighted mean lets a strong category pay for a failing one. That is the
+# right shape for "how finished is this repo", and the wrong shape for the
+# question the product actually answers, which is "is this safe to put in
+# front of users". Testing and Deploy are real work, but no amount of them
+# makes a repo with an auth hole safe to ship, and averaging says otherwise:
+# audit 0a043539 (vercel/nextjs-subscription-payments) held Security 5.9 and
+# Auth 6.2 -- an open redirect, a service-role client that silently no-ops
+# when misconfigured, a subscriptions table with no write RLS policies -- and
+# still totalled 8.1, because Testing 9.7 and Deploy 9.8 carried it. The
+# reader sees the headline number and stops.
+#
+# So failing either safety category imposes a CEILING on the total. It does
+# not replace the total with the failing subscore: that was tried, and on the
+# 72 real audits carrying category data it collapsed 10 of them (every repo
+# whose Security penalty saturated the subscore to 0.0) to exactly 0.0 --
+# re-creating for these two categories precisely the v1 flattening this
+# module's docstring exists to describe, where a repo at Security 0.0 / Auth
+# 10.0 became indistinguishable from Security 0.0 / Auth 6.3.
+#
+# A ceiling gets the product outcome without that cost. Below it the weighted
+# mean is untouched, so every gated repo keeps its full ordering; above it the
+# score is pulled down to the ceiling and no further. Of those same 72 audits
+# 40 fail the gate -- a majority, which is the expected shape for a product
+# that audits vibe-coded repos, not evidence the threshold is wrong.
+GATED_CATEGORIES = ("Security", "Auth")
+
+# Set at 7.0 because that is where these subscores stop meaning "some issues"
+# and start meaning "an attacker has something to work with": both real audits
+# that motivated this sat just under it (5.9/6.2 and 6.5). A repo at 7.0+ in
+# both still gets its averaged score.
+GATE_THRESHOLD = 7.0
+
+# Deliberately just under GATE_THRESHOLD: a repo that fails the safety gate
+# must never present a headline number that reads as passing. Not lower --
+# the ceiling's job is to stop the flattering read, and the weighted mean
+# below it is still the honest relative measure.
+GATE_CEILING = 6.9
+
+
+def _ceiling(by_cat: dict[str, float]) -> float:
+    """GATE_CEILING when either safety category is failing, else no ceiling."""
+    if any(by_cat[c] < GATE_THRESHOLD for c in GATED_CATEGORIES):
+        return GATE_CEILING
+    return 10.0
+
+
 def compute_scores(findings: list[ScoredFinding]) -> dict:
     by_cat = {
         cat: _score([f for f in findings if f.category == cat])
         for cat in CATEGORIES
     }
     total = round(sum(by_cat[c] * CATEGORY_WEIGHT[c] for c in CATEGORIES), 1)
+    total = min(total, _ceiling(by_cat))
     if findings and total == 10.0:
         total = 9.9  # a perfect 10 with a non-empty findings list is a lie
     return {"total": total, "categories": by_cat}
