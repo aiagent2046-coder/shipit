@@ -9,6 +9,7 @@ import json
 import zipfile
 
 import httpx
+import pytest
 
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.scan.llm_scan import (
@@ -158,6 +159,22 @@ def test_verify_rejects_missing_keys_and_bad_severity():
     del bad["evidence"]
     assert not verify_finding(bad, FILES)
     assert not verify_finding(valid_finding(severity="catastrophic"), FILES)
+
+
+@pytest.mark.parametrize("bad_confidence", ["very-high", None, [0.9], {"v": 0.9}])
+def test_verify_rejects_non_numeric_confidence(bad_confidence):
+    # Regression: verify_finding used to accept any type here and let
+    # float(f["confidence"]) crash downstream in run_llm_scan, turning one
+    # malformed field from the model into a 500 for the whole scan instead
+    # of a discarded finding -- after the LLM call had already been paid for.
+    assert not verify_finding(valid_finding(confidence=bad_confidence), FILES)
+
+
+def test_verify_rejects_unhashable_file():
+    # Regression: files.get(f["file"]) raises TypeError, not returns None,
+    # when f["file"] is a list/dict -- that crashed verify_finding itself
+    # rather than returning False.
+    assert not verify_finding(valid_finding(file=["src/auth.ts"]), FILES)
 
 
 # --- end to end with mocked LLM ---
