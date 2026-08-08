@@ -20,7 +20,7 @@ from typing import BinaryIO
 from app.llm import pricing
 from app.llm.client import LLMClient
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.scoring import ScoredFinding
+from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
 
 MAX_FILE_CHARS = 24_000          # per-file cap in prompt
@@ -36,8 +36,18 @@ JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "3.00"))
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "venv/")
 _CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".py", ".sql", ".toml", ".yaml", ".yml", ".json")
 
+# Each rubric declares the score category its findings land in. This used to
+# be inferred at the call site as `"Security" if rubric == "security" else
+# "Auth"` -- a binary that silently mislabels every finding from any third
+# rubric as Auth. Declared here instead, beside the prompt it belongs to, and
+# checked below against the categories the scorer actually knows: a rubric
+# whose category is not in CATEGORIES produces findings that contribute to no
+# subscore at all (compute_scores iterates CATEGORIES, so they are dropped
+# from the score while still appearing in the findings list -- visible, and
+# silently free). See app/scan/scoring.py.
 RUBRICS: dict[str, dict] = {
     "auth": {
+        "category": "Auth",
         "keywords": re.compile(
             r"auth|jwt|session|password|token|login|signin|middleware|rls|cookie",
             re.I,
@@ -52,6 +62,7 @@ RUBRICS: dict[str, dict] = {
         ),
     },
     "security": {
+        "category": "Security",
         "keywords": re.compile(
             r"env|config|cors|csp|header|upload|exec|query|sql|fetch|axios|input",
             re.I,
@@ -65,6 +76,13 @@ RUBRICS: dict[str, dict] = {
         ),
     },
 }
+
+# A rubric whose category the scorer does not know contributes nothing to any
+# subscore, so its findings are shown but score as free. Asserted at import so
+# that mistake cannot reach a paid audit.
+assert {r["category"] for r in RUBRICS.values()} <= set(CATEGORIES), (
+    "every rubric's category must be one app/scan/scoring.py scores"
+)
 
 SYSTEM_PROMPT = (
     "You are a strict application security reviewer inside an automated "
@@ -300,7 +318,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   title=str(f["title"])[:200],
                   severity=severity,
                   confidence=confidence,
-                  category="Security" if rubric == "security" else "Auth",
+                  category=RUBRICS[rubric]["category"],
                   file=f["file"],
                   line=int(f["line_start"]),
                   explanation=str(f.get("explanation", ""))[:600],
