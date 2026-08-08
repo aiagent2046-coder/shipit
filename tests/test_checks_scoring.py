@@ -3,8 +3,17 @@
 import io
 import zipfile
 
+import pytest
+
 from app.scan.checks import run_checks
-from app.scan.scoring import CATEGORIES, ScoredFinding, compute_scores
+from app.scan.scoring import (
+    CATEGORIES,
+    GATE_CEILING,
+    GATE_THRESHOLD,
+    GATED_CATEGORIES,
+    ScoredFinding,
+    compute_scores,
+)
 from app.scan.static import run_static_scan
 
 
@@ -104,6 +113,82 @@ def test_findings_across_all_categories_still_reach_zero():
     # category the way it did when the tuple was written out by hand.
     findings = [_f("critical", 1.0, cat) for cat in CATEGORIES] * 10
     assert compute_scores(findings)["total"] == 0.0
+
+
+# --- safety gate: Security/Auth cap the headline number ---
+
+def test_failing_safety_category_caps_the_total():
+    # The motivating real case, audit 0a043539
+    # (vercel/nextjs-subscription-payments): an open redirect, a service-role
+    # client that silently no-ops when misconfigured, and a subscriptions
+    # table with no write RLS policies put Security at 5.9 -- while Testing
+    # 9.7 and Deploy 9.8 carried the weighted mean to a reassuring 8.1.
+    # Security: 10 − (2.0×1.0 + 2.0×1.0) = 6.0, while every other category
+    # stays at 10.0 -- the weighted mean alone would read 8.9.
+    findings = [_f("critical", 1.0), _f("critical", 1.0)]
+    scores = compute_scores(findings)
+
+    assert scores["categories"]["Security"] < GATE_THRESHOLD
+    assert scores["total"] == GATE_CEILING
+
+
+@pytest.mark.parametrize("category", ["Security", "Auth"])
+def test_either_safety_category_alone_triggers_the_gate(category: str) -> None:
+    """Both halves gate independently.
+
+    A repo can be clean on Security and still be unsafe to ship on Auth, and
+    the headline must say so either way. The category names are written out
+    rather than driven off GATED_CATEGORIES: parametrizing off the tuple
+    means dropping a category from it silently deletes its own test case
+    instead of failing, which is how this stops guarding what it claims to.
+    """
+    assert category in GATED_CATEGORIES, f"{category} is no longer gated"
+    findings = [_f("critical", 1.0, category), _f("critical", 1.0, category)]
+    scores = compute_scores(findings)
+
+    assert scores["categories"][category] < GATE_THRESHOLD
+    assert scores["total"] == GATE_CEILING
+
+
+def test_gate_does_not_fire_on_hygiene_only_findings():
+    # Missing tests and no Dockerfile are real findings but say nothing about
+    # whether a visitor can break in. A repo whose only problems are hygiene
+    # must keep its averaged score -- the gate is a ceiling on the misleading
+    # case, not a blanket penalty.
+    findings = [_f("medium", 0.8, "Testing"), _f("low", 0.9, "Deploy")]
+    scores = compute_scores(findings)
+
+    assert scores["categories"]["Security"] == 10.0
+    assert scores["categories"]["Auth"] == 10.0
+    assert scores["total"] > GATE_CEILING
+
+
+def test_gate_preserves_ordering_among_failing_repos():
+    """The gate must not flatten the bottom of the scale.
+
+    Replacing the total with the failing subscore was tried first and
+    collapsed every repo whose Security penalty saturated to 0.0 down to
+    exactly 0.0 -- on the real audit set, 10 of the 72 carrying category
+    data. That re-creates for these two categories the v1 flattening the
+    module docstring exists to describe. A ceiling leaves the weighted mean
+    intact below it, so worse repos still score worse.
+    """
+    saturated_only = [_f("critical", 1.0)] * 10                      # Security 0.0
+    saturated_plus = saturated_only + [_f("critical", 1.0, "Auth")]  # Auth also hit
+
+    worse = compute_scores(saturated_plus)["total"]
+    bad = compute_scores(saturated_only)["total"]
+
+    assert compute_scores(saturated_only)["categories"]["Security"] == 0.0
+    assert worse < bad, "a repo failing both safety categories must score lower"
+    assert worse > 0.0, "the gate must not collapse the scale to zero"
+
+
+def test_gate_never_raises_a_score():
+    # min() by construction, pinned because a future edit that turns the
+    # ceiling into an assignment would silently start inflating clean repos.
+    clean = compute_scores([])
+    assert clean["total"] == 10.0
 
 
 def test_static_scan_end_to_end():
