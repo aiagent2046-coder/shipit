@@ -52,9 +52,9 @@ from __future__ import annotations
 import io
 import re
 import sys
-import urllib.request
 import zipfile
 
+from app.ingest.github_fetch import fetch_repo_zip as github_fetch_repo_zip
 from app.llm import pricing
 from app.llm.client import LLMClient
 from app.scan.llm_scan import (
@@ -80,12 +80,30 @@ from app.scan.llm_scan import (
 # fears rather than by technology, because that is how the person reading the
 # report holds them.
 CANDIDATE = {
+    # Anchored on word boundaries and on terms specific to the three fears.
+    #
+    # The first draft used bare substrings -- pay, order, limit, token, delete
+    # -- which match ordinary prose and identifiers: "pay" is inside payload,
+    # "order" inside any "in order to" comment, "limit" inside unlimited. A
+    # dry run against this repository selected a Spinner component and the
+    # terms-of-service page.
+    #
+    # That is not merely untidy. select_files fills a fixed content budget
+    # smallest-file-first and stops, so junk does not just come along -- it
+    # takes the place of something relevant. The broad draft matched 232 files
+    # and could send only 112; 120 matched files were never seen by the model
+    # at all. Anchoring cut matches to 162 and spends that same budget on
+    # payments, migrations and scheduled work.
     "keywords": re.compile(
-        r"pay|price|amount|charge|invoice|billing|checkout|stripe|paypal|"
-        r"subscription|refund|order|webhook|quota|limit|credit|"
-        r"migration|drop|truncate|delete|cascade|backup|transaction|"
-        r"cron|schedule|interval|retry|batch|worker|queue|poll|"
-        r"openai|anthropic|claude|llm|completion|token|upload|resize",
+        # money
+        r"\b(stripe|paypal|checkout|invoice|billing|subscription|refund|"
+        r"payout|coupon|discount|currency|idempotenc\w*|webhook)\b"
+        # data loss
+        r"|\bdrop\s+table\b|\btruncate\b|\bon\s+delete\s+cascade\b"
+        r"|\b(migration|rollback|soft.?delete)\b"
+        # runaway spend
+        r"|\b(openai|anthropic|cron|setInterval|max_tokens|backoff)\b"
+        r"|\brate.?limit\w*\b",
         re.I,
     ),
     "instructions": (
@@ -124,15 +142,18 @@ CANDIDATE = {
 
 
 def fetch_repo_zip(repo_url: str) -> io.BytesIO:
+    """Fetch through the same path a real audit uses.
+
+    Not a hand-rolled archive download: app/ingest/github_fetch.py resolves
+    the default branch via the API zipball endpoint and enforces the same
+    size cap the free scan does. A validation run that fetched differently
+    could select a different file set than production would, which is the
+    one thing this measurement must not do.
+    """
     owner_repo = repo_url.rstrip("/").removeprefix("https://github.com/")
-    for branch in ("main", "master"):
-        url = f"https://github.com/{owner_repo}/archive/refs/heads/{branch}.zip"
-        try:
-            with urllib.request.urlopen(url, timeout=60) as resp:
-                return io.BytesIO(resp.read())
-        except Exception:
-            continue
-    raise SystemExit(f"could not fetch {repo_url}")
+    owner_repo = owner_repo.removesuffix(".git")
+    owner, _, repo = owner_repo.partition("/")
+    return io.BytesIO(github_fetch_repo_zip(owner, repo))
 
 
 def run_one(repo_url: str, client: LLMClient) -> tuple[int, float]:
