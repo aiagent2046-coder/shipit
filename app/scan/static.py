@@ -26,6 +26,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         findings.append(ScoredFinding(
             rule_id=c.rule_id, title=c.title, severity=c.severity,
             confidence=c.confidence, category=c.category, file=c.file,
+            explanation=c.explanation, fix_hint=c.fix_hint,
         ))
 
     return {
