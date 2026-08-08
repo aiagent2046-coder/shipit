@@ -21,7 +21,7 @@ import uuid
 import httpx
 import pytest
 
-import app.main as main_mod
+import app.routes.bank_transfer as bank_transfer_routes
 from app.billing import bank_transfer, telegram_stars
 from app.main import (
     app,
@@ -497,7 +497,7 @@ def test_report_paid_is_rate_limited(monkeypatch):
     payments = FakePaymentRepo()
     # The endpoint passes its own per-route budget to check(), so that is what
     # has to shrink; the limiter here only supplies a frozen clock.
-    monkeypatch.setattr(main_mod, "BANK_TRANSFER_PAID_LIMIT", 2)
+    monkeypatch.setattr(bank_transfer_routes, "BANK_TRANSFER_PAID_LIMIT", 2)
     limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
     app.dependency_overrides[get_rate_limiter] = lambda: limiter
     _override({get_payment_repo: payments,
@@ -1151,7 +1151,7 @@ def test_invoice_creation_is_rate_limited(monkeypatch):
     switch the operator's matching hint off for everybody."""
     _configure_bank(monkeypatch)
     payments = FakePaymentRepo()
-    monkeypatch.setattr(main_mod, "BANK_TRANSFER_INVOICE_LIMIT", 2)
+    monkeypatch.setattr(bank_transfer_routes, "BANK_TRANSFER_INVOICE_LIMIT", 2)
     limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
     app.dependency_overrides[get_rate_limiter] = lambda: limiter
     _override({get_payment_repo: payments})
@@ -1179,7 +1179,7 @@ def test_pro_and_fixpack_share_one_invoice_budget(monkeypatch):
     payments = FakePaymentRepo()
     audits = FakeAuditRepo()
     audit = audits.add()
-    monkeypatch.setattr(main_mod, "BANK_TRANSFER_INVOICE_LIMIT", 2)
+    monkeypatch.setattr(bank_transfer_routes, "BANK_TRANSFER_INVOICE_LIMIT", 2)
     limiter = RateLimiter(limit=100, window_seconds=100, clock=lambda: 0.0)
     app.dependency_overrides[get_rate_limiter] = lambda: limiter
     _override({get_payment_repo: payments, get_audit_repo: audits})
