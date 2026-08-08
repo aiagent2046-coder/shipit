@@ -200,21 +200,47 @@ def main() -> None:
     if not repos:
         raise SystemExit(__doc__)
 
+    # Line-buffered so a long run shows progress as it goes and, more to the
+    # point, so nothing already printed is lost in the buffer if a later repo
+    # kills the process -- output is normally block-buffered when piped to a
+    # file or tee, which is exactly how this script is meant to be run.
+    sys.stdout.reconfigure(line_buffering=True)
+
     client = LLMClient()          # providers come from the environment
     if not client.providers:
         raise SystemExit("no LLM providers configured")
 
-    results, total_cost = [], 0.0
+    # One repo must not take the run down with it. A renamed or deleted repo
+    # raises RepoFetchError, a provider hiccup raises LLMError, and either one
+    # landing on the seventh of ten repos would otherwise discard the summary
+    # for the six already paid for -- the same "money the provider bills
+    # regardless" that pipeline.py keeps llm_usage separate from `llm` to
+    # avoid. Failures are recorded as failures, never as a zero: counting a
+    # crash as "found nothing" would quietly corrupt the one number this
+    # script exists to produce.
+    results: list[tuple[str, int | None]] = []
+    total_cost = 0.0
     for repo in repos:
-        found, cost = run_one(repo, client)
+        try:
+            found, cost = run_one(repo, client)
+        except Exception as exc:                       # noqa: BLE001
+            print(f"\n  !! FAILED: {type(exc).__name__}: {exc}")
+            results.append((repo, None))
+            continue
         results.append((repo, found))
         total_cost += cost
 
     print(f"\n{'=' * 70}\nSUMMARY\n{'=' * 70}")
-    with_findings = sum(1 for _, n in results if n)
+    scanned = [(r, n) for r, n in results if n is not None]
+    failed = [r for r, n in results if n is None]
+    with_findings = sum(1 for _, n in scanned if n)
+
     for repo, n in results:
-        print(f"  {n:>3} findings  {repo}")
-    print(f"\nhit rate: {with_findings}/{len(results)} repos")
+        print(f"  {'  --' if n is None else f'{n:>4}'} {'(failed)' if n is None else 'findings'}  {repo}")
+    if scanned:
+        print(f"\nhit rate: {with_findings}/{len(scanned)} repos scanned")
+    if failed:
+        print(f"not scanned ({len(failed)}): " + ", ".join(failed))
     print(f"total spend: ${total_cost:.2f}")
     print(
         "\nNow read the findings above. The count is not the answer -- the "
