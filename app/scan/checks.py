@@ -19,6 +19,15 @@ class CheckFinding:
     confidence: float
     category: str
     file: str = ""
+    # Written for someone who shipped their first app and does not know the
+    # jargon. The LLM findings already arrive with these filled in, and they
+    # read well precisely because the model is told to describe a concrete
+    # harm rather than name a category. These are the static equivalent, so
+    # the free tier -- which is static-only, and is the only thing most
+    # visitors ever see -- stops handing out bare titles like
+    # "Environment file committed to repository" with nothing underneath.
+    explanation: str = ""
+    fix_hint: str = ""
 
 
 def _strip_root(names: list[str]) -> list[str]:
@@ -78,6 +87,21 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
             "env-file-committed", "Environment file committed to repository",
             severity="critical", confidence=0.9, category="Security",
             file=committed_env[0],
+            explanation=(
+                "Your .env file is stored in the repository, so everything in "
+                "it — database passwords, API keys, payment credentials — is "
+                "visible to anyone who can see this code. If the repository is "
+                "public, that is the whole internet. Deleting the file later "
+                "does not help on its own: Git keeps every past version, so "
+                "the values stay readable in the history."
+            ),
+            fix_hint=(
+                "Treat every value in that file as already leaked and issue "
+                "new ones (rotate the keys in each service's dashboard). Then "
+                "stop tracking the file with `git rm --cached .env`, add it to "
+                ".gitignore, and set the same values as environment variables "
+                "in your hosting provider instead."
+            ),
         ))
 
     # A .gitignore that doesn't cover .env is how the committed-env leak
@@ -94,6 +118,19 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
             else ".gitignore does not cover .env / secret files",
             severity="high", confidence=0.8, category="Security",
             file=gitignore or "",
+            explanation=(
+                "Nothing is telling Git to leave your .env file alone, so the "
+                "next time you or your AI assistant commits changes, the file "
+                "with your passwords and API keys gets swept in along with "
+                "everything else. This is how secrets end up published — not "
+                "by a deliberate decision, but by a routine commit."
+            ),
+            fix_hint=(
+                "Add a line containing exactly `.env` to your .gitignore file "
+                "(create the file in the project root if it does not exist). "
+                "This does not remove anything already committed — that needs "
+                "the separate fix above — but it stops it happening again."
+            ),
         ))
 
     has_tests = any(
@@ -104,18 +141,56 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
         findings.append(CheckFinding(
             "no-tests", "No test files found",
             severity="medium", confidence=0.8, category="Testing",
+            explanation=(
+                "There is nothing that checks your app still works after a "
+                "change. Right now the only way to find out you broke signup "
+                "or checkout is a user hitting it in production. That risk "
+                "grows every time you ask an AI assistant to modify code you "
+                "are not reading line by line."
+            ),
+            fix_hint=(
+                "Start with one test for the thing that would hurt most if it "
+                "silently broke — usually payment or login. One test that runs "
+                "on every change is worth far more than a suite you plan to "
+                "write later."
+            ),
         ))
 
     if not any(n.rsplit("/", 1)[-1] == "Dockerfile" for n in files):
         findings.append(CheckFinding(
             "no-dockerfile", "No Dockerfile — app is not containerized",
             severity="low", confidence=0.9, category="Deploy",
+            explanation=(
+                "Your app has no recipe describing how to run it, so it runs "
+                "with whatever versions happen to be installed wherever it is "
+                "deployed. That is why an app can work on your machine and "
+                "fail on the server. It also makes moving to another host a "
+                "manual reconstruction rather than a copy."
+            ),
+            fix_hint=(
+                "Not urgent if your host builds the app for you (Vercel, "
+                "Netlify and similar do). Worth adding when you move to your "
+                "own server, or when 'works locally, breaks in production' "
+                "starts costing you time."
+            ),
         ))
 
     if not any(n.startswith(".github/workflows/") for n in files):
         findings.append(CheckFinding(
             "no-ci", "No CI workflow found",
             severity="low", confidence=0.9, category="Deploy",
+            explanation=(
+                "Nothing runs automatically when you change the code, so a "
+                "change that does not even compile can reach production and "
+                "the first sign is the site being down. A human remembering "
+                "to check every time is not a safety net."
+            ),
+            fix_hint=(
+                "Add a GitHub Actions workflow that at minimum builds the app "
+                "on every push. It turns a broken build into a red mark on the "
+                "change instead of an outage. Pairs with the tests above: "
+                "together they catch most self-inflicted breakage."
+            ),
         ))
 
     return findings
