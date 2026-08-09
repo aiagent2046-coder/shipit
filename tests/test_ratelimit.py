@@ -75,10 +75,20 @@ def test_eviction_does_not_leak_across_many_expired_keys():
 # --- integration: the endpoint returns 429 + Retry-After once tripped ---
 
 def make_zip() -> io.BytesIO:
-    """An unsupported-stack zip: rejected at validation (422), before quota."""
+    """An archive rejected by validation itself (422), before the quota check.
+
+    A path-traversal entry, not an unrecognised stack. This fixture used to be
+    a plain index.html, which was rejected only because stack detection refused
+    anything outside Next.js / Vite / FastAPI. Once an unknown stack became a
+    normal audit rather than a refusal, that upload started returning 202 and
+    the test was asserting on a fixture that no longer meant what its name
+    said. The property here -- a rejected upload must not burn quota -- is
+    unchanged and worth keeping, so the fixture is now invalid for a reason
+    that cannot quietly stop being one.
+    """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("index.html", b"<html></html>")
+        zf.writestr("../../etc/evil", b"x")
     buf.seek(0)
     return buf
 

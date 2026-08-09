@@ -56,7 +56,7 @@ from app.db import (
     ServiceFlagsRepository,
 )
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
-from app.ingest.stack_detect import Stack, detect_stack
+from app.ingest.stack_detect import detect_stack
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
 from app.log_context import log_context, set_log_context
@@ -285,14 +285,12 @@ async def _execute_job(
     buf = io.BytesIO(raw)
     report = validate_zip(buf, size_bytes=len(raw))
     buf.seek(0)
+    # Recorded, not refused -- see the note at the same decision in
+    # app/main.py's upload intake. The scan is stack-agnostic, so a stack the
+    # detector does not recognise still gets every static rule and every LLM
+    # rubric; only the Deploy Pack and the Fix Pack's verified build depend on
+    # the value, and both handle an unknown one in their own module.
     stack = detect_stack(buf)
-    if stack is Stack.UNSUPPORTED:
-        raise JobExecutionError(
-            "unsupported_stack",
-            "We can audit Next.js, Vite + React, and FastAPI projects. "
-            "This repository looks like none of them.",
-            permanent=True,
-        )
 
     # Recomputed rather than taken from job['content_hash']: for a repo_url job
     # the bytes were fetched just now and the default branch may have moved
