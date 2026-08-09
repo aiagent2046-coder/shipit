@@ -110,7 +110,7 @@ def test_audit_intake_accepts_a_stack_the_detector_does_not_recognise():
     buf = make_zip({
         "svelte.config.js": b"export default {}",
         "src/routes/+page.svelte": b"<h1>hi</h1>",
-        ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",
+        ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",  # scan-allow: fixture URL, invented credentials
     })
     resp = client.post(
         "/v1/audits", files={"archive": ("app.zip", buf, "application/zip")}
@@ -133,7 +133,7 @@ def test_unrecognised_stack_still_produces_the_findings_that_matter():
     buf = make_zip({
         "svelte.config.js": b"export default {}",
         ".gitignore": b"node_modules\n",
-        ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",
+        ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",  # scan-allow: fixture URL, invented credentials
     })
     result = run_static_scan(_io.BytesIO(buf.getvalue()))
     ids = {f["rule_id"] for f in result["findings"]}

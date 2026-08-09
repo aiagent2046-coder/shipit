@@ -166,7 +166,7 @@ SVELTE_ZIP = {
     "svelte.config.js": b"export default {}",
     "src/routes/+page.svelte": b"<h1>hi</h1>",
     ".gitignore": b"node_modules\n",
-    ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",
+    ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",  # scan-allow: fixture URL, invented credentials
     "src/lib/db.ts": b"const token = process.env.SESSION_TOKEN  // auth session",
 }
 
