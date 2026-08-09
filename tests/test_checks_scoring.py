@@ -8,6 +8,7 @@ import pytest
 from app.scan.checks import run_checks
 from app.scan.scoring import (
     CATEGORIES,
+    CRITICAL_GATE_MIN_CONFIDENCE,
     GATE_THRESHOLD,
     GATED_CATEGORIES,
     GATED_MAX,
@@ -84,8 +85,16 @@ def _f(sev: str, conf: float, cat: str = "Security") -> ScoredFinding:
 
 
 def test_score_v2_total_is_weighted_mean_of_categories():
-    # Security: 10 − (2.0×1.0 + 1.0×0.5) = 7.5; Testing: 10 − 0.4 = 9.6
-    findings = [_f("critical", 1.0), _f("high", 0.5), _f("medium", 1.0, "Testing")]
+    # Security: 10 − (1.0×1.0 + 1.0×1.0 + 1.0×0.5) = 7.5; Testing: 10 − 0.4 = 9.6
+    #
+    # Three highs rather than one critical plus one high, which is what this
+    # reached for originally. Both give Security 7.5, but a critical now fails
+    # the gate on its own (GATE_ON_CRITICAL), so the old fixture measured the
+    # gated path while claiming to measure the ungated mean. The arithmetic
+    # under test is the weighted mean; the fixture must not smuggle in a
+    # second behaviour to depend on.
+    findings = [_f("high", 1.0), _f("high", 1.0), _f("high", 0.5),
+                _f("medium", 1.0, "Testing")]
     scores = compute_scores(findings)
     assert scores["categories"]["Security"] == 7.5
     assert scores["categories"]["Testing"] == 9.6
@@ -153,6 +162,61 @@ def test_either_safety_category_alone_triggers_the_gate(category: str) -> None:
     assert scores["categories"][category] < GATE_THRESHOLD
     assert scores["total"] < GATE_THRESHOLD
     assert scores["total"] <= GATED_MAX
+
+
+@pytest.mark.parametrize("category", ["Security", "Auth", "Money & Data"])
+def test_one_confident_critical_gates_on_its_own(category: str) -> None:
+    """A single critical fails the gate even though the subscore clears it.
+
+    This is the case the subscore route structurally could not reach: one
+    critical at 0.9 costs 1.8, leaving the category at 8.2, well clear of
+    GATE_THRESHOLD. Seven stored audits sat here, presenting 9.0-9.5 while
+    holding a committed .env or a private key.
+
+    Names written out rather than driven off GATED_CATEGORIES, for the reason
+    the test above gives: parametrizing off the tuple means dropping a
+    category from it deletes its own case instead of failing.
+    """
+    assert category in GATED_CATEGORIES, f"{category} is no longer gated"
+    findings = [_f("critical", 0.9, category)]
+    scores = compute_scores(findings)
+
+    assert scores["categories"][category] > GATE_THRESHOLD, (
+        "fixture no longer exercises the gap: the subscore itself now fails, "
+        "so this would pass without GATE_ON_CRITICAL")
+    assert scores["total"] <= GATED_MAX
+
+
+def test_an_unsure_critical_does_not_gate_by_itself():
+    """Severity claims impact, confidence claims certainty. The gate is
+    categorical, so it reads both: a critical the producer is guessing at
+    must not fail a repository on its own.
+
+    Nothing in production emits one -- the lowest-confidence critical across
+    every stored audit is 0.85, and the static rules cap non-production paths
+    at medium before this point. The floor exists for the rubric not yet
+    written, so it is tested rather than assumed.
+    """
+    findings = [_f("critical", CRITICAL_GATE_MIN_CONFIDENCE - 0.1, "Security")]
+    scores = compute_scores(findings)
+
+    assert scores["total"] > GATE_THRESHOLD
+    # And the same finding one notch more confident does gate, so the test
+    # pins the floor rather than merely observing a low score somewhere.
+    sure = compute_scores([_f("critical", CRITICAL_GATE_MIN_CONFIDENCE,
+                              "Security")])
+    assert sure["total"] <= GATED_MAX
+
+
+def test_critical_in_an_unexamined_category_cannot_gate():
+    """On a static-only audit nothing ran that could produce an Auth finding,
+    so an Auth critical cannot be present -- but a Security one can, and the
+    gate must read only what was examined. Mirrors the subscore rule: an
+    unexamined category neither clears the gate nor fails it.
+    """
+    findings = [_f("critical", 0.95, "Auth")]
+    assert compute_scores(findings, llm_ran=False)["total"] > GATE_THRESHOLD
+    assert compute_scores(findings, llm_ran=True)["total"] <= GATED_MAX
 
 
 def test_gate_does_not_fire_on_hygiene_only_findings():
