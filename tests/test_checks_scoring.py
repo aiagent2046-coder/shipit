@@ -209,6 +209,32 @@ def test_static_scan_end_to_end():
     assert result["score"]["categories"]["Security"] < 10.0
 
 
+def test_static_scan_does_not_let_unexamined_categories_vote():
+    """run_static_scan runs no LLM stage, so Auth and Money & Data have no
+    producer inside it and their 10.0 means "not examined", not "clean".
+
+    compute_scores defaults to llm_ran=True, so this is one omitted keyword
+    away from handing those two 42% of the weight at a constant 10.0 -- the
+    inflation LLM_ONLY_CATEGORIES was added to stop, reached by leaving an
+    argument out instead of passing it wrong. The pipeline recomputes and so
+    never showed it, which is exactly why nothing caught it here.
+    """
+    buf = make_zip({
+        "src/config.ts": b"const k = 'AKIA" + b"A" * 16 + b"'",
+        "app.py": b"",
+    })
+    result = run_static_scan(buf)
+    findings = [ScoredFinding(**{k: v for k, v in f.items()})
+                for f in result["findings"]]
+
+    assert result["score"]["total"] == compute_scores(
+        findings, llm_ran=False)["total"]
+    # Not vacuous: the two must actually disagree on this fixture, or the
+    # assertion above would hold no matter which one the code picked.
+    assert (compute_scores(findings, llm_ran=True)["total"]
+            > compute_scores(findings, llm_ran=False)["total"])
+
+
 def test_static_findings_carry_context_field():
     # The structured context field must survive serialization into the
     # finding dicts stored in findings_json / returned by the API.
