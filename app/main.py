@@ -80,7 +80,7 @@ from app.fixpack.generate import (
 )
 from app.fixpack.semantic_check import run_semantic_check
 from app.ingest.github_fetch import RepoFetchError
-from app.ingest.stack_detect import Stack, detect_stack
+from app.ingest.stack_detect import detect_stack
 from app import sandbox_client
 from app.sandbox_client import SandboxRunnerUnavailable
 from app.llm.client import LLMClient
@@ -519,9 +519,11 @@ async def run_repo_audit(
     except ArchiveValidationError:
         return None
     buf.seek(0)
+    # Recorded, not refused -- same reasoning as the upload intake below.
+    # A monitored repository whose stack the detector cannot name still gets
+    # a real audit on every push; silently returning None here meant its
+    # owner had a monitoring subscription that quietly never reported.
     stack = detect_stack(buf)
-    if stack is Stack.UNSUPPORTED:
-        return None
 
     digest = content_digest(raw)
     # BASIS_FULL, not the caller's tier: this path always runs the LLM stage
@@ -1804,14 +1806,19 @@ async def create_audit(
         "audit intake: archive validated as %s", stack.value,
         extra={"step": "validate", "duration_ms": _elapsed_ms(stage_started)},
     )
-    if stack is Stack.UNSUPPORTED:
-        raise HTTPException(
-            status_code=422,
-            detail={"reason": "unsupported_stack",
-                    "detail": "We can audit Next.js, Vite + React, and FastAPI "
-                              "projects. This repository looks like none of "
-                              "them."},
-        )
+    # An unrecognised stack is recorded, not refused. Nothing the audit does
+    # is stack-specific: app/scan/ never reads this value, the presence checks
+    # look for .env / .gitignore / tests / CI, and the secret rules are regexes
+    # over file bytes. All of that is exactly as true of a SvelteKit, Django or
+    # Express repository as of the three the detector happens to name.
+    #
+    # Refusing here turned those visitors away from findings that would have
+    # been correct, which is the opposite of the product's purpose -- a
+    # committed .env is a committed .env whatever built it. The stack still
+    # gates the things that genuinely need it, in their own modules: the
+    # Deploy Pack raises UnsupportedForDeployPack for a stack with no
+    # Dockerfile template, and the Fix Pack's verified-build gate returns None
+    # outside its profile set and falls back to the semantic check.
 
     # Consume quota only after the upload proves to be real work: validation
     # and stack detection are free, so a garbage/hostile zip (or probing for

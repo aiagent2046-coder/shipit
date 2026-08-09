@@ -158,3 +158,37 @@ def test_score_basis_static_plus_llm_when_stage_ran(monkeypatch):
     fake.providers = [object()]
     scan = run_scan(buf.getvalue(), fake)
     assert scan["score"]["basis"] == "static+llm"
+
+
+# --- an unrecognised stack goes through the worker, not into a dead letter ---
+
+SVELTE_ZIP = {
+    "svelte.config.js": b"export default {}",
+    "src/routes/+page.svelte": b"<h1>hi</h1>",
+    ".gitignore": b"node_modules\n",
+    ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",  # scan-allow: fixture URL, invented credentials
+    "src/lib/db.ts": b"const token = process.env.SESSION_TOKEN  // auth session",
+}
+
+
+async def test_worker_audits_a_stack_the_detector_does_not_recognise():
+    """The queue path must not dead-letter an unknown stack.
+
+    `POST /v1/audits` returns 202 and the worker does the scan, so accepting
+    the upload at intake buys nothing if _execute_job then fails the job
+    permanently -- the visitor would wait and be told their project is not
+    supported, one step later. This drives the real _execute_job.
+
+    Written after a mutation showed the worker branch had no coverage:
+    restoring its refusal broke no test, because every other worker test
+    feeds it a Next.js fixture.
+    """
+    row = await run_audit_job(
+        make_zip(SVELTE_ZIP).getvalue(),
+        llm_client=FakeLLM(response="[]"),
+        account_id=_ACCOUNT_ID,
+    )
+
+    ids = {f["rule_id"] for f in row["findings_json"]}
+    assert "env-file-committed" in ids
+    assert row["stack"] == "unsupported"       # recorded, not refused

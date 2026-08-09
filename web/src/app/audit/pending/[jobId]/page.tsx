@@ -25,11 +25,11 @@ const TERMINAL: ReadonlySet<AuditJobState> = new Set<AuditJobState>([
 // generic: a code we did not anticipate is one we cannot explain honestly.
 function humanError(code: string | null): string {
   switch (code) {
-    case "unsupported_stack":
-      return (
-        "We can audit Next.js, Vite + React, and FastAPI projects. " +
-        "This repository looks like none of them."
-      );
+    // "unsupported_stack" used to live here. The worker no longer fails a job
+    // for it: an unrecognised stack is audited like any other, because nothing
+    // the scan does depends on the value. Left unmapped rather than reworded,
+    // so if it ever reappears it gets the generic message above instead of a
+    // sentence that is no longer true.
     case "zip_bomb":
     case "too_large":
     case "bad_archive":

@@ -1,8 +1,15 @@
 """Stack detection over a validated archive's file listing.
 
-MVP supports exactly two stacks (architecture doc, principle 4):
-Next.js, Vite + React (what Lovable and Bolt generate), and FastAPI.
-Anything else is an honest `unsupported`.
+Recognises Next.js, Vite + React (what Lovable and Bolt generate), and
+FastAPI. Anything else is an honest `unsupported`.
+
+`unsupported` is a label, not a refusal. The audit does not read this value
+at all -- app/scan/ is entirely stack-agnostic -- so a repository built with
+something else still gets every static rule and every LLM rubric. What the
+stack decides is which of the *fix* products can run: the Deploy Pack needs a
+Dockerfile template (app/deploypack/generate.py) and the Fix Pack's verified
+build needs a known build profile (app/fixpack/verified_build.py). Both check
+for themselves and degrade in their own module.
 """
 
 from __future__ import annotations

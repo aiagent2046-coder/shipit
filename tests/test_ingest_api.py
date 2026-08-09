@@ -98,13 +98,49 @@ def test_audit_intake_rejects_traversal_zip_with_reason():
     assert resp.json()["detail"]["reason"] == "unsafe_path"
 
 
-def test_audit_intake_rejects_unsupported_stack():
-    buf = make_zip({"index.html": b"<html></html>"})
+def test_audit_intake_accepts_a_stack_the_detector_does_not_recognise():
+    """A repository outside Next.js / Vite / FastAPI is audited, not refused.
+
+    Everything the audit does is stack-agnostic: app/scan/ never reads the
+    detected stack, the presence checks look for .env / .gitignore / tests /
+    CI, and the secret rules are regexes over file bytes. A SvelteKit, Django
+    or Express repository with a committed .env has exactly the problem this
+    product exists to find, and used to be told to go away instead.
+    """
+    buf = make_zip({
+        "svelte.config.js": b"export default {}",
+        "src/routes/+page.svelte": b"<h1>hi</h1>",
+        ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",  # scan-allow: fixture URL, invented credentials
+    })
     resp = client.post(
         "/v1/audits", files={"archive": ("app.zip", buf, "application/zip")}
     )
-    assert resp.status_code == 422
-    assert resp.json()["detail"]["reason"] == "unsupported_stack"
+
+    assert resp.status_code == 202, resp.text
+
+
+def test_unrecognised_stack_still_produces_the_findings_that_matter():
+    """The point of accepting it: the findings are real, not an empty report.
+
+    Asserted on the scan directly rather than through the queue, so this
+    covers what the visitor actually receives rather than that a job was
+    created.
+    """
+    import io as _io
+
+    from app.scan.static import run_static_scan
+
+    buf = make_zip({
+        "svelte.config.js": b"export default {}",
+        ".gitignore": b"node_modules\n",
+        ".env": b"DATABASE_URL=postgres://user:hunter2@db/app\n",  # scan-allow: fixture URL, invented credentials
+    })
+    result = run_static_scan(_io.BytesIO(buf.getvalue()))
+    ids = {f["rule_id"] for f in result["findings"]}
+
+    assert "env-file-committed" in ids
+    assert "gitignore-missing-secrets" in ids
+    assert result["score"]["total"] < 10.0
 
 
 def test_detect_vite_react_lovable_export():
