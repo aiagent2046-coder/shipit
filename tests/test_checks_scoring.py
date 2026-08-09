@@ -437,3 +437,39 @@ def test_unexamined_category_cannot_trigger_the_gate():
     scores = compute_scores(hygiene_only, llm_ran=False)
 
     assert scores["total"] > GATE_THRESHOLD
+
+
+def test_gate_reasons_are_recorded_whenever_the_gate_fires():
+    """The gate's decision and its published explanation come from one list,
+    so they cannot disagree: reasons non-empty iff the total was capped.
+
+    Checked over the whole gated/ungated boundary rather than one fixture,
+    because the failure this guards against is a route that caps the score
+    without recording why -- which reads to a user as an unexplained number.
+    """
+    cases = [
+        [],                                        # clean
+        [_f("medium", 0.8, "Testing")],            # hygiene only
+        [_f("critical", 0.9, "Security")],         # lone critical
+        [_f("critical", 1.0), _f("critical", 1.0)],  # subscore failure
+        [_f("critical", 0.5, "Security")],         # unsure critical
+    ]
+    for findings in cases:
+        scores = compute_scores(findings)
+        capped = scores["total"] <= GATED_MAX and findings
+        assert bool(scores["gated_by"]) == bool(capped), (
+            f"{findings}: total {scores['total']} vs "
+            f"reasons {scores['gated_by']}")
+
+
+def test_gate_reason_carries_the_finding_a_reader_must_act_on():
+    reasons = compute_scores([_f("critical", 0.9, "Security")])["gated_by"]
+    assert reasons == [{"kind": "critical", "category": "Security",
+                        "rule_id": "r", "title": "t"}]
+
+
+def test_ungated_score_reports_an_empty_reason_list_not_a_missing_key():
+    """Empty distinguishes "not gated" from "produced before this key
+    existed"; a missing key conflates the two, and the report surfaces treat
+    the second as unknown rather than as a clean bill."""
+    assert compute_scores([_f("low", 0.1, "Deploy")])["gated_by"] == []

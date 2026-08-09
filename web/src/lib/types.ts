@@ -21,10 +21,26 @@ export const CATEGORY_NAMES = [
   "Deploy",
 ] as const;
 
+// Why the safety gate capped the total, as recorded by the scorer that
+// decided it (_gate_reasons in app/scan/scoring.py). Not re-derived here:
+// working it out on this side needs the threshold, the gated category list
+// and the confidence floor, and a second copy of that rule will not stay in
+// agreement with the first.
+export interface GateReason {
+  kind: "subscore" | "critical";
+  category: string;
+  value?: number; // subscore only
+  rule_id?: string; // critical only
+  title?: string; // critical only
+}
+
 export interface Score {
   total: number;
   categories: Record<string, number>;
   basis?: "static+llm" | "static_only";
+  // Optional because audits stored before this key existed have none, which
+  // means "unknown", not "ungated" — an empty array is the ungated case.
+  gated_by?: GateReason[];
 }
 
 export interface Finding {
