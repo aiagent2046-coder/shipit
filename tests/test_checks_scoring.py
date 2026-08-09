@@ -8,6 +8,7 @@ import pytest
 from app.scan.checks import run_checks
 from app.scan.scoring import (
     CATEGORIES,
+    CRITICAL_GATE_MIN_CONFIDENCE,
     GATE_THRESHOLD,
     GATED_CATEGORIES,
     GATED_MAX,
@@ -84,8 +85,16 @@ def _f(sev: str, conf: float, cat: str = "Security") -> ScoredFinding:
 
 
 def test_score_v2_total_is_weighted_mean_of_categories():
-    # Security: 10 − (2.0×1.0 + 1.0×0.5) = 7.5; Testing: 10 − 0.4 = 9.6
-    findings = [_f("critical", 1.0), _f("high", 0.5), _f("medium", 1.0, "Testing")]
+    # Security: 10 − (1.0×1.0 + 1.0×1.0 + 1.0×0.5) = 7.5; Testing: 10 − 0.4 = 9.6
+    #
+    # Three highs rather than one critical plus one high, which is what this
+    # reached for originally. Both give Security 7.5, but a critical now fails
+    # the gate on its own (GATE_ON_CRITICAL), so the old fixture measured the
+    # gated path while claiming to measure the ungated mean. The arithmetic
+    # under test is the weighted mean; the fixture must not smuggle in a
+    # second behaviour to depend on.
+    findings = [_f("high", 1.0), _f("high", 1.0), _f("high", 0.5),
+                _f("medium", 1.0, "Testing")]
     scores = compute_scores(findings)
     assert scores["categories"]["Security"] == 7.5
     assert scores["categories"]["Testing"] == 9.6
@@ -155,6 +164,61 @@ def test_either_safety_category_alone_triggers_the_gate(category: str) -> None:
     assert scores["total"] <= GATED_MAX
 
 
+@pytest.mark.parametrize("category", ["Security", "Auth", "Money & Data"])
+def test_one_confident_critical_gates_on_its_own(category: str) -> None:
+    """A single critical fails the gate even though the subscore clears it.
+
+    This is the case the subscore route structurally could not reach: one
+    critical at 0.9 costs 1.8, leaving the category at 8.2, well clear of
+    GATE_THRESHOLD. Seven stored audits sat here, presenting 9.0-9.5 while
+    holding a committed .env or a private key.
+
+    Names written out rather than driven off GATED_CATEGORIES, for the reason
+    the test above gives: parametrizing off the tuple means dropping a
+    category from it deletes its own case instead of failing.
+    """
+    assert category in GATED_CATEGORIES, f"{category} is no longer gated"
+    findings = [_f("critical", 0.9, category)]
+    scores = compute_scores(findings)
+
+    assert scores["categories"][category] > GATE_THRESHOLD, (
+        "fixture no longer exercises the gap: the subscore itself now fails, "
+        "so this would pass without GATE_ON_CRITICAL")
+    assert scores["total"] <= GATED_MAX
+
+
+def test_an_unsure_critical_does_not_gate_by_itself():
+    """Severity claims impact, confidence claims certainty. The gate is
+    categorical, so it reads both: a critical the producer is guessing at
+    must not fail a repository on its own.
+
+    Nothing in production emits one -- the lowest-confidence critical across
+    every stored audit is 0.85, and the static rules cap non-production paths
+    at medium before this point. The floor exists for the rubric not yet
+    written, so it is tested rather than assumed.
+    """
+    findings = [_f("critical", CRITICAL_GATE_MIN_CONFIDENCE - 0.1, "Security")]
+    scores = compute_scores(findings)
+
+    assert scores["total"] > GATE_THRESHOLD
+    # And the same finding one notch more confident does gate, so the test
+    # pins the floor rather than merely observing a low score somewhere.
+    sure = compute_scores([_f("critical", CRITICAL_GATE_MIN_CONFIDENCE,
+                              "Security")])
+    assert sure["total"] <= GATED_MAX
+
+
+def test_critical_in_an_unexamined_category_cannot_gate():
+    """On a static-only audit nothing ran that could produce an Auth finding,
+    so an Auth critical cannot be present -- but a Security one can, and the
+    gate must read only what was examined. Mirrors the subscore rule: an
+    unexamined category neither clears the gate nor fails it.
+    """
+    findings = [_f("critical", 0.95, "Auth")]
+    assert compute_scores(findings, llm_ran=False)["total"] > GATE_THRESHOLD
+    assert compute_scores(findings, llm_ran=True)["total"] <= GATED_MAX
+
+
 def test_gate_does_not_fire_on_hygiene_only_findings():
     # Missing tests and no Dockerfile are real findings but say nothing about
     # whether a visitor can break in. A repo whose only problems are hygiene
@@ -207,6 +271,32 @@ def test_static_scan_end_to_end():
     assert "aws-access-key-id" in ids and "no-tests" in ids
     assert result["score"]["total"] < 10.0
     assert result["score"]["categories"]["Security"] < 10.0
+
+
+def test_static_scan_does_not_let_unexamined_categories_vote():
+    """run_static_scan runs no LLM stage, so Auth and Money & Data have no
+    producer inside it and their 10.0 means "not examined", not "clean".
+
+    compute_scores defaults to llm_ran=True, so this is one omitted keyword
+    away from handing those two 42% of the weight at a constant 10.0 -- the
+    inflation LLM_ONLY_CATEGORIES was added to stop, reached by leaving an
+    argument out instead of passing it wrong. The pipeline recomputes and so
+    never showed it, which is exactly why nothing caught it here.
+    """
+    buf = make_zip({
+        "src/config.ts": b"const k = 'AKIA" + b"A" * 16 + b"'",
+        "app.py": b"",
+    })
+    result = run_static_scan(buf)
+    findings = [ScoredFinding(**{k: v for k, v in f.items()})
+                for f in result["findings"]]
+
+    assert result["score"]["total"] == compute_scores(
+        findings, llm_ran=False)["total"]
+    # Not vacuous: the two must actually disagree on this fixture, or the
+    # assertion above would hold no matter which one the code picked.
+    assert (compute_scores(findings, llm_ran=True)["total"]
+            > compute_scores(findings, llm_ran=False)["total"])
 
 
 def test_static_findings_carry_context_field():
@@ -347,3 +437,39 @@ def test_unexamined_category_cannot_trigger_the_gate():
     scores = compute_scores(hygiene_only, llm_ran=False)
 
     assert scores["total"] > GATE_THRESHOLD
+
+
+def test_gate_reasons_are_recorded_whenever_the_gate_fires():
+    """The gate's decision and its published explanation come from one list,
+    so they cannot disagree: reasons non-empty iff the total was capped.
+
+    Checked over the whole gated/ungated boundary rather than one fixture,
+    because the failure this guards against is a route that caps the score
+    without recording why -- which reads to a user as an unexplained number.
+    """
+    cases = [
+        [],                                        # clean
+        [_f("medium", 0.8, "Testing")],            # hygiene only
+        [_f("critical", 0.9, "Security")],         # lone critical
+        [_f("critical", 1.0), _f("critical", 1.0)],  # subscore failure
+        [_f("critical", 0.5, "Security")],         # unsure critical
+    ]
+    for findings in cases:
+        scores = compute_scores(findings)
+        capped = scores["total"] <= GATED_MAX and findings
+        assert bool(scores["gated_by"]) == bool(capped), (
+            f"{findings}: total {scores['total']} vs "
+            f"reasons {scores['gated_by']}")
+
+
+def test_gate_reason_carries_the_finding_a_reader_must_act_on():
+    reasons = compute_scores([_f("critical", 0.9, "Security")])["gated_by"]
+    assert reasons == [{"kind": "critical", "category": "Security",
+                        "rule_id": "r", "title": "t"}]
+
+
+def test_ungated_score_reports_an_empty_reason_list_not_a_missing_key():
+    """Empty distinguishes "not gated" from "produced before this key
+    existed"; a missing key conflates the two, and the report surfaces treat
+    the second as unknown rather than as a clean bill."""
+    assert compute_scores([_f("low", 0.1, "Deploy")])["gated_by"] == []

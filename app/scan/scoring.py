@@ -150,10 +150,104 @@ GATE_THRESHOLD = 7.0
 # GATE_THRESHOLD, so a failing repo can never present a passing headline.
 GATED_MAX = 6.9
 
+# A single critical finding in a gated category fails the gate on its own,
+# whatever the subscore arithmetic says.
+#
+# The subscore route could not do this. One critical costs 2.0 x confidence,
+# so a lone critical at 0.9 leaves Security at 8.2 -- comfortably clear of
+# GATE_THRESHOLD -- and the gate needed a second one before it fired.
+#
+# Measured on the 67 stored audits carrying a basis and both gated
+# subscores, that took the gate from 40 repositories to 47. All seven it
+# adds were presenting 9.0 to 9.5 while holding a critical: five a committed
+# .env (link9jatree, metalcraft-forge-hub, blitz-blueprint,
+# nextjs-subscription-payments, drydock-vite-react-fixture), one a private
+# key block, one a critical from the security rubric. A committed .env is
+# the product's flagship finding; printing 9.1 above it is the headline
+# contradicting the finding underneath, which is the one thing this gate
+# exists to stop. They land at 6.2-6.6 -- inside the gated band, still
+# ordered among themselves.
+#
+# Lowering GATE_THRESHOLD to reach those repos was the alternative and is
+# worse: it would have to land near 8.3, which also gates every repo holding
+# three merely-high findings, a much larger and less defensible sweep. The
+# rule belongs on severity because that is what the claim is about -- "one
+# critical is enough" is a statement about criticals, not about a threshold.
+#
+# Applied to all of GATED_CATEGORIES, not Security alone. The reasoning that
+# makes one critical secret disqualifying is the same reasoning the Money &
+# Data note above makes for revenue, and a rule that gated a leaked key but
+# not a critical auth bypass would be indefensible on its own terms.
+GATE_ON_CRITICAL = True
 
-def _apply_gate(total: float, by_cat: dict[str, float],
-                counted: list[str]) -> float:
+# ...but only a critical its producer is actually sure of. Severity is a
+# claim about impact, confidence a claim about certainty, and the weighted
+# sum multiplies them precisely so an uncertain finding costs less. The gate
+# is categorical instead -- it either disqualifies the headline or does not
+# -- so it needs its own floor rather than inheriting that arithmetic.
+#
+# Set at 0.7, which changes nothing measurable today: across every stored
+# audit the lowest-confidence critical is 0.85 and 99% sit at 0.9 or above,
+# and the static rules cannot emit one lower, because a credential on a test,
+# example or doc path is capped at medium before it ever gets here
+# (damp_for_non_production_path in app/scan/secrets.py, applied to the LLM
+# pass too). The floor is for the producer not yet written: a rubric that
+# reports "critical if real, but I am guessing" must not be able to fail a
+# repository by itself.
+CRITICAL_GATE_MIN_CONFIDENCE = 0.7
+
+
+def _gating_criticals(findings: list[ScoredFinding],
+                      counted: list[str]) -> list[ScoredFinding]:
+    """Criticals confident enough, and in a category examined enough, to gate.
+
+    Restricted to `counted` for the same reason the subscore test is: on a
+    static-only audit nothing ran that could have produced an Auth or
+    Money & Data finding, so their absence is not evidence of anything.
+    """
+    return [f for f in findings
+            if f.severity == "critical"
+            and f.confidence >= CRITICAL_GATE_MIN_CONFIDENCE
+            and f.category in GATED_CATEGORIES
+            and f.category in counted]
+
+
+def _gate_reasons(by_cat: dict[str, float], counted: list[str],
+                  findings: list[ScoredFinding]) -> list[dict]:
+    """Why the gate fired, in the scorer that decided it.
+
+    Emitted because the two gate routes no longer look the same to a reader.
+    A subscore failure is self-evident on the page -- the category bar is
+    visibly short. A lone critical is not: every bar can sit above 7.0 while
+    the headline reads 6.3, and without a reason printed beside it the number
+    contradicts the breakdown directly under it. That is the same species of
+    dishonesty the gate was built to remove, one level down.
+
+    Computed here rather than re-derived in each report surface. The web page
+    and the HTML report would each need their own copy of GATE_THRESHOLD,
+    GATED_CATEGORIES and the confidence floor to work it out, and three
+    copies of this rule will not stay in agreement.
+    """
+    reasons: list[dict] = [
+        {"kind": "subscore", "category": c, "value": by_cat[c]}
+        for c in GATED_CATEGORIES
+        if c in counted and by_cat[c] < GATE_THRESHOLD
+    ]
+    reasons += [
+        {"kind": "critical", "category": f.category, "rule_id": f.rule_id,
+         "title": f.title}
+        for f in _gating_criticals(findings, counted)
+    ]
+    return reasons
+
+
+def _apply_gate(total: float, reasons: list[dict]) -> float:
     """Compress a failing repo's mean into [0, GATED_MAX], preserving order.
+
+    Driven off the reason list rather than re-testing the conditions, so the
+    decision and its published explanation cannot disagree: if the gate
+    fires, something is in `reasons` to print, and if `reasons` is empty the
+    gate did not fire. There is no third state to fall out of sync.
 
     A flat ceiling was tried first: total = min(mean, GATED_MAX). It stopped
     the flattering headline but flattened the top of the failing range,
@@ -168,8 +262,7 @@ def _apply_gate(total: float, by_cat: dict[str, float],
     in. Monotonic by construction, so a worse repo always scores lower, and
     nothing collapses to a constant.
     """
-    gated = [c for c in GATED_CATEGORIES if c in counted]
-    if any(by_cat[c] < GATE_THRESHOLD for c in gated):
+    if reasons:
         return total * (GATED_MAX / 10.0)
     return total
 
@@ -200,7 +293,13 @@ def compute_scores(findings: list[ScoredFinding],
     # The gate reads only categories that were actually examined, for the same
     # reason: an unexamined Auth sitting at 10.0 must not be able to clear a
     # gate, and an unexamined one cannot fail it either.
-    total = round(_apply_gate(total, by_cat, counted), 1)
+    reasons = _gate_reasons(by_cat, counted, findings)
+    total = round(_apply_gate(total, reasons), 1)
     if findings and total == 10.0:
         total = 9.9  # a perfect 10 with a non-empty findings list is a lie
-    return {"total": total, "categories": by_cat}
+    # Empty list, not omitted, when the gate did not fire: a consumer can
+    # then tell "not gated" from "produced before this key existed", which a
+    # missing key conflates. Stored rows predating it have no `gated_by` at
+    # all, and every surface that renders it must keep treating that as
+    # unknown rather than as a clean bill.
+    return {"total": total, "categories": by_cat, "gated_by": reasons}

@@ -204,7 +204,10 @@ function AuditPageInner() {
 
             <div className="my-6 border-t border-border" />
             {scored ? (
-              <CategoryBars categories={view.score.categories} />
+              <CategoryBars
+                categories={view.score.categories}
+                gatedBy={view.score.gated_by}
+              />
             ) : (
               <div className="text-sm text-muted">
                 <p>

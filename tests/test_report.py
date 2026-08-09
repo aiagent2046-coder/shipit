@@ -256,3 +256,69 @@ def test_full_report_is_unchanged_and_missing_basis_keeps_its_score():
     legacy = result([_finding()])          # no basis key at all
     html2 = render_report(legacy)
     assert 'class="ring"' in html2 and "6.4" in html2
+
+
+# --- why a score was capped -------------------------------------------------
+
+def _gated(reasons: list[dict], basis: str = "static+llm") -> dict:
+    return {
+        "stack": "nextjs",
+        "score": {"total": 6.5, "basis": basis,
+                  "categories": {"Security": 8.2, "Auth": 10.0,
+                                 "Testing": 9.6, "Deploy": 9.8},
+                  "gated_by": reasons},
+        "findings": [_finding()],
+    }
+
+
+def test_capped_score_says_a_critical_caused_it():
+    """The case with no visual tell: every bar above 7.0, headline 6.5.
+
+    Without this line the breakdown appears to contradict the headline, and a
+    reader who cannot reconcile the two has no reason to trust either.
+    """
+    html = render_report(_gated([
+        {"kind": "critical", "category": "Security",
+         "rule_id": "env-file-committed", "title": "Committed .env file"},
+    ]))
+    assert "capped" in html
+    assert "Committed .env file" in html
+
+
+def test_capped_score_names_the_failing_category():
+    html = render_report(_gated([
+        {"kind": "subscore", "category": "Security", "value": 5.9},
+    ]))
+    assert "Security 5.9" in html
+
+
+def test_hostile_gate_reason_title_is_escaped():
+    """gated_by carries an LLM-authored title straight from the finding."""
+    html = render_report(_gated([
+        {"kind": "critical", "category": "Security", "rule_id": "llm-security",
+         "title": "<script>alert(1)</script>"},
+    ]))
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_ungated_and_legacy_rows_print_no_cap_note():
+    """Empty means the gate did not fire; absent means an audit stored before
+    the scorer recorded reasons. Neither may print an explanation -- and the
+    legacy row must not be described as ungated either, so it says nothing.
+    """
+    assert "capped" not in render_report(_gated([]))
+    legacy = _gated([])
+    del legacy["score"]["gated_by"]
+    assert "capped" not in render_report(legacy)
+
+
+def test_static_only_report_prints_no_cap_note():
+    """A static-only audit publishes no score at all, so there is no headline
+    for a cap note to explain -- printing one would reintroduce the number the
+    free tier deliberately withholds."""
+    html = render_report(_gated(
+        [{"kind": "critical", "category": "Security",
+          "rule_id": "env-file-committed", "title": "Committed .env file"}],
+        basis="static_only"))
+    assert "capped" not in html
