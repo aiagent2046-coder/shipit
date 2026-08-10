@@ -39,18 +39,31 @@ concern is real.
 
 WHAT TO DO WITH THE RESULT
 
-  * Findings in most repos, and they hold up on inspection -> the category
-    earns its weight; wire it into RUBRICS and CATEGORIES together, in one
-    change, so the weight and its producer land at the same time.
-  * Findings rare but real -> keep the rubric, fold it into Security rather
-    than giving it a category that would sit at 10.0 and inflate.
+  * Findings in most repos, and they hold up on inspection -> the rubric is
+    earning the weight it already carries.
+  * Findings rare but real -> its category sits near 10.0 and inflates every
+    total; fold it into Security instead.
   * Mostly noise -> the prompt is wrong, not the idea. Tighten and re-run.
+
+THE QUESTION ABOVE IS SETTLED; THIS NOW MEASURES THE SHIPPED RUBRIC
+
+The rubric was wired into RUBRICS and CATEGORIES in #219, so "does it earn a
+place" became "is it still earning it". This script used to carry its own
+copy of the candidate prompt, which was correct while nothing shipped and a
+trap afterwards: the two drifted by 185 characters, and the shipped one had
+gained specifics -- content created by OTHER users, a scheduled job running
+more often than its work needs -- that the copy never got. Anyone running
+this to decide whether the rubric pays for itself was measuring a draft.
+
+It reads RUBRICS["money"] directly now. One definition, and the numbers this
+prints describe what a paying customer actually receives. It still touches
+no production path: it reads the rubric, sends its own LLM calls, and writes
+nothing.
 """
 
 from __future__ import annotations
 
 import io
-import re
 import sys
 import zipfile
 
@@ -67,78 +80,18 @@ from app.scan.llm_scan import (
     verify_finding,
 )
 
-# The candidate rubric, in the shape RUBRICS expects.
-#
-# "category" is deliberately absent: it is the open question this script
-# exists to answer, and llm_scan asserts at import that every rubric in
-# RUBRICS declares one the scorer knows. Leaving it out is what keeps this
-# from being wired in by accident.
-#
-# The instructions name concrete, checkable patterns for the same reason the
-# two shipped rubrics do -- "review for problems" returns essays, a list of
-# specific mistakes returns findings with line numbers. Grouped by the three
-# fears rather than by technology, because that is how the person reading the
-# report holds them.
-CANDIDATE = {
-    # Anchored on word boundaries and on terms specific to the three fears.
-    #
-    # The first draft used bare substrings -- pay, order, limit, token, delete
-    # -- which match ordinary prose and identifiers: "pay" is inside payload,
-    # "order" inside any "in order to" comment, "limit" inside unlimited. A
-    # dry run against this repository selected a Spinner component and the
-    # terms-of-service page.
-    #
-    # That is not merely untidy. select_files fills a fixed content budget
-    # smallest-file-first and stops, so junk does not just come along -- it
-    # takes the place of something relevant. The broad draft matched 232 files
-    # and could send only 112; 120 matched files were never seen by the model
-    # at all. Anchoring cut matches to 162 and spends that same budget on
-    # payments, migrations and scheduled work.
-    "keywords": re.compile(
-        # money
-        r"\b(stripe|paypal|checkout|invoice|billing|subscription|refund|"
-        r"payout|coupon|discount|currency|idempotenc\w*|webhook)\b"
-        # data loss
-        r"|\bdrop\s+table\b|\btruncate\b|\bon\s+delete\s+cascade\b"
-        r"|\b(migration|rollback|soft.?delete)\b"
-        # runaway spend
-        r"|\b(openai|anthropic|cron|setInterval|max_tokens|backoff)\b"
-        r"|\brate.?limit\w*\b",
-        re.I,
-    ),
-    "instructions": (
-        "Review for ways this app loses its owner money, loses user data, or "
-        "runs up a bill -- WITHOUT an attacker. Assume every user behaves "
-        "normally and the code still runs in production for a year. Report "
-        "only concrete issues you can point at a line for.\n"
-        "\n"
-        "Money taken or lost wrongly: a price, amount or currency read from "
-        "the client request instead of looked up on the server; a payment or "
-        "webhook handler with no idempotency key or duplicate check, so the "
-        "provider's normal retry credits the order twice; an order marked "
-        "paid before the provider confirms; a refund, discount or credit "
-        "computed client-side; money held in a float instead of a decimal or "
-        "integer minor units; a paid feature gated only in the UI.\n"
-        "\n"
-        "Data lost for good: destructive SQL in a migration (DROP TABLE, "
-        "TRUNCATE, DELETE or UPDATE with no WHERE) with nothing guarding it; "
-        "ON DELETE CASCADE reaching user-created content; a multi-step write "
-        "with no transaction, so a mid-way failure leaves half-written state; "
-        "a delete path with no soft delete, no backup and no confirmation; "
-        "object-storage deletion keyed on unvalidated user input.\n"
-        "\n"
-        "A bill nobody expects: a paid API, LLM or third-party call inside a "
-        "loop, recursion or per-row iteration with no cap; an expensive "
-        "endpoint reachable without auth or rate limiting; a query with no "
-        "LIMIT or pagination over a table that grows forever; a scheduled job "
-        "running far more often than its work needs; retry logic with no "
-        "maximum attempts or backoff; an LLM call with no token ceiling.\n"
-        "\n"
-        "Do NOT report attacker-driven vulnerabilities -- injection, XSS, "
-        "auth bypass, SSRF. Other rubrics cover those, and a duplicate here "
-        "spends a finding slot on something already reported."
-    ),
-}
+# The shipped rubric, by name. Not a copy: this script used to hold its own
+# draft, which was right while nothing shipped and wrong the moment #219 wired
+# one in -- the two drifted, and the numbers printed here stopped describing
+# what production sends. Reading the key means a prompt change is measured the
+# next time this runs, with no second edit to remember.
+MEASURED_RUBRIC = "money"
+assert MEASURED_RUBRIC in RUBRICS, (
+    f"{MEASURED_RUBRIC!r} is not a shipped rubric; this script measures what "
+    "app/scan/llm_scan.py actually sends, so a renamed rubric must be renamed "
+    "here too rather than silently measuring nothing"
+)
+
 
 
 def fetch_repo_zip(repo_url: str) -> io.BytesIO:
@@ -163,20 +116,16 @@ def run_one(repo_url: str, client: LLMClient) -> tuple[int, float]:
         files = _iter_code_files(zf)
     files_by_name = dict(files)
 
-    RUBRICS["_candidate"] = CANDIDATE          # scoped to this process only
-    try:
-        selected = select_files(files, "_candidate")
-        if not selected:
-            print("no rubric-relevant files")
-            return 0, 0.0
-        print(f"{len(selected)} files selected")
-        raw, usage = client.complete(
-            SYSTEM_PROMPT,
-            build_prompt(selected, "_candidate"),
-            max_tokens=8192,
-        )
-    finally:
-        RUBRICS.pop("_candidate", None)
+    selected = select_files(files, MEASURED_RUBRIC)
+    if not selected:
+        print("no rubric-relevant files")
+        return 0, 0.0
+    print(f"{len(selected)} files selected")
+    raw, usage = client.complete(
+        SYSTEM_PROMPT,
+        build_prompt(selected, MEASURED_RUBRIC),
+        max_tokens=8192,
+    )
 
     kept = 0
     for f in parse_findings(raw):
