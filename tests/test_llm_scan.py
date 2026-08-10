@@ -504,3 +504,22 @@ def test_the_money_rubric_still_refuses_attacker_findings():
     instructions = RUBRICS["money"]["instructions"]
 
     assert "Do NOT report attacker-driven vulnerabilities" in instructions
+
+
+def test_the_money_rubric_grades_low_by_size_not_by_how_long_it_takes():
+    """The first wording cost a real finding its severity.
+
+    "Reserve low for something that costs the owner real money only after a
+    year of growth" reads as "anything that accrues over a year is low" --
+    and the model applied it exactly: blitz-blueprint's match_events, an
+    append-only table taking every shot and kill in every match, fell from
+    high to low. It gathers millions of rows a MONTH; the bill is real, it
+    just arrives gradually.
+
+    Low is for a cost that stays small even after that year, not for one
+    that merely takes a year to add up.
+    """
+    instructions = RUBRICS["money"]["instructions"]
+
+    assert "stays SMALL even after a year" in instructions
+    assert "not when it merely takes a year to add up" in instructions
