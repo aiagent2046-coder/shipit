@@ -303,6 +303,15 @@ def test_a_well_formed_tron_address_passes(tmp_path, monkeypatch):
     env = dict(COMPLETE_ENV)
     env["USDT_TRC20_ADDRESS"] = "TBTwuY1oQMLw2wxc3FWB8TFtu1dTnuvZuf"
     env["USDT_POLL_TOKEN"] = "fake-usdt-token-not-real"
+    # Setting an address configures a payment rail, which now also requires a
+    # confirmation path. Added so this keeps testing the address FORMAT rather
+    # than tripping a rule it says nothing about -- and so a green result here
+    # means the format passed, not that nothing else was checked.
+    env.update({
+        "TELEGRAM_BOT_TOKEN": "000:fake-bot-token",
+        "TELEGRAM_ADMIN_CHAT_ID": "12345",
+        "TELEGRAM_WEBHOOK_SECRET": "fake-webhook-secret",
+    })
 
     assert _run(tmp_path, monkeypatch, env) == 0
 
@@ -353,3 +362,53 @@ def test_a_short_token_warns_but_still_starts(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "SERVICE_FLAGS_TOKEN is shorter than 16 characters" in err
     assert "Invalid production configuration" not in err
+
+
+# --- a payment rail must have a way to confirm a payment --------------------
+
+_BANK_RAIL = {"BANK_TRANSFER_CARD": "0000 0000 0000 0000"}
+_TELEGRAM = {
+    "TELEGRAM_BOT_TOKEN": "000:fake-bot-token",
+    "TELEGRAM_ADMIN_CHAT_ID": "12345",
+    "TELEGRAM_WEBHOOK_SECRET": "fake-webhook-secret",
+}
+
+
+def test_a_payment_rail_without_telegram_refuses_to_boot(tmp_path, monkeypatch):
+    """The worst shape this file can let through, because every part of it
+    fails closed correctly and so nothing complains.
+
+    The payer gets bank details, pays, and presses "I've paid". That pages the
+    operator on Telegram, and access is granted only when the operator taps
+    Confirm. Without the bot token or the admin chat id, notify_operator sends
+    nothing and _is_operator rejects everyone -- including the operator. Money
+    arrives, nobody can act on it, and no error is raised anywhere.
+    """
+    env = {**COMPLETE_ENV, **_BANK_RAIL}
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+
+
+def test_each_telegram_variable_is_required_on_its_own(tmp_path, monkeypatch):
+    """All three break the confirmation path, at different steps: the token
+    and chat id silence the notification, the webhook secret makes the
+    endpoint 503 so the Confirm tap never arrives."""
+    for missing in _TELEGRAM:
+        env = {**COMPLETE_ENV, **_BANK_RAIL, **_TELEGRAM}
+        del env[missing]
+
+        assert _run(tmp_path, monkeypatch, env) == 78, missing
+
+
+def test_a_complete_payment_setup_boots(tmp_path, monkeypatch):
+    env = {**COMPLETE_ENV, **_BANK_RAIL, **_TELEGRAM}
+
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
+def test_a_deployment_selling_nothing_is_unaffected(tmp_path, monkeypatch):
+    """The check keys on a configured rail, not on Telegram itself: an
+    instance that sells nothing has no confirmation path to break, and
+    demanding a bot token from it would refuse to boot over an unused
+    feature."""
+    assert _run(tmp_path, monkeypatch, dict(COMPLETE_ENV)) == 0
