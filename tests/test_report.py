@@ -218,28 +218,65 @@ def test_migration_findings_stay_in_the_production_section():
     assert "In tests, examples and documentation" not in html
 
 
-def test_static_only_report_carries_no_readiness_score():
-    """A free static scan must not publish a number.
+def test_free_scan_publishes_its_score_with_the_scope_declared():
+    """The free tier used to publish no number, because the score ROSE when
+    fewer checks ran: 7.2 with the auth and injection rubrics on audit
+    ed402e63, 9.1 without them.
 
-    The score RISES when fewer checks run, because the findings that would lower
-    it were never looked for: 7.2 with the auth and injection rubrics on audit
-    ed402e63, 9.1 without them, Auth reading 10.0 for a repo whose subscriptions
-    table has no write RLS policies. A static-only report carrying a score would
-    be reassurance pointing the wrong way.
+    That mechanism is gone. Unexamined categories no longer vote on the mean,
+    and one confident critical caps it -- something the free static rules can
+    trigger alone. Recomputed on that same audit under today's engine: 5.4
+    full against 6.1 static-only, a 0.7 gap in the same direction, both inside
+    the failing band.
+
+    So the number is shown. What must travel with it is the scope: this test
+    fails if the score appears without a statement of what nothing looked at.
     """
     r = result([_finding()])
     r["score"]["basis"] = "static_only"
+    r["score"]["unexamined"] = ["Auth", "Money & Data"]
     html = render_report(r)
 
-    assert "6.4" not in html                    # the total, gone everywhere
-    assert 'class="ring"' not in html           # and its circle
-    assert "Static scan" in html
-    assert "no readiness score" in html
-    # Category bars are part of the score and go with it.
-    assert "Correctness" not in html
-    # og:title must not leak the number into a link preview either.
-    og = next(line for line in html.split("\n") if "og:title" in line)
-    assert "6.4" not in og and "/10" not in og
+    assert "6.4" in html
+    assert 'class="ring"' in html
+    assert "Auth" in html and "Money &amp; Data" in html
+    assert "Nothing here examined" in html
+
+
+def test_an_unexamined_category_is_never_drawn_as_a_passing_bar():
+    """The reason the score was withheld in the first place, kept as an
+    invariant rather than as a blanket ban on the number.
+
+    An unexamined category sits at 10.0 for want of a producer. Rendering
+    that as a full bar answers "is my auth safe?" with a confident yes that
+    nothing checked -- which is worse than any headline, because it is
+    specific.
+    """
+    r = result([_finding()])
+    r["score"]["basis"] = "static_only"
+    r["score"]["categories"] = {"Security": 5.0, "Auth": 10.0,
+                                "Testing": 9.6, "Deploy": 9.8}
+    r["score"]["unexamined"] = ["Auth"]
+    html = render_report(r)
+
+    # Matched on the label span, not on the word: "Auth" also appears in the
+    # scope note above the bars, and splitting on it picked up the preamble.
+    auth_row = next(row for row in html.split('<div class="cat">')
+                    if row.startswith('<span class="cat-name">Auth</span>'))
+    assert "not checked" in auth_row
+    assert "10.0" not in auth_row
+    assert "fill" not in auth_row, "an unexamined category must draw no bar"
+
+
+def test_a_stored_audit_without_the_unexamined_key_says_something_honest():
+    """Rows written before the scorer recorded `unexamined` cannot name the
+    categories. They still must not imply the scan covered everything."""
+    r = result([_finding()])
+    r["score"]["basis"] = "static_only"
+    r["score"].pop("unexamined", None)
+    html = render_report(r)
+
+    assert "does not review your authentication" in html
 
 
 def test_full_report_is_unchanged_and_missing_basis_keeps_its_score():
@@ -313,12 +350,48 @@ def test_ungated_and_legacy_rows_print_no_cap_note():
     assert "capped" not in render_report(legacy)
 
 
-def test_static_only_report_prints_no_cap_note():
-    """A static-only audit publishes no score at all, so there is no headline
-    for a cap note to explain -- printing one would reintroduce the number the
-    free tier deliberately withholds."""
+def test_a_capped_free_scan_explains_the_cap_too():
+    """The cap note used to be suppressed on a static-only audit, because
+    there was no headline to explain. There is one now, and the free tier is
+    where a lone critical most often caps it -- a committed .env is a static
+    rule, so this is the common case, not the exotic one.
+    """
     html = render_report(_gated(
         [{"kind": "critical", "category": "Security",
           "rule_id": "env-file-committed", "title": "Committed .env file"}],
         basis="static_only"))
-    assert "capped" not in html
+    assert "capped" in html
+    assert "Committed .env file" in html
+
+
+def test_a_stored_row_predating_the_key_still_marks_auth_unchecked():
+    """The dangerous edge of publishing the free tier's score.
+
+    Rows written before the scorer recorded `unexamined` arrive without it.
+    Treating absent as "everything was examined" would draw Auth as a full
+    10.0 bar on every cached free audit -- the exact claim (issue #181) that
+    keeping the score hidden used to prevent. The basis is enough to work it
+    out, and it is worked out from the same constant compute_scores uses.
+    """
+    r = result([_finding()])
+    r["score"]["basis"] = "static_only"
+    r["score"].pop("unexamined", None)
+    r["score"]["categories"] = {"Security": 5.0, "Auth": 10.0,
+                                "Testing": 9.6, "Deploy": 9.8}
+    html = render_report(r)
+
+    auth_row = next(row for row in html.split('<div class="cat">')
+                    if row.startswith('<span class="cat-name">Auth</span>'))
+    assert "not checked" in auth_row
+    assert "10.0" not in auth_row
+
+
+def test_a_full_audit_never_marks_anything_unchecked():
+    """The backfill keys on the basis, so it must not reach a paid audit --
+    every category there really was examined."""
+    r = result([_finding()])
+    r["score"]["basis"] = "static+llm"
+    r["score"].pop("unexamined", None)
+    html = render_report(r)
+
+    assert "not checked" not in html
