@@ -85,7 +85,34 @@ def verified_build_gate_enabled() -> bool:
     )
 
     return raw.strip().lower() in _TRUE_ENV_VALUES
-MEMORY_LIMIT = "512m"
+
+
+# Memory ceiling for every untrusted container. Overridable like the runtime
+# and rootfs knobs below it -- this was the only one of the group hardcoded,
+# and the right value depends on the host, not on the code.
+#
+# The default is unchanged, so no deployment moves without someone deciding
+# to move it. But it is known to be too small for a large repository: on
+# dubinc/dub, `pnpm install --frozen-lockfile` died after 24 seconds with exit
+# 137 -- SIGKILL from the OOM killer, not a timeout and not a registry error.
+# Resolving and linking a workspace's dependency graph is the most
+# memory-hungry thing this sandbox runs, and 512m was chosen when single-app
+# repositories were the only ones that got this far.
+#
+# Raising it costs host RAM per concurrent Fix Pack, which is why it is a
+# deployment decision rather than a new constant.
+#
+# Resolved at call time, not bound at import, for the reason given further
+# down about run_suite/minimal_check: a value read once at import cannot be
+# changed without restarting the process, and cannot be tested without
+# reloading the module out from under everything holding a reference to it.
+MEMORY_LIMIT_DEFAULT = "512m"
+
+
+def memory_limit() -> str:
+    return os.environ.get("FIXPACK_MEMORY_LIMIT") or MEMORY_LIMIT_DEFAULT
+
+
 PYTHON_IMAGE = "python:3.12-slim"
 NODE_IMAGE = "node:20-slim"
 # Docker runtime for the containers that execute untrusted client code.
@@ -588,7 +615,7 @@ def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
         "docker", "run", "--rm",
         *_runtime_argv(),
         *_user_argv(),
-        "--memory", MEMORY_LIMIT,
+        "--memory", memory_limit(),
         *_CONTAINER_HARDENING,
         *_readonly_argv(),
         *_tool_home_argv(),
@@ -605,7 +632,7 @@ def _docker_test_argv(image: str, workdir: str, script: str) -> list[str]:
         *_runtime_argv(),
         *_user_argv(),
         "--network", "none",
-        "--memory", MEMORY_LIMIT,
+        "--memory", memory_limit(),
         *_CONTAINER_HARDENING,
         *_readonly_argv(),
         *_tool_home_argv(),

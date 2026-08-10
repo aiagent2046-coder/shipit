@@ -31,6 +31,57 @@ _PY_DEPS_DIR = ".shipit_pydeps"
 _NODE_IMAGE = "node:20-slim"
 _PYTHON_IMAGE = "python:3.12-slim"
 
+# Workspace members, same depth and same reasoning as
+# app/ingest/stack_detect.py: the framework lives in apps/web, not in the
+# turborepo manifest at the root. dubinc/dub's root package.json declares no
+# dependencies at all and `"build": "turbo build"`, so this file returned None
+# for it and every Fix Pack fell back to the semantic check -- the weaker
+# guarantee, on the product that is paid for.
+_MAX_MEMBER_DEPTH = 2
+
+# npm is not the only installer, and on a workspace it is not even a working
+# one: pnpm and yarn write `"@dub/utils": "workspace:*"` into member manifests,
+# a protocol npm does not understand, so `npm install` fails outright rather
+# than merely being unreproducible. Detecting the manager is therefore not a
+# nicety here -- without it, member detection alone would find the framework
+# and then fail to install it.
+_NPM, _PNPM, _YARN = "npm", "pnpm", "yarn"
+
+# Both live inside the bind-mounted /work, like _PY_DEPS_DIR, and for the same
+# two reasons: /work is the only writable place under --read-only, and it is
+# the only one that survives from the network-enabled install container into
+# the `--network none` containers that run every later step. The tmpfs at /tmp
+# does not -- each step is its own `docker run`.
+#
+# corepack's shims cannot go where corepack puts them by default. `corepack
+# enable` symlinks into Node's global bin, which is on the read-only rootfs and
+# owned by root, and fails with
+#
+#     EROFS: read-only file system, symlink ... -> '/usr/local/bin/pnpm'
+#
+# Bypassing the shims entirely -- `corepack pnpm install` -- installs but does
+# not survive contact with real repositories: dubinc/dub's build script is
+# `pnpm prisma:generate && next build`, and that nested bare `pnpm` needs a
+# real command on PATH. Both facts were established by running them in the
+# sandbox's own flags, not reasoned about.
+_NODE_BIN_DIR = ".shipit_bin"
+_COREPACK_HOME_DIR = ".shipit_corepack"
+
+# pnpm's content-addressable store, and yarn classic's cache, default to a
+# directory under HOME -- which _tool_home_argv points at /tmp, a tmpfs. Two
+# consequences, both fatal and only the first one visible:
+#
+#   * it fills. dubinc/dub got about 800 of 2632 packages in before
+#     `ERR_PNPM_ENOSPC ... no space left on device`, 112 seconds in.
+#
+#   * pnpm links node_modules to the store with HARD LINKS. A tmpfs dies with
+#     its container, so even a store that fitted would leave the next step --
+#     a separate `docker run` -- holding a node_modules full of dangling
+#     links. The store has to live beside node_modules, in the bind mount,
+#     or install and build cannot be two containers.
+_PNPM_STORE_DIR = ".shipit_pnpm_store"
+_YARN_CACHE_DIR = ".shipit_yarn_cache"
+
 
 @dataclass(frozen=True)
 class VerificationStep:
@@ -127,26 +178,180 @@ def _real_test_script(value: object) -> bool:
     return bool(script) and "no test specified" not in script.lower()
 
 
-def _node_profile(
-    entries: dict[str, zipfile.ZipInfo],
-    archive: zipfile.ZipFile,
-) -> VerificationProfile | None:
-    package_text = _read_small_text(archive, entries.get("package.json"))
+def _member_manifests(entries: dict[str, zipfile.ZipInfo]) -> list[str]:
+    """package.json paths worth reading, root first then shallowest.
 
-    if package_text is None:
+    node_modules is excluded explicitly. A vendored dependency's manifest sits
+    at exactly the depth a workspace member does, and picking one would build
+    a profile for somebody else's package.
+    """
+    found: list[str] = []
+
+    for path in entries:
+        head, _, tail = path.rpartition("/")
+
+        if tail != "package.json" or "node_modules/" in f"{path}/":
+            continue
+
+        depth = head.count("/") + 1 if head else 0
+
+        if depth <= _MAX_MEMBER_DEPTH:
+            found.append(path)
+
+    return sorted(found, key=lambda p: (p.count("/"), p))
+
+
+def _load_package(
+    archive: zipfile.ZipFile,
+    entries: dict[str, zipfile.ZipInfo],
+    path: str,
+) -> dict | None:
+    text = _read_small_text(archive, entries.get(path))
+
+    if text is None:
         return None
 
     try:
-        package = json.loads(package_text)
+        package = json.loads(text)
     except (TypeError, ValueError):
         return None
 
-    if not isinstance(package, dict):
-        return None
+    return package if isinstance(package, dict) else None
 
-    scripts = package.get("scripts")
-    scripts = scripts if isinstance(scripts, dict) else {}
 
+def _package_manager(root: dict | None, entries: dict[str, object]) -> str:
+    """corepack's `packageManager` field first, then the lockfile.
+
+    The declared field is the repository's own answer and beats inference: a
+    repo can carry a stale lockfile from a previous manager, and dub declares
+    `"packageManager": "pnpm@9.15.9"` outright.
+    """
+    declared = (root or {}).get("packageManager")
+
+    if isinstance(declared, str):
+        name = declared.split("@", 1)[0].strip().lower()
+        if name in (_NPM, _PNPM, _YARN):
+            return name
+
+    if "pnpm-lock.yaml" in entries:
+        return _PNPM
+    if "yarn.lock" in entries:
+        return _YARN
+
+    return _NPM
+
+
+def with_corepack(manager: str, command: str) -> str:
+    """Make `pnpm`/`yarn` a real command on PATH, then run `command`.
+
+    Prepended to EVERY step, not run once at install time, because each step
+    is a separate container: the shim directory and corepack's download cache
+    both live in /work so they survive, but PATH does not. `mkdir` first --
+    `corepack enable --install-directory` calls realpathSync on the directory
+    and fails if it does not exist yet. Re-enabling per step is idempotent and
+    needs no network; the manager tarball is already in the cache /work
+    carries over from the install.
+
+    npm needs none of this and gets the command unchanged, so every
+    single-app npm repository keeps running exactly the strings it ran before.
+    """
+    if manager == _NPM:
+        return command
+
+    return (
+        f"mkdir -p /work/{_NODE_BIN_DIR}"
+        f" && export COREPACK_HOME=/work/{_COREPACK_HOME_DIR}"
+        f" PATH=/work/{_NODE_BIN_DIR}:$PATH"
+        f" && corepack enable --install-directory /work/{_NODE_BIN_DIR}"
+        f" && {command}"
+    )
+
+
+def _node_install_command(
+    manager: str,
+    root: dict | None,
+    entries: dict[str, object],
+) -> str:
+    if manager == _PNPM:
+        return (
+            "pnpm install --frozen-lockfile"
+            f" --store-dir /work/{_PNPM_STORE_DIR}"
+        )
+
+    if manager == _YARN:
+        declared = str((root or {}).get("packageManager") or "")
+        berry = ".yarnrc.yml" in entries or bool(
+            re.match(r"yarn@(?!1\.)", declared)
+        )
+
+        if berry:
+            # --frozen-lockfile was removed in Yarn 2. Berry caches inside the
+            # project (.yarn/cache), which is already in the bind mount, so it
+            # needs no redirect.
+            return "yarn install --immutable"
+
+        # ...and --immutable does not exist in Yarn 1, whose cache IS under
+        # HOME and so hits the same tmpfs as pnpm's store.
+        return (
+            "yarn install --frozen-lockfile"
+            f" --cache-folder /work/{_YARN_CACHE_DIR}"
+        )
+
+    if "package-lock.json" in entries:
+        return "npm ci --no-audit --no-fund"
+
+    return "npm install --no-audit --no-fund"
+
+
+def _script_command(manager: str, script: str, workspace: str | None) -> str:
+    """How to run a package script, optionally scoped to a workspace member.
+
+    The root+npm strings are exactly what this file emitted before workspaces
+    existed -- including bare `npm test` rather than `npm run test`. Every
+    repository that verifies today must keep running the identical commands;
+    a rename here would be an untested change to every existing Fix Pack.
+    """
+    if workspace is None:
+        if manager == _NPM:
+            return "npm test" if script == "test" else f"npm run {script}"
+        return f"{manager} run {script}"
+
+    if manager == _PNPM:
+        return f"pnpm --filter {workspace} run {script}"
+    if manager == _YARN:
+        return f"yarn workspace {workspace} run {script}"
+
+    return f"npm run {script} --workspace {workspace}"
+
+
+def _exec_command(manager: str, tool: str, workspace: str | None) -> str:
+    """Run a binary from node_modules, in the right package's context.
+
+    `npx --no-install tsc` is correct at a repository root and wrong in a
+    workspace: pnpm and yarn install a member's devDependencies under that
+    member, so typescript is in apps/web/node_modules/.bin and not on the
+    root's PATH. Run from the root it fails with "tsc not found", which reads
+    as a repository that cannot typecheck rather than a command aimed at the
+    wrong directory. Scoping through the manager also puts tsc in the member
+    directory, so it finds that package's tsconfig.json with no --project.
+    """
+    if workspace is None:
+        return f"npx --no-install {tool}"
+
+    if manager == _PNPM:
+        return f"pnpm --filter {workspace} exec {tool}"
+    if manager == _YARN:
+        return f"yarn workspace {workspace} exec {tool}"
+
+    return f"npm exec --workspace {workspace} -- {tool}"
+
+
+def _node_framework(package: dict) -> Literal["nextjs", "vite"] | None:
+    """Which supported framework this manifest describes, if any.
+
+    Split out so the workspace search can ask the question of each candidate
+    manifest without building a profile it may then discard.
+    """
     dependencies: dict[str, object] = {}
 
     for key in ("dependencies", "devDependencies", "peerDependencies"):
@@ -154,20 +359,66 @@ def _node_profile(
         if isinstance(value, dict):
             dependencies.update(value)
 
+    scripts = package.get("scripts")
+    scripts = scripts if isinstance(scripts, dict) else {}
     build_script = scripts.get("build")
     build_script = build_script if isinstance(build_script, str) else ""
 
     if "next" in dependencies or re.search(r"\bnext\s+build\b", build_script):
-        framework: Literal["nextjs", "vite"] = "nextjs"
-    elif "vite" in dependencies or re.search(r"\bvite\s+build\b", build_script):
-        framework = "vite"
-    else:
+        return "nextjs"
+    if "vite" in dependencies or re.search(r"\bvite\s+build\b", build_script):
+        return "vite"
+
+    return None
+
+
+def _node_profile(
+    entries: dict[str, zipfile.ZipInfo],
+    archive: zipfile.ZipFile,
+) -> VerificationProfile | None:
+    root_package = _load_package(archive, entries, "package.json")
+
+    package: dict | None = None
+    manifest_path = "package.json"
+
+    # Root first, so a single-app repository is resolved exactly as before and
+    # a repository with both is judged by its root.
+    for candidate in _member_manifests(entries):
+        loaded = _load_package(archive, entries, candidate)
+
+        if loaded is None:
+            continue
+
+        if _node_framework(loaded) is not None:
+            package, manifest_path = loaded, candidate
+            break
+
+    if package is None:
         return None
 
-    if "package-lock.json" in entries:
-        install_command = "npm ci --no-audit --no-fund"
-    else:
-        install_command = "npm install --no-audit --no-fund"
+    framework = _node_framework(package)
+
+    if framework is None:                       # pragma: no cover - guarded above
+        return None
+
+    scripts = package.get("scripts")
+    scripts = scripts if isinstance(scripts, dict) else {}
+
+    directory = manifest_path[: -len("package.json")]
+    name = package.get("name")
+    workspace = name if directory and isinstance(name, str) and name else None
+
+    # A member with no usable `name` cannot be addressed by --filter or
+    # --workspace, and guessing from the directory would silently verify the
+    # wrong package. Falling back to the whole-repo commands is wrong too: on
+    # a workspace they run the root's `turbo build`, which is not this app.
+    if directory and workspace is None:
+        return None
+
+    manager = _package_manager(root_package, entries)
+
+    install_command = with_corepack(
+        manager, _node_install_command(manager, root_package, entries))
 
     steps: list[VerificationStep] = []
 
@@ -177,15 +428,21 @@ def _node_profile(
         steps.append(
             VerificationStep(
                 name="typecheck",
-                command="npm run typecheck",
+                command=with_corepack(
+                    manager,
+                    _script_command(manager, "typecheck", workspace),
+                ),
                 required=True,
             )
         )
-    elif "tsconfig.json" in entries:
+    elif f"{directory}tsconfig.json" in entries:
         steps.append(
             VerificationStep(
                 name="typecheck",
-                command="npx --no-install tsc --noEmit",
+                command=with_corepack(
+                    manager,
+                    _exec_command(manager, "tsc --noEmit", workspace),
+                ),
                 required=True,
             )
         )
@@ -195,7 +452,8 @@ def _node_profile(
     steps.append(
         VerificationStep(
             name="build",
-            command="npm run build",
+            command=with_corepack(
+                manager, _script_command(manager, "build", workspace)),
             required=True,
         )
     )
@@ -204,7 +462,8 @@ def _node_profile(
         steps.append(
             VerificationStep(
                 name="tests",
-                command="npm test",
+                command=with_corepack(
+                    manager, _script_command(manager, "test", workspace)),
                 required=False,
             )
         )
@@ -400,6 +659,47 @@ def detect_verification_profile(
     finally:
         archive.close()
         buffer.close()
+
+
+def required_stage_failed_on_both(
+    profile: VerificationProfile,
+    original: tuple[VerificationStage, ...],
+    patched: tuple[VerificationStage, ...],
+) -> bool:
+    """Did a required stage fail for the ORIGINAL repository as well?
+
+    Then this repository cannot be built here, and that is a fact about the
+    repository and our sandbox -- not evidence about the patch. Treating it as
+    a verification failure blocks delivery of a Fix Pack the customer paid
+    for, on the grounds that code they had not touched was already failing.
+
+    Real example: dubinc/dub's build script is
+    `pnpm prisma:generate && next build`, which wants database credentials the
+    offline container deliberately does not have. Before workspace members
+    were detected there was no profile at all and the semantic check took
+    over; detecting one would have turned "delivered with a weaker guarantee"
+    into "not delivered".
+
+    Deliberately only `failed`. `unavailable` and `pending` mean the run did
+    not happen, and compare_verification_stages already answers those with a
+    report of their own -- silently degrading an infrastructure outage into a
+    fallback would hide exactly the thing an operator needs to see.
+    """
+    required = {
+        "install",
+        *(step.name for step in profile.steps if step.required),
+    }
+
+    original_by_name = {stage.name: stage for stage in original}
+    patched_by_name = {stage.name: stage for stage in patched}
+
+    return any(
+        original_by_name.get(name)
+        and patched_by_name.get(name)
+        and original_by_name[name].status == "failed"
+        and patched_by_name[name].status == "failed"
+        for name in required
+    )
 
 
 def compare_verification_stages(

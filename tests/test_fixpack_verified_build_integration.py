@@ -272,7 +272,15 @@ def test_enabled_supported_stack_uses_structured_gate():
     )
 
 
-def test_existing_required_build_failure_blocks_without_regression():
+def test_a_pre_existing_build_failure_falls_back_instead_of_blocking():
+    """End to end: the gate declines and the semantic check decides.
+
+    The paid product must not be withheld because the repository was already
+    broken before we touched it. What replaces the blocked verdict is not
+    "verified" -- it is whatever the semantic check concludes, which is the
+    weaker guarantee this repository always used for repositories it cannot
+    build.
+    """
     def structured_runner(raw, profile):
         return profile_stages(
             profile,
@@ -286,13 +294,10 @@ def test_existing_required_build_failure_blocks_without_regression():
         verified_build_enabled=True,
     )
 
-    assert verdict.ran is True
-    assert verdict.regression is False
-    assert verdict.blocked is True
-    assert verdict.verification_unavailable is False
+    assert verdict.blocked is False
     assert (
         "patched required verification failed: build"
-        in verdict.detail
+        not in (verdict.detail or "")
     )
 
 
