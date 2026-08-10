@@ -112,7 +112,14 @@ def _is_test_fixture_path(name: str) -> bool:
     return any(seg in _TEST_PATH_SEGMENTS for seg in lower.split("/")[:-1])
 
 
-def _value_has_placeholder_marker(value: str) -> bool:
+def value_has_placeholder_marker(value: str) -> bool:
+    """Whether a value announces itself as a stand-in (`changeme`, `xxx`, ...).
+
+    Public because app/scan/checks.py grades a committed .env with it. That
+    check must reach the same verdict this scanner does about what counts as
+    a real value, and a second copy of the marker list is how the two would
+    start disagreeing about the same file.
+    """
     low = value.lower()
     return any(marker in low for marker in _PLACEHOLDER_MARKERS)
 
@@ -346,7 +353,7 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
         title = f"{title} (committed database migration)"
     elif is_anon:
         pass
-    elif _is_test_fixture_path(name) and _value_has_placeholder_marker(matched):
+    elif _is_test_fixture_path(name) and value_has_placeholder_marker(matched):
         severity = _TEST_PLACEHOLDER_SEVERITY
         confidence = round(confidence * _TEST_PLACEHOLDER_CONFIDENCE_FACTOR, 2)
         title = f"{title} (test fixture/placeholder context)"

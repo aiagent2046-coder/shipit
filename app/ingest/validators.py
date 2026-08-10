@@ -15,7 +15,23 @@ from typing import BinaryIO
 # Hard limits (see shipit-architecture.md, section 2.1)
 MAX_ARCHIVE_BYTES = 50 * 1024 * 1024        # 50 MB compressed
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024  # 500 MB total after extraction
-MAX_FILE_COUNT = 5_000
+# Raised from 5,000, which was rejecting ordinary repositories rather than
+# abusive ones. Measured: react/react is 7,841 entries and 40 MB unpacked,
+# and the whole static scan takes 3.7 s at a 5 MB peak -- roughly 0.5 ms an
+# entry. openclaw/openclaw is 31,403 and NousResearch/hermes-agent 8,703;
+# three of the four most-starred real codebases tried were refused on size,
+# none of them on anything a scanner would have struggled with.
+#
+# Nothing about LLM spend changes: select_files in app/scan/llm_scan.py fills
+# a fixed MAX_TOTAL_CHARS budget per rubric, so the prompt is the same size
+# for a 500-file repo and a 50,000-file one. Only CPU scales, linearly.
+#
+# The bound stays because MAX_ARCHIVE_BYTES and MAX_UNCOMPRESSED_BYTES do not
+# cover an archive of a million empty entries: that passes both byte limits
+# and still makes the scanner iterate a million times. 50,000 puts the worst
+# case near 25 s of CPU, well inside the worker's 300 s lease (renewed by a
+# heartbeat every 100 s), while admitting every real repository measured.
+MAX_FILE_COUNT = 50_000
 # Per-entry compression ratio above this, for entries larger than the
 # floor, is treated as a zip bomb. Legitimate source code stays well
 # below 100x; crafted bombs reach 1000x+.
@@ -75,9 +91,17 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
     with zf:
         infos = zf.infolist()
 
-        if len(infos) > MAX_FILE_COUNT:
+        # Directory entries are not files and must not spend the budget. A
+        # GitHub zipball carries one per directory -- 640 of react/react's
+        # 7,841 entries, 8% of a limit meant to bound scanning work that a
+        # directory entry does not cause. The same count is reported to the
+        # caller as `file_count` and shown to the user as "files scanned",
+        # where counting directories was simply wrong.
+        files = [i for i in infos if not i.is_dir()]
+
+        if len(files) > MAX_FILE_COUNT:
             raise ArchiveValidationError(
-                "too_many_files", f"{len(infos)} > {MAX_FILE_COUNT}"
+                "too_many_files", f"{len(files)} > {MAX_FILE_COUNT}"
             )
 
         total_uncompressed = 0
@@ -114,7 +138,7 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
             )
 
     return ArchiveReport(
-        file_count=len(infos) - symlink_count,
+        file_count=len(files) - symlink_count,
         total_uncompressed_bytes=total_uncompressed,
         symlink_count=symlink_count,
     )

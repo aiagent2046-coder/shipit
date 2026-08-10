@@ -90,8 +90,11 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Move it to environment variables and rotate the leaked value.",
     ),
     "env-file-committed": (
-        "Your .env file — the file that holds ALL your secrets — is "
-        "inside the repository.",
+        # Deliberately says nothing about what is inside. The rule grades
+        # itself on the contents now, and this headline sits above both
+        # verdicts: "the file that holds ALL your secrets" reads as a lie
+        # over a .env that holds a build path.
+        "Your .env file is inside the repository.",
         "The .env file usually contains database passwords and API keys "
         "in one place. Committing it hands your entire keychain to "
         "anyone who ever sees the code.",
@@ -151,17 +154,33 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
     unknown rule degrades to the old behavior, never to an empty row.
     """
     rid = str(finding.get("rule_id", ""))
+    own_risk = str(finding.get("explanation", "")).strip()
+    own_fix = str(finding.get("fix_hint", "")).strip()
     if rid in PLAIN:
         what, risk, fix = PLAIN[rid]
-        # collapse_repeats appends an occurrence note ("This appears in N
-        # files: ...") to a collapsed finding's explanation. The static
-        # translation above replaces explanation wholesale, so surface that
-        # note here instead of dropping it from the HTML report. Static
-        # findings carry no base explanation, so this is exactly the note.
-        note = str(finding.get("explanation", "")).strip()
-        if note:
-            risk = f"{risk} {note}"
-        return what, risk, fix
+        # The finding's own text wins where it has any.
+        #
+        # This dictionary predates #217, when static rules carried no
+        # explanation at all and this was the only prose a static finding
+        # had. #217 gave every rule its own explanation and fix_hint --
+        # and because the branch below treated `explanation` as nothing
+        # but collapse_repeats' occurrence note, the report has since been
+        # printing BOTH: the dictionary's wording followed by the rule's
+        # own, saying the same thing twice in different words.
+        #
+        # It stopped being merely repetitive once env-file-committed began
+        # grading itself on the file's contents. A .env holding a build
+        # path yields "nothing is exposed yet" appended to "Committing it
+        # hands your entire keychain to anyone who ever sees the code" --
+        # one paragraph making both claims, under a fix that says to
+        # rotate every secret inside. The rule knows which case it found;
+        # the dictionary cannot.
+        #
+        # `what` still comes from here: it is a friendlier headline than
+        # the technical title, and CheckFinding has no equivalent field.
+        # The occurrence note rides along inside `explanation`, so it
+        # survives without special handling.
+        return what, own_risk or risk, own_fix or fix
     what = str(finding.get("title", ""))
     risk = str(finding.get("explanation", ""))
     fix = str(finding.get("fix_hint", ""))

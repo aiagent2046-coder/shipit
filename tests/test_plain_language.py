@@ -49,6 +49,12 @@ def test_unknown_rule_degrades_to_title_not_empty():
 
 
 def test_report_renders_plain_text_and_tiers():
+    """The finding here carries no explanation/fix_hint of its own, which is
+    the point: that is the dictionary's remaining job. Since #217 every static
+    rule ships its own text and plain_fields prefers it, so PLAIN is reached
+    only by findings that have none -- stored audits written before #217, and
+    any producer that skips the fields.
+    """
     result = {
         "score": {"total": 4.2, "basis": "static+llm",
                   "categories": {c: 5.0 for c in
@@ -63,10 +69,52 @@ def test_report_renders_plain_text_and_tiers():
     }
     html = render_report(result, "demo")
     assert "Fix before launch" in html          # tier, not raw "critical"
-    assert "ALL your secrets" in html           # plain-language what
+    assert ".env file is inside the repository" in html  # plain-language what
     assert "rotate every secret" in html        # plain-language fix
 
 
 def test_tier_mapping_total():
     assert tier("critical")[1] == "Fix before launch"
     assert tier("unknown")[1] == "Good to know"
+
+
+def test_a_findings_own_text_beats_the_dictionary():
+    """The dictionary cannot know which case a graded rule found.
+
+    env-file-committed now says one thing for a .env holding a live key and
+    another for one holding a build path. Before this, plain_fields printed
+    the dictionary's wording AND appended the finding's own -- so a graded
+    rule produced a paragraph asserting both, under a fix telling the reader
+    to rotate secrets that may not exist.
+    """
+    graded = {
+        "rule_id": "env-file-committed", "title": "Environment file tracked",
+        "severity": "medium", "confidence": 0.6, "category": "Security",
+        "explanation": "Nothing in it looks like a password or key today.",
+        "fix_hint": "Stop tracking it and add .env to .gitignore.",
+    }
+    what, risk, fix = plain_fields(graded)
+
+    assert risk == graded["explanation"]
+    assert fix == graded["fix_hint"]
+    assert "rotate" not in (risk + fix).lower()
+    # ...and the dictionary's wording is gone, not merely appended to.
+    assert "entire keychain" not in risk
+
+
+def test_the_occurrence_note_still_reaches_the_report():
+    """collapse_repeats writes "This appears in N files" into `explanation`.
+    It used to be surfaced by a branch that treated explanation as nothing
+    but that note; now it rides along inside the text, which only works if
+    the text is the thing being printed.
+    """
+    collapsed = {
+        "rule_id": "generic-assignment", "title": "Hardcoded credential",
+        "severity": "high", "confidence": 0.5, "category": "Security",
+        "explanation": "A secret is written into the code. "
+                       "This appears in 4 files: a.ts, b.ts, c.ts.",
+        "fix_hint": "Move it to an environment variable.",
+    }
+    _, risk, _ = plain_fields(collapsed)
+
+    assert "This appears in 4 files" in risk

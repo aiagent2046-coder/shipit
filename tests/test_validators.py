@@ -121,3 +121,38 @@ def test_normal_compressible_source_not_flagged_as_bomb():
     buf = make_zip({"package-lock.json": b"".join(lines)})
     report = validate_zip(buf, size_bytes=size_of(buf))
     assert report.file_count == 1
+
+
+def test_directory_entries_do_not_spend_the_file_budget():
+    """A zipball carries one entry per directory. They cause no scanning work,
+    so counting them against MAX_FILE_COUNT rejects archives for the wrong
+    reason -- 640 of react/react's 7,841 entries are directories.
+    """
+    entries = {f"d{i}/": b"" for i in range(200)}
+    entries.update({f"d{i}/f.txt": b"x" for i in range(200)})
+    buf = make_zip(entries)
+
+    report = validate_zip(buf, size_bytes=size_of(buf))
+
+    assert report.file_count == 200, (
+        "file_count is shown to the user as 'files scanned'; directories are "
+        "not files")
+
+
+def test_a_real_large_repository_is_accepted():
+    """The regression this limit change exists for.
+
+    react/react is 7,201 files in 640 directories and was refused outright at
+    the old cap of 5,000 -- not for anything a scanner struggles with (the
+    full static scan of it runs in 3.7 s) but for having the file count of an
+    ordinary large project. Sized to that shape rather than to a round number
+    so it keeps meaning something if the cap moves again.
+    """
+    entries = {f"pkg{i}/": b"" for i in range(640)}
+    entries.update({f"pkg{i % 640}/f{i}.ts": b"export const x = 1\n"
+                    for i in range(7_201)})
+    buf = make_zip(entries)
+
+    report = validate_zip(buf, size_bytes=size_of(buf))
+
+    assert report.file_count == 7_201
