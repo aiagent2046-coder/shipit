@@ -407,3 +407,23 @@ def test_an_unavailable_stage_is_not_treated_as_unbuildable():
 
     assert report is not None
     assert report.detail == "verification infrastructure unavailable"
+
+
+def test_the_container_memory_limit_comes_from_the_environment(monkeypatch):
+    """It was the only hardening knob hardcoded while its neighbours read the
+    environment, and it is the one that stopped a real repository: 512m killed
+    `pnpm install` on a workspace with exit 137, the OOM killer.
+
+    Asserted through the environment, not by assigning the module attribute --
+    that weaker test passes just as happily against a hardcoded literal, which
+    is exactly the thing being fixed.
+    """
+    from app.fixpack import semantic_check
+
+    monkeypatch.setenv("FIXPACK_MEMORY_LIMIT", "2g")
+    argv = semantic_check._docker_install_argv("node:20-slim", "/w", "true")
+    assert argv[argv.index("--memory") + 1] == "2g"
+
+    monkeypatch.delenv("FIXPACK_MEMORY_LIMIT")
+    argv = semantic_check._docker_install_argv("node:20-slim", "/w", "true")
+    assert argv[argv.index("--memory") + 1] == "512m"
