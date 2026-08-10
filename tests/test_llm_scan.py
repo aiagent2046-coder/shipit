@@ -5,6 +5,7 @@ finding must never reach the user.
 """
 
 import hashlib
+import inspect
 import io
 import json
 import re
@@ -14,6 +15,7 @@ import httpx
 import pytest
 
 from app.llm.client import LLMClient, LLMUsage, Provider
+from app.scan import llm_scan
 from app.scan.llm_scan import (
     RUBRICS,
     SYSTEM_PROMPT,
@@ -28,11 +30,11 @@ from app.scan.llm_scan import (
 from app.scan.pipeline import AUDIT_ENGINE_VERSION
 from app.scan.scoring import CATEGORIES
 
-# sha256 of the LLM-visible prompt surface, first 16 hex characters. Paired
-# with AUDIT_ENGINE_VERSION by test_changing_the_prompt_forces_an_engine_
-# version_bump at the bottom of this file, which explains what to do when it
-# fails.
-PROMPT_FINGERPRINT = "60758795318d2fd8"
+# sha256 of everything that decides what the model is shown -- the prompts,
+# and the file selection that fills them. First 16 hex characters. Paired with
+# AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
+# what to do when it fails.
+PROMPT_FINGERPRINT = "b2567e7eb0fbf161"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -80,6 +82,91 @@ def test_select_files_matches_rubric_and_respects_budget():
     assert "src/auth/session.ts" in names
     assert "src/api/login.ts" in names       # matched by content keyword
     assert "src/ui/button.tsx" not in names
+
+
+# --- selection order ---
+#
+# select_files used to sort matches by ascending size and fill the budget from
+# the small end. On dubinc/dub that meant 1261 files matched the money rubric,
+# 347 fitted, and the cut fell at 1804 characters -- so the entire payout
+# pipeline was invisible to the model while icons and email templates were not.
+
+
+def test_a_long_relevant_file_beats_a_pile_of_short_ones():
+    """The regression in one assertion. Under ascending-size order the twenty
+    stubs win on count and the handler never reaches the prompt; it is the
+    handler that can pay a partner twice."""
+    handler = ("apps/lib/payouts/send-payout.ts",
+               "stripe payout invoice refund idempotency " * 200)
+    stubs = [(f"apps/ui/icons/payout-{i}.tsx", "payout icon " * 5)
+             for i in range(20)]
+
+    names = [n for n, _ in select_files(stubs + [handler], "money")]
+
+    assert names[0] == handler[0]
+
+
+def test_short_files_still_reach_the_prompt():
+    """The breadth reserve. retally-payouts-amount.ts is 900 characters and
+    scores below the relevance cut, and it carries a real finding -- a pure
+    relevance order drops it for forty large handlers."""
+    handlers = [(f"apps/lib/payouts/handler-{i}.ts",
+                 "stripe payout invoice refund idempotency webhook " * 400)
+                for i in range(30)]
+    small = ("apps/lib/payouts/retally.ts", "payout aggregate then update")
+
+    names = [n for n, _ in select_files(handlers + [small], "money")]
+
+    assert small[0] in names
+
+
+def test_presentation_paths_lose_to_behaviour_paths():
+    """Both say "payout" the same number of times. Only one sends money."""
+    body = "payout invoice stripe refund " * 40
+    files = [("apps/ui/partners/payout-card.tsx", body),
+             ("apps/lib/payouts/pay.ts", body)]
+
+    names = [n for n, _ in select_files(files, "money")]
+
+    assert names.index("apps/lib/payouts/pay.ts") < names.index(
+        "apps/ui/partners/payout-card.tsx")
+
+
+def test_one_oversized_file_does_not_end_the_selection():
+    """The old loop used `break`, which was equivalent only because the sort
+    was ascending -- nothing after the first overflow could fit either. In any
+    other order it silently discards every remaining file."""
+    huge = ("apps/lib/payouts/huge.ts", "payout stripe " * 20_000)
+    small = ("apps/lib/payouts/small.ts", "payout stripe invoice")
+
+    names = [n for n, _ in select_files([huge, small], "money")]
+
+    assert small[0] in names
+
+
+def test_selection_does_not_depend_on_archive_order():
+    """The audit cache is keyed on a content hash. Two byte-identical
+    repositories whose zips list members in a different order must select the
+    same files, or the same key yields two different scores."""
+    files = [(f"apps/lib/payouts/f{i}.ts", f"payout invoice {'x' * (i * 30)}")
+             for i in range(25)]
+
+    forward = select_files(files, "money")
+    backward = select_files(list(reversed(files)), "money")
+
+    assert forward == backward
+
+
+def test_tinybird_pipe_files_are_readable():
+    """The file that disproved a false positive and could not reach the model:
+    `limit 100` lives in the .pipe, not in the TypeScript that calls it."""
+    buf = make_zip({"packages/tinybird/pipes/events.pipe":
+                    b"SELECT * FROM events WHERE webhook_id = {{String(id)}}\nlimit 100"})
+
+    with zipfile.ZipFile(buf) as zf:
+        names = [n for n, _ in llm_scan._iter_code_files(zf)]
+
+    assert names == ["packages/tinybird/pipes/events.pipe"]
 
 
 def test_prompt_wraps_content_as_data_with_line_numbers():
@@ -634,33 +721,50 @@ def test_the_money_rubric_names_the_wrapper_trap():
     assert "pipe file" in instructions
 
 
-def test_changing_the_prompt_forces_an_engine_version_bump():
+def test_changing_what_the_model_sees_forces_an_engine_version_bump():
     """Nothing else catches a forgotten bump, and the cost is silent.
 
-    AUDIT_ENGINE_VERSION is part of the audit cache key, so a prompt edit that
-    ships without one keeps serving results produced by the OLD prompt for
+    AUDIT_ENGINE_VERSION is part of the audit cache key, so a change that
+    ships without one keeps serving results produced by the OLD engine for
     every repository already audited — the improvement is real, paid for, and
     invisible. The whole suite passes in that state; verified by reverting the
-    bump on this very change and watching 1475 tests stay green.
+    bump and watching every test stay green.
 
-    So the prompt surface is fingerprinted here. When this fails you changed
-    what the model is asked, which means:
+    The fingerprint covers everything that decides what the model is asked,
+    which is deliberately wider than the prompt text. It was prompt-only when
+    first written, and the very next change proved that too narrow: rewriting
+    file SELECTION changes the findings completely while leaving every word of
+    the prompt untouched. A guard that misses the change it was written one
+    commit before is not a guard.
+
+    When this fails:
 
       1. bump AUDIT_ENGINE_VERSION in app/scan/pipeline.py, and
       2. paste the new fingerprint below.
 
-    Two lines of ceremony, deliberately. Step 1 is the one that matters and
-    the one nobody remembers.
+    Two lines of ceremony. Step 1 is the one that matters and the one nobody
+    remembers.
     """
-    surface = SYSTEM_PROMPT + "".join(
-        name + RUBRICS[name]["instructions"] for name in sorted(RUBRICS)
-    )
+    surface = "|".join([
+        SYSTEM_PROMPT,
+        *(name + RUBRICS[name]["instructions"] for name in sorted(RUBRICS)),
+        # What reaches the prompt at all, and in what order.
+        repr(llm_scan._CODE_SUFFIXES),
+        repr(llm_scan._SKIP_DIRS),
+        llm_scan._BEHAVIOUR_PATH.pattern,
+        llm_scan._PRESENTATION_PATH.pattern,
+        str(llm_scan.MAX_FILE_CHARS),
+        str(llm_scan.MAX_TOTAL_CHARS),
+        str(llm_scan.RELEVANCE_BUDGET_SHARE),
+        inspect.getsource(llm_scan.relevance),
+        inspect.getsource(llm_scan.select_files),
+    ])
     fingerprint = hashlib.sha256(surface.encode("utf-8")).hexdigest()[:16]
 
     assert fingerprint == PROMPT_FINGERPRINT, (
-        f"the LLM prompt changed (fingerprint {fingerprint}). Bump "
+        f"what the model is shown changed (fingerprint {fingerprint}). Bump "
         f"AUDIT_ENGINE_VERSION in app/scan/pipeline.py -- it is currently "
         f"{AUDIT_ENGINE_VERSION!r} -- then update PROMPT_FINGERPRINT in this "
         "file. Without the bump, every repository already audited keeps "
-        "receiving results from the old prompt."
+        "receiving results from the old engine."
     )
