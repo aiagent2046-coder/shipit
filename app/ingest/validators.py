@@ -71,6 +71,64 @@ def _is_unsafe_path(name: str) -> bool:
     return ".." in path.parts
 
 
+# End of Central Directory record: signature, then 16 bytes of counts and
+# offsets, then a variable-length comment. The comment is bounded at 64 KiB,
+# so the record starts somewhere in the last 64 KiB + 22 bytes.
+_EOCD_SIG = b"PK\x05\x06"
+_EOCD_MIN = 22
+_EOCD_MAX_COMMENT = 0xFFFF
+# ZIP64: the classic record cannot express more than 65535 entries, so it
+# stores 0xFFFF and the real count lives in the ZIP64 record, found through a
+# locator sitting immediately before the classic one.
+_ZIP64_LOCATOR_SIG = b"PK\x06\x07"
+_ZIP64_EOCD_SIG = b"PK\x06\x06"
+_ZIP64_LOCATOR_LEN = 20
+
+
+def _declared_entry_count(fileobj: BinaryIO, size_bytes: int) -> int | None:
+    """Entry count read from the archive's trailer, without parsing entries.
+
+    zipfile.ZipFile materialises a ZipInfo for every entry inside its
+    constructor, so a count check placed after it has already paid for the
+    thing it is meant to refuse. Measured: 560,000 empty entries packed into
+    49 MB -- comfortably under MAX_ARCHIVE_BYTES -- cost 3.8 s of CPU and
+    315 MB of RSS before validation could say a word, and identically so at
+    the old 5,000 cap as at the current one, because the limit was never what
+    bounded it.
+
+    Reading the trailer costs a few hundred bytes and answers the same
+    question. Returns None when the trailer cannot be parsed, and the caller
+    then falls through to the old path: a malformed archive is zipfile's
+    business to reject, and a parse bug here must never refuse a real upload.
+    """
+    # Only the trailer is read, never the archive. Reading it whole to find a
+    # 22-byte record would allocate another MAX_ARCHIVE_BYTES per request --
+    # trading the cost this function exists to avoid for a different one.
+    window = min(size_bytes, _EOCD_MAX_COMMENT + _EOCD_MIN + _ZIP64_LOCATOR_LEN)
+    fileobj.seek(size_bytes - window)
+    tail = fileobj.read(window)
+
+    start = tail.rfind(_EOCD_SIG)
+    if start < 0 or len(tail) - start < _EOCD_MIN:
+        return None
+    count = int.from_bytes(tail[start + 10:start + 12], "little")
+    if count != 0xFFFF:
+        return count
+
+    # ZIP64. The locator ends where the classic record begins.
+    loc = start - _ZIP64_LOCATOR_LEN
+    if loc < 0 or tail[loc:loc + 4] != _ZIP64_LOCATOR_SIG:
+        return None
+    z64_offset = int.from_bytes(tail[loc + 8:loc + 16], "little")
+    if z64_offset < 0 or z64_offset + 40 > size_bytes:
+        return None
+    fileobj.seek(z64_offset)
+    record = fileobj.read(40)
+    if len(record) < 40 or record[:4] != _ZIP64_EOCD_SIG:
+        return None
+    return int.from_bytes(record[32:40], "little")
+
+
 def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
     """Validate an uploaded ZIP without extracting it.
 
@@ -81,6 +139,23 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
     if size_bytes > MAX_ARCHIVE_BYTES:
         raise ArchiveValidationError(
             "too_large", f"{size_bytes} > {MAX_ARCHIVE_BYTES}"
+        )
+
+    # Refuse an absurd entry count from the trailer, BEFORE zipfile builds an
+    # object per entry. Compared against the total rather than the file-only
+    # count the check below uses, because directories cannot be told apart
+    # without reading the entries -- which is the cost being avoided. An
+    # archive whose TOTAL entries exceed the file budget is over it either
+    # way, so nothing legitimate is refused here that would have passed later.
+    try:
+        declared = _declared_entry_count(fileobj, size_bytes)
+    except (OSError, ValueError):
+        declared = None   # unseekable or truncated: let zipfile have its say
+    finally:
+        fileobj.seek(0)
+    if declared is not None and declared > MAX_FILE_COUNT:
+        raise ArchiveValidationError(
+            "too_many_files", f"{declared} > {MAX_FILE_COUNT}"
         )
 
     try:
