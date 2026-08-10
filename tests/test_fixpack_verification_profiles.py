@@ -339,7 +339,11 @@ def test_pnpm_is_put_on_path_before_every_command():
         " && corepack enable --install-directory /work/.shipit_bin && "
     )
 
-    assert profile.install_command == prefix + "pnpm install --frozen-lockfile"
+    assert profile.install_command == (
+        prefix
+        + "pnpm install --frozen-lockfile"
+        + " --store-dir /work/.shipit_pnpm_store"
+    )
     assert all(step.command.startswith(prefix) for step in profile.steps)
 
 
@@ -398,7 +402,7 @@ def test_the_declared_package_manager_beats_the_lockfile():
         "apps/web/package.json": MEMBER_NEXT,
     }))
 
-    assert profile.install_command.endswith("pnpm install --frozen-lockfile")
+    assert "pnpm install --frozen-lockfile" in profile.install_command
 
 
 def test_yarn_berry_and_yarn_classic_take_different_install_flags():
@@ -416,7 +420,9 @@ def test_yarn_berry_and_yarn_classic_take_different_install_flags():
     }))
 
     assert berry.install_command.endswith("yarn install --immutable")
-    assert classic.install_command.endswith("yarn install --frozen-lockfile")
+    assert classic.install_command.endswith(
+        "yarn install --frozen-lockfile --cache-folder /work/.shipit_yarn_cache"
+    )
 
 
 def test_npm_workspaces_are_addressed_with_the_workspace_flag():
@@ -466,3 +472,37 @@ def test_the_member_search_has_a_floor():
     }))
 
     assert profile is None
+
+
+def test_the_package_store_is_redirected_out_of_the_tmpfs():
+    """Not a tidiness preference -- two independent failures.
+
+    On dubinc/dub the default store (under HOME, which the sandbox points at
+    the /tmp tmpfs) hit `ERR_PNPM_ENOSPC ... no space left on device` after
+    about 800 of 2632 packages. And pnpm hard-links node_modules to the store,
+    so a store on a tmpfs dies with its container and leaves the NEXT step --
+    a separate `docker run` -- with dangling links. Install and build can only
+    be two containers if the store is in the bind mount.
+    """
+    profile = detect_verification_profile(make_zip({
+        "package.json": MONOREPO_ROOT,
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+        "apps/web/package.json": MEMBER_NEXT,
+    }))
+
+    assert "--store-dir /work/.shipit_pnpm_store" in profile.install_command
+    # Beside node_modules, not under HOME.
+    assert "/tmp" not in profile.install_command
+
+
+def test_yarn_berry_needs_no_cache_redirect():
+    """Berry caches in .yarn/cache inside the project, which is already in the
+    bind mount. Adding --cache-folder there would be cargo-culted from Yarn 1,
+    where the cache really is under HOME."""
+    profile = detect_verification_profile(make_zip({
+        "package.json": '{"name":"m","packageManager":"yarn@4.1.0"}',
+        "yarn.lock": "",
+        "apps/web/package.json": MEMBER_NEXT,
+    }))
+
+    assert "--cache-folder" not in profile.install_command

@@ -67,6 +67,21 @@ _NPM, _PNPM, _YARN = "npm", "pnpm", "yarn"
 _NODE_BIN_DIR = ".shipit_bin"
 _COREPACK_HOME_DIR = ".shipit_corepack"
 
+# pnpm's content-addressable store, and yarn classic's cache, default to a
+# directory under HOME -- which _tool_home_argv points at /tmp, a tmpfs. Two
+# consequences, both fatal and only the first one visible:
+#
+#   * it fills. dubinc/dub got about 800 of 2632 packages in before
+#     `ERR_PNPM_ENOSPC ... no space left on device`, 112 seconds in.
+#
+#   * pnpm links node_modules to the store with HARD LINKS. A tmpfs dies with
+#     its container, so even a store that fitted would leave the next step --
+#     a separate `docker run` -- holding a node_modules full of dangling
+#     links. The store has to live beside node_modules, in the bind mount,
+#     or install and build cannot be two containers.
+_PNPM_STORE_DIR = ".shipit_pnpm_store"
+_YARN_CACHE_DIR = ".shipit_yarn_cache"
+
 
 @dataclass(frozen=True)
 class VerificationStep:
@@ -258,17 +273,29 @@ def _node_install_command(
     entries: dict[str, object],
 ) -> str:
     if manager == _PNPM:
-        return "pnpm install --frozen-lockfile"
+        return (
+            "pnpm install --frozen-lockfile"
+            f" --store-dir /work/{_PNPM_STORE_DIR}"
+        )
 
     if manager == _YARN:
         declared = str((root or {}).get("packageManager") or "")
         berry = ".yarnrc.yml" in entries or bool(
             re.match(r"yarn@(?!1\.)", declared)
         )
-        # --frozen-lockfile was removed in Yarn 2 and --immutable does not
-        # exist in Yarn 1, so one flag for both fails half the repositories.
-        flag = "--immutable" if berry else "--frozen-lockfile"
-        return f"yarn install {flag}"
+
+        if berry:
+            # --frozen-lockfile was removed in Yarn 2. Berry caches inside the
+            # project (.yarn/cache), which is already in the bind mount, so it
+            # needs no redirect.
+            return "yarn install --immutable"
+
+        # ...and --immutable does not exist in Yarn 1, whose cache IS under
+        # HOME and so hits the same tmpfs as pnpm's store.
+        return (
+            "yarn install --frozen-lockfile"
+            f" --cache-folder /work/{_YARN_CACHE_DIR}"
+        )
 
     if "package-lock.json" in entries:
         return "npm ci --no-audit --no-fund"
