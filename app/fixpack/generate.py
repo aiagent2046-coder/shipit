@@ -67,6 +67,7 @@ ENV_VAR_BY_RULE = {
     "telegram-bot-token": "TELEGRAM_BOT_TOKEN",
     "private-key-block": "PRIVATE_KEY",
     "jwt-in-code": "JWT_SECRET",
+    "connection-string-password": "DATABASE_URL",
     "sql-secret-assignment": "DATABASE_SECRET",
     "generic-assignment": "APP_SECRET",
 }
@@ -82,6 +83,9 @@ ROTATE_GUIDANCE = {
     "telegram-bot-token": "Telegram (@BotFather → /revoke)",
     "private-key-block": "the key's issuer (generate a fresh key pair, replace the old)",
     "jwt-in-code": "your auth/JWT provider (rotate the signing secret)",
+    "connection-string-password":
+        "your database/broker provider (change the password on that user, "
+        "then update the connection string)",
     "sql-secret-assignment": "your database/secret provider (change the credential)",
     "generic-assignment": "the relevant provider (rotate the credential)",
 }

@@ -89,6 +89,31 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "office key to the front door.",
         "Move it to environment variables and rotate the leaked value.",
     ),
+    "connection-string-password": (
+        "Your database connection string, password included, is written "
+        "into the code.",
+        "A connection string is everything needed to open the database: "
+        "the address, the username and the password, in one line. Anyone "
+        "who reads this code can connect to it directly — read every "
+        "table, change it, or delete it — without going through your app "
+        "or its login at all.",
+        "Change that user's password at your database provider, then keep "
+        "the connection string in an environment variable instead of in "
+        "the code. Removing the line does not help on its own: Git keeps "
+        "every past version.",
+    ),
+    "connection-string-dev-password": (
+        "A connection string in your project uses a default password like "
+        "`postgres` or `change_me`.",
+        "This is the value tutorials and docker-compose files ship with, "
+        "so it is almost certainly your local development database and not "
+        "a leak. It is worth knowing about for one reason: if that same "
+        "default is ever pointed at a real database, the password is "
+        "already public knowledge.",
+        "Nothing to do if this is your local setup. If anything real ever "
+        "uses it, give it a proper password and move the connection string "
+        "to an environment variable.",
+    ),
     "env-file-committed": (
         # Deliberately says nothing about what is inside. The rule grades
         # itself on the contents now, and this headline sits above both
