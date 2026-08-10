@@ -61,6 +61,61 @@ def load(target: str) -> bytes:
     return fetch_repo_zip(owner, repo)
 
 
+def debug_install(raw: bytes, profile) -> int:
+    """Reproduce the install step exactly, and show what it said.
+
+    The pipeline deliberately never copies container output into a stored
+    field, and it is right not to: that output is the client's, it can be
+    enormous, and it can contain their secrets. But that leaves an operator
+    debugging a failure with nothing but an exit code, and an exit code sent
+    me chasing three wrong theories -- a proxy that was not configured, a
+    zipball that was identical, and ulimits that were not the difference --
+    while the same command run by hand succeeded every time.
+
+    So this reuses the pipeline's OWN argv builder and OWN extraction rather
+    than a hand-written approximation, because an approximation is what made
+    those three rounds worthless. It prints to the operator's terminal, on
+    their machine, for a repository they chose. It keeps the work directory
+    so the half-finished tree can be inspected.
+    """
+    import subprocess
+    import tempfile
+
+    from app.fixpack.semantic_check import (
+        INSTALL_TIMEOUT_SECONDS,
+        _chown_workdir,
+        _docker_install_argv,
+        _extract_repo_relative,
+    )
+
+    workdir = tempfile.mkdtemp(prefix="shipit-verify-debug-")
+    _extract_repo_relative(raw, workdir)
+    _chown_workdir(workdir)
+
+    argv = _docker_install_argv(profile.image, workdir, profile.install_command)
+
+    print(f"\nwork directory (kept): {workdir}")
+    print(f"argv: {' '.join(argv)}\n")
+
+    try:
+        proc = subprocess.run(
+            argv,
+            timeout=INSTALL_TIMEOUT_SECONDS,
+            text=True,
+            capture_output=True,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"timed out after {INSTALL_TIMEOUT_SECONDS}s")
+        return 1
+
+    tail = 6000
+    print(f"exit code: {proc.returncode}")
+    print(f"--- stdout (last {tail} chars) ---\n{proc.stdout[-tail:]}")
+    print(f"--- stderr (last {tail} chars) ---\n{proc.stderr[-tail:]}")
+
+    return 0 if proc.returncode == 0 else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("target", help="a github.com repo URL or a .zip path")
@@ -68,6 +123,14 @@ def main() -> int:
         "--plan-only",
         action="store_true",
         help="print the planned profile and stop; needs no Docker",
+    )
+    parser.add_argument(
+        "--debug-install",
+        action="store_true",
+        help=(
+            "run ONLY the install step, print the container's output, and "
+            "keep the work directory for inspection"
+        ),
     )
     args = parser.parse_args()
 
@@ -95,6 +158,9 @@ def main() -> int:
 
     if args.plan_only:
         return 0
+
+    if args.debug_install:
+        return debug_install(raw, profile)
 
     # Imported here, not at module scope: the plan-only path must work on a
     # host with no Docker, and this module reaches for the sandbox at import.
