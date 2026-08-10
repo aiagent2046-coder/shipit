@@ -156,3 +156,87 @@ def test_a_real_large_repository_is_accepted():
     report = validate_zip(buf, size_bytes=size_of(buf))
 
     assert report.file_count == 7_201
+
+
+# --- the entry count is refused from the trailer, before entries are built ---
+
+def test_an_absurd_entry_count_is_refused_without_building_the_entries():
+    """The point of the preflight, asserted where it cannot be faked.
+
+    zipfile.ZipFile materialises a ZipInfo per entry inside its constructor,
+    so a count check placed after it has already paid for what it refuses:
+    560,000 empty entries in 49 MB -- under MAX_ARCHIVE_BYTES -- cost 3.8 s
+    and 315 MB of RSS before validation could speak, and identically so at
+    the old 5,000 cap, because the limit was never what bounded it.
+
+    Patching ZipFile to explode proves the rejection happens first. A timing
+    assertion would say the same thing and flake on a loaded runner.
+    """
+    import zipfile as zipfile_mod
+
+    buf = io.BytesIO()
+    with zipfile_mod.ZipFile(buf, "w", zipfile_mod.ZIP_STORED) as zf:
+        for i in range(MAX_FILE_COUNT + 100):
+            zf.writestr(str(i), b"")
+    data = buf.getvalue()
+
+    import app.ingest.validators as validators_mod
+
+    def _explode(*a, **kw):
+        raise AssertionError("ZipFile must not be constructed for this archive")
+
+    original = validators_mod.zipfile.ZipFile
+    validators_mod.zipfile.ZipFile = _explode
+    try:
+        with pytest.raises(ArchiveValidationError) as exc:
+            validate_zip(io.BytesIO(data), size_bytes=len(data))
+        assert exc.value.reason == "too_many_files"
+    finally:
+        validators_mod.zipfile.ZipFile = original
+
+
+def test_the_trailer_count_is_read_for_both_zip_layouts():
+    """A classic End of Central Directory record cannot express more than
+    65535 entries; past that the count lives in a ZIP64 record reached
+    through a locator. Reading only the classic one would return 0xFFFF and
+    silently miss exactly the archives worth refusing."""
+    from app.ingest.validators import _declared_entry_count
+
+    for n in (3, 70_000):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+            for i in range(n):
+                zf.writestr(str(i), b"")
+        data = buf.getvalue()
+        assert _declared_entry_count(io.BytesIO(data), len(data)) == n, n
+
+
+def test_a_zip_comment_does_not_hide_the_trailer():
+    """The record sits before a variable-length comment, not at the very end."""
+    from app.ingest.validators import _declared_entry_count
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.comment = b"c" * 4000
+        zf.writestr("a.js", b"x")
+    data = buf.getvalue()
+
+    assert _declared_entry_count(io.BytesIO(data), len(data)) == 1
+
+
+def test_an_unreadable_trailer_falls_through_instead_of_rejecting():
+    """A parse failure must never refuse an upload on its own.
+
+    Deciding an archive is invalid is zipfile's job; this function only ever
+    short-circuits the obvious abuse. Returning None on anything it cannot
+    read keeps a bug here from turning into a rejected real repository.
+    """
+    from app.ingest.validators import _declared_entry_count
+
+    for junk in (b"", b"not a zip", b"PK\x05\x06short"):
+        assert _declared_entry_count(io.BytesIO(junk), len(junk)) is None
+
+    # ...and the validator still reaches zipfile's own verdict.
+    with pytest.raises(ArchiveValidationError) as exc:
+        validate_zip(io.BytesIO(b"not a zip"), size_bytes=9)
+    assert exc.value.reason == "not_a_zip"
