@@ -4,6 +4,7 @@ The verification tests are the heart of this stage: a hallucinated
 finding must never reach the user.
 """
 
+import hashlib
 import io
 import json
 import re
@@ -15,14 +16,23 @@ import pytest
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.scan.llm_scan import (
     RUBRICS,
+    SYSTEM_PROMPT,
     LLMScanStats,
     build_prompt,
+    clip,
     parse_findings,
     run_llm_scan,
     select_files,
     verify_finding,
 )
+from app.scan.pipeline import AUDIT_ENGINE_VERSION
 from app.scan.scoring import CATEGORIES
+
+# sha256 of the LLM-visible prompt surface, first 16 hex characters. Paired
+# with AUDIT_ENGINE_VERSION by test_changing_the_prompt_forces_an_engine_
+# version_bump at the bottom of this file, which explains what to do when it
+# fails.
+PROMPT_FINGERPRINT = "60758795318d2fd8"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -523,3 +533,134 @@ def test_the_money_rubric_grades_low_by_size_not_by_how_long_it_takes():
 
     assert "stays SMALL even after a year" in instructions
     assert "not when it merely takes a year to add up" in instructions
+
+
+# --- clipping long model output ---
+#
+# The caps are not new; the honest cut is. A plain `[:600]` ended the CRITICAL
+# finding of a real paid audit on dubinc/dub mid-word, and that finding is the
+# one that gated the whole score.
+
+# Exactly 600 characters, as it reached the customer's report.
+DUB_CRITICAL_EXPLANATION = (
+    "The function sends money to partners via PayPal using the invoice ID as "
+    "the sender_batch_id (which PayPal uses for idempotency), but the calling "
+    "code does not check whether the invoice has already been paid before "
+    "invoking this function. If the cron job or webhook that triggers payouts "
+    "fires twice (normal for any queued job), PayPal will reject the second "
+    "call with a duplicate error — but only if the batch_id is truly unique "
+    "per attempt. More critically, nothing in the visible code marks the "
+    "invoice as 'sent' before or atomically with the API call, so a retry "
+    "after a partial failure can re-send"
+)
+
+
+def test_clip_leaves_text_within_the_limit_alone():
+    assert clip("short", 600) == "short"
+    assert clip("x" * 600, 600) == "x" * 600
+
+
+def test_clip_cuts_on_a_word_boundary_and_marks_the_cut():
+    assert clip("alpha beta gamma delta", 16) == "alpha beta…"
+
+
+def test_clip_never_exceeds_the_limit_it_was_given():
+    """The ellipsis comes out of the budget, not on top of it. Otherwise a
+    field clipped to a column width overflows it by one character."""
+    for limit in range(2, 40):
+        assert len(clip("alpha beta gamma delta epsilon", limit)) <= limit
+
+
+def test_clip_falls_back_to_a_hard_cut_on_an_unbroken_run():
+    """A base64 blob or a minified line has no boundary to fall back to.
+    Mid-token beats returning nothing."""
+    assert clip("x" * 50, 10) == "x" * 9 + "…"
+
+
+def test_clip_does_not_leave_dangling_punctuation():
+    """"...the call, ..." reads as a transcription error rather than a cut."""
+    assert clip("we call the thing, and then we wait", 20) == "we call the thing…"
+
+
+def test_the_real_critical_explanation_now_reads_as_cut():
+    """The regression case, verbatim. Before this it ended `can re-sen`, and
+    a reader could not tell truncation from a model that lost the thread."""
+    clipped = clip(DUB_CRITICAL_EXPLANATION + " to the partner a second time.",
+                   600)
+
+    assert clipped.endswith("…")
+    assert not clipped.endswith("re-sen…")
+    assert len(clipped) <= 600
+
+
+def test_a_long_explanation_is_already_clipped_on_the_finding(monkeypatch):
+    """End to end: the clip has to happen where the ScoredFinding is built, or
+    every consumer downstream -- report, HTML, database -- gets the raw cut."""
+    buf = make_zip({"src/auth.ts": VULN_TS.encode()})
+    response = json.dumps([valid_finding(
+        explanation="word " * 400, fix_hint="fix " * 200, title="head " * 100)])
+
+    findings, _ = run_llm_scan(buf, FakeLLM(response), rubrics=("auth",))
+
+    f = findings[0]
+    assert len(f.explanation) <= 600 and f.explanation.endswith("…")
+    assert len(f.fix_hint) <= 300 and f.fix_hint.endswith("…")
+    assert len(f.title) <= 200 and f.title.endswith("…")
+
+
+# --- the money rubric must not state inferences as facts ---
+
+
+def test_the_money_rubric_demands_the_line_that_proves_the_claim():
+    """Three findings in a row on dubinc/dub read as statements of fact and
+    were inferences. Two happened to be right; the third was wrong, and a
+    reader had to open the repository to find that out."""
+    instructions = RUBRICS["money"]["instructions"]
+
+    assert "PROVES the claim" in instructions
+    assert "confidence 0.5 or lower" in instructions
+    assert "Never write an assumption in the voice of something you read" in (
+        instructions)
+
+
+def test_the_money_rubric_names_the_wrapper_trap():
+    """The one that was actually wrong: getWebhookEvents passes no limit, so
+    the model reported an unbounded query. The `limit 100` was in the Tinybird
+    pipe file, which it had not been shown."""
+    instructions = RUBRICS["money"]["instructions"]
+
+    assert "does not pass an option does not prove the option is unset" in (
+        instructions)
+    assert "pipe file" in instructions
+
+
+def test_changing_the_prompt_forces_an_engine_version_bump():
+    """Nothing else catches a forgotten bump, and the cost is silent.
+
+    AUDIT_ENGINE_VERSION is part of the audit cache key, so a prompt edit that
+    ships without one keeps serving results produced by the OLD prompt for
+    every repository already audited — the improvement is real, paid for, and
+    invisible. The whole suite passes in that state; verified by reverting the
+    bump on this very change and watching 1475 tests stay green.
+
+    So the prompt surface is fingerprinted here. When this fails you changed
+    what the model is asked, which means:
+
+      1. bump AUDIT_ENGINE_VERSION in app/scan/pipeline.py, and
+      2. paste the new fingerprint below.
+
+    Two lines of ceremony, deliberately. Step 1 is the one that matters and
+    the one nobody remembers.
+    """
+    surface = SYSTEM_PROMPT + "".join(
+        name + RUBRICS[name]["instructions"] for name in sorted(RUBRICS)
+    )
+    fingerprint = hashlib.sha256(surface.encode("utf-8")).hexdigest()[:16]
+
+    assert fingerprint == PROMPT_FINGERPRINT, (
+        f"the LLM prompt changed (fingerprint {fingerprint}). Bump "
+        f"AUDIT_ENGINE_VERSION in app/scan/pipeline.py -- it is currently "
+        f"{AUDIT_ENGINE_VERSION!r} -- then update PROMPT_FINGERPRINT in this "
+        "file. Without the bump, every repository already audited keeps "
+        "receiving results from the old prompt."
+    )

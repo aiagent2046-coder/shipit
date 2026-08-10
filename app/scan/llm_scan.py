@@ -146,6 +146,23 @@ RUBRICS: dict[str, dict] = {
             "receive, so judge it by the size it reaches, not by how long it "
             "takes to get there.\n"
             "\n"
+            "Point at the line that PROVES the claim, not the line where you "
+            "assume the problem is. If the code that would settle the "
+            "question is not among the files you were given, say so in the "
+            "explanation, phrase the finding as the question it actually is, "
+            "and report confidence 0.5 or lower. Never write an assumption "
+            "in the voice of something you read.\n"
+            "\n"
+            "In particular: a function that does not pass an option does not "
+            "prove the option is unset. A limit, an idempotency key or a "
+            "guard may be set in the query definition, the pipe file, the "
+            "schema or the caller -- somewhere you were not shown. On a real "
+            "audit this produced three findings in a row that read as "
+            "statements of fact and were inferences; one was simply wrong, "
+            "because the LIMIT the wrapper did not pass was sitting in the "
+            "pipe file all along. A finding the reader has to disprove costs "
+            "more than the finding is worth.\n"
+            "\n"
             "Do NOT report attacker-driven vulnerabilities -- injection, "
             "XSS, auth bypass, SSRF. Other rubrics cover those, and a "
             "duplicate here spends a finding slot on something already "
@@ -270,6 +287,35 @@ def build_prompt(selected: list[tuple[str, str]], rubric: str) -> str:
         )
         parts.append(f'<file path="{n}">\n{numbered}\n</file>')
     return "\n\n".join(parts)
+
+
+def clip(text: str, limit: int) -> str:
+    """Trim `text` to `limit` characters on a word boundary, marking the cut.
+
+    The caps themselves are worth keeping: a model that rambles must not be
+    able to fill a report with one finding. What was wrong was the cut. A
+    plain `[:600]` slice ended the CRITICAL finding of a real paid audit
+    mid-word --
+
+        ...so a retry after a partial failure can re-sen
+
+    -- at exactly the 600th character, with nothing to say it had been cut.
+    The reader cannot tell a truncated explanation from a model that stopped
+    making sense, and this is the finding that gated the whole score.
+
+    The ellipsis is inside the budget, not added to it, so the result never
+    exceeds the limit the caller asked for.
+    """
+    if len(text) <= limit:
+        return text
+
+    head = text[:limit - 1]
+    spaced = head.rsplit(" ", 1)[0]
+
+    # `spaced` is empty when the only space sits at the very front, and a
+    # single unbroken run longer than the limit has no boundary at all. Both
+    # fall back to the hard cut: mid-token beats returning nothing.
+    return (spaced or head).rstrip(" ,;:.—-") + "…"
 
 
 def parse_findings(raw: str) -> list[dict]:
@@ -399,14 +445,14 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               )
               findings.append(ScoredFinding(
                   rule_id=f"llm-{rubric}",
-                  title=str(f["title"])[:200],
+                  title=clip(str(f["title"]), 200),
                   severity=severity,
                   confidence=confidence,
                   category=RUBRICS[rubric]["category"],
                   file=f["file"],
                   line=int(f["line_start"]),
-                  explanation=str(f.get("explanation", ""))[:600],
-                  fix_hint=str(f.get("fix_hint", ""))[:300],
+                  explanation=clip(str(f.get("explanation", "")), 600),
+                  fix_hint=clip(str(f.get("fix_hint", "")), 300),
                   context=context,
               ))
           # Cost cap: price the tokens accumulated so far (all calls this scan
