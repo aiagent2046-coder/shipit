@@ -457,3 +457,50 @@ def test_fixtures_alone_no_longer_zero_the_security_score():
                                     severity=sev, confidence=conf,
                                     category="Security", file=p, line=1, context=ctx))
     assert compute_scores(damped)["categories"]["Security"] > 8.0
+
+
+# --- the money rubric, calibrated against its first real run ---------------
+#
+# Run on two repositories with known answers before this change. It found both
+# ground-truth bugs, and two things it got wrong are pinned below so a later
+# prompt edit cannot quietly undo them.
+
+def test_the_money_rubric_calls_a_missing_idempotency_guard_critical():
+    """It rated it `high`, and the score said the repo was fine.
+
+    vercel/nextjs-subscription-payments has a webhook that re-provisions a
+    subscription on Stripe's own retry. The rubric found it -- correctly, with
+    the mechanism -- and graded it high, which put Money & Data at 7.1: one
+    tenth above the gate. A repository that double-charges on a routine
+    provider retry presented a passing headline.
+
+    The provider's retry is not a risk, it is a scheduled event, so the
+    duplicate is certain rather than possible. That is what critical means
+    here, and saying so in the prompt is what moves the verdict.
+    """
+    instructions = RUBRICS["money"]["instructions"]
+
+    assert "idempotency guard is CRITICAL" in instructions
+    assert "not high" in instructions
+
+
+def test_the_money_rubric_excludes_costs_that_land_in_the_browser():
+    """It reported a 16-minute setTimeout in a toast component.
+
+    A real bug, and not this rubric: the owner loses no money, no data, and
+    pays no bill for it. The rubric is read by someone deciding what to fix
+    before launch, and a finding they will not act on costs the attention of
+    the one above it.
+    """
+    instructions = RUBRICS["money"]["instructions"]
+
+    assert "browser" in instructions
+    assert "Do NOT report anything whose whole cost lands" in instructions
+
+
+def test_the_money_rubric_still_refuses_attacker_findings():
+    """The older exclusion, kept: the auth and security rubrics cover those,
+    and a duplicate here spends a finding slot twice."""
+    instructions = RUBRICS["money"]["instructions"]
+
+    assert "Do NOT report attacker-driven vulnerabilities" in instructions
