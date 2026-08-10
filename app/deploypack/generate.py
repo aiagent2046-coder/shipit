@@ -24,6 +24,7 @@ complete.
 
 from __future__ import annotations
 
+import json
 import re
 import stat
 import zipfile
@@ -220,7 +221,19 @@ def _fastapi_pack(files: dict[str, str]) -> dict[str, str]:
     }
 
 
+_VITE_CONFIG_NAMES = ("vite.config.js", "vite.config.ts",
+                      "vite.config.mjs", "vite.config.cjs")
+
+
 def _vite_react_pack(files: dict[str, str]) -> dict[str, str]:
+    if not _app_is_at_the_archive_root(files, "vite", _VITE_CONFIG_NAMES):
+        raise UnsupportedForDeployPack(
+            "This looks like a workspace/monorepo: the Vite app is in a "
+            "member directory, not at the repository root. Every Deploy Pack "
+            "template builds from the root manifest, so a Pack generated here "
+            "would install the wrong dependency tree. Monorepo templates are "
+            "not built yet."
+        )
     env_vars = sorted({
         m for text in files.values() for m in _VITE_ENV_VAR.findall(text)
     })
@@ -315,7 +328,47 @@ def _next_is_standalone(files: dict[str, str]) -> bool:
     )
 
 
+def _root_deps(files: dict[str, str]) -> dict:
+    try:
+        pkg = json.loads(files.get("package.json", ""))
+    except json.JSONDecodeError:
+        return {}
+    return ({**(pkg.get("dependencies") or {}),
+             **(pkg.get("devDependencies") or {})}
+            if isinstance(pkg, dict) else {})
+
+
+def _app_is_at_the_archive_root(files: dict[str, str], dependency: str,
+                                config_names: tuple[str, ...]) -> bool:
+    """Is the application the template will build sitting at the root?
+
+    Every template here copies `package.json` from the archive root and runs
+    the build in `/app`. That is true of the single-app repositories the
+    detector used to be able to name, and false of a workspace: the root
+    manifest of a turborepo declares no framework and has no build for the
+    application, so a Pack generated from it copies the wrong manifest,
+    installs the wrong tree, and produces an image that cannot boot.
+
+    Refusing is the module's own rule -- "a generated Dockerfile that builds
+    but doesn't actually boot the app is worse than no Dockerfile, because it
+    looks done". Nothing changed about what we can containerize; what changed
+    is that detect_stack now names a monorepo's framework instead of calling
+    it unsupported, so the honest refusal has to be made here rather than
+    falling out of a detector that could not see the app at all.
+    """
+    deps = _root_deps(files)
+    return dependency in deps or any(name in files for name in config_names)
+
+
 def _nextjs_pack(files: dict[str, str]) -> dict[str, str]:
+    if not _app_is_at_the_archive_root(files, "next", _NEXT_CONFIG_NAMES):
+        raise UnsupportedForDeployPack(
+            "This looks like a workspace/monorepo: the Next.js app is in a "
+            "member directory, not at the repository root. Every Deploy Pack "
+            "template builds from the root manifest, so a Pack generated here "
+            "would install the wrong dependency tree and produce an image "
+            "that cannot boot. Monorepo templates are not built yet."
+        )
     if not _next_is_standalone(files):
         raise UnsupportedForDeployPack(
             'Next.js Deploy Pack needs output: "standalone" in your '

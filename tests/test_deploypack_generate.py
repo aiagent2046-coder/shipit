@@ -395,3 +395,66 @@ def test_dockerignore_does_not_starve_compose_of_its_env():
     files = {"requirements.txt": "fastapi\n", "app/main.py": "app = 1\n"}
     pack = generate_deploy_pack(Stack.FASTAPI, files)
     assert "env_file: [.env]" in pack["docker-compose.yml"]
+
+
+# --- workspaces / monorepos ---
+#
+# detect_stack now names a monorepo's framework instead of calling it
+# unsupported, which is truthful and moves the refusal here. Every template
+# copies package.json from the archive root and builds in /app; a turborepo
+# root manifest declares no framework and has no build for the application, so
+# a Pack generated from it installs the wrong tree and produces an image that
+# cannot boot. The module's own rule: worse than no Dockerfile, because it
+# looks done.
+
+
+def test_a_nextjs_monorepo_is_refused_rather_than_built_wrong():
+    files = {
+        "package.json": '{"name":"monorepo","workspaces":["apps/*"]}',
+        "apps/web/package.json": '{"dependencies":{"next":"14"}}',
+        "apps/web/next.config.js": 'module.exports = {output: "standalone"}',
+    }
+
+    with pytest.raises(UnsupportedForDeployPack) as caught:
+        generate_deploy_pack(Stack.NEXTJS, files)
+
+    assert "monorepo" in str(caught.value)
+
+
+def test_the_monorepo_refusal_does_not_masquerade_as_a_standalone_problem():
+    """The member app HAS output: "standalone". Blaming the config would send
+    the user to add a line that is already there, and they would re-run and be
+    refused again for a reason nobody named."""
+    files = {
+        "package.json": '{"name":"monorepo"}',
+        "apps/web/next.config.js": 'module.exports = {output: "standalone"}',
+    }
+
+    with pytest.raises(UnsupportedForDeployPack) as caught:
+        generate_deploy_pack(Stack.NEXTJS, files)
+
+    assert "standalone" not in str(caught.value)
+
+
+def test_a_vite_monorepo_is_refused():
+    files = {
+        "package.json": '{"name":"monorepo","workspaces":["apps/*"]}',
+        "apps/site/package.json": '{"dependencies":{"react":"18","vite":"5"}}',
+        "apps/site/vite.config.ts": "export default {}",
+    }
+
+    with pytest.raises(UnsupportedForDeployPack) as caught:
+        generate_deploy_pack(Stack.VITE_REACT, files)
+
+    assert "monorepo" in str(caught.value)
+
+
+def test_a_root_app_is_still_built():
+    """The refusal must key on where the app is, not on the word workspaces
+    appearing somewhere. A single-app repository is unaffected."""
+    files = {
+        "package.json": '{"dependencies":{"next":"14"}}',
+        "next.config.js": 'module.exports = {output: "standalone"}',
+    }
+
+    assert "Dockerfile" in generate_deploy_pack(Stack.NEXTJS, files)

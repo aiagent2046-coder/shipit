@@ -54,6 +54,91 @@ def test_python_without_fastapi_import_is_unsupported():
     assert detect_stack(buf) is Stack.UNSUPPORTED
 
 
+# --- workspaces / monorepos ---
+#
+# detect_stack examined only the archive root, so dubinc/dub came back
+# `unsupported`: 4177 files of Next.js whose root package.json, being a
+# turborepo manifest, names no framework at all. The audit read every one of
+# those files while the report told the customer we did not recognise the
+# stack.
+
+
+def test_detect_nextjs_in_a_workspace_member():
+    buf = make_zip({
+        "package.json": b'{"name":"monorepo","workspaces":["apps/*"]}',
+        "turbo.json": b"{}",
+        "apps/web/package.json": NEXT_PKG,
+        "apps/web/next.config.js": b"module.exports = {}",
+    })
+    assert detect_stack(buf) is Stack.NEXTJS
+
+
+def test_a_root_app_still_wins_over_a_member():
+    """Order matters, not just membership. A repository with an app at its
+    root must be judged by that app exactly as it was before workspaces were
+    searched at all."""
+    buf = make_zip({
+        "package.json": b'{"dependencies":{"react":"18","vite":"5"}}',
+        "vite.config.ts": b"export default {}",
+        "apps/docs/package.json": NEXT_PKG,
+    })
+    assert detect_stack(buf) is Stack.VITE_REACT
+
+
+def test_the_member_search_has_a_floor():
+    """A search for an application, not a scan of the repository. Two levels
+    is where workspaces live; anything deeper is something else."""
+    buf = make_zip({
+        "package.json": b'{"name":"root"}',
+        "a/b/c/package.json": NEXT_PKG,
+    })
+    assert detect_stack(buf) is Stack.UNSUPPORTED
+
+
+def test_between_two_members_the_shallower_one_decides():
+    """Pins the sort key, which is depth and not name. Sorting by name gives
+    the right answer for most trees by accident -- "" sorts before "apps/" --
+    and the wrong one here, where the deeper directory happens to sort first.
+    An arbitrary tiebreak is fine; an accidental one is not."""
+    buf = make_zip({
+        "package.json": b'{"name":"root"}',
+        "z/package.json": NEXT_PKG,
+        "a/b/package.json": b'{"dependencies":{"react":"18","vite":"5"}}',
+    })
+    assert detect_stack(buf) is Stack.NEXTJS
+
+
+def test_detect_fastapi_in_a_workspace_member():
+    buf = make_zip({
+        "package.json": b'{"name":"monorepo"}',
+        "services/api/requirements.txt": b"fastapi\nuvicorn\n",
+        "services/api/main.py": b"from fastapi import FastAPI\napp = FastAPI()\n",
+    })
+    assert detect_stack(buf) is Stack.FASTAPI
+
+
+def test_a_malformed_member_manifest_does_not_break_detection():
+    """One unreadable package.json in a workspace must not cost the whole
+    repository its stack -- the root loop already tolerated this and the
+    member loop has to as well."""
+    buf = make_zip({
+        "package.json": b'{"name":"monorepo"}',
+        "apps/broken/package.json": b"{ not json",
+        "apps/web/package.json": NEXT_PKG,
+    })
+    assert detect_stack(buf) is Stack.NEXTJS
+
+
+def test_a_member_manifest_that_is_a_json_list_is_ignored():
+    """json.loads succeeds and .get explodes. The root path guarded only
+    against a decode error, which is not the same thing."""
+    buf = make_zip({
+        "package.json": b"[]",
+        "apps/web/package.json": NEXT_PKG,
+    })
+    assert detect_stack(buf) is Stack.NEXTJS
+
+
 def test_unknown_project_is_unsupported():
     buf = make_zip({"index.html": b"<html></html>"})
     assert detect_stack(buf) is Stack.UNSUPPORTED
