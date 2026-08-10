@@ -584,6 +584,47 @@ def detect_verification_profile(
         buffer.close()
 
 
+def required_stage_failed_on_both(
+    profile: VerificationProfile,
+    original: tuple[VerificationStage, ...],
+    patched: tuple[VerificationStage, ...],
+) -> bool:
+    """Did a required stage fail for the ORIGINAL repository as well?
+
+    Then this repository cannot be built here, and that is a fact about the
+    repository and our sandbox -- not evidence about the patch. Treating it as
+    a verification failure blocks delivery of a Fix Pack the customer paid
+    for, on the grounds that code they had not touched was already failing.
+
+    Real example: dubinc/dub's build script is
+    `pnpm prisma:generate && next build`, which wants database credentials the
+    offline container deliberately does not have. Before workspace members
+    were detected there was no profile at all and the semantic check took
+    over; detecting one would have turned "delivered with a weaker guarantee"
+    into "not delivered".
+
+    Deliberately only `failed`. `unavailable` and `pending` mean the run did
+    not happen, and compare_verification_stages already answers those with a
+    report of their own -- silently degrading an infrastructure outage into a
+    fallback would hide exactly the thing an operator needs to see.
+    """
+    required = {
+        "install",
+        *(step.name for step in profile.steps if step.required),
+    }
+
+    original_by_name = {stage.name: stage for stage in original}
+    patched_by_name = {stage.name: stage for stage in patched}
+
+    return any(
+        original_by_name.get(name)
+        and patched_by_name.get(name)
+        and original_by_name[name].status == "failed"
+        and patched_by_name[name].status == "failed"
+        for name in required
+    )
+
+
 def compare_verification_stages(
     profile: VerificationProfile,
     original: tuple[VerificationStage, ...],

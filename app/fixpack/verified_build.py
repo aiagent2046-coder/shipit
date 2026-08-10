@@ -20,6 +20,7 @@ from app.fixpack.verification import (
     VerificationStage,
     compare_verification_stages,
     detect_verification_profile,
+    required_stage_failed_on_both,
 )
 
 
@@ -77,6 +78,19 @@ def run_verified_build_gate(
             profile,
         )
     )
+
+    # Same meaning as an undetected profile: the semantic check owns this
+    # repository. A required stage that fails for the ORIGINAL too says the
+    # repository cannot be built in this sandbox -- a fact about the
+    # repository, not evidence about the patch -- and reporting it as a
+    # verification failure would refuse delivery of a Fix Pack because code
+    # the customer never touched was already failing.
+    if required_stage_failed_on_both(
+        profile,
+        original_stages,
+        patched_stages,
+    ):
+        return None
 
     return compare_verification_stages(
         profile,

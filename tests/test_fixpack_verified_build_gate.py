@@ -71,6 +71,7 @@ def stages(
     *,
     install: str = "passed",
     build: str = "passed",
+    tests: str = "passed",
 ) -> tuple[VerificationStage, ...]:
     output = [
         VerificationStage(
@@ -81,11 +82,7 @@ def stages(
     ]
 
     for step in profile.steps:
-        status = (
-            build
-            if step.name == "build"
-            else "passed"
-        )
+        status = {"build": build, "tests": tests}.get(step.name, "passed")
 
         output.append(
             VerificationStage(
@@ -222,7 +219,19 @@ def test_new_patched_build_failure_is_regression():
     )
 
 
-def test_existing_required_failure_is_not_new_regression():
+def test_a_repository_that_already_fails_to_build_is_not_verifiable_here():
+    """None, not a blocking report -- the semantic check takes over.
+
+    This test asserted the opposite until a real run showed what the old
+    answer cost. A required stage that fails for the ORIGINAL too says the
+    repository cannot be built in this sandbox; it says nothing about the
+    patch. Reporting it as a verification failure refuses delivery of a Fix
+    Pack the customer paid for, because code they never touched was already
+    failing -- and it does so precisely for the large repositories that only
+    became eligible when workspace members started being detected.
+    dubinc/dub is the case: its build script wants database credentials the
+    offline container deliberately withholds.
+    """
     def fake_runner(raw, profile):
         return stages(
             profile,
@@ -235,12 +244,7 @@ def test_existing_required_failure_is_not_new_regression():
         profile_runner=fake_runner,
     )
 
-    assert report is not None
-    assert report.regression is False
-    assert report.deliverable is False
-    assert report.detail == (
-        "patched required verification failed: build"
-    )
+    assert report is None
 
 
 def test_runner_unavailable_fails_closed():
@@ -341,3 +345,65 @@ def test_unsupported_repository_short_circuits_without_patch_or_runner(
     )
 
     assert result is None
+
+
+def test_a_new_build_failure_still_blocks():
+    """The boundary. Falling back when the original ALSO failed must not
+    become falling back whenever the patch fails -- that would delete the
+    gate. Original green, patched red is a regression and stays one."""
+    call_number = 0
+
+    def fake_runner(raw, profile):
+        nonlocal call_number
+        call_number += 1
+        return stages(profile, build="failed" if call_number == 2 else "passed")
+
+    report = verified_build.run_verified_build_gate(
+        nextjs_zip(), plan(), profile_runner=fake_runner,
+    )
+
+    assert report is not None
+    assert report.regression is True
+    assert report.deliverable is False
+
+
+def test_an_optional_stage_failing_on_both_sides_does_not_trigger_the_fallback():
+    """Only REQUIRED stages say the repository cannot be built. A client test
+    suite that was already red is an ordinary condition the report is designed
+    to describe, not a reason to abandon the verification entirely."""
+    with_a_test_suite = make_zip({
+        "package.json": json.dumps({
+            "scripts": {"build": "next build", "test": "jest"},
+            "dependencies": {"next": "14.2.0", "react": "18.3.0"},
+        }),
+        "package-lock.json": "{}\n",
+        "pages/index.js": "export default function Home() { return null; }\n",
+    })
+
+    def fake_runner(raw, profile):
+        return stages(profile, tests="failed")
+
+    report = verified_build.run_verified_build_gate(
+        with_a_test_suite, plan(), profile_runner=fake_runner,
+    )
+
+    # The fixture must actually HAVE the optional stage, or this asserts
+    # nothing: nextjs_zip() declares no test script, so its profile has no
+    # tests step and `tests="failed"` was quietly a no-op.
+    assert any(step.name == "tests" for step in report.profile.steps)
+    assert report is not None
+
+
+def test_an_unavailable_stage_is_not_treated_as_unbuildable():
+    """`unavailable` means the run did not happen -- an infrastructure outage.
+    Degrading it into a quiet fallback would hide the one thing an operator
+    needs to see, so it keeps its own explicit report."""
+    def fake_runner(raw, profile):
+        return stages(profile, build="unavailable")
+
+    report = verified_build.run_verified_build_gate(
+        nextjs_zip(), plan(), profile_runner=fake_runner,
+    )
+
+    assert report is not None
+    assert report.detail == "verification infrastructure unavailable"
