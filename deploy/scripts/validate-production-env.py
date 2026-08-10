@@ -126,6 +126,44 @@ def main() -> int:
             "spend and error rate are unreadable)"
         )
 
+    # A configured payment rail with no way to confirm a payment is the worst
+    # shape this file can let through, because every part of it fails closed
+    # correctly and so nothing complains.
+    #
+    # Bank transfer is the live rail. The payer gets the details, pays, and
+    # presses "I've paid"; that pages the operator on Telegram, and access is
+    # granted only when the operator taps Confirm on that message. With
+    # TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID unset, notify_operator
+    # returns False and sends nothing (app/alerts.py), and _is_operator
+    # returns False for EVERYONE including the operator
+    # (app/billing/telegram_stars.py) -- both by design, both silent. Money
+    # arrives and no one can act on it.
+    #
+    # TELEGRAM_WEBHOOK_SECRET is the same story one step later: the webhook
+    # 503s without it, so the Confirm tap never reaches the application.
+    #
+    # An error rather than a warning: a checkout that cannot deliver what it
+    # sells should not boot. It only fires when a rail is actually configured,
+    # so a deployment selling nothing is unaffected.
+    bank_configured = any(
+        values.get(name, "").strip() for name in (
+            "BANK_TRANSFER_CARD", "BANK_TRANSFER_ACCOUNT",
+        )
+    )
+    rails_configured = bank_configured or bool(
+        values.get("USDT_TRC20_ADDRESS", "").strip()
+    ) or bool(values.get("PAYPAL_CLIENT_ID", "").strip())
+
+    if rails_configured:
+        for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_CHAT_ID",
+                     "TELEGRAM_WEBHOOK_SECRET"):
+            if not values.get(name, "").strip():
+                errors.append(
+                    f"{name} is required when a payment rail is configured: "
+                    "without it a paid invoice can never be confirmed, and "
+                    "nothing reports the failure"
+                )
+
     aitunnel_key = bool(values.get("AITUNNEL_API_KEY", "").strip())
     aitunnel_url = bool(values.get("AITUNNEL_BASE_URL", "").strip())
 
