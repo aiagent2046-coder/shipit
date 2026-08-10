@@ -778,6 +778,31 @@ rationale.
   pytest -q tests/test_db_postgres_smoke.py # exercise every repo write path
   ```
 
+  **Applying to a database that has data takes a pg_dump first.** Against a
+  fresh database (which is what CI and the command above use) there is nothing
+  to lose, and nothing is dumped. Everywhere else, `apply` writes a verified
+  custom-format dump to `$BACKUP_DIR` (default `/var/backups/shipit/postgres`,
+  the same directory the scheduled `deploy/scripts/backup-postgres.sh` uses,
+  so the existing `BACKUP_KEEP_DAYS` sweep prunes these too) and refuses to
+  apply anything if that dump cannot be taken or cannot be read back with
+  `pg_restore --list`. The file is named `shipit-pre-<NNNN>-<timestamp>.dump`
+  after the first pending migration, so a directory listing during an incident
+  says which dump precedes which schema change.
+
+  This is not the scheduled backup wearing a different hat. That one runs on a
+  timer, so a migration that drops or corrupts data loses every write since the
+  timer last fired; this one is taken against the schema the migration is about
+  to change. `pg_dump` is looked for at `/usr/lib/postgresql/17/bin/pg_dump`
+  (a client older than the server refuses to dump it, correctly), then at
+  `$PG_DUMP`, then on `PATH`. `--no-backup` applies without one and says so on
+  stderr — for a host with no usable client tools, where the alternative is
+  being unable to migrate at all.
+
+  ```sh
+  bash scripts/apply_migrations.sh apply                 # dumps first
+  bash scripts/apply_migrations.sh apply --no-backup     # deliberate, loud
+  ```
+
   The test is proven load-bearing, not decorative: reverting the `expires_at`
   timestamptz conversion in `app/db.py` makes it fail with the exact prod
   `DatatypeMismatch` (verified via a temporary local revert on a real
