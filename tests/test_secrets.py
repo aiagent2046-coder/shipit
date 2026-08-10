@@ -317,3 +317,120 @@ def test_placeholder_value_outside_test_path_still_flagged():
     assert f.severity == "critical"
     assert f.confidence >= 0.9
     assert "(test fixture" not in f.title
+
+
+# --- connection strings carrying their own password ------------------------
+#
+# Assembled from parts, like FAKE_STRIPE above: written whole, a DSN with a
+# password trips GitHub push protection and this repo's own added-secrets CI
+# scanner, neither of which can tell a fixture from a leak.
+def _dsn(scheme: str, user: str, password: str, host: str,
+         tail: str = "/app") -> str:
+    return f"{scheme}://{user}:{password}@{host}{tail}"
+
+
+def _dsn_findings(body: str, path: str = "src/config.py"):
+    return [f for f in scan_secrets(make_zip({path: body.encode()}))
+            if f.rule_id.startswith("connection-string")]
+
+
+def test_connection_string_password_is_found_in_source():
+    """The gap this rule closes.
+
+    Nothing else caught it: generic-assignment needs quotes around the value
+    and a secret-shaped variable NAME, so a DSN assigned to DATABASE_URL or
+    handed straight to a client constructor scanned completely clean. A
+    connection string is the whole database in one line -- address, user and
+    password -- so a leaked one needs no other finding to be exploitable.
+    """
+    body = f'DB = "{_dsn("postgresql", "svc", "zQ8vT2mKp", "db.prod.example.com", ":5432/app")}"\n'
+    findings = _dsn_findings(body)
+
+    assert [f.rule_id for f in findings] == ["connection-string-password"]
+    assert findings[0].severity == "critical"
+
+
+def test_the_password_never_appears_in_the_finding():
+    """The scanner's own rule, applied to the value it is most tempting to
+    quote back: a finding is persisted and rendered, so the mask is the only
+    thing standing between "we found your password" and republishing it."""
+    password = "zQ8vT2mKp"
+    body = f'DB = "{_dsn("postgresql", "svc", password, "db.prod.example.com")}"\n'
+    finding = _dsn_findings(body)[0]
+
+    assert password not in finding.masked
+    assert password not in finding.title
+    assert password not in repr(finding)
+
+
+def test_an_interpolated_password_is_not_a_finding():
+    """`postgres://u:${DB_PASSWORD}@host` contains no credential at all --
+    the value lives in the environment, which is exactly where we tell people
+    to put it. Reporting it would punish the fix we recommend.
+    """
+    for placeholder in ("${DB_PASSWORD}", "%s", "{pw}", "<password>"):
+        body = f'DB = "{_dsn("postgres", "u", placeholder, "prod.example.com")}"\n'
+        assert _dsn_findings(body) == [], placeholder
+
+
+def test_a_passwordless_connection_string_is_not_a_finding():
+    body = 'DB = "postgresql://readonly@db.example.com/app"\n'
+    assert _dsn_findings(body) == []
+
+
+def test_a_tutorial_default_gets_its_own_rule_id_and_stays_low():
+    """postgres:postgres@localhost is what every quickstart ships. Filing it
+    under the same id as a live credential would collapse the two together in
+    the report and offer to rewrite a docker-compose default into an
+    environment variable. Same reasoning as supabase-anon-key.
+    """
+    for password in ("postgres", "change_me", "change-me", "changeme"):
+        body = f'DB = "{_dsn("postgres", "app", password, "localhost", ":5432/app")}"\n'
+        findings = _dsn_findings(body)
+
+        assert [f.rule_id for f in findings] == [
+            "connection-string-dev-password"], password
+        assert findings[0].severity == "low"
+
+
+def test_a_real_password_on_a_local_host_is_reported_but_not_critical():
+    body = f'DB = "{_dsn("postgres", "app", "zQ8vT2mK", "localhost", ":5432/app")}"\n'
+    finding = _dsn_findings(body)[0]
+
+    assert finding.rule_id == "connection-string-password"
+    assert finding.severity == "medium"
+
+
+def test_a_dev_default_is_not_escalated_by_migration_context():
+    """Migration context raises confidence because a secret in applied state
+    is real. A tutorial password is not, and the escalation would drag it back
+    up to a leak claim -- the same exemption supabase-anon-key already has.
+    """
+    body = f'-- {_dsn("postgres", "postgres", "postgres", "db")}\n'
+    finding = _dsn_findings(body, path="migrations/0001_init.sql")[0]
+
+    assert finding.rule_id == "connection-string-dev-password"
+    assert finding.severity == "low"
+
+
+def test_the_match_spans_the_whole_connection_string():
+    """The Fix Pack replaces a secret by locating the QUOTED literal around
+    it. A match that stopped at the host left `:5432/app` inside the quotes
+    and produced DB = "os.environ['DATABASE_URL']:5432/app" -- scrubbed, and
+    not valid code. _verify_scrubbed passes that, because the password really
+    is gone, so nothing downstream would have caught it.
+    """
+    from app.fixpack.generate import _apply_secret_fix
+    from app.scan.secrets import iter_secret_matches
+
+    dsn = _dsn("postgresql", "svc", "zQ8vT2mKp", "db.prod.example.com",
+               ":5432/app")
+    src = f'DB = "{dsn}"\n'
+    raw = next(raw for f, raw in iter_secret_matches(make_zip({"c.py": src.encode()}))
+               if f.rule_id == "connection-string-password")
+
+    assert raw == dsn, "the match must cover port and database, not stop at the host"
+
+    rewritten, _ = _apply_secret_fix(src, "connection-string-password", raw,
+                                     "os.environ['DATABASE_URL']")
+    assert rewritten.strip() == "DB = os.environ['DATABASE_URL']"

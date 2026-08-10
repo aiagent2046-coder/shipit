@@ -246,6 +246,44 @@ RULES: tuple[SecretRule, ...] = (
         "high", 0.6,
     ),
     SecretRule(
+        # A connection string carrying its own password:
+        # scheme://user:password@host. Nothing else here catches it. The
+        # generic-assignment rule requires quotes around the value and keys
+        # on a secret-shaped NAME, so a DSN assigned to `DATABASE_URL` -- or
+        # passed straight into a client constructor -- scanned completely
+        # clean. Verified against scan_secrets on postgres, mysql, mongodb,
+        # redis, amqp and https-basic-auth forms: none produced a finding.
+        #
+        # The password half deliberately excludes $ { } < > %, so an
+        # interpolated value (postgres://u:${DB_PASSWORD}@h, ...:%s@...,
+        # ...:{pw}@...) does not match at all -- there is no credential in
+        # that file to find. A literal password does match, and is graded
+        # by _dsn_severity: a dev default or a localhost host is reported
+        # informationally rather than as a leak.
+        #
+        # Requires >=3 password characters so `u:p@h` shorthand in prose
+        # does not fire, and bounds every component so a pathological line
+        # cannot drive the engine into backtracking.
+        "connection-string-password", "Password embedded in a connection string",
+        re.compile(
+            r"(?i)\b[a-z][a-z0-9+.-]{1,15}://"      # scheme
+            r"[^:/?#@\s\"']{1,64}"                  # user
+            r":[^@/?#\s\"'${}<>%]{3,128}"           # password, no interpolation
+            r"@[A-Za-z0-9._-]{1,253}"               # host
+            # Port and path are part of the match on purpose, so the span IS
+            # the whole connection string. The Fix Pack replaces a secret by
+            # locating the QUOTED literal around it; a match that stopped at
+            # the host left `:5432/app` behind inside the quotes and rewrote
+            # DB = "postgres://u:pw@h:5432/app" into
+            # DB = "os.environ['DATABASE_URL']:5432/app" -- scrubbed, and not
+            # valid code. _verify_scrubbed would have passed it, because the
+            # password really was gone.
+            r"(?::\d{1,5})?"                        # port
+            r"(?:/[^\s\"'`<>]*)?"                   # database / path / query
+        ),
+        "critical", 0.9,
+    ),
+    SecretRule(
         # Systemic Lovable-export pattern, confirmed on real repos:
         # migrations declare PL/pgSQL variables like
         #   v_cron_secret text := 'hunter2...';
@@ -327,6 +365,75 @@ def _jwt_severity(token: str) -> tuple[str, float, str]:
     return "high", 0.6, "JWT committed to code"
 
 
+# Hosts that mean "this connection never leaves the developer's machine",
+# including the service names docker-compose conventionally assigns.
+_DSN_LOCAL_HOSTS = frozenset((
+    "localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal",
+    "db", "database", "postgres", "postgresql", "mysql", "mariadb",
+    "redis", "mongo", "mongodb", "rabbitmq", "mq",
+))
+
+# Passwords that are conventions rather than secrets: the value every
+# docker-compose and quickstart uses. Finding `postgres:postgres` tells you
+# the author followed a tutorial, not that a credential leaked.
+_DSN_DEV_PASSWORDS = frozenset((
+    "postgres", "postgresql", "password", "passwd", "pass", "root", "admin",
+    "guest", "test", "testing", "example", "docker", "mysql", "redis",
+    "mongo", "secret", "dev", "development", "local", "changeme",
+))
+
+_DSN_SPLIT_RE = re.compile(
+    r"://(?P<user>[^:/?#@\s]+):(?P<password>[^@/?#\s]+)@(?P<host>[^/?#\s:]+)"
+)
+
+
+def dsn_password_is_conventional(matched: str) -> bool:
+    """Whether a connection string's password is a tutorial default.
+
+    Public because the finding gets its own rule_id when this is true, the
+    way supabase-anon-key does: same pattern, materially different claim.
+    `postgres://postgres:postgres@db` is a docker-compose convention, and
+    filing it under the same id as a live production credential would make
+    the report collapse the two together and offer to rewrite the first.
+    """
+    m = _DSN_SPLIT_RE.search(matched)
+    if m is None:
+        return False
+    pw = m.group("password").lower().replace("_", "").replace("-", "")
+    return pw in _DSN_DEV_PASSWORDS
+
+
+def _dsn_severity(matched: str) -> tuple[str, float, str]:
+    """Grade one connection string by what its password and host actually are.
+
+    A DSN pointing at a production host with a real password is as direct a
+    leak as an API key -- it is the database, in one string. The same shape
+    pointing at localhost with the password `postgres` is a tutorial default,
+    and reporting it as critical would be the committed-.env mistake again:
+    a claim of exposure the value itself contradicts. Both are still
+    reported; only the claim differs.
+    """
+    m = _DSN_SPLIT_RE.search(matched)
+    if m is None:  # pragma: no cover - the rule pattern guarantees the shape
+        return "critical", 0.9, "Password embedded in a connection string"
+
+    # Separators stripped before the lookup: the same convention shows up as
+    # changeme, change_me and change-me, and our own Deploy Pack template
+    # emits `change_me`. Matching only the unpunctuated spelling graded that
+    # template as a real credential.
+    host = m.group("host").lower()
+
+    if dsn_password_is_conventional(matched):
+        return ("low", 0.3,
+                "Connection string with a default development password "
+                "(informational)")
+    if host in _DSN_LOCAL_HOSTS:
+        return ("medium", 0.5,
+                "Password in a connection string to a local/development host")
+    return ("critical", 0.9,
+            "Password embedded in a connection string")
+
+
 def _classify_match(name: str, lineno: int, rule: SecretRule,
                     matched: str, line_text: str = "") -> SecretFinding:
     """Turn one rule hit into a SecretFinding, applying the same
@@ -337,21 +444,34 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     severity, confidence, title = rule.severity, rule.confidence, rule.title
     if rule.id == "jwt-in-code":
         severity, confidence, title = _jwt_severity(matched)
+    elif rule.id == "connection-string-password":
+        severity, confidence, title = _dsn_severity(matched)
     # Supabase anon key is public by design; migration context must NOT
     # re-escalate it (that produced a wall of 40+ scary-but-false "admin
     # login" rows in a real report). Tag it with its own rule_id so the
     # report can collapse and translate it correctly.
     is_anon = title.startswith("Supabase anon key")
-    effective_rule_id = "supabase-anon-key" if is_anon else rule.id
+    # A tutorial-default connection password gets its own id for the same
+    # reason the anon key does: the report must not collapse it together
+    # with a live credential, and the Fix Pack must not offer to rewrite a
+    # docker-compose default into an environment variable.
+    is_dev_dsn = (rule.id == "connection-string-password"
+                  and dsn_password_is_conventional(matched))
+    if is_anon:
+        effective_rule_id = "supabase-anon-key"
+    elif is_dev_dsn:
+        effective_rule_id = "connection-string-dev-password"
+    else:
+        effective_rule_id = rule.id
     # Order matters. Migration escalation wins outright -- it is the one
     # context calibrated on confirmed real leaks. Everything below it damps,
     # strongest signal first: a self-labelled placeholder on a test path is
     # two signals, a test path is one, a comment or doc path is one.
     context: str | None = None
-    if _is_migration_context(name) and not is_anon:
+    if _is_migration_context(name) and not is_anon and not is_dev_dsn:
         confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
         title = f"{title} (committed database migration)"
-    elif is_anon:
+    elif is_anon or is_dev_dsn:
         pass
     elif _is_test_fixture_path(name) and value_has_placeholder_marker(matched):
         severity = _TEST_PLACEHOLDER_SEVERITY
