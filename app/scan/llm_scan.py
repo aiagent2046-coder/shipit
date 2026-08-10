@@ -24,7 +24,20 @@ from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
 
 MAX_FILE_CHARS = 24_000          # per-file cap in prompt
-MAX_TOTAL_CHARS = 360_000        # ~90-100K tokens per rubric prompt
+
+# Per-rubric prompt budget, ~225K tokens. Adaptive by construction rather than
+# by branching: select_files spends min(matching content, this), so a repo that
+# has 50K characters of matching code selects 50K and costs exactly what it did
+# at the old 360_000 -- there is nothing for the extra room to hold. Only a
+# repository with more matching code than the old cap can reach it, which is
+# the same set of repositories the cap was hurting.
+#
+# It was 360_000, and on dubinc/dub that admitted 215 of 1263 matching files
+# (6.4M characters). No ordering closes that gap: six were measured -- ascending
+# size, relevance, relevance-per-character, distinct-keyword counts, a relevance
+# floor, and deferring presentation paths -- and 9 of 13 known-finding files was
+# the ceiling. At this budget the same selection reaches 13 of 13.
+MAX_TOTAL_CHARS = 900_000
 
 # Per-job spend ceiling for a single scan's sequential .complete() loop. When
 # the running cost estimate (summed from each call's returned usage, priced by
@@ -32,9 +45,58 @@ MAX_TOTAL_CHARS = 360_000        # ~90-100K tokens per rubric prompt
 # with stats.cost_cap_exceeded = True -- an honest partial result, never a 500.
 # A degenerate cap (<=0 from a bad env value) is ignored so a typo can't wedge
 # the loop to zero calls; the intended off-switch is a large number, not 0.
-JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "3.00"))
+#
+# Raised from 3.00 together with MAX_TOTAL_CHARS, because otherwise that raise
+# defeats itself on the one product that is paid for. Priced at Sonnet 4.6 list
+# rates, three rubrics at the new budget cost about $2.16 for a one-pass audit
+# and about $4.32 for a Fix Pack's two passes -- so at 3.00 every large-repo
+# Fix Pack would stop mid-scan with cost_cap_exceeded and return a partial
+# result, which is exactly the silent truncation this whole change exists to
+# remove. This is a backstop against a runaway loop, not a budget: it has to
+# sit above the intended cost, not on top of it.
+JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "6.00"))
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "venv/")
-_CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".py", ".sql", ".toml", ".yaml", ".yml", ".json")
+# .pipe is Tinybird's query definition format. It earned its place: on a real
+# paid audit the money rubric reported getWebhookEvents as an unbounded query
+# because the TypeScript wrapper passes no limit -- while `limit 100` sat in
+# packages/tinybird/pipes/get_webhook_events.pipe, which this tuple made
+# unreadable. The finding was not the model guessing; the file that disproves
+# it could not reach the prompt.
+_CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".py", ".sql", ".toml",
+                  ".yaml", ".yml", ".json", ".pipe")
+
+# Selection budget split. Everything below exists because `select_files` used
+# to sort matches by ascending size and fill the budget from the small end --
+# on dubinc/dub that meant 1261 files matched the money rubric, 347 fitted,
+# and the cut fell at 1804 characters. Every file above that size was invisible
+# to the model, which on a monorepo is precisely the payout pipeline:
+# retry-failed-paypal-payouts.ts (4169 chars, and the actual double-payment
+# bug), balance-available/route.ts (7523, a Stripe payout with no idempotency
+# key), send-paypal-payouts.ts, process-payouts.ts, confirm-payouts.ts. What
+# fitted instead were icons, badges, status-label constants and email
+# templates -- files that match "payout" many times and cannot move a cent.
+#
+# Size is anti-correlated with relevance here: the logic that takes money
+# lives in the long handlers. So most of the budget is now spent by relevance,
+# and the rest kept for breadth -- a purely relevance-ordered prompt would be
+# forty large files and would lose the odd small one that turns out to matter.
+RELEVANCE_BUDGET_SHARE = 0.7
+
+# Where behaviour lives, versus where it is merely displayed. Both match the
+# rubric keywords -- an invoice email template says "invoice" a dozen times --
+# and only one of them can charge a card twice or drop a table.
+_BEHAVIOUR_PATH = re.compile(
+    r"(^|/)(api|lib|server|actions?|cron|jobs?|workers?|services?|handlers?"
+    r"|db|prisma|migrations|webhooks?)/",
+    re.I,
+)
+_PRESENTATION_PATH = re.compile(
+    r"(^|/)(ui|components?|icons?|emails?|templates?|styles?|public|assets"
+    r"|fixtures?|stories)/"
+    r"|(^|/)tests?/|\.(test|spec|stories)\."
+    r"|\.(css|scss|svg)$",
+    re.I,
+)
 
 # Each rubric declares the score category its findings land in. This used to
 # be inferred at the call site as `"Security" if rubric == "security" else
@@ -257,21 +319,72 @@ def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
     return out
 
 
+def relevance(name: str, text: str, kw: re.Pattern[str]) -> int:
+    """How much this file looks like the rubric's subject, not its decoration.
+
+    Keyword hits, weighted: a hit in the path is worth more than one in the
+    body, because a file called `create-batch-payout.ts` is about payouts
+    while a file that mentions payouts once is about something else. The path
+    class then multiplies or divides, since it is the single strongest signal
+    available -- `lib/payouts/` and `ui/partners/payouts/` match the same
+    words and only one of them sends money.
+    """
+    score = len(kw.findall(name)) * 5 + len(kw.findall(text))
+
+    if _BEHAVIOUR_PATH.search(name):
+        score *= 3
+    if _PRESENTATION_PATH.search(name):
+        score //= 4
+
+    return score
+
+
 def select_files(files: list[tuple[str, str]], rubric: str) -> list[tuple[str, str]]:
-    """Files whose path or content matches the rubric, smallest first,
-    truncated per-file and capped by total prompt budget."""
+    """Files matching the rubric: most relevant first, then breadth.
+
+    Two passes over the same matches. The first spends RELEVANCE_BUDGET_SHARE
+    of the prompt on the files most likely to contain the rubric's subject;
+    the second spends what is left on the smallest remaining ones, so a prompt
+    is never just forty large handlers. See RELEVANCE_BUDGET_SHARE for what
+    the old size-only order did to a monorepo.
+
+    Both passes `continue` past a file that does not fit rather than stopping.
+    Under the old ascending-size sort `break` was equivalent -- nothing after
+    the first overflow could fit either -- but in any other order it would
+    throw away every remaining file because one was too big.
+
+    Ties break on size and then on name so the selection is a pure function of
+    the archive's contents. Zip member order must not change it: the audit
+    cache is keyed on a content hash, and two byte-identical repositories that
+    selected different files would produce different scores from the same key.
+    """
     kw = RUBRICS[rubric]["keywords"]
     matched = [
-        (n, t) for n, t in files if kw.search(n) or kw.search(t)
+        (n, t[:MAX_FILE_CHARS]) for n, t in files
+        if kw.search(n) or kw.search(t)
     ]
-    matched.sort(key=lambda x: len(x[1]))
-    selected, total = [], 0
-    for n, t in matched:
-        t = t[:MAX_FILE_CHARS]
-        if total + len(t) > MAX_TOTAL_CHARS:
-            break
+
+    selected: list[tuple[str, str]] = []
+    taken: set[str] = set()
+    total = 0
+
+    reserve = int(MAX_TOTAL_CHARS * RELEVANCE_BUDGET_SHARE)
+    by_relevance = sorted(
+        matched, key=lambda x: (-relevance(x[0], x[1], kw), len(x[1]), x[0]))
+
+    for n, t in by_relevance:
+        if total + len(t) > reserve:
+            continue
+        selected.append((n, t))
+        taken.add(n)
+        total += len(t)
+
+    for n, t in sorted(matched, key=lambda x: (len(x[1]), x[0])):
+        if n in taken or total + len(t) > MAX_TOTAL_CHARS:
+            continue
         selected.append((n, t))
         total += len(t)
+
     return selected
 
 

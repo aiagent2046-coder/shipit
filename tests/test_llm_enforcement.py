@@ -33,7 +33,7 @@ from fastapi.testclient import TestClient
 import app.main as main_mod
 from app import accounts, alerts
 from app.llm.client import LLMClient, LLMUsage, Provider
-from app.scan.llm_scan import run_llm_scan
+from app.scan.llm_scan import JOB_COST_CAP_USD, run_llm_scan
 from app.main import (
     app,
     get_account_repo,
@@ -96,9 +96,15 @@ class CountingLLM(LLMClient):
 # --------------------------------------------------------------------------
 
 def test_cost_cap_interrupts_loop_and_flags_partial():
-    # One call at 1,000,000 input tokens = exactly $3.00 = the cap, so the loop
-    # stops after the FIRST rubric even though a second would otherwise run.
-    llm = CountingLLM(input_tokens=1_000_000, output_tokens=0)
+    # Derived from the cap, not from a hardcoded dollar figure. Written as
+    # "1,000,000 input tokens = exactly $3.00 = the cap", this test broke the
+    # moment the cap moved -- reporting a raised constant as a broken guard,
+    # which is the one failure that teaches an author to weaken the guard. What
+    # it means to assert is that the loop stops once spend reaches the cap,
+    # whatever the cap is: input is $3.00/MTok, so that is one call of
+    # cap/3.00 million tokens.
+    at_the_cap = int(JOB_COST_CAP_USD / Decimal("3.00") * 1_000_000)
+    llm = CountingLLM(input_tokens=at_the_cap, output_tokens=0)
     _findings, stats = run_llm_scan(_both_rubrics_zip(), llm)
     assert llm.calls == 1                 # stopped before the second rubric
     assert stats.calls == 1
@@ -106,7 +112,7 @@ def test_cost_cap_interrupts_loop_and_flags_partial():
 
 
 def test_cost_cap_not_tripped_runs_full_scan():
-    # Cheap calls never approach $3.00, so both rubrics run and the flag stays
+    # Cheap calls never approach the cap, so both rubrics run and the flag stays
     # down -- the cap must not fire on ordinary traffic.
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     _findings, stats = run_llm_scan(_both_rubrics_zip(), llm)
@@ -527,3 +533,36 @@ async def test_anonymous_caller_is_not_served_a_paid_audit_from_the_cache(
     assert not any((f.get("rule_id") or "").startswith("llm-")
                    for f in fresh["findings_json"])
     assert llm.calls == 0
+
+
+def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
+    """The cap is a backstop against a runaway loop, not a budget.
+
+    If it sits below the intended cost of a scan, every large-repo Fix Pack
+    stops mid-way and returns a partial result flagged cost_cap_exceeded --
+    silently, and only on the product that was paid for. That is not
+    hypothetical: raising MAX_TOTAL_CHARS to 900_000 while leaving the cap at
+    $3.00 does exactly this, and no other test notices, because the cap tests
+    derive their token counts FROM the cap and so move with it.
+
+    Priced from app/llm/pricing.py so a price rise fails here rather than in
+    production. Output is bounded by the 8192 max_tokens each call requests.
+    """
+    from app.llm.client import DEFAULT_MODEL
+    from app.llm.pricing import cost_usd
+    from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRICS
+
+    passes = 2                              # what a Fix Pack runs
+    calls = len(RUBRICS) * passes
+    # ~4 characters per token is the standard rough conversion; the point is
+    # the order of magnitude, not a token-exact figure.
+    worst_case = cost_usd(DEFAULT_MODEL,
+                          input_tokens=MAX_TOTAL_CHARS // 4 * calls,
+                          output_tokens=8192 * calls)
+
+    assert JOB_COST_CAP_USD > worst_case, (
+        f"JOB_COST_CAP_USD is {JOB_COST_CAP_USD}, but a two-pass scan at "
+        f"MAX_TOTAL_CHARS={MAX_TOTAL_CHARS:,} costs about {worst_case:.2f}. "
+        "Every Fix Pack on a large repository would stop mid-scan and return "
+        "a partial result. Raise the cap, or lower the budget."
+    )
