@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Run this YOURSELF, on a host with Docker, against a real repository.
+
+What it proves that no unit test can: that the commands
+`detect_verification_profile` plans actually RUN. The profile is built from
+package.json and lockfiles, so a test can only assert the strings we meant to
+emit -- it cannot tell you that `pnpm --filter web run build` succeeds inside
+node:20-slim, that corepack really puts pnpm on PATH, or that a workspace
+member's tsconfig is found. Those are facts about Docker and about npm/pnpm
+/yarn, and the only honest way to learn them is to execute the thing.
+
+This matters most for workspaces. Before member support, a monorepo produced
+no profile at all and every Fix Pack for it fell back to the semantic check.
+Now it produces one -- and a profile that is generated but never executed is
+exactly the "builds green, boots never" shape this repository refuses to ship
+elsewhere.
+
+Usage:
+    python scripts/verify_build_profile_locally.py https://github.com/owner/repo
+    python scripts/verify_build_profile_locally.py path/to/repo.zip
+    python scripts/verify_build_profile_locally.py <target> --plan-only
+
+`--plan-only` prints the profile and stops, needing no Docker. Without it the
+containers really run: an install with network, then every step offline, with
+the same restrictions a customer's Fix Pack gets.
+
+Expect the full run to take minutes on a large repository, and expect it to
+cost real disk in the Docker cache.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.fixpack.verification import detect_verification_profile  # noqa: E402
+
+
+def load(target: str) -> bytes:
+    path = Path(target)
+
+    if path.exists():
+        return path.read_bytes()
+
+    if not target.startswith("https://github.com/"):
+        raise SystemExit(
+            f"not a file and not a github.com URL: {target}"
+        )
+
+    from app.ingest.github_fetch import fetch_repo_zip
+
+    owner, _, repo = target.removeprefix(
+        "https://github.com/").rstrip("/").partition("/")
+
+    if not owner or not repo:
+        raise SystemExit(f"cannot read owner/repo from {target}")
+
+    return fetch_repo_zip(owner, repo)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("target", help="a github.com repo URL or a .zip path")
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="print the planned profile and stop; needs no Docker",
+    )
+    args = parser.parse_args()
+
+    raw = load(args.target)
+    profile = detect_verification_profile(raw)
+
+    if profile is None:
+        print(
+            "No verification profile.\n"
+            "The Fix Pack falls back to the semantic check for this "
+            "repository, which is the weaker guarantee. If you expected a "
+            "profile, the framework was not found at the repository root or "
+            "in a workspace member."
+        )
+        return 1
+
+    print(f"ecosystem : {profile.ecosystem}")
+    print(f"framework : {profile.framework}")
+    print(f"image     : {profile.image}")
+    print(f"install   : {profile.install_command}")
+
+    for step in profile.steps:
+        required = "required" if step.required else "optional"
+        print(f"  {step.name:<10} {required:<9} {step.command}")
+
+    if args.plan_only:
+        return 0
+
+    # Imported here, not at module scope: the plan-only path must work on a
+    # host with no Docker, and this module reaches for the sandbox at import.
+    from app.fixpack.semantic_check import run_verification_profile
+
+    print("\nRunning the profile (this really builds; minutes, not seconds)…")
+    stages = run_verification_profile(raw, profile)
+
+    failed = False
+
+    for stage in stages:
+        print(f"  {stage.name:<10} {stage.status}")
+        if stage.status not in ("passed", "skipped"):
+            failed = True
+
+    print(
+        "\nThe planned commands do not run."
+        if failed else
+        "\nEvery planned command ran. The profile is real, not just plausible."
+    )
+
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
