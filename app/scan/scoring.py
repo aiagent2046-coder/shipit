@@ -302,4 +302,16 @@ def compute_scores(findings: list[ScoredFinding],
     # missing key conflates. Stored rows predating it have no `gated_by` at
     # all, and every surface that renders it must keep treating that as
     # unknown rather than as a clean bill.
-    return {"total": total, "categories": by_cat, "gated_by": reasons}
+    # Which categories nothing looked at. `categories` reports all of them
+    # because hiding a row would make the audit look narrower than it is --
+    # but an unexamined category sits at 10.0 for want of a producer, and a
+    # 10.0 rendered as a full green bar is the single most misleading thing
+    # this module can emit. It already does not vote on the total; this key
+    # is what lets a report say "not checked" instead of drawing that bar.
+    #
+    # Derived here rather than in each surface: working it out downstream
+    # needs LLM_ONLY_CATEGORIES and the basis, and a second copy of that
+    # rule is how the report starts disagreeing with the score.
+    unexamined = [c for c in CATEGORIES if c not in counted]
+    return {"total": total, "categories": by_cat, "gated_by": reasons,
+            "unexamined": unexamined}

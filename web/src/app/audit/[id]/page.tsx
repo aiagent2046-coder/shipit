@@ -123,15 +123,17 @@ function AuditPageInner() {
     };
   }, [id, token]);
 
-  // A static-only audit shows no readiness score, and the reason is the point:
-  // the number goes UP when fewer checks run, because the findings that would
-  // lower it were never looked for. Measured on audit ed402e63 -- 7.2 with the
-  // auth and injection rubrics, 9.1 without them, and Auth reading 10.0 for a
-  // repository whose subscriptions table has no write RLS policies. That is the
-  // defect from issue #181 (a category scoring ten because nothing looked at
-  // it), and showing it to a free visitor would be reassurance pointing the
-  // wrong way -- on the page whose headline question is whether this is safe to
-  // ship. An audit with no basis at all predates the field and keeps its score.
+  // Both tiers show a score. The free one used to show none, because the
+  // number went UP when fewer checks ran -- audit ed402e63 scored 7.2 with the
+  // auth and injection rubrics and 9.1 without them. Two engine changes
+  // removed that: unexamined categories no longer vote on the mean, and one
+  // confident critical caps it, which the free static rules can trigger alone.
+  // Recomputed on that same audit today: 5.4 full, 6.1 static-only.
+  //
+  // `scored` now only decides how much scope the page has to declare. The
+  // honesty requirement did not go away, it moved: CategoryBars renders an
+  // unexamined category as "not checked" instead of a full green bar, which
+  // is the specific lie that mattered (issue #181).
   const scored = !view || view.score.basis !== "static_only";
 
   return (
@@ -161,20 +163,14 @@ function AuditPageInner() {
         <div className="mt-6">
           <div className="rounded-xl border border-border bg-elevated p-5 sm:p-6">
             <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-              {scored ? (
+              <div>
                 <ScoreRing total={view.score.total} />
-              ) : (
-                <div>
-                  <p className="text-sm text-muted">Static scan</p>
-                  <p className="text-lg font-semibold">
-                    {view.findings.length === 0
-                      ? "Nothing found by these checks"
-                      : `${view.findings.length} issue${
-                          view.findings.length === 1 ? "" : "s"
-                        } found`}
+                {!scored && (
+                  <p className="mt-2 text-sm text-muted">
+                    Free scan — scored over the checks below
                   </p>
-                </div>
-              )}
+                )}
+              </div>
               <div className="text-sm text-muted">
                 <p>
                   stack:{" "}
@@ -203,13 +199,13 @@ function AuditPageInner() {
             </div>
 
             <div className="my-6 border-t border-border" />
-            {scored ? (
-              <CategoryBars
-                categories={view.score.categories}
-                gatedBy={view.score.gated_by}
-              />
-            ) : (
-              <div className="text-sm text-muted">
+            <CategoryBars
+              categories={view.score.categories}
+              gatedBy={view.score.gated_by}
+              unexamined={view.score.unexamined}
+            />
+            {!scored && (
+              <div className="mt-4 text-sm text-muted">
                 <p>
                   These are the checks that run for free: credentials committed
                   to the repository, a committed .env, a .gitignore that misses
@@ -218,10 +214,10 @@ function AuditPageInner() {
                 <p className="mt-2">
                   Not checked here: whether your routes verify who is calling
                   them, whether passwords are hashed, whether row-level security
-                  is on, and whether user input reaches somewhere dangerous. So
-                  there is no readiness score on this page — a score computed
-                  from half the checks rises as fewer things are examined, which
-                  would tell you the opposite of the truth.
+                  is on, and whether user input reaches somewhere dangerous.
+                  Those are left out of the score rather than counted as
+                  passing, so it cannot rise for a check we skipped — but it
+                  cannot tell you they are fine either.
                 </p>
               </div>
             )}

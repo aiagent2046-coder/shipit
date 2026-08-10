@@ -895,3 +895,48 @@ class TestSubscriptionRepositoryExpiresAtType:
 
 async def _async_return(value):
     return value
+
+
+def test_backfill_marks_old_free_audits_unexamined():
+    """A stored static-only row predating `unexamined` must not read as if
+    everything was examined: both report surfaces decide whether to draw a
+    category's bar from that key, and absent would draw Auth at a full 10.0.
+    """
+    from app.db import _backfill_unexamined
+
+    row = {"total": 6.1, "basis": "static_only", "categories": {"Auth": 10.0}}
+    assert _backfill_unexamined(row)["unexamined"] == ["Auth", "Money & Data"]
+
+
+def test_backfill_leaves_paid_and_fresh_rows_alone():
+    from app.db import _backfill_unexamined
+
+    paid = {"total": 5.4, "basis": "static+llm", "categories": {}}
+    assert "unexamined" not in _backfill_unexamined(paid)
+
+    # Already recorded, and empty means "nothing was skipped" -- the backfill
+    # must not overwrite that with a guess.
+    fresh = {"total": 6.1, "basis": "static_only", "unexamined": []}
+    assert _backfill_unexamined(fresh)["unexamined"] == []
+
+    assert _backfill_unexamined(None) is None
+
+
+def test_row_to_audit_applies_the_backfill():
+    """Through the serializer, not the helper.
+
+    Testing _backfill_unexamined directly leaves its call site uncovered:
+    deleting the call from _row_to_audit passed the whole suite, and every
+    stored free audit would have started drawing Auth as a full bar again.
+    """
+    from app.db import _row_to_audit
+
+    row = {
+        "id": "abc",
+        "score_total": None,
+        "score_json": {"total": 6.1, "basis": "static_only",
+                       "categories": {"Auth": 10.0}},
+        "findings_json": [],
+    }
+    assert _row_to_audit(row)["score_json"]["unexamined"] == [
+        "Auth", "Money & Data"]

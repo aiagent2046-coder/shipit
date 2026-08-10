@@ -473,3 +473,19 @@ def test_ungated_score_reports_an_empty_reason_list_not_a_missing_key():
     existed"; a missing key conflates the two, and the report surfaces treat
     the second as unknown rather than as a clean bill."""
     assert compute_scores([_f("low", 0.1, "Deploy")])["gated_by"] == []
+
+
+def test_a_static_only_score_names_the_categories_nothing_examined():
+    """The key both report surfaces read before drawing a category's bar.
+
+    An unexamined category sits at 10.0 for want of a producer, and it is
+    already kept out of the mean -- but `categories` still reports it, so
+    without this list a renderer has no way to tell that 10.0 from a real
+    one. Asserted as the exact list, since an empty one would let every
+    surface fall back to drawing full bars.
+    """
+    findings = [_f("critical", 0.9, "Security")]
+
+    assert compute_scores(findings, llm_ran=False)["unexamined"] == [
+        "Auth", "Money & Data"]
+    assert compute_scores(findings, llm_ran=True)["unexamined"] == []

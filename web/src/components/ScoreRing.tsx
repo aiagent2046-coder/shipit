@@ -76,28 +76,47 @@ function GateNote({ reasons }: { reasons?: GateReason[] }) {
 export function CategoryBars({
   categories,
   gatedBy,
+  unexamined,
 }: {
   categories: Record<string, number>;
   gatedBy?: GateReason[];
+  /** Categories nothing produced a finding for, from the scorer. They sit at
+   * 10.0 for want of a producer, and drawing that as a full bar answers "is
+   * my auth safe?" with a yes nobody checked — issue #181, at the row level.
+   * Read from the score rather than derived here: the rule for which
+   * categories an LLM-less scan cannot fill lives in app/scan/scoring.py. */
+  unexamined?: string[];
 }) {
+  const skipped = new Set(unexamined ?? []);
   return (
     <>
       <div className="flex flex-col gap-2">
         {Object.entries(categories).map(([name, value]) => (
           <div key={name} className="flex items-center gap-3 text-sm">
             <span className="w-24 shrink-0 text-muted">{name}</span>
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-border">
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${(value / 10) * 100}%`,
-                  background: scoreColor(value),
-                }}
-              />
-            </div>
-            <span className="w-8 shrink-0 text-right font-mono tabular-nums">
-              {value.toFixed(1)}
-            </span>
+            {skipped.has(name) ? (
+              <>
+                <div className="h-2 flex-1 rounded-full bg-border/40" />
+                <span className="shrink-0 text-right text-xs text-muted">
+                  not checked
+                </span>
+              </>
+            ) : (
+              <>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-border">
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${(value / 10) * 100}%`,
+                      background: scoreColor(value),
+                    }}
+                  />
+                </div>
+                <span className="w-8 shrink-0 text-right font-mono tabular-nums">
+                  {value.toFixed(1)}
+                </span>
+              </>
+            )}
           </div>
         ))}
       </div>

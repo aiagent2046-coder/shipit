@@ -10,7 +10,8 @@ from __future__ import annotations
 from html import escape
 
 from app.report.plain_language import plain_fields, tier
-from app.scan.scoring import GATE_THRESHOLD, GATED_MAX
+from app.scan.scoring import (GATE_THRESHOLD, GATED_MAX,
+                              LLM_ONLY_CATEGORIES)
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -28,7 +29,22 @@ def _score_color(total: float) -> str:
     return "#e5484d"
 
 
-def _bar(label: str, value: float) -> str:
+def _bar(label: str, value: float, examined: bool = True) -> str:
+    """One category row. `examined=False` draws no bar and no number.
+
+    An unexamined category sits at 10.0 because nothing produced a finding
+    in it, not because it is clean. Drawing that as a full green bar is the
+    most misleading thing this report can do -- it answers the reader's
+    question ("is my auth safe?") with a confident yes nobody checked. The
+    row stays, because hiding it would make the audit look narrower than it
+    was; only the claim goes.
+    """
+    if not examined:
+        return (
+            f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
+            f'<div class="track"></div>'
+            f'<span class="cat-val cat-skip">not checked</span></div>'
+        )
     pct = int(value * 10)
     return (
         f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
@@ -36,6 +52,25 @@ def _bar(label: str, value: float) -> str:
         f'background:{_score_color(value)}"></div></div>'
         f'<span class="cat-val">{value:.1f}</span></div>'
     )
+
+
+def _unexamined_sentence(score: dict) -> str:
+    """Name the categories nothing looked at, for the scope note.
+
+    Reads the scorer's own `unexamined` list rather than re-deriving it from
+    the basis: the rule for which categories an LLM-less scan cannot fill
+    lives in app/scan/scoring.py, and a second copy here would drift from it.
+    An older stored audit has no such key and gets a generic sentence.
+    """
+    names = [str(n) for n in score.get("unexamined") or []]
+    if not names:
+        return ("It does not review your authentication and does not look "
+                "for injection paths.")
+    if len(names) == 1:
+        listed = escape(names[0])
+    else:
+        listed = escape(", ".join(names[:-1]) + " and " + names[-1])
+    return f"Nothing here examined {listed}."
 
 
 def _finding_row(f: dict) -> str:
@@ -89,15 +124,12 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     score = result["score"]
     total = float(score["total"])
 
-    # A static-only scan gets no readiness score, and this is the whole reason:
-    # the number goes UP when fewer checks run, because the findings that would
-    # lower it were never looked for. Measured on audit ed402e63 -- 7.2 with the
-    # auth and injection rubrics, 9.1 without them, Auth reading 10.0 for a repo
-    # whose subscriptions table has no write RLS policies. Publishing that as a
-    # "production readiness score" would be reassurance in the wrong direction.
+    # Both tiers publish a score now; `scored` only decides how it is framed
+    # and how much scope the note has to declare. See the free-tier branch
+    # below for why withholding it stopped being the honest option.
     #
-    # A missing basis means an audit from before the field existed: those keep
-    # rendering exactly as they always did.
+    # A missing basis means an audit from before the field existed. It is
+    # treated as a full audit, exactly as it always was.
     scored = str(score.get("basis") or "") != "static_only"
     findings = sorted(
         result.get("findings", []),
@@ -105,9 +137,21 @@ def render_report(result: dict, project_name: str = "your app") -> str:
                        -float(f.get("confidence", 0))),
     )
 
+    # Rendered for the free tier too now, with the unexamined rows marked.
+    #
+    # A stored row predating the key gets the same answer computed from the
+    # basis, because absent must not read as "everything was examined": that
+    # would draw Auth as a full 10.0 bar, the exact claim issue #181 is about.
+    if "unexamined" in score:
+        unexamined = set(str(n) for n in (score.get("unexamined") or []))
+    elif not scored:
+        unexamined = set(LLM_ONLY_CATEGORIES)
+    else:
+        unexamined = set()
     cats = "".join(
-        _bar(name, val) for name, val in score["categories"].items()
-    ) if scored else ""
+        _bar(name, val, examined=name not in unexamined)
+        for name, val in score["categories"].items()
+    )
 
     # Why the headline is capped, printed next to the bars it contradicts.
     # A subscore failure explains itself -- the bar is visibly short -- but a
@@ -119,7 +163,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # not the same as "not gated" and must print nothing rather than a
     # reassurance the row cannot support.
     gate_note = ""
-    if scored and score.get("gated_by"):
+    if score.get("gated_by"):
         crit = [r for r in score["gated_by"] if r.get("kind") == "critical"]
         low = [r for r in score["gated_by"] if r.get("kind") == "subscore"]
         parts = []
@@ -142,25 +186,41 @@ def render_report(result: dict, project_name: str = "your app") -> str:
             f'while something disqualifying is open.</p></section>'
         )
 
-    n = len(result.get("findings", []))
+    header_left = f'<div class="ring">{total:.1f}</div>'
     if scored:
         og_title = f"Production Readiness Score: {total:.1f}/10"
-        header_left = f'<div class="ring">{total:.1f}</div>'
-        heading = f"Production Readiness — {escape(project_name)}"
+        heading = f"Production Readiness \u2014 {escape(project_name)}"
         tier_note = ""
     else:
-        og_title = (f"Static scan: {n} issue{'' if n == 1 else 's'} found"
-                    if n else "Static scan: nothing found")
-        header_left = ""
-        heading = f"Static scan — {escape(project_name)}"
+        # The free tier used to publish no number at all, on the reasoning
+        # that a score from half the checks reads as reassurance and goes UP
+        # as fewer things are examined. That was measured and true: audit
+        # ed402e63 scored 7.2 with the auth and injection rubrics and 9.1
+        # without them.
+        #
+        # Two changes since removed the mechanism. Unexamined categories no
+        # longer vote on the mean (LLM_ONLY_CATEGORIES), so a skipped rubric
+        # cannot lift the total; and one confident critical now caps it,
+        # which the free static rules can trigger on their own. Recomputed
+        # on that same audit under today's engine: 5.4 full, 6.1 static-only
+        # -- a 0.7 gap in the same direction as before, with both numbers
+        # inside the failing band, against 1.9 the other way.
+        #
+        # So the number is now defensible, and withholding it costs the
+        # visitor the one thing they came for. What must stay is the honest
+        # scope: the note below names what was not examined, and the bars
+        # render those categories as unchecked rather than as a perfect 10.
+        og_title = f"Free scan: {total:.1f}/10 over the checks that ran"
+        heading = f"Free scan \u2014 {escape(project_name)}"
         tier_note = (
-            '<section><p class="secnote">This is the free static scan: '
-            'credentials committed to the repository, a committed .env, a '
-            '.gitignore that misses secret files, missing tests, missing CI and '
-            'no Dockerfile. It does not review your authentication and does not '
-            'look for injection paths, so it produces no readiness score \u2014 a '
-            'score computed from half the checks reads as reassurance, and it '
-            'goes up as fewer things are examined.</p></section>'
+            '<section><p class="secnote">This score covers what the free '
+            'scan looks at: credentials committed to the repository, a '
+            'committed .env, a .gitignore that misses secret files, missing '
+            'tests, missing CI and no Dockerfile. '
+            + _unexamined_sentence(score) +
+            f' Those are left out of the {total:.1f} rather than counted as '
+            'passing, so the number cannot rise for a check we skipped '
+            '\u2014 but it cannot tell you they are fine either.</p></section>'
         )
 
     # Split, don't hide. A secret in a test fixture and a secret in a running
@@ -232,6 +292,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
  .sechead{{font-size:15px;margin:32px 0 4px;padding-top:24px;
           border-top:1px solid #26262a}}
  .secnote{{color:#8b8d98;font-size:13px;margin:0}}
+.cat-skip{{color:#8b8d98;font-size:12px;width:auto;white-space:nowrap}}
  footer{{margin-top:36px;color:#5a5c66;font-size:12px}}
 </style></head><body><div class="wrap">
 <header>

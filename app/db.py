@@ -46,6 +46,9 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
 
+from app.scan.pipeline import BASIS_STATIC_ONLY
+from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
+
 import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -383,9 +386,30 @@ def _row_to_audit(row: dict[str, Any]) -> dict[str, Any]:
     # rounded to 1 dp -- see app/scan/scoring.py).
     if d.get("score_total") is not None:
         d["score_total"] = round(float(d["score_total"]), 1)
-    d["score_json"] = _json_field(d["score_json"])
+    d["score_json"] = _backfill_unexamined(_json_field(d["score_json"]))
     d["findings_json"] = _json_field(d["findings_json"])
     return d
+
+
+def _backfill_unexamined(score: Any) -> Any:
+    """Fill in `unexamined` for a row stored before the scorer recorded it.
+
+    Both report surfaces now publish the free tier's score, and they decide
+    whether to draw a category's bar from this key. A stored static-only row
+    that predates it would arrive without one -- and Auth would render as a
+    full green 10.0, which is precisely the claim (issue #181) the key exists
+    to prevent. Absent must not read as "everything was examined".
+
+    Derived from LLM_ONLY_CATEGORIES rather than a literal list: it is the
+    same constant compute_scores excludes from the mean, so the backfilled
+    answer cannot disagree with the one a fresh audit produces.
+    """
+    if not isinstance(score, dict) or "unexamined" in score:
+        return score
+    if str(score.get("basis") or "") != BASIS_STATIC_ONLY:
+        return score
+    return {**score,
+            "unexamined": [c for c in CATEGORIES if c in LLM_ONLY_CATEGORIES]}
 
 
 # Marks a fixpack_jobs.detail written by the stale-lease reaper rather than by the

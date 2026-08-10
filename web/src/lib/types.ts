@@ -41,6 +41,11 @@ export interface Score {
   // Optional because audits stored before this key existed have none, which
   // means "unknown", not "ungated" — an empty array is the ungated case.
   gated_by?: GateReason[];
+  // Categories excluded from the mean because nothing produced findings for
+  // them (a static-only scan cannot fill Auth or Money & Data). They still
+  // appear in `categories` at 10.0, so a renderer MUST consult this before
+  // drawing a bar. Absent on audits stored before the key existed.
+  unexamined?: string[];
 }
 
 export interface Finding {
