@@ -16,7 +16,7 @@ Modes:
 
     apply
         Apply only pending migrations. Each migration and its ledger row are
-        committed atomically.
+        committed atomically, after a verified pg_dump of the database.
 """
 
 from __future__ import annotations
@@ -26,9 +26,11 @@ import fcntl
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn, Sequence
 
@@ -49,6 +51,30 @@ LOCAL_LOCK_PATH = Path(
 MIGRATION_NAME_RE = re.compile(
     r"^(?P<number>[0-9]{4})_[a-z0-9_]+\.sql$"
 )
+
+# pg_dump refuses to dump a server newer than itself, so the binary is pinned
+# to the PostgreSQL 17 build rather than to whatever `pg_dump` PATH happens to
+# resolve to -- the same pin deploy/scripts/backup-postgres.sh uses. PG_DUMP
+# and PG_RESTORE override it for a host that installs elsewhere, and PATH is
+# the last resort: a wrong-version binary found there fails loudly on the
+# version check rather than writing a partial dump.
+PG_DUMP_PINNED = "/usr/lib/postgresql/17/bin/pg_dump"
+PG_RESTORE_PINNED = "/usr/lib/postgresql/17/bin/pg_restore"
+
+# The scheduled backups' directory, on purpose: the BACKUP_KEEP_DAYS sweep at
+# the end of backup-postgres.sh matches *.dump anywhere under it, so
+# pre-migration dumps age out on the same schedule instead of growing without
+# bound. Their value is highest in the hour after a migration and gone once
+# the routine backups have moved past it.
+DEFAULT_BACKUP_DIR = "/var/backups/shipit/postgres"
+
+# Everything this script prints lands in a deploy log or the journal, and both
+# psql and pg_dump quote the connection string back in some failure messages.
+# On 2026-08-02 an error that echoed a config value put a live bearer token
+# into the journal and into an HTTP response body; naming the variable was
+# just as actionable and could not leak. Same rule for anything carrying
+# DATABASE_URL.
+DSN_CREDENTIALS_RE = re.compile(r"(?<=://)[^/\s@]+(?=@)")
 
 APP_TABLES = (
     "accounts",
@@ -383,6 +409,17 @@ def database_url() -> str:
     return value
 
 
+def redact_dsn(text: str) -> str:
+    """Mask the credentials in any connection URI appearing in `text`.
+
+    Applied to every diagnostic this script relays from psql or pg_dump, on
+    the reasoning in DSN_CREDENTIALS_RE. The host and database name survive,
+    because those are what make a connection error actionable; the part before
+    the '@' is what must not reach a log.
+    """
+    return DSN_CREDENTIALS_RE.sub("***", text)
+
+
 def run_psql(
     sql: str,
     *,
@@ -417,7 +454,7 @@ def run_psql(
 
         raise MigrationError(
             f"psql failed with exit code {completed.returncode}: "
-            f"{detail or 'no diagnostic output'}"
+            f"{redact_dsn(detail) or 'no diagnostic output'}"
         )
 
     return completed.stdout.strip()
@@ -1015,10 +1052,149 @@ def mark_migration(
     )
 
 
+def backup_directory() -> Path:
+    return Path(
+        os.environ.get("BACKUP_DIR", "").strip() or DEFAULT_BACKUP_DIR
+    )
+
+
+def resolve_pg_tool(variable: str, pinned: str, command: str) -> str:
+    override = os.environ.get(variable, "").strip()
+
+    if override:
+        return override
+
+    if os.access(pinned, os.X_OK):
+        return pinned
+
+    found = shutil.which(command)
+
+    if found:
+        return found
+
+    raise MigrationError(
+        f"{command} is needed for the pre-migration backup and was found "
+        f"neither at {pinned} nor on PATH. Install the PostgreSQL 17 client "
+        f"tools, point {variable} at the binary, or -- if you have a recent "
+        "backup by other means and accept applying without a fresh one -- "
+        "re-run with --no-backup."
+    )
+
+
+def backup_before_apply(pending: Sequence[Migration]) -> Path:
+    """Take a verified pg_dump immediately before the first schema change.
+
+    Not a duplicate of the scheduled backup. deploy/scripts/backup-postgres.sh
+    runs on a timer, so a migration that corrupts or drops data loses every
+    write since that timer last fired -- up to a full period, and the quiet
+    hours when nobody is watching are exactly when the window is widest. This
+    dump is taken against the schema the migration is about to change, which
+    is the only state a restore can be reasoned about from.
+
+    Verified with `pg_restore --list` before the file is given its final name,
+    and written under a `.partial` name until then. A truncated dump that
+    merely exists is worse than no dump at all, because it is the one an
+    operator reaches for during an incident; an interrupted run must leave
+    nothing that looks restorable.
+
+    A failure here refuses the whole run. The alternative -- warn and migrate
+    anyway -- reproduces the assumption this function exists to remove, and it
+    would do so at the one moment the backup was about to matter.
+    """
+    pg_dump = resolve_pg_tool("PG_DUMP", PG_DUMP_PINNED, "pg_dump")
+    pg_restore = resolve_pg_tool("PG_RESTORE", PG_RESTORE_PINNED, "pg_restore")
+
+    directory = backup_directory()
+
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(0o700)
+    except OSError as error:
+        raise MigrationError(
+            f"cannot prepare the backup directory {directory}: {error}"
+        ) from error
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # The migration number is in the name so that an operator staring at a
+    # directory listing during an incident can tell which dump precedes which
+    # schema change without opening any of them.
+    stem = f"shipit-pre-{pending[0].name.split('_')[0]}-{stamp}"
+    destination = directory / f"{stem}.dump"
+    partial = directory / f"{stem}.dump.partial"
+
+    print(
+        f"Backing up to {destination} before applying "
+        f"{len(pending)} migration(s)..."
+    )
+
+    previous_umask = os.umask(0o077)
+
+    try:
+        completed = subprocess.run(
+            [
+                pg_dump,
+                f"--dbname={database_url()}",
+                "--format=custom",
+                "--compress=9",
+                "--no-owner",
+                "--no-privileges",
+                f"--file={partial}",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        if completed.returncode != 0:
+            partial.unlink(missing_ok=True)
+            detail = completed.stderr.strip() or completed.stdout.strip()
+
+            raise MigrationError(
+                "pre-migration backup failed (pg_dump exited "
+                f"{completed.returncode}): "
+                f"{redact_dsn(detail) or 'no diagnostic output'}. "
+                "No migration was applied."
+            )
+
+        verified = subprocess.run(
+            [pg_restore, "--list", str(partial)],
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        if verified.returncode != 0:
+            partial.unlink(missing_ok=True)
+
+            raise MigrationError(
+                "the pre-migration backup is unreadable (pg_restore --list "
+                f"exited {verified.returncode}): "
+                f"{redact_dsn(verified.stderr.strip()) or 'no output'}. "
+                "No migration was applied."
+            )
+
+        partial.rename(destination)
+
+        checksum_file = directory / f"{stem}.dump.sha256"
+        checksum_file.write_text(
+            f"{migration_checksum(destination)}  {destination}\n",
+            encoding="utf-8",
+        )
+    finally:
+        os.umask(previous_umask)
+
+    print(f"Backup verified: {destination}")
+
+    return destination
+
+
 def apply_migrations(
     migrations: Sequence[Migration],
     *,
     allow_destructive: bool,
+    backup: bool = True,
 ) -> None:
     has_ledger = ledger_exists()
     has_existing_schema = existing_app_schema()
@@ -1062,6 +1238,25 @@ def apply_migrations(
         raise MigrationError(
             "destructive pending migrations require "
             f"--allow-destructive: {names}"
+        )
+
+    # After validation and the destructive gate, before the first schema
+    # change: there is no point dumping a large database only to refuse on the
+    # next line, and no point applying anything we could not first capture.
+    if bootstrap:
+        # An empty database with no ledger and no tables. There is nothing to
+        # lose and nothing to restore to, and this is the path CI takes on a
+        # fresh postgres service container -- which has no pg_dump installed.
+        print("Fresh database; no pre-migration backup needed.")
+    elif backup:
+        backup_before_apply(pending)
+    else:
+        print(
+            "WARNING: --no-backup was given, so these migrations are being "
+            "applied with no fresh dump to restore from. The most recent "
+            "scheduled backup is the fallback, and every write since it ran "
+            "is at risk.",
+            file=sys.stderr,
         )
 
     revision = git_sha()
@@ -1138,6 +1333,15 @@ def parse_args(
         action="store_true",
         help="allow pending DROP/TRUNCATE/DELETE migrations",
     )
+    apply_parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        help=(
+            "apply without first taking a pg_dump (the backup is refused "
+            "rather than skipped when it fails, so this is the only way past "
+            "a host with no usable pg_dump)"
+        ),
+    )
 
     mark_parser = subparsers.add_parser(
         "mark",
@@ -1213,6 +1417,7 @@ def main(
             apply_migrations(
                 migrations,
                 allow_destructive=arguments.allow_destructive,
+                backup=not arguments.no_backup,
             )
             return 0
 

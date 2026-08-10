@@ -404,3 +404,288 @@ def test_lint_passes_on_the_real_migration_directory() -> None:
     assert migration_manager.lint_migrations(
         migration_manager.discover_migrations()
     ) == 0
+
+
+# --- the pre-migration backup ---
+#
+# backup-postgres.sh runs on a timer, so before this a migration that dropped
+# or corrupted data lost every write since the timer last fired. The dump now
+# happens against the schema the migration is about to change.
+
+
+def fake_binary(path: Path, body: str) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\nimport sys, pathlib\n" + body,
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+DUMP_OK = """
+for arg in sys.argv[1:]:
+    if arg.startswith("--file="):
+        pathlib.Path(arg.split("=", 1)[1]).write_bytes(b"PGDMP-fake")
+"""
+
+DUMP_FAILS = """
+sys.stderr.write(
+    "pg_dump: error: connection to server at "
+    "postgresql://shipit:hunter2@db.example:5432/shipit failed\\n"  # scan-allow: fixture
+)
+raise SystemExit(1)
+"""
+
+RESTORE_OK = "raise SystemExit(0)\n"
+
+RESTORE_FAILS = """
+sys.stderr.write("pg_restore: error: did not find magic string\\n")
+raise SystemExit(1)
+"""
+
+
+def backup_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    dump: str = DUMP_OK,
+    restore: str = RESTORE_OK,
+) -> Path:
+    monkeypatch.setenv(
+        "PG_DUMP",
+        str(fake_binary(tmp_path / "pg_dump", dump)),
+    )
+    monkeypatch.setenv(
+        "PG_RESTORE",
+        str(fake_binary(tmp_path / "pg_restore", restore)),
+    )
+    # The fake pg_dump never connects; this only has to parse.
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:p@localhost/shipit",  # scan-allow: throwaway fixture
+    )
+
+    directory = tmp_path / "backups"
+    monkeypatch.setenv("BACKUP_DIR", str(directory))
+
+    return directory
+
+
+def pending_one(tmp_path: Path):
+    return [only(tmp_path / "m", "0028_a.sql",
+                 "-- rollback-safe: yes\ncreate index i on t (c);\n")]
+
+
+def stub_apply_path(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    bootstrap: bool,
+) -> list[str]:
+    """Replace every database call in the apply path, logging the order.
+
+    Order is the assertion that matters. A test that only checked the backup
+    happened would pass just as happily with the dump taken after the schema
+    change, which is the one arrangement that provides nothing.
+    """
+    calls: list[str] = []
+
+    def record_backup(pending):
+        calls.append(f"backup:{len(pending)}")
+        return Path("/nonexistent/fake.dump")
+
+    def record_apply(migration, *, revision):
+        calls.append(f"apply:{migration.name}")
+
+    monkeypatch.setattr(migration_manager, "ledger_exists",
+                        lambda: not bootstrap)
+    monkeypatch.setattr(migration_manager, "existing_app_schema",
+                        lambda: not bootstrap)
+    monkeypatch.setattr(migration_manager, "create_ledger", lambda: None)
+    monkeypatch.setattr(migration_manager, "ensure_ledger_columns",
+                        lambda: None)
+    monkeypatch.setattr(migration_manager, "load_applied", lambda: {})
+    monkeypatch.setattr(migration_manager, "verify_applied_integrity",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(migration_manager, "git_sha", lambda: "0" * 40)
+    monkeypatch.setattr(migration_manager, "apply_one", record_apply)
+    monkeypatch.setattr(migration_manager, "backup_before_apply",
+                        record_backup)
+
+    return calls
+
+
+def test_the_dump_is_taken_before_the_first_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = stub_apply_path(monkeypatch, bootstrap=False)
+
+    migration_manager.apply_migrations(
+        pending_one(tmp_path),
+        allow_destructive=False,
+    )
+
+    assert calls == ["backup:1", "apply:0028_a.sql"]
+
+
+def test_a_fresh_database_is_not_dumped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing to lose and nothing to restore to. This is also the path CI
+    takes against a fresh postgres service container, which has no pg_dump
+    installed -- so a dump here would fail the smoke test on every run."""
+    calls = stub_apply_path(monkeypatch, bootstrap=True)
+
+    migration_manager.apply_migrations(
+        pending_one(tmp_path),
+        allow_destructive=False,
+    )
+
+    assert calls == ["apply:0028_a.sql"]
+
+
+def test_no_backup_applies_without_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = stub_apply_path(monkeypatch, bootstrap=False)
+
+    migration_manager.apply_migrations(
+        pending_one(tmp_path),
+        allow_destructive=False,
+        backup=False,
+    )
+
+    assert calls == ["apply:0028_a.sql"]
+
+
+def test_nothing_pending_takes_no_dump(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deploy that carries no new migration must not dump the database."""
+    calls = stub_apply_path(monkeypatch, bootstrap=False)
+    migrations = pending_one(tmp_path)
+
+    monkeypatch.setattr(
+        migration_manager,
+        "load_applied",
+        lambda: {
+            migrations[0].name: migration_manager.AppliedMigration(
+                name=migrations[0].name,
+                checksum=migrations[0].checksum,
+                execution_mode="apply",
+            )
+        },
+    )
+
+    migration_manager.apply_migrations(
+        migrations,
+        allow_destructive=False,
+    )
+
+    assert calls == []
+
+
+def test_a_verified_dump_is_named_and_checksummed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = backup_environment(monkeypatch, tmp_path)
+
+    destination = migration_manager.backup_before_apply(pending_one(tmp_path))
+
+    assert destination.parent == directory
+    # The migration number is in the name so a directory listing during an
+    # incident says which dump precedes which schema change.
+    assert destination.name.startswith("shipit-pre-0028-")
+    assert destination.read_bytes() == b"PGDMP-fake"
+
+    checksum_file = directory / f"{destination.name}.sha256"
+    assert str(destination) in checksum_file.read_text(encoding="utf-8")
+
+    assert list(directory.glob("*.partial")) == []
+    assert directory.stat().st_mode & 0o777 == 0o700
+
+
+def test_a_failed_dump_refuses_the_whole_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Warn-and-migrate-anyway would reproduce the assumption this function
+    exists to remove, at the one moment the backup was about to matter."""
+    directory = backup_environment(monkeypatch, tmp_path, dump=DUMP_FAILS)
+
+    with pytest.raises(migration_manager.MigrationError,
+                       match="No migration was applied"):
+        migration_manager.backup_before_apply(pending_one(tmp_path))
+
+    assert list(directory.glob("*.dump*")) == []
+
+
+def test_a_failed_dump_does_not_log_the_password(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pg_dump quotes the connection string back on a connection failure, and
+    this message goes to a deploy log and the journal."""
+    backup_environment(monkeypatch, tmp_path, dump=DUMP_FAILS)
+
+    with pytest.raises(migration_manager.MigrationError) as caught:
+        migration_manager.backup_before_apply(pending_one(tmp_path))
+
+    assert "hunter2" not in str(caught.value)
+    # The host survives redaction: it is what makes the error actionable.
+    assert "db.example:5432" in str(caught.value)
+
+
+def test_an_unreadable_dump_is_never_left_looking_restorable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A truncated dump that exists is worse than no dump, because it is the
+    one an operator reaches for during an incident."""
+    directory = backup_environment(monkeypatch, tmp_path,
+                                   restore=RESTORE_FAILS)
+
+    with pytest.raises(migration_manager.MigrationError,
+                       match="unreadable"):
+        migration_manager.backup_before_apply(pending_one(tmp_path))
+
+    assert list(directory.glob("*.dump")) == []
+    assert list(directory.glob("*.partial")) == []
+
+
+def test_a_missing_pg_dump_names_the_way_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host without the client tools must not turn into a puzzle: the error
+    has to say which binary, which variable, and which flag."""
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.delenv("PG_DUMP", raising=False)
+    monkeypatch.setattr(migration_manager, "PG_DUMP_PINNED",
+                        str(tmp_path / "absent"))
+
+    with pytest.raises(migration_manager.MigrationError) as caught:
+        migration_manager.backup_before_apply(pending_one(tmp_path))
+
+    message = str(caught.value)
+    assert "pg_dump" in message
+    assert "PG_DUMP" in message
+    assert "--no-backup" in message
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("postgresql://shipit:hunter2@db:5432/x",  # scan-allow: fixture
+     "postgresql://***@db:5432/x"),
+    # Two on one line, to prove the substitution is global rather than first-
+    # wins: a psql error can name the DSN more than once.
+    ("postgres://u:p@h/d and postgres://a:b@i/e",  # scan-allow: fixture
+     "postgres://***@h/d and postgres://***@i/e"),
+    ("no credentials here", "no credentials here"),
+    ("postgresql://db.example:5432/x", "postgresql://db.example:5432/x"),
+])
+def test_redact_dsn(text: str, expected: str) -> None:
+    assert migration_manager.redact_dsn(text) == expected
