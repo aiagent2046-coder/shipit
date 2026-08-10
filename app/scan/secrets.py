@@ -255,7 +255,7 @@ RULES: tuple[SecretRule, ...] = (
         # redis, amqp and https-basic-auth forms: none produced a finding.
         #
         # The password half deliberately excludes $ { } < > %, so an
-        # interpolated value (postgres://u:${DB_PASSWORD}@h, ...:%s@...,
+        # interpolated value (postgres://u:${DB_PASSWORD}@h, ...:%s@...,  scan-allow: rule documentation, no credential
         # ...:{pw}@...) does not match at all -- there is no credential in
         # that file to find. A literal password does match, and is graded
         # by _dsn_severity: a dev default or a localhost host is reported
@@ -274,7 +274,7 @@ RULES: tuple[SecretRule, ...] = (
             # the whole connection string. The Fix Pack replaces a secret by
             # locating the QUOTED literal around it; a match that stopped at
             # the host left `:5432/app` behind inside the quotes and rewrote
-            # DB = "postgres://u:pw@h:5432/app" into
+            # DB = "postgres://u:pw@h:5432/app" into  scan-allow: rule documentation, no credential
             # DB = "os.environ['DATABASE_URL']:5432/app" -- scrubbed, and not
             # valid code. _verify_scrubbed would have passed it, because the
             # password really was gone.
@@ -392,9 +392,10 @@ def dsn_password_is_conventional(matched: str) -> bool:
 
     Public because the finding gets its own rule_id when this is true, the
     way supabase-anon-key does: same pattern, materially different claim.
-    `postgres://postgres:postgres@db` is a docker-compose convention, and
-    filing it under the same id as a live production credential would make
-    the report collapse the two together and offer to rewrite the first.
+    A password of `postgres` against a host of `db` is a docker-compose
+    convention rather than a credential, and filing it under the same id as
+    a live production one would make the report collapse the two together
+    and offer to rewrite the first.
     """
     m = _DSN_SPLIT_RE.search(matched)
     if m is None:

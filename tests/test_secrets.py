@@ -364,7 +364,7 @@ def test_the_password_never_appears_in_the_finding():
 
 
 def test_an_interpolated_password_is_not_a_finding():
-    """`postgres://u:${DB_PASSWORD}@host` contains no credential at all --
+    """`postgres://u:${DB_PASSWORD}@host` contains no credential at all --  scan-allow: docstring example, interpolated
     the value lives in the environment, which is exactly where we tell people
     to put it. Reporting it would punish the fix we recommend.
     """
