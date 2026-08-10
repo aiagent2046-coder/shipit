@@ -6,9 +6,12 @@ tests, Dockerfile or CI. Each check yields at most one finding.
 
 from __future__ import annotations
 
+import re
 import zipfile
 from dataclasses import dataclass
 from typing import BinaryIO
+
+from app.scan.secrets import RULES, value_has_placeholder_marker
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,106 @@ def find_committed_env_files(files: list[str]) -> list[str]:
     ]
 
 
+# Keys whose VALUE is a credential if it is anything at all. Matched against
+# the key half of a `KEY=value` line, so `NODE_PATH` and `PORT` do not qualify
+# while `DB_PASSWORD` and `STRIPE_SECRET_KEY` do.
+_SECRET_KEY_RE = re.compile(
+    r"(?i)(password|passwd|secret|token|api[_-]?key|access[_-]?key|"
+    r"private[_-]?key|credential|auth|dsn|service[_-]?role)"
+)
+
+# A value that is one of these is configuration, not a credential, however
+# secret-sounding its key: a path, a port, a boolean, a bare number, an empty
+# assignment, or a localhost URL with no password in it.
+_INNOCUOUS_VALUE_RE = re.compile(
+    r"""(?ix)^(
+        | \.{0,2}/[\w./-]*          # ./build, ../../packages, /srv/app
+        | [\w.-]*/[\w./-]*          # build/packages (bare relative path)
+        | \d+                       # 8080
+        | true|false|yes|no|on|off
+        | localhost(:\d+)?
+        | https?://localhost(:\d+)?[\w/.-]*
+    )$"""
+)
+
+# scheme://user:password@host -- a DSN carrying its own credentials. Kept
+# separate from the key test because DATABASE_URL is a config-sounding name
+# that can still hold a live password.
+_URL_WITH_PASSWORD_RE = re.compile(r"://[^/\s:@]+:[^/\s:@]+@")
+
+# Template stubs: what a committed .env holds when it is checked in ON PURPOSE
+# as a starting point for the next developer. Matched whole, not as a
+# substring, so a real key that merely contains "none" or "here" is unaffected.
+#
+# Kept here rather than added to _PLACEHOLDER_MARKERS in app/scan/secrets.py.
+# That list damps test-fixture findings across every scanner, and widening it
+# to catch "changeme" would quietly re-grade unrelated secret matches in test
+# files. This one has a single caller and a single question to answer.
+_ENV_PLACEHOLDER_RE = re.compile(
+    r"""(?ix)^(
+        change[-_ ]?me | replace[-_ ]?me | fill[-_ ]?me[-_ ]?in
+      | your[-_ ]?[\w-]*          # your-api-key, your_token, yourkey
+      | <[^>]*> | \{\{[^}]*\}\}   # <your key here>, {{API_KEY}}
+      | \*{3,} | x{3,} | \.{3,}
+      | todo | tbd | none | null | undefined
+      | example ([-_][\w-]*)?
+      | [\w-]*[-_]here            # secret_here, key-here
+    )$"""
+)
+
+# A .env is a handful of lines. Reading more than this buys nothing and would
+# let a 500 MB file named ".env.production" be pulled into memory whole.
+_MAX_ENV_BYTES = 64 * 1024
+
+
+def env_file_holds_credentials(body: str) -> bool:
+    """Whether a committed .env actually exposes something.
+
+    The check that uses this used to be unconditionally `critical`, on the
+    name of the file alone. That was survivable while a single critical only
+    dented the score; it stopped being survivable when one confident critical
+    began capping the headline (GATE_ON_CRITICAL in app/scan/scoring.py),
+    because a .env holding nothing but a build path now drops a repository
+    below passing. React's own `fixtures/fiber-debugger/.env` -- one line,
+    `NODE_PATH=../../build/packages` -- is the case that surfaced it.
+
+    This cannot be delegated to app/scan/secrets.py. Those rules are written
+    for source code and the general one requires quotes around the value, so
+    as .env lines both `DB_PASSWORD=hunter2` and a DATABASE_URL holding a
+    driver URL with `user:password@host` in it scan completely clean --
+    verified against scan_secrets directly. The presence check is the ONLY
+    thing standing between a visitor and a committed password file, which is
+    exactly why it has to read the file rather than guess from its name.
+
+    (That example is spelled out rather than written literally on purpose:
+    a real DSN here trips the repository's own added-secrets CI scanner,
+    which cannot tell a docstring from a leak.)
+    """
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().removeprefix("export ").strip()
+        value = value.strip().strip("'\"").strip()
+
+        if _URL_WITH_PASSWORD_RE.search(value):
+            return True
+        if (not value or value_has_placeholder_marker(value)
+                or _ENV_PLACEHOLDER_RE.match(value)):
+            continue
+        if _INNOCUOUS_VALUE_RE.match(value):
+            continue
+        if _SECRET_KEY_RE.search(key):
+            return True
+        # A value that matches a real secret signature counts whatever its
+        # key is called: an AWS id or a live Stripe key is not configuration.
+        if any(rule.pattern.search(value) for rule in RULES
+               if rule.severity == "critical"):
+            return True
+    return False
+
+
 def gitignore_covers_env(gitignore_body: str) -> bool:
     """Whether a .gitignore's text already ignores .env. Same predicate
     run_checks uses to decide gitignore-missing-secrets, exposed so the
@@ -78,31 +181,73 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
         if gitignore_raw is not None:
             gitignore_body = zf.read(gitignore_raw).decode("utf-8", errors="ignore")
 
+        # The committed env files' bodies, read while the zip is open, so the
+        # finding below can be graded on what is inside rather than on the
+        # filename. Capped: a .env is a handful of lines, and anything larger
+        # is not the file this check is about.
+        env_bodies = [
+            zf.read(n)[:_MAX_ENV_BYTES].decode("utf-8", errors="ignore")
+            for n in find_committed_env_files(raw_names)
+        ]
+
     findings: list[CheckFinding] = []
     files = [n for n in names if not n.endswith("/")]
 
     committed_env = find_committed_env_files(files)
     if committed_env:
-        findings.append(CheckFinding(
-            "env-file-committed", "Environment file committed to repository",
-            severity="critical", confidence=0.9, category="Security",
-            file=committed_env[0],
-            explanation=(
-                "Your .env file is stored in the repository, so everything in "
-                "it — database passwords, API keys, payment credentials — is "
-                "visible to anyone who can see this code. If the repository is "
-                "public, that is the whole internet. Deleting the file later "
-                "does not help on its own: Git keeps every past version, so "
-                "the values stay readable in the history."
-            ),
-            fix_hint=(
-                "Treat every value in that file as already leaked and issue "
-                "new ones (rotate the keys in each service's dashboard). Then "
-                "stop tracking the file with `git rm --cached .env`, add it to "
-                ".gitignore, and set the same values as environment variables "
-                "in your hosting provider instead."
-            ),
-        ))
+        exposed = any(env_file_holds_credentials(b) for b in env_bodies)
+        if exposed:
+            finding = CheckFinding(
+                "env-file-committed", "Environment file committed to repository",
+                severity="critical", confidence=0.9, category="Security",
+                file=committed_env[0],
+                explanation=(
+                    "Your .env file is stored in the repository, so everything "
+                    "in it — database passwords, API keys, payment credentials "
+                    "— is visible to anyone who can see this code. If the "
+                    "repository is public, that is the whole internet. "
+                    "Deleting the file later does not help on its own: Git "
+                    "keeps every past version, so the values stay readable in "
+                    "the history."
+                ),
+                fix_hint=(
+                    "Treat every value in that file as already leaked and "
+                    "issue new ones (rotate the keys in each service's "
+                    "dashboard). Then stop tracking the file with `git rm "
+                    "--cached .env`, add it to .gitignore, and set the same "
+                    "values as environment variables in your hosting provider "
+                    "instead."
+                ),
+            )
+        else:
+            # Same file, no credential in it. Still worth reporting -- this is
+            # the file secrets get added to, and once it is tracked the next
+            # one lands in history without anyone noticing -- but calling it
+            # critical would be a claim about exposure that the contents
+            # contradict, and under GATE_ON_CRITICAL that claim now caps the
+            # headline. Medium keeps it visible without asserting a leak.
+            finding = CheckFinding(
+                "env-file-committed", "Environment file tracked in the repository",
+                severity="medium", confidence=0.6, category="Security",
+                file=committed_env[0],
+                explanation=(
+                    "Your .env file is stored in the repository. Nothing in it "
+                    "looks like a password or key today, so nothing is exposed "
+                    "yet — but .env is the file those values go into, and once "
+                    "it is tracked the next secret added to it is committed "
+                    "along with everything else. Git keeps every past version, "
+                    "so that one would stay readable in the history even after "
+                    "a later delete."
+                ),
+                fix_hint=(
+                    "Stop tracking it with `git rm --cached .env` and add "
+                    ".env to .gitignore, so the day a real key goes in there "
+                    "it does not follow. Values the build genuinely needs can "
+                    "live in a committed .env.example with the secrets left "
+                    "blank."
+                ),
+            )
+        findings.append(finding)
 
     # A .gitignore that doesn't cover .env is how the committed-env leak
     # above happens in the first place: without it, the next `git add`

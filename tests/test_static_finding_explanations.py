@@ -34,8 +34,17 @@ def make_zip(entries: dict[str, str]) -> io.BytesIO:
 
 # A repo that trips every one of the five checks at once: committed .env, a
 # .gitignore that does not cover it, no tests, no Dockerfile, no CI.
+# The .env carries a real-looking credential deliberately. env-file-committed
+# is now graded on the file's contents, and the "rotate your keys" instruction
+# below only belongs on a .env that actually exposes something -- a fixture
+# holding nothing but a public URL would exercise the innocuous branch while
+# claiming to test the leak one. A Lovable export looks like this: the project
+# URL next to the key that opens it.
 BARE_REPO = {
-    "proj/.env": 'VITE_SUPABASE_URL="https://example.supabase.co"\n',
+    "proj/.env": (
+        'VITE_SUPABASE_URL="https://example.supabase.co"\n'
+        'DB_PASSWORD="hunter2hunter2"\n'  # scan-allow: fixture, invented credential
+    ),
     "proj/.gitignore": "node_modules\ndist\n",
     "proj/package.json": '{"dependencies":{"vite":"5","react":"18"}}',
     "proj/src/App.tsx": "export default function App(){return null}",
@@ -144,3 +153,54 @@ def test_the_env_fix_says_to_rotate_the_secrets() -> None:
         "the .env finding must say deleting the file does not erase it from "
         "Git history"
     )
+
+
+def test_a_committed_env_with_no_credentials_is_not_called_a_leak() -> None:
+    """The other half of the same instruction.
+
+    env-file-committed used to be critical on the filename alone, and its text
+    told every reader that "database passwords, API keys, payment credentials"
+    were visible — including readers whose .env holds a build path. React's
+    fixtures/fiber-debugger/.env is one line, NODE_PATH=../../build/packages.
+    Saying that file leaked their credentials is simply false, and since
+    GATE_ON_CRITICAL that false claim also caps the repository's headline.
+
+    So the finding still fires — a tracked .env is how the next real secret
+    gets committed — but it must not assert an exposure that is not there.
+    """
+    repo = dict(BARE_REPO)
+    repo["proj/.env"] = "NODE_PATH=../../build/packages\n"
+    findings = {f.rule_id: f for f in run_checks(make_zip(repo))}
+
+    env = findings["env-file-committed"]
+    assert env.severity == "medium", (
+        "a .env with no credential in it must not be critical: one confident "
+        "critical caps the score (GATE_ON_CRITICAL)")
+
+    text = (env.explanation + " " + env.fix_hint).lower()
+    assert "rotate" not in text and "already leaked" not in text, (
+        "nothing was leaked, so the text must not tell the reader to treat "
+        "values as compromised")
+    # It still has to explain why a tracked .env matters at all, or the
+    # downgrade turns the finding into noise the reader learns to skip.
+    assert "gitignore" in text
+    assert "history" in text
+
+
+def test_the_env_severity_follows_the_contents_not_the_filename() -> None:
+    """Both branches, side by side, off one fixture pair -- so a change that
+    collapses them into one answer cannot pass by satisfying either alone."""
+    leaky = dict(BARE_REPO)
+    # Split the way tests/test_secrets.py does: written whole, the literal
+    # trips GitHub push protection and the repo's own added-secrets scanner,
+    # neither of which can tell a fixture from a leak.
+    leaky["proj/.env"] = "STRIPE_SECRET_KEY=" + "sk_live_" + "a" * 24 + "\n"
+    innocuous = dict(BARE_REPO)
+    innocuous["proj/.env"] = "PORT=8080\nDEBUG=true\n"
+
+    def sev(repo: dict) -> str:
+        return next(f.severity for f in run_checks(make_zip(repo))
+                    if f.rule_id == "env-file-committed")
+
+    assert sev(leaky) == "critical"
+    assert sev(innocuous) == "medium"
