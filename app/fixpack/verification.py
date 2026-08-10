@@ -47,6 +47,26 @@ _MAX_MEMBER_DEPTH = 2
 # and then fail to install it.
 _NPM, _PNPM, _YARN = "npm", "pnpm", "yarn"
 
+# Both live inside the bind-mounted /work, like _PY_DEPS_DIR, and for the same
+# two reasons: /work is the only writable place under --read-only, and it is
+# the only one that survives from the network-enabled install container into
+# the `--network none` containers that run every later step. The tmpfs at /tmp
+# does not -- each step is its own `docker run`.
+#
+# corepack's shims cannot go where corepack puts them by default. `corepack
+# enable` symlinks into Node's global bin, which is on the read-only rootfs and
+# owned by root, and fails with
+#
+#     EROFS: read-only file system, symlink ... -> '/usr/local/bin/pnpm'
+#
+# Bypassing the shims entirely -- `corepack pnpm install` -- installs but does
+# not survive contact with real repositories: dubinc/dub's build script is
+# `pnpm prisma:generate && next build`, and that nested bare `pnpm` needs a
+# real command on PATH. Both facts were established by running them in the
+# sandbox's own flags, not reasoned about.
+_NODE_BIN_DIR = ".shipit_bin"
+_COREPACK_HOME_DIR = ".shipit_corepack"
+
 
 @dataclass(frozen=True)
 class VerificationStep:
@@ -206,28 +226,49 @@ def _package_manager(root: dict | None, entries: dict[str, object]) -> str:
     return _NPM
 
 
+def with_corepack(manager: str, command: str) -> str:
+    """Make `pnpm`/`yarn` a real command on PATH, then run `command`.
+
+    Prepended to EVERY step, not run once at install time, because each step
+    is a separate container: the shim directory and corepack's download cache
+    both live in /work so they survive, but PATH does not. `mkdir` first --
+    `corepack enable --install-directory` calls realpathSync on the directory
+    and fails if it does not exist yet. Re-enabling per step is idempotent and
+    needs no network; the manager tarball is already in the cache /work
+    carries over from the install.
+
+    npm needs none of this and gets the command unchanged, so every
+    single-app npm repository keeps running exactly the strings it ran before.
+    """
+    if manager == _NPM:
+        return command
+
+    return (
+        f"mkdir -p /work/{_NODE_BIN_DIR}"
+        f" && export COREPACK_HOME=/work/{_COREPACK_HOME_DIR}"
+        f" PATH=/work/{_NODE_BIN_DIR}:$PATH"
+        f" && corepack enable --install-directory /work/{_NODE_BIN_DIR}"
+        f" && {command}"
+    )
+
+
 def _node_install_command(
     manager: str,
     root: dict | None,
     entries: dict[str, object],
 ) -> str:
-    """corepack enable is required for pnpm and yarn.
-
-    node:20-slim ships corepack but leaves the shims uninstalled, so `pnpm`
-    is not on PATH until it is enabled. Without this the install step fails
-    with "pnpm: not found", which reads like a broken repository rather than
-    a missing one-line setup.
-    """
     if manager == _PNPM:
-        return "corepack enable && pnpm install --frozen-lockfile"
+        return "pnpm install --frozen-lockfile"
 
     if manager == _YARN:
         declared = str((root or {}).get("packageManager") or "")
         berry = ".yarnrc.yml" in entries or bool(
             re.match(r"yarn@(?!1\.)", declared)
         )
+        # --frozen-lockfile was removed in Yarn 2 and --immutable does not
+        # exist in Yarn 1, so one flag for both fails half the repositories.
         flag = "--immutable" if berry else "--frozen-lockfile"
-        return f"corepack enable && yarn install {flag}"
+        return f"yarn install {flag}"
 
     if "package-lock.json" in entries:
         return "npm ci --no-audit --no-fund"
@@ -349,7 +390,8 @@ def _node_profile(
 
     manager = _package_manager(root_package, entries)
 
-    install_command = _node_install_command(manager, root_package, entries)
+    install_command = with_corepack(
+        manager, _node_install_command(manager, root_package, entries))
 
     steps: list[VerificationStep] = []
 
@@ -359,7 +401,10 @@ def _node_profile(
         steps.append(
             VerificationStep(
                 name="typecheck",
-                command=_script_command(manager, "typecheck", workspace),
+                command=with_corepack(
+                    manager,
+                    _script_command(manager, "typecheck", workspace),
+                ),
                 required=True,
             )
         )
@@ -367,7 +412,10 @@ def _node_profile(
         steps.append(
             VerificationStep(
                 name="typecheck",
-                command=_exec_command(manager, "tsc --noEmit", workspace),
+                command=with_corepack(
+                    manager,
+                    _exec_command(manager, "tsc --noEmit", workspace),
+                ),
                 required=True,
             )
         )
@@ -377,7 +425,8 @@ def _node_profile(
     steps.append(
         VerificationStep(
             name="build",
-            command=_script_command(manager, "build", workspace),
+            command=with_corepack(
+                manager, _script_command(manager, "build", workspace)),
             required=True,
         )
     )
@@ -386,7 +435,8 @@ def _node_profile(
         steps.append(
             VerificationStep(
                 name="tests",
-                command=_script_command(manager, "test", workspace),
+                command=with_corepack(
+                    manager, _script_command(manager, "test", workspace)),
                 required=False,
             )
         )

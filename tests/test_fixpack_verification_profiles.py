@@ -310,23 +310,37 @@ def test_a_workspace_member_supplies_the_profile():
     assert profile is not None
     assert profile.framework == "nextjs"
     commands = {step.name: step.command for step in profile.steps}
-    assert commands["build"] == "pnpm --filter web run build"
-    assert commands["tests"] == "pnpm --filter web run test"
+    assert commands["build"].endswith("pnpm --filter web run build")
+    assert commands["tests"].endswith("pnpm --filter web run test")
 
 
-def test_pnpm_is_installed_through_corepack():
-    """node:20-slim ships corepack with the shims uninstalled, so `pnpm` is
-    not on PATH until it is enabled. Without this the install fails with
-    "pnpm: not found", which reads as a broken repository."""
+def test_pnpm_is_put_on_path_before_every_command():
+    """Pinned in full, because every character was established by running it
+    in the sandbox's own flags rather than by reasoning.
+
+    `corepack enable` alone dies with EROFS: its shims go to Node's global bin,
+    on the read-only rootfs. `--install-directory` needs the directory to exist
+    first (realpathSync). The shim dir and the download cache live in /work
+    because each step is a separate container and only /work is carried over --
+    the later ones have `--network none`, so nothing can be fetched there. And
+    the prefix repeats per step because PATH does not survive between
+    containers even though the directories do.
+    """
     profile = detect_verification_profile(make_zip({
         "package.json": MONOREPO_ROOT,
         "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
         "apps/web/package.json": MEMBER_NEXT,
     }))
 
-    assert profile.install_command == (
-        "corepack enable && pnpm install --frozen-lockfile"
+    prefix = (
+        "mkdir -p /work/.shipit_bin"
+        " && export COREPACK_HOME=/work/.shipit_corepack"
+        " PATH=/work/.shipit_bin:$PATH"
+        " && corepack enable --install-directory /work/.shipit_bin && "
     )
+
+    assert profile.install_command == prefix + "pnpm install --frozen-lockfile"
+    assert all(step.command.startswith(prefix) for step in profile.steps)
 
 
 def test_a_single_app_repository_is_untouched():
@@ -361,7 +375,7 @@ def test_typecheck_runs_inside_the_member_not_from_the_root():
     }))
 
     commands = {step.name: step.command for step in profile.steps}
-    assert commands["typecheck"] == "pnpm --filter web exec tsc --noEmit"
+    assert commands["typecheck"].endswith("pnpm --filter web exec tsc --noEmit")
 
 
 def test_a_root_app_still_wins_over_a_member():
@@ -384,7 +398,7 @@ def test_the_declared_package_manager_beats_the_lockfile():
         "apps/web/package.json": MEMBER_NEXT,
     }))
 
-    assert profile.install_command.startswith("corepack enable && pnpm")
+    assert profile.install_command.endswith("pnpm install --frozen-lockfile")
 
 
 def test_yarn_berry_and_yarn_classic_take_different_install_flags():
@@ -401,10 +415,8 @@ def test_yarn_berry_and_yarn_classic_take_different_install_flags():
         "apps/web/package.json": MEMBER_NEXT,
     }))
 
-    assert berry.install_command == "corepack enable && yarn install --immutable"
-    assert classic.install_command == (
-        "corepack enable && yarn install --frozen-lockfile"
-    )
+    assert berry.install_command.endswith("yarn install --immutable")
+    assert classic.install_command.endswith("yarn install --frozen-lockfile")
 
 
 def test_npm_workspaces_are_addressed_with_the_workspace_flag():
@@ -417,6 +429,9 @@ def test_npm_workspaces_are_addressed_with_the_workspace_flag():
     commands = {step.name: step.command for step in profile.steps}
     assert commands["build"] == "npm run build --workspace web"
     assert profile.install_command == "npm ci --no-audit --no-fund"
+    # npm needs no corepack, so an npm repository keeps the exact strings it
+    # ran before any of this existed.
+    assert "corepack" not in profile.install_command
 
 
 def test_a_vendored_dependency_manifest_is_not_mistaken_for_the_app():
