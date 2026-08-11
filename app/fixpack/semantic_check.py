@@ -127,6 +127,12 @@ FIXPACK_DOCKER_RUNTIME = os.environ.get("FIXPACK_DOCKER_RUNTIME", "runc")
 # between the (separate) install and test containers.
 _PY_DEPS_DIR = ".shipit_pydeps"
 
+# Package caches, in the bind mount rather than the tmpfs. See _tool_home_argv
+# for why, and app/fixpack/verification.py for pnpm's store, which had to move
+# for the same reason plus one of its own.
+_NPM_CACHE_DIR = ".shipit_npm_cache"
+_PIP_CACHE_DIR = ".shipit_pip_cache"
+
 # Coarse zip-bomb / disk-fill guard: cap the total UNCOMPRESSED size of a
 # client repo we will extract and bind-mount into a container, on top of the
 # per-member zip-slip check in _extract_repo_relative. A genuine client repo
@@ -590,11 +596,24 @@ def _runtime_argv() -> list[str]:
 
 
 def _tool_home_argv() -> list[str]:
-    """Writable, disposable tool home for non-root read-only containers.
+    """Writable tool home and package caches for a non-root read-only container.
 
-    Image-specific homes are unsafe to assume: node:20-slim uses /home/node,
-    while other images may have no passwd entry for our fixed uid. All tool
-    state therefore lives under the existing writable /tmp tmpfs.
+    Two different needs, deliberately pointed at two different filesystems.
+
+    Small, disposable tool state -- config files, scratch -- stays on the /tmp
+    tmpfs. Image-specific homes are unsafe to assume: node:20-slim uses
+    /home/node, while other images may have no passwd entry for our fixed uid.
+
+    The PACKAGE CACHES go to the bind-mounted /work instead, because a tmpfs
+    is RAM with a ceiling and a real install reaches it. pnpm's store sat
+    there and died with `ERR_PNPM_ENOSPC ... no space left on device` after
+    about 800 of dubinc/dub's 2632 packages. npm's cache and pip's cache are
+    the same kind of unbounded thing in the same tmpfs, so a large enough
+    SINGLE-APP repository fails the same way -- this has nothing to do with
+    workspaces, and predates them.
+
+    /work also has room: it is a bind mount on the host's disk, sized by the
+    host rather than by a fraction of its RAM.
     """
 
     home = "/tmp/shipit-home"
@@ -603,8 +622,8 @@ def _tool_home_argv() -> list[str]:
         "-e", f"HOME={home}",
         "-e", f"XDG_CACHE_HOME={home}/.cache",
         "-e", f"XDG_CONFIG_HOME={home}/.config",
-        "-e", f"npm_config_cache={home}/.npm",
-        "-e", f"PIP_CACHE_DIR={home}/.cache/pip",
+        "-e", f"npm_config_cache=/work/{_NPM_CACHE_DIR}",
+        "-e", f"PIP_CACHE_DIR=/work/{_PIP_CACHE_DIR}",
     ]
 
 
