@@ -208,11 +208,19 @@ def test_the_rubric_requires_a_conditional_hook_to_actually_be_reachable():
 
     GroupChat.tsx:22 is the one that counts: hooks after an early return on
     `personas`, which goes from empty to non-empty as the parent loads.
+
+    The first wording said to report it when the condition "can differ between
+    two renders of the same mounted component -- a prop, state or fetched
+    data", and both survivors sailed through it: `redirectMethod` IS a prop.
+    Being a prop was never the property that mattered. Now the rule asks for
+    the code that changes the branch, which is a thing that either exists in
+    the files or does not.
     """
     instructions = RUBRICS["web"]["instructions"]
 
-    assert "the condition can differ between two renders" in instructions
-    assert "build-time constant" in instructions
+    assert "NAME THE CODE THAT CHANGES IT" in instructions
+    assert "build-time" in instructions
+    assert "even though it IS a prop" in instructions
 
 
 def test_the_digest_line_ignores_wording_and_confidence():

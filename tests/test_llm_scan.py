@@ -4,6 +4,7 @@ The verification tests are the heart of this stage: a hallucinated
 finding must never reach the user.
 """
 
+import dataclasses
 import hashlib
 import inspect
 import io
@@ -37,7 +38,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "f61eb1dce430dfec"
+PROMPT_FINGERPRINT = "800999be773b9346"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -925,3 +926,144 @@ def test_every_rubric_selects_something_from_a_frontend_repository():
     assert [n for n, _ in select_files(files, "web")], (
         "the web rubric selected nothing from a frontend repository"
     )
+
+
+# --- the three defects that survived the fifth measured run ---
+#
+# Two are prose, because they are about how the model reasons. The third is a
+# filter, because prose had already been tried on it and reached 20 of 21.
+
+
+def test_a_finding_whose_own_fix_says_nothing_to_do_is_dropped():
+    """Measured once in twenty-one on dubinc/dub: "[LOW conf=0.95] setInterval
+    for draft saving is correctly cleaned up ... fix: No action needed."
+
+    The instructions already forbid this in as many words. Once per run is
+    still a reader paying for a list of repairs and finding an item that needs
+    none -- and it costs them more than the wasted line, because it teaches
+    them to trust the rest of the list less.
+    """
+    for hint in (
+        "No action needed — the ref guard is correct.",
+        "No action needed.",
+        "The existing disabled prop already prevents double-clicks. "
+        "No change needed.",
+        "This is actually correct; nothing to fix.",
+        "No issue here.",
+    ):
+        assert llm_scan.self_cancelling({"fix_hint": hint}), hint
+
+
+def test_a_real_fix_is_not_mistaken_for_a_withdrawal():
+    """The filter's whole risk. Matched on fix_hint alone for this reason: an
+    explanation may say "there is no issue with the ref guard, but the button
+    ..." on its way to a real defect, while a genuine repair instruction has no
+    reason to contain any of these phrases."""
+    for hint in (
+        "Add `await` before handleRequest(e, updateName, router).",
+        "Wrap the await call in try/finally and clear the flag in finally.",
+        "Pass disabled={isSubmitting} alongside loading={isSubmitting}.",
+        "",
+    ):
+        assert not llm_scan.self_cancelling({"fix_hint": hint}), hint
+
+    # An explanation that discusses a non-issue on the way to a real one.
+    assert not llm_scan.self_cancelling({
+        "fix_hint": "Add a cleanup function.",
+        "explanation": "No action needed for the ref, but the timer leaks.",
+    })
+
+
+def test_the_withdrawn_finding_is_counted_apart_from_the_unverifiable_one():
+    """`discarded` counts a claim about code the verifier could not find;
+    `self_cancelled` counts a claim the model withdrew in the same breath it
+    made it. One counter for both would hide whichever is rarer, and this was
+    rare -- one in twenty-one -- and still reached a paying reader."""
+    stats = LLMScanStats()
+
+    assert stats.self_cancelled == 0
+    assert "self_cancelled" in {f.name for f in
+                                dataclasses.fields(LLMScanStats)}
+
+
+def test_a_conditional_hook_needs_the_code_that_changes_the_branch():
+    """Navlinks.tsx:16 and EmailSignIn.tsx:22, both reported at 0.95 as
+    crashes that would blank the page for every visitor. Both really do call
+    useRouter() inside a ternary. Neither crashes: the condition is computed
+    once from a build-time setting, so hook order never changes.
+
+    The previous wording let both through by naming "a prop" as qualifying --
+    and `redirectMethod` IS a prop. Being a prop is not the property that
+    matters; changing is.
+    """
+    instructions = RUBRICS["web"]["instructions"]
+
+    assert "NAME THE CODE THAT CHANGES IT" in instructions
+    assert "even though it IS a prop" in instructions
+    assert "'It might change'" in instructions
+
+
+def test_a_stuck_flag_finding_must_name_the_branch_that_leaks():
+    """add-edit-domain-form.tsx:307, reported as "setIsSubmitting(false) is
+    never called on the success path -- only on the error paths". It is called
+    on the success path and in the catch; if anything leaks it is the early
+    return when the response is not ok. Reporting the inverse of what the file
+    says is worse than a miss, because the reader can check it in ten
+    seconds."""
+    instructions = RUBRICS["web"]["instructions"]
+
+    assert "READ EVERY BRANCH" in instructions
+    assert "quote the one that leaves it" in instructions
+    assert "If every branch clears it, there is nothing here" in instructions
+
+
+def test_the_scan_actually_applies_the_withdrawal_filter():
+    """The assertion M27 exposed as missing.
+
+    The three tests above exercise `self_cancelling` as a pure function and
+    none of them notices when run_llm_scan stops calling it -- deleting the
+    two lines from the loop left the suite green. That is the same shape as
+    the defect this session already shipped once: the web rubric existed in
+    RUBRICS and was never called, and everything that tested the rubric's
+    text passed.
+
+    A predicate that is never invoked is not a filter. This runs the scan.
+    """
+    buf = make_zip({"src/auth.ts": VULN_TS.encode()})
+    withdrawn = json.dumps([{
+        "file": "src/auth.ts", "line_start": 3, "line_end": 3,
+        "evidence": "jwt.decode(token)", "severity": "low", "confidence": 0.95,
+        "title": "Token decoding is correctly guarded",
+        "explanation": "The caller verifies it first.",
+        "fix_hint": "No action needed — the guard is correct.",
+    }])
+
+    findings, stats = run_llm_scan(buf, FakeLLM(withdrawn),
+                                   rubrics=("auth",))
+
+    assert findings == []
+    assert stats.self_cancelled == 1
+    assert stats.verified == 0
+    assert stats.discarded == 0, (
+        "a withdrawn finding is not an unverifiable one; counting it as "
+        "discarded would hide it among the verifier's rejections"
+    )
+
+
+def test_a_real_finding_still_survives_the_filter():
+    """The other half, on the same path: the filter must be invisible to
+    everything that is not a withdrawal."""
+    buf = make_zip({"src/auth.ts": VULN_TS.encode()})
+    real = json.dumps([{
+        "file": "src/auth.ts", "line_start": 3, "line_end": 3,
+        "evidence": "jwt.decode(token)", "severity": "critical",
+        "confidence": 0.9, "title": "JWT decoded without verification",
+        "explanation": "No signature check.",
+        "fix_hint": "Use jwt.verify with the shared secret.",
+    }])
+
+    findings, stats = run_llm_scan(buf, FakeLLM(real), rubrics=("auth",))
+
+    assert len(findings) == 1
+    assert stats.self_cancelled == 0
+    assert stats.verified == 1

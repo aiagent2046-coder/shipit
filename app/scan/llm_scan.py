@@ -306,6 +306,15 @@ RUBRICS: dict[str, dict] = {
             "try -- an argument built from `x.y.join()` before the try begins can "
             "throw where a reader assumes it cannot.\n"
             "\n"
+            "Before writing that a flag is never cleared, READ EVERY BRANCH "
+            "that returns from the handler and quote the one that leaves it "
+            "set. Say which branch it is. A handler that clears the flag on "
+            "success and in its catch, and misses only the early `return` when "
+            "the response is not ok, is a finding about THAT branch -- not "
+            "about the success path, and reporting it as the success path is "
+            "simply wrong about code the reader can see. If every branch "
+            "clears it, there is nothing here.\n"
+            "\n"
             "3. WORK DISAPPEARS. A form the user fills in over minutes, kept only "
             "in component state, with no beforeunload listener and no router "
             "blocker, so a stray click on a nav link discards it silently.\n"
@@ -314,12 +323,22 @@ RUBRICS: dict[str, dict] = {
             "or event listener started in an effect or a callback with no cleanup "
             "that cancels it, so it fires against a component the user has left.\n"
             "\n"
-            "5. A HOOK IS CALLED CONDITIONALLY. A useState or useEffect after an "
-            "early return, or a useRouter() inside a ternary. Report it only when "
-            "the condition can differ between two renders of the same mounted "
-            "component -- a prop, state or fetched data. When it reads a "
-            "build-time constant the order never actually changes and the app "
-            "does not crash: that is a lint violation and not a finding here.\n"
+            "5. A HOOK IS CALLED CONDITIONALLY. A useState or useEffect after "
+            "an early return, or a useRouter() inside a ternary. The violation "
+            "alone is not the finding -- the crash is, and the crash needs the "
+            "branch to actually change while the component stays mounted.\n"
+            "\n"
+            "So NAME THE CODE THAT CHANGES IT and quote that line too: the "
+            "setter that flips the state, the fetch whose result arrives, the "
+            "parent that renders this component with a different prop. "
+            "`personas` going from [] to loaded is a finding. "
+            "`redirectMethod === 'client'` is not, even though it IS a prop -- "
+            "being a prop is not enough, because a prop computed once from a "
+            "build-time setting is as constant as that setting, and the "
+            "component never re-renders with the other branch. If you cannot "
+            "point at what changes it, this is a lint violation and not a "
+            "finding here. 'It might change', 'if it ever differs' and "
+            "'server and client could disagree' point at nothing.\n"
             "\n"
             "6. THE USER ACTS TWICE: a form or button left enabled while its own "
             "submit is in flight, so an impatient second click sends a second "
@@ -464,6 +483,13 @@ class LLMScanStats:
     raw_findings: int = 0
     verified: int = 0
     discarded: int = 0
+    # Findings dropped because their own fix_hint said there was nothing to
+    # do. Separate from `discarded` on purpose: that one counts claims about
+    # code the verifier could not find, this one counts claims the model
+    # withdrew in the same breath it made them. A shared counter would hide
+    # whichever is rarer, and the whole reason this is measured is that it was
+    # rare -- one finding in twenty-one -- and still reached a paying reader.
+    self_cancelled: int = 0
     # None when the stage ran (even if prompts=0, i.e. no rubric-relevant
     # files); a machine-readable string when it never ran at all (e.g. no
     # providers configured). Lets a consumer tell those two apart without
@@ -695,6 +721,33 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
     return evidence in window
 
 
+# A finding that says, in its own words, that there is nothing to fix.
+#
+# The web rubric's instructions already forbid these ("report NOTHING ... not a
+# finding whose fix reads 'no action needed'"), and measured at 20 of 21 --
+# once per run is still a customer paying for a list of repairs and reading an
+# item that needs none. Prose gets asymptotically close and does not arrive; a
+# string match arrives.
+#
+# Matched against `fix_hint` alone, deliberately. That is where the self-
+# cancelling finding lands -- every observed one reads "fix: No action needed"
+# -- while an explanation may legitimately say "there is no issue with the ref
+# guard, but the button..." on its way to a real defect. A real repair
+# instruction has no reason to contain any of these.
+_NO_FIX_NEEDED = re.compile(
+    r"\bno\s+(action|change|fix|changes)\s+(needed|required|necessary)\b"
+    r"|\bnothing\s+to\s+(fix|report|do)\b"
+    r"|\bno\s+issue\s+here\b"
+    r"|\bthis\s+is\s+(actually\s+)?correct\b",
+    re.I,
+)
+
+
+def self_cancelling(finding: dict) -> bool:
+    """True when the finding's own fix says there is nothing to do."""
+    return bool(_NO_FIX_NEEDED.search(str(finding.get("fix_hint") or "")))
+
+
 def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                  rubrics: tuple[str, ...] = ALL_RUBRICS,
                  passes: int = 1,
@@ -742,6 +795,13 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               stats.raw_findings += 1
               if not verify_finding(f, files_by_name):
                   stats.discarded += 1
+                  continue
+              # Counted apart from `discarded`: the verifier rejects a claim
+              # about code that is not there, this rejects a claim the model
+              # itself withdrew. Two different things going wrong, and a
+              # single counter would hide whichever is rarer.
+              if self_cancelling(f):
+                  stats.self_cancelled += 1
                   continue
               stats.verified += 1
               # Same context damping the static rules apply. Without it the
