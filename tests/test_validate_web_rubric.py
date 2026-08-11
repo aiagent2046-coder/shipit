@@ -162,6 +162,83 @@ def test_the_candidate_forbids_timing_as_a_ground_for_a_double_submit_finding():
     assert "disabled input or textarea" in instructions
 
 
+def test_the_candidate_asks_six_closed_questions_and_says_so():
+    """The narrowing, after four runs.
+
+    Each question earned its place by producing a finding that survived
+    hand-verification: the missing error boundary (4 of 4 runs), the flag
+    cleared after an await with no finally, the dirty form with no
+    beforeunload (3 of 4), the timer with no cleanup (4 of 4), the
+    conditionally called hook (GroupChat:22 is a real crash), and the
+    in-flight prop the component never maps to `disabled` (4 of 4, on the
+    money path).
+
+    The closed list is the point. What was cut -- racing fetches, optimistic
+    updates that might diverge, a swallowed error behind a toast -- had four
+    runs to prove itself and produced confident prose about correct code. A
+    question the model cannot answer reliably does not come back empty; it
+    comes back wrong, and the verifier cannot catch that because the quoted
+    line really is there.
+    """
+    instructions = validator.CANDIDATE["instructions"]
+
+    assert "Six questions, and only these six" in instructions
+    assert "If it is not one of the six, it is not a finding" in instructions
+
+    for number in ("1. ", "2. ", "3. ", "4. ", "5. ", "6. "):
+        assert number in instructions, number
+
+
+def test_the_candidate_requires_a_conditional_hook_to_actually_be_reachable():
+    """Navlinks.tsx:16 and EmailSignIn.tsx:22, reported at 0.95 as crashes
+    that would blank the page for every user. Both really do call useRouter()
+    inside a ternary -- a genuine Rules-of-Hooks violation -- but the
+    condition reads a build-time constant, so the hook order never changes
+    between renders and nothing crashes. A lint violation, not a finding.
+
+    GroupChat.tsx:22 is the one that counts: hooks after an early return on
+    `personas`, which goes from empty to non-empty as the parent loads.
+    """
+    instructions = validator.CANDIDATE["instructions"]
+
+    assert "the condition can differ between two renders" in instructions
+    assert "build-time constant" in instructions
+
+
+def test_the_digest_line_ignores_wording_and_confidence():
+    """Two runs of the same rubric on the same input reword the same defect
+    and wobble its confidence, which is what makes reading two transcripts
+    side by side unreliable -- and reading them side by side is how three
+    rounds of prompt work each found a signal in the spread.
+
+    So the digest carries file, line and severity, and nothing that moves for
+    reasons other than a different claim.
+    """
+    finding = {
+        "file": "src/App.tsx",
+        "line_start": 17,
+        "severity": "high",
+        "confidence": 0.9,
+        "title": "No error boundary wrapping the route tree",
+        "explanation": "reworded every single run",
+    }
+    line = validator.digest_line(finding)
+
+    assert line.startswith("DIGEST ")
+    assert "src/App.tsx:17" in line
+    assert "HIGH" in line
+
+    for volatile in ("0.9", "reworded", "wrapping"):
+        assert volatile not in line, volatile
+
+    # A confidence wobble on the same defect must not read as a difference.
+    assert validator.digest_line({**finding, "confidence": 0.85}) == line
+    assert validator.digest_line({**finding, "title": "Blank page"}) == line
+    # A different claim must.
+    assert validator.digest_line({**finding, "line_start": 18}) != line
+    assert validator.digest_line({**finding, "severity": "critical"}) != line
+
+
 def test_the_candidate_carries_the_evidence_rule():
     """Learned on the money rubric: without it, findings state inferences in
     the voice of things read, and one in three was simply wrong."""

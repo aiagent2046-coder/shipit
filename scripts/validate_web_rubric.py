@@ -136,6 +136,29 @@ forbidden as a ground. The syntactic half of the same question stays, because
 it is what found Pricing.tsx, CustomerPortalForm, NameForm, EmailForm and the
 three auth forms -- every real double-submit finding across four runs.
 
+WHAT THE RUBRIC ASKS NOW, AND WHY IT IS SIX THINGS
+
+The same split, applied to the whole rubric rather than to one question. The
+instructions were four themes; they are now six numbered questions, each
+settled by reading lines. Every one of them earned its place by producing a
+finding that survived hand-verification in the runs it appeared in:
+
+  1. no error boundary above the routes      (4 of 4 runs, always true)
+  2. a flag cleared after an await, no finally (SimulatorChat:33, GroupChat:80)
+  3. a dirty form with no beforeunload        (3 of 4 runs, always true)
+  4. a timer or listener with no cleanup      (4 of 4 runs, always true)
+  5. a hook called conditionally              (3 of 4 runs; GroupChat:22 is a
+     real crash, and Navlinks:16 is why the condition must be able to change)
+  6. an in-flight prop the component never maps to `disabled`, and the
+     missing `await`                          (4 of 4 runs on the money path)
+
+What was cut had four runs to prove itself and did not: the racing fetches,
+the optimistic update that might diverge, the swallowed error behind a toast.
+Each produced confident prose about code that turned out to be correct. A
+rubric that asks a question the model cannot answer reliably does not fail
+quietly -- it fails by inventing an answer, and the verifier cannot catch it
+because the quoted line really is there.
+
 WHAT ADOPTION WOULD COST, BEYOND THE PROMPT
 
   * One more LLM call per rubric per pass.
@@ -248,13 +271,39 @@ CANDIDATE = {
         "network is sometimes slow. No attacker is involved. Report only "
         "concrete issues you can point at a line for.\n"
         "\n"
-        "The screen goes blank or stays empty: a component tree with no error "
-        "boundary above the routes, so one render error replaces the whole "
-        "app with a white page; a render that reads through data before it "
-        "has arrived, with no loading branch; an error path that returns null "
-        "and shows the user nothing at all.\n"
+        "Six questions, and only these six. Each is settled by reading lines, "
+        "not by reasoning about what happens between them.\n"
         "\n"
-        "The user acts twice: a form or button left enabled while its own "
+        "1. THE SCREEN GOES BLANK. No error boundary anywhere above the "
+        "routes, so one render error replaces the whole app with a white "
+        "page. In the Next.js app router an error.tsx or global-error.tsx "
+        "file is that boundary; if you see one, there is nothing to report.\n"
+        "\n"
+        "2. THE APP STAYS STUCK. A handler sets a flag before an await and "
+        "clears it after, with no try/finally around them, so a throw leaves "
+        "the spinner running and the input disabled until the user reloads. "
+        "The proof is the absence of `finally`, and that the clear sits after "
+        "an await rather than inside one. A `catch` that does not clear the "
+        "flag counts too. Check the callee for expressions outside its own "
+        "try -- an argument built from `x.y.join()` before the try begins can "
+        "throw where a reader assumes it cannot.\n"
+        "\n"
+        "3. WORK DISAPPEARS. A form the user fills in over minutes, kept only "
+        "in component state, with no beforeunload listener and no router "
+        "blocker, so a stray click on a nav link discards it silently.\n"
+        "\n"
+        "4. SOMETHING KEEPS RUNNING. A setTimeout, setInterval, subscription "
+        "or event listener started in an effect or a callback with no cleanup "
+        "that cancels it, so it fires against a component the user has left.\n"
+        "\n"
+        "5. A HOOK IS CALLED CONDITIONALLY. A useState or useEffect after an "
+        "early return, or a useRouter() inside a ternary. Report it only when "
+        "the condition can differ between two renders of the same mounted "
+        "component -- a prop, state or fetched data. When it reads a "
+        "build-time constant the order never actually changes and the app "
+        "does not crash: that is a lint violation and not a finding here.\n"
+        "\n"
+        "6. THE USER ACTS TWICE: a form or button left enabled while its own "
         "submit is in flight, so an impatient second click sends a second "
         "request. This is the browser half of a duplicate charge -- the "
         "server half is a missing idempotency key -- and it is the half the "
@@ -300,15 +349,12 @@ CANDIDATE = {
         "not belong there, and makes them trust the rest of the list less. "
         "Silence is the correct output for code that is already right.\n"
         "\n"
-        "Work disappears: state a long flow keeps only in memory, so a "
-        "refresh or a back gesture loses what the user typed; leaving a "
-        "dirty form with nothing asking them to confirm.\n"
-        "\n"
-        "The screen lies about what happened: a catch that swallows the error "
-        "and leaves the previous state on screen, so a failed save looks like "
-        "a successful one; a success message shown before the request "
-        "resolves; two fetches racing in an effect with no cleanup or abort, "
-        "so a slow first response overwrites a fresher second one.\n"
+        "The missing `await` belongs to question 6 as well, and is the "
+        "clearest form of it: a handler that calls an async function without "
+        "awaiting it and clears its in-flight flag on the next line. The flag "
+        "is true for no time at all, so the spinner never appears and the "
+        "control is never protected, whatever the component does with the "
+        "prop.\n"
         "\n"
         "Severity, for the cases that are not judgement calls. A submit path "
         "that can fire twice is CRITICAL when the request spends money, "
@@ -331,7 +377,14 @@ CANDIDATE = {
         "slot on something already reported.\n"
         "\n"
         "Do NOT report a missing loading state on something that resolves "
-        "locally and instantly."
+        "locally and instantly.\n"
+        "\n"
+        "Do NOT report anything outside the six questions, however real it "
+        "looks. A race between two fetches, an optimistic update that could "
+        "diverge from the server, a catch that shows a toast the user might "
+        "miss -- these were measured, and what came back was confident prose "
+        "about code that turned out to be correct. If it is not one of the "
+        "six, it is not a finding."
     ),
 }
 
@@ -407,6 +460,28 @@ def fetch_repo_zip(repo_url: str) -> io.BytesIO:
     return io.BytesIO(github_fetch_repo_zip(owner, repo))
 
 
+def digest_line(finding: dict) -> str:
+    """One finding, reduced to what two runs can be compared on.
+
+    Wanted because run-to-run spread turned out larger than the effect of any
+    edit made to this rubric: GroupChat.tsx:22, a real crash, is present in
+    three of four runs and absent from the fourth, on byte-identical input.
+    Reading two transcripts side by side to notice that is how three rounds
+    of prompt work each read a signal out of the noise.
+
+    The prose is deliberately dropped -- it is reworded every run for the same
+    defect, which is exactly what defeats eyeballing. File, line and severity
+    identify the claim; confidence is left out so a 0.85/0.9 wobble on the
+    same finding does not read as a difference.
+
+        grep '^DIGEST' run-a.txt | sort > a
+        grep '^DIGEST' run-b.txt | sort > b
+        diff a b
+    """
+    where = f"{finding['file']}:{finding['line_start']}"
+    return f"DIGEST {finding['severity'].upper():8} {where}"
+
+
 def run_one(repo_url: str, client: LLMClient) -> tuple[int, float]:
     print(f"\n{'=' * 70}\n{repo_url}\n{'=' * 70}")
     buf = fetch_repo_zip(repo_url)
@@ -431,12 +506,13 @@ def run_one(repo_url: str, client: LLMClient) -> tuple[int, float]:
         max_tokens=8192,
     )
 
-    kept = 0
+    kept, digest = 0, []
     for f in parse_findings(raw):
         if not verify_finding(f, files_by_name):
             print(f"  [DISCARDED by verifier] {f.get('title', '?')}")
             continue
         kept += 1
+        digest.append(digest_line(f))
         print(f"\n  [{f['severity'].upper()} conf={f['confidence']}] {f['title']}")
         print(f"    {f['file']}:{f['line_start']}")
         print(f"    why:  {f.get('explanation', '')}")
@@ -445,6 +521,9 @@ def run_one(repo_url: str, client: LLMClient) -> tuple[int, float]:
     cost = float(pricing.cost_usd(
         usage.model, usage.input_tokens, usage.output_tokens))
     print(f"\n  -> {kept} verified findings, ${cost:.4f}")
+
+    for line in sorted(digest):
+        print(line)
 
     return kept, cost
 
