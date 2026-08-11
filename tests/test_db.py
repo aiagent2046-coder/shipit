@@ -905,7 +905,7 @@ def test_backfill_marks_old_free_audits_unexamined():
     from app.db import _backfill_unexamined
 
     row = {"total": 6.1, "basis": "static_only", "categories": {"Auth": 10.0}}
-    assert _backfill_unexamined(row)["unexamined"] == ["Auth", "Money & Data"]
+    assert _backfill_unexamined(row)["unexamined"] == ["Auth", "Money & Data", "Frontend"]
 
 
 def test_backfill_leaves_paid_and_fresh_rows_alone():
@@ -939,4 +939,4 @@ def test_row_to_audit_applies_the_backfill():
         "findings_json": [],
     }
     assert _row_to_audit(row)["score_json"]["unexamined"] == [
-        "Auth", "Money & Data"]
+        "Auth", "Money & Data", "Frontend"]

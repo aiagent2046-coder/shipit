@@ -1,14 +1,37 @@
 #!/usr/bin/env python3
-"""Measure whether a rubric about the browser earns a place in the audit.
+"""Measure how the shipped "web" rubric earns a place in the audit.
 
-WHY THIS ONE, AND WHY NOW
+IT SHIPPED. THIS READS RUBRICS["web"], AND MUST KEEP DOING SO.
+
+Five measured runs, hand-verified against local clones, took it from 11 of 22
+findings to 16 of 21; on that basis it is in RUBRICS and Frontend is the sixth
+score category. The history below is the record of what each edit cost and
+bought, kept because the conclusions are load-bearing and three of them were
+wrong when first drawn.
+
+Until it shipped this file carried its own copy of the prompt -- correct then,
+because running a measurement must not change what a paying customer receives.
+That is exactly how validate_money_rubric.py's copy became a trap: the shipped
+prompt and the script's draft drifted by 185 characters, and anyone running it
+to decide whether the rubric paid for itself was measuring something
+production never sent. So this script now reads the shipped dict and holds no
+prompt of its own, and tests/test_validate_web_rubric.py fails if a copy comes
+back.
+
+What it still holds is select_with_primitives, which is NOT in select_files --
+see the section on the buffer below. Findings measured here are therefore
+produced by the shipped prompt over a slightly wider file set than production
+sends. That gap is real and deliberate; closing it is a change to select_files
+with an AUDIT_ENGINE_VERSION bump behind it.
+
+WHY THIS RUBRIC, AND WHY IT WAS WORTH FIVE ROUNDS
 
 The two oldest rubrics look for an attacker. The money rubric looks for what a
 normal year in production does to code written fast, and that framing is what
 made it worth its cost: on dubinc/dub it found four CRITICAL findings the
 security rubric was silent about.
 
-This candidate applies the same framing one layer out. Nobody attacks a user
+This rubric applies the same framing one layer out. Nobody attacks a user
 into losing the form they were filling in; a refresh does it. Nobody exploits
 a missing error boundary; a render error does it, and the user sees a white
 page instead of an app.
@@ -19,17 +42,6 @@ segment this product exists for -- reads NO environment variables at all and
 has no backend. Its whole surface is the browser. The money and config
 questions cannot find anything there by construction, so for that customer
 this is the only rubric that can say anything at all.
-
-WHY THE RUBRIC LIVES HERE AND NOT IN RUBRICS
-
-Same reason validate_money_rubric.py held its own copy until #219: nothing has
-shipped, and running this must not change what a paying customer receives.
-
-That copy later became a trap -- the shipped prompt and the script's draft
-drifted by 185 characters, and anyone running it to decide whether the rubric
-paid for itself was measuring something production never sent. So the moment
-this ships, DELETE the dict below and read RUBRICS["web"] instead, exactly as
-validate_money_rubric.py does now.
 
 WHAT THE FIRST MEASUREMENT SHOWED, AND WHAT IT CHANGED
 
@@ -52,10 +64,10 @@ keyword density and path class, and on a 4212-file monorepo the shared
 primitives lose that race to the 325 components that consume them -- the
 question is asked in the consumer and answered in the primitive.
 
-Hence select_with_primitives below. It lives here, not in llm_scan, for the
-same reason CANDIDATE does: nothing has shipped, and a change to select_files
-moves PROMPT_FINGERPRINT and AUDIT_ENGINE_VERSION, which invalidates the
-audit cache for every paying customer.
+Hence select_with_primitives below. It stayed here rather than moving into
+llm_scan even after the rubric shipped, because a change to select_files moves
+PROMPT_FINGERPRINT and invalidates the audit cache for every paying customer,
+and because the run that followed showed it was not what fixed anything.
 
 THAT THEORY WAS WRONG, AND HOW THE SECOND RUN SHOWED IT
 
@@ -159,20 +171,55 @@ rubric that asks a question the model cannot answer reliably does not fail
 quietly -- it fails by inventing an answer, and the verifier cannot catch it
 because the quoted line really is there.
 
-WHAT ADOPTION WOULD COST, BEYOND THE PROMPT
+FIFTH RUN, AND WHAT ADOPTION ACTUALLY COST
 
-  * One more LLM call per rubric per pass.
+16 of 21 hand-verified: 6 of 6 on digital-rolecraft, 5 of 7 on
+nextjs-subscription-payments, 5 of 8 on dub -- which had produced 1, 2, 0 and
+0 in the four runs before. Two of dub's five are on the money path: a shared
+settings form and the billing button, both `await` without try/finally, both
+leaving a control disabled until reload.
 
-  * The primitive buffer, permanently, in select_files: measured at 105 KB of
-    a 900 KB budget on dub, 30 KB on digital-rolecraft, 2 KB on
-    nextjs-subscription-payments.
+A second run of the same commit was cut short by a 402 from the provider after
+one repository, so digital-rolecraft is the only side-by-side. There the four
+HIGH findings reproduce exactly, the cleanup finding reproduces at a different
+anchor line inside the same function, and the beforeunload finding is produced
+both times and discarded by the verifier once. Six of six by substance, and
+the run-to-run churn that made runs 1-4 hard to read is gone.
 
-  * A new score category. Auth, Deploy, Testing, Security and Money & Data are
-    what compute_scores knows; none of them is where "the page goes blank"
-    belongs. Adding a sixth renormalises every weight, and a category that is
-    usually clean sits at 10.0 and props up every total -- measured at +0.29
-    on the average for the money rubric's fifth category. That is a scoring
-    decision, not a prompt decision, and it is not made by this script.
+What it cost, all paid:
+
+  * A fourth LLM call per pass. A Fix Pack's two passes go from 6 calls to 8,
+    worst case $4.79 -> $6.38, so JOB_COST_CAP_USD went 6.00 -> 6.50. Worst
+    case assumes all four rubrics fill the whole 900 KB budget twice; measured
+    spend for this rubric was $1.56 across the three repositories.
+
+  * Frontend as the sixth score category, at raw weight 0.15 beside Testing
+    and Deploy. The objection was that a usually-clean category sits at 10.0
+    and props up every total, which is what the fifth category cost (+0.29 on
+    the average). Five runs answer it: findings on 3 of 3 repositories every
+    time, including the mature monorepo.
+
+  * Frontend in LLM_ONLY_CATEGORIES, taking the LLM-only share of the weight
+    from 36% to 45%. A static-only audit now reports three categories as
+    unexamined rather than as 10.0.
+
+  * NOT gating it, though it can emit a critical. See app/scan/scoring.py.
+
+STILL OPEN, MEASURED AND UNFIXED
+
+Three defects survived the fifth run and are small enough to fix on the next
+natural pass rather than with a dedicated round:
+
+  * Question 5's exclusion was ignored twice on nextjs-subscription-payments,
+    both at 0.95: Navlinks.tsx:16 and EmailSignIn.tsx:22 do call useRouter()
+    inside a ternary, but the condition reads a build-time constant, so hook
+    order never changes and nothing crashes.
+
+  * The silence rule was broken once in 21, on branding-form.tsx:442 -- "This
+    is actually correct ... No action needed", reported at LOW 0.95.
+
+  * add-edit-domain-form.tsx:307 was reported inverted: setIsSubmitting(false)
+    is called on the success path and in the catch, not only on error.
 
 USAGE
 
@@ -207,8 +254,6 @@ from app.llm.client import LLMClient  # noqa: E402
 from app.scan.llm_scan import (  # noqa: E402
     MAX_FILE_CHARS,
     MAX_TOTAL_CHARS,
-    PRESENTATION,
-    RUBRICS,
     SYSTEM_PROMPT,
     _iter_code_files,
     build_prompt,
@@ -217,7 +262,7 @@ from app.scan.llm_scan import (  # noqa: E402
     verify_finding,
 )
 
-CANDIDATE_KEY = "web"
+RUBRIC_KEY = "web"
 
 # Files whose NAME is a design-system primitive: button.tsx, not
 # retry-payment-modal.tsx. The leading (^|/) is what draws that line -- it
@@ -245,167 +290,6 @@ _PRIMITIVE_NOISE = re.compile(r"(^|/)icons?/", re.I)
 # files button.tsx cannot quietly eat the prompt -- the buffer is supposed to
 # answer a question, not become the answer.
 PRIMITIVE_BUDGET = 140_000
-
-CANDIDATE = {
-    # Only used if this ever ships; nothing here is scored. See the module
-    # docstring on why the category is an open question.
-    "category": "Deploy",
-    # PRESENTATION is the whole reason the weighting became per-rubric. Under
-    # the old global weighting, ui/ and components/ were divided by four, so a
-    # rubric about the frontend would have been shown everything except the
-    # frontend -- and would have looked like a bad idea rather than a
-    # misconfigured one.
-    "lives_in": PRESENTATION,
-    "keywords": re.compile(
-        r"\b(useState|useEffect|useRef|useCallback|onSubmit|onClick|onChange"
-        r"|preventDefault|disabled|isLoading|isSubmitting|isPending|setLoading"
-        r"|spinner|skeleton|ErrorBoundary|componentDidCatch|Suspense|fallback"
-        r"|localStorage|sessionStorage|beforeunload|toast|notify"
-        r"|useSWR|useQuery|useMutation|AbortController|router)\b"
-        r"|\bfetch\(|\baxios\b|\balert\(|\bconfirm\(",
-        re.I,
-    ),
-    "instructions": (
-        "Review what breaks for the person using this app in a browser. "
-        "Assume the code is deployed, the user behaves normally, and the "
-        "network is sometimes slow. No attacker is involved. Report only "
-        "concrete issues you can point at a line for.\n"
-        "\n"
-        "Six questions, and only these six. Each is settled by reading lines, "
-        "not by reasoning about what happens between them.\n"
-        "\n"
-        "1. THE SCREEN GOES BLANK. No error boundary anywhere above the "
-        "routes, so one render error replaces the whole app with a white "
-        "page. In the Next.js app router an error.tsx or global-error.tsx "
-        "file is that boundary; if you see one, there is nothing to report.\n"
-        "\n"
-        "2. THE APP STAYS STUCK. A handler sets a flag before an await and "
-        "clears it after, with no try/finally around them, so a throw leaves "
-        "the spinner running and the input disabled until the user reloads. "
-        "The proof is the absence of `finally`, and that the clear sits after "
-        "an await rather than inside one. A `catch` that does not clear the "
-        "flag counts too. Check the callee for expressions outside its own "
-        "try -- an argument built from `x.y.join()` before the try begins can "
-        "throw where a reader assumes it cannot.\n"
-        "\n"
-        "3. WORK DISAPPEARS. A form the user fills in over minutes, kept only "
-        "in component state, with no beforeunload listener and no router "
-        "blocker, so a stray click on a nav link discards it silently.\n"
-        "\n"
-        "4. SOMETHING KEEPS RUNNING. A setTimeout, setInterval, subscription "
-        "or event listener started in an effect or a callback with no cleanup "
-        "that cancels it, so it fires against a component the user has left.\n"
-        "\n"
-        "5. A HOOK IS CALLED CONDITIONALLY. A useState or useEffect after an "
-        "early return, or a useRouter() inside a ternary. Report it only when "
-        "the condition can differ between two renders of the same mounted "
-        "component -- a prop, state or fetched data. When it reads a "
-        "build-time constant the order never actually changes and the app "
-        "does not crash: that is a lint violation and not a finding here.\n"
-        "\n"
-        "6. THE USER ACTS TWICE: a form or button left enabled while its own "
-        "submit is in flight, so an impatient second click sends a second "
-        "request. This is the browser half of a duplicate charge -- the "
-        "server half is a missing idempotency key -- and it is the half the "
-        "person clicking can see. An impatient double click is not an edge "
-        "case; it is what people do when nothing visibly happens.\n"
-        "\n"
-        "Before you claim a control is still clickable, QUOTE the line in the "
-        "component that renders it -- Button, Switch, the control itself -- "
-        "that maps its props onto the HTML disabled attribute. Codebases "
-        "differ here and the difference decides the finding: in one, "
-        "`disabled` must be passed explicitly and a `loading` prop only draws "
-        "a spinner; in another, the same component reads "
-        "`disabled={props.disabled || loading}`, so `loading={isSubmitting}` "
-        "already disables the button and there is nothing to report. A "
-        "`disabled` prop that omits the in-flight flag proves nothing on its "
-        "own. If you have not read that mapping, you do not know which "
-        "codebase you are in: say so, phrase the finding as the question it "
-        "is, and report confidence 0.5 or lower.\n"
-        "\n"
-        "There is exactly ONE ground for this finding: the control has no "
-        "in-flight prop at all, or it has one and the component you just "
-        "quoted does not turn it into `disabled`. That is a fact about two "
-        "lines of code, and it is the only fact you may report here.\n"
-        "\n"
-        "TIMING IS NOT A GROUND. Never report that a flag is set 'too late', "
-        "that a state update 'has not propagated yet', that the button 'is "
-        "not disabled at the moment of the first click', or that a second "
-        "click lands 'before the re-render'. If a handler sets its flag, or "
-        "a ref, or calls a function that does -- anywhere before its first "
-        "await -- the control is guarded and there is nothing to report. So "
-        "is a disabled input or textarea, which receives no key events at "
-        "all. Once you have quoted a guard, you are finished: an argument "
-        "that gets past it is wrong, and it is wrong every time, because the "
-        "click that would exploit the window is delivered after the update "
-        "that closes it.\n"
-        "\n"
-        "When you check one of these and the code turns out to be correct, "
-        "report NOTHING. Not a finding at confidence 0.9 whose explanation "
-        "ends in 'no issue here', not an informational confirmation that a "
-        "guard is present, not a finding whose fix reads 'no action needed'. "
-        "The reader is paying for a list of things to repair; an item on that "
-        "list that needs no repair costs them the time to discover it does "
-        "not belong there, and makes them trust the rest of the list less. "
-        "Silence is the correct output for code that is already right.\n"
-        "\n"
-        "The missing `await` belongs to question 6 as well, and is the "
-        "clearest form of it: a handler that calls an async function without "
-        "awaiting it and clears its in-flight flag on the next line. The flag "
-        "is true for no time at all, so the spinner never appears and the "
-        "control is never protected, whatever the component does with the "
-        "prop.\n"
-        "\n"
-        "Severity, for the cases that are not judgement calls. A submit path "
-        "that can fire twice is CRITICAL when the request spends money, "
-        "creates an order or sends a message, and high otherwise. A missing "
-        "error boundary above the application's routes is high: it converts "
-        "every other bug in the app into a blank page.\n"
-        "\n"
-        "Point at the line that PROVES the claim. If the code that would "
-        "settle it is not among the files you were given -- the provider that "
-        "might wrap these routes in a boundary, the hook that might already "
-        "disable the button -- say so, phrase the finding as the question it "
-        "is, and report confidence 0.5 or lower.\n"
-        "\n"
-        "Do NOT report styling, layout, accessibility or bundle size. Those "
-        "are real and they are not this rubric.\n"
-        "\n"
-        "Do NOT report server-side issues: a missing idempotency key on the "
-        "handler, an unindexed query, a webhook with no signature check. "
-        "Other rubrics cover those, and a duplicate here spends a finding "
-        "slot on something already reported.\n"
-        "\n"
-        "Do NOT report a missing loading state on something that resolves "
-        "locally and instantly.\n"
-        "\n"
-        "Do NOT report anything outside the six questions, however real it "
-        "looks. A race between two fetches, an optimistic update that could "
-        "diverge from the server, a catch that shows a toast the user might "
-        "miss -- these were measured, and what came back was confident prose "
-        "about code that turned out to be correct. If it is not one of the "
-        "six, it is not a finding."
-    ),
-}
-
-
-def install_candidate() -> None:
-    """Put the candidate where select_files and build_prompt look for it.
-
-    Called from main(), NOT at import. The first version did it at import and
-    three tests failed the moment the whole suite ran in one process: the
-    cost-cap check counted a fourth rubric, the prompt fingerprint moved, and
-    the guard that every shipped rubric keeps the BEHAVIOUR weighting saw a
-    PRESENTATION one. The comment there claimed the injection was harmless
-    because llm_scan's import-time category assertion had already run. That
-    was true and beside the point -- it cannot weaken that assertion, and it
-    disturbs everything that reads RUBRICS afterwards.
-
-    A measurement harness that quietly reweights the rubrics it is not
-    measuring would invalidate its own numbers, so the mutation happens once,
-    in the process that is about to make LLM calls and nowhere else.
-    """
-    RUBRICS[CANDIDATE_KEY] = CANDIDATE
 
 
 def select_with_primitives(
@@ -489,12 +373,12 @@ def run_one(repo_url: str, client: LLMClient) -> tuple[int, float]:
         files = _iter_code_files(zf)
     files_by_name = dict(files)
 
-    selected = select_with_primitives(files, CANDIDATE_KEY)
+    selected = select_with_primitives(files, RUBRIC_KEY)
     if not selected:
         print("no rubric-relevant files")
         return 0, 0.0
 
-    baseline = {n for n, _ in select_files(files, CANDIDATE_KEY)}
+    baseline = {n for n, _ in select_files(files, RUBRIC_KEY)}
     added = [n for n, _ in selected if n not in baseline]
     print(f"{len(selected)} files selected "
           f"({len(added)} primitives the ranking had dropped)")
@@ -502,7 +386,7 @@ def run_one(repo_url: str, client: LLMClient) -> tuple[int, float]:
         print(f"    + {name}")
     raw, usage = client.complete(
         SYSTEM_PROMPT,
-        build_prompt(selected, CANDIDATE_KEY),
+        build_prompt(selected, RUBRIC_KEY),
         max_tokens=8192,
     )
 
@@ -532,8 +416,6 @@ def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
-
-    install_candidate()
 
     client = LLMClient()          # providers come from the environment
     if not client.providers:

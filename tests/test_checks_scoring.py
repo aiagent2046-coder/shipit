@@ -2,16 +2,19 @@
 
 import io
 import zipfile
+from pathlib import Path
 
 import pytest
 
 from app.scan.checks import run_checks
 from app.scan.scoring import (
     CATEGORIES,
+    CATEGORY_WEIGHT,
     CRITICAL_GATE_MIN_CONFIDENCE,
     GATE_THRESHOLD,
     GATED_CATEGORIES,
     GATED_MAX,
+    LLM_ONLY_CATEGORIES,
     ScoredFinding,
     compute_scores,
 )
@@ -100,9 +103,12 @@ def test_score_v2_total_is_weighted_mean_of_categories():
     assert scores["categories"]["Testing"] == 9.6
     assert scores["categories"]["Deploy"] == 10.0
     # Weights are the raw values normalised over their own sum:
-    # (7.5×.25 + 10×.20 + 9.6×.15 + 10×.15 + 10×.20) / .95 = 9.3
+    # (7.5×.25 + 10×.20 + 9.6×.15 + 10×.15 + 10×.20 + 10×.15) / 1.10 = 9.4
     # Not gated: Security 7.5 clears GATE_THRESHOLD, so the mean stands.
-    assert scores["total"] == 9.3
+    # Moved from 9.3 when Frontend became the sixth category: the divisor
+    # goes .95 -> 1.10 and the only damaged category, Security, is diluted
+    # by one more clean one. That is the arithmetic working, not drifting.
+    assert scores["total"] == 9.4
 
 
 def test_saturated_category_does_not_zero_total():
@@ -111,12 +117,14 @@ def test_saturated_category_does_not_zero_total():
     findings = [_f("critical", 1.0)] * 10  # all Security
     scores = compute_scores(findings)
     assert scores["categories"]["Security"] == 0.0
-    # Everything except Security intact. The number has moved twice since:
-    # to 6.7 when the two producer-less categories were dropped (issue #181),
-    # and to 5.1 once a failing safety category began compressing the mean
-    # into the sub-threshold band. The property under test is unchanged and
-    # is the point -- a single saturated category must not zero the total.
-    assert scores["total"] == 5.1
+    # Everything except Security intact. The number has moved three times
+    # since: to 6.7 when the two producer-less categories were dropped (issue
+    # #181), to 5.1 once a failing safety category began compressing the mean
+    # into the sub-threshold band, and to 5.3 when Frontend became the sixth
+    # category and Security's saturated 0.0 carried proportionally less of the
+    # mean. The property under test is unchanged and is the point -- a single
+    # saturated category must not zero the total.
+    assert scores["total"] == 5.3
     assert scores["total"] > 0.0
 
 
@@ -487,5 +495,85 @@ def test_a_static_only_score_names_the_categories_nothing_examined():
     findings = [_f("critical", 0.9, "Security")]
 
     assert compute_scores(findings, llm_ran=False)["unexamined"] == [
-        "Auth", "Money & Data"]
+        "Auth", "Money & Data", "Frontend"]
     assert compute_scores(findings, llm_ran=True)["unexamined"] == []
+
+
+# --------------------------------------------------------------------------
+# Frontend, the sixth category. Added with the "web" rubric after five
+# measured runs; see app/scan/scoring.py and scripts/validate_web_rubric.py.
+# --------------------------------------------------------------------------
+
+def test_every_scored_category_has_a_producer():
+    """Issue #181 in one assertion.
+
+    "Correctness" and "Config" were categories nothing could ever emit, so
+    both sat at a constant 10.0 and together carried 25% of the weight -- a
+    scale whose bottom half was unreachable. The lesson was written down as a
+    comment; this is the version that fails.
+
+    Producers are the LLM rubrics plus the static rules. Anything in
+    CATEGORIES that neither can emit is dead weight by construction.
+    """
+    import re as _re
+
+    from app.scan.llm_scan import RUBRICS
+
+    produced = {r["category"] for r in RUBRICS.values()}
+    # The static rules build ScoredFindings inline rather than from a table,
+    # so their categories are read out of the source. Crude on purpose: a
+    # structural reader would have to track two modules' shapes, and what this
+    # needs to know is only which names can ever be emitted.
+    for module in ("checks", "secrets", "static"):
+        source = (
+            Path(__file__).resolve().parents[1] / "app" / "scan" / f"{module}.py"
+        ).read_text()
+        produced |= set(_re.findall(r'category=["\']([^"\']+)["\']', source))
+
+    assert set(CATEGORIES) <= produced, (
+        f"no producer emits {sorted(set(CATEGORIES) - produced)}; a category "
+        f"with no producer scores a constant 10.0 and props up every total"
+    )
+
+
+def test_frontend_is_weighted_with_testing_and_deploy_not_with_the_safety_three():
+    """What it finds is real and a user hits it on a normal day, but the
+    product's wedge is "safe to put in production" and a blank page is not an
+    auth hole. Asserted as a relation, not as 0.136...: the normalised value
+    moves whenever any category is added, and the claim being made is about
+    the ordering."""
+    weight = CATEGORY_WEIGHT["Frontend"]
+
+    assert weight == CATEGORY_WEIGHT["Testing"] == CATEGORY_WEIGHT["Deploy"]
+    assert weight < CATEGORY_WEIGHT["Auth"] == CATEGORY_WEIGHT["Money & Data"]
+    assert weight < CATEGORY_WEIGHT["Security"]
+    assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
+
+
+def test_frontend_is_not_examined_by_a_static_only_audit():
+    """The "web" rubric is its only producer. On a static-only audit it would
+    otherwise read a perfect 10.0 for a reason that has nothing to do with the
+    repository -- which is what LLM_ONLY_CATEGORIES exists to stop, and what
+    the free tier was doing to Auth in 25 of 25 audits."""
+    assert "Frontend" in LLM_ONLY_CATEGORIES
+
+    scores = compute_scores([_f("critical", 0.9, "Security")], llm_ran=False)
+
+    assert "Frontend" in scores["unexamined"]
+
+
+def test_a_critical_frontend_finding_does_not_gate_the_headline():
+    """Deliberate, and the reason is in app/scan/scoring.py: the gate is about
+    a headline that contradicts "safe to put in production", and a white page
+    on a render error is a bad app rather than an unsafe one. The money-shaped
+    half of what this rubric finds already reaches the reader through Money &
+    Data, whose remit the rubric is told not to duplicate.
+
+    If this ever becomes wrong, gating it is a calibration change with its own
+    evidence against the stored audits -- not a one-line edit here.
+    """
+    scores = compute_scores([_f("critical", 0.95, "Frontend")])
+
+    assert scores["categories"]["Frontend"] == 8.1
+    assert scores["gated_by"] == []
+    assert scores["total"] > GATE_THRESHOLD

@@ -30,10 +30,28 @@ SEVERITY_WEIGHT = {"critical": 2.0, "high": 1.0, "medium": 0.4, "low": 0.1}
 #
 # Producers, for whoever adds the next category: app/scan/checks.py emits
 # Security, Testing and Deploy; the secret rules in app/scan/secrets.py emit
-# Security; the rubrics in app/scan/llm_scan.py map to Auth, Security and
-# Money & Data. Adding a name here without adding a producer re-creates the
-# same dead weight.
-CATEGORIES = ("Security", "Auth", "Testing", "Deploy", "Money & Data")
+# Security; the rubrics in app/scan/llm_scan.py map to Auth, Security, Money &
+# Data and Frontend. Adding a name here without adding a producer re-creates
+# the same dead weight.
+#
+# Frontend is the sixth, added for the "web" rubric. The objection to it was
+# the one issue #181 is about -- a category that is usually clean sits at 10.0
+# and props up every total, which is what the fifth category cost, measured at
+# +0.29 on the average. Five measured runs answer it: the rubric produced
+# findings on 3 of 3 repositories in every run, including a mature monorepo,
+# and the last of those runs verified 16 of 21 by hand. It is not a category
+# that will sit at 10.0.
+#
+# What it scores is whether the app works for the person using it, which none
+# of the other five asks: a render error with no boundary above the routes
+# turning every future bug into a white page, a flag set before an await and
+# cleared after it with no try/finally so one timeout disables the form until
+# reload, a submit control the component never actually disables. Filing these
+# under Deploy -- where the rubric's draft category sat while it was a
+# candidate -- would have diluted what a Deploy subscore means rather than
+# renormalising six honest weights.
+CATEGORIES = ("Security", "Auth", "Testing", "Deploy", "Money & Data",
+              "Frontend")
 
 # Weighted mean for the total. Security and Auth dominate because the product's
 # wedge is "safe to put in production".
@@ -51,9 +69,16 @@ CATEGORIES = ("Security", "Auth", "Testing", "Deploy", "Money & Data")
 # webhook with no idempotency guard against the provider's own retries
 # (nextjs-subscription-payments). Measured on ten real repositories before
 # being given this weight.
+#
+# Frontend sits with Testing and Deploy rather than with the safety three.
+# What it finds is real and a user hits it on a normal day, but the product's
+# wedge is "safe to put in production", and a blank page is not an auth hole.
+# Declaring it at 0.15 leaves the relative order of the first five exactly as
+# it was chosen and measured -- the normalisation divisor moves from 0.95 to
+# 1.10, which scales every weight by the same factor.
 _RAW_CATEGORY_WEIGHT = {
     "Security": 0.25, "Auth": 0.20, "Testing": 0.15, "Deploy": 0.15,
-    "Money & Data": 0.20,
+    "Money & Data": 0.20, "Frontend": 0.15,
 }
 _RAW_TOTAL = sum(_RAW_CATEGORY_WEIGHT.values())
 CATEGORY_WEIGHT = {k: v / _RAW_TOTAL for k, v in _RAW_CATEGORY_WEIGHT.items()}
@@ -70,7 +95,14 @@ assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
 # and Auth reads exactly 10.0 in 25 of 25 of them. The free tier was telling
 # people their auth was perfect when nothing had looked at it. Adding a second
 # LLM-only category would have taken 42% of the weight to a constant 10.0.
-LLM_ONLY_CATEGORIES = frozenset({"Auth", "Money & Data"})
+#
+# Frontend joins them: the "web" rubric is its only producer, no static check
+# emits it, so on a static-only audit it would read a perfect 10.0 for the
+# reason this set exists. That takes the LLM-only share of the weight from 36%
+# to 45%, which is the cost of the note above being right about Auth -- a free
+# tier that stayed silent on three categories is honest, one that reports 10.0
+# on them is not.
+LLM_ONLY_CATEGORIES = frozenset({"Auth", "Money & Data", "Frontend"})
 
 
 @dataclass(frozen=True)
@@ -138,6 +170,22 @@ def _score(findings: list[ScoredFinding]) -> float:
 # a repository that should present an 8.3, and no amount of clean Testing
 # makes it one. The gate is about the headline never contradicting the
 # finding underneath it, which is as true of revenue as of an auth hole.
+#
+# Frontend is deliberately NOT gated, though it can emit a critical -- a
+# Subscribe button the component never disables is the browser half of a
+# duplicate charge, and that is what its one CRITICAL finding across five runs
+# was. Two reasons. The gate is about a headline that contradicts the finding
+# under it, and "safe to put in production" is the claim these three speak to;
+# a white page on a render error is a bad app, not an unsafe one. And the
+# money-shaped half of what this rubric finds already reaches the reader
+# through a gated category, because the server half of the same duplicate
+# charge is Money & Data's remit by construction -- the rubric is told not to
+# report it precisely so the two do not collide.
+#
+# Gating it later is a calibration change with its own evidence, not a
+# follow-on to this one: it would need re-measuring against the stored audits
+# the way GATE_ON_CRITICAL was, since a fourth gated category moves every
+# repository that currently passes.
 GATED_CATEGORIES = ("Security", "Auth", "Money & Data")
 
 # Set at 7.0 because that is where these subscores stop meaning "some issues"

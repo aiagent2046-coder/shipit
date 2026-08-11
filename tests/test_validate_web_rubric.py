@@ -1,26 +1,30 @@
-"""The web-rubric candidate must stay a candidate until it ships.
+"""The web rubric shipped; the script must read it, never copy it.
 
-The mirror image of tests/test_validate_money_rubric.py, at the earlier point
-in the same lifecycle. That script carried its own copy of the prompt while
-nothing shipped -- correct, because running it could not change what a
-customer received -- and the copy became a trap the moment #219 wired the
-rubric in: the two drifted by 185 characters and anyone measuring was
-measuring a draft.
+The mirror image of tests/test_validate_money_rubric.py, one step further
+along the same lifecycle. Both scripts carried their own copy of the prompt
+while nothing shipped -- correct then, because running a measurement must not
+change what a customer receives -- and validate_money_rubric.py's copy became
+a trap the moment #219 wired that rubric in: the two drifted by 185 characters
+and anyone measuring was measuring a draft.
 
-So this file guards both ends of the same rule:
+So this file guarded both ends of one rule, and the second end has now fired:
 
-  * while the rubric is NOT in RUBRICS, the script must hold its own text,
-    and must not be able to reach production by accident;
-  * the moment it IS in RUBRICS, the local copy must be gone.
+  * while the rubric was NOT in RUBRICS, the script held its own text and
+    could not reach production by accident;
+  * now that it IS in RUBRICS, the local copy is gone and the script reads
+    the shipped dict.
 
-The second assertion is the one that will fire one day, at exactly the commit
-that ships the rubric, which is when someone needs reminding.
+What remains here asserts the shipped prompt still carries every rule five
+measured runs put into it, and that select_with_primitives -- which is NOT in
+select_files -- stays a wrapper around the shipped selector rather than a
+second implementation of it.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -38,41 +42,47 @@ sys.modules[SPEC.name] = validator
 SPEC.loader.exec_module(validator)
 
 
-def test_the_candidate_is_not_wired_into_the_shipped_audit():
-    """Importing the script injects the candidate into the RUBRICS dict so
-    select_files can find it by key. That is fine for a measurement process
-    and would not be fine for the API: this asserts the rubric is not in the
-    source of truth, only in this process's copy of it.
+def test_the_script_holds_no_copy_of_the_prompt_now_that_it_ships():
+    """The assertion that fired at the commit that shipped the rubric, which
+    is exactly when someone needed reminding.
+
+    It used to read the other way: while `"web": {` was absent from llm_scan
+    the script had to hold its own dict. Now that the rubric ships, the dict
+    must be gone, or the script measures a draft the customer never receives
+    -- see tests/test_validate_money_rubric.py for how that went last time.
     """
-    shipped = Path(
+    shipped = (
         Path(__file__).resolve().parents[1] / "app" / "scan" / "llm_scan.py"
     ).read_text()
+    script = MODULE_PATH.read_text()
 
-    assert '"web": {' not in shipped, (
-        "the web rubric now ships; delete CANDIDATE from "
-        "scripts/validate_web_rubric.py and read RUBRICS['web'] instead, or "
-        "the script will measure a draft the customer never receives -- see "
-        "tests/test_validate_money_rubric.py for how that went last time"
+    assert '"web": {' in shipped, "the web rubric is no longer in RUBRICS"
+
+    assert "CANDIDATE = {" not in script, (
+        "scripts/validate_web_rubric.py has grown a local copy of the prompt "
+        "again; it must read RUBRICS['web'] so that what is measured is what "
+        "production sends"
     )
+    assert '"instructions": (' not in script
 
 
-def test_the_candidate_looks_for_the_frontend():
+def test_the_rubric_looks_for_the_frontend():
     """The reason path weighting became per-rubric. Under BEHAVIOUR this
     rubric would be shown ui/ and components/ divided by four -- everything
     except its own subject."""
-    assert validator.CANDIDATE["lives_in"] == PRESENTATION
+    assert RUBRICS["web"]["lives_in"] == PRESENTATION
 
 
-def test_the_candidate_excludes_what_other_rubrics_already_cover():
+def test_the_rubric_excludes_what_other_rubrics_already_cover():
     """A duplicate finding spends a slot twice. The server half of a double
     submit belongs to money; only the browser half belongs here."""
-    instructions = validator.CANDIDATE["instructions"]
+    instructions = RUBRICS["web"]["instructions"]
 
     assert "Do NOT report server-side issues" in instructions
     assert "idempotency key" in instructions
 
 
-def test_the_candidate_refuses_a_double_submit_claim_without_the_mapping():
+def test_the_rubric_refuses_a_double_submit_claim_without_the_mapping():
     """The one thing two measured runs agree is broken.
 
     Ten of dub's twelve findings in the second run were the same claim -- this
@@ -87,14 +97,14 @@ def test_the_candidate_refuses_a_double_submit_claim_without_the_mapping():
     imply `disabled`. A version that only says "check the button component" is
     what the evidence rule already said, and it did not work.
     """
-    instructions = validator.CANDIDATE["instructions"]
+    instructions = RUBRICS["web"]["instructions"]
 
     assert "QUOTE the line" in instructions
     assert "disabled={props.disabled || loading}" in instructions
     assert "confidence 0.5 or lower" in instructions
 
 
-def test_the_candidate_treats_a_quoted_guard_as_the_end_of_the_matter():
+def test_the_rubric_treats_a_quoted_guard_as_the_end_of_the_matter():
     """The companion to the timing ban, and the half that makes it usable.
 
     A ban on one argument is only as good as the model's ability to tell when
@@ -108,14 +118,14 @@ def test_the_candidate_treats_a_quoted_guard_as_the_end_of_the_matter():
     pointed at the requirement -- a named guard, and an explicit end to the
     inquiry -- rather than at the sentence that carried it in run 3.
     """
-    instructions = validator.CANDIDATE["instructions"]
+    instructions = RUBRICS["web"]["instructions"]
 
     assert "before its first await" in instructions
     assert "the control is guarded and there is nothing to report" in instructions
     assert "Once you have quoted a guard, you are finished" in instructions
 
 
-def test_the_candidate_forbids_reporting_a_check_that_came_back_clean():
+def test_the_rubric_forbids_reporting_a_check_that_came_back_clean():
     """What the third run cost, having fixed what the second run measured.
 
     Told to quote the props-to-disabled mapping, the model started quoting it
@@ -126,14 +136,14 @@ def test_the_candidate_forbids_reporting_a_check_that_came_back_clean():
     Nothing in the rubric had ever said not to. Until that run it had never
     been correct often enough for the omission to show.
     """
-    instructions = validator.CANDIDATE["instructions"]
+    instructions = RUBRICS["web"]["instructions"]
 
     assert "report NOTHING" in instructions
     assert "no action needed" in instructions
     assert "Silence is the correct output" in instructions
 
 
-def test_the_candidate_forbids_timing_as_a_ground_for_a_double_submit_finding():
+def test_the_rubric_forbids_timing_as_a_ground_for_a_double_submit_finding():
     """The one conclusion four measured runs agree on.
 
     Split the double-submit findings by what they rest on. SYNTAX -- a
@@ -150,7 +160,7 @@ def test_the_candidate_forbids_timing_as_a_ground_for_a_double_submit_finding():
     set of admissible grounds instead, which is the difference between
     debating a model and constraining it.
     """
-    instructions = validator.CANDIDATE["instructions"]
+    instructions = RUBRICS["web"]["instructions"]
 
     assert "TIMING IS NOT A GROUND" in instructions
     assert "There is exactly ONE ground for this finding" in instructions
@@ -162,7 +172,7 @@ def test_the_candidate_forbids_timing_as_a_ground_for_a_double_submit_finding():
     assert "disabled input or textarea" in instructions
 
 
-def test_the_candidate_asks_six_closed_questions_and_says_so():
+def test_the_rubric_asks_six_closed_questions_and_says_so():
     """The narrowing, after four runs.
 
     Each question earned its place by producing a finding that survived
@@ -180,7 +190,7 @@ def test_the_candidate_asks_six_closed_questions_and_says_so():
     comes back wrong, and the verifier cannot catch that because the quoted
     line really is there.
     """
-    instructions = validator.CANDIDATE["instructions"]
+    instructions = RUBRICS["web"]["instructions"]
 
     assert "Six questions, and only these six" in instructions
     assert "If it is not one of the six, it is not a finding" in instructions
@@ -189,7 +199,7 @@ def test_the_candidate_asks_six_closed_questions_and_says_so():
         assert number in instructions, number
 
 
-def test_the_candidate_requires_a_conditional_hook_to_actually_be_reachable():
+def test_the_rubric_requires_a_conditional_hook_to_actually_be_reachable():
     """Navlinks.tsx:16 and EmailSignIn.tsx:22, reported at 0.95 as crashes
     that would blank the page for every user. Both really do call useRouter()
     inside a ternary -- a genuine Rules-of-Hooks violation -- but the
@@ -199,7 +209,7 @@ def test_the_candidate_requires_a_conditional_hook_to_actually_be_reachable():
     GroupChat.tsx:22 is the one that counts: hooks after an early return on
     `personas`, which goes from empty to non-empty as the parent loads.
     """
-    instructions = validator.CANDIDATE["instructions"]
+    instructions = RUBRICS["web"]["instructions"]
 
     assert "the condition can differ between two renders" in instructions
     assert "build-time constant" in instructions
@@ -239,38 +249,34 @@ def test_the_digest_line_ignores_wording_and_confidence():
     assert validator.digest_line({**finding, "severity": "critical"}) != line
 
 
-def test_the_candidate_carries_the_evidence_rule():
+def test_the_rubric_carries_the_evidence_rule():
     """Learned on the money rubric: without it, findings state inferences in
     the voice of things read, and one in three was simply wrong."""
-    instructions = validator.CANDIDATE["instructions"]
+    instructions = RUBRICS["web"]["instructions"]
 
     assert "PROVES the claim" in instructions
     assert "confidence 0.5 or lower" in instructions
 
 
-def test_importing_the_script_adds_no_rubric_at_all():
-    """The first version injected at import, and three unrelated tests failed
-    once the whole suite ran in one process: the cost cap counted a fourth
-    rubric, the prompt fingerprint moved, and the guard that every shipped
-    rubric keeps the BEHAVIOUR weighting saw a PRESENTATION one.
-
-    A measurement harness that quietly reweights the rubrics it is NOT
-    measuring invalidates its own numbers. The mutation belongs in the process
-    that is about to make LLM calls, and nowhere else.
+def test_the_script_never_mutates_the_rubric_dict():
+    """An earlier version injected its draft into RUBRICS -- first at import,
+    which broke three unrelated tests the moment the suite ran in one process,
+    then from main(). Now that the rubric ships there is nothing to inject,
+    and a measurement harness that reweights the rubrics it is not measuring
+    would invalidate its own numbers.
     """
-    assert validator.CANDIDATE_KEY not in RUBRICS
+    script = MODULE_PATH.read_text()
+
+    # An assignment, not a mention: the docstring names RUBRICS["web"] on
+    # purpose, and a test that forbade the word would forbid explaining
+    # itself.
+    assert not re.search(r"^\s*RUBRICS\s*\[", script, re.M), (
+        "the script assigns into RUBRICS again"
+    )
+    assert "install_candidate" not in script
 
     for name in ("auth", "security", "money"):
         assert RUBRICS[name].get("lives_in", "behaviour") == "behaviour", name
-
-
-def test_the_candidate_is_installed_when_the_script_actually_runs():
-    """The other half: deferring the injection must not mean forgetting it."""
-    try:
-        validator.install_candidate()
-        assert RUBRICS[validator.CANDIDATE_KEY] is validator.CANDIDATE
-    finally:
-        RUBRICS.pop(validator.CANDIDATE_KEY, None)
 
 
 def test_both_validation_scripts_put_the_repo_root_on_sys_path():
@@ -348,17 +354,11 @@ def test_the_primitive_buffer_ignores_the_rubric_keywords():
 
     assert not RUBRICS["auth"]["keywords"].search(files[0][1])
 
-    try:
-        validator.install_candidate()
-        assert not validator.CANDIDATE["keywords"].search(files[0][1])
-        assert files[0][0] not in {
-            n for n, _ in validator.select_files(files, validator.CANDIDATE_KEY)
-        }
-        chosen = validator.select_with_primitives(
-            files, validator.CANDIDATE_KEY
-        )
-    finally:
-        RUBRICS.pop(validator.CANDIDATE_KEY, None)
+    assert not RUBRICS["web"]["keywords"].search(files[0][1])
+    assert files[0][0] not in {
+        n for n, _ in validator.select_files(files, validator.RUBRIC_KEY)
+    }
+    chosen = validator.select_with_primitives(files, validator.RUBRIC_KEY)
 
     assert [n for n, _ in chosen] == [files[0][0]]
 
@@ -398,13 +398,7 @@ def test_the_buffer_cannot_eat_the_whole_prompt():
     huge = "x" * 50_000
     files = [(f"ui/{i}/button.tsx", huge) for i in range(100)]
 
-    try:
-        validator.install_candidate()
-        chosen = validator.select_with_primitives(
-            files, validator.CANDIDATE_KEY
-        )
-    finally:
-        RUBRICS.pop(validator.CANDIDATE_KEY, None)
+    chosen = validator.select_with_primitives(files, validator.RUBRIC_KEY)
 
     spent = sum(len(t) for _, t in chosen)
     assert spent <= validator.PRIMITIVE_BUDGET, spent
@@ -434,9 +428,6 @@ def test_main_reaches_the_llm_client_without_a_typo(monkeypatch, capsys):
     monkeypatch.delenv("AITUNNEL_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    try:
-        assert validator.main() == 1
-    finally:
-        RUBRICS.pop(validator.CANDIDATE_KEY, None)
+    assert validator.main() == 1
 
     assert "no LLM provider configured" in capsys.readouterr().err
