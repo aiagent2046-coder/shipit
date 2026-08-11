@@ -37,7 +37,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "67cb9afec1123efd"
+PROMPT_FINGERPRINT = "f61eb1dce430dfec"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -468,8 +468,14 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
         def complete(self, system, user, max_tokens=4096):
             return next(responses), LLMUsage(model="fake-model")
 
+    # Rubrics named explicitly, not left to the default. This is a test about
+    # `passes`, and the canned responses above are positional -- so under the
+    # default roster it breaks every time a rubric is added, which is what
+    # happened when "web" shipped: the fixture's `fetch(` matches its keywords
+    # too, so six calls met four responses and the failure pointed here
+    # instead of at the roster. Pinning the two keeps the subject singular.
     findings, stats = run_llm_scan(io.BytesIO(buf.getvalue()), FakeClient(),
-                                   passes=2)
+                                   rubrics=("auth", "security"), passes=2)
     assert stats.prompts == 4          # 2 рубрики × 2 прохода
     # оба ответа указывают на одну (file, line): дедуп оставил тяжёлую
     assert len(findings) == 1
@@ -758,6 +764,13 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
     surface = "|".join([
         SYSTEM_PROMPT,
         *(name + RUBRICS[name]["instructions"] for name in sorted(RUBRICS)),
+        # WHICH rubrics are asked, not only what each one says. Missing here
+        # until "web" shipped without being run: its text was in the surface,
+        # so the fingerprint moved and the engine version was bumped, while
+        # run_llm_scan's own default still named three rubrics and never
+        # called it. Every guard fired and none of them was about the roster.
+        repr(llm_scan.ALL_RUBRICS),
+        repr(inspect.signature(run_llm_scan).parameters["rubrics"].default),
         # What reaches the prompt at all, and in what order.
         repr(llm_scan._CODE_SUFFIXES),
         repr(llm_scan._SKIP_DIRS),
@@ -853,3 +866,62 @@ def test_the_same_files_under_a_behaviour_rubric_order_the_other_way(monkeypatch
     names = [n for n, _ in select_files(files, "web")]
 
     assert names[0] == "apps/lib/api/submit.ts"
+
+
+def test_the_scan_runs_every_rubric_that_exists():
+    """The defect this file could not see, because it only ever checked what
+    the rubrics say rather than whether they are asked.
+
+    `run_llm_scan`'s rubric list was a literal in its own signature --
+    ("auth", "security", "money") -- so adding a fourth to RUBRICS did not run
+    it. The "web" rubric shipped that way and reached production: in the dict,
+    mapped to the Frontend category, inside PROMPT_FINGERPRINT, counted in the
+    cost cap, and never called once.
+
+    Nothing caught it. PROMPT_FINGERPRINT moved, because the rubric's text is
+    part of what the model would be shown. The category assertion passed,
+    because Frontend is a category the scorer knows. LLM_ONLY_CATEGORIES did
+    not help either: it marks a category unexamined when the LLM did not run,
+    and the LLM did run -- for the other three. The audit reported
+    `unexamined: []` beside `Frontend: 10.0`, a perfect score from a rubric
+    that had not looked.
+    """
+    default = inspect.signature(run_llm_scan).parameters["rubrics"].default
+
+    assert set(default) == set(RUBRICS), (
+        f"run_llm_scan runs {sorted(set(default))} but RUBRICS defines "
+        f"{sorted(RUBRICS)}; a rubric that is defined and not run scores its "
+        f"category a silent 10.0"
+    )
+    assert tuple(default) == llm_scan.ALL_RUBRICS
+
+
+def test_the_rubric_list_is_derived_rather_than_written_out():
+    """The assertion above is satisfiable by editing a literal, which is what
+    someone will do at 2am when a fifth rubric is added and this fails. The
+    list has to come from the dict, so adding a rubric is one edit and not
+    two."""
+    source = inspect.getsource(llm_scan)
+
+    assert "ALL_RUBRICS: tuple[str, ...] = tuple(RUBRICS)" in source
+    assert '= ("auth", "security", "money")' not in source
+
+
+def test_every_rubric_selects_something_from_a_frontend_repository():
+    """The narrower half of the same worry: a rubric that runs but whose
+    keywords match nothing contributes no findings either, and looks identical
+    from the outside. digital-rolecraft is 102 files of Vite/React with no
+    backend, which is where the web rubric is meant to earn its place."""
+    files = [
+        ("src/App.tsx",
+         "const App = () => (<QueryClientProvider client={queryClient}>"
+         "<BrowserRouter><Routes/></BrowserRouter></QueryClientProvider>)"),
+        ("src/components/SimulatorChat.tsx",
+         "const [isGenerating, setIsGenerating] = useState(false);\n"
+         "await generatePersonaResponse(); setIsGenerating(false);"),
+        ("src/lib/auth.ts", "const token = localStorage.getItem('session')"),
+    ]
+
+    assert [n for n, _ in select_files(files, "web")], (
+        "the web rubric selected nothing from a frontend repository"
+    )
