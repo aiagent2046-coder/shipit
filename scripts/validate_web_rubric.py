@@ -81,6 +81,29 @@ The buffer stays. It is cheap, it broke nothing, and one of dub's two real
 findings came from a file it recovered -- but it does not sell the rubric,
 and it was adopted for a reason that turned out to be false.
 
+THIRD RUN: THE RULE WORKED, AND EXPOSED THE NEXT LAYER
+
+8 of 8 real on nextjs-subscription-payments, up from 6: given the rule, the
+model applied the Button.tsx mapping across the whole codebase rather than
+only where it had tripped, and found three more real ones in the auth forms.
+On dub every false double-submit claim disappeared -- it now quotes
+`packages/ui/src/button.tsx line 114` and reaches the right conclusion every
+time.
+
+And then reports that conclusion as a finding. Five of dub's six read like
+"[HIGH conf=0.9] Retry payment: double-submit correctly guarded via ref ...
+No action needed." Correct analysis, useless output, on a list the customer
+is paying to be a list of repairs. Hence the paragraph that says silence is
+the right answer for code that is already right -- the rubric had never been
+told, because until this run it had never been correct often enough for it
+to matter.
+
+Two false positives at 0.95 survived on digital-rolecraft, both of the form
+"the handler calls an async function that sets the flag on its own first
+line, so the flag is set too late". It is not: the call is synchronous and
+the await inside it happens afterwards. The guard paragraph now names that
+shape, and the disabled-textarea shape beside it.
+
 WHAT ADOPTION WOULD COST, BEYOND THE PROMPT
 
   * One more LLM call per rubric per pass.
@@ -223,8 +246,22 @@ CANDIDATE = {
         "await, or an early `if (isSubmitting) return`, closes the race by "
         "itself -- state updates from a click are flushed before the next "
         "click is delivered, so `setLoading(true)` on the first line of a "
-        "handler is not too late. If you mention such a guard and then argue "
+        "handler is not too late. Nor is it too late when the handler's last "
+        "act is to CALL an async function whose own first line sets the flag: "
+        "that call is synchronous, the flag is set in the same event, and the "
+        "await inside it happens afterwards. A disabled input or textarea is "
+        "a guard too -- it receives no key events, so a keyboard path through "
+        "it is closed as well. If you mention such a guard and then argue "
         "past it, you are reporting a bug you have already disproved.\n"
+        "\n"
+        "When you check one of these and the code turns out to be correct, "
+        "report NOTHING. Not a finding at confidence 0.9 whose explanation "
+        "ends in 'no issue here', not an informational confirmation that a "
+        "guard is present, not a finding whose fix reads 'no action needed'. "
+        "The reader is paying for a list of things to repair; an item on that "
+        "list that needs no repair costs them the time to discover it does "
+        "not belong there, and makes them trust the rest of the list less. "
+        "Silence is the correct output for code that is already right.\n"
         "\n"
         "Work disappears: state a long flow keeps only in memory, so a "
         "refresh or a back gesture loses what the user typed; leaving a "

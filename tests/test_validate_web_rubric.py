@@ -112,6 +112,43 @@ def test_the_candidate_names_the_guards_that_close_the_race():
     assert "argue past it" in instructions
 
 
+def test_the_candidate_forbids_reporting_a_check_that_came_back_clean():
+    """What the third run cost, having fixed what the second run measured.
+
+    Told to quote the props-to-disabled mapping, the model started quoting it
+    and reaching the right answer every time -- and then reporting the right
+    answer as a finding. Five of dub's six read like "[HIGH conf=0.9] Retry
+    payment: double-submit correctly guarded via ref ... No action needed."
+
+    Nothing in the rubric had ever said not to. Until that run it had never
+    been correct often enough for the omission to show.
+    """
+    instructions = validator.CANDIDATE["instructions"]
+
+    assert "report NOTHING" in instructions
+    assert "no action needed" in instructions
+    assert "Silence is the correct output" in instructions
+
+
+def test_the_candidate_knows_a_flag_set_inside_a_called_async_function_is_in_time():
+    """The two 0.95 false positives that survived the third run, both of the
+    shape "the handler's last act is to call an async function whose first
+    line sets the flag, so the flag is set too late".
+
+    It is not too late: the call itself is synchronous, and the await inside
+    it happens after the flag is set, in the same event. The earlier
+    paragraph named a ref before the first await and an early return; the
+    model found the shape it did not name.
+    """
+    instructions = validator.CANDIDATE["instructions"]
+
+    assert "CALL an async function" in instructions
+    assert "that call is synchronous" in instructions
+    # Both digital-rolecraft chats route the keyboard through a textarea that
+    # is itself disabled while generating, which closes that path too.
+    assert "disabled input or textarea is" in instructions
+
+
 def test_the_candidate_carries_the_evidence_rule():
     """Learned on the money rubric: without it, findings state inferences in
     the voice of things read, and one in three was simply wrong."""
