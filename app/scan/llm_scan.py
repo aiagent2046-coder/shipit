@@ -319,7 +319,17 @@ def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
     return out
 
 
-def relevance(name: str, text: str, kw: re.Pattern[str]) -> int:
+# Which side of the codebase a rubric's subject lives on. Declared per rubric
+# because the answer is opposite for different questions and there is no
+# neutral default that serves both: money moves in lib/ and api/, while a
+# white screen on render happens in ui/ and components/. A single global
+# weighting -- which is what this was -- would show a rubric about the
+# frontend everything except the frontend.
+BEHAVIOUR, PRESENTATION = "behaviour", "presentation"
+
+
+def relevance(name: str, text: str, kw: re.Pattern[str],
+              lives_in: str = BEHAVIOUR) -> int:
     """How much this file looks like the rubric's subject, not its decoration.
 
     Keyword hits, weighted: a hit in the path is worth more than one in the
@@ -328,12 +338,22 @@ def relevance(name: str, text: str, kw: re.Pattern[str]) -> int:
     class then multiplies or divides, since it is the single strongest signal
     available -- `lib/payouts/` and `ui/partners/payouts/` match the same
     words and only one of them sends money.
+
+    `lives_in` decides which class is which. It defaults to BEHAVIOUR, so
+    every rubric that shipped before this parameter existed selects the same
+    files it always did -- asserted in the tests rather than assumed, because
+    a silent change here changes what a paying customer receives.
     """
     score = len(kw.findall(name)) * 5 + len(kw.findall(text))
 
-    if _BEHAVIOUR_PATH.search(name):
+    favoured, demoted = (
+        (_BEHAVIOUR_PATH, _PRESENTATION_PATH) if lives_in == BEHAVIOUR
+        else (_PRESENTATION_PATH, _BEHAVIOUR_PATH)
+    )
+
+    if favoured.search(name):
         score *= 3
-    if _PRESENTATION_PATH.search(name):
+    if demoted.search(name):
         score //= 4
 
     return score
@@ -359,6 +379,7 @@ def select_files(files: list[tuple[str, str]], rubric: str) -> list[tuple[str, s
     selected different files would produce different scores from the same key.
     """
     kw = RUBRICS[rubric]["keywords"]
+    lives_in = RUBRICS[rubric].get("lives_in", BEHAVIOUR)
     matched = [
         (n, t[:MAX_FILE_CHARS]) for n, t in files
         if kw.search(n) or kw.search(t)
@@ -370,7 +391,8 @@ def select_files(files: list[tuple[str, str]], rubric: str) -> list[tuple[str, s
 
     reserve = int(MAX_TOTAL_CHARS * RELEVANCE_BUDGET_SHARE)
     by_relevance = sorted(
-        matched, key=lambda x: (-relevance(x[0], x[1], kw), len(x[1]), x[0]))
+        matched,
+        key=lambda x: (-relevance(x[0], x[1], kw, lives_in), len(x[1]), x[0]))
 
     for n, t in by_relevance:
         if total + len(t) > reserve:
