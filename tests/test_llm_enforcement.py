@@ -560,7 +560,19 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
     from app.llm.pricing import cost_usd
     from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRICS
 
-    passes = 2                              # what a Fix Pack runs
+    # A deliberate 2x safety factor, NOT a description of anything that runs.
+    # It used to say "what a Fix Pack runs", and that was wrong and expensively
+    # so: nothing in the codebase passes `passes=2`. run_scan is only ever
+    # called with llm_passes=1, and a Fix Pack's deep review is a second
+    # single-pass audit through run_repo_audit, with its own cap.
+    #
+    # Reading this comment as fact produced a cost analysis off by double --
+    # "$6.38 per Fix Pack" against a $10 price, when the real per-scan ceiling
+    # is four calls and $3.19, with $3.53 the worst ever measured. Kept at 2
+    # anyway: a cap has to sit above the intended cost with room, and doubling
+    # here is what stops someone lowering JOB_COST_CAP_USD to just above
+    # today's traffic.
+    passes = 2
     calls = len(RUBRICS) * passes
     # ~4 characters per token is the standard rough conversion; the point is
     # the order of magnitude, not a token-exact figure.
