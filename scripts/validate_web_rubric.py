@@ -88,11 +88,22 @@ import io
 import re
 import sys
 import zipfile
+from pathlib import Path
 
-from app.ingest.github_fetch import fetch_repo_zip as github_fetch_repo_zip
-from app.llm import pricing
-from app.llm.client import LLMClient
-from app.scan.llm_scan import (
+# Same line as eleven sibling scripts, for the same reason: Python puts the
+# SCRIPT's directory on sys.path, never the working directory, so `python
+# scripts/validate_web_rubric.py` from the repo root cannot import app/ on its
+# own. It ran anyway for two days because every invocation carried
+# `PYTHONPATH=.` in front of it, and it kept passing the test suite because
+# the development venv holds an editable install of this package -- two
+# separate reasons the defect could not be seen from here. It surfaced on the
+# server, whose venv is a built release with neither.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.ingest.github_fetch import fetch_repo_zip as github_fetch_repo_zip  # noqa: E402
+from app.llm import pricing  # noqa: E402
+from app.llm.client import LLMClient  # noqa: E402
+from app.scan.llm_scan import (  # noqa: E402
     MAX_FILE_CHARS,
     MAX_TOTAL_CHARS,
     PRESENTATION,

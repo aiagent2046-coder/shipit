@@ -20,6 +20,8 @@ that ships the rubric, which is when someone needs reminding.
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -102,6 +104,69 @@ def test_the_candidate_is_installed_when_the_script_actually_runs():
         assert RUBRICS[validator.CANDIDATE_KEY] is validator.CANDIDATE
     finally:
         RUBRICS.pop(validator.CANDIDATE_KEY, None)
+
+
+def test_both_validation_scripts_put_the_repo_root_on_sys_path():
+    """Python puts the SCRIPT's directory on sys.path, never the working
+    directory, so `python scripts/validate_web_rubric.py` from the repo root
+    cannot import app/ on its own.
+
+    Asserted against the source, which is unusual and is the only thing that
+    works here. The obvious test -- run the script in a subprocess with a
+    clean environment and check it starts -- passes whether or not the line is
+    present, because this repository is installed into the development venv as
+    an editable package, so `app` resolves from site-packages no matter what
+    sys.path[0] is. Removing the line and watching the suite stay green is how
+    that was established.
+
+    Two separate things therefore hid this: every invocation happened to carry
+    `PYTHONPATH=.`, and every test run happened to have the editable install.
+    It surfaced on the server, whose venv is a built release with neither, as
+    a ModuleNotFoundError at line 92 of a script that had worked all week.
+
+    Eleven sibling scripts under scripts/ carry the same line for the same
+    reason; these two were the exceptions.
+    """
+    line = "sys.path.insert(0, str(Path(__file__).resolve().parent.parent))"
+    root = Path(__file__).resolve().parents[1]
+
+    for name in ("validate_web_rubric.py", "validate_money_rubric.py"):
+        source = (root / "scripts" / name).read_text()
+        first_app_import = source.index("\nfrom app.")
+
+        assert line in source, (
+            f"{name} relies on the caller passing PYTHONPATH=. -- it will "
+            f"fail on any venv without an editable install of this package"
+        )
+        assert source.index(line) < first_app_import, (
+            f"{name} inserts the repo root after it imports from app/"
+        )
+
+
+def test_both_validation_scripts_start_without_PYTHONPATH():
+    """The weaker companion to the assertion above: it cannot prove the
+    sys.path line is there, but it does prove nothing else at import time is
+    broken. Run with no arguments both scripts refuse to do anything and print
+    their own usage.
+
+    The exit code is deliberately not asserted -- the two disagree (2 here, 1
+    there via SystemExit(__doc__)) and that is not what this is about.
+    """
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    root = Path(__file__).resolve().parents[1]
+
+    for name in ("validate_web_rubric.py", "validate_money_rubric.py"):
+        result = subprocess.run(
+            [sys.executable, str(root / "scripts" / name)],
+            cwd=root, env=environment, capture_output=True, text=True,
+        )
+        output = result.stdout + result.stderr
+
+        assert "Traceback" not in output, f"{name}:\n{output[-800:]}"
+        assert "earns a place in the audit" in output, (
+            f"{name} never reached its own usage text:\n{output[-800:]}"
+        )
 
 
 def test_the_primitive_buffer_ignores_the_rubric_keywords():
