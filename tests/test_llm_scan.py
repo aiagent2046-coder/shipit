@@ -37,7 +37,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "05e6592b20296110"
+PROMPT_FINGERPRINT = "67cb9afec1123efd"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -783,16 +783,27 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
 # --- path weighting is per rubric ---
 
 
-def test_no_shipped_rubric_changes_its_path_weighting():
+def test_no_rubric_written_before_the_parameter_changes_its_path_weighting():
     """The safety assertion for making this a parameter at all.
 
     Every rubric that existed before `lives_in` must keep selecting the files
     it always did, or this quietly changes what a paying customer receives.
-    None of them declares the key, so all three take the BEHAVIOUR default,
-    which is the weighting they were written and measured under.
+    None of the three declares the key, so all three take the BEHAVIOUR
+    default, which is the weighting they were written and measured under.
+
+    Named rather than derived: `web` shipped later and is the reason the
+    parameter exists, so "every rubric" would now be false and iterating
+    RUBRICS would make this test disappear the moment it mattered. A fourth
+    BEHAVIOUR rubric added tomorrow is not this test's business; a change to
+    one of these three is.
     """
-    for name, rubric in RUBRICS.items():
-        assert rubric.get("lives_in", BEHAVIOUR) == BEHAVIOUR, name
+    for name in ("auth", "security", "money"):
+        assert RUBRICS[name].get("lives_in", BEHAVIOUR) == BEHAVIOUR, name
+
+    assert RUBRICS["web"]["lives_in"] == PRESENTATION, (
+        "the web rubric is the reason lives_in exists; under BEHAVIOUR it "
+        "would be shown ui/ and components/ divided by four"
+    )
 
 
 def test_the_default_weighting_is_unchanged_by_the_parameter():

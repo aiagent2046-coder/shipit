@@ -22,6 +22,7 @@ tests/test_audit_worker.py) -- a limit in a process that no longer runs scans
 was bounding nothing.
 """
 
+import math
 import io
 import json
 import uuid
@@ -103,7 +104,14 @@ def test_cost_cap_interrupts_loop_and_flags_partial():
     # it means to assert is that the loop stops once spend reaches the cap,
     # whatever the cap is: input is $3.00/MTok, so that is one call of
     # cap/3.00 million tokens.
-    at_the_cap = int(JOB_COST_CAP_USD / Decimal("3.00") * 1_000_000)
+    # Rounded UP, not truncated. int() was exact while the cap was 6.00 --
+    # 2,000,000 tokens on the nose -- and silently wrong at 6.50, where
+    # 2,166,666.67 truncates to a call costing a fraction of a cent less than
+    # the cap, so the loop was right to make a second one and the test failed
+    # for arithmetic rather than for behaviour. The intent is "one call that
+    # reaches the cap", which is a ceiling for any cap that is not a multiple
+    # of the per-token price.
+    at_the_cap = math.ceil(JOB_COST_CAP_USD / Decimal("3.00") * 1_000_000)
     llm = CountingLLM(input_tokens=at_the_cap, output_tokens=0)
     _findings, stats = run_llm_scan(_both_rubrics_zip(), llm)
     assert llm.calls == 1                 # stopped before the second rubric

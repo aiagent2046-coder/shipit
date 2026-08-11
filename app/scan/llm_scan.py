@@ -54,7 +54,19 @@ MAX_TOTAL_CHARS = 900_000
 # result, which is exactly the silent truncation this whole change exists to
 # remove. This is a backstop against a runaway loop, not a budget: it has to
 # sit above the intended cost, not on top of it.
-JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "6.00"))
+#
+# Raised again from 6.00 for the fourth rubric, which takes a Fix Pack's two
+# passes from 6 calls to 8 and the worst case from $4.79 to $6.38 -- back
+# under the cap, and back to truncating exactly the large repositories the
+# budget raise was for. 6.50 restores the same thin backstop margin.
+#
+# Worst case is not the bill. It assumes all four rubrics fill the entire
+# 900_000 budget on both passes; the web rubric measured $1.56 across three
+# repositories, and dubinc/dub -- 4212 files, the largest thing measured --
+# came to $1.06 of that. The number that matters for pricing is the measured
+# one; the number that matters here is the one that must never be hit by a
+# scan that is behaving.
+JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "6.50"))
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "venv/")
 # .pipe is Tinybird's query definition format. It earned its place: on a real
 # paid audit the money rubric reported getWebhookEvents as an unbounded query
@@ -97,6 +109,18 @@ _PRESENTATION_PATH = re.compile(
     r"|\.(css|scss|svg)$",
     re.I,
 )
+
+# Which side of the codebase a rubric's subject lives on. Declared per rubric
+# because the answer is opposite for different questions and there is no
+# neutral default that serves both: money moves in lib/ and api/, while a
+# white screen on render happens in ui/ and components/. A single global
+# weighting -- which is what this was -- would show a rubric about the
+# frontend everything except the frontend.
+#
+# Defined above RUBRICS rather than beside relevance(), where it started: the
+# "web" rubric is the first to declare the key, and a name has to exist before
+# the dict that uses it.
+BEHAVIOUR, PRESENTATION = "behaviour", "presentation"
 
 # Each rubric declares the score category its findings land in. This used to
 # be inferred at the call site as `"Security" if rubric == "security" else
@@ -238,6 +262,149 @@ RUBRICS: dict[str, dict] = {
             "on the one finding they will not act on."
         ),
     },
+    "web": {
+        # The sixth score category, added with this rubric. See
+        # app/scan/scoring.py for why it is its own category rather than
+        # folded into Deploy, and why it is not gated.
+        "category": "Frontend",
+        # The only rubric that does not take the BEHAVIOUR default, and the
+        # reason the weighting became per-rubric at all: under the global
+        # weighting ui/ and components/ were divided by four, so a rubric
+        # about the frontend would have been shown everything except the
+        # frontend -- and would have looked like a bad idea rather than a
+        # misconfigured one.
+        "lives_in": PRESENTATION,
+        "keywords": re.compile(
+            r"\b(useState|useEffect|useRef|useCallback|onSubmit|onClick|onChange"
+            r"|preventDefault|disabled|isLoading|isSubmitting|isPending|setLoading"
+            r"|spinner|skeleton|ErrorBoundary|componentDidCatch|Suspense|fallback"
+            r"|localStorage|sessionStorage|beforeunload|toast|notify"
+            r"|useSWR|useQuery|useMutation|AbortController|router)\b"
+            r"|\bfetch\(|\baxios\b|\balert\(|\bconfirm\(",
+            re.I,
+        ),
+        "instructions": (
+            "Review what breaks for the person using this app in a browser. "
+            "Assume the code is deployed, the user behaves normally, and the "
+            "network is sometimes slow. No attacker is involved. Report only "
+            "concrete issues you can point at a line for.\n"
+            "\n"
+            "Six questions, and only these six. Each is settled by reading lines, "
+            "not by reasoning about what happens between them.\n"
+            "\n"
+            "1. THE SCREEN GOES BLANK. No error boundary anywhere above the "
+            "routes, so one render error replaces the whole app with a white "
+            "page. In the Next.js app router an error.tsx or global-error.tsx "
+            "file is that boundary; if you see one, there is nothing to report.\n"
+            "\n"
+            "2. THE APP STAYS STUCK. A handler sets a flag before an await and "
+            "clears it after, with no try/finally around them, so a throw leaves "
+            "the spinner running and the input disabled until the user reloads. "
+            "The proof is the absence of `finally`, and that the clear sits after "
+            "an await rather than inside one. A `catch` that does not clear the "
+            "flag counts too. Check the callee for expressions outside its own "
+            "try -- an argument built from `x.y.join()` before the try begins can "
+            "throw where a reader assumes it cannot.\n"
+            "\n"
+            "3. WORK DISAPPEARS. A form the user fills in over minutes, kept only "
+            "in component state, with no beforeunload listener and no router "
+            "blocker, so a stray click on a nav link discards it silently.\n"
+            "\n"
+            "4. SOMETHING KEEPS RUNNING. A setTimeout, setInterval, subscription "
+            "or event listener started in an effect or a callback with no cleanup "
+            "that cancels it, so it fires against a component the user has left.\n"
+            "\n"
+            "5. A HOOK IS CALLED CONDITIONALLY. A useState or useEffect after an "
+            "early return, or a useRouter() inside a ternary. Report it only when "
+            "the condition can differ between two renders of the same mounted "
+            "component -- a prop, state or fetched data. When it reads a "
+            "build-time constant the order never actually changes and the app "
+            "does not crash: that is a lint violation and not a finding here.\n"
+            "\n"
+            "6. THE USER ACTS TWICE: a form or button left enabled while its own "
+            "submit is in flight, so an impatient second click sends a second "
+            "request. This is the browser half of a duplicate charge -- the "
+            "server half is a missing idempotency key -- and it is the half the "
+            "person clicking can see. An impatient double click is not an edge "
+            "case; it is what people do when nothing visibly happens.\n"
+            "\n"
+            "Before you claim a control is still clickable, QUOTE the line in the "
+            "component that renders it -- Button, Switch, the control itself -- "
+            "that maps its props onto the HTML disabled attribute. Codebases "
+            "differ here and the difference decides the finding: in one, "
+            "`disabled` must be passed explicitly and a `loading` prop only draws "
+            "a spinner; in another, the same component reads "
+            "`disabled={props.disabled || loading}`, so `loading={isSubmitting}` "
+            "already disables the button and there is nothing to report. A "
+            "`disabled` prop that omits the in-flight flag proves nothing on its "
+            "own. If you have not read that mapping, you do not know which "
+            "codebase you are in: say so, phrase the finding as the question it "
+            "is, and report confidence 0.5 or lower.\n"
+            "\n"
+            "There is exactly ONE ground for this finding: the control has no "
+            "in-flight prop at all, or it has one and the component you just "
+            "quoted does not turn it into `disabled`. That is a fact about two "
+            "lines of code, and it is the only fact you may report here.\n"
+            "\n"
+            "TIMING IS NOT A GROUND. Never report that a flag is set 'too late', "
+            "that a state update 'has not propagated yet', that the button 'is "
+            "not disabled at the moment of the first click', or that a second "
+            "click lands 'before the re-render'. If a handler sets its flag, or "
+            "a ref, or calls a function that does -- anywhere before its first "
+            "await -- the control is guarded and there is nothing to report. So "
+            "is a disabled input or textarea, which receives no key events at "
+            "all. Once you have quoted a guard, you are finished: an argument "
+            "that gets past it is wrong, and it is wrong every time, because the "
+            "click that would exploit the window is delivered after the update "
+            "that closes it.\n"
+            "\n"
+            "When you check one of these and the code turns out to be correct, "
+            "report NOTHING. Not a finding at confidence 0.9 whose explanation "
+            "ends in 'no issue here', not an informational confirmation that a "
+            "guard is present, not a finding whose fix reads 'no action needed'. "
+            "The reader is paying for a list of things to repair; an item on that "
+            "list that needs no repair costs them the time to discover it does "
+            "not belong there, and makes them trust the rest of the list less. "
+            "Silence is the correct output for code that is already right.\n"
+            "\n"
+            "The missing `await` belongs to question 6 as well, and is the "
+            "clearest form of it: a handler that calls an async function without "
+            "awaiting it and clears its in-flight flag on the next line. The flag "
+            "is true for no time at all, so the spinner never appears and the "
+            "control is never protected, whatever the component does with the "
+            "prop.\n"
+            "\n"
+            "Severity, for the cases that are not judgement calls. A submit path "
+            "that can fire twice is CRITICAL when the request spends money, "
+            "creates an order or sends a message, and high otherwise. A missing "
+            "error boundary above the application's routes is high: it converts "
+            "every other bug in the app into a blank page.\n"
+            "\n"
+            "Point at the line that PROVES the claim. If the code that would "
+            "settle it is not among the files you were given -- the provider that "
+            "might wrap these routes in a boundary, the hook that might already "
+            "disable the button -- say so, phrase the finding as the question it "
+            "is, and report confidence 0.5 or lower.\n"
+            "\n"
+            "Do NOT report styling, layout, accessibility or bundle size. Those "
+            "are real and they are not this rubric.\n"
+            "\n"
+            "Do NOT report server-side issues: a missing idempotency key on the "
+            "handler, an unindexed query, a webhook with no signature check. "
+            "Other rubrics cover those, and a duplicate here spends a finding "
+            "slot on something already reported.\n"
+            "\n"
+            "Do NOT report a missing loading state on something that resolves "
+            "locally and instantly.\n"
+            "\n"
+            "Do NOT report anything outside the six questions, however real it "
+            "looks. A race between two fetches, an optimistic update that could "
+            "diverge from the server, a catch that shows a toast the user might "
+            "miss -- these were measured, and what came back was confident prose "
+            "about code that turned out to be correct. If it is not one of the "
+            "six, it is not a finding."
+        ),
+    },
 }
 
 # A rubric whose category the scorer does not know contributes nothing to any
@@ -317,15 +484,6 @@ def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
             continue
         out.append((n, data.decode("utf-8", errors="ignore")))
     return out
-
-
-# Which side of the codebase a rubric's subject lives on. Declared per rubric
-# because the answer is opposite for different questions and there is no
-# neutral default that serves both: money moves in lib/ and api/, while a
-# white screen on render happens in ui/ and components/. A single global
-# weighting -- which is what this was -- would show a rubric about the
-# frontend everything except the frontend.
-BEHAVIOUR, PRESENTATION = "behaviour", "presentation"
 
 
 def relevance(name: str, text: str, kw: re.Pattern[str],
