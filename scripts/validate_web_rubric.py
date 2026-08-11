@@ -55,8 +55,31 @@ question is asked in the consumer and answered in the primitive.
 Hence select_with_primitives below. It lives here, not in llm_scan, for the
 same reason CANDIDATE does: nothing has shipped, and a change to select_files
 moves PROMPT_FINGERPRINT and AUDIT_ENGINE_VERSION, which invalidates the
-audit cache for every paying customer. If the re-measurement shows this
-recovers the seven, THEN it moves into select_files with those bumps.
+audit cache for every paying customer.
+
+THAT THEORY WAS WRONG, AND HOW THE SECOND RUN SHOWED IT
+
+Second run, same three repositories, with the buffer in place and the prompt
+deliberately untouched so only one variable moved: 5 of 6 real on
+digital-rolecraft, 5 of 7 on nextjs-subscription-payments, 2 of 12 on dub.
+Precision 12 of 25, against 11 of 22 before. No improvement.
+
+packages/ui/src/button.tsx WAS in the prompt -- the script prints it in the
+list of files the buffer recovered -- and the model still wrote, ten times,
+that a button only shows a spinner and is never disabled. The clearest case
+was oauth-apps/add-edit-app-form.tsx, reported as "not disabled while
+`saving` is true" when line 602 of that same file reads `loading={saving}`.
+
+So availability was never the variable. In nextjs-subscription-payments the
+Button is 1.4 KB in a 23-file prompt and the model reads it, quotes it, and
+gets all six findings right; in dub it is 5 KB in a 272-file prompt and the
+model does not consult it. The fix therefore belongs in the prompt: the
+instructions now refuse the claim unless the props-to-`disabled` mapping is
+quoted. That is the third run's single variable.
+
+The buffer stays. It is cheap, it broke nothing, and one of dub's two real
+findings came from a file it recovered -- but it does not sell the rubric,
+and it was adopted for a reason that turned out to be false.
 
 WHAT ADOPTION WOULD COST, BEYOND THE PROMPT
 
@@ -182,6 +205,26 @@ CANDIDATE = {
         "server half is a missing idempotency key -- and it is the half the "
         "person clicking can see. An impatient double click is not an edge "
         "case; it is what people do when nothing visibly happens.\n"
+        "\n"
+        "Before you claim a control is still clickable, QUOTE the line in the "
+        "component that renders it -- Button, Switch, the control itself -- "
+        "that maps its props onto the HTML disabled attribute. Codebases "
+        "differ here and the difference decides the finding: in one, "
+        "`disabled` must be passed explicitly and a `loading` prop only draws "
+        "a spinner; in another, the same component reads "
+        "`disabled={props.disabled || loading}`, so `loading={isSubmitting}` "
+        "already disables the button and there is nothing to report. A "
+        "`disabled` prop that omits the in-flight flag proves nothing on its "
+        "own. If you have not read that mapping, you do not know which "
+        "codebase you are in: say so, phrase the finding as the question it "
+        "is, and report confidence 0.5 or lower.\n"
+        "\n"
+        "The same applies to a guard you can see. A ref set before the first "
+        "await, or an early `if (isSubmitting) return`, closes the race by "
+        "itself -- state updates from a click are flushed before the next "
+        "click is delivered, so `setLoading(true)` on the first line of a "
+        "handler is not too late. If you mention such a guard and then argue "
+        "past it, you are reporting a bug you have already disproved.\n"
         "\n"
         "Work disappears: state a long flow keeps only in memory, so a "
         "refresh or a back gesture loses what the user typed; leaving a "

@@ -72,6 +72,46 @@ def test_the_candidate_excludes_what_other_rubrics_already_cover():
     assert "idempotency key" in instructions
 
 
+def test_the_candidate_refuses_a_double_submit_claim_without_the_mapping():
+    """The one thing two measured runs agree is broken.
+
+    Ten of dub's twelve findings in the second run were the same claim -- this
+    button is not disabled while its request is in flight -- and all ten were
+    refuted by packages/ui/src/button.tsx:114, `disabled={props.disabled ||
+    loading}`, which was IN the prompt that run. Selection was fixed first, on
+    the theory that the model could not see the file; it could, and the
+    numbers did not move. So the rule has to be stated.
+
+    Asserted on the two halves that carry the whole argument: that the mapping
+    must be quoted, and that `loading` is named as a thing which may already
+    imply `disabled`. A version that only says "check the button component" is
+    what the evidence rule already said, and it did not work.
+    """
+    instructions = validator.CANDIDATE["instructions"]
+
+    assert "QUOTE the line" in instructions
+    assert "disabled={props.disabled || loading}" in instructions
+    assert "confidence 0.5 or lower" in instructions
+
+
+def test_the_candidate_names_the_guards_that_close_the_race():
+    """Four false findings quoted the guard that refuted them and argued past
+    it anyway -- a synchronous ref set before the first await, an early
+    `if (isSubmitting) return` -- on the theory that a second click arrives
+    before the re-render. It does not: updates from a discrete event are
+    flushed before the next event is delivered.
+
+    Naming the guards is what makes the rule checkable by the model. Without
+    it, "quote the mapping" is satisfied by quoting the mapping and then
+    reasoning around it, which is exactly what happened.
+    """
+    instructions = validator.CANDIDATE["instructions"]
+
+    assert "before the first await" in instructions
+    assert "if (isSubmitting) return" in instructions
+    assert "argue past it" in instructions
+
+
 def test_the_candidate_carries_the_evidence_rule():
     """Learned on the money rubric: without it, findings state inferences in
     the voice of things read, and one in three was simply wrong."""
