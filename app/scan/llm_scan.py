@@ -407,6 +407,23 @@ RUBRICS: dict[str, dict] = {
     },
 }
 
+# Every rubric, in declaration order, as run_llm_scan's default.
+#
+# Derived, never written out. The list used to be a literal in that signature
+# -- ("auth", "security", "money") -- and adding a fourth rubric to the dict
+# above therefore did not run it. The "web" rubric shipped that way: present
+# in RUBRICS, mapped to the Frontend category, inside PROMPT_FINGERPRINT,
+# counted in the cost cap, and never once called. The audit reported
+# `unexamined: []` and `Frontend: 10.0` -- a perfect score for a rubric that
+# had not looked, which is the exact failure LLM_ONLY_CATEGORIES exists to
+# prevent and could not, because as far as the scorer could tell the LLM had
+# run.
+#
+# Order matters and is the dict's. Under a cost cap the loop stops mid-way and
+# flags a partial result, so the rubrics most worth having are the ones
+# declared first.
+ALL_RUBRICS: tuple[str, ...] = tuple(RUBRICS)
+
 # A rubric whose category the scorer does not know contributes nothing to any
 # subscore, so its findings are shown but score as free. Asserted at import so
 # that mistake cannot reach a paid audit.
@@ -679,7 +696,7 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
 
 
 def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
-                 rubrics: tuple[str, ...] = ("auth", "security", "money"),
+                 rubrics: tuple[str, ...] = ALL_RUBRICS,
                  passes: int = 1,
                  stats: LLMScanStats | None = None,
                  ) -> tuple[list[ScoredFinding], LLMScanStats]:
