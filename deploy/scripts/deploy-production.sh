@@ -15,6 +15,7 @@ KEEP_RELEASES="${SHIPIT_KEEP_RELEASES:-5}"
 REVISION="origin/main"
 PUBLIC_BASE_URL=""
 SKIP_FETCH=0
+ALLOW_SAME_REVISION=0
 
 usage() {
   cat <<'EOF'
@@ -25,6 +26,7 @@ Options:
   --revision REVISION       Git revision to deploy (default: origin/main)
   --public-base-url URL     Also check public health endpoints
   --skip-fetch              Do not fetch origin/main
+  --allow-same-revision     Redeploy the commit already running
   --help                    Show this help
 EOF
 }
@@ -41,6 +43,10 @@ while (($#)); do
       ;;
     --skip-fetch)
       SKIP_FETCH=1
+      shift
+      ;;
+    --allow-same-revision)
+      ALLOW_SAME_REVISION=1
       shift
       ;;
     --help|-h)
@@ -167,6 +173,46 @@ fi
 
 echo "Target release:  $TARGET_SHA"
 echo "Current release: ${CURRENT_SHA:-none}"
+
+# Deploying the commit that is already running is almost always an accident,
+# and it is the one accident this script cannot otherwise report: every stage
+# passes, the health checks pass, and the run ends in "Production deployment:
+# PASSED" having changed nothing.
+#
+# It happened on 2026-08-11. Nine commits sat on an unmerged branch,
+# tag-release.sh tagged origin/main as it is supposed to, and v2026.08.11-2
+# was cut against the same commit as v2026.08.11-1. The deploy was green, the
+# new work was not in production, and the only way to know was to compare the
+# two lines printed directly above against a commit held in someone's head.
+#
+# The two lines were already there. They were not enough, so this exits.
+#
+# Not a hard refusal: re-deploying the running commit is legitimate after a
+# host is rebuilt, after a manual change on the box, or to recover a release
+# whose build is suspect. --allow-same-revision says that out loud, which is
+# the whole difference between the deliberate case and the accident.
+if [[ -n "$CURRENT_SHA" && "$CURRENT_SHA" == "$TARGET_SHA" ]]; then
+  if ((ALLOW_SAME_REVISION)); then
+    echo "NOTE: redeploying the running commit, as requested."
+  else
+    {
+      echo
+      echo "ERROR: $REVISION already resolves to the running release."
+      echo "       Nothing would change, and the run would still report PASSED."
+      echo
+      echo "  If work is missing from this deployment, it is not merged yet:"
+      echo "  release tags are cut against origin/main, so a tag made while a"
+      echo "  branch is unmerged points at the commit already deployed. Merge,"
+      echo "  cut a new tag, and deploy that."
+      echo
+      echo "  To redeploy this exact commit on purpose -- a rebuilt host, a"
+      echo "  manual change on the box, a build you no longer trust -- pass"
+      echo "  --allow-same-revision."
+      echo
+    } >&2
+    exit 1
+  fi
+fi
 
 python3 "$MANAGER" \
   --root "$RELEASE_ROOT" \

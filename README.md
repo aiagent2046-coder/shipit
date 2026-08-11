@@ -449,6 +449,15 @@ can never point at unreviewed work. It fetches tags first, so two people
 tagging on the same day see each other's counter instead of racing to the same
 number.
 
+**Merge before you tag.** Because the tag is cut against `origin/main`, cutting
+one while the work sits on an unmerged branch produces a tag pointing at the
+commit already in production — and deploying it is a green, completely
+successful no-op. `deploy-production.sh` now refuses that case rather than
+reporting `PASSED`; pass `--allow-same-revision` when redeploying the running
+commit is what you actually mean (a rebuilt host, a manual change on the box, a
+build you no longer trust). The CI path cannot pass that flag, by design: the
+forced command accepts `deploy <tag>` and nothing else.
+
 `deploy-production.sh` checks the control repository out at the revision being
 deployed before it builds. The deploy tooling is versioned with the application
 but runs from `/opt/shipit`, and `git fetch` updates refs without touching the
