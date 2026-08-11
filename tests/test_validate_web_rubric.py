@@ -102,3 +102,24 @@ def test_the_candidate_is_installed_when_the_script_actually_runs():
         assert RUBRICS[validator.CANDIDATE_KEY] is validator.CANDIDATE
     finally:
         RUBRICS.pop(validator.CANDIDATE_KEY, None)
+
+
+def test_main_reaches_the_llm_client_without_a_typo(monkeypatch, capsys):
+    """The entry point was never exercised: the dry run called select_files
+    directly, so `LLMClient.from_env()` -- a method that does not exist --
+    survived review, the commit and the push, and failed on the operator's
+    machine after a worktree and a fetch.
+
+    This runs main() with no providers configured, which is the one path that
+    reaches the constructor and returns before spending anything.
+    """
+    monkeypatch.setattr(sys, "argv", ["validate_web_rubric.py", "https://x/y/z"])
+    monkeypatch.delenv("AITUNNEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    try:
+        assert validator.main() == 1
+    finally:
+        RUBRICS.pop(validator.CANDIDATE_KEY, None)
+
+    assert "no LLM provider configured" in capsys.readouterr().err

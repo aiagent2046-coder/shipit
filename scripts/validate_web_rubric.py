@@ -219,7 +219,7 @@ def main() -> int:
 
     install_candidate()
 
-    client = LLMClient.from_env()
+    client = LLMClient()          # providers come from the environment
     if not client.providers:
         print("no LLM provider configured", file=sys.stderr)
         return 1
