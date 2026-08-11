@@ -20,9 +20,12 @@ from app.scan.llm_scan import (
     RUBRICS,
     SYSTEM_PROMPT,
     LLMScanStats,
+    BEHAVIOUR,
+    PRESENTATION,
     build_prompt,
     clip,
     parse_findings,
+    relevance,
     run_llm_scan,
     select_files,
     verify_finding,
@@ -34,7 +37,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "b2567e7eb0fbf161"
+PROMPT_FINGERPRINT = "05e6592b20296110"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -744,6 +747,13 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
 
     Two lines of ceremony. Step 1 is the one that matters and the one nobody
     remembers.
+
+    Step 1 has exactly one honest exception: a change that provably cannot
+    alter what any SHIPPED rubric is shown -- adding a parameter whose default
+    reproduces the old behaviour, say. Then bumping would re-run the LLM
+    against every cached audit to produce identical results. Take the
+    exception only with a test that pins the old behaviour, and say so in the
+    commit; "I thought it was equivalent" is not the same as having shown it.
     """
     surface = "|".join([
         SYSTEM_PROMPT,
@@ -768,3 +778,67 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         "file. Without the bump, every repository already audited keeps "
         "receiving results from the old engine."
     )
+
+
+# --- path weighting is per rubric ---
+
+
+def test_no_shipped_rubric_changes_its_path_weighting():
+    """The safety assertion for making this a parameter at all.
+
+    Every rubric that existed before `lives_in` must keep selecting the files
+    it always did, or this quietly changes what a paying customer receives.
+    None of them declares the key, so all three take the BEHAVIOUR default,
+    which is the weighting they were written and measured under.
+    """
+    for name, rubric in RUBRICS.items():
+        assert rubric.get("lives_in", BEHAVIOUR) == BEHAVIOUR, name
+
+
+def test_the_default_weighting_is_unchanged_by_the_parameter():
+    files = [("apps/lib/payouts/pay.ts", "payout stripe invoice " * 20),
+             ("apps/ui/payouts/card.tsx", "payout stripe invoice " * 20)]
+
+    assert select_files(files, "money") == select_files(files, "money")
+
+    kw = RUBRICS["money"]["keywords"]
+    for name, text in files:
+        assert relevance(name, text, kw) == relevance(name, text, kw, BEHAVIOUR)
+
+
+def test_a_presentation_rubric_sees_the_frontend_first(monkeypatch):
+    """The point of the whole change. A rubric about what the user sees --
+    a white screen with no error boundary, a form that double-submits -- lives
+    in ui/ and components/, which the single global weighting divided by four.
+    It would have been shown everything except its own subject.
+    """
+    monkeypatch.setitem(RUBRICS, "web", {
+        "category": "Deploy",
+        "keywords": re.compile(r"button|form|submit|render", re.I),
+        "instructions": "stubbed",
+        "lives_in": PRESENTATION,
+    })
+    body = "submit button form render " * 30
+    files = [("apps/lib/api/submit.ts", body),
+             ("apps/ui/components/form.tsx", body)]
+
+    names = [n for n, _ in select_files(files, "web")]
+
+    assert names[0] == "apps/ui/components/form.tsx"
+
+
+def test_the_same_files_under_a_behaviour_rubric_order_the_other_way(monkeypatch):
+    """The mirror, so the test above cannot pass by accident on tie-breaks."""
+    monkeypatch.setitem(RUBRICS, "web", {
+        "category": "Deploy",
+        "keywords": re.compile(r"button|form|submit|render", re.I),
+        "instructions": "stubbed",
+        "lives_in": BEHAVIOUR,
+    })
+    body = "submit button form render " * 30
+    files = [("apps/ui/components/form.tsx", body),
+             ("apps/lib/api/submit.ts", body)]
+
+    names = [n for n, _ in select_files(files, "web")]
+
+    assert names[0] == "apps/lib/api/submit.ts"
