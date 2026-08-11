@@ -38,7 +38,26 @@ PROBES = (
 
 
 class ProbeFailure(RuntimeError):
-    """A health probe failed."""
+    """A health probe failed.
+
+    `reachable` says which of two different things went wrong. False means the
+    probe never got an answer -- DNS, connection refused, timeout -- and says
+    nothing whatsoever about the application's health. True means the
+    application answered and the answer was wrong: a 5xx, a body that is not
+    JSON, `db: false`.
+
+    Both are failures while a deploy waits for a release to come up, and the
+    retry loop treats them identically on purpose. The distinction is for the
+    line an operator reads afterwards. Collapsing them is how an external
+    watchdog on this service came to send "DRYDOCK ALERT - health endpoint
+    unreachable after 3 attempts: URLError: Temporary failure in name
+    resolution" -- a report that production was down, from a host that could
+    not resolve DNS, while production was serving fine.
+    """
+
+    def __init__(self, message: str, *, reachable: bool = True) -> None:
+        super().__init__(message)
+        self.reachable = reachable
 
 
 def fetch_json(
@@ -70,7 +89,11 @@ def fetch_json(
         ) from error
 
     except OSError as error:
-        raise ProbeFailure(str(error)) from error
+        # Everything that never reached the application: URLError wrapping a
+        # DNS failure or a refused connection, and socket.timeout. HTTPError
+        # is caught above and is deliberately NOT here -- it means the
+        # application answered.
+        raise ProbeFailure(str(error), reachable=False) from error
 
     try:
         value = json.loads(body)
@@ -123,6 +146,7 @@ def wait_for_health(
 ) -> bool:
     successes = 0
     last_error = "no probe attempts performed"
+    last_reachable = True
 
     for attempt in range(1, attempts + 1):
         try:
@@ -133,6 +157,7 @@ def wait_for_health(
         except ProbeFailure as error:
             successes = 0
             last_error = str(error)
+            last_reachable = error.reachable
 
             print(
                 f"Health attempt {attempt}/{attempts}: "
@@ -153,10 +178,22 @@ def wait_for_health(
         if attempt < attempts:
             time.sleep(interval)
 
-    print(
-        "Production health gate: FAILED — "
-        + last_error
-    )
+    # Two verdicts, because they send a reader to two different places. An
+    # unreachable endpoint is a claim about the path between here and there;
+    # only the other one is a claim about the application.
+    if last_reachable:
+        print(
+            "Production health gate: FAILED — "
+            f"{base_url} answered and the answer was unhealthy: {last_error}"
+        )
+    else:
+        print(
+            "Production health gate: FAILED — "
+            f"could not reach {base_url} on any of {attempts} attempts: "
+            f"{last_error}. This says the prober could not get there, NOT "
+            "that the application is down; check DNS, the network path and "
+            "the port before concluding anything about the release."
+        )
 
     return False
 
