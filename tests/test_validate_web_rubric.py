@@ -104,6 +104,91 @@ def test_the_candidate_is_installed_when_the_script_actually_runs():
         RUBRICS.pop(validator.CANDIDATE_KEY, None)
 
 
+def test_the_primitive_buffer_ignores_the_rubric_keywords():
+    """The reason the buffer exists rather than a relevance boost.
+
+    On digital-rolecraft, tooltip.tsx, popover.tsx and form.tsx match not one
+    of the rubric's keywords, so no amount of reweighting reaches them -- they
+    are not in the ranking to be reweighted. All three decide whether a
+    control is disabled, which is the question the rubric asks.
+    """
+    files = [("src/components/ui/tooltip.tsx", "export const Tooltip = 1\n")]
+
+    assert not RUBRICS["auth"]["keywords"].search(files[0][1])
+
+    try:
+        validator.install_candidate()
+        assert not validator.CANDIDATE["keywords"].search(files[0][1])
+        assert files[0][0] not in {
+            n for n, _ in validator.select_files(files, validator.CANDIDATE_KEY)
+        }
+        chosen = validator.select_with_primitives(
+            files, validator.CANDIDATE_KEY
+        )
+    finally:
+        RUBRICS.pop(validator.CANDIDATE_KEY, None)
+
+    assert [n for n, _ in chosen] == [files[0][0]]
+
+
+def test_the_buffer_takes_primitives_not_the_components_named_after_them():
+    """`(^|/)` anchors the word at the start of the basename. Without it
+    retry-payment-modal.tsx and add-folder-form.tsx are 'primitives' too, and
+    on dub the buffer would be spent on the twenty consumers rather than on
+    the one file that answers the question about them."""
+    primitive = validator._PRIMITIVE_NAME
+
+    for name in (
+        "packages/ui/src/button.tsx",
+        "components/ui/Button/Button.tsx",
+        "src/components/ui/textarea.tsx",
+    ):
+        assert primitive.search(name), name
+
+    for name in (
+        "apps/web/ui/modals/retry-payment-modal.tsx",
+        "apps/web/ui/folders/add-folder-form.tsx",
+        "apps/web/ui/modals/import-bitly-modal.tsx",
+    ):
+        assert not primitive.search(name), name
+
+    # An icon that happens to be called checkbox.tsx is an SVG, not a control.
+    assert validator._PRIMITIVE_NOISE.search(
+        "packages/ui/src/icons/nucleo/checkbox.tsx"
+    )
+
+
+def test_the_buffer_cannot_eat_the_whole_prompt():
+    """A repository that names three hundred files button.tsx must not turn
+    the buffer into the answer. Measured spend on the largest of the three
+    repositories is 105 KB; the cap is what keeps that a measurement rather
+    than an assumption."""
+    huge = "x" * 50_000
+    files = [(f"ui/{i}/button.tsx", huge) for i in range(100)]
+
+    try:
+        validator.install_candidate()
+        chosen = validator.select_with_primitives(
+            files, validator.CANDIDATE_KEY
+        )
+    finally:
+        RUBRICS.pop(validator.CANDIDATE_KEY, None)
+
+    spent = sum(len(t) for _, t in chosen)
+    assert spent <= validator.PRIMITIVE_BUDGET, spent
+
+
+def test_the_buffer_leaves_the_shipped_selector_alone():
+    """It wraps select_files; it must not reach inside it. If this ever fails,
+    the change belongs in llm_scan with an AUDIT_ENGINE_VERSION bump, not
+    here."""
+    source = MODULE_PATH.read_text()
+
+    assert "select_files(files, rubric)" in source
+    assert "llm_scan.select_files =" not in source
+    assert "monkeypatch" not in source
+
+
 def test_main_reaches_the_llm_client_without_a_typo(monkeypatch, capsys):
     """The entry point was never exercised: the dry run called select_files
     directly, so `LLMClient.from_env()` -- a method that does not exist --

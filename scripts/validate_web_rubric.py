@@ -31,9 +31,40 @@ paid for itself was measuring something production never sent. So the moment
 this ships, DELETE the dict below and read RUBRICS["web"] instead, exactly as
 validate_money_rubric.py does now.
 
+WHAT THE FIRST MEASUREMENT SHOWED, AND WHAT IT CHANGED
+
+Run of 2026-08-11, hand-verified against local clones: 6 findings on
+digital-rolecraft (4 real), 6 on nextjs-subscription-payments (6 real), 10 on
+dub (1 real). Every one of dub's seven false findings said the same thing --
+"this submit button is not disabled while its request is in flight" -- and
+every one of them was refuted by a single line the model never saw:
+
+    packages/ui/src/button.tsx:114   disabled={props.disabled || loading}
+
+In dub, passing `loading` sets the HTML `disabled` attribute. In
+nextjs-subscription-payments it does not, and there the model read Button.tsx
+-- it was one of only 23 selected files -- and got every finding right,
+reasoning out loud from that file. Precision tracked exactly one thing:
+whether the design-system primitive was in the context.
+
+So the defect was in selection, not in the prompt. select_files ranks by
+keyword density and path class, and on a 4212-file monorepo the shared
+primitives lose that race to the 325 components that consume them -- the
+question is asked in the consumer and answered in the primitive.
+
+Hence select_with_primitives below. It lives here, not in llm_scan, for the
+same reason CANDIDATE does: nothing has shipped, and a change to select_files
+moves PROMPT_FINGERPRINT and AUDIT_ENGINE_VERSION, which invalidates the
+audit cache for every paying customer. If the re-measurement shows this
+recovers the seven, THEN it moves into select_files with those bumps.
+
 WHAT ADOPTION WOULD COST, BEYOND THE PROMPT
 
   * One more LLM call per rubric per pass.
+
+  * The primitive buffer, permanently, in select_files: measured at 105 KB of
+    a 900 KB budget on dub, 30 KB on digital-rolecraft, 2 KB on
+    nextjs-subscription-payments.
 
   * A new score category. Auth, Deploy, Testing, Security and Money & Data are
     what compute_scores knows; none of them is where "the page goes blank"
@@ -62,6 +93,8 @@ from app.ingest.github_fetch import fetch_repo_zip as github_fetch_repo_zip
 from app.llm import pricing
 from app.llm.client import LLMClient
 from app.scan.llm_scan import (
+    MAX_FILE_CHARS,
+    MAX_TOTAL_CHARS,
     PRESENTATION,
     RUBRICS,
     SYSTEM_PROMPT,
@@ -73,6 +106,33 @@ from app.scan.llm_scan import (
 )
 
 CANDIDATE_KEY = "web"
+
+# Files whose NAME is a design-system primitive: button.tsx, not
+# retry-payment-modal.tsx. The leading (^|/) is what draws that line -- it
+# anchors the word at the start of the basename, so the twenty consumer
+# components with "modal" or "form" somewhere in their name do not match and
+# do not spend the buffer.
+#
+# Deliberately crude, and named by hand rather than resolved from imports. One
+# import hop from the selected files would be more precise and would also
+# catch a primitive nobody thought to list; it is also a real change to
+# select_files, and the point of this pass is to find out whether the theory
+# is right at all before paying for the precise version.
+_PRIMITIVE_NAME = re.compile(
+    r"(^|/)(button|buttons|form|input|textarea|select|checkbox|switch|toggle"
+    r"|modal|dialog|drawer|sheet|popover|dropdown|tooltip|spinner)"
+    r"\.[jt]sx?$",
+    re.I,
+)
+
+# packages/ui/src/icons/nucleo/checkbox.tsx is an SVG, not the checkbox.
+_PRIMITIVE_NOISE = re.compile(r"(^|/)icons?/", re.I)
+
+# Measured ceiling, not a guess: the largest of the three repositories spends
+# 105 KB here. The cap exists so that a repository which names three hundred
+# files button.tsx cannot quietly eat the prompt -- the buffer is supposed to
+# answer a question, not become the answer.
+PRIMITIVE_BUDGET = 140_000
 
 CANDIDATE = {
     # Only used if this ever ships; nothing here is scored. See the module
@@ -167,6 +227,50 @@ def install_candidate() -> None:
     RUBRICS[CANDIDATE_KEY] = CANDIDATE
 
 
+def select_with_primitives(
+    files: list[tuple[str, str]], rubric: str,
+) -> list[tuple[str, str]]:
+    """select_files, with the design-system primitives it drops put back.
+
+    Seeded FIRST and unconditionally -- in particular without consulting the
+    rubric's keyword regex, which is the whole point. On digital-rolecraft
+    `tooltip.tsx`, `popover.tsx` and `form.tsx` do not match a single one of
+    the rubric's keywords, and all three decide whether a control is disabled.
+    Ranking them would not help; they are not in the ranking at all.
+
+    Smallest first, so the buffer buys as many distinct primitives as it can
+    rather than one large one. Whatever budget is left goes to select_files
+    exactly as before, and its tail is dropped to stay inside MAX_TOTAL_CHARS
+    -- the tail is the breadth pass, the least relevant end of it.
+    """
+    primitives = sorted(
+        (
+            (n, t[:MAX_FILE_CHARS]) for n, t in files
+            if _PRIMITIVE_NAME.search(n) and not _PRIMITIVE_NOISE.search(n)
+        ),
+        key=lambda x: (len(x[1]), x[0]),
+    )
+
+    selected: list[tuple[str, str]] = []
+    seeded: set[str] = set()
+    total = 0
+
+    for n, t in primitives:
+        if total + len(t) > PRIMITIVE_BUDGET:
+            continue
+        selected.append((n, t))
+        seeded.add(n)
+        total += len(t)
+
+    for n, t in select_files(files, rubric):
+        if n in seeded or total + len(t) > MAX_TOTAL_CHARS:
+            continue
+        selected.append((n, t))
+        total += len(t)
+
+    return selected
+
+
 def fetch_repo_zip(repo_url: str) -> io.BytesIO:
     """Fetch through the same path a real audit uses, so the file set matches."""
     owner_repo = repo_url.rstrip("/").removeprefix("https://github.com/")
@@ -182,12 +286,17 @@ def run_one(repo_url: str, client: LLMClient) -> tuple[int, float]:
         files = _iter_code_files(zf)
     files_by_name = dict(files)
 
-    selected = select_files(files, CANDIDATE_KEY)
+    selected = select_with_primitives(files, CANDIDATE_KEY)
     if not selected:
         print("no rubric-relevant files")
         return 0, 0.0
 
-    print(f"{len(selected)} files selected")
+    baseline = {n for n, _ in select_files(files, CANDIDATE_KEY)}
+    added = [n for n, _ in selected if n not in baseline]
+    print(f"{len(selected)} files selected "
+          f"({len(added)} primitives the ranking had dropped)")
+    for name in added:
+        print(f"    + {name}")
     raw, usage = client.complete(
         SYSTEM_PROMPT,
         build_prompt(selected, CANDIDATE_KEY),
