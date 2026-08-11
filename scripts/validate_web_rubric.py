@@ -101,8 +101,40 @@ to matter.
 Two false positives at 0.95 survived on digital-rolecraft, both of the form
 "the handler calls an async function that sets the flag on its own first
 line, so the flag is set too late". It is not: the call is synchronous and
-the await inside it happens afterwards. The guard paragraph now names that
-shape, and the disabled-textarea shape beside it.
+the await inside it happens afterwards.
+
+FOURTH RUN: THE PATTERN UNDERNEATH ALL FOUR
+
+Worst of the four. 3 of 6 real on digital-rolecraft, 5 of 5 on
+nextjs-subscription-payments -- down from 8, the suppression rule took three
+true auth-form findings with it -- and 0 of 8 on dub. Running totals, all
+hand-verified against clones: 11/22, 12/25, 12/21, 8/19.
+
+Two things are now clear, and neither is a prompt bug.
+
+The first is variance. GroupChat.tsx:22, a real Rules-of-Hooks crash, appears
+in runs 1, 2 and 3 and is absent from run 4. The three auth-form findings
+appear only in run 3. CreatePersonaForm's missing beforeunload appears in 1,
+2 and 4 but not 3. The input is byte-identical every time. Run-to-run spread
+is larger than the effect of any edit made here, which is why three rounds of
+reading a signal out of it produced three different theories.
+
+The second is a clean split in what survives. Findings that rest on SYNTAX --
+a `loading` prop the component never maps to `disabled`, a `handleRequest`
+called without `await`, no error boundary above the routes, no beforeunload
+on a dirty form, a setTimeout with no cleanup -- were correct in every run
+they appeared in. Findings that rest on TIMING -- a flag set 'too late', a
+state update that 'has not propagated', a click that lands 'before the
+re-render' -- were wrong in every run, all four, including the run whose
+instructions refuted that exact argument in advance. Run 4's dub findings
+quote `packages/ui/src/button.tsx line 114`, note that it disables the
+button, and then argue past it anyway.
+
+That is a capability boundary, not a wording problem, and it was addressed
+three times with words. So the timing argument is no longer refuted; it is
+forbidden as a ground. The syntactic half of the same question stays, because
+it is what found Pricing.tsx, CustomerPortalForm, NameForm, EmailForm and the
+three auth forms -- every real double-submit finding across four runs.
 
 WHAT ADOPTION WOULD COST, BEYOND THE PROMPT
 
@@ -242,17 +274,22 @@ CANDIDATE = {
         "codebase you are in: say so, phrase the finding as the question it "
         "is, and report confidence 0.5 or lower.\n"
         "\n"
-        "The same applies to a guard you can see. A ref set before the first "
-        "await, or an early `if (isSubmitting) return`, closes the race by "
-        "itself -- state updates from a click are flushed before the next "
-        "click is delivered, so `setLoading(true)` on the first line of a "
-        "handler is not too late. Nor is it too late when the handler's last "
-        "act is to CALL an async function whose own first line sets the flag: "
-        "that call is synchronous, the flag is set in the same event, and the "
-        "await inside it happens afterwards. A disabled input or textarea is "
-        "a guard too -- it receives no key events, so a keyboard path through "
-        "it is closed as well. If you mention such a guard and then argue "
-        "past it, you are reporting a bug you have already disproved.\n"
+        "There is exactly ONE ground for this finding: the control has no "
+        "in-flight prop at all, or it has one and the component you just "
+        "quoted does not turn it into `disabled`. That is a fact about two "
+        "lines of code, and it is the only fact you may report here.\n"
+        "\n"
+        "TIMING IS NOT A GROUND. Never report that a flag is set 'too late', "
+        "that a state update 'has not propagated yet', that the button 'is "
+        "not disabled at the moment of the first click', or that a second "
+        "click lands 'before the re-render'. If a handler sets its flag, or "
+        "a ref, or calls a function that does -- anywhere before its first "
+        "await -- the control is guarded and there is nothing to report. So "
+        "is a disabled input or textarea, which receives no key events at "
+        "all. Once you have quoted a guard, you are finished: an argument "
+        "that gets past it is wrong, and it is wrong every time, because the "
+        "click that would exploit the window is delivered after the update "
+        "that closes it.\n"
         "\n"
         "When you check one of these and the code turns out to be correct, "
         "report NOTHING. Not a finding at confidence 0.9 whose explanation "

@@ -94,22 +94,25 @@ def test_the_candidate_refuses_a_double_submit_claim_without_the_mapping():
     assert "confidence 0.5 or lower" in instructions
 
 
-def test_the_candidate_names_the_guards_that_close_the_race():
-    """Four false findings quoted the guard that refuted them and argued past
-    it anyway -- a synchronous ref set before the first await, an early
-    `if (isSubmitting) return` -- on the theory that a second click arrives
-    before the re-render. It does not: updates from a discrete event are
-    flushed before the next event is delivered.
+def test_the_candidate_treats_a_quoted_guard_as_the_end_of_the_matter():
+    """The companion to the timing ban, and the half that makes it usable.
 
-    Naming the guards is what makes the rule checkable by the model. Without
-    it, "quote the mapping" is satisfied by quoting the mapping and then
-    reasoning around it, which is exactly what happened.
+    A ban on one argument is only as good as the model's ability to tell when
+    it has already won. Runs 3 and 4 both quoted the guard that refuted them
+    and kept going, so the rule has to close the question explicitly: a flag
+    or ref set anywhere before the first await guards the control, and once
+    a guard is quoted there is nothing left to report.
+
+    This assertion moved once already, when the paragraph it guards was
+    rewritten from refuting the timing argument to forbidding it. It is
+    pointed at the requirement -- a named guard, and an explicit end to the
+    inquiry -- rather than at the sentence that carried it in run 3.
     """
     instructions = validator.CANDIDATE["instructions"]
 
-    assert "before the first await" in instructions
-    assert "if (isSubmitting) return" in instructions
-    assert "argue past it" in instructions
+    assert "before its first await" in instructions
+    assert "the control is guarded and there is nothing to report" in instructions
+    assert "Once you have quoted a guard, you are finished" in instructions
 
 
 def test_the_candidate_forbids_reporting_a_check_that_came_back_clean():
@@ -130,23 +133,33 @@ def test_the_candidate_forbids_reporting_a_check_that_came_back_clean():
     assert "Silence is the correct output" in instructions
 
 
-def test_the_candidate_knows_a_flag_set_inside_a_called_async_function_is_in_time():
-    """The two 0.95 false positives that survived the third run, both of the
-    shape "the handler's last act is to call an async function whose first
-    line sets the flag, so the flag is set too late".
+def test_the_candidate_forbids_timing_as_a_ground_for_a_double_submit_finding():
+    """The one conclusion four measured runs agree on.
 
-    It is not too late: the call itself is synchronous, and the await inside
-    it happens after the flag is set, in the same event. The earlier
-    paragraph named a ref before the first await and an early return; the
-    model found the shape it did not name.
+    Split the double-submit findings by what they rest on. SYNTAX -- a
+    `loading` prop the component never maps to `disabled`, a `handleRequest`
+    called without `await` -- was right in every run it appeared in, and is
+    where Pricing.tsx, CustomerPortalForm, NameForm, EmailForm and the three
+    auth forms came from. TIMING -- a flag set 'too late', an update that
+    'has not propagated', a click 'before the re-render' -- was wrong in every
+    run, all four, including run 4, whose instructions refuted that argument
+    in advance and whose dub findings quote button.tsx line 114, agree it
+    disables the button, and argue past it anyway.
+
+    Three rounds tried to correct the reasoning. This one removes it from the
+    set of admissible grounds instead, which is the difference between
+    debating a model and constraining it.
     """
     instructions = validator.CANDIDATE["instructions"]
 
-    assert "CALL an async function" in instructions
-    assert "that call is synchronous" in instructions
-    # Both digital-rolecraft chats route the keyboard through a textarea that
-    # is itself disabled while generating, which closes that path too.
-    assert "disabled input or textarea is" in instructions
+    assert "TIMING IS NOT A GROUND" in instructions
+    assert "There is exactly ONE ground for this finding" in instructions
+
+    for banned in ("too late", "before the re-render", "has not propagated"):
+        assert banned in instructions, banned
+
+    # A disabled textarea takes no key events; that path is closed too.
+    assert "disabled input or textarea" in instructions
 
 
 def test_the_candidate_carries_the_evidence_rule():
