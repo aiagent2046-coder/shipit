@@ -38,7 +38,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "30da540757908ee8"
+PROMPT_FINGERPRINT = "cd3b7a59803e0470"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -782,6 +782,14 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         str(llm_scan.RELEVANCE_BUDGET_SHARE),
         inspect.getsource(llm_scan.relevance),
         inspect.getsource(llm_scan.select_files),
+        # How a file that does not fit is cut, and what the cut says. Added
+        # after an off-by-one in the withheld-line count changed the text the
+        # model reads and this guard stayed silent: MAX_FILE_CHARS was in the
+        # surface, so the cap was watched, while the function applying it was
+        # not. Anything that decides the CHARACTERS in the prompt belongs here,
+        # not only the constants that bound them.
+        llm_scan.TRUNCATION_MARKER,
+        inspect.getsource(llm_scan.truncate_at_line),
     ])
     fingerprint = hashlib.sha256(surface.encode("utf-8")).hexdigest()[:16]
 
@@ -1201,3 +1209,153 @@ def test_a_real_title_survives_the_withdrawal_filter():
         "Long persona form has no navigation guard",
     ):
         assert not llm_scan.self_cancelling({"title": title}), title
+
+
+# --- plurals in rubric keywords ---
+#
+# A codebase names the file after the collection: coupons.py, migrations/,
+# routers.tsx. Requiring the singular made the closing word boundary exclude
+# the commonest spelling, and the boundary itself is not the problem -- it is
+# what stops "discount" matching inside an unrelated identifier.
+#
+# Measured cost of the omission: on a ground-truth app the real
+# read-then-decrement race lived in coupons.py, with an explicit sleep between
+# the read and the write and no rowcount check. The money rubric never saw the
+# file, and the model spent its finding on the correctly guarded twin instead.
+
+
+def test_money_and_web_keywords_match_the_plural_spelling():
+    files = [
+        ("api/coupons.py", "def redeem(code): ..."),
+        ("api/migrations/0001.py", "def upgrade(): ..."),
+        ("api/coupon.py", "def redeem(code): ..."),
+        ("src/routers.tsx", "export const routers = []"),
+    ]
+
+    money = [n for n, _ in select_files(files, "money")]
+    assert "api/coupons.py" in money
+    assert "api/migrations/0001.py" in money
+    assert "api/coupon.py" in money        # the singular must keep working
+
+    assert "src/routers.tsx" in [n for n, _ in select_files(files, "web")]
+
+
+# --- a finding's category is a fact about the finding ---
+
+
+def _one_finding_response(**overrides) -> str:
+    f = {
+        "file": "src/auth.ts",
+        "line_start": 3,
+        "line_end": 3,
+        "evidence": "jwt.decode(token)",
+        "severity": "high",
+        "confidence": 0.9,
+        "title": "Command injection in the token handler",
+        "explanation": "...",
+        "fix_hint": "...",
+    }
+    f.update(overrides)
+    return json.dumps([f])
+
+
+def test_finding_category_comes_from_the_finding_not_the_rubric():
+    """19 findings once arrived under Auth and about 5 were about auth.
+
+    The rest were SQL injection, command injection, unsafe deserialisation,
+    SSTI, path traversal and an unauthenticated environment dump -- Security
+    every one, filed as Auth because the auth rubric was the prompt that
+    happened to be reading those files. The reader was told the app had an
+    authentication problem when it had a remote code execution problem.
+    """
+    findings, stats = run_llm_scan(
+        make_zip({"src/auth.ts": VULN_TS.encode()}),
+        FakeLLM(_one_finding_response(category="Security")),
+        rubrics=("auth",),
+    )
+    assert [f.category for f in findings] == ["Security"]
+    assert stats.recategorised == 1
+
+
+@pytest.mark.parametrize("declared", [None, "", "RCE", "Testing", "auth"])
+def test_an_unusable_declared_category_falls_back_to_the_rubric(declared):
+    """Including "Testing", which the scorer knows but no rubric produces.
+
+    Letting a model post into a static-only category would change what that
+    subscore means with no producer behind the change; a category the scorer
+    does not know at all scores as free. Both fall back.
+    """
+    overrides = {} if declared is None else {"category": declared}
+    findings, stats = run_llm_scan(
+        make_zip({"src/auth.ts": VULN_TS.encode()}),
+        FakeLLM(_one_finding_response(**overrides)),
+        rubrics=("auth",),
+    )
+    assert [f.category for f in findings] == ["Auth"]
+    assert stats.recategorised == 0
+
+
+def test_the_prompt_offers_exactly_the_rubric_categories():
+    for category in llm_scan.RUBRIC_CATEGORIES:
+        assert f'"{category}"' in SYSTEM_PROMPT
+    # Static-only categories must not be on offer.
+    for category in set(CATEGORIES) - set(llm_scan.RUBRIC_CATEGORIES):
+        assert f'"{category}"' not in SYSTEM_PROMPT
+
+
+# --- truncation must not read as absence ---
+#
+# MAX_FILE_CHARS used to slice a file with t[:cap], mid-token, with nothing to
+# say the file continued. On a real CRM that ended sales_kpi_board.py on
+#
+#     629    if sale is None or sale.company_id != compa
+#
+# and the engine reported "Manual sale payment patch missing ownership check"
+# against a handler whose check the cut had removed. It was the only auth false
+# positive in that run, and the engine manufactured it.
+
+
+def test_truncation_cuts_on_a_line_boundary():
+    text = "".join(f"line {i} padding padding\n" for i in range(400))
+    out = llm_scan.truncate_at_line(text, 1_000)
+
+    body, marker = out.rsplit("\n", 1)
+    assert marker.startswith("[... truncated:")
+    # No half-line survives: every line kept is a line the file really has.
+    assert all(f"{ln}\n" in text for ln in body.splitlines())
+
+
+def test_truncation_reports_how_many_lines_were_withheld():
+    text = "".join(f"line {i}\n" for i in range(100))
+    out = llm_scan.truncate_at_line(text, 200)
+
+    kept = len(out.splitlines()) - 1          # minus the marker line
+    withheld = int(re.search(r"truncated: (\d+) more", out).group(1))
+    assert kept + withheld == len(text.splitlines())
+
+
+def test_a_file_within_the_cap_is_untouched():
+    text = "a\nb\nc\n"
+    assert llm_scan.truncate_at_line(text, 1_000) == text
+    assert "truncated" not in llm_scan.truncate_at_line(text, 1_000)
+
+
+def test_selected_files_carry_the_marker_when_cut():
+    big = ("api/auth/session.ts", "const token = 1  // session\n" * 6_000)
+    selected = dict(select_files([big], "auth"))
+
+    sent = selected["api/auth/session.ts"]
+    assert len(sent) <= llm_scan.MAX_FILE_CHARS + len(llm_scan.TRUNCATION_MARKER) + 16
+    assert "[... truncated:" in sent
+
+
+def test_the_marker_fails_verification_rather_than_becoming_evidence():
+    """A model that quotes the marker must be discarded, not believed."""
+    files = {"src/auth.ts": VULN_TS}
+    quoted = llm_scan.TRUNCATION_MARKER.format(n=120)
+    assert not verify_finding(valid_finding(evidence=quoted), files)
+
+
+def test_the_prompt_forbids_concluding_absence_from_a_truncated_file():
+    assert "truncation marker" in SYSTEM_PROMPT
+    assert "MISSING" in SYSTEM_PROMPT
