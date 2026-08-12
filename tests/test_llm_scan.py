@@ -38,7 +38,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "30da540757908ee8"
+PROMPT_FINGERPRINT = "166cf5c5f8af1f63"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1201,3 +1201,95 @@ def test_a_real_title_survives_the_withdrawal_filter():
         "Long persona form has no navigation guard",
     ):
         assert not llm_scan.self_cancelling({"title": title}), title
+
+
+# --- plurals in rubric keywords ---
+#
+# A codebase names the file after the collection: coupons.py, migrations/,
+# routers.tsx. Requiring the singular made the closing word boundary exclude
+# the commonest spelling, and the boundary itself is not the problem -- it is
+# what stops "discount" matching inside an unrelated identifier.
+#
+# Measured cost of the omission: on a ground-truth app the real
+# read-then-decrement race lived in coupons.py, with an explicit sleep between
+# the read and the write and no rowcount check. The money rubric never saw the
+# file, and the model spent its finding on the correctly guarded twin instead.
+
+
+def test_money_and_web_keywords_match_the_plural_spelling():
+    files = [
+        ("api/coupons.py", "def redeem(code): ..."),
+        ("api/migrations/0001.py", "def upgrade(): ..."),
+        ("api/coupon.py", "def redeem(code): ..."),
+        ("src/routers.tsx", "export const routers = []"),
+    ]
+
+    money = [n for n, _ in select_files(files, "money")]
+    assert "api/coupons.py" in money
+    assert "api/migrations/0001.py" in money
+    assert "api/coupon.py" in money        # the singular must keep working
+
+    assert "src/routers.tsx" in [n for n, _ in select_files(files, "web")]
+
+
+# --- a finding's category is a fact about the finding ---
+
+
+def _one_finding_response(**overrides) -> str:
+    f = {
+        "file": "src/auth.ts",
+        "line_start": 3,
+        "line_end": 3,
+        "evidence": "jwt.decode(token)",
+        "severity": "high",
+        "confidence": 0.9,
+        "title": "Command injection in the token handler",
+        "explanation": "...",
+        "fix_hint": "...",
+    }
+    f.update(overrides)
+    return json.dumps([f])
+
+
+def test_finding_category_comes_from_the_finding_not_the_rubric():
+    """19 findings once arrived under Auth and about 5 were about auth.
+
+    The rest were SQL injection, command injection, unsafe deserialisation,
+    SSTI, path traversal and an unauthenticated environment dump -- Security
+    every one, filed as Auth because the auth rubric was the prompt that
+    happened to be reading those files. The reader was told the app had an
+    authentication problem when it had a remote code execution problem.
+    """
+    findings, stats = run_llm_scan(
+        make_zip({"src/auth.ts": VULN_TS.encode()}),
+        FakeLLM(_one_finding_response(category="Security")),
+        rubrics=("auth",),
+    )
+    assert [f.category for f in findings] == ["Security"]
+    assert stats.recategorised == 1
+
+
+@pytest.mark.parametrize("declared", [None, "", "RCE", "Testing", "auth"])
+def test_an_unusable_declared_category_falls_back_to_the_rubric(declared):
+    """Including "Testing", which the scorer knows but no rubric produces.
+
+    Letting a model post into a static-only category would change what that
+    subscore means with no producer behind the change; a category the scorer
+    does not know at all scores as free. Both fall back.
+    """
+    overrides = {} if declared is None else {"category": declared}
+    findings, stats = run_llm_scan(
+        make_zip({"src/auth.ts": VULN_TS.encode()}),
+        FakeLLM(_one_finding_response(**overrides)),
+        rubrics=("auth",),
+    )
+    assert [f.category for f in findings] == ["Auth"]
+    assert stats.recategorised == 0
+
+
+def test_the_prompt_offers_exactly_the_rubric_categories():
+    for category in llm_scan.RUBRIC_CATEGORIES:
+        assert f'"{category}"' in SYSTEM_PROMPT
+    # Static-only categories must not be on offer.
+    for category in set(CATEGORIES) - set(llm_scan.RUBRIC_CATEGORIES):
+        assert f'"{category}"' not in SYSTEM_PROMPT
