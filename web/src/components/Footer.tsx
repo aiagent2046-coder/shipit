@@ -82,6 +82,14 @@ export function Footer() {
             <Link href="/terms" className="transition-colors hover:text-text">
               Terms
             </Link>
+            <a
+              href="https://github.com/aiagent2046-coder/shipit"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-text"
+            >
+              Source code (AGPL-3.0)
+            </a>
           </nav>
         </div>
       </div>
