@@ -42,8 +42,12 @@ def tree(tmp_path: Path) -> Path:
         "async def get_item(item_id: int, user=Depends(auth)):\n"
         "    return await db.fetch('SELECT * FROM items WHERE id = ?', item_id)\n"
     )
+    # The fixture the static scan is meant to find: an .env.example whose
+    # placeholder connection string looks like a credential. That is the point
+    # of the file -- without it this test asserts "0 findings printed with a
+    # location", which passes on a runner that prints nothing at all.
     (root / ".env.example").write_text(
-        "DATABASE_URL=postgres://user:password@localhost/db\n")
+        "DATABASE_URL=postgres://user:password@localhost/db\n")  # scan-allow: literal placeholder, the input this test scans for
     return root
 
 
