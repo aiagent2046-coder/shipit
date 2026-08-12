@@ -142,6 +142,26 @@ class FixpackPlan:
     config_fixes: list[ConfigFix] = field(default_factory=list)
     skipped: list[SkippedFinding] = field(default_factory=list)
 
+    # A committed .env is a leak, and until now it was filed as tidying.
+    #
+    # `env-file-committed` produces a ConfigFix, so on a repository whose only
+    # leak was a committed .env, secret_fixes stayed empty -- which meant the
+    # PR title read "secure repository configuration", the "ROTATE THESE
+    # SECRETS NOW" block never rendered at all, and the one sentence about
+    # rotation sat mid-bullet under "Configuration hardening", where it reads
+    # like housekeeping. That is exactly backwards: a committed .env usually
+    # holds MORE credentials than a lone hardcoded literal, and it is the
+    # commonest shape of this leak in the repositories this product exists for.
+    #
+    # Seen in production on a paid Fix Pack: two live API keys and a server's
+    # SSH details, and the customer merged without rotating anything. He was
+    # not careless. He was not told.
+    #
+    # Names only, never values -- these reach the PR body, and _env_key_names
+    # discards the right-hand side for that reason.
+    leaked_env_files: list[str] = field(default_factory=list)
+    leaked_env_vars: list[str] = field(default_factory=list)
+
     @property
     def has_changes(self) -> bool:
         return bool(self.files or self.deletions)
@@ -558,6 +578,11 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                 entry = _find_entry(raw_names, env_path)
                 if entry:
                     untracked_env_names |= _env_key_names(contents.get(entry, ""))
+            # Sorted, because the PR title and body are part of what a paying
+            # customer receives and must not reorder between two runs over
+            # byte-identical content.
+            plan.leaked_env_files = sorted(committed)
+            plan.leaked_env_vars = sorted(untracked_env_names)
             # A committed .env re-appears on the next `git add` without an
             # ignore rule, so untracking without this is a half-fix.
             for p in (".env",):
@@ -636,13 +661,35 @@ def _plural(n: int, singular: str, plural: str | None = None) -> str:
 
 
 def render_pr_title(plan: FixpackPlan) -> str:
+    """The title names what the CUSTOMER must still do, not what we did.
+
+    We already removed the secret; that half is finished the moment the PR
+    exists. The half that is not finished is rotation, and the title is the
+    one piece of a pull request nobody can scroll past -- it is in the list,
+    in the notification email's subject, in the merge commit, in the browser
+    tab. A production Fix Pack proved the body is not enough: the loud block
+    was there for hardcoded secrets and absent for a committed .env, and the
+    customer merged without rotating.
+
+    No count for the .env case on purpose. A dotenv file holds
+    SSH_PORT beside MIMO_API_KEY, and calling six variables "six leaked
+    credentials" is a number we cannot stand behind. The file is named
+    instead, and the variable names are listed in the body so the reader
+    decides which of them are secret.
+    """
     n_sec = len(plan.secret_fixes)
-    has_cfg = bool(plan.config_fixes)
-    if n_sec and has_cfg:
-        return (f"Drydock Fix Pack: remove {n_sec} hardcoded "
-                f"{_plural(n_sec, 'secret')} and secure repo config")
+    leaked = plan.leaked_env_files
+    where = ", ".join(f"`{f}`" for f in leaked)
+
+    if n_sec and leaked:
+        return (f"Drydock Fix Pack: rotate {n_sec} hardcoded "
+                f"{_plural(n_sec, 'secret')} and everything in {where} "
+                f"before merging")
+    if leaked:
+        return f"Drydock Fix Pack: rotate the credentials in {where} before merging"
     if n_sec:
-        return f"Drydock Fix Pack: remove {n_sec} hardcoded {_plural(n_sec, 'secret')}"
+        return (f"Drydock Fix Pack: rotate {n_sec} hardcoded "
+                f"{_plural(n_sec, 'secret')} before merging")
     return "Drydock Fix Pack: secure repository configuration"
 
 
@@ -656,16 +703,32 @@ def render_pr_body(plan: FixpackPlan) -> str:
         "Nothing is merged until you press merge.\n"
     )
 
-    if plan.secret_fixes:
+    if plan.secret_fixes or plan.leaked_env_files:
         parts.append(
-            "> ## ⚠️ ROTATE THESE SECRETS NOW\n"
+            "> ## ⚠️ ROTATE THESE SECRETS BEFORE YOU MERGE\n"
             "> Removing a secret from the code does **NOT** make it safe. "
             "Every value below has already been committed to your git "
             "history and must be treated as **compromised**. Deleting it "
             "here does not invalidate it — you MUST rotate/revoke each one "
             "at its provider, or an attacker who already has it keeps full "
-            "access:\n>"
+            "access.\n>"
         )
+        # Before, not after. Between merging and rotating, the credential is
+        # still live and now easier to find: this PR's own diff shows every
+        # removed line in plain text, which is also why a secret-scanning
+        # check on your repository may go red on this commit.
+        if plan.leaked_env_files:
+            where = ", ".join(f"`{f}`" for f in plan.leaked_env_files)
+            parts.append(
+                f"> **{where} was committed to git.** Everything it defined "
+                "is public to anyone who can read this repository's history, "
+                "and stays public after this PR is merged — deleting a file "
+                "does not remove it from earlier commits. Rotate every one of "
+                "these that is a credential:\n>"
+            )
+            for name in plan.leaked_env_vars:
+                parts.append(f"> - `{name}`")
+            parts.append(">")
         # De-dup provider guidance so the same provider isn't listed twice.
         seen: set[str] = set()
         for fix in plan.secret_fixes:
@@ -675,12 +738,17 @@ def render_pr_body(plan: FixpackPlan) -> str:
             parts.append(f"> - **Rotate at {fix.rotate_where}**")
         parts.append("")
 
-        parts.append("### Secrets removed from code\n")
-        for fix in plan.secret_fixes:
-            parts.append(
-                f"- **{fix.title}** in `{fix.file}` — replaced with a "
-                f"reference to the `{fix.env_var}` environment variable."
-            )
+        # Guarded separately from the block above: a repository whose only
+        # leak is a committed .env has no hardcoded secrets, and printing an
+        # empty "Secrets removed from code" heading under a warning about
+        # leaked credentials reads like the tool lost track of what it did.
+        if plan.secret_fixes:
+            parts.append("### Secrets removed from code\n")
+            for fix in plan.secret_fixes:
+                parts.append(
+                    f"- **{fix.title}** in `{fix.file}` — replaced with a "
+                    f"reference to the `{fix.env_var}` environment variable."
+                )
         parts.append(
             "\nThe substituted variables were added to `.env.example` with a "
             "`changeme` placeholder. Set the **new, rotated** values in your "

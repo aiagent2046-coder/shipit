@@ -556,3 +556,90 @@ def test_the_filter_reuses_the_scanner_vocabulary():
                     context=context),
         ])
         assert not plan.has_changes, f"{context} still edited"
+
+
+# --- a committed .env is a leak, not tidying ---
+#
+# Reproduces a real paid Fix Pack. The customer's only leak was a committed
+# .env holding two live API keys and a server's SSH details. Because
+# env-file-committed produces a ConfigFix and not a SecretFix, the PR title
+# read "secure repository configuration", the ROTATE block never rendered, and
+# the single sentence about rotation sat mid-bullet under "Configuration
+# hardening". He merged without rotating anything -- and then said the thing
+# that matters: most people would have done the same.
+
+
+def _committed_env_plan():
+    zip_bytes = make_zip({
+        ".env": (
+            "# OpenClaw / DeepSeek API Key\n"
+            "OPENCLAW_API_KEY=sk-live-aaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "MIMO_API_KEY=sk-live-bbbbbbbbbbbbbbbbbbbbbbbb\n"
+            "SSH_HOST=203.0.113.9\n"
+            "SSH_USER=root\n"
+            "SSH_PORT=3333\n"
+        ),
+        "app.py": "print('hi')\n",
+    })
+    findings = [finding(rule_id="env-file-committed", file=".env", line=0)]
+    return build_fixpack_plan(zip_bytes, findings)
+
+
+def test_a_committed_env_puts_rotation_in_the_title():
+    """The title is the one part of a PR nobody scrolls past: it is in the
+    list, the notification subject, the merge commit and the browser tab."""
+    title = render_pr_title(_committed_env_plan())
+
+    assert "rotate" in title.lower()
+    assert ".env" in title
+    assert "before merging" in title
+
+
+def test_a_committed_env_gets_the_loud_rotation_block():
+    body = render_pr_body(_committed_env_plan())
+
+    assert "ROTATE THESE SECRETS BEFORE YOU MERGE" in body
+    # The block must come before the routine hardening section, not after it.
+    if "Configuration hardening" in body:
+        assert body.index("ROTATE") < body.index("Configuration hardening")
+
+
+def test_the_rotation_block_names_the_variables_and_never_their_values():
+    plan = _committed_env_plan()
+    body = render_pr_body(plan)
+
+    for name in ("OPENCLAW_API_KEY", "MIMO_API_KEY", "SSH_HOST"):
+        assert f"`{name}`" in body
+    # Names reach the customer; values never do. The PR is a public artefact
+    # on a repository whose history already leaked once.
+    assert "sk-live-aaaa" not in body
+    assert "sk-live-bbbb" not in body
+    assert "203.0.113.9" not in body
+
+
+def test_the_leaked_names_are_sorted_so_two_runs_agree():
+    """Title and body are part of what a paying customer receives; they must
+    not reorder between two runs over byte-identical content."""
+    plan = _committed_env_plan()
+    assert plan.leaked_env_vars == sorted(plan.leaked_env_vars)
+    assert plan.leaked_env_files == [".env"]
+
+
+def test_no_empty_sections_when_the_only_leak_was_the_env_file():
+    """Caught by rendering the output, not by an assertion.
+
+    "### Secrets removed from code" sat under the same guard as the rotation
+    block, so a repository whose only leak was a committed .env got the
+    heading with nothing beneath it -- which reads like the tool lost track of
+    what it had done, directly under a warning asking to be trusted.
+
+    The first version of this test asserted that no heading is followed by
+    another heading. It passed against the bug, because the empty section was
+    followed by prose rather than by a heading. The mutation survived and said
+    so; this assertion is the one that holds.
+    """
+    plan = _committed_env_plan()
+    body = render_pr_body(plan)
+
+    assert not plan.secret_fixes
+    assert "Secrets removed from code" not in body
