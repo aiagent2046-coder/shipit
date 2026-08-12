@@ -38,7 +38,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "800999be773b9346"
+PROMPT_FINGERPRINT = "97d399a803583c9c"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1067,3 +1067,67 @@ def test_a_real_finding_still_survives_the_filter():
     assert len(findings) == 1
     assert stats.self_cancelled == 0
     assert stats.verified == 1
+
+
+# --- the missing ownership check (BOLA) ---
+#
+# OWASP API Security Top 10 has this at number one, and it is what most real
+# data leaks from an API actually are. The auth rubric named the adjacent
+# things -- a route that mutates without checking the session, a user id taken
+# from the client -- and not this one: the session IS checked, the caller IS
+# who they say, and the query still returns someone else's row.
+
+
+def test_the_auth_rubric_asks_for_the_ownership_check_not_only_the_session():
+    """The two are different failures and the rubric conflated them by only
+    naming one. `where id = $1` inside a handler that verified the session is
+    a leak; the session check being present is exactly why it reads as safe.
+    """
+    instructions = RUBRICS["auth"]["instructions"]
+
+    assert "missing OWNERSHIP check" in instructions
+    assert "different thing from a missing session check" in instructions
+    assert "user_id, owner_id, team_id or workspace_id" in instructions
+
+
+def test_the_ownership_finding_is_proved_by_quoting_the_query():
+    """Today's lesson, applied on the way in rather than after five runs: a
+    claim that survives is one settled by reading lines. The proof here is two
+    absences -- no owner column in the query, and no earlier line comparing
+    the record's owner to the session -- and BOTH have to hold, or a handler
+    that checks ownership on the line above gets reported anyway."""
+    instructions = RUBRICS["auth"]["instructions"]
+
+    assert "QUOTE the query" in instructions
+    assert "one of them present means there is nothing to report" in instructions
+
+    # The conjunction itself, not just a sentence about it. Weakening this
+    # AND to an OR is the mutation that turns the rule into "report every
+    # query without an owner column", which fires on every correctly guarded
+    # handler that checks ownership on the line above -- and the first draft
+    # of this test did not catch it, because the following sentence still
+    # said "Both have to be missing" and the assertion matched that instead.
+    assert "the owner column in it AND the absence of" in instructions
+
+
+def test_the_rubric_knows_row_level_security_can_make_it_a_non_finding():
+    """The exclusion that keeps this from firing on every correct Supabase
+    route. A user-scoped client against an RLS table is filtered by the
+    database, and the code is right to omit the owner column."""
+    instructions = RUBRICS["auth"]["instructions"]
+
+    assert "row-level security" in instructions
+    assert "the database applies the filter" in instructions
+    assert "It is NOT a finding" in instructions
+
+
+def test_the_rubric_names_the_service_role_key_as_the_critical_case():
+    """The signature failure of this customer segment. The author enables RLS,
+    believes the database is enforcing ownership, and then reaches the table
+    from a route with a service-role key -- which bypasses RLS entirely, so
+    the policy protects nothing on that path."""
+    instructions = RUBRICS["auth"]["instructions"]
+
+    assert "service-role or admin key" in instructions
+    assert "bypasses" in instructions
+    assert "critical one" in instructions
