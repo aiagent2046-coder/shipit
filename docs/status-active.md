@@ -448,6 +448,15 @@ that was already written, so the running release keeps reporting a bare short
 SHA until it is rebuilt. Tagging afterwards still marks history correctly, but
 it buys nothing at runtime.
 
+Tagging also carries a licence obligation, not only a bookkeeping one.
+AGPL-3.0 section 13 owes the users of a network service the corresponding
+source of the version serving them, and `GET /version` now answers that with a
+`source` field naming the exact tree (`.../tree/<release sha>`). Release tags
+are what keep that tree reachable after `main` moves on. On a source checkout
+`SHIPIT_RELEASE` is the literal string `unknown`, so the field falls back to
+the repository root rather than emitting `/tree/unknown` — a 404 that would
+look like a specific offer.
+
 `tag-release.sh` refuses to tag a commit that is not an ancestor of
 `origin/main` — the same gate `deploy-production.sh` applies — so a release tag
 can never point at unreviewed work. It fetches tags first, so two people

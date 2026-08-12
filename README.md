@@ -93,8 +93,31 @@ Issues and pull requests are welcome. Please keep changes small, add a focused
 test for changed behaviour, and do not include credentials, customer archives,
 or generated secrets in a contribution.
 
+Commits need a sign-off (`git commit -s`) certifying you have the right to
+submit the work under AGPL-3.0. There is no contributor licence agreement and
+no copyright assignment — you keep the copyright in your work, and the project
+gives up the ability to relicense it without asking you. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 Drydock is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 If you run a modified public network service, AGPL-3.0 requires offering its
 corresponding source to the users of that service.
+
+That obligation binds the hosted service at drydock.co as much as anyone
+else's fork, so here is how it is met. The footer of every page links to this
+repository. That is the offer, but it cannot be specific — it is rendered
+without knowing which commit is live, so following it a week after a deploy
+gives you `main` rather than the code that served you. `GET /version` closes
+that gap: it reports the running release's commit and a `source` URL pointing
+at exactly that tree.
+
+```json
+{ "release": "d6b84bc…", "source": "https://github.com/…/tree/d6b84bc…",
+  "version": "v2026.08.12-3" }
+```
+
+Releases are tagged, so a running version stays reachable after `main` moves
+on. If you are ever served a version whose source you cannot obtain from that
+URL, that is a licence violation and a bug — please report it.
