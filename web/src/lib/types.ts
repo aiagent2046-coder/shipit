@@ -151,8 +151,6 @@ export interface PersistedAudit {
 
 export interface Entitlements {
   daily_audit_limit: number;
-  private_repos_allowed: boolean;
-  priority_queue: boolean;
 }
 
 export interface Account {

@@ -52,12 +52,23 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
 pytest -q
-uvicorn app.main:app --reload
 ```
 
-The API runs without a database for local exploration. Configure the required
-environment variables from [`.env.example`](.env.example) to use persistence,
-LLM providers, GitHub delivery, sandbox execution, or payments.
+The test suite is the part that runs with no configuration at all, and it is
+the honest starting point.
+
+**Running an audit needs a database.** `uvicorn app.main:app --reload` will
+start without `DATABASE_URL`, but requesting an audit then fails with
+`503 {"reason": "queue_unavailable"}`: an audit is a queued job, and with no
+database there is no queue to accept it and no worker to run it. The server
+says so rather than handing back a job id for a job that does not exist. Set
+`DATABASE_URL` (see [`.env.example`](.env.example)) before expecting
+`POST /v1/audits` to work.
+
+A static-only audit needs nothing further. LLM providers, GitHub delivery,
+sandbox execution and payments each need their own variables from
+[`.env.example`](.env.example); without provider keys the scan degrades to
+static-only and reports `basis: static_only` instead of pretending it looked.
 
 ## Architecture
 

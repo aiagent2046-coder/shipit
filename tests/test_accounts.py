@@ -112,18 +112,14 @@ def make_valid_zip() -> io.BytesIO:
 
 # --- entitlement resolution (pure) ---
 
-def test_free_entitlements_use_the_passed_limit_and_deny_paid_flags():
+def test_free_entitlements_use_the_passed_limit():
     ent = entitlements_for_tier("free", free_daily_limit=5)
-    assert ent == Entitlements(
-        daily_audit_limit=5, private_repos_allowed=False, priority_queue=False
-    )
+    assert ent == Entitlements(daily_audit_limit=5)
 
 
-def test_pro_entitlements_grant_higher_limit_and_paid_flags():
+def test_pro_entitlements_grant_a_higher_limit():
     ent = entitlements_for_tier("pro", free_daily_limit=5)
     assert ent.daily_audit_limit == PRO_DAILY_AUDIT_LIMIT
-    assert ent.private_repos_allowed is True
-    assert ent.priority_queue is True
 
 
 def test_unknown_tier_falls_back_to_free_not_an_error():
@@ -267,11 +263,7 @@ def test_account_endpoint_anonymous_returns_free_entitlements():
     body = resp.json()
     assert body["tier"] == "free"
     assert body["authenticated"] is False
-    assert body["entitlements"] == {
-        "daily_audit_limit": 5,
-        "private_repos_allowed": False,
-        "priority_queue": False,
-    }
+    assert body["entitlements"] == {"daily_audit_limit": 5}
 
 
 def test_account_endpoint_unknown_key_is_free_not_401():
@@ -301,11 +293,7 @@ def test_account_endpoint_valid_key_returns_pro_entitlements():
     body = resp.json()
     assert body["tier"] == "pro"
     assert body["authenticated"] is True
-    assert body["entitlements"] == {
-        "daily_audit_limit": PRO_DAILY_AUDIT_LIMIT,
-        "private_repos_allowed": True,
-        "priority_queue": True,
-    }
+    assert body["entitlements"] == {"daily_audit_limit": PRO_DAILY_AUDIT_LIMIT}
     # the endpoint never echoes the secret back
     assert "api_key" not in json.dumps(body)
 
@@ -583,3 +571,25 @@ def test_the_cookie_authenticates_a_real_request_end_to_end():
     finally:
         secure.cookies.clear()
         _clear_account_repo()
+
+
+def test_the_account_payload_advertises_nothing_that_gates_nothing():
+    """The guard against the flags creeping back.
+
+    `private_repos_allowed` and `priority_queue` shipped in this payload for
+    months, described in app/accounts.py as "honest placeholders". They were
+    honest in that file and dishonest on the wire: a caller reading
+    `priority_queue: false` on free and `true` on pro concludes that paying
+    buys a faster queue, and it does not. A comment the caller never sees is
+    not a disclaimer.
+
+    So the assertion is on the payload's exact shape, not on the two names.
+    A new field that gates nothing fails this test the same way, which is the
+    point -- the rule is about the class of mistake, not about these two.
+    """
+    fields = set(Entitlements.__dataclass_fields__)
+    assert fields == {"daily_audit_limit"}, (
+        f"entitlements gained {fields - {'daily_audit_limit'}}. Every field "
+        "here is reported by GET /v1/account and reads as a promise. Add one "
+        "only together with the code that enforces it."
+    )

@@ -56,10 +56,15 @@ so the frontend only deep-links into the bot.
 
 ## Honesty: entitlements
 
-Per `app/accounts.py`, only the **daily audit limit** is actually enforced
-today (free = 5, pro = 100). `private_repos_allowed` and `priority_queue` are
-returned in the entitlements payload but gate nothing yet — the pricing page
-labels them "not enforced yet" rather than overselling them.
+Per `app/accounts.py`, the **daily audit limit** (free = 5, pro = 100) is the
+only entitlement, and it is enforced.
+
+This paragraph used to say that `private_repos_allowed` and `priority_queue`
+are returned but gate nothing, and that "the pricing page labels them 'not
+enforced yet'". The pricing page never mentioned either one, so the sentence
+described a disclaimer that did not exist — an inaccuracy about our own
+honesty. Both flags have since been removed from the payload, so there is
+nothing left to disclaim.
 
 ## What was verified vs. not
 

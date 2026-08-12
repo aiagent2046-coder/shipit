@@ -108,19 +108,29 @@ class Entitlements:
     actually exists in the code today — don't add flags for features that
     don't exist anywhere yet.
 
-    Only `daily_audit_limit` is really enforced (in app/main.py's
-    create_audit, via the existing rate limiter). `private_repos_allowed`
-    and `priority_queue` are honest placeholders: the flags exist and are
-    reported by GET /v1/account, but neither gates anything real yet —
-    private-repo intake doesn't exist (only public repos are fetchable at
-    all, see app/ingest/github_fetch.py) and there is no job queue in this
-    codebase to prioritize (the scan runs inline in a threadpool). They're
-    here so Stage 2 and later work have a defined place to switch on.
+    It used to carry two more: `private_repos_allowed` and `priority_queue`,
+    described in this docstring as "honest placeholders". They were honest
+    HERE and dishonest on the wire. A caller reading GET /v1/account saw
+    `priority_queue: false` on free and `true` on pro and drew the only
+    reasonable conclusion — that paying buys a faster queue. It did not. The
+    comment explaining that was in a file the caller never sees, and a
+    product whose README has a section titled "What Drydock deliberately does
+    not claim" cannot ship two claims of exactly that kind in its own API
+    response.
+
+    So they are gone rather than annotated. Removing a field from a v1
+    response is a compatibility break and worth naming as one: nothing reads
+    them (web/src/lib/types.ts declared them and no component consumed them),
+    and a field that means nothing cannot break anything by ceasing to exist.
+    The place to record that private intake and queue priority are planned is
+    the code that will gate them and the status record — not a payload that
+    tells every caller they already work.
+
+    Only `daily_audit_limit` remains, and it is really enforced, in
+    app/main.py's create_audit via the rate limiter.
     """
 
     daily_audit_limit: int
-    private_repos_allowed: bool
-    priority_queue: bool
 
 
 def entitlements_for_tier(tier: str, *, free_daily_limit: int) -> Entitlements:
@@ -136,16 +146,8 @@ def entitlements_for_tier(tier: str, *, free_daily_limit: int) -> Entitlements:
     row with an unexpected tier value all get the free entitlement set.
     """
     if tier == TIER_PRO:
-        return Entitlements(
-            daily_audit_limit=PRO_DAILY_AUDIT_LIMIT,
-            private_repos_allowed=True,
-            priority_queue=True,
-        )
-    return Entitlements(
-        daily_audit_limit=free_daily_limit,
-        private_repos_allowed=False,
-        priority_queue=False,
-    )
+        return Entitlements(daily_audit_limit=PRO_DAILY_AUDIT_LIMIT)
+    return Entitlements(daily_audit_limit=free_daily_limit)
 
 
 def entitlements_dict(ent: Entitlements) -> dict[str, Any]:
