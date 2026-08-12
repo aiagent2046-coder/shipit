@@ -93,7 +93,8 @@ from app.monitor import (
 from app.monitor.diff import new_high_severity_findings
 from app.ratelimit import RateLimitExceeded, RateLimiter
 from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
-                              basis_for_account, content_digest, run_scan)
+                              LLM_FAILURE_BILLING, basis_for_account,
+                              content_digest, llm_failure_kind, run_scan)
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
@@ -544,6 +545,7 @@ async def run_repo_audit(
         }
 
     scan = await _run_scan_offthread(raw, llm_client)
+    await _alert_llm_stage_failed(scan["llm"])
     # Cost accounting. account_id is None: this path serves system re-audits
     # (continuous monitoring), whose LLM cost is incurred once per push
     # regardless of how many subscribers watch the repo -- attributing it to any
@@ -1051,6 +1053,44 @@ async def _alert_fixpack_failed(job_id, detail: str) -> None:
     await alerts.notify_operator(
         f"Drydock: Fix Pack job {job_id} failed — {detail}",
         dedupe_key=f"fixpack-failed:{job_id}",
+    )
+
+
+async def _alert_llm_stage_failed(llm_summary: object) -> None:
+    """One operator alert when the LLM stage lost the provider, or nothing.
+
+    The audit still completes, still persists, and still returns 200 -- with
+    three of six categories unexamined and a total that reads higher than the
+    truth. That silence is the whole problem: on 2026-08-12 two paid audits
+    came back at 9.7 within three minutes of each other and were found only
+    because someone happened to be running one of them by hand.
+
+    Deduped on the KIND, not the job. A dead provider fails every audit, so a
+    per-job key would page once per submission for one cause -- the same
+    reasoning as the GitHub App alert below. The text names the remedy rather
+    than the symptom, because the useful thing to know is not that an audit
+    degraded, it is that every audit will keep degrading until someone acts.
+    """
+    kind = llm_failure_kind(llm_summary)
+    if kind is None:
+        return
+
+    if kind == LLM_FAILURE_BILLING:
+        await alerts.notify_operator(
+            "Drydock: the LLM provider is REFUSING CALLS FOR NON-PAYMENT. "
+            "Every audit from now on silently degrades to static-only — it "
+            "still returns 200, still says succeeded, and reports a HIGHER "
+            "score with Auth, Money & Data and Frontend unexamined. Top up "
+            "the provider account.",
+            dedupe_key="llm-provider-billing",
+        )
+        return
+
+    await alerts.notify_operator(
+        "Drydock: the LLM provider is failing; audits are degrading to "
+        "static-only and reporting higher scores than the code deserves. "
+        f"Usually transient. {llm_summary}",
+        dedupe_key="llm-provider-failure",
     )
 
 

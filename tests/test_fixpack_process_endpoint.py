@@ -477,7 +477,12 @@ def test_a_degraded_review_is_not_advertised_as_the_full_one(monkeypatch):
 
     alerts: list[str] = []
 
-    async def _capture_alert(text):
+    # **kwargs, not a bare (text): notify_operator takes dedupe_key and
+    # friends, and a double narrower than the real signature turns a new
+    # caller into a TypeError that surfaces as an unrelated assertion --
+    # here, an audit row that was never written because the alert raised
+    # halfway through.
+    async def _capture_alert(text, **kwargs):
         alerts.append(text)
 
     monkeypatch.setattr(alerts_mod, "notify_operator", _capture_alert)
@@ -511,7 +516,12 @@ def test_a_failed_deep_review_still_delivers_the_fix(monkeypatch):
 
     alerts: list[str] = []
 
-    async def _capture_alert(text):
+    # **kwargs, not a bare (text): notify_operator takes dedupe_key and
+    # friends, and a double narrower than the real signature turns a new
+    # caller into a TypeError that surfaces as an unrelated assertion --
+    # here, an audit row that was never written because the alert raised
+    # halfway through.
+    async def _capture_alert(text, **kwargs):
         alerts.append(text)
 
     monkeypatch.setattr(alerts_mod, "notify_operator", _capture_alert)

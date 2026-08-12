@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import re
 import zipfile
 
 from app.llm.client import LLMClient, LLMError
@@ -48,12 +49,59 @@ AUDIT_ENGINE_VERSION = "2026-08-12-1"
 # "something went wrong or the budget ran out"; it is now also what the free
 # tier deliberately delivers.
 BASIS_FULL = "static+llm"
+
+# Why a provider failure needs a name, and two of them.
+#
+# The `llm` field has carried "failed: ..." since a 402 mid-run turned a 0.0
+# into a 9.2. That fixed the diagnosis and not the discovery: the job still
+# finalises as succeeded, the audit still persists, and the only trace is a
+# WARNING nobody reads until they go looking. On 2026-08-12 it happened twice
+# inside three minutes -- two paid audits delivered at 9.7 with three of six
+# categories quietly unexamined -- and was found only because someone was
+# running dubinc/dub by hand for an unrelated reason.
+#
+# Split in two because the operator does two different things. BILLING is
+# "top up the provider account", actionable in a minute, and until it is done
+# EVERY audit degrades. PROVIDER is an outage or a bad response, usually
+# transient, usually nothing to do but wait. One alert for both would train
+# the reader to ignore the one that matters.
+LLM_FAILURE_BILLING = "billing"
+LLM_FAILURE_PROVIDER = "provider"
+
+# Deliberately narrow. 429 is rate limiting and 403 is authorisation, and
+# calling either of them "top up the account" sends the operator to the wrong
+# page; both are PROVIDER. This matches what the provider actually said today:
+# "Client error '402 Payment Required' for url ...".
+_BILLING_SIGNATURE = re.compile(
+    r"\b402\b|payment\s+required|insufficient\s+(funds|balance|credit)"
+    r"|out\s+of\s+credit|quota\s+exceeded",
+    re.I,
+)
 BASIS_STATIC_ONLY = "static_only"
 
 # Passed as llm_skip_reason when the caller is not a paying account. Distinct
 # from "daily_spend_cap" on purpose: that reason means we ran out of money, this
 # one means we never intended to spend any.
 FREE_TIER_LLM_SKIP_REASON = "free_tier"
+
+
+def llm_failure_kind(llm_summary: object) -> str | None:
+    """Which kind of provider failure this scan hit, or None if it did not.
+
+    Reads the same `llm` value the caller already has rather than taking the
+    exception, because run_scan is synchronous and every alerting caller is
+    async -- classifying here keeps the decision in one place and lets the
+    two async call sites (the worker, and run_repo_audit for the Fix Pack's
+    deep review) share it instead of each parsing a string.
+
+    A successful scan puts a dict here; only the failure path writes a string,
+    and it always starts with "failed: ". Anything else is not a failure.
+    """
+    if not isinstance(llm_summary, str) or not llm_summary.startswith("failed:"):
+        return None
+    if _BILLING_SIGNATURE.search(llm_summary):
+        return LLM_FAILURE_BILLING
+    return LLM_FAILURE_PROVIDER
 
 
 def basis_for_account(account_id: object | None) -> str:
