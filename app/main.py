@@ -1788,13 +1788,13 @@ async def create_audit(
     if archive is not None:
         raw = await archive.read(MAX_ARCHIVE_BYTES + 1)
     else:
-        # `entitlements.private_repos_allowed` (free=False, pro=True) is the
-        # flag that WOULD gate private-repo intake here — but private repos
-        # aren't fetchable at all yet (github_fetch.py is public-only, no
-        # auth), so there is nothing private to reach and the flag has no
-        # visible effect until private-repo support is built. Not enforced
-        # with a fake `if` that can never fire; wire the real gate here when
-        # private intake exists.
+        # This is where private-repo intake would be gated by tier. There is
+        # no flag to consult: `private_repos_allowed` used to sit in
+        # Entitlements and was removed, because reporting it over
+        # GET /v1/account told every caller a feature existed that does not.
+        # Private repos aren't fetchable at all yet — github_fetch.py is
+        # public-only, no auth — so add the entitlement back together with
+        # the intake that needs it, and gate it here.
         #
         # SSRF guard: validate the URL to a clean github.com owner/repo
         # BEFORE any network call. Only the two validated segments reach

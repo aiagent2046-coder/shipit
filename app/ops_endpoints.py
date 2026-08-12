@@ -12,6 +12,33 @@ from app.release_info import release_labels
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Where this software's source lives, and how a user of the RUNNING service
+# gets the source of the version that is running.
+#
+# AGPL-3.0 section 13 obliges an operator who offers a modified version over a
+# network to give that version's Corresponding Source to its remote users. The
+# web footer already carries "Source code (AGPL-3.0)" pointing at the
+# repository, which is the offer; what it cannot do is be specific, because it
+# is a static server component with no idea which commit is live. Follow it a
+# week after a deploy and you get main, which is not what you were served.
+#
+# /version knows the commit exactly -- it is the same SHA every JSON log record
+# carries -- so it can name the tree instead of the project.
+#
+# On a source checkout there is no commit to point at, and release_from_env()
+# does NOT return None there: it returns the literal string "unknown", which is
+# what every log record carries too. Interpolating that produces
+# .../tree/unknown -- a 404 dressed as compliance. The repository root is the
+# honest answer instead.
+SOURCE_REPO_URL = "https://github.com/aiagent2046-coder/shipit"
+_NO_RELEASE = frozenset({"", "unknown"})
+
+
+def source_url_for(release: str | None) -> str:
+    if not release or release in _NO_RELEASE:
+        return SOURCE_REPO_URL
+    return f"{SOURCE_REPO_URL}/tree/{release}"
 _fixpack_repo = FixpackJobRepository()
 _audit_job_repo = AuditJobRepository()
 
@@ -80,8 +107,13 @@ async def version() -> dict[str, str | None]:
     # "which commit" precisely but unreadably; these answer "which release,
     # and how old" for a human during an incident. Both are null on a source
     # checkout, which is a truthful "not a built release", not an error.
+    #
+    # `source` makes the AGPL-3.0 section 13 offer specific: not "the project
+    # is on GitHub" but "the code answering this request is at this tree".
+    release = release_from_env()
     return {
-        "release": release_from_env(),
+        "release": release,
         "environment": environment_from_env(),
+        "source": source_url_for(release),
         **release_labels(),
     }

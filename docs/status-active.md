@@ -181,16 +181,24 @@ Implemented:
     by client IP exactly as before — **anonymous usage is byte-for-byte
     unchanged**; pro = 100, keyed by account id so the budget follows the
     account, not the IP.
-  - `private_repos_allowed` (free=False, pro=True) — **a flag with no real
-    effect yet.** The check point is documented in `create_audit`'s
-    `repo_url` branch (where it would gate private-repo intake), but
-    private repos aren't fetchable at all today (`github_fetch.py` is
-    public-only), so there's nothing to gate. Not faked with an `if` that
-    can never fire.
-  - `priority_queue` (free=False, pro=True) — **a flag not wired to
-    anything**, because there is no job queue in this codebase to
-    prioritize (the scan runs inline in a threadpool). Exists so later
-    scheduling work has a defined switch.
+  - `daily_audit_limit` is the **only** entitlement. `private_repos_allowed`
+    and `priority_queue` were removed from `Entitlements` and from the
+    `GET /v1/account` payload. They had shipped as documented placeholders,
+    which made them honest in `app/accounts.py` and dishonest on the wire:
+    a caller seeing `priority_queue: false` on free and `true` on pro
+    concludes that paying buys a faster queue, and a comment in a file the
+    caller never reads is not a disclaimer. Nothing consumed them
+    (`web/src/lib/types.ts` declared them; no component read them).
+    - Private-repo intake still does not exist — `github_fetch.py` is
+      public-only, no auth. The place the gate belongs is commented in
+      `create_audit`'s `repo_url` branch; add the entitlement back together
+      with the intake that needs it.
+    - Queue priority is now buildable, unlike when the flag was written:
+      audits ARE queued jobs (`audit_jobs`, `app/worker/main.py`), so
+      prioritising one account over another is real work rather than a
+      switch with nothing behind it. It is not implemented.
+  - `tests/test_accounts.py` asserts the payload's exact field set, so any
+    new entitlement fails the suite until something enforces it.
   No payment provider is implemented in this stage (explicitly out of
   scope): the `payments` table + `PaymentRepository` are schema-and-CRUD
   only, so Stage 2 has somewhere to write. There is **no** public
@@ -439,6 +447,15 @@ reports it from there. A tag pushed *after* the build cannot reach the metadata
 that was already written, so the running release keeps reporting a bare short
 SHA until it is rebuilt. Tagging afterwards still marks history correctly, but
 it buys nothing at runtime.
+
+Tagging also carries a licence obligation, not only a bookkeeping one.
+AGPL-3.0 section 13 owes the users of a network service the corresponding
+source of the version serving them, and `GET /version` now answers that with a
+`source` field naming the exact tree (`.../tree/<release sha>`). Release tags
+are what keep that tree reachable after `main` moves on. On a source checkout
+`SHIPIT_RELEASE` is the literal string `unknown`, so the field falls back to
+the repository root rather than emitting `/tree/unknown` — a 404 that would
+look like a specific offer.
 
 `tag-release.sh` refuses to tag a commit that is not an ancestor of
 `origin/main` — the same gate `deploy-production.sh` applies — so a release tag
@@ -1037,9 +1054,11 @@ allowed request headers are `Authorization` and `Content-Type`.
   the live Supabase project already (see the entries above) — what's
   still pending is exercising the two providers against a real bot token
   and a real on-chain transfer, not schema. The
-  `private_repos_allowed` and `priority_queue` entitlements still aren't
-  enforced anywhere real (no private-repo intake, no job queue); only
-  `daily_audit_limit` is.
+  `private_repos_allowed` and `priority_queue` entitlements have been
+  removed rather than left unenforced in the payload; only
+  `daily_audit_limit` exists, and it is enforced. The underlying gaps are
+  unchanged: no private-repo intake, and no prioritisation between accounts
+  in the job queue.
 - Cross-rubric dedup collapses a finding reported by both the auth and
   security rubrics into one (most severe wins, the other rubric noted on
   the survivor). It matches on same file + line numbers within a small
