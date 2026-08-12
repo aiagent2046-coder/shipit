@@ -38,7 +38,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "97d399a803583c9c"
+PROMPT_FINGERPRINT = "30da540757908ee8"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1131,3 +1131,73 @@ def test_the_rubric_names_the_service_role_key_as_the_critical_case():
     assert "service-role or admin key" in instructions
     assert "bypasses" in instructions
     assert "critical one" in instructions
+
+
+# --- what the ownership rule's first measured run cost ---
+#
+# nextjs-subscription-payments, three findings, none of them a defect. The
+# search was right -- it located every service-role call site and the one
+# RLS-dependent query, which is exactly the set a reviewer would open. The
+# verdict was wrong three times out of three: it reported the places instead
+# of clearing them.
+
+
+def test_the_auth_rubric_is_told_to_follow_the_id_to_its_origin():
+    """The webhook case, which is the one that made the rule misfire hardest.
+
+    A signature-verified Stripe webhook carries no user session, so
+    manageSubscriptionStatusChange looks the customer up in a mapping table
+    and writes with a service-role key. That is correct and is the only way it
+    can work -- and it was reported HIGH 0.75 because the rule said
+    "service-role plus an id" without saying "check where the id came from".
+    """
+    instructions = RUBRICS["auth"]["instructions"]
+
+    assert "not by itself a finding" in instructions
+    assert "FOLLOW THE ID" in instructions
+    assert "mapping table" in instructions
+    assert "is not caller-controlled and there" in instructions
+
+
+def test_the_auth_rubric_carries_the_silence_rule_too():
+    """Ported from the web rubric, where it was measured to be necessary. It
+    was left out of the auth rule when the rest of the discipline was carried
+    over, and the omission produced two of the three false findings on the
+    first run."""
+    instructions = RUBRICS["auth"]["instructions"]
+
+    assert "report " in instructions and "NOTHING" in instructions
+    assert "Silence is the correct output" in instructions
+    assert "a caller that does not exist in these files" in instructions
+
+
+def test_a_withdrawal_in_the_title_is_caught_too():
+    """`fix_hint` was the documented place to match, and the auth run showed
+    what that misses: a finding can withdraw itself in its own headline."""
+    for title in (
+        "Service-role client reads customers table — safe in normal flow "
+        "but dangerous if called from any non-session path",
+        "Retry payment: double-submit correctly guarded via ref",
+        "setInterval for draft saving is correctly cleaned up",
+        "Partner link modal: save button correctly disabled while loading",
+        "No duplicate-submit risk on this handler",
+        "This is actually correct",
+    ):
+        assert llm_scan.self_cancelling({"title": title}), title
+
+
+def test_a_real_title_survives_the_withdrawal_filter():
+    """The filter's whole risk, checked against titles measured today that
+    were verified real by hand. A title pattern is more dangerous than a
+    fix_hint pattern because every finding has a title."""
+    for title in (
+        "No error boundary wrapping the routes",
+        "Missing await leaves in-flight flag cleared immediately",
+        "getUserDetails query has no explicit user_id filter — relies "
+        "entirely on RLS",
+        "Hooks called after conditional early return — violates Rules of Hooks",
+        "isGenerating flag never cleared when generatePersonaResponse throws",
+        "Stripe checkout button not disabled while request is in flight",
+        "Long persona form has no navigation guard",
+    ):
+        assert not llm_scan.self_cancelling({"title": title}), title

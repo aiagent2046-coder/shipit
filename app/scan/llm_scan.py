@@ -176,7 +176,27 @@ RUBRICS: dict[str, dict] = {
             "relying on stops applying to this path. A route that takes an id "
             "from the request and queries it with a service-role client is "
             "the most common way an app of this shape hands one customer "
-            "another customer's data."
+            "another customer's data.\n"
+            "\n"
+            "A service-role client is not by itself a finding, and this is "
+            "where the first measured run of this rule went wrong three times "
+            "out of three. Some paths have no session and cannot have one: a "
+            "signature-verified payment webhook carries no user, so it looks "
+            "the caller up in a mapping table and writes with an admin key, "
+            "which is correct and is the only way it can work. FOLLOW THE ID "
+            "to where it comes from before deciding. An id resolved on the "
+            "server -- from a mapping table, from the session, from a "
+            "verified webhook payload -- is not caller-controlled and there "
+            "is nothing to report.\n"
+            "\n"
+            "When you check one of these and it turns out correct, report "
+            "NOTHING. Not a finding titled 'X is correctly scoped', not one "
+            "whose own words are 'safe in normal flow', not one that rests on "
+            "a caller that does not exist in these files -- 'dangerous if "
+            "this were ever called from somewhere without a session' is a "
+            "sentence about code nobody has written. The reader is paying for "
+            "a list of things to repair. Silence is the correct output for "
+            "code that is already right."
         ),
     },
     "security": {
@@ -775,9 +795,39 @@ _NO_FIX_NEEDED = re.compile(
 )
 
 
+# The other place a withdrawal lands: the title.
+#
+# Matching fix_hint alone was the documented trade -- an explanation may
+# legitimately say "there is no issue with the ref guard, but the button ..."
+# on its way to a real defect, so the body was left alone. The auth rubric's
+# first measured run showed what that trade costs: "Service-role client reads
+# customers table ... safe in normal flow but dangerous if called from any
+# non-session path" withdrew itself in its own headline and sailed through.
+#
+# A separate and much narrower pattern, because a title is one line and a
+# reader sees it first. It matches the withdrawal SHAPE -- "correctly guarded",
+# "correctly cleaned up", "safe in normal flow", "not a bug" -- and nothing
+# that a genuine title has reason to contain. Checked against every real
+# finding measured today: "No error boundary wrapping the routes", "Missing
+# await leaves in-flight flag cleared immediately", "getUserDetails query has
+# no explicit user_id filter" all pass through untouched.
+_TITLE_WITHDRAWAL = re.compile(
+    r"\bcorrectly\s+\w+ed\b"
+    r"|\bis\s+(actually\s+)?correct\b"
+    r"|\bsafe\s+in\s+(the\s+)?normal\b"
+    r"|\bno\s+issue\b"
+    r"|\bnot\s+a\s+(bug|finding|problem|risk|vulnerability)\b"
+    r"|\bno\s+\S+\s+risk\b",
+    re.I,
+)
+
+
 def self_cancelling(finding: dict) -> bool:
-    """True when the finding's own fix says there is nothing to do."""
-    return bool(_NO_FIX_NEEDED.search(str(finding.get("fix_hint") or "")))
+    """True when the finding withdraws itself, in its fix or in its title."""
+    return bool(
+        _NO_FIX_NEEDED.search(str(finding.get("fix_hint") or ""))
+        or _TITLE_WITHDRAWAL.search(str(finding.get("title") or ""))
+    )
 
 
 def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
