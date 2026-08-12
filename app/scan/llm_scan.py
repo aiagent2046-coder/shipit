@@ -23,7 +23,45 @@ from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
 
-MAX_FILE_CHARS = 24_000          # per-file cap in prompt
+# Per-file cap in the prompt, ~5% of MAX_TOTAL_CHARS: no single file may take
+# more than about a nineteenth of a rubric's budget.
+#
+# It was 24_000, and that number did two kinds of damage on a 237-file CRM.
+#
+# It hid defects: backend/app/routers/booking.py went in as 655 of 2155 lines,
+# leads.py as 683 of 2128. A cross-tenant write at booking.py:947 -- confirmed
+# by hand, the record fetched by path id with no company comparison -- could
+# not be found at any price, because it was never sent.
+#
+# Worse, it INVENTED one. sales_kpi_board.py was cut mid-token on
+#
+#     629    if sale is None or sale.company_id != compa
+#
+# and the engine duly reported "Manual sale payment patch missing ownership
+# check" against a handler whose ownership check the cut had removed. That was
+# the only auth false positive in the run. A false accusation about correct
+# code costs more trust than a miss, and we manufactured it.
+#
+# 48_000 was measured, not guessed, across five clones and all four rubrics:
+#   * dubinc/dub (4213 files) -- the monorepo the selection logic exists for:
+#     -2 to -6 files, prompt volume flat. Its budget is saturated by hundreds
+#     of small files, so the cap is not what binds there.
+#   * MetodiOne -- auth/security/web budget-neutral (-8/-16/-8 of the least
+#     relevant small files, volume within 1%), money +31% because that rubric
+#     was under budget. booking.py:947 becomes visible at 40_000;
+#     sales_kpi_board.py fits whole at 48_000, which is why the number is 48
+#     and not 40.
+#   * small repos (dvwa-pm, nextjs-subscription-payments, digital-rolecraft)
+#     -- no file dropped, +7% to +28% more content. They were never near the
+#     budget, so the tails are pure added coverage at real added cost.
+# Net on the one repository with a measured invoice: +6.5% content, about
+# $3.93 -> $4.19 against JOB_COST_CAP_USD of 6.50.
+#
+# Raising this further is not free and not obviously better: past ~64_000 a
+# single large file starts pushing mid-sized ones out entirely, and on
+# MetodiOne at 96_000 sales_kpi_board.py disappears from the prompt again --
+# trading a truncated file for an absent one.
+MAX_FILE_CHARS = 48_000
 
 # Per-rubric prompt budget, ~225K tokens. Adaptive by construction rather than
 # by branching: select_files spends min(matching content, this), so a repo that
@@ -565,7 +603,12 @@ SYSTEM_PROMPT = (
     "representative instance as file/line/evidence (representative = the "
     "affected file that sorts FIRST alphabetically), and state in the "
     "explanation how many other files are affected and list them. Do "
-    "not spend multiple findings on repeats of one pattern. If nothing "
+    "not spend multiple findings on repeats of one pattern. A file may be "
+    "sent to you cut short; when it is, its last line is a truncation marker "
+    "saying how many lines were withheld. NEVER conclude that a check, guard, "
+    "owner comparison or handler is MISSING because you cannot see it in a "
+    "file marked truncated -- in that file report only what the lines you "
+    "were given prove. If nothing "
     "is wrong, respond with []. Never invent files or lines: evidence "
     "must be copied exactly from the provided content."
 )
@@ -660,6 +703,39 @@ def relevance(name: str, text: str, kw: re.Pattern[str],
     return score
 
 
+TRUNCATION_MARKER = "[... truncated: {n} more lines of this file were not sent ...]"
+
+
+def truncate_at_line(text: str, limit: int) -> str:
+    """Cut a file to `limit` on a line boundary and say that it was cut.
+
+    Both halves matter and the second one is why this function exists.
+
+    Cutting mid-token produces text no reader can interpret. A real run ended a
+    file on `if sale is None or sale.company_id != compa` and the model, doing
+    exactly what it was asked, reported the ownership check as missing. The
+    line boundary alone would still have removed the check -- what stops the
+    false accusation is the marker, which says the file continues, plus the
+    system prompt's rule that absence in a truncated file proves nothing.
+
+    The marker is deliberately not code and not a comment in any language it
+    might appear in, so a model that quotes it as evidence fails verification
+    (the string is not in the real file) rather than smuggling it into a
+    finding.
+    """
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = head.rfind("\n")
+    if cut > 0:
+        head = head[:cut]
+    # Counted as lines rather than as newlines in the remainder: the newline
+    # that ends the last KEPT line lives at the head of that remainder, so
+    # counting separators there reports one withheld line too many.
+    hidden = len(text.splitlines()) - len(head.splitlines())
+    return f"{head}\n{TRUNCATION_MARKER.format(n=hidden)}"
+
+
 def select_files(files: list[tuple[str, str]], rubric: str) -> list[tuple[str, str]]:
     """Files matching the rubric: most relevant first, then breadth.
 
@@ -682,7 +758,7 @@ def select_files(files: list[tuple[str, str]], rubric: str) -> list[tuple[str, s
     kw = RUBRICS[rubric]["keywords"]
     lives_in = RUBRICS[rubric].get("lives_in", BEHAVIOUR)
     matched = [
-        (n, t[:MAX_FILE_CHARS]) for n, t in files
+        (n, truncate_at_line(t, MAX_FILE_CHARS)) for n, t in files
         if kw.search(n) or kw.search(t)
     ]
 

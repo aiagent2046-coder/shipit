@@ -38,7 +38,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "166cf5c5f8af1f63"
+PROMPT_FINGERPRINT = "cd3b7a59803e0470"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -782,6 +782,14 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         str(llm_scan.RELEVANCE_BUDGET_SHARE),
         inspect.getsource(llm_scan.relevance),
         inspect.getsource(llm_scan.select_files),
+        # How a file that does not fit is cut, and what the cut says. Added
+        # after an off-by-one in the withheld-line count changed the text the
+        # model reads and this guard stayed silent: MAX_FILE_CHARS was in the
+        # surface, so the cap was watched, while the function applying it was
+        # not. Anything that decides the CHARACTERS in the prompt belongs here,
+        # not only the constants that bound them.
+        llm_scan.TRUNCATION_MARKER,
+        inspect.getsource(llm_scan.truncate_at_line),
     ])
     fingerprint = hashlib.sha256(surface.encode("utf-8")).hexdigest()[:16]
 
@@ -1293,3 +1301,61 @@ def test_the_prompt_offers_exactly_the_rubric_categories():
     # Static-only categories must not be on offer.
     for category in set(CATEGORIES) - set(llm_scan.RUBRIC_CATEGORIES):
         assert f'"{category}"' not in SYSTEM_PROMPT
+
+
+# --- truncation must not read as absence ---
+#
+# MAX_FILE_CHARS used to slice a file with t[:cap], mid-token, with nothing to
+# say the file continued. On a real CRM that ended sales_kpi_board.py on
+#
+#     629    if sale is None or sale.company_id != compa
+#
+# and the engine reported "Manual sale payment patch missing ownership check"
+# against a handler whose check the cut had removed. It was the only auth false
+# positive in that run, and the engine manufactured it.
+
+
+def test_truncation_cuts_on_a_line_boundary():
+    text = "".join(f"line {i} padding padding\n" for i in range(400))
+    out = llm_scan.truncate_at_line(text, 1_000)
+
+    body, marker = out.rsplit("\n", 1)
+    assert marker.startswith("[... truncated:")
+    # No half-line survives: every line kept is a line the file really has.
+    assert all(f"{ln}\n" in text for ln in body.splitlines())
+
+
+def test_truncation_reports_how_many_lines_were_withheld():
+    text = "".join(f"line {i}\n" for i in range(100))
+    out = llm_scan.truncate_at_line(text, 200)
+
+    kept = len(out.splitlines()) - 1          # minus the marker line
+    withheld = int(re.search(r"truncated: (\d+) more", out).group(1))
+    assert kept + withheld == len(text.splitlines())
+
+
+def test_a_file_within_the_cap_is_untouched():
+    text = "a\nb\nc\n"
+    assert llm_scan.truncate_at_line(text, 1_000) == text
+    assert "truncated" not in llm_scan.truncate_at_line(text, 1_000)
+
+
+def test_selected_files_carry_the_marker_when_cut():
+    big = ("api/auth/session.ts", "const token = 1  // session\n" * 6_000)
+    selected = dict(select_files([big], "auth"))
+
+    sent = selected["api/auth/session.ts"]
+    assert len(sent) <= llm_scan.MAX_FILE_CHARS + len(llm_scan.TRUNCATION_MARKER) + 16
+    assert "[... truncated:" in sent
+
+
+def test_the_marker_fails_verification_rather_than_becoming_evidence():
+    """A model that quotes the marker must be discarded, not believed."""
+    files = {"src/auth.ts": VULN_TS}
+    quoted = llm_scan.TRUNCATION_MARKER.format(n=120)
+    assert not verify_finding(valid_finding(evidence=quoted), files)
+
+
+def test_the_prompt_forbids_concluding_absence_from_a_truncated_file():
+    assert "truncation marker" in SYSTEM_PROMPT
+    assert "MISSING" in SYSTEM_PROMPT
