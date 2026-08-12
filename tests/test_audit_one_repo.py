@@ -47,7 +47,7 @@ def tree(tmp_path: Path) -> Path:
     # of the file -- without it this test asserts "0 findings printed with a
     # location", which passes on a runner that prints nothing at all.
     (root / ".env.example").write_text(
-        "DATABASE_URL=postgres://user:password@localhost/db\n")  # scan-allow: literal placeholder, the input this test scans for
+        "DATABASE_URL=postgres://user:password@localhost/db\n")  # scan-allow: placeholder
     return root
 
 
