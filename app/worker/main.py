@@ -76,6 +76,7 @@ from app.main import (  # noqa: E402  -- see comment above
     _emergency_stop_active,
     _parse_github_repo_url,
     _record_llm_usage,
+    _alert_llm_stage_failed,
     _run_scan_offthread,
 )
 
@@ -327,6 +328,10 @@ async def _execute_job(
 
     scan = await _run_scan_offthread(
         raw, llm_client, llm_skip_reason=llm_skip_reason)
+
+    # The audit still finalises as succeeded; the operator is the only one
+    # who can act, and until now nothing told them. See _alert_llm_stage_failed.
+    await _alert_llm_stage_failed(scan["llm"])
 
     # Everything from here on is bookkeeping over money that is already spent:
     # the scan above made the provider calls. Whether this attempt goes on to
