@@ -1359,3 +1359,22 @@ def test_the_marker_fails_verification_rather_than_becoming_evidence():
 def test_the_prompt_forbids_concluding_absence_from_a_truncated_file():
     assert "truncation marker" in SYSTEM_PROMPT
     assert "MISSING" in SYSTEM_PROMPT
+
+
+def test_the_verifier_accepts_a_wrong_conclusion_about_real_code():
+    """The scope of `discarded`, asserted so it stops being read as quality.
+
+    Both false positives found by hand in real runs quoted real lines
+    accurately and concluded something untrue about them. verify_finding
+    measures whether the quoted code EXISTS, so it passes them -- correctly,
+    because that is the question it answers. Anyone reading discarded == 0 as
+    "the findings are right" is reading a different number than the one being
+    reported.
+    """
+    files = {"src/auth.ts": VULN_TS}
+    nonsense = valid_finding(
+        title="This line mines cryptocurrency",
+        explanation="It does not. The evidence below is real all the same.",
+    )
+
+    assert verify_finding(nonsense, files)

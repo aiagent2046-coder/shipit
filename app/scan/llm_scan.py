@@ -619,6 +619,23 @@ class LLMScanStats:
     prompts: int = 0
     raw_findings: int = 0
     verified: int = 0
+    # Findings rejected by verify_finding, which measures ONE thing: whether
+    # the code the model quoted exists as quoted. File present, line range
+    # sane, evidence verbatim inside the cited window, severity and confidence
+    # well-formed. It is an anti-hallucination gate and nothing else.
+    #
+    # So `discarded` is not a quality signal, and reading it as one is a
+    # mistake this project made for three runs. Measured: 0 discarded across
+    # three real audits, while hand-verification of the same runs found two
+    # false positives -- sales_kpi_board.py:618 (manufactured by our own
+    # head-first truncation, since fixed) and integrations.py:92 (a correct
+    # constant-time guard reported as a defect). Both quoted real lines
+    # accurately and drew a wrong conclusion from them. Nothing here can see
+    # that, and no cheap check can: judging a conclusion needs the reasoning,
+    # not the coordinates.
+    #
+    # discarded == 0 therefore means "the model did not invent code", which is
+    # worth knowing and is not the same as "the findings are right".
     discarded: int = 0
     # Findings dropped because their own fix_hint said there was nothing to
     # do. Separate from `discarded` on purpose: that one counts claims about
