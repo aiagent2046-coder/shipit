@@ -749,3 +749,63 @@ def test_skipped_findings_show_their_title_not_only_a_rule_id():
     body = render_pr_body(_mixed_findings_plan())
 
     assert "Hardcoded API secret in source code — `action_service.py`:17" in body
+
+
+# --- a Fix Pack may not claim a secret is gone while it is still there ---
+#
+# The measured incident: a customer's key lived in .env AND verbatim in two
+# source files. The Fix Pack untracked .env, titled itself "secure repository
+# configuration", and left both copies. One of three, reported as success.
+
+
+def _secret_in_three_places_plan():
+    # Not secret-SHAPED: CI scans added lines, and a realistic key here would
+    # fail the build exactly as a live one would. The check keys on length,
+    # not on a provider pattern, so a long placeholder exercises it honestly.
+    value = "fake-value-hunter2-padded-to-length"
+    zip_bytes = make_zip({
+        ".env": f"OPENCLAW_API_KEY={value}\nSSH_PORT=3333\nSSH_USER=root\n",
+        "action_service.py": f'OPENCLAW_API_KEY = "{value}"\n',
+        # Contains the SHORT dotenv values and nothing secret. Without the
+        # length threshold this file is reported as harbouring a survivor,
+        # which is how a real finding gets buried under noise.
+        "config.py": 'USER = "root"\nPORT = 3333\n',
+        "app.py": "print('hi')\n",
+    })
+    findings = [finding(rule_id="env-file-committed", file=".env", line=0)]
+    return build_fixpack_plan(zip_bytes, findings), value
+
+
+def test_a_surviving_copy_of_the_secret_is_found_and_located():
+    plan, _ = _secret_in_three_places_plan()
+
+    assert plan.surviving_secrets == [("action_service.py", 1)]
+
+
+def test_the_pr_refuses_to_claim_the_secret_was_removed():
+    plan, _ = _secret_in_three_places_plan()
+    body = render_pr_body(plan)
+
+    assert "does NOT remove the secret" in body
+    assert "`action_service.py`:1" in body
+
+
+def test_the_survivor_check_never_prints_the_value():
+    """Coordinates travel, values do not. This PR is a public artefact on a
+    repository whose history has already leaked once."""
+    plan, value = _secret_in_three_places_plan()
+
+    assert value not in render_pr_body(plan)
+    assert value not in render_pr_title(plan)
+    assert all(value not in text for text in plan.files.values())
+
+
+def test_short_config_values_are_not_hunted_as_secrets():
+    """A dotenv holds SSH_PORT=3333 and SSH_USER=root beside the key.
+    Searching the tree for "root" matches every third file and would bury the
+    real survivor in noise."""
+    plan, _ = _secret_in_three_places_plan()
+
+    assert ("config.py", 1) not in plan.surviving_secrets
+    assert ("config.py", 2) not in plan.surviving_secrets
+    assert all(path == "action_service.py" for path, _ in plan.surviving_secrets)
