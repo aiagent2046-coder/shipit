@@ -591,14 +591,15 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
             plan.config_fixes.append(ConfigFix(
                 rule_id="env-file-committed",
                 title="Environment file committed to repository",
+                # Says what was done, nothing more. The warnings that used to
+                # live here — rotate the credentials, and your local copy
+                # disappears on pull — now open the PR body instead. They were
+                # true here and unread here: a bullet under "Configuration
+                # hardening" reads as housekeeping, which is how a customer
+                # merged a real Fix Pack without rotating two live API keys.
                 detail="Untracked "
                        + ", ".join(f"`{c}`" for c in committed)
-                       + " and added it to `.gitignore`. **Copy the current "
-                         "values somewhere safe before you merge** — removing "
-                         "the file from version control also removes it from "
-                         "your working copy when you pull this merge. The "
-                         "values remain in your git history, which is why "
-                         "they must be rotated at their providers.",
+                       + " and added it to `.gitignore`.",
             ))
         else:
             plan.skipped.append(SkippedFinding(
@@ -729,6 +730,28 @@ def render_pr_body(plan: FixpackPlan) -> str:
             for name in plan.leaked_env_vars:
                 parts.append(f"> - `{name}`")
             parts.append(">")
+            # The other half of the harm, and the half a build check cannot
+            # see: this PR untracks the file, so pulling the merge DELETES it
+            # from every working copy — the developer's laptop, and any server
+            # deployed by `git pull`. The app then starts with no credentials.
+            #
+            # Recoverable rather than merely warned about: the values are
+            # still in the customer's own history, so the exact command to get
+            # the file back is safe to hand over. Verified against a real
+            # merged Fix Pack and against both merge styles — a merge commit
+            # and a squash — because a recovery command that does not work is
+            # worse than none.
+            for path in plan.leaked_env_files:
+                parts.append(
+                    f"> **Pulling this merge deletes your local `{path}`.** "
+                    f"Back it up first (`cp {path} {path}.backup`). If you "
+                    "have already merged and lost it, restore it from your "
+                    "own history:\n>"
+                )
+                parts.append(
+                    f"> `git show $(git rev-list -n 1 HEAD -- {path})^:{path}"
+                    f" > {path}`\n>"
+                )
         # De-dup provider guidance so the same provider isn't listed twice.
         seen: set[str] = set()
         for fix in plan.secret_fixes:

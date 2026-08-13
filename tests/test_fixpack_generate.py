@@ -206,7 +206,12 @@ def test_pr_body_does_not_promise_the_env_file_survives_the_merge():
     for whoever runs `git rm --cached` locally and false for the only person
     who reads it — the customer merging our PR. Verified against git: pulling
     the merge deletes their working copy, and because the same commit
-    gitignores the path, `git status` stays clean so the loss is silent."""
+    gitignores the path, `git status` stays clean so the loss is silent.
+
+    The warning moved from a bullet under "Configuration hardening" into the
+    block that opens the PR, so the assertion moved with it and got stricter:
+    it is no longer enough to mention the loss, the body must also carry the
+    command that undoes it."""
     zip_bytes = make_zip({
         ".env": "DATABASE_URL=fake-value-hunter2\n",
         "app.py": "print('hi')\n",
@@ -217,8 +222,11 @@ def test_pr_body_does_not_promise_the_env_file_survives_the_merge():
     body = render_pr_body(plan)
 
     assert "kept on your disk" not in body
-    assert "before you merge" in body
+    assert "deletes your local `.env`" in body
     assert "git history" in body
+    # Recoverable, not merely announced: the values are still in the
+    # customer's own history, so the exact command belongs in the PR.
+    assert "git rev-list -n 1 HEAD -- .env" in body
 
 
 def test_missing_gitignore_case_creates_gitignore():
@@ -643,3 +651,30 @@ def test_no_empty_sections_when_the_only_leak_was_the_env_file():
 
     assert not plan.secret_fixes
     assert "Secrets removed from code" not in body
+
+
+def test_the_recovery_command_is_the_one_that_was_actually_run():
+    """Shipping a recovery command nobody executed is the mistake this whole
+    task exists to stop repeating.
+
+    The literal below was run against a real merged Fix Pack
+    (donjonson-hash/kristina_agent_center, PR #1) and against synthetic
+    repositories for BOTH merge styles -- a merge commit and a squash -- and
+    returned the original file each time. `git rev-list -n 1 HEAD -- <path>`
+    resolves to the commit that removed the file; its parent still has it.
+    """
+    body = render_pr_body(_committed_env_plan())
+
+    assert "git show $(git rev-list -n 1 HEAD -- .env)^:.env > .env" in body
+    # A backup instruction for whoever has NOT merged yet: cheaper than
+    # recovery and the only option if history is ever rewritten.
+    assert "cp .env .env.backup" in body
+
+
+def test_the_local_copy_warning_sits_in_the_opening_block():
+    """Position is the whole point. The same sentence lived in a ConfigFix
+    detail under "Configuration hardening" and was read as housekeeping."""
+    body = render_pr_body(_committed_env_plan())
+
+    assert "Configuration hardening" in body
+    assert body.index("deletes your local") < body.index("Configuration hardening")
