@@ -206,7 +206,12 @@ def test_pr_body_does_not_promise_the_env_file_survives_the_merge():
     for whoever runs `git rm --cached` locally and false for the only person
     who reads it — the customer merging our PR. Verified against git: pulling
     the merge deletes their working copy, and because the same commit
-    gitignores the path, `git status` stays clean so the loss is silent."""
+    gitignores the path, `git status` stays clean so the loss is silent.
+
+    The warning moved from a bullet under "Configuration hardening" into the
+    block that opens the PR, so the assertion moved with it and got stricter:
+    it is no longer enough to mention the loss, the body must also carry the
+    command that undoes it."""
     zip_bytes = make_zip({
         ".env": "DATABASE_URL=fake-value-hunter2\n",
         "app.py": "print('hi')\n",
@@ -217,8 +222,11 @@ def test_pr_body_does_not_promise_the_env_file_survives_the_merge():
     body = render_pr_body(plan)
 
     assert "kept on your disk" not in body
-    assert "before you merge" in body
+    assert "deletes your local `.env`" in body
     assert "git history" in body
+    # Recoverable, not merely announced: the values are still in the
+    # customer's own history, so the exact command belongs in the PR.
+    assert "git rev-list -n 1 HEAD -- .env" in body
 
 
 def test_missing_gitignore_case_creates_gitignore():
@@ -556,3 +564,188 @@ def test_the_filter_reuses_the_scanner_vocabulary():
                     context=context),
         ])
         assert not plan.has_changes, f"{context} still edited"
+
+
+# --- a committed .env is a leak, not tidying ---
+#
+# Reproduces a real paid Fix Pack. The customer's only leak was a committed
+# .env holding two live API keys and a server's SSH details. Because
+# env-file-committed produces a ConfigFix and not a SecretFix, the PR title
+# read "secure repository configuration", the ROTATE block never rendered, and
+# the single sentence about rotation sat mid-bullet under "Configuration
+# hardening". He merged without rotating anything -- and then said the thing
+# that matters: most people would have done the same.
+
+
+def _committed_env_plan():
+    zip_bytes = make_zip({
+        ".env": (
+            "# OpenClaw / DeepSeek API Key\n"
+            "OPENCLAW_API_KEY=sk-live-aaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "MIMO_API_KEY=sk-live-bbbbbbbbbbbbbbbbbbbbbbbb\n"
+            "SSH_HOST=203.0.113.9\n"
+            "SSH_USER=root\n"
+            "SSH_PORT=3333\n"
+        ),
+        "app.py": "print('hi')\n",
+    })
+    findings = [finding(rule_id="env-file-committed", file=".env", line=0)]
+    return build_fixpack_plan(zip_bytes, findings)
+
+
+def test_a_committed_env_puts_rotation_in_the_title():
+    """The title is the one part of a PR nobody scrolls past: it is in the
+    list, the notification subject, the merge commit and the browser tab."""
+    title = render_pr_title(_committed_env_plan())
+
+    assert "rotate" in title.lower()
+    assert ".env" in title
+    assert "before merging" in title
+
+
+def test_a_committed_env_gets_the_loud_rotation_block():
+    body = render_pr_body(_committed_env_plan())
+
+    assert "ROTATE THESE SECRETS BEFORE YOU MERGE" in body
+    # The block must come before the routine hardening section, not after it.
+    if "Configuration hardening" in body:
+        assert body.index("ROTATE") < body.index("Configuration hardening")
+
+
+def test_the_rotation_block_names_the_variables_and_never_their_values():
+    plan = _committed_env_plan()
+    body = render_pr_body(plan)
+
+    for name in ("OPENCLAW_API_KEY", "MIMO_API_KEY", "SSH_HOST"):
+        assert f"`{name}`" in body
+    # Names reach the customer; values never do. The PR is a public artefact
+    # on a repository whose history already leaked once.
+    assert "sk-live-aaaa" not in body
+    assert "sk-live-bbbb" not in body
+    assert "203.0.113.9" not in body
+
+
+def test_the_leaked_names_are_sorted_so_two_runs_agree():
+    """Title and body are part of what a paying customer receives; they must
+    not reorder between two runs over byte-identical content."""
+    plan = _committed_env_plan()
+    assert plan.leaked_env_vars == sorted(plan.leaked_env_vars)
+    assert plan.leaked_env_files == [".env"]
+
+
+def test_no_empty_sections_when_the_only_leak_was_the_env_file():
+    """Caught by rendering the output, not by an assertion.
+
+    "### Secrets removed from code" sat under the same guard as the rotation
+    block, so a repository whose only leak was a committed .env got the
+    heading with nothing beneath it -- which reads like the tool lost track of
+    what it had done, directly under a warning asking to be trusted.
+
+    The first version of this test asserted that no heading is followed by
+    another heading. It passed against the bug, because the empty section was
+    followed by prose rather than by a heading. The mutation survived and said
+    so; this assertion is the one that holds.
+    """
+    plan = _committed_env_plan()
+    body = render_pr_body(plan)
+
+    assert not plan.secret_fixes
+    assert "Secrets removed from code" not in body
+
+
+def test_the_recovery_command_is_the_one_that_was_actually_run():
+    """Shipping a recovery command nobody executed is the mistake this whole
+    task exists to stop repeating.
+
+    The literal below was run against a real merged Fix Pack
+    (donjonson-hash/kristina_agent_center, PR #1) and against synthetic
+    repositories for BOTH merge styles -- a merge commit and a squash -- and
+    returned the original file each time. `git rev-list -n 1 HEAD -- <path>`
+    resolves to the commit that removed the file; its parent still has it.
+    """
+    body = render_pr_body(_committed_env_plan())
+
+    assert "git show $(git rev-list -n 1 HEAD -- .env)^:.env > .env" in body
+    # A backup instruction for whoever has NOT merged yet: cheaper than
+    # recovery and the only option if history is ever rewritten.
+    assert "cp .env .env.backup" in body
+
+
+def test_the_local_copy_warning_sits_in_the_opening_block():
+    """Position is the whole point. The same sentence lived in a ConfigFix
+    detail under "Configuration hardening" and was read as housekeeping."""
+    body = render_pr_body(_committed_env_plan())
+
+    assert "Configuration hardening" in body
+    assert body.index("deletes your local") < body.index("Configuration hardening")
+
+
+# --- the Fix Pack must say what it did NOT do ---
+#
+# A customer paid, watched the PR untrack one .env, and never learned that
+# three CRITICAL findings about a live API key in two source files had been
+# filtered out before planning began. `_is_fixable_rule` accepts only static
+# scanner rule ids, so every llm-* finding was dropped -- not fixed, not
+# skipped, not mentioned. The PR listed its wins; nothing listed its silence.
+
+
+def _mixed_findings_plan():
+    zip_bytes = make_zip({
+        ".env": "OPENCLAW_API_KEY=fake-value-hunter2\n",
+        "action_service.py": "K = 'fake-value-hunter2'\n",
+        "app.py": "print('hi')\n",
+    })
+    findings = [
+        finding(rule_id="env-file-committed", file=".env", line=0,
+                title="Environment file committed to repository"),
+        finding(rule_id="llm-security", file="action_service.py", line=17,
+                title="Hardcoded API secret in source code"),
+        finding(rule_id="llm-auth", file="action_service.py", line=128,
+                title="Unauthenticated endpoint executes arbitrary SSH commands"),
+        finding(rule_id="no-dockerfile", file="", line=0,
+                title="No Dockerfile — app is not containerized"),
+    ]
+    return build_fixpack_plan(zip_bytes, findings)
+
+
+def test_findings_the_pack_cannot_fix_are_listed_not_dropped():
+    plan = _mixed_findings_plan()
+    body = render_pr_body(plan)
+
+    assert "NOT fixed by this pull request" in body
+    for title in ("Hardcoded API secret in source code",
+                  "Unauthenticated endpoint executes arbitrary SSH commands",
+                  "No Dockerfile — app is not containerized"):
+        assert title in body, f"{title!r} vanished from the PR"
+
+
+def test_the_pr_states_how_many_findings_it_left_alone():
+    """A customer counting 15 findings on the report and 1 change in the diff
+    deserves that arithmetic from us, not from their own suspicion."""
+    plan = _mixed_findings_plan()
+    body = render_pr_body(plan)
+
+    assert plan.total_findings == 4
+    assert "**4** findings" in body
+    assert "changes **1**" in body
+    assert "remaining **3**" in body
+
+
+def test_a_deep_review_finding_says_it_is_still_the_owners_to_fix():
+    """The two reasons a finding goes unfixed are not equivalent. "No
+    Dockerfile" has nothing to rewrite. A CRITICAL hardcoded key has plenty,
+    and is left alone by a policy the buyer never agreed to."""
+    body = render_pr_body(_mixed_findings_plan())
+
+    assert "rewrites only findings from the static rules" in body
+    assert "still yours to fix" in body
+    # Shouted on purpose, and .capitalize() would silently lowercase it.
+    assert "NOT changed" in body
+
+
+def test_skipped_findings_show_their_title_not_only_a_rule_id():
+    """`llm-security (action_service.py:17)` tells an owner nothing, and that
+    line was a live API key. The rule id is our vocabulary; the title theirs."""
+    body = render_pr_body(_mixed_findings_plan())
+
+    assert "Hardcoded API secret in source code — `action_service.py`:17" in body

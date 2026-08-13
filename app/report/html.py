@@ -210,17 +210,45 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         # visitor the one thing they came for. What must stay is the honest
         # scope: the note below names what was not examined, and the bars
         # render those categories as unchecked rather than as a perfect 10.
-        og_title = f"Free scan: {total:.1f}/10 over the checks that ran"
+        # ...and then a second repository falsified it. The argument above
+        # rests on one audit, where static-only read 6.1 against 5.4 full: a
+        # small gap, both numbers failing. On donjonson-hash/kristina_agent_
+        # center the same comparison is 9.9 static-only against 4.7 full -- a
+        # gap of 5.2, with the free number reading as a clean bill of health
+        # on a repository that lets an unauthenticated caller run commands as
+        # root over SSH.
+        #
+        # The mechanism that was supposed to prevent this covers Auth, Money &
+        # Data and Frontend, which no longer vote when unexamined. It cannot
+        # cover Security, which BOTH tiers fill: with the static rules finding
+        # only "no Dockerfile", Security read a clean 10.0 -- not because the
+        # repository is clean but because regexes are not where its problems
+        # live. The mean over Security 10.0, Deploy 9.9 and Testing 10.0 is
+        # 9.9, and no confident critical existed to cap it.
+        #
+        # So the headline number goes. The bars stay, the findings stay, the
+        # scope note stays. What a free scan can honestly say is WHAT IT
+        # LOOKED AT AND WHAT IT FOUND, not a mark out of ten -- and the
+        # pricing page has promised exactly that all along ("No readiness
+        # score out of 10"); only the code disagreed.
+        og_title = f"Free scan \u2014 {escape(project_name)}"
         heading = f"Free scan \u2014 {escape(project_name)}"
+        header_left = (
+            f'<div class="noring">{len(findings)}'
+            f'<small>{"finding" if len(findings) == 1 else "findings"}'
+            '</small></div>'
+        )
         tier_note = (
-            '<section><p class="secnote">This score covers what the free '
-            'scan looks at: credentials committed to the repository, a '
-            'committed .env, a .gitignore that misses secret files, missing '
-            'tests, missing CI and no Dockerfile. '
+            '<section><p class="secnote">A free scan does not produce a mark '
+            'out of ten, because it does not look at enough to earn one. It '
+            'checks credentials committed to the repository, a committed '
+            '.env, a .gitignore that misses secret files, missing tests, '
+            'missing CI and no Dockerfile. '
             + _unexamined_sentence(score) +
-            f' Those are left out of the {total:.1f} rather than counted as '
-            'passing, so the number cannot rise for a check we skipped '
-            '\u2014 but it cannot tell you they are fine either.</p></section>'
+            ' Finding nothing in the checks that ran is not the same as '
+            'being sound: on one real repository this scan reported a single '
+            'low finding while a full audit found an unauthenticated endpoint '
+            'running commands as root.</p></section>'
         )
 
     # Split, don't hide. A secret in a test fixture and a secret in a running
@@ -270,6 +298,13 @@ def render_report(result: dict, project_name: str = "your app") -> str:
  .ring{{width:110px;height:110px;border-radius:50%;display:flex;
        align-items:center;justify-content:center;flex-shrink:0;
        border:6px solid {_score_color(total)};font-size:30px;font-weight:700}}
+ /* The free scan's counterpart. Deliberately NOT _score_color: a verdict
+    colour is a verdict, and counting what the checks found is not one. */
+ .noring{{width:110px;height:110px;border-radius:50%;display:flex;
+       flex-direction:column;align-items:center;justify-content:center;
+       flex-shrink:0;border:6px solid #4a4b52;font-size:30px;
+       font-weight:700}}
+ .noring small{{font-size:11px;font-weight:400;color:#8b8d98}}
  h1{{font-size:20px;margin:0 0 4px}} .sub{{color:#8b8d98;font-size:13px}}
  .cat{{display:flex;align-items:center;gap:10px;margin:6px 0}}
  .cat-name{{width:110px;color:#8b8d98;font-size:13px}}

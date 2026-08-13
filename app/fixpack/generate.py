@@ -132,6 +132,11 @@ class SkippedFinding:
     file: str
     line: int
     reason: str
+    # What the finding actually said. Without it the list reads
+    # "llm-security (action_service.py:17)", which tells the owner nothing --
+    # and that line happened to be a live API key. A rule id is our
+    # vocabulary; the title is theirs.
+    title: str = ""
 
 
 @dataclass
@@ -141,6 +146,32 @@ class FixpackPlan:
     secret_fixes: list[SecretFix] = field(default_factory=list)
     config_fixes: list[ConfigFix] = field(default_factory=list)
     skipped: list[SkippedFinding] = field(default_factory=list)
+
+    # A committed .env is a leak, and until now it was filed as tidying.
+    #
+    # `env-file-committed` produces a ConfigFix, so on a repository whose only
+    # leak was a committed .env, secret_fixes stayed empty -- which meant the
+    # PR title read "secure repository configuration", the "ROTATE THESE
+    # SECRETS NOW" block never rendered at all, and the one sentence about
+    # rotation sat mid-bullet under "Configuration hardening", where it reads
+    # like housekeeping. That is exactly backwards: a committed .env usually
+    # holds MORE credentials than a lone hardcoded literal, and it is the
+    # commonest shape of this leak in the repositories this product exists for.
+    #
+    # Seen in production on a paid Fix Pack: two live API keys and a server's
+    # SSH details, and the customer merged without rotating anything. He was
+    # not careless. He was not told.
+    #
+    # Names only, never values -- these reach the PR body, and _env_key_names
+    # discards the right-hand side for that reason.
+    leaked_env_files: list[str] = field(default_factory=list)
+    leaked_env_vars: list[str] = field(default_factory=list)
+
+    # How many findings the audit produced, so the PR can state the fraction
+    # it addressed instead of only enumerating its wins. A customer counting
+    # 15 findings on the report and 1 change in the pull request deserves that
+    # arithmetic from us rather than from their own suspicion.
+    total_findings: int = 0
 
     @property
     def has_changes(self) -> bool:
@@ -364,6 +395,26 @@ def _is_fixable_rule(finding: dict) -> bool:
     return finding.get("rule_id") in (SECRET_RULE_IDS | _CHECK_RULE_IDS)
 
 
+def _why_not_fixable(finding: dict) -> str:
+    """Why this finding gets no code change, in the customer's terms.
+
+    Two very different reasons wear the same "not fixable" flag, and telling
+    them apart is the whole point of showing this at all. "No Dockerfile" has
+    nothing to rewrite and needs no apology. A CRITICAL hardcoded key found by
+    the deep review has plenty to rewrite and is left alone by a deliberate
+    policy the buyer never agreed to -- that one is a limitation to disclose,
+    not a non-event.
+    """
+    rule_id = str(finding.get("rule_id", ""))
+    if rule_id.startswith("llm-"):
+        return (
+            "Found by the deep review. This Fix Pack rewrites only findings "
+            "from the static rules, so these are reported and NOT changed — "
+            "they are still yours to fix."
+        )
+    return "Advisory findings: there is nothing in the code to rewrite."
+
+
 def _is_production_code(finding: dict) -> bool:
     """Is it somewhere worth rewriting? See the note in build_fixpack_plan:
     editing a comment, a doc example or a test fixture buys no security."""
@@ -421,9 +472,22 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     #
     # They stay in the report -- damped, as #125 left them. Noticing something
     # and declining to rewrite it automatically is not the same as hiding it.
+    plan.total_findings = len(findings)
     eligible = []
     for f in findings:
         if not _is_fixable_rule(f):
+            # Recorded, not dropped. Silently discarding these is how a
+            # customer paid for a Fix Pack, watched it untrack one .env, and
+            # never learned that three CRITICAL findings about a live API key
+            # in two source files had been filtered out before planning even
+            # began. The PR listed what it did; nothing listed what it did not.
+            plan.skipped.append(SkippedFinding(
+                rule_id=f.get("rule_id", ""),
+                file=_repo_relative(f.get("file", "")),
+                line=f.get("line", 0),
+                reason=_why_not_fixable(f),
+                title=str(f.get("title") or ""),
+            ))
             continue
         context = f.get("context")
         if not _is_production_code(f):
@@ -558,6 +622,11 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                 entry = _find_entry(raw_names, env_path)
                 if entry:
                     untracked_env_names |= _env_key_names(contents.get(entry, ""))
+            # Sorted, because the PR title and body are part of what a paying
+            # customer receives and must not reorder between two runs over
+            # byte-identical content.
+            plan.leaked_env_files = sorted(committed)
+            plan.leaked_env_vars = sorted(untracked_env_names)
             # A committed .env re-appears on the next `git add` without an
             # ignore rule, so untracking without this is a half-fix.
             for p in (".env",):
@@ -566,14 +635,15 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
             plan.config_fixes.append(ConfigFix(
                 rule_id="env-file-committed",
                 title="Environment file committed to repository",
+                # Says what was done, nothing more. The warnings that used to
+                # live here — rotate the credentials, and your local copy
+                # disappears on pull — now open the PR body instead. They were
+                # true here and unread here: a bullet under "Configuration
+                # hardening" reads as housekeeping, which is how a customer
+                # merged a real Fix Pack without rotating two live API keys.
                 detail="Untracked "
                        + ", ".join(f"`{c}`" for c in committed)
-                       + " and added it to `.gitignore`. **Copy the current "
-                         "values somewhere safe before you merge** — removing "
-                         "the file from version control also removes it from "
-                         "your working copy when you pull this merge. The "
-                         "values remain in your git history, which is why "
-                         "they must be rotated at their providers.",
+                       + " and added it to `.gitignore`.",
             ))
         else:
             plan.skipped.append(SkippedFinding(
@@ -636,13 +706,35 @@ def _plural(n: int, singular: str, plural: str | None = None) -> str:
 
 
 def render_pr_title(plan: FixpackPlan) -> str:
+    """The title names what the CUSTOMER must still do, not what we did.
+
+    We already removed the secret; that half is finished the moment the PR
+    exists. The half that is not finished is rotation, and the title is the
+    one piece of a pull request nobody can scroll past -- it is in the list,
+    in the notification email's subject, in the merge commit, in the browser
+    tab. A production Fix Pack proved the body is not enough: the loud block
+    was there for hardcoded secrets and absent for a committed .env, and the
+    customer merged without rotating.
+
+    No count for the .env case on purpose. A dotenv file holds
+    SSH_PORT beside MIMO_API_KEY, and calling six variables "six leaked
+    credentials" is a number we cannot stand behind. The file is named
+    instead, and the variable names are listed in the body so the reader
+    decides which of them are secret.
+    """
     n_sec = len(plan.secret_fixes)
-    has_cfg = bool(plan.config_fixes)
-    if n_sec and has_cfg:
-        return (f"Drydock Fix Pack: remove {n_sec} hardcoded "
-                f"{_plural(n_sec, 'secret')} and secure repo config")
+    leaked = plan.leaked_env_files
+    where = ", ".join(f"`{f}`" for f in leaked)
+
+    if n_sec and leaked:
+        return (f"Drydock Fix Pack: rotate {n_sec} hardcoded "
+                f"{_plural(n_sec, 'secret')} and everything in {where} "
+                f"before merging")
+    if leaked:
+        return f"Drydock Fix Pack: rotate the credentials in {where} before merging"
     if n_sec:
-        return f"Drydock Fix Pack: remove {n_sec} hardcoded {_plural(n_sec, 'secret')}"
+        return (f"Drydock Fix Pack: rotate {n_sec} hardcoded "
+                f"{_plural(n_sec, 'secret')} before merging")
     return "Drydock Fix Pack: secure repository configuration"
 
 
@@ -656,16 +748,54 @@ def render_pr_body(plan: FixpackPlan) -> str:
         "Nothing is merged until you press merge.\n"
     )
 
-    if plan.secret_fixes:
+    if plan.secret_fixes or plan.leaked_env_files:
         parts.append(
-            "> ## ⚠️ ROTATE THESE SECRETS NOW\n"
+            "> ## ⚠️ ROTATE THESE SECRETS BEFORE YOU MERGE\n"
             "> Removing a secret from the code does **NOT** make it safe. "
             "Every value below has already been committed to your git "
             "history and must be treated as **compromised**. Deleting it "
             "here does not invalidate it — you MUST rotate/revoke each one "
             "at its provider, or an attacker who already has it keeps full "
-            "access:\n>"
+            "access.\n>"
         )
+        # Before, not after. Between merging and rotating, the credential is
+        # still live and now easier to find: this PR's own diff shows every
+        # removed line in plain text, which is also why a secret-scanning
+        # check on your repository may go red on this commit.
+        if plan.leaked_env_files:
+            where = ", ".join(f"`{f}`" for f in plan.leaked_env_files)
+            parts.append(
+                f"> **{where} was committed to git.** Everything it defined "
+                "is public to anyone who can read this repository's history, "
+                "and stays public after this PR is merged — deleting a file "
+                "does not remove it from earlier commits. Rotate every one of "
+                "these that is a credential:\n>"
+            )
+            for name in plan.leaked_env_vars:
+                parts.append(f"> - `{name}`")
+            parts.append(">")
+            # The other half of the harm, and the half a build check cannot
+            # see: this PR untracks the file, so pulling the merge DELETES it
+            # from every working copy — the developer's laptop, and any server
+            # deployed by `git pull`. The app then starts with no credentials.
+            #
+            # Recoverable rather than merely warned about: the values are
+            # still in the customer's own history, so the exact command to get
+            # the file back is safe to hand over. Verified against a real
+            # merged Fix Pack and against both merge styles — a merge commit
+            # and a squash — because a recovery command that does not work is
+            # worse than none.
+            for path in plan.leaked_env_files:
+                parts.append(
+                    f"> **Pulling this merge deletes your local `{path}`.** "
+                    f"Back it up first (`cp {path} {path}.backup`). If you "
+                    "have already merged and lost it, restore it from your "
+                    "own history:\n>"
+                )
+                parts.append(
+                    f"> `git show $(git rev-list -n 1 HEAD -- {path})^:{path}"
+                    f" > {path}`\n>"
+                )
         # De-dup provider guidance so the same provider isn't listed twice.
         seen: set[str] = set()
         for fix in plan.secret_fixes:
@@ -675,12 +805,17 @@ def render_pr_body(plan: FixpackPlan) -> str:
             parts.append(f"> - **Rotate at {fix.rotate_where}**")
         parts.append("")
 
-        parts.append("### Secrets removed from code\n")
-        for fix in plan.secret_fixes:
-            parts.append(
-                f"- **{fix.title}** in `{fix.file}` — replaced with a "
-                f"reference to the `{fix.env_var}` environment variable."
-            )
+        # Guarded separately from the block above: a repository whose only
+        # leak is a committed .env has no hardcoded secrets, and printing an
+        # empty "Secrets removed from code" heading under a warning about
+        # leaked credentials reads like the tool lost track of what it did.
+        if plan.secret_fixes:
+            parts.append("### Secrets removed from code\n")
+            for fix in plan.secret_fixes:
+                parts.append(
+                    f"- **{fix.title}** in `{fix.file}` — replaced with a "
+                    f"reference to the `{fix.env_var}` environment variable."
+                )
         parts.append(
             "\nThe substituted variables were added to `.env.example` with a "
             "`changeme` placeholder. Set the **new, rotated** values in your "
@@ -694,11 +829,33 @@ def render_pr_body(plan: FixpackPlan) -> str:
         parts.append("")
 
     if plan.skipped:
-        parts.append("### Skipped\n")
+        # Named for what it is. It used to say "Skipped", which reads like
+        # housekeeping we did on your behalf; these are findings from the
+        # audit you paid for that this pull request leaves entirely to you.
+        parts.append("### NOT fixed by this pull request\n")
+        if plan.total_findings:
+            changed = plan.total_findings - len(plan.skipped)
+            parts.append(
+                f"Your audit reported **{plan.total_findings}** findings. "
+                f"This pull request changes **{changed}** of them. The "
+                f"remaining **{len(plan.skipped)}** are listed below, "
+                "unchanged, so you can see exactly what is still open:\n"
+            )
+        # Grouped by reason, because the reason is shared and the findings are
+        # not. Repeating one long sentence under every bullet buries the
+        # titles, which are the only part of this list a reader needs.
+        by_reason: dict[str, list[SkippedFinding]] = {}
         for s in plan.skipped:
-            where = f" (`{s.file}`" + (f":{s.line}" if s.line else "") + ")" if s.file else ""
-            parts.append(f"- `{s.rule_id}`{where}: {s.reason}")
-        parts.append("")
+            by_reason.setdefault(s.reason, []).append(s)
+        for reason, group in by_reason.items():
+            # Not .capitalize(): it lowercases everything after the first
+            # character, and the reason deliberately shouts one word.
+            parts.append(f"**{reason}**\n")
+            for s in group:
+                where = f"`{s.file}`" + (f":{s.line}" if s.line else "")
+                head = s.title or f"`{s.rule_id}`"
+                parts.append(f"- {head}" + (f" — {where}" if s.file else ""))
+            parts.append("")
 
     parts.append(
         "---\nMerge is entirely up to you. Review the diff, rotate any "

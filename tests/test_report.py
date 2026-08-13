@@ -218,27 +218,40 @@ def test_migration_findings_stay_in_the_production_section():
     assert "In tests, examples and documentation" not in html
 
 
-def test_free_scan_publishes_its_score_with_the_scope_declared():
-    """The free tier used to publish no number, because the score ROSE when
+def test_free_scan_publishes_no_mark_out_of_ten():
+    """This test asserted the opposite until a second repository settled it.
+
+    The free tier first published no number, because the score ROSE when
     fewer checks ran: 7.2 with the auth and injection rubrics on audit
-    ed402e63, 9.1 without them.
+    ed402e63, 9.1 without them. The number came back once unexamined
+    categories stopped voting and one confident critical could cap the total
+    -- recomputed on that same audit, 5.4 full against 6.1 static-only: a 0.7
+    gap, both failing.
 
-    That mechanism is gone. Unexamined categories no longer vote on the mean,
-    and one confident critical caps it -- something the free static rules can
-    trigger alone. Recomputed on that same audit under today's engine: 5.4
-    full against 6.1 static-only, a 0.7 gap in the same direction, both inside
-    the failing band.
+    That reasoning rested on one repository. On kristina_agent_center the same
+    comparison is 9.9 static-only against 4.7 full, a gap of 5.2, with the
+    free number reading as a clean bill of health on a codebase that lets an
+    unauthenticated caller run commands as root over SSH. The protection
+    covers Auth, Money & Data and Frontend; it cannot cover Security, which
+    both tiers fill -- with the static rules finding only "no Dockerfile",
+    Security read 10.0 and carried the mean.
 
-    So the number is shown. What must travel with it is the scope: this test
-    fails if the score appears without a statement of what nothing looked at.
+    So: no mark out of ten from a scan that cannot earn one. What the free
+    report shows is what it looked at and what it found. The scope
+    requirement did not go away -- it is asserted below exactly as before.
     """
     r = result([_finding()])
     r["score"]["basis"] = "static_only"
     r["score"]["unexamined"] = ["Auth", "Money & Data"]
     html = render_report(r)
 
-    assert "6.4" in html
-    assert 'class="ring"' in html
+    assert 'class="ring"' not in html, "the headline score ring is back"
+    assert 'class="noring"' in html
+    # The whole claim, not a fragment of it: asserting "out of ten" passed
+    # against a mutation that flipped the sentence to "produces a summary out
+    # of ten". A substring is not a statement.
+    assert "does not produce a mark out of ten" in html
+    # Scope still travels with the report, which is what mattered all along.
     assert "Auth" in html and "Money &amp; Data" in html
     assert "Nothing here examined" in html
 
