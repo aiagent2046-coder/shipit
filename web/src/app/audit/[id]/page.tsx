@@ -164,11 +164,30 @@ function AuditPageInner() {
           <div className="rounded-xl border border-border bg-elevated p-5 sm:p-6">
             <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <ScoreRing total={view.score.total} />
-                {!scored && (
-                  <p className="mt-2 text-sm text-muted">
-                    Free scan — scored over the checks below
-                  </p>
+                {/* No mark out of ten from a scan that cannot earn one.
+                    The premise for showing it — that a static-only total
+                    stays close to the full one — held on the audit it was
+                    measured on and broke on the next: 9.9 static-only against
+                    4.7 full, on a repository with an unauthenticated endpoint
+                    running commands as root. Security is filled by both
+                    tiers, so it reads a clean 10.0 when only regexes looked,
+                    and carries the mean. The bars and the findings stay; the
+                    verdict goes. */}
+                {scored ? (
+                  <ScoreRing total={view.score.total} />
+                ) : (
+                  <div>
+                    <p className="text-3xl font-semibold">
+                      {view.findings.length}
+                      <span className="ml-2 text-sm font-normal text-muted">
+                        {view.findings.length === 1 ? "finding" : "findings"}
+                      </span>
+                    </p>
+                    <p className="mt-2 text-sm text-muted">
+                      Free scan — no score out of 10, because it does not look
+                      at enough to give one. What it checked is below.
+                    </p>
+                  </div>
                 )}
               </div>
               <div className="text-sm text-muted">
@@ -184,7 +203,12 @@ function AuditPageInner() {
                     </span>
                   </p>
                 )}
-                {scored && view.score.basis && (
+                {/* Was `scored && …`, which hid the basis on exactly the
+                    audits where it is the caveat: a static-only scan showed
+                    no basis line at all, while a full one advertised
+                    "static+llm". Backwards. The scope of a score belongs
+                    beside it whichever scope it had. */}
+                {view.score.basis && (
                   <p>
                     basis:{" "}
                     <span className="font-mono text-text">
