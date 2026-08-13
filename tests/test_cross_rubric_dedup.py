@@ -150,3 +150,60 @@ def test_line_window_boundary():
              title="Same issue"),
     ])
     assert len(past_edge) == 2
+
+
+# --- position beats prose ---
+#
+# Two pairs reached a paying customer's report twice each, because the merge
+# required similar titles and these scored 0.317 and 0.352 against a 0.5 gate.
+# Measured on the same scale: the pair the threshold exists to KEEP APART
+# scores 0.588 -- higher than both that had to join. No threshold separates
+# the classes, so the gate moved to position.
+
+
+def _f(**kw):
+    base = dict(rule_id="llm-auth", title="t", severity="high", confidence=0.9,
+                category="Auth", file="api.py", line=10, masked="", explanation="",
+                fix_hint="", context=None)
+    base.update(kw)
+    return ScoredFinding(**base)
+
+
+def test_two_rubrics_on_the_same_line_collapse_however_they_word_it():
+    out = dedup_cross_rubric([
+        _f(rule_id="llm-security", line=128, severity="high",
+           title="No authentication on action execution endpoint"),
+        _f(rule_id="llm-auth", line=128, severity="critical",
+           title="Unauthenticated endpoint executes arbitrary SSH commands"),
+    ])
+
+    assert len(out) == 1
+    assert out[0].severity == "critical"      # most severe survives
+
+
+def test_the_merged_finding_carries_the_other_wording():
+    """Merging on position alone can join two different issues that share a
+    line. The survivor must carry what the other said, or the second issue
+    leaves no trace at all."""
+    out = dedup_cross_rubric([
+        _f(rule_id="llm-auth", line=128, severity="critical",
+           title="Unauthenticated endpoint executes arbitrary SSH commands"),
+        _f(rule_id="llm-security", line=128, severity="high",
+           title="No rate limit on the action endpoint"),
+    ])
+
+    assert len(out) == 1
+    assert "No rate limit on the action endpoint" in out[0].explanation
+    assert "security review" in out[0].explanation
+
+
+def test_a_nearby_line_still_needs_the_titles_to_agree():
+    """The window exists for one statement spanning several lines, where the
+    titles genuinely are alike. Widening it to bare adjacency would merge
+    neighbours that have nothing to do with each other."""
+    out = dedup_cross_rubric([
+        _f(rule_id="llm-auth", line=46, title="Session cookie set without Secure"),
+        _f(rule_id="llm-security", line=48, title="Shell command built by string concatenation"),
+    ])
+
+    assert len(out) == 2

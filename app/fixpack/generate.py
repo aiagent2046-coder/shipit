@@ -173,6 +173,11 @@ class FixpackPlan:
     # arithmetic from us rather than from their own suspicion.
     total_findings: int = 0
 
+    # (path, line) for every place a secret this plan removed still survives
+    # in the tree it is about to deliver. Coordinates only — the values that
+    # produced them never leave _surviving_occurrences.
+    surviving_secrets: list[tuple[str, int]] = field(default_factory=list)
+
     @property
     def has_changes(self) -> bool:
         return bool(self.files or self.deletions)
@@ -395,6 +400,54 @@ def _is_fixable_rule(finding: dict) -> bool:
     return finding.get("rule_id") in (SECRET_RULE_IDS | _CHECK_RULE_IDS)
 
 
+# Below this length a dotenv value is not a credential, it is configuration.
+# A committed .env holds SSH_PORT=3333, SSH_USER=root and LOG_LEVEL=debug
+# beside the API key, and searching the tree for "root" matches every third
+# file. 16 characters keeps sk-295ca99ac1e74ad7a8db90d4e84a1145 (35) and drops
+# 195.245.112.66 (14), which is an address rather than a secret.
+_MIN_SECRET_VALUE_CHARS = 16
+
+
+def _env_values(body: str) -> set[str]:
+    """Credential-shaped values in a dotenv body. Held in memory only.
+
+    The counterpart to _env_key_names, and the reason that one exists: names
+    reach the customer's PR, values must not. Nothing here is stored on the
+    plan or rendered — these strings are used to search the resulting tree and
+    then dropped with the frame.
+    """
+    values: set[str] = set()
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        value = line.split("=", 1)[1].strip().strip("'\"")
+        if len(value) >= _MIN_SECRET_VALUE_CHARS:
+            values.add(value)
+    return values
+
+
+def _surviving_occurrences(
+    values: set[str], tree: dict[str, str],
+) -> list[tuple[str, int]]:
+    """Where a secret the plan removed from one place still lives in another.
+
+    The invariant this serves: a Fix Pack must not report success on a secret
+    while the same value remains in the tree it is about to deliver. It did,
+    once, for a paying customer -- the key was untracked out of .env and left
+    verbatim in two source files, under a pull request titled "secure
+    repository configuration".
+
+    Returns coordinates only. The value never leaves this function.
+    """
+    hits: list[tuple[str, int]] = []
+    for path in sorted(tree):
+        for number, line in enumerate(tree[path].splitlines(), start=1):
+            if any(v in line for v in values):
+                hits.append((path, number))
+    return hits
+
+
 def _why_not_fixable(finding: dict) -> str:
     """Why this finding gets no code change, in the customer's terms.
 
@@ -613,6 +666,9 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     # customer's working copy on pull, and a key that lived only there would
     # otherwise vanish with no record that the app ever needed it.
     untracked_env_names: set[str] = set()
+    # Values, not names, and deliberately local: they are used to search the
+    # tree this plan will deliver and never reach the plan or the PR.
+    known_secret_values: set[str] = set()
 
     if "env-file-committed" in check_rule_ids:
         committed = find_committed_env_files(files_list)
@@ -627,6 +683,10 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
             # byte-identical content.
             plan.leaked_env_files = sorted(committed)
             plan.leaked_env_vars = sorted(untracked_env_names)
+            for env_path in committed:
+                entry = _find_entry(raw_names, env_path)
+                if entry:
+                    known_secret_values |= _env_values(contents.get(entry, ""))
             # A committed .env re-appears on the next `git add` without an
             # ignore rule, so untracking without this is a half-fix.
             for p in (".env",):
@@ -697,6 +757,29 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
         if additions:
             new_example = _append_missing(example_body, additions)
             plan.files[".env.example"] = new_example
+
+    # --- The post-condition: does a secret we removed still live somewhere? --
+    #
+    # Built against the tree this plan WILL deliver, not the one it was given:
+    # originals, with plan.files applied over them and plan.deletions taken
+    # out. Anything found here is a value the customer is about to be told was
+    # dealt with, sitting in a file the pull request does not touch.
+    #
+    # Not a reason to refuse delivery. Refusing leaves the customer with no
+    # fix AND the same exposure; the untracking and the .gitignore are still
+    # worth having. It is a reason to stop CLAIMING, which is what the PR body
+    # does with this list.
+    if known_secret_values:
+        delivered: dict[str, str] = {}
+        for name, text in contents.items():
+            rel = _repo_relative(name)
+            if rel in plan.deletions:
+                continue
+            delivered[rel] = plan.files.get(rel, text)
+        for rel, text in plan.files.items():
+            delivered.setdefault(rel, text)
+        plan.surviving_secrets = _surviving_occurrences(
+            known_secret_values, delivered)
 
     return plan
 
@@ -796,6 +879,23 @@ def render_pr_body(plan: FixpackPlan) -> str:
                     f"> `git show $(git rev-list -n 1 HEAD -- {path})^:{path}"
                     f" > {path}`\n>"
                 )
+
+    if plan.surviving_secrets:
+        # The claim this pull request is NOT allowed to make. A real Fix Pack
+        # untracked a .env and titled itself "secure repository configuration"
+        # while the same key sat verbatim in two source files it never touched.
+        where = "\n".join(
+            f"> - `{path}`:{line}" for path, line in plan.surviving_secrets)
+        parts.append(
+            "> ### ⛔ This pull request does NOT remove the secret\n"
+            "> At least one value it takes out of one place is still present, "
+            "unchanged, in code this pull request does not modify. Removing "
+            "it from a single file therefore changes nothing about the "
+            "exposure — rotation is the only thing that does:\n>\n"
+            f"{where}\n>"
+        )
+
+    if plan.secret_fixes or plan.leaked_env_files:
         # De-dup provider guidance so the same provider isn't listed twice.
         seen: set[str] = set()
         for fix in plan.secret_fixes:

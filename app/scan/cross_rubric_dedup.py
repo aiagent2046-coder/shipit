@@ -58,14 +58,44 @@ def _title_ratio(a: str, b: str) -> float:
 
 
 def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
-    """Both signals required (AND): near in the file AND about the same
-    thing. Same-line (distance 0) is included, keeping the old exact-line
-    behavior as the trivial subset of this one condition."""
-    return (
-        anchor.file == f.file
-        and abs(anchor.line - f.line) <= _NEARBY_LINE_WINDOW
-        and _title_ratio(anchor.title, f.title) >= _TITLE_SIMILARITY_THRESHOLD
-    )
+    """Same line is enough. A nearby line additionally needs similar titles.
+
+    Requiring title similarity everywhere was measured and does not work. On a
+    paying customer's report two pairs reached the reader twice each, and the
+    ratios explain why the gate never fired:
+
+        0.317  "Command injection via unsanitised user-controlled parameter"
+               vs "User-controlled input interpolated into SSH shell commands"
+        0.352  "Unauthenticated endpoint executes arbitrary SSH commands"
+               vs "No authentication on action execution endpoint"
+        0.535  the pair this threshold was calibrated to MERGE
+        0.588  a same-place-but-distinct pair that must NOT merge
+
+    The classes are interleaved: the pair that must stay apart scores higher
+    than both that must join. No threshold separates them, so the signal is
+    wrong rather than the constant, and lowering it would only merge more of
+    the wrong things.
+
+    What does separate them is position. Two rubrics anchoring to the SAME
+    line are looking at one place in one file, and two prompts over
+    overlapping files reaching the same line is the ordinary way one issue
+    gets reported twice. The line window exists for a different case -- one
+    statement spanning several lines, where the titles genuinely are alike --
+    so it keeps the similarity test it was calibrated with.
+
+    The cost is named: two genuinely distinct issues anchored to the same line
+    (a decorator attracts "no auth" and "no rate limit" alike) now merge. That
+    is why the merge carries the other title into the survivor's explanation
+    instead of discarding it -- the finding loses its own row, not its
+    existence.
+    """
+    if anchor.file != f.file:
+        return False
+    distance = abs(anchor.line - f.line)
+    if distance == 0:
+        return True
+    return (distance <= _NEARBY_LINE_WINDOW
+            and _title_ratio(anchor.title, f.title) >= _TITLE_SIMILARITY_THRESHOLD)
 
 
 def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
@@ -103,6 +133,18 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
             # same-line and widened cases.
             where = " at a nearby line" if any(m.line != rep.line for m in members) else ""
             note = f" Also independently flagged by the {labels}{where}."
+            # The other wording, kept. Merging on position alone can join two
+            # genuinely different issues that share a line, so the survivor
+            # has to carry what the other one said or the second issue leaves
+            # no trace at all. Dissimilar titles are exactly the ones worth
+            # repeating; near-identical ones would only pad the explanation.
+            extra = [
+                m.title for m in members
+                if m is not rep
+                and _title_ratio(m.title, rep.title) < _TITLE_SIMILARITY_THRESHOLD
+            ]
+            if extra:
+                note += " Reported there as: " + "; ".join(sorted(set(extra))) + "."
             rep = replace(rep, explanation=(rep.explanation + note).strip()[:600])
         out[slot] = rep
 
