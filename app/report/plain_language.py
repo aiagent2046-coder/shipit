@@ -154,6 +154,17 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Start with a few tests for the money paths — signup, login, "
         "checkout.",
     ),
+    "dependency-dir-committed": (
+        "Installed libraries are stored in your repository as if you wrote "
+        "them.",
+        "Every clone downloads all of it, every update to a library lands in "
+        "your history, and what is stored slowly stops matching what your "
+        "lockfile says the project needs — so the versions running in "
+        "production drift away from the ones you think you have.",
+        "Add the folder to .gitignore and untrack it with "
+        "`git rm -r --cached <folder>`. Your local copy stays; anyone "
+        "cloning reinstalls from your lockfile, which is what it is for.",
+    ),
     "no-dockerfile": (
         "The app isn't packaged to run on a server (no Dockerfile).",
         "It runs on the builder's platform, but moving to your own "
