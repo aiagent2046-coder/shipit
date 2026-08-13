@@ -577,3 +577,63 @@ def test_a_critical_frontend_finding_does_not_gate_the_headline():
     assert scores["categories"]["Frontend"] == 8.1
     assert scores["gated_by"] == []
     assert scores["total"] > GATE_THRESHOLD
+
+
+# --- a committed dependency tree ---
+#
+# On a paying customer's repository venv/ was 2,987 of 3,098 tracked files and
+# the audit said nothing. Every component that could have noticed was told to
+# look away: _SKIP_DIRS excludes these paths from the secret scan and from the
+# prompt, correctly, because auditing somebody else's dependencies would spend
+# the entire budget. Skipping the CONTENTS is right; saying nothing about the
+# FACT is not, and any reviewer names it in the first minute.
+
+
+def test_a_committed_virtualenv_is_reported_with_its_size():
+    from app.scan.checks import _committed_dependency_dirs
+
+    files = [f"venv/lib/python3.12/site-packages/pkg/mod{i}.py" for i in range(40)]
+    files += ["app.py", "README.md"]
+
+    assert _committed_dependency_dirs(files) == [("venv", 40)]
+
+
+def test_only_the_outermost_tree_is_reported():
+    """A virtualenv contains site-packages/ and dozens of __pycache__/. Listing
+    each would bury the one fact the owner needs under its own consequences."""
+    from app.scan.checks import _committed_dependency_dirs
+
+    # Attribution stops at the FIRST marker in _DEPENDENCY_DIRS order, so a
+    # path inside venv/ never reaches the site-packages/ or __pycache__/
+    # markers at all -- those cannot produce their own entry here.
+    files = [f"venv/lib/site-packages/p/m{i}.py" for i in range(30)]
+    files += [f"venv/lib/site-packages/p/__pycache__/m{i}.pyc" for i in range(30)]
+
+    assert [d for d, _ in _committed_dependency_dirs(files)] == ["venv"]
+
+    # The case that DOES produce two entries, one inside the other: `venv/`
+    # is checked before `vendor/`, so these files are attributed to
+    # "vendor/venv" and "vendor" separately. Only the outer one is reported.
+    nested = [f"vendor/venv/lib/m{i}.py" for i in range(25)]
+    nested += [f"vendor/pkg/m{i}.php" for i in range(25)]
+
+    assert [d for d, _ in _committed_dependency_dirs(nested)] == ["vendor"]
+
+
+def test_a_stray_file_is_not_a_committed_dependency_tree():
+    """One file slipping through is a mistake, not the problem this describes."""
+    from app.scan.checks import _committed_dependency_dirs
+
+    assert _committed_dependency_dirs(["node_modules/.package-lock.json"]) == []
+
+
+def test_the_check_reads_no_file_contents():
+    """It counts names. Reading these trees is what _SKIP_DIRS exists to
+    prevent, and this check must not become the reason they are read."""
+    import inspect
+
+    from app.scan import checks
+
+    source = inspect.getsource(checks._committed_dependency_dirs)
+    for forbidden in ("open(", "read(", "decode("):
+        assert forbidden not in source
