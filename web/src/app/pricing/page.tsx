@@ -56,7 +56,14 @@ const FIXPACK_REVIEW = [
 // Everything the paid pull request contains. Each line maps to real generator
 // behaviour in app/fixpack/generate.py — nothing aspirational.
 const FIXPACK_INCLUDES = [
-  "Each hardcoded secret replaced with an environment variable reference",
+  // Narrowed from "Each hardcoded secret …", which was false and false at the
+  // worst moment — before payment. The Fix Pack plans only from static rule
+  // ids (app/fixpack/generate.py, _is_fixable_rule), so a secret that only
+  // the deep review spots is reported and left in place. A real customer paid
+  // while three CRITICAL findings about a live key sat outside that filter.
+  "Each hardcoded secret the static rules detect, replaced with an environment variable reference",
+  // Now a real deliverable, not a caveat: the PR carries the list.
+  "A list of every finding it does NOT change — including anything the deep review found, which is reported but not rewritten",
   "A committed .env removed from version control, with every variable name preserved in .env.example",
   "A .gitignore that covers .env files and key material",
   "Per-provider instructions for rotating every secret that leaked, because deleting it from code does not make it safe",

@@ -678,3 +678,74 @@ def test_the_local_copy_warning_sits_in_the_opening_block():
 
     assert "Configuration hardening" in body
     assert body.index("deletes your local") < body.index("Configuration hardening")
+
+
+# --- the Fix Pack must say what it did NOT do ---
+#
+# A customer paid, watched the PR untrack one .env, and never learned that
+# three CRITICAL findings about a live API key in two source files had been
+# filtered out before planning began. `_is_fixable_rule` accepts only static
+# scanner rule ids, so every llm-* finding was dropped -- not fixed, not
+# skipped, not mentioned. The PR listed its wins; nothing listed its silence.
+
+
+def _mixed_findings_plan():
+    zip_bytes = make_zip({
+        ".env": "OPENCLAW_API_KEY=fake-value-hunter2\n",
+        "action_service.py": "K = 'fake-value-hunter2'\n",
+        "app.py": "print('hi')\n",
+    })
+    findings = [
+        finding(rule_id="env-file-committed", file=".env", line=0,
+                title="Environment file committed to repository"),
+        finding(rule_id="llm-security", file="action_service.py", line=17,
+                title="Hardcoded API secret in source code"),
+        finding(rule_id="llm-auth", file="action_service.py", line=128,
+                title="Unauthenticated endpoint executes arbitrary SSH commands"),
+        finding(rule_id="no-dockerfile", file="", line=0,
+                title="No Dockerfile — app is not containerized"),
+    ]
+    return build_fixpack_plan(zip_bytes, findings)
+
+
+def test_findings_the_pack_cannot_fix_are_listed_not_dropped():
+    plan = _mixed_findings_plan()
+    body = render_pr_body(plan)
+
+    assert "NOT fixed by this pull request" in body
+    for title in ("Hardcoded API secret in source code",
+                  "Unauthenticated endpoint executes arbitrary SSH commands",
+                  "No Dockerfile — app is not containerized"):
+        assert title in body, f"{title!r} vanished from the PR"
+
+
+def test_the_pr_states_how_many_findings_it_left_alone():
+    """A customer counting 15 findings on the report and 1 change in the diff
+    deserves that arithmetic from us, not from their own suspicion."""
+    plan = _mixed_findings_plan()
+    body = render_pr_body(plan)
+
+    assert plan.total_findings == 4
+    assert "**4** findings" in body
+    assert "changes **1**" in body
+    assert "remaining **3**" in body
+
+
+def test_a_deep_review_finding_says_it_is_still_the_owners_to_fix():
+    """The two reasons a finding goes unfixed are not equivalent. "No
+    Dockerfile" has nothing to rewrite. A CRITICAL hardcoded key has plenty,
+    and is left alone by a policy the buyer never agreed to."""
+    body = render_pr_body(_mixed_findings_plan())
+
+    assert "rewrites only findings from the static rules" in body
+    assert "still yours to fix" in body
+    # Shouted on purpose, and .capitalize() would silently lowercase it.
+    assert "NOT changed" in body
+
+
+def test_skipped_findings_show_their_title_not_only_a_rule_id():
+    """`llm-security (action_service.py:17)` tells an owner nothing, and that
+    line was a live API key. The rule id is our vocabulary; the title theirs."""
+    body = render_pr_body(_mixed_findings_plan())
+
+    assert "Hardcoded API secret in source code — `action_service.py`:17" in body

@@ -132,6 +132,11 @@ class SkippedFinding:
     file: str
     line: int
     reason: str
+    # What the finding actually said. Without it the list reads
+    # "llm-security (action_service.py:17)", which tells the owner nothing --
+    # and that line happened to be a live API key. A rule id is our
+    # vocabulary; the title is theirs.
+    title: str = ""
 
 
 @dataclass
@@ -161,6 +166,12 @@ class FixpackPlan:
     # discards the right-hand side for that reason.
     leaked_env_files: list[str] = field(default_factory=list)
     leaked_env_vars: list[str] = field(default_factory=list)
+
+    # How many findings the audit produced, so the PR can state the fraction
+    # it addressed instead of only enumerating its wins. A customer counting
+    # 15 findings on the report and 1 change in the pull request deserves that
+    # arithmetic from us rather than from their own suspicion.
+    total_findings: int = 0
 
     @property
     def has_changes(self) -> bool:
@@ -384,6 +395,26 @@ def _is_fixable_rule(finding: dict) -> bool:
     return finding.get("rule_id") in (SECRET_RULE_IDS | _CHECK_RULE_IDS)
 
 
+def _why_not_fixable(finding: dict) -> str:
+    """Why this finding gets no code change, in the customer's terms.
+
+    Two very different reasons wear the same "not fixable" flag, and telling
+    them apart is the whole point of showing this at all. "No Dockerfile" has
+    nothing to rewrite and needs no apology. A CRITICAL hardcoded key found by
+    the deep review has plenty to rewrite and is left alone by a deliberate
+    policy the buyer never agreed to -- that one is a limitation to disclose,
+    not a non-event.
+    """
+    rule_id = str(finding.get("rule_id", ""))
+    if rule_id.startswith("llm-"):
+        return (
+            "Found by the deep review. This Fix Pack rewrites only findings "
+            "from the static rules, so these are reported and NOT changed — "
+            "they are still yours to fix."
+        )
+    return "Advisory findings: there is nothing in the code to rewrite."
+
+
 def _is_production_code(finding: dict) -> bool:
     """Is it somewhere worth rewriting? See the note in build_fixpack_plan:
     editing a comment, a doc example or a test fixture buys no security."""
@@ -441,9 +472,22 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     #
     # They stay in the report -- damped, as #125 left them. Noticing something
     # and declining to rewrite it automatically is not the same as hiding it.
+    plan.total_findings = len(findings)
     eligible = []
     for f in findings:
         if not _is_fixable_rule(f):
+            # Recorded, not dropped. Silently discarding these is how a
+            # customer paid for a Fix Pack, watched it untrack one .env, and
+            # never learned that three CRITICAL findings about a live API key
+            # in two source files had been filtered out before planning even
+            # began. The PR listed what it did; nothing listed what it did not.
+            plan.skipped.append(SkippedFinding(
+                rule_id=f.get("rule_id", ""),
+                file=_repo_relative(f.get("file", "")),
+                line=f.get("line", 0),
+                reason=_why_not_fixable(f),
+                title=str(f.get("title") or ""),
+            ))
             continue
         context = f.get("context")
         if not _is_production_code(f):
@@ -785,11 +829,33 @@ def render_pr_body(plan: FixpackPlan) -> str:
         parts.append("")
 
     if plan.skipped:
-        parts.append("### Skipped\n")
+        # Named for what it is. It used to say "Skipped", which reads like
+        # housekeeping we did on your behalf; these are findings from the
+        # audit you paid for that this pull request leaves entirely to you.
+        parts.append("### NOT fixed by this pull request\n")
+        if plan.total_findings:
+            changed = plan.total_findings - len(plan.skipped)
+            parts.append(
+                f"Your audit reported **{plan.total_findings}** findings. "
+                f"This pull request changes **{changed}** of them. The "
+                f"remaining **{len(plan.skipped)}** are listed below, "
+                "unchanged, so you can see exactly what is still open:\n"
+            )
+        # Grouped by reason, because the reason is shared and the findings are
+        # not. Repeating one long sentence under every bullet buries the
+        # titles, which are the only part of this list a reader needs.
+        by_reason: dict[str, list[SkippedFinding]] = {}
         for s in plan.skipped:
-            where = f" (`{s.file}`" + (f":{s.line}" if s.line else "") + ")" if s.file else ""
-            parts.append(f"- `{s.rule_id}`{where}: {s.reason}")
-        parts.append("")
+            by_reason.setdefault(s.reason, []).append(s)
+        for reason, group in by_reason.items():
+            # Not .capitalize(): it lowercases everything after the first
+            # character, and the reason deliberately shouts one word.
+            parts.append(f"**{reason}**\n")
+            for s in group:
+                where = f"`{s.file}`" + (f":{s.line}" if s.line else "")
+                head = s.title or f"`{s.rule_id}`"
+                parts.append(f"- {head}" + (f" — {where}" if s.file else ""))
+            parts.append("")
 
     parts.append(
         "---\nMerge is entirely up to you. Review the diff, rotate any "
