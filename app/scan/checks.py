@@ -42,6 +42,47 @@ def _strip_root(names: list[str]) -> list[str]:
     return names
 
 
+# Directories a package manager fills, which belong in .gitignore rather than
+# in history. Their CONTENTS are skipped everywhere else on purpose -- see
+# _SKIP_DIRS in app/scan/secrets.py and app/scan/llm_scan.py -- because
+# auditing somebody else's dependencies wastes the whole prompt budget. That
+# is correct, and it left nobody able to say the obvious: on one paying
+# customer's repository, venv/ was 2,987 of 3,098 tracked files and the audit
+# said nothing, because every component that could have noticed was told to
+# look away. This check reads no contents; it counts names.
+_DEPENDENCY_DIRS = ("venv/", ".venv/", "node_modules/", "vendor/",
+                    "__pycache__/", "site-packages/")
+
+# One stray committed file is a mistake; a populated tree is the problem this
+# describes. Below this it is not worth a finding of its own.
+_DEPENDENCY_DIR_MIN_FILES = 20
+
+
+def _committed_dependency_dirs(files: list[str]) -> list[tuple[str, int]]:
+    """(directory, tracked file count) for each dependency tree in the repo.
+
+    Reports the TOP-most occurrence only. A virtualenv contains
+    site-packages/ and dozens of __pycache__/ directories, and listing each as
+    its own finding would bury the one fact the owner needs under its own
+    consequences.
+    """
+    counts: dict[str, int] = {}
+    for name in files:
+        for marker in _DEPENDENCY_DIRS:
+            index = name.find(marker)
+            if index == -1:
+                continue
+            directory = name[:index + len(marker) - 1]
+            counts[directory] = counts.get(directory, 0) + 1
+            break
+    nested = {d for d in counts for other in counts
+              if d != other and d.startswith(other + "/")}
+    return sorted(
+        (d, n) for d, n in counts.items()
+        if d not in nested and n >= _DEPENDENCY_DIR_MIN_FILES
+    )
+
+
 def find_committed_env_files(files: list[str]) -> list[str]:
     """The committed env files a repo should never track: `.env` itself
     and any `.env.<something>` except `.env.example`. Shared by run_checks
@@ -298,6 +339,31 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
                 "silently broke — usually payment or login. One test that runs "
                 "on every change is worth far more than a suite you plan to "
                 "write later."
+            ),
+        ))
+
+    for directory, count in _committed_dependency_dirs(files):
+        findings.append(CheckFinding(
+            "dependency-dir-committed",
+            f"{directory} is committed to the repository ({count} files)",
+            severity="medium", confidence=0.95, category="Deploy",
+            file=directory,
+            explanation=(
+                f"{directory} holds code you did not write — libraries "
+                "installed by a package manager — and it is stored in your "
+                "repository as if you had. Every clone downloads it, every "
+                "change to it lands in your history, and the versions there "
+                "drift away from the ones your lockfile names, so what runs "
+                "in production stops matching what the project says it "
+                "needs. On one real repository this was 2,987 files against "
+                "111 of the owner's own."
+            ),
+            fix_hint=(
+                f"Add {directory} to .gitignore and remove it from version "
+                f"control with `git rm -r --cached {directory}`. Your local "
+                "copy stays; only the tracking stops. Anyone cloning "
+                "reinstalls from your lockfile, which is the point of having "
+                "one."
             ),
         ))
 
