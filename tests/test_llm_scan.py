@@ -330,7 +330,8 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
     assert stats == LLMScanStats(
         prompts=1, raw_findings=2, verified=1, discarded=1,
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
-        prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]))
+        prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]),
+        rubrics_ran=("auth",))
     assert len(findings) == 1
     f = findings[0]
     assert f.rule_id == "llm-auth" and f.category == "Auth"
