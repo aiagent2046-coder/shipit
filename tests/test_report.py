@@ -420,6 +420,55 @@ def test_ungated_and_legacy_rows_print_no_cap_note():
     assert "cannot exceed" not in render_report(legacy)
 
 
+# --- joining the bars to the table ------------------------------------------
+
+def test_a_finding_names_the_bar_it_scored_in():
+    """The page draws six category bars and a table, and nothing joined them.
+
+    Audit fb00b177 published Security 9.0 above a table holding predictable
+    hardcoded passwords for a hundred accounts, an SSRF and a service-role key
+    used to derive user passwords. Both halves can be right -- findings are
+    filed by what they are, not by which rubric found them -- but the reader
+    was given no way to establish that. The score is checkable arithmetic,
+    10.0 - sum(weight x confidence), and the one input it needs was the one
+    thing the page did not print.
+    """
+    f = {**_finding(), "category": "Auth"}
+
+    # Anchored to the row, not to the page: "Auth" is the name of a bar too,
+    # so a bare substring check passes on a report that prints nothing here.
+    assert '<div class="tech">Auth · ' in render_report(result([f]))
+
+
+def test_a_moved_finding_says_where_it_came_from():
+    """The question the bars raise most often: a category can read a perfect
+    10.0 for the precise reason that everything it found now scores next
+    door."""
+    f = {**_finding(), "category": "Security", "origin_category": "Auth"}
+
+    assert "Security (moved from Auth)" in render_report(result([f]))
+
+
+def test_an_unmoved_finding_says_nothing_about_moving():
+    f = {**_finding(), "category": "Security", "origin_category": "Security"}
+
+    assert "moved from" not in render_report(result([f]))
+
+
+def test_a_finding_with_no_category_renders_without_one():
+    """Static rules predating the field, and stored rows written before it."""
+    html = render_report(result([_finding()]))
+
+    assert "AWS key in code" in html and "moved from" not in html
+
+
+def test_a_hostile_category_is_escaped():
+    """`category` is model-authored on every LLM finding."""
+    f = {**_finding(), "category": "<script>alert(1)</script>"}
+
+    assert "<script>alert(1)</script>" not in render_report(result([f]))
+
+
 def test_a_capped_free_scan_names_nothing_it_did_not_publish():
     """The counterpart of the test above, on the case that reads worst.
 

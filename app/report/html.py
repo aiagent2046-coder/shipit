@@ -107,6 +107,31 @@ def _unexamined_sentence(score: dict) -> str:
     return f"Nothing here examined {listed}."
 
 
+def _category_label(f: dict) -> str:
+    """Which bar this finding scored in, and where it was filed from.
+
+    The page draws six category bars and a table of findings, and until now
+    nothing joined them. A real paid report (audit fb00b177) published
+    Security 9.0 directly above a table containing predictable hardcoded
+    passwords for a hundred accounts, an SSRF, and a service-role key used to
+    derive user passwords. Both halves can be right -- a finding is filed by
+    what it IS, not by which rubric found it, so those three can legitimately
+    score under Auth -- but the page gave the reader no way to establish that.
+    Unreconcilable is its own defect, whichever number turns out to be
+    correct: 10.0 - sum(weight x confidence) is checkable arithmetic, and the
+    one input it needs was the one thing not printed.
+
+    `origin_category` is named when the finding moved, because that is the
+    question the bars raise most often: a category can read a perfect 10.0
+    for the specific reason that everything it found now scores next door.
+    """
+    cat = escape(str(f.get("category") or ""))
+    if not cat:
+        return ""
+    origin = escape(str(f.get("origin_category") or ""))
+    return f"{cat} (moved from {origin})" if origin and origin != cat else cat
+
+
 def _finding_row(f: dict) -> str:
     sev = str(f.get("severity", "low"))
     color = _SEVERITY_COLOR.get(sev, "#8b8d98")
@@ -118,6 +143,7 @@ def _finding_row(f: dict) -> str:
     risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
     fix_html = f'<div class="fix">→ {escape(fix)}</div>' if fix else ""
     tech_bits = " · ".join(x for x in (
+        _category_label(f),
         escape(str(f.get("title", ""))), loc,
         escape(str(f.get("masked", "")))) if x)
     return (
