@@ -20,6 +20,42 @@ import httpx
 # 400s (see .env.example). Note the request name and the response data["model"]
 # can differ per provider — app/llm/pricing.py keys on the RESPONSE name.
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# Models that REJECT a non-default `temperature` with a 400, and for which
+# thinking is on by default.
+#
+# Claude 5 and Opus 4.7+ removed the sampling parameters: `temperature`,
+# `top_p` and `top_k` are no longer accepted, and a request carrying one is
+# rejected outright. This scanner has sent `temperature: 0` on every call
+# since it was written, so pointing LLM_MODEL at one of these models without
+# this table would 400 EVERY request -- not degrade quality, but fail the
+# whole LLM stage on every audit, silently delivering static-only results
+# under a paid basis. That is the failure llm_failure_kind exists to alert on,
+# and it is better not to cause it.
+#
+# The same models turn adaptive thinking ON when `thinking` is unset, where
+# Sonnet 4.6 ran without it. `max_tokens` bounds thinking AND response text
+# together, so at our 4096 a long think would eat the budget and truncate the
+# JSON the rubric parser needs. We ask these models for the 4.6 behaviour
+# explicitly rather than inheriting a new default.
+#
+# Listed by hand in BOTH provider spellings, exactly as PRICE_TABLE is, and
+# for the same reason: AITunnel and the direct Anthropic API name the same
+# model differently, and a missed spelling here means a 400 in production
+# rather than a wrong number. Add a model's rows here AND in
+# app/llm/pricing.py before putting it in rotation.
+MODELS_WITHOUT_SAMPLING_PARAMS = frozenset({
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-fable-5",
+    "claude-opus-4-7", "claude-opus-4.7",
+    "claude-opus-4-8", "claude-opus-4.8",
+})
+
+
+def supports_sampling_params(model: str) -> bool:
+    """False when `temperature` must be omitted or the request 400s."""
+    return model not in MODELS_WITHOUT_SAMPLING_PARAMS
 TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 TRANSIENT_RETRIES = 2      # extra attempts per provider on 5xx/transport errors
 RETRY_BACKOFF_S = 2.0      # linear: 2s, then 4s
@@ -104,6 +140,56 @@ class LLMClient:
                     break
         raise LLMError("; ".join(errors))
 
+    @staticmethod
+    def _payload_anthropic(p: Provider, system: str, user: str,
+                           max_tokens: int) -> dict:
+        """The /v1/messages body, shaped to what this model accepts.
+
+        Audit pipeline: reproducibility over creativity. On models that take
+        it, temperature 0 stays -- an unset temperature is the provider
+        default (usually 1.0) and produces finding sets that differ more
+        between runs. It was never the whole story even there: the docstring
+        of app/scan/pipeline.py:content_digest records that the scan "returns
+        a different findings set (and thus a different score) run to run even
+        at temperature=0", which is why the content-digest cache, not this
+        parameter, is what makes a re-audit reproducible.
+        """
+        body: dict = {
+            "model": p.model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if supports_sampling_params(p.model):
+            body["temperature"] = 0
+        else:
+            # Keep the Sonnet 4.6 behaviour rather than inheriting the new
+            # default: max_tokens caps thinking and text together, and a long
+            # think would truncate the JSON the rubric parser reads.
+            body["thinking"] = {"type": "disabled"}
+        return body
+
+    @staticmethod
+    def _payload_openai(p: Provider, system: str, user: str,
+                        max_tokens: int) -> dict:
+        """The /chat/completions body for the OpenAI-compatible provider.
+
+        No `thinking` key: it is not part of that wire format, and the
+        provider decides. Only the sampling parameter is conditional, for the
+        same 400 the Anthropic path avoids.
+        """
+        body: dict = {
+            "model": p.model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        if supports_sampling_params(p.model):
+            body["temperature"] = 0
+        return body
+
     def _call(self, p: Provider, system: str, user: str,
               max_tokens: int) -> tuple[str, LLMUsage]:
         with httpx.Client(timeout=TIMEOUT, transport=self._transport) as client:
@@ -115,16 +201,7 @@ class LLMClient:
                         "anthropic-version": "2023-06-01",
                         "content-type": "application/json",
                     },
-                    json={
-                        "model": p.model,
-                        "max_tokens": max_tokens,
-                        # Audit pipeline: reproducibility over creativity.
-                        # Unset temperature = provider default (usually
-                        # 1.0) = finding sets that differ run to run.
-                        "temperature": 0,
-                        "system": system,
-                        "messages": [{"role": "user", "content": user}],
-                    },
+                    json=self._payload_anthropic(p, system, user, max_tokens),
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -138,15 +215,7 @@ class LLMClient:
                 f"{p.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {p.api_key}",
                          "content-type": "application/json"},
-                json={
-                    "model": p.model,
-                    "max_tokens": max_tokens,
-                    "temperature": 0,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                },
+                json=self._payload_openai(p, system, user, max_tokens),
             )
             resp.raise_for_status()
             data = resp.json()

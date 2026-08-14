@@ -229,3 +229,87 @@ async def test_no_usage_row_when_llm_stage_skipped():
 
     assert row["score_json"]["basis"] == "static_only"
     assert usage_repo.rows == []
+
+
+# --- models that reject the sampling parameters -----------------------------
+
+def test_sonnet_5_is_priced_from_its_own_row_at_list_not_promo():
+    """A promotional rate must not enter the table.
+
+    Sonnet 5 runs an introductory $2/$10 to 2026-08-31. This table feeds the
+    spend cap and the cost accounting, where a guard that reads LOW is the
+    dangerous direction: when the promotion lapses, every audit would be
+    under-counted silently. List price over-estimates during the promotion,
+    which is the safe error.
+    """
+    from decimal import Decimal
+
+    assert "claude-sonnet-5" in pricing.PRICE_TABLE
+    assert pricing.price_for("claude-sonnet-5") is pricing.PRICE_TABLE["claude-sonnet-5"]
+    # 1M in + 1M out at list = $3 + $15. At the promo rate this would be $12.
+    assert pricing.cost_usd("claude-sonnet-5", 1_000_000, 1_000_000) == Decimal("18.00")
+
+
+def test_a_model_without_sampling_params_gets_no_temperature():
+    """`temperature: 0` is a 400 on Claude 5, not a quality knob.
+
+    The scanner has sent it on every call since it was written, so pointing
+    LLM_MODEL at Sonnet 5 without this branch fails EVERY request -- the LLM
+    stage dies and the audit silently delivers static-only results under a
+    paid basis. Asserted on both wire formats because both carried the
+    parameter, and a fix to one is a 400 on the other.
+    """
+    from app.llm.client import LLMClient, Provider
+
+    old = Provider(kind="anthropic", base_url="x", api_key="k",
+                   model="claude-sonnet-4-6")
+    new = Provider(kind="anthropic", base_url="x", api_key="k",
+                   model="claude-sonnet-5")
+
+    assert LLMClient._payload_anthropic(old, "s", "u", 4096)["temperature"] == 0
+    assert "temperature" not in LLMClient._payload_anthropic(new, "s", "u", 4096)
+    assert LLMClient._payload_openai(old, "s", "u", 4096)["temperature"] == 0
+    assert "temperature" not in LLMClient._payload_openai(new, "s", "u", 4096)
+
+
+def test_thinking_is_disabled_only_where_it_would_otherwise_switch_on():
+    """max_tokens bounds thinking AND text together.
+
+    Sonnet 4.6 ran without thinking when the key was absent; Claude 5 turns
+    adaptive thinking on in that same case. At our 4096 a long think eats the
+    budget and truncates the JSON the rubric parser reads, so the new
+    behaviour is declined explicitly rather than inherited.
+
+    Absent on the OpenAI-compatible body on purpose: `thinking` is not part of
+    that wire format, and sending an unknown key is the provider's error to
+    raise.
+    """
+    from app.llm.client import LLMClient, Provider
+
+    old = Provider(kind="anthropic", base_url="x", api_key="k",
+                   model="claude-sonnet-4-6")
+    new = Provider(kind="anthropic", base_url="x", api_key="k",
+                   model="claude-sonnet-5")
+
+    assert "thinking" not in LLMClient._payload_anthropic(old, "s", "u", 4096)
+    assert LLMClient._payload_anthropic(new, "s", "u", 4096)["thinking"] == {
+        "type": "disabled"}
+    assert "thinking" not in LLMClient._payload_openai(new, "s", "u", 4096)
+
+
+def test_every_priced_model_is_classified_for_sampling_support():
+    """The two hand-maintained tables must not drift apart.
+
+    Adding a model to PRICE_TABLE without deciding whether it accepts
+    `temperature` is how the 400 arrives in production: the cost is right and
+    every request fails. This does not assert WHICH answer is correct -- only
+    that someone made the call deliberately for Claude 5 names, where the
+    default (send temperature) is the failing one.
+    """
+    from app.llm.client import MODELS_WITHOUT_SAMPLING_PARAMS
+
+    for name in pricing.PRICE_TABLE:
+        if "-5" in name or "-4-7" in name or "-4-8" in name:
+            assert name in MODELS_WITHOUT_SAMPLING_PARAMS, (
+                f"{name} is priced but still sends temperature -- a 400 on "
+                "every call")

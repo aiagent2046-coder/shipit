@@ -21,7 +21,7 @@ from decimal import Decimal
 
 # The date the prices below were last verified against the providers. Bump it
 # whenever PRICE_TABLE changes, so a stale table is visible rather than silent.
-PRICING_LAST_UPDATED = "2026-07-22"
+PRICING_LAST_UPDATED = "2026-08-14"
 
 _PER_MILLION = Decimal(1_000_000)
 
@@ -42,9 +42,27 @@ _SONNET_4_6: dict[str, Decimal] = {
     "input": Decimal("3.00"),
     "output": Decimal("15.00"),
 }
+# Sonnet 5 carries the SAME list price as 4.6 -- but not the same cost per
+# audit. It uses the Opus 4.7/4.8 tokenizer, which turns the same repository
+# into roughly 30% more tokens, so an audit measured at $0.92 on 4.6 lands
+# near $1.20 here. An introductory $2.00/$10.00 runs to 2026-08-31 and is
+# deliberately NOT the number below: this table feeds the spend cap and the
+# cost accounting, a guard that reads low is worse than one that reads high,
+# and a promotional rate that lapses would silently under-count every audit
+# after it ends. Billing during the promotion simply comes in under estimate.
+#
+# There is one spelling because there is one: the dot/dash split existed to
+# render "4-6" as "4.6", and a bare "5" has nothing to convert. If a provider
+# is ever seen returning another spelling, add it here rather than letting it
+# fall through to DEFAULT_PRICE.
+_SONNET_5: dict[str, Decimal] = {
+    "input": Decimal("3.00"),
+    "output": Decimal("15.00"),
+}
 PRICE_TABLE: dict[str, dict[str, Decimal]] = {
     "claude-sonnet-4.6": _SONNET_4_6,   # AITunnel / OpenAI-compat response name
     "claude-sonnet-4-6": _SONNET_4_6,   # direct Anthropic response name
+    "claude-sonnet-5": _SONNET_5,
 }
 
 # Fallback for a model not in the table (an unexpected served model, or a new
