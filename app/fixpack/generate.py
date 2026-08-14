@@ -845,6 +845,38 @@ def render_pr_body(plan: FixpackPlan) -> str:
         # still live and now easier to find: this PR's own diff shows every
         # removed line in plain text, which is also why a secret-scanning
         # check on your repository may go red on this commit.
+        #
+        # That sentence lived here as a comment only, and the customer never
+        # saw it. It is the sharpest argument the block has -- "rotate first"
+        # sounds like caution until you learn the pull request itself is a new,
+        # more convenient copy of the credential -- so it now goes in the body.
+        #
+        # It does NOT warn about the push being blocked, because it is not.
+        # GitHub push protection does not block a secret it has already
+        # alerted on, and a secret this Fix Pack is removing is by
+        # construction already in the repository. The delivery push therefore
+        # goes through; the scanning ALERT is what may appear, and it is
+        # correct. Saying "your push may be rejected" would be a warning about
+        # something that does not happen, which costs the ones that do.
+        #
+        # No history-rewriting command is offered, deliberately. It is
+        # destructive, it breaks every existing clone, and it does not undo
+        # the exposure -- the value is already out. Handing a force-push
+        # recipe to someone who merges without reading (the behaviour this
+        # whole block exists for) trades a live credential for a broken
+        # repository AND a live credential.
+        parts.append(
+            "> **This pull request's own diff shows those values in plain "
+            "text.** A removed line is still part of the patch: it is on this "
+            "page, in the notification email GitHub has already sent, and in "
+            "anything that reads this repository's pull requests. Until each "
+            "value is rotated, this pull request makes the credential easier "
+            "to find, not harder — which is why rotation belongs before the "
+            "merge and not after it. Rewriting history to erase the value is "
+            "not a substitute: everyone who already cloned, forked or read "
+            "the repository still has it. Rotating at the provider is the "
+            "only action that ends the exposure.\n>"
+        )
         if plan.leaked_env_files:
             where = ", ".join(f"`{f}`" for f in plan.leaked_env_files)
             parts.append(

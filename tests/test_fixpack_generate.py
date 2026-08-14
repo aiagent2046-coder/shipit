@@ -625,6 +625,47 @@ def test_the_rotation_block_names_the_variables_and_never_their_values():
     assert "203.0.113.9" not in body
 
 
+def test_the_block_says_this_pull_request_itself_exposes_the_values():
+    """The argument that makes "rotate first" more than caution.
+
+    It existed as a source comment beside the block for weeks -- "this PR's
+    own diff shows every removed line in plain text" -- and the customer, who
+    is the only person who can rotate anything, never saw it. A paying
+    customer merged this exact pull request without rotating, which is the
+    behaviour the whole block is written against; "the pull request is itself
+    a fresh, more convenient copy of your credential" is the sentence most
+    likely to stop it.
+
+    Asserted on both plan shapes. The code-edit route shows `-KEY = "..."`
+    and the untracking route shows the entire file as removed lines, so the
+    claim is equally true either way and must not depend on which branch of
+    the generator built the plan.
+    """
+    code_edit_plan = build_fixpack_plan(
+        make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'}),
+        [finding(rule_id="aws-access-key-id", file="config.py", line=1)],
+    )
+    assert code_edit_plan.secret_fixes and not code_edit_plan.leaked_env_files
+    env_plan = _committed_env_plan()
+    assert env_plan.leaked_env_files and not env_plan.secret_fixes
+
+    for plan in (env_plan, code_edit_plan):
+        body = render_pr_body(plan)
+
+        assert "own diff shows those values in plain text" in body
+        # Placed inside the warning block, above the routine sections -- the
+        # position the local-copy warning had to be moved to for the same
+        # reason.
+        assert body.index("own diff") < body.index("ROTATE") + 1500
+        # And it must not offer history rewriting as an escape: it does not
+        # end the exposure, and it breaks every clone.
+        assert "not a substitute" in body
+        for destructive in ("filter-repo", "filter-branch", "--force", "BFG"):
+            assert destructive not in body, (
+                f"{destructive} hands a destructive recipe to someone who "
+                "merges without reading")
+
+
 def test_the_leaked_names_are_sorted_so_two_runs_agree():
     """Title and body are part of what a paying customer receives; they must
     not reorder between two runs over byte-identical content."""
