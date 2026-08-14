@@ -189,7 +189,7 @@ def test_deletion_order_tables_exist_in_the_migrations():
 # ---------------------------------------------------------------- masking
 
 def test_mask_dsn_never_prints_the_password():
-    url = "postgresql://postgres.refs:s3cret-pass@aws-0-eu.pooler.supabase.com:5432/postgres"
+    url = "postgresql://u:s3cret-pass@aws-0-eu.pooler.supabase.com:5432/postgres"  # scan-allow: fixture DSN
     masked = atd.mask_dsn(url)
     assert "s3cret-pass" not in masked
     assert "aws-0-eu.pooler.supabase.com/postgres" == masked
