@@ -158,9 +158,17 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     score = result["score"]
     total = float(score["total"])
 
-    # Both tiers publish a score now; `scored` only decides how it is framed
-    # and how much scope the note has to declare. See the free-tier branch
-    # below for why withholding it stopped being the honest option.
+    # Whether this page publishes a headline number at all. It said "both
+    # tiers publish a score now" and that has been false since the free tier
+    # stopped: see the free-tier branch below, where the argument was made,
+    # reversed on kristina_agent_center (9.9 static-only against 4.7 full, on
+    # a repository that lets an unauthenticated caller run commands as root),
+    # and never carried back up to here.
+    #
+    # A stale comment on a flag is not decoration. This one described the
+    # opposite of the truth directly above the branch that decides what the
+    # free page may claim, and the cap paragraph below shipped on the free
+    # page for exactly as long as it stood.
     #
     # A missing basis means an audit from before the field existed. It is
     # treated as a full audit, exactly as it always was.
@@ -213,8 +221,22 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # `gated_by` absent means an audit stored before the key existed, which is
     # not the same as "not gated" and must print nothing rather than a
     # reassurance the row cannot support.
+    #
+    # AND ONLY WHERE A SCORE IS PUBLISHED. This paragraph explains a headline
+    # number, and a free scan has none. It shipped on the free page anyway and
+    # a real report (audit 544b91bd) carried all three consequences at once:
+    # it opened "This score cannot exceed 6.9" two paragraphs under "A free
+    # scan does not produce a mark out of ten"; it published "Security 5.5",
+    # the exact category number the page had just declined to publish, for a
+    # row it had labelled "partly checked"; and 6.9 appears nowhere else on
+    # that page, so the reader has nothing to reconcile it against.
+    #
+    # The free page already says what it looked at and shows what it found.
+    # Withholding a number in one section and printing it in the next is not
+    # a smaller claim than publishing it -- it is the same claim, made where
+    # nobody thought to check it.
     gate_note = ""
-    if score.get("gated_by"):
+    if scored and score.get("gated_by"):
         crit = [r for r in score["gated_by"] if r.get("kind") == "critical"]
         low = [r for r in score["gated_by"] if r.get("kind") == "subscore"]
         parts = []

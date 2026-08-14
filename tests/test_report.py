@@ -367,6 +367,38 @@ def test_the_note_describes_compression_not_a_flat_ceiling():
         "describes the flat ceiling that was measured and rejected")
 
 
+def test_a_page_with_no_score_does_not_explain_the_score():
+    """Measured on a real free report, audit 544b91bd.
+
+    The page opened "A free scan does not produce a mark out of ten, because
+    it does not look at enough to earn one", marked Security "partly checked"
+    rather than giving it a number, and then printed:
+
+        This score cannot exceed 6.9 because the audit found a safety
+        category below 7.0 (Security 5.5).
+
+    Three things wrong at once. It says "this score" where there is none. It
+    publishes the exact category number the page two paragraphs above had
+    declined to publish. And 6.9 appears nowhere else on a free page, so the
+    reader has nothing to reconcile it against.
+
+    Withholding a number in one section and printing it in the next is not a
+    smaller claim than publishing it. It is the same claim, made where nobody
+    thought to look for it.
+    """
+    reasons = [{"kind": "subscore", "category": "Security", "value": 5.5}]
+
+    for basis in ("static+preview", "static_only"):
+        html = render_report(_gated(reasons, basis=basis))
+        assert "cannot exceed" not in html, basis
+        assert "Security 5.5" not in html, basis
+
+    # ...and the paid page still carries it, which is the whole point of the
+    # paragraph: a headline that contradicts every bar above it needs saying.
+    paid = render_report(_gated(reasons))
+    assert "cannot exceed" in paid and "Security 5.5" in paid
+
+
 def test_hostile_gate_reason_title_is_escaped():
     """gated_by carries an LLM-authored title straight from the finding."""
     html = render_report(_gated([
@@ -388,18 +420,20 @@ def test_ungated_and_legacy_rows_print_no_cap_note():
     assert "cannot exceed" not in render_report(legacy)
 
 
-def test_a_capped_free_scan_explains_the_cap_too():
-    """The cap note used to be suppressed on a static-only audit, because
-    there was no headline to explain. There is one now, and the free tier is
-    where a lone critical most often caps it -- a committed .env is a static
-    rule, so this is the common case, not the exotic one.
+def test_a_capped_free_scan_names_nothing_it_did_not_publish():
+    """The counterpart of the test above, on the case that reads worst.
+
+    A committed .env is a static rule, so a lone critical capping a free scan
+    is the common case rather than the exotic one -- which is exactly why the
+    paragraph must not print here. The finding is in the table, at its own
+    severity, where a free scan is entitled to put it. What the free page
+    cannot do is explain the effect of that finding on a number it withheld.
     """
     html = render_report(_gated(
         [{"kind": "critical", "category": "Security",
           "rule_id": "env-file-committed", "title": "Committed .env file"}],
         basis="static_only"))
-    assert "cannot exceed" in html
-    assert "Committed .env file" in html
+    assert "cannot exceed" not in html
 
 
 def test_a_stored_row_predating_the_key_still_marks_auth_unchecked():
