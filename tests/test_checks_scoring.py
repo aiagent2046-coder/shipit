@@ -189,10 +189,20 @@ def test_one_confident_critical_gates_on_its_own(category: str) -> None:
     findings = [_f("critical", 0.9, category)]
     scores = compute_scores(findings)
 
-    assert scores["categories"][category] > GATE_THRESHOLD, (
+    # The fixture guard used to read the published subscore and require it
+    # above GATE_THRESHOLD. That number is now scaled when this very route
+    # fires, so it can no longer speak for the raw one. The routes themselves
+    # say the same thing directly: the critical must be what gated, and the
+    # subscore route must NOT have fired -- which is exactly "the subscore
+    # itself does not fail" without inferring it from a value.
+    kinds = {r["kind"] for r in scores["gated_by"] if r.get("category") == category}
+    assert "critical" in kinds
+    assert "subscore" not in kinds, (
         "fixture no longer exercises the gap: the subscore itself now fails, "
         "so this would pass without GATE_ON_CRITICAL")
     assert scores["total"] <= GATED_MAX
+    # And the category no longer outranks its own critical finding.
+    assert scores["categories"][category] <= GATED_MAX
 
 
 def test_an_unsure_critical_does_not_gate_by_itself():
