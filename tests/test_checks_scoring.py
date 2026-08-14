@@ -637,3 +637,30 @@ def test_the_check_reads_no_file_contents():
     source = inspect.getsource(checks._committed_dependency_dirs)
     for forbidden in ("open(", "read(", "decode("):
         assert forbidden not in source
+
+
+def test_the_dependency_check_fires_through_run_checks():
+    """Through the pipeline, not by calling the helper.
+
+    The helper was verified directly and shipped; the version that reached
+    main carried only its plain-language translation, because a hand-typed
+    list of commits during a branch rebuild missed the one holding the code.
+    Nothing caught it: the tests went with it, so the suite stayed green while
+    the check no longer existed. A test that drives run_checks would have
+    failed on the import.
+    """
+    import io
+    import zipfile
+
+    from app.scan.checks import run_checks
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for i in range(40):
+            zf.writestr(f"repo-main/venv/lib/site-packages/p/m{i}.py", "x=1\n")
+        zf.writestr("repo-main/app.py", "print('hi')\n")
+    buf.seek(0)
+
+    ids = [f.rule_id for f in run_checks(buf)]
+
+    assert "dependency-dir-committed" in ids
