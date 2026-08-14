@@ -82,3 +82,46 @@ def test_run_on_local_tree_prints_a_location_for_every_finding(
     located = [ln for ln in body.splitlines() if ln.startswith("      ")]
     assert len(located) == count
     assert all(":" in ln for ln in located)
+
+
+# --- naming the reclassified findings, not just counting them ---
+#
+# LLMScanStats.recategorised returned 2 on the first real run. That answered
+# half a question -- the model does use its right to declare a category -- and
+# left the half that matters unanswerable from this output: it printed the
+# category without the rule id, so the two findings that had moved were
+# indistinguishable from the thirteen that had not. A wrong reclassification
+# is worse than none, and judging one requires knowing which it is.
+
+
+def test_a_finding_that_kept_its_rubrics_category_is_not_marked():
+    mod = _load()
+    unmoved = {"rule_id": "llm-security", "category": "Security"}
+
+    assert mod._reclassified_marker(unmoved) == ""
+
+
+def test_a_moved_finding_names_the_category_it_came_from():
+    mod = _load()
+    moved = {"rule_id": "llm-security", "category": "Auth"}
+
+    assert mod._reclassified_marker(moved) == " (moved from Security)"
+
+
+def test_static_findings_are_never_marked():
+    """Only the LLM rubrics declare a category; a static rule has no rubric to
+    have moved away from, and marking one would invent a question."""
+    mod = _load()
+
+    assert mod._reclassified_marker(
+        {"rule_id": "no-dockerfile", "category": "Deploy"}) == ""
+    assert mod._reclassified_marker({"category": "Deploy"}) == ""
+
+
+def test_an_unknown_llm_rule_does_not_crash_the_report():
+    """A rubric could be renamed while old findings still carry its rule id.
+    A run that prints findings must not die deciding how to label one."""
+    mod = _load()
+
+    assert mod._reclassified_marker(
+        {"rule_id": "llm-doesnotexist", "category": "Auth"}) == ""

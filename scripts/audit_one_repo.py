@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.ingest.stack_detect import detect_stack  # noqa: E402
 from app.ingest.validators import validate_zip  # noqa: E402
 from app.llm.client import LLMClient  # noqa: E402
+from app.scan.llm_scan import RUBRICS  # noqa: E402
 from app.scan.pipeline import run_scan  # noqa: E402
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -50,6 +51,31 @@ def fetch_repack(slug: str, branch: str) -> bytes:
                 continue
             dst.writestr(parts[1], src.read(zi))
     return out.getvalue()
+
+
+def _reclassified_marker(finding: dict) -> str:
+    """" <- llm-security" when a finding did not keep its rubric's category.
+
+    LLMScanStats counts these as `recategorised`, and the first real run
+    returned 2 -- which answered half a question. The other half, whether the
+    model moved them the RIGHT way, could not be answered from this output at
+    all: it printed the category and not the rule id, so the two findings that
+    had moved were indistinguishable from the thirteen that had not.
+
+    A count says the feature is alive. Naming the findings is what lets
+    someone judge them, and judging is the whole reason the field exists: a
+    model reclassifying wrongly is worse than one not reclassifying at all.
+    """
+    rule_id = str(finding.get("rule_id") or "")
+    if not rule_id.startswith("llm-"):
+        return ""
+    rubric = RUBRICS.get(rule_id[len("llm-"):])
+    if rubric is None:
+        return ""
+    declared = str(finding.get("category") or "")
+    if declared and declared != rubric["category"]:
+        return f" (moved from {rubric['category']})"
+    return ""
 
 
 def pack_directory(root: Path) -> bytes:
@@ -114,7 +140,8 @@ def main(argv: list[str]) -> int:
     )
     print(f"\n=== {len(findings)} findings")
     for f in findings:
-        print(f"  [{str(f.get('severity')).upper():8s}] {f.get('category')}  "
+        print(f"  [{str(f.get('severity')).upper():8s}] {f.get('category')}"
+              f"{_reclassified_marker(f)}  {f.get('rule_id')}  "
               f"conf={f.get('confidence')}")
         print(f"      {f.get('file')}:{f.get('line')}  {f.get('title')}")
     return 0
