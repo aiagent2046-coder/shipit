@@ -38,7 +38,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "cd3b7a59803e0470"
+PROMPT_FINGERPRINT = "6f4df84af4982d39"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1378,3 +1378,14 @@ def test_the_verifier_accepts_a_wrong_conclusion_about_real_code():
     )
 
     assert verify_finding(nonsense, files)
+
+
+def test_a_hardcoded_credential_is_named_as_Security_in_the_prompt():
+    """Measured, not guessed: across two runs of the same repository the
+    hardcoded secrets at action_service.py:17 and action_service_fixed.py:19
+    were found by the auth rubric and stayed in Auth, while five other
+    findings per run DID move category. The model reclassifies readily; it
+    treated a credential as within auth's remit because the prompt's list of
+    examples never said otherwise."""
+    assert "credential hardcoded in source" in SYSTEM_PROMPT
+    assert 'are "Security" even when you find' in SYSTEM_PROMPT
