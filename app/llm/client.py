@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import httpx
 
@@ -53,9 +53,33 @@ MODELS_WITHOUT_SAMPLING_PARAMS = frozenset({
     "claude-opus-4-8", "claude-opus-4.8",
 })
 
+# ...and the ones that do take it, listed rather than inferred.
+#
+# The first version of this guard tested `"-5" in name`, which reads as "a
+# Claude 5 model" and is not: it matches "claude-haiku-4-5", a model that
+# accepts `temperature` perfectly well. Version numbers are not a grammar, and
+# guessing from a substring gets a tier wrong in whichever direction happens to
+# be worse -- here it would have blamed a working model.
+#
+# So both sets are explicit, and a test requires every model in
+# app/llm/pricing.py's PRICE_TABLE to appear in exactly one of them. Adding a
+# model to the price table without deciding which way it goes then fails
+# loudly, instead of shipping a default that is a 400 on every request.
+MODELS_WITH_SAMPLING_PARAMS = frozenset({
+    "claude-sonnet-4.6", "claude-sonnet-4-6",
+    "claude-haiku-4.5", "claude-haiku-4-5",
+})
+
 
 def supports_sampling_params(model: str) -> bool:
-    """False when `temperature` must be omitted or the request 400s."""
+    """False when `temperature` must be omitted or the request 400s.
+
+    Unknown models get the permissive answer, which is what every model before
+    Claude 5 wanted and what the scanner has always sent. That is the right
+    default to fail towards: a wrong `temperature` on a model that dropped it
+    is a loud 400 on the first call, while omitting it on a model that wants it
+    is silent variance in the findings.
+    """
     return model not in MODELS_WITHOUT_SAMPLING_PARAMS
 
 
@@ -112,6 +136,24 @@ class LLMClient:
                  transport: httpx.BaseTransport | None = None):
         self.providers = providers if providers is not None else providers_from_env()
         self._transport = transport  # injectable for tests
+
+    def with_model(self, model: str) -> LLMClient:
+        """The same provider chain, asking for a different model.
+
+        The free tier runs a cheaper model than the paid one, and `LLM_MODEL`
+        is process-wide: one env var cannot serve two tiers in the same worker.
+        Rebuilding the chain per request would re-read the environment and
+        could pick up a different set of providers mid-flight, so the chain is
+        reused and only the model name is replaced.
+
+        Returns a new client; the original is untouched, which is what keeps a
+        preview scan from changing the model of the paid audit running beside
+        it. Providers are frozen dataclasses, so the copies cannot alias.
+        """
+        return LLMClient(
+            providers=[replace(p, model=model) for p in self.providers],
+            transport=self._transport,
+        )
 
     def complete(self, system: str, user: str,
                  max_tokens: int = 4096) -> tuple[str, LLMUsage]:

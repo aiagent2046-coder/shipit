@@ -47,7 +47,8 @@ from app.main import (
     get_repo_fetcher,
     get_billing_transport,
 )
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
+from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
+                               basis_for_account, content_digest)
 from tests.conftest import drain_audit_queue
 
 client = TestClient(app)
@@ -531,12 +532,18 @@ async def test_anonymous_caller_is_not_served_a_paid_audit_from_the_cache(
         _clear()
 
     assert resp.status_code == 202
-    # Asked only for free depth, never for the paid row.
+    # Asked only for free depth, never for the paid row. Asserted as "not the
+    # paid basis" rather than as a literal string: the free tier's name changed
+    # once (static_only -> static+preview) and the property this test exists
+    # for did not. A literal here fails on the rename and passes on the bug.
     assert audit_repo.basis_queries
-    assert set(audit_repo.basis_queries) == {"static_only"}
+    assert BASIS_FULL not in audit_repo.basis_queries
+    assert set(audit_repo.basis_queries) == {basis_for_account(None)}
     # A second row, scanned fresh at free depth, rather than the seeded one.
     assert len(audit_repo.rows) == 2
     fresh = audit_repo.rows[1]
+    # The stage was skipped, so the RESULT is static-only whatever depth the
+    # caller was entitled to -- the distinction basis_for_account documents.
     assert fresh["score_json"]["basis"] == "static_only"
     assert not any((f.get("rule_id") or "").startswith("llm-")
                    for f in fresh["findings_json"])

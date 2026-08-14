@@ -18,8 +18,9 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
-from app.llm.client import LLMClient, LLMUsage, Provider
 from app.llm import pricing
+from app.llm.client import (LLMClient, LLMUsage, Provider,
+                             supports_sampling_params)
 from app.main import app, get_audit_repo
 from tests.conftest import (drain_audit_queue, force_pro_account,
                            run_audit_job)
@@ -307,10 +308,58 @@ def test_every_priced_model_is_classified_for_sampling_support():
     that someone made the call deliberately for Claude 5 names, where the
     default (send temperature) is the failing one.
     """
-    from app.llm.client import MODELS_WITHOUT_SAMPLING_PARAMS
+    from app.llm.client import (MODELS_WITH_SAMPLING_PARAMS,
+                                MODELS_WITHOUT_SAMPLING_PARAMS)
 
+    # This started as `if "-5" in name`, meaning "a Claude 5 model". It is not:
+    # that substring also matches "claude-haiku-4-5", which takes temperature
+    # perfectly well, and the test failed the moment Haiku was priced. Version
+    # numbers are not a grammar. Both sets are now explicit and every priced
+    # model must appear in exactly one -- which is the decision itself, not a
+    # guess about it.
     for name in pricing.PRICE_TABLE:
-        if "-5" in name or "-4-7" in name or "-4-8" in name:
-            assert name in MODELS_WITHOUT_SAMPLING_PARAMS, (
-                f"{name} is priced but still sends temperature -- a 400 on "
-                "every call")
+        in_without = name in MODELS_WITHOUT_SAMPLING_PARAMS
+        in_with = name in MODELS_WITH_SAMPLING_PARAMS
+        assert in_without != in_with, (
+            f"{name} is priced but not classified for sampling support: add it "
+            "to exactly one of MODELS_WITH_SAMPLING_PARAMS / "
+            "MODELS_WITHOUT_SAMPLING_PARAMS in app/llm/client.py. Guessing "
+            "wrong in one direction is a 400 on every call.")
+
+    # And the classification has to agree with the function that acts on it.
+    for name in MODELS_WITH_SAMPLING_PARAMS:
+        assert supports_sampling_params(name)
+    for name in MODELS_WITHOUT_SAMPLING_PARAMS:
+        assert not supports_sampling_params(name)
+
+
+def test_with_model_gives_the_preview_its_own_model_and_leaves_the_original():
+    """The free tier runs a cheaper model than the paid one in the same worker.
+
+    `LLM_MODEL` is process-wide, so one env var cannot serve two tiers. Two
+    ways this goes wrong, and both are silent: returning the chain unchanged
+    bills the preview at Sonnet rates while the operator believes it is on
+    Haiku, and mutating in place switches the paid audit running beside it
+    down to the cheap model. Neither raises; both are only visible on the
+    invoice or in the findings.
+    """
+    base = LLMClient(providers=[
+        Provider("openai_compat", "https://reseller/v1", "k", "claude-sonnet-4-6"),
+        Provider("anthropic", "https://api.anthropic.com", "k", "claude-sonnet-4-6"),
+    ])
+    preview = base.with_model("claude-haiku-4-5")
+
+    assert [p.model for p in preview.providers] == ["claude-haiku-4-5"] * 2
+    assert [p.model for p in base.providers] == ["claude-sonnet-4-6"] * 2
+    # The chain itself must survive intact -- same providers, same order, same
+    # credentials. A preview that silently lost the fallback provider would
+    # degrade to static-only on the first outage instead of failing over.
+    assert [(p.kind, p.base_url, p.api_key) for p in preview.providers] == [
+        (p.kind, p.base_url, p.api_key) for p in base.providers]
+
+
+def test_with_model_on_an_empty_chain_stays_empty():
+    """No providers configured is a real state (it is what the free tier looks
+    like on a deployment with no keys), and it must not become a crash inside
+    the tier that is given away."""
+    assert LLMClient(providers=[]).with_model("claude-haiku-4-5").providers == []

@@ -59,10 +59,27 @@ _SONNET_5: dict[str, Decimal] = {
     "input": Decimal("3.00"),
     "output": Decimal("15.00"),
 }
+# The free tier's model. A third of Sonnet's rate per token, which is what
+# makes a preview scan affordable to give away -- and a weaker reader, which is
+# why a preview publishes findings rather than scores. It is NOT a Claude 5
+# model, so it still accepts `temperature` and needs no entry in
+# MODELS_WITHOUT_SAMPLING_PARAMS.
+#
+# Both spellings, for the reason the block above gives: the dashed name is
+# Anthropic's and the dotted one is what an OpenAI-compatible reseller returns
+# for the same model. A missed spelling here prices a real scan at
+# DEFAULT_PRICE -- which reads HIGH, so the failure is a spend cap that trips
+# early rather than a bill that arrives unmeasured.
+_HAIKU_4_5: dict[str, Decimal] = {
+    "input": Decimal("1.00"),
+    "output": Decimal("5.00"),
+}
 PRICE_TABLE: dict[str, dict[str, Decimal]] = {
     "claude-sonnet-4.6": _SONNET_4_6,   # AITunnel / OpenAI-compat response name
     "claude-sonnet-4-6": _SONNET_4_6,   # direct Anthropic response name
     "claude-sonnet-5": _SONNET_5,
+    "claude-haiku-4.5": _HAIKU_4_5,
+    "claude-haiku-4-5": _HAIKU_4_5,
 }
 
 # Fallback for a model not in the table (an unexpected served model, or a new
