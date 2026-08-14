@@ -67,9 +67,17 @@ from scripts.batch_audit import REPOS  # noqa: E402
 # Cost per audit is dominated by repository size, so any single number here is
 # an average over a specific sample and not a per-repo prediction. The spread
 # behind these means is wide: Sonnet ran $1.03 to $4.63.
+#
+# Haiku's figure is DOUBLE what the last run invoiced. That run measured a
+# provider silently truncating the input to fit a 200K window, so $0.39 was
+# the price of reading a quarter of each repository. Now that the prompt is
+# built to fit the window, the same audits send about twice as many tokens and
+# cost about twice as much. Quoting the invoiced number here would understate
+# the next run by 2x -- the same shape of error as the $12.30-against-$31.11
+# estimate two paragraphs up, from the opposite direction.
 _ROUGH_COST_PER_AUDIT = {"claude-sonnet-4.6": 3.50, "claude-sonnet-4-6": 3.50,
                          "claude-sonnet-5": 4.55,   # +30% tokenizer, measured
-                         "claude-haiku-4.5": 0.39, "claude-haiku-4-5": 0.39}
+                         "claude-haiku-4.5": 0.80, "claude-haiku-4-5": 0.80}
 
 # How far apart two findings may sit and still be "the same place". Models
 # disagree about which line of a handler to point at. Three, because that is
