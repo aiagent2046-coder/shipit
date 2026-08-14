@@ -689,6 +689,12 @@ class LLMScanStats:
     # and threw away the goods.
     failed_rubric: str | None = None
     failure: str | None = None
+    # How many times a provider rejected a prompt for its size and the scan
+    # came back smaller. Zero is the expected value; anything else says the
+    # character ceiling derived from MODEL_INPUT_TOKENS is too generous for
+    # the code this repository contains, and the operator is paying for it in
+    # round trips rather than in silence.
+    oversize_retries: int = 0
     # True when a provider reported far fewer input tokens than the bytes we
     # sent can contain -- i.e. it cut the request down to fit and answered
     # anyway. See _TRUNCATION_RATIO. This is the alarm that did not exist
@@ -839,6 +845,58 @@ def content_budget(client: object) -> int:
 # Large enough that fit_to_window never trims, so such a double sees exactly
 # the prompt it saw before windows existed.
 _NO_WINDOW = 1 << 40
+
+
+# A provider saying the request is too long, in the words the two API shapes
+# use. Anthropic: "prompt is too long: 235000 tokens > 200000 maximum".
+# OpenAI-compatible: "maximum context length is 200000 tokens ... your messages
+# resulted in 235000 tokens", code context_length_exceeded.
+#
+# Deliberately narrow. A 400 can equally mean a model name this provider spells
+# differently -- the exact trap this project walked into with claude-haiku-4-5
+# -- and shrinking the prompt for that one buys nothing but three more
+# rejections at the same wrong name.
+_OVERSIZE_SIGNATURE = re.compile(
+    r"context[_ ]length|too\s+long|maximum\s+context|max(imum)?\s+tokens?"
+    r"|prompt\s+is\s+too\s+large",
+    re.I,
+)
+
+# "235000 tokens > 200000 maximum", either order of the pair. When the provider
+# states both numbers there is nothing left to estimate: the ratio between them
+# is exactly how much too big the prompt was.
+_OVERSIZE_NUMBERS = re.compile(r"(\d[\d,]{3,})\D{1,40}?(\d[\d,]{3,})")
+
+# How far to cut when the provider does not say. A guess, and marked as one --
+# but a guess that costs one rejected request (billed at zero tokens) rather
+# than a wrong number baked into a constant nobody revisits.
+_BLIND_SHRINK = 0.6
+
+# How many times to shrink before giving up on a rubric. Two, because each
+# attempt is a round trip on a prompt of hundreds of thousands of characters,
+# and 0.6 twice is a third of the original -- past that the prompt is too thin
+# to be worth the wait, and the honest answer is the partial result #30 makes
+# possible.
+_MAX_SHRINKS = 2
+
+
+def shrunk_limit(current: int, message: str) -> int:
+    """The request ceiling to retry under, after a provider rejected `current`.
+
+    Reads the numbers out of the provider's own complaint when they are there,
+    because they turn the whole question from a guess into arithmetic: a reply
+    naming 235000 tokens against a 200000 maximum says the prompt was 17.5%
+    too big and nothing needs to be assumed. The 5% margin covers the fact
+    that the ratio is measured in tokens and applied to characters, which are
+    related by exactly the average this function exists to stop trusting.
+    """
+    m = _OVERSIZE_NUMBERS.search(message)
+    if m:
+        a, b = (int(g.replace(",", "")) for g in m.groups())
+        used, allowed = max(a, b), min(a, b)
+        if used > allowed > 0:
+            return max(1, int(current * (allowed / used) * 0.95))
+    return max(1, int(current * _BLIND_SHRINK))
 
 
 def request_limit_for(client: object) -> int:
@@ -1181,26 +1239,50 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               # caller had before failures were survivable.
               _record_ran(rubric)
               continue
-          stats.prompts += 1
-          selected, prompt = fit_to_window(
-              selected, rubric, request_limit - len(SYSTEM_PROMPT))
-          sent = len(SYSTEM_PROMPT) + len(prompt)
-          stats.prompt_chars += sent
-          try:
-              raw, usage = client.complete(SYSTEM_PROMPT, prompt,
-                                           max_tokens=8192)
-          except LLMError as exc:
-              # Stop, do not continue to the next rubric. The client has
-              # already retried this call and walked the whole provider
-              # chain, so a failure here is the chain being unavailable or
-              # the request being one it will not accept -- and three more
-              # rubrics would be three more of the same, slower, and paid for
-              # if any of them half-succeeded. What matters is that the loop
-              # ENDS rather than unwinds: `findings` is local, and unwinding
-              # is what used to throw it away.
-              stats.failed_rubric = rubric
-              stats.failure = str(exc)
+          usage = None
+          for _shrink in range(_MAX_SHRINKS + 1):
+              stats.prompts += 1
+              selected, prompt = fit_to_window(
+                  selected, rubric, request_limit - len(SYSTEM_PROMPT))
+              sent = len(SYSTEM_PROMPT) + len(prompt)
+              try:
+                  raw, usage = client.complete(SYSTEM_PROMPT, prompt,
+                                               max_tokens=8192)
+                  break
+              except LLMError as exc:
+                  # A provider refusing the request for its SIZE is a
+                  # measurement, not a verdict. Our ceiling comes from
+                  # converting a token window with an average characters-per-
+                  # token -- 3.0, measured over four real prompts -- and an
+                  # average is not a bound: denser code crosses the window at
+                  # the same character count. The provider is the only party
+                  # that knows for certain, so when it says no, believe it and
+                  # come back smaller.
+                  #
+                  # The narrowed limit sticks for the REST OF THIS SCAN. Three
+                  # more rubrics would otherwise repeat the same rejection and
+                  # relearn the same number, one round trip at a time.
+                  if (_shrink < _MAX_SHRINKS
+                          and _OVERSIZE_SIGNATURE.search(str(exc))):
+                      request_limit = shrunk_limit(request_limit, str(exc))
+                      stats.oversize_retries += 1
+                      continue
+                  # Anything else, or one shrink too many: stop, do not
+                  # continue to the next rubric. The client has already
+                  # retried and walked the whole provider chain. What matters
+                  # is that the loop ENDS rather than unwinds -- `findings` is
+                  # local, and unwinding is what used to throw it away.
+                  stats.failed_rubric = rubric
+                  stats.failure = str(exc)
+                  break
+          if usage is None:
               break
+          # Counted only for the request that was ACCEPTED. A rejected one was
+          # sent and cost nothing -- no tokens are billed for a 400 -- and
+          # adding its characters here would inflate the ratio that
+          # input_truncated reads, accusing the provider of dropping a prompt
+          # it never took.
+          stats.prompt_chars += sent
           stats.calls += 1
           stats.input_tokens += usage.input_tokens
           stats.output_tokens += usage.output_tokens

@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from app.llm import client as client_mod
-from app.llm.client import LLMClient, LLMUsage, Provider
+from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan import llm_scan
 from app.scan.llm_scan import (
     RUBRICS,
@@ -546,6 +546,46 @@ def test_client_falls_back_to_second_provider(monkeypatch):
     text, _usage = client.complete("s", "u")
     assert text == "[]"
     assert calls == ["primary.example"] * 3 + ["api.anthropic.com"]
+
+
+def test_a_4xx_carries_what_the_provider_actually_said():
+    """httpx's message for a 400 is "Client error '400 Bad Request' for url
+    ...", which names the status and nothing else.
+
+    Everything downstream that reacts to a 400 reads this string. A context
+    window overflow, a model name the provider spells differently and a
+    malformed body all arrive as the same sentence, and only the body tells
+    them apart -- so run_llm_scan's decision to resend a smaller prompt could
+    never fire in production, however well it worked against a double that
+    supplied the body itself.
+    """
+    body = ('{"error":{"type":"invalid_request_error","message":'
+            '"prompt is too long: 235000 tokens > 200000 maximum"}}')
+    client = LLMClient(
+        providers=[Provider("anthropic", "https://api.anthropic.com", "k", "m")],
+        transport=httpx.MockTransport(lambda _r: httpx.Response(400, text=body)),
+    )
+
+    with pytest.raises(LLMError) as caught:
+        client.complete("s", "u")
+
+    assert "prompt is too long: 235000 tokens > 200000 maximum" in str(caught.value)
+    assert llm_scan._OVERSIZE_SIGNATURE.search(str(caught.value))
+
+
+def test_the_error_body_is_clipped():
+    """It reaches logs, and a provider that echoes part of the request would
+    otherwise put a customer's code there."""
+    client = LLMClient(
+        providers=[Provider("anthropic", "https://api.anthropic.com", "k", "m")],
+        transport=httpx.MockTransport(
+            lambda _r: httpx.Response(400, text="x" * 5000)),
+    )
+
+    with pytest.raises(LLMError) as caught:
+        client.complete("s", "u")
+
+    assert str(caught.value).count("x") <= client_mod._DETAIL_CHARS
 
 
 def test_cross_rubric_dedup_keeps_most_severe():

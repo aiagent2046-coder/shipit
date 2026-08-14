@@ -271,7 +271,7 @@ class LLMClient:
                     if transient and attempt < TRANSIENT_RETRIES:
                         time.sleep(RETRY_BACKOFF_S * (attempt + 1))
                         continue
-                    errors.append(f"{p.kind}@{p.base_url}: {exc}")
+                    errors.append(f"{p.kind}@{p.base_url}: {_detail(exc)}")
                     break
         raise LLMError("; ".join(errors))
 
@@ -356,6 +356,34 @@ class LLMClient:
             data = resp.json()
             text = data["choices"][0]["message"]["content"]
             return text, _usage_openai(data, p.model)
+
+
+# How much of a provider's error body to keep. Enough for the sentence that
+# says what was wrong; short enough that a body echoing part of the request
+# cannot put a meaningful amount of a customer's code into a log line.
+_DETAIL_CHARS = 200
+
+
+def _detail(exc: Exception) -> str:
+    """The exception, plus what the provider actually said.
+
+    httpx's message for a 4xx is "Client error '400 Bad Request' for url ...",
+    which names the status and nothing else. That cost a real diagnosis: a 400
+    on a free-tier audit could have been a context window overflow, a model
+    name the provider spells differently, or a malformed body, and the three
+    have completely different fixes. With the body dropped there was no way to
+    tell them apart from the outside, and the caller could only guess.
+
+    A body that cannot be read is not an error worth raising over the error --
+    the exception is the message either way.
+    """
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return str(exc)
+    try:
+        body = " ".join((exc.response.text or "").split())
+    except Exception:                       # noqa: BLE001 - never mask the 4xx
+        body = ""
+    return f"{exc}: {body[:_DETAIL_CHARS]}" if body else str(exc)
 
 
 def _usage_int(usage: dict, key: str) -> int:
