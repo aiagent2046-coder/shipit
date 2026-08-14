@@ -367,6 +367,38 @@ def test_the_note_describes_compression_not_a_flat_ceiling():
         "describes the flat ceiling that was measured and rejected")
 
 
+def test_a_page_with_no_score_does_not_explain_the_score():
+    """Measured on a real free report, audit 544b91bd.
+
+    The page opened "A free scan does not produce a mark out of ten, because
+    it does not look at enough to earn one", marked Security "partly checked"
+    rather than giving it a number, and then printed:
+
+        This score cannot exceed 6.9 because the audit found a safety
+        category below 7.0 (Security 5.5).
+
+    Three things wrong at once. It says "this score" where there is none. It
+    publishes the exact category number the page two paragraphs above had
+    declined to publish. And 6.9 appears nowhere else on a free page, so the
+    reader has nothing to reconcile it against.
+
+    Withholding a number in one section and printing it in the next is not a
+    smaller claim than publishing it. It is the same claim, made where nobody
+    thought to look for it.
+    """
+    reasons = [{"kind": "subscore", "category": "Security", "value": 5.5}]
+
+    for basis in ("static+preview", "static_only"):
+        html = render_report(_gated(reasons, basis=basis))
+        assert "cannot exceed" not in html, basis
+        assert "Security 5.5" not in html, basis
+
+    # ...and the paid page still carries it, which is the whole point of the
+    # paragraph: a headline that contradicts every bar above it needs saying.
+    paid = render_report(_gated(reasons))
+    assert "cannot exceed" in paid and "Security 5.5" in paid
+
+
 def test_hostile_gate_reason_title_is_escaped():
     """gated_by carries an LLM-authored title straight from the finding."""
     html = render_report(_gated([
@@ -388,18 +420,69 @@ def test_ungated_and_legacy_rows_print_no_cap_note():
     assert "cannot exceed" not in render_report(legacy)
 
 
-def test_a_capped_free_scan_explains_the_cap_too():
-    """The cap note used to be suppressed on a static-only audit, because
-    there was no headline to explain. There is one now, and the free tier is
-    where a lone critical most often caps it -- a committed .env is a static
-    rule, so this is the common case, not the exotic one.
+# --- joining the bars to the table ------------------------------------------
+
+def test_a_finding_names_the_bar_it_scored_in():
+    """The page draws six category bars and a table, and nothing joined them.
+
+    Audit fb00b177 published Security 9.0 above a table holding predictable
+    hardcoded passwords for a hundred accounts, an SSRF and a service-role key
+    used to derive user passwords. Both halves can be right -- findings are
+    filed by what they are, not by which rubric found them -- but the reader
+    was given no way to establish that. The score is checkable arithmetic,
+    10.0 - sum(weight x confidence), and the one input it needs was the one
+    thing the page did not print.
+    """
+    f = {**_finding(), "category": "Auth"}
+
+    # Anchored to the row, not to the page: "Auth" is the name of a bar too,
+    # so a bare substring check passes on a report that prints nothing here.
+    assert '<div class="tech">Auth · ' in render_report(result([f]))
+
+
+def test_a_moved_finding_says_where_it_came_from():
+    """The question the bars raise most often: a category can read a perfect
+    10.0 for the precise reason that everything it found now scores next
+    door."""
+    f = {**_finding(), "category": "Security", "origin_category": "Auth"}
+
+    assert "Security (moved from Auth)" in render_report(result([f]))
+
+
+def test_an_unmoved_finding_says_nothing_about_moving():
+    f = {**_finding(), "category": "Security", "origin_category": "Security"}
+
+    assert "moved from" not in render_report(result([f]))
+
+
+def test_a_finding_with_no_category_renders_without_one():
+    """Static rules predating the field, and stored rows written before it."""
+    html = render_report(result([_finding()]))
+
+    assert "AWS key in code" in html and "moved from" not in html
+
+
+def test_a_hostile_category_is_escaped():
+    """`category` is model-authored on every LLM finding."""
+    f = {**_finding(), "category": "<script>alert(1)</script>"}
+
+    assert "<script>alert(1)</script>" not in render_report(result([f]))
+
+
+def test_a_capped_free_scan_names_nothing_it_did_not_publish():
+    """The counterpart of the test above, on the case that reads worst.
+
+    A committed .env is a static rule, so a lone critical capping a free scan
+    is the common case rather than the exotic one -- which is exactly why the
+    paragraph must not print here. The finding is in the table, at its own
+    severity, where a free scan is entitled to put it. What the free page
+    cannot do is explain the effect of that finding on a number it withheld.
     """
     html = render_report(_gated(
         [{"kind": "critical", "category": "Security",
           "rule_id": "env-file-committed", "title": "Committed .env file"}],
         basis="static_only"))
-    assert "cannot exceed" in html
-    assert "Committed .env file" in html
+    assert "cannot exceed" not in html
 
 
 def test_a_stored_row_predating_the_key_still_marks_auth_unchecked():
