@@ -590,7 +590,8 @@ SYSTEM_PROMPT = (
     + "|".join(f"\"{c}\"" for c in RUBRIC_CATEGORIES)
     + "}. Set \"category\" from what the FINDING IS, not from the review you "
     "were asked to do: SQL injection, command injection, unsafe "
-    "deserialisation or path traversal are \"Security\" even when you find "
+    "deserialisation, path traversal or a credential hardcoded in source "
+    "are \"Security\" even when you find "
     "them while reviewing authentication. Use \"Auth\" only for who may sign "
     "in and who may reach whose data. Write \"explanation\" for a "
     "non-technical founder: "
