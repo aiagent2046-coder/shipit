@@ -50,7 +50,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # byte-identical content recompute instead of reusing a now-stale row,
 # which is what stops an engine improvement (or bug fix) from being frozen
 # out by a result produced under the old engine.
-AUDIT_ENGINE_VERSION = "2026-08-14-4"
+AUDIT_ENGINE_VERSION = "2026-08-14-5"
 
 
 # The three values `score["basis"]` can take, named because they are a pricing

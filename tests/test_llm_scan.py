@@ -15,6 +15,7 @@ import zipfile
 import httpx
 import pytest
 
+from app.llm import client as client_mod
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.scan import llm_scan
 from app.scan.llm_scan import (
@@ -38,7 +39,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "6f4df84af4982d39"
+PROMPT_FINGERPRINT = "99b8ee94fec02304"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -323,11 +324,13 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
         valid_finding(file="src/invented.ts", title="hallucination"),
     ])
     buf = make_zip({"src/auth.ts": VULN_TS.encode()})
-    findings, stats = run_llm_scan(buf, FakeLLM(response), rubrics=("auth",))
+    llm = FakeLLM(response)
+    findings, stats = run_llm_scan(buf, llm, rubrics=("auth",))
 
     assert stats == LLMScanStats(
         prompts=1, raw_findings=2, verified=1, discarded=1,
-        calls=1, input_tokens=100, output_tokens=20, model="fake-model")
+        calls=1, input_tokens=100, output_tokens=20, model="fake-model",
+        prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]))
     assert len(findings) == 1
     f = findings[0]
     assert f.rule_id == "llm-auth" and f.category == "Auth"
@@ -338,6 +341,181 @@ def test_run_llm_scan_skips_rubric_with_no_matching_files():
     buf = make_zip({"README.md": b"# hi"})  # not a code file at all
     findings, stats = run_llm_scan(buf, FakeLLM("[]"))
     assert findings == [] and stats.prompts == 0
+
+
+# --- the prompt must fit the model that receives it -------------------------
+#
+# Measured on tscircuit.com: 3,777,616 characters went out across four rubric
+# prompts. Sonnet 4.6 reported 1,256K input tokens, 3.0 per character -- all
+# of it. Haiku 4.5, on the same archive bytes, reported 330K: a quarter. It
+# answered anyway, with 19 findings and a score of 5.3 for a repository it had
+# mostly not read, and no counter anywhere disagreed.
+#
+# MAX_TOTAL_CHARS was one number for every model, described in its own comment
+# as "~225K tokens" on a 4-chars-per-token guess. Code is 3.0, so a rubric
+# prompt is ~315K tokens -- over the 200K window of every Claude model not
+# served with the long-context beta.
+
+
+def _client_for(model: str) -> LLMClient:
+    return LLMClient(providers=[Provider("openai_compat", "http://x", "k", model)])
+
+
+def test_prompt_budget_shrinks_to_the_models_context_window():
+    """The paid model keeps the full budget; the free tier's does not get a
+    budget its provider has to cut down to size."""
+    assert llm_scan.content_budget(_client_for("claude-sonnet-4.6")) == \
+        llm_scan.MAX_TOTAL_CHARS
+    assert llm_scan.content_budget(_client_for("claude-haiku-4.5")) < \
+        llm_scan.MAX_TOTAL_CHARS
+
+
+def test_a_full_prompt_fits_the_window_it_is_sent_to():
+    """The property, rather than the number: whatever budget a model gets,
+    filling it completely -- content plus the system prompt plus build_prompt's
+    line numbering -- must still fit that model's context window.
+
+    This is what MAX_TOTAL_CHARS alone could not state. It bounded our own
+    spending and nothing checked it against the receiver."""
+    for model in ("claude-sonnet-4.6", "claude-haiku-4.5", "no-such-model"):
+        budget = llm_scan.content_budget(_client_for(model))
+        files = [(f"src/auth/h{i}.ts", "jwt token session " * 4000)
+                 for i in range(400)]
+        selected = select_files(files, "auth", budget)
+        sent = len(SYSTEM_PROMPT) + len(build_prompt(selected, "auth"))
+        assert sent <= client_mod.input_char_budget(model), model
+
+
+def test_run_llm_scan_sends_prompts_that_fit_the_configured_model():
+    """End to end, because select_files taking a budget proves nothing about
+    run_llm_scan passing one. That exact gap -- a correct producer nobody
+    called, a correct consumer called with the old default -- has now been the
+    shape of four separate defects in this scanner, each with a green suite.
+    """
+    class Recorder(FakeLLM):
+        def __init__(self, model):
+            super().__init__("[]")
+            self.providers = [Provider("openai_compat", "http://x", "k", model)]
+
+    buf = make_zip({f"src/auth/h{i}.ts": ("// jwt token session\n" * 3000).encode()
+                    for i in range(40)})
+    llm = Recorder("claude-haiku-4.5")
+
+    run_llm_scan(buf, llm, rubrics=("auth",))
+
+    assert llm.prompts, "the rubric must have run for this to prove anything"
+    assert max(len(SYSTEM_PROMPT) + len(p) for p in llm.prompts) <= \
+        client_mod.input_char_budget("claude-haiku-4.5")
+
+
+def test_short_lines_do_not_push_the_prompt_over_the_window():
+    """The case that proved an estimate cannot do this job.
+
+    build_prompt numbers every line, so its overhead is per LINE, not per
+    character: 14.5% on tscircuit's real code and over 25% on a file of
+    twenty-character lines. content_budget's 1.15 was measured on the former
+    and is simply wrong on the latter, and being wrong by 10% against a
+    context window is the provider discarding the tail of the prompt.
+
+    fit_to_window measures the finished string instead of predicting it, so
+    this holds for any shape of file rather than for the average one.
+    """
+    dense = [(f"src/auth/h{i}.ts", "// jwt token\n" * 4000) for i in range(60)]
+    limit = 200_000
+
+    selected, prompt = llm_scan.fit_to_window(
+        select_files(dense, "auth", limit), "auth", limit)
+
+    assert selected, "trimming to nothing would be a different bug"
+    assert len(prompt) <= limit
+    # Without the numbering the same selection looks comfortably under. This
+    # is the difference the estimate got wrong, stated as a number.
+    assert sum(len(t) for _, t in selected) < len(prompt)
+
+
+def test_select_files_spends_the_budget_it_is_given():
+    """Both passes, not just the relevance reserve. The breadth pass had its
+    own copy of the ceiling and would have kept filling to 900_000 after the
+    first pass respected a smaller one."""
+    files = [(f"src/auth/h{i}.ts", "jwt token session " * 500) for i in range(200)]
+
+    small = sum(len(t) for _, t in select_files(files, "auth", 50_000))
+    large = sum(len(t) for _, t in select_files(files, "auth", 500_000))
+
+    assert small <= 50_000 and large > 50_000
+
+
+def test_the_smallest_window_in_the_chain_wins():
+    """A prompt is built once and offered to each provider in turn, so the
+    fallback receives the prompt the primary was sized for. Sizing to the
+    first provider means the day the primary is down is the day the audit
+    quietly starts reading a third of the repository."""
+    chain = LLMClient(providers=[
+        Provider("openai_compat", "http://a", "k", "claude-sonnet-4.6"),
+        Provider("anthropic", "http://b", "k", "claude-haiku-4-5"),
+    ])
+    assert chain.input_char_budget() == \
+        client_mod.input_char_budget("claude-haiku-4-5")
+
+
+def test_an_unlisted_model_gets_the_small_window():
+    """The default has to fail towards reading less, not towards a score for
+    code nobody read."""
+    assert client_mod.input_char_budget("something-new-and-huge") == \
+        client_mod.input_char_budget("claude-haiku-4.5")
+
+
+# --- and when a provider cuts it anyway, that must be recorded --------------
+
+
+class SizedLLM(FakeLLM):
+    """Reports input tokens as `chars_per_token` of what it was handed.
+
+    3.0 is what a provider that read the prompt reports. A larger number is
+    the shape of one that did not.
+    """
+
+    def __init__(self, response: str, chars_per_token: float):
+        super().__init__(response)
+        self.chars_per_token = chars_per_token
+
+    def complete(self, system: str, user: str, max_tokens: int = 4096):
+        self.prompts.append(user)
+        return self.response, LLMUsage(
+            model="fake-model",
+            input_tokens=int(len(system + user) / self.chars_per_token),
+            output_tokens=20)
+
+
+def _big_auth_zip() -> io.BytesIO:
+    # Over _TRUNCATION_MIN_CHARS, because a prompt far under the smallest
+    # context window cannot have been cut for length and the ratio there
+    # measures the provider's bookkeeping instead.
+    return make_zip({f"src/auth/h{i}.ts": ("// jwt token session\n" * 400).encode()
+                     for i in range(10)})
+
+
+def test_a_provider_that_read_a_quarter_of_the_prompt_is_recorded():
+    _, stats = run_llm_scan(_big_auth_zip(), SizedLLM("[]", 12.0),
+                            rubrics=("auth",))
+    assert stats.prompt_chars >= llm_scan._TRUNCATION_MIN_CHARS
+    assert stats.input_truncated is True
+
+
+def test_a_provider_that_read_the_prompt_is_not_accused():
+    _, stats = run_llm_scan(_big_auth_zip(), SizedLLM("[]", 3.0),
+                            rubrics=("auth",))
+    assert stats.input_truncated is False
+
+
+def test_prompt_chars_counts_the_system_prompt_too():
+    """The system prompt is 2,217 characters of the request the provider bills
+    and truncates. Counting only the user half would understate every ratio
+    and, on a prompt sitting on the window, hide the cut it exists to find."""
+    llm = SizedLLM("[]", 3.0)
+    _, stats = run_llm_scan(_big_auth_zip(), llm, rubrics=("auth",))
+    assert stats.prompt_chars == sum(
+        len(SYSTEM_PROMPT) + len(p) for p in llm.prompts)
 
 
 # --- client fallback chain ---
@@ -780,6 +958,22 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         str(llm_scan.MAX_FILE_CHARS),
         str(llm_scan.MAX_TOTAL_CHARS),
         str(llm_scan.RELEVANCE_BUDGET_SHARE),
+        # The budget MAX_TOTAL_CHARS is now only the upper half of. What a
+        # rubric may actually spend is the smaller of that and the model's
+        # context window, so a table of windows in another module decides how
+        # much code the model is shown -- and shrinking one silently would be
+        # a prompt change wearing a configuration change's clothes.
+        inspect.getsource(llm_scan.content_budget),
+        # And the trim that enforces it. content_budget only predicts the
+        # prompt's size; this decides which files survive when the prediction
+        # was optimistic, so it removes characters the model would have seen.
+        inspect.getsource(llm_scan.fit_to_window),
+        inspect.getsource(llm_scan.request_limit_for),
+        str(llm_scan._PROMPT_OVERHEAD),
+        repr(sorted(client_mod.MODEL_INPUT_TOKENS.items())),
+        str(client_mod.DEFAULT_INPUT_TOKENS),
+        str(client_mod.CHARS_PER_TOKEN),
+        str(client_mod.RESPONSE_RESERVE_TOKENS),
         inspect.getsource(llm_scan.relevance),
         inspect.getsource(llm_scan.select_files),
         # How a file that does not fit is cut, and what the cut says. Added

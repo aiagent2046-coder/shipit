@@ -71,6 +71,69 @@ MODELS_WITH_SAMPLING_PARAMS = frozenset({
     "claude-haiku-4.5", "claude-haiku-4-5",
 })
 
+# How many input tokens we are willing to build a prompt up to, per model.
+#
+# MEASURED, and the measurement is why this table exists. tscircuit.com sent
+# 3,777,616 characters across four rubric prompts. Sonnet 4.6 reported
+# 1,256K input tokens -- 3.0 characters per token, all of it. Haiku 4.5, on
+# the SAME bytes (the comparison script fetches the archive once on purpose),
+# reported 330K: 11.4 characters per token, about a quarter. It then returned
+# 19 findings and a score of 5.3, and nothing anywhere recorded that three
+# quarters of the repository had never reached the model.
+#
+# app/scan/llm_scan.py's MAX_TOTAL_CHARS is 900_000, which its own comment
+# calls "~225K tokens" on a 4-chars-per-token assumption. Code is 3.0, so a
+# rubric prompt is ~315K tokens -- past the 200K window every current Claude
+# model has except with the long-context beta. Sonnet 4.6 is served with it
+# and swallowed the prompt; Haiku 4.5 is not, and the provider cut the request
+# down to fit without saying so.
+#
+# That makes this OUR defect and not the provider's. We built a prompt for a
+# window we never checked the model had. The difference matters beyond blame:
+# when select_files drops a file it drops the least relevant one and marks the
+# cut, and the system prompt tells the model that absence inside a truncated
+# file proves nothing. When the provider drops it, we do not know what went,
+# the model is not told, and its silence about a region it never saw reads
+# exactly like a clean bill of health.
+#
+# An unlisted model gets the SMALL window. A prompt built for 200K on a model
+# that has 1M spends less than it could; the reverse reviews a fraction of the
+# code and prints a number for the whole of it.
+MODEL_INPUT_TOKENS = {
+    # Served with the long-context beta: measured accepting ~315K tokens in a
+    # single request. The exact ceiling above that is untested -- anything at
+    # or over ~400K is equivalent at today's MAX_TOTAL_CHARS.
+    "claude-sonnet-4.6": 1_000_000, "claude-sonnet-4-6": 1_000_000,
+    # 200K, and the reason this table exists.
+    "claude-haiku-4.5": 200_000, "claude-haiku-4-5": 200_000,
+}
+
+# Deliberately the standard window, not the largest one. See above: guessing
+# high is the failure mode that ships a score for code nobody read.
+#
+# claude-sonnet-5 is in PRICE_TABLE and absent from MODEL_INPUT_TOKENS, so it
+# lands here. That is a real reduction for anyone who switches to it, and it
+# is the right default until someone runs scripts/prompt_sizes.py --compare
+# against it. Measuring is one $4 audit.
+DEFAULT_INPUT_TOKENS = 200_000
+
+# Characters per token on the code this scanner sends: 3,777,616 / 1,256,000
+# over four real rubric prompts. Not the ~4 that prose gets, which is where
+# MAX_TOTAL_CHARS's "~225K tokens" came from and why it was 33% optimistic.
+CHARS_PER_TOKEN = 3.0
+
+# Held back from the input budget for the response. The rubric path asks for
+# max_tokens=8192, and on models where thinking shares that budget it is the
+# whole of it. Providers differ on whether the response competes with the
+# input window at all; reserving when it does not costs 8K tokens of prompt.
+RESPONSE_RESERVE_TOKENS = 8_192
+
+
+def input_char_budget(model: str) -> int:
+    """Characters one request to `model` may contain, system prompt included."""
+    window = MODEL_INPUT_TOKENS.get(model, DEFAULT_INPUT_TOKENS)
+    return int(max(0, window - RESPONSE_RESERVE_TOKENS) * CHARS_PER_TOKEN)
+
 
 def supports_sampling_params(model: str) -> bool:
     """False when `temperature` must be omitted or the request 400s.
@@ -162,6 +225,25 @@ class LLMClient:
         clone = copy.copy(self)
         clone.providers = [replace(p, model=model) for p in self.providers]
         return clone
+
+    def input_char_budget(self) -> int:
+        """Characters a single request may contain on THIS chain.
+
+        The smallest window in the chain, not the first provider's. A prompt
+        is built once and then offered to each provider in turn until one
+        answers, so a prompt sized for the primary is the prompt the fallback
+        gets -- and a fallback exists to be used on the day the primary is
+        down, which is the worst day to start silently reviewing a third of
+        the repository. Sizing to the smallest costs coverage only while the
+        primary is healthy, and never costs correctness.
+
+        An empty chain answers with the default rather than 0: no request will
+        be sent anyway, and returning 0 would make select_files pick nothing
+        and the failure look like an empty repository.
+        """
+        if not self.providers:
+            return input_char_budget("")
+        return min(input_char_budget(p.model) for p in self.providers)
 
     def complete(self, system: str, user: str,
                  max_tokens: int = 4096) -> tuple[str, LLMUsage]:
