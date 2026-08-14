@@ -276,8 +276,9 @@ def test_thinking_is_disabled_only_where_it_would_otherwise_switch_on():
     """max_tokens bounds thinking AND text together.
 
     Sonnet 4.6 ran without thinking when the key was absent; Claude 5 turns
-    adaptive thinking on in that same case. At our 4096 a long think eats the
-    budget and truncates the JSON the rubric parser reads, so the new
+    adaptive thinking on in that same case. The rubric path sends 8192
+    (app/scan/llm_scan.py) — not the 4096 default — and a long think eats
+    that budget and truncates the JSON the rubric parser reads, so the new
     behaviour is declined explicitly rather than inherited.
 
     Absent on the OpenAI-compatible body on purpose: `thinking` is not part of

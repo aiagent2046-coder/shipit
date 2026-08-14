@@ -35,9 +35,10 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 #
 # The same models turn adaptive thinking ON when `thinking` is unset, where
 # Sonnet 4.6 ran without it. `max_tokens` bounds thinking AND response text
-# together, so at our 4096 a long think would eat the budget and truncate the
-# JSON the rubric parser needs. We ask these models for the 4.6 behaviour
-# explicitly rather than inheriting a new default.
+# together, so at the rubric path's 8192 (app/scan/llm_scan.py sends that, not
+# the 4096 default) a long think would eat the budget and truncate the JSON the
+# rubric parser needs. We ask these models for the 4.6 behaviour explicitly
+# rather than inheriting a new default.
 #
 # Listed by hand in BOTH provider spellings, exactly as PRICE_TABLE is, and
 # for the same reason: AITunnel and the direct Anthropic API name the same
@@ -56,6 +57,8 @@ MODELS_WITHOUT_SAMPLING_PARAMS = frozenset({
 def supports_sampling_params(model: str) -> bool:
     """False when `temperature` must be omitted or the request 400s."""
     return model not in MODELS_WITHOUT_SAMPLING_PARAMS
+
+
 TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 TRANSIENT_RETRIES = 2      # extra attempts per provider on 5xx/transport errors
 RETRY_BACKOFF_S = 2.0      # linear: 2s, then 4s
