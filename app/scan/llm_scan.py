@@ -18,7 +18,7 @@ from decimal import Decimal
 from typing import BinaryIO
 
 from app.llm import pricing
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, LLMError
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
@@ -677,6 +677,24 @@ class LLMScanStats:
     # much of it arrived, so a provider that read a quarter and billed for a
     # quarter looked identical to a small repository.
     prompt_chars: int = 0
+    # Which rubrics completed, in declaration order. The scorer needs it to
+    # tell a category nobody looked at from one that was looked at and found
+    # clean -- and after a mid-scan provider failure those are different
+    # rubrics than the ones the caller asked for.
+    rubrics_ran: tuple[str, ...] = ()
+    # The rubric that failed and what the provider said, or None. Set instead
+    # of raising: an LLMError used to propagate out of the rubric loop and
+    # take every finding collected before it, while the token count -- which
+    # this object holds and the caller owns -- survived. We kept the invoice
+    # and threw away the goods.
+    failed_rubric: str | None = None
+    failure: str | None = None
+    # How many times a provider rejected a prompt for its size and the scan
+    # came back smaller. Zero is the expected value; anything else says the
+    # character ceiling derived from MODEL_INPUT_TOKENS is too generous for
+    # the code this repository contains, and the operator is paying for it in
+    # round trips rather than in silence.
+    oversize_retries: int = 0
     # True when a provider reported far fewer input tokens than the bytes we
     # sent can contain -- i.e. it cut the request down to fit and answered
     # anyway. See _TRUNCATION_RATIO. This is the alarm that did not exist
@@ -827,6 +845,58 @@ def content_budget(client: object) -> int:
 # Large enough that fit_to_window never trims, so such a double sees exactly
 # the prompt it saw before windows existed.
 _NO_WINDOW = 1 << 40
+
+
+# A provider saying the request is too long, in the words the two API shapes
+# use. Anthropic: "prompt is too long: 235000 tokens > 200000 maximum".
+# OpenAI-compatible: "maximum context length is 200000 tokens ... your messages
+# resulted in 235000 tokens", code context_length_exceeded.
+#
+# Deliberately narrow. A 400 can equally mean a model name this provider spells
+# differently -- the exact trap this project walked into with claude-haiku-4-5
+# -- and shrinking the prompt for that one buys nothing but three more
+# rejections at the same wrong name.
+_OVERSIZE_SIGNATURE = re.compile(
+    r"context[_ ]length|too\s+long|maximum\s+context|max(imum)?\s+tokens?"
+    r"|prompt\s+is\s+too\s+large",
+    re.I,
+)
+
+# "235000 tokens > 200000 maximum", either order of the pair. When the provider
+# states both numbers there is nothing left to estimate: the ratio between them
+# is exactly how much too big the prompt was.
+_OVERSIZE_NUMBERS = re.compile(r"(\d[\d,]{3,})\D{1,40}?(\d[\d,]{3,})")
+
+# How far to cut when the provider does not say. A guess, and marked as one --
+# but a guess that costs one rejected request (billed at zero tokens) rather
+# than a wrong number baked into a constant nobody revisits.
+_BLIND_SHRINK = 0.6
+
+# How many times to shrink before giving up on a rubric. Two, because each
+# attempt is a round trip on a prompt of hundreds of thousands of characters,
+# and 0.6 twice is a third of the original -- past that the prompt is too thin
+# to be worth the wait, and the honest answer is the partial result #30 makes
+# possible.
+_MAX_SHRINKS = 2
+
+
+def shrunk_limit(current: int, message: str) -> int:
+    """The request ceiling to retry under, after a provider rejected `current`.
+
+    Reads the numbers out of the provider's own complaint when they are there,
+    because they turn the whole question from a guess into arithmetic: a reply
+    naming 235000 tokens against a 200000 maximum says the prompt was 17.5%
+    too big and nothing needs to be assumed. The 5% margin covers the fact
+    that the ratio is measured in tokens and applied to characters, which are
+    related by exactly the average this function exists to stop trusting.
+    """
+    m = _OVERSIZE_NUMBERS.search(message)
+    if m:
+        a, b = (int(g.replace(",", "")) for g in m.groups())
+        used, allowed = max(a, b), min(a, b)
+        if used > allowed > 0:
+            return max(1, int(current * (allowed / used) * 0.95))
+    return max(1, int(current * _BLIND_SHRINK))
 
 
 def request_limit_for(client: object) -> int:
@@ -1126,7 +1196,17 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     client.complete() raises on the second rubric: the tokens the first call
     already burned are in the caller's object, whereas a locally-created one is
     discarded with the frame. app/scan/pipeline.py passes one in for exactly
-    that reason; the default keeps every other caller unchanged."""
+    that reason; the default keeps every other caller unchanged.
+
+    A PROVIDER FAILURE MID-SCAN NO LONGER RAISES. It stops the loop and returns
+    what the earlier rubrics found, with stats.failed_rubric and stats.failure
+    naming what went wrong. Raising was half a fix: the accumulator above was
+    added so the tokens survived, and the findings those tokens bought still
+    did not. On a real repository that meant three rubrics' worth of paid
+    review discarded and an audit that scored 6.0 where the complete scan
+    scored 3.9. A caller that wants the old all-or-nothing behaviour can read
+    stats.failure and decide; a caller that just wants findings gets the ones
+    that exist."""
     stats = stats if stats is not None else LLMScanStats()
     # Resolved once, before the loop: every rubric this scan sends goes to the
     # same chain, and re-deriving it per rubric would let a chain mutated
@@ -1138,19 +1218,71 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     files_by_name = dict(files)
 
     findings: list[ScoredFinding] = []
+    ran: set[str] = set()
+
+    def _record_ran(rubric: str) -> None:
+        # In declaration order, deduplicated across passes, so the value is a
+        # set of rubrics rather than a log of attempts. The scorer asks it one
+        # question -- was this category examined -- and asks it once.
+        ran.add(rubric)
+        stats.rubrics_ran = tuple(r for r in rubrics if r in ran)
+
     for _pass in range(max(1, passes)):
-      if stats.cost_cap_exceeded:
+      if stats.cost_cap_exceeded or stats.failure:
           break
       for rubric in rubrics:
           selected = select_files(files, rubric, budget)
           if not selected:
+              # No prompt is sent, but the rubric was applied and its keywords
+              # matched nothing. That is a rubric that looked, which is what
+              # the scorer is asking about -- and it is the behaviour every
+              # caller had before failures were survivable.
+              _record_ran(rubric)
               continue
-          stats.prompts += 1
-          selected, prompt = fit_to_window(
-              selected, rubric, request_limit - len(SYSTEM_PROMPT))
-          sent = len(SYSTEM_PROMPT) + len(prompt)
+          usage = None
+          for _shrink in range(_MAX_SHRINKS + 1):
+              stats.prompts += 1
+              selected, prompt = fit_to_window(
+                  selected, rubric, request_limit - len(SYSTEM_PROMPT))
+              sent = len(SYSTEM_PROMPT) + len(prompt)
+              try:
+                  raw, usage = client.complete(SYSTEM_PROMPT, prompt,
+                                               max_tokens=8192)
+                  break
+              except LLMError as exc:
+                  # A provider refusing the request for its SIZE is a
+                  # measurement, not a verdict. Our ceiling comes from
+                  # converting a token window with an average characters-per-
+                  # token -- 3.0, measured over four real prompts -- and an
+                  # average is not a bound: denser code crosses the window at
+                  # the same character count. The provider is the only party
+                  # that knows for certain, so when it says no, believe it and
+                  # come back smaller.
+                  #
+                  # The narrowed limit sticks for the REST OF THIS SCAN. Three
+                  # more rubrics would otherwise repeat the same rejection and
+                  # relearn the same number, one round trip at a time.
+                  if (_shrink < _MAX_SHRINKS
+                          and _OVERSIZE_SIGNATURE.search(str(exc))):
+                      request_limit = shrunk_limit(request_limit, str(exc))
+                      stats.oversize_retries += 1
+                      continue
+                  # Anything else, or one shrink too many: stop, do not
+                  # continue to the next rubric. The client has already
+                  # retried and walked the whole provider chain. What matters
+                  # is that the loop ENDS rather than unwinds -- `findings` is
+                  # local, and unwinding is what used to throw it away.
+                  stats.failed_rubric = rubric
+                  stats.failure = str(exc)
+                  break
+          if usage is None:
+              break
+          # Counted only for the request that was ACCEPTED. A rejected one was
+          # sent and cost nothing -- no tokens are billed for a 400 -- and
+          # adding its characters here would inflate the ratio that
+          # input_truncated reads, accusing the provider of dropping a prompt
+          # it never took.
           stats.prompt_chars += sent
-          raw, usage = client.complete(SYSTEM_PROMPT, prompt, max_tokens=8192)
           stats.calls += 1
           stats.input_tokens += usage.input_tokens
           stats.output_tokens += usage.output_tokens
@@ -1221,6 +1353,10 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   context=context,
                   origin_category=origin,
               ))
+          # After the findings are in, not before the call: a rubric counts as
+          # examined once its answer has been read, so a category is never
+          # scored on the strength of a prompt whose reply never arrived.
+          _record_ran(rubric)
           # Cost cap: price the tokens accumulated so far (all calls this scan
           # used the same served model) and stop before the NEXT call if we've
           # crossed the ceiling. Checked after the call, not before: the cap

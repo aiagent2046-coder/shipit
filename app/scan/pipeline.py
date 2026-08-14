@@ -77,6 +77,28 @@ BASIS_FULL = "static+llm"
 # number out of ten is not.
 BASIS_PREVIEW = "static+preview"
 
+# ...and a fourth, for the audit that started at full depth and did not get
+# there: some rubrics answered, one failed, and the findings of the ones that
+# answered are real and in the result.
+#
+# Measured on Avisafety-1/blank-slate. One rubric took a 400, run_llm_scan
+# raised, and the whole stage was written off: the tokens the earlier rubrics
+# had already spent were recorded (the accumulator is owned by this module and
+# survives) while their findings died with the frame. The audit degraded to
+# static-only and scored 6.0 where the same repository with the LLM stage
+# scored 3.9 -- the report reassuring exactly where it broke.
+#
+# It needs its own name for the same reason BASIS_PREVIEW does. `basis` is the
+# third component of the audit cache key, so a three-of-four audit reporting
+# BASIS_FULL would be served later to a request that asked for a full one, and
+# nothing downstream could tell. Under its own name the lookup simply misses
+# and the next request pays for a complete scan.
+#
+# Distinct from BASIS_PREVIEW, which is also partial: that one is partial ON
+# PURPOSE and to a known extent. This one is partial by accident and to an
+# extent only the run itself knows, which is why rubrics_ran travels with it.
+BASIS_PARTIAL = "static+partial"
+
 # What the free tier spends. One rubric, because the security surface is the
 # product's wedge and the one a visitor most needs to see; the cheapest model,
 # because this is given away to unauthenticated traffic.
@@ -134,12 +156,29 @@ def llm_failure_kind(llm_summary: object) -> str | None:
     two async call sites (the worker, and run_repo_audit for the Fix Pack's
     deep review) share it instead of each parsing a string.
 
-    A successful scan puts a dict here; only the failure path writes a string,
-    and it always starts with "failed: ". Anything else is not a failure.
+    Two shapes carry a failure. A stage that never produced anything writes
+    the string "failed: ..."; a stage that lost ONE RUBRIC part-way through
+    now returns its stats dict with `failure` set, because its findings are
+    real and are in the result.
+
+    The second shape has to alert too, and that is the whole reason this
+    function was touched. A partial audit is the quiet kind of broken: it
+    returns findings, it scores, it looks like every other audit, and the
+    only thing missing is the rubric nobody was told about. If only the
+    all-or-nothing shape raised an alert, making failures survivable would
+    have made them invisible -- trading a loud outage for a silent one.
     """
+    if isinstance(llm_summary, dict):
+        detail = llm_summary.get("failure")
+        return _classify_failure(detail) if isinstance(detail, str) and detail \
+            else None
     if not isinstance(llm_summary, str) or not llm_summary.startswith("failed:"):
         return None
-    if _BILLING_SIGNATURE.search(llm_summary):
+    return _classify_failure(llm_summary)
+
+
+def _classify_failure(detail: str) -> str:
+    if _BILLING_SIGNATURE.search(detail):
         return LLM_FAILURE_BILLING
     return LLM_FAILURE_PROVIDER
 
@@ -270,6 +309,27 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
     llm_ran = (isinstance(llm_summary, dict)
                and llm_summary.get("skipped_reason") is None)
 
+    # Which rubrics actually answered. run_llm_scan no longer raises when a
+    # provider fails mid-scan -- it stops and reports how far it got -- so the
+    # rubrics REQUESTED and the rubrics that ran are two different lists, and
+    # only one of them may decide which categories were examined.
+    #
+    # Missing key means a stats dict from before this existed; falling back to
+    # the requested list reproduces exactly what such a scan meant.
+    ran = (llm_summary.get("rubrics_ran") if llm_ran else None)
+    if ran is None:
+        ran = llm_rubrics if llm_rubrics is not None else tuple(RUBRICS)
+    # A stage that answered nothing is not a stage that ran, whatever it says
+    # about itself. Without this, a failure on the first prompt would report a
+    # partial basis, which is static-only wearing a more expensive name.
+    #
+    # Keyed on `calls` -- answers received -- and not on `ran`, which also
+    # counts rubrics that matched no files and so sent nothing. A scan where
+    # the only rubric with matching code failed made zero LLM calls, whatever
+    # the others did or did not look at.
+    if llm_ran and llm_summary.get("failure") and not llm_summary.get("calls"):
+        llm_ran = False
+
     return {
         "score": {
             **compute_scores(
@@ -281,8 +341,8 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
                 # at must not score 10.0 off the back of the ones that did.
                 # Reading RUBRICS is what keeps this correct when the free
                 # tier's rubric list is changed by an env var.
-                llm_categories=None if llm_rubrics is None else frozenset(
-                    RUBRICS[r]["category"] for r in llm_rubrics if r in RUBRICS),
+                llm_categories=frozenset(
+                    RUBRICS[r]["category"] for r in ran if r in RUBRICS),
             ),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0
@@ -295,7 +355,12 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # The same flag now also keeps Auth and Money & Data out of the
             # mean on a static-only audit: nothing ran that could have filled
             # them, and their 10.0 means "not examined", not "clean".
-            "basis": depth if llm_ran else BASIS_STATIC_ONLY,
+            #
+            # A run that lost a rubric to a provider failure reports
+            # BASIS_PARTIAL instead of `depth`, which keeps it out of the
+            # cache slot a full audit reads from -- see BASIS_PARTIAL.
+            "basis": ((BASIS_PARTIAL if llm_summary.get("failure") else depth)
+                      if llm_ran else BASIS_STATIC_ONLY),
         },
         "findings": findings,
         "llm": llm_summary,
