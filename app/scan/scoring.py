@@ -358,15 +358,29 @@ def compute_scores(findings: list[ScoredFinding],
     # 6.9 would make one critical indistinguishable from six. Applied AFTER
     # the total so the same gate is never counted twice -- the total already
     # carries it.
-    # Only the "critical" route. A "subscore" reason means the category is
-    # ALREADY below GATE_THRESHOLD and is failing on its own arithmetic;
-    # scaling it again would punish the same fact twice and drag an honest 5.0
-    # down to 3.5. The defect is a category reading HIGH while holding a
-    # confident critical, and that is the one route this touches.
-    for reason in reasons:
-        cat = reason.get("category")
-        if reason.get("kind") == "critical" and cat in by_cat:
-            by_cat[cat] = round(by_cat[cat] * (GATED_MAX / 10.0), 1)
+    # Only the "critical" route, and only once per category.
+    #
+    # Reduced to a set of categories before scaling, because `reasons` carries
+    # one entry per critical FINDING. Reading it as a loop compounded the
+    # ceiling: kristina_agent_center holds three criticals in Security, and its
+    # published subscore went 0.9 -> 0.6 -> 0.4 -> 0.3 across three passes while
+    # the raw subscore had not moved at all. The claim this ceiling makes is
+    # "the category may not present above GATED_MAX" -- a statement about the
+    # category, not a penalty per finding. The per-finding penalty is the
+    # weighted sum in _score, and it has already been charged.
+    #
+    # A "subscore" reason means the category is ALREADY below GATE_THRESHOLD
+    # and is failing on its own arithmetic, so it is excluded outright rather
+    # than scaled: the ceiling would be charging it a second time for the same
+    # findings, dragging an honest 5.0 to 3.5. The defect being fixed is a
+    # category reading HIGH while holding a confident critical, and a category
+    # that already reads low is not that defect.
+    already_failing = {r.get("category") for r in reasons
+                       if r.get("kind") == "subscore"}
+    capped = {r.get("category") for r in reasons
+              if r.get("kind") == "critical" and r.get("category") in by_cat}
+    for cat in capped - already_failing:
+        by_cat[cat] = round(by_cat[cat] * (GATED_MAX / 10.0), 1)
     if findings and total == 10.0:
         total = 9.9  # a perfect 10 with a non-empty findings list is a lie
     # Empty list, not omitted, when the gate did not fire: a consumer can

@@ -205,6 +205,54 @@ def test_one_confident_critical_gates_on_its_own(category: str) -> None:
     assert scores["categories"][category] <= GATED_MAX
 
 
+def test_a_category_is_capped_once_however_many_criticals_it_holds():
+    """The ceiling is a statement about the category, not a per-finding fine.
+
+    `gated_by` carries one entry per critical finding, and scaling straight
+    off that list compounded: two criticals multiplied the subscore by 0.69
+    twice. Measured on kristina_agent_center, whose Security holds three --
+    the published subscore walked 0.9 -> 0.6 -> 0.4 -> 0.3 across three
+    passes while its raw subscore had not moved at all.
+
+    Confidence 0.7 rather than 0.9 on purpose: two criticals at 0.9 cost 3.6
+    and leave the raw subscore at 6.4, which fails the gate on the subscore
+    route as well, and the test would then be measuring the exemption below
+    instead of this. At 0.7 the raw subscore is 7.2 -- above GATE_THRESHOLD,
+    so only the critical route fires.
+    """
+    findings = [_f("critical", 0.7, "Auth"), _f("critical", 0.7, "Auth")]
+    scores = compute_scores(findings)
+
+    kinds = {r["kind"] for r in scores["gated_by"] if r.get("category") == "Auth"}
+    assert kinds == {"critical"}, (
+        "fixture no longer isolates the critical route; the subscore route "
+        "would exempt the category and this would pass either way")
+    assert len([r for r in scores["gated_by"]
+                if r.get("kind") == "critical"]) == 2, (
+        "fixture no longer produces the repeated reasons this guards against")
+
+    raw = round(10.0 - 2 * 2.0 * 0.7, 1)
+    assert scores["categories"]["Auth"] == round(raw * (GATED_MAX / 10.0), 1)
+
+
+def test_a_category_already_failing_its_subscore_is_not_capped_again():
+    """Excluded outright, not scaled: it is already below the ceiling.
+
+    Three criticals at 0.9 put Security at 4.6 on its own arithmetic. The
+    ceiling exists to stop a category presenting a HIGH number above a
+    confident critical; 4.6 presents nothing of the kind, and scaling it
+    charges the same three findings a second time.
+    """
+    findings = [_f("critical", 0.9, "Security")] * 3
+    scores = compute_scores(findings)
+
+    raw = round(10.0 - 3 * 2.0 * 0.9, 1)
+    assert raw < GATE_THRESHOLD, "fixture must fail on the subscore route"
+    assert {r["kind"] for r in scores["gated_by"]} == {"subscore", "critical"}, (
+        "fixture must fire BOTH routes, or it cannot show the exemption")
+    assert scores["categories"]["Security"] == raw
+
+
 def test_an_unsure_critical_does_not_gate_by_itself():
     """Severity claims impact, confidence claims certainty. The gate is
     categorical, so it reads both: a critical the producer is guessing at
