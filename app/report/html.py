@@ -29,8 +29,9 @@ def _score_color(total: float) -> str:
     return "#e5484d"
 
 
-def _bar(label: str, value: float, examined: bool = True) -> str:
-    """One category row. `examined=False` draws no bar and no number.
+def _bar(label: str, value: float, examined: bool = True,
+         elsewhere: list[str] | None = None) -> str:
+    """One category row. Neither flag set means a real bar and a real number.
 
     An unexamined category sits at 10.0 because nothing produced a finding
     in it, not because it is clean. Drawing that as a full green bar is the
@@ -38,7 +39,24 @@ def _bar(label: str, value: float, examined: bool = True) -> str:
     question ("is my auth safe?") with a confident yes nobody checked. The
     row stays, because hiding it would make the audit look narrower than it
     was; only the claim goes.
+
+    `elsewhere` is the second way a 10.0 lies, and it needs its own wording
+    rather than reusing "not checked": the rubric DID run, and it DID find
+    something -- the finding is simply filed under the category it belongs to.
+    Auth read 10.0 on a repository whose endpoint runs shell commands with no
+    login check, because the model correctly called that a Security problem.
     """
+    if elsewhere:
+        # Examined, and NOT clean: this rubric found things and they are
+        # counted under another heading. "not checked" would be a second
+        # falsehood -- it sends the reader hunting for an audit that already
+        # happened -- so the row names the destination instead.
+        where = ", ".join(escape(c) for c in elsewhere)
+        return (
+            f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
+            f'<div class="track"></div>'
+            f'<span class="cat-val cat-skip">reported under {where}</span></div>'
+        )
     if not examined:
         return (
             f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
@@ -148,8 +166,13 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         unexamined = set(LLM_ONLY_CATEGORIES)
     else:
         unexamined = set()
+    # Absent on every row stored before the key existed, which reads as "no
+    # category handed its findings away" -- the same answer those rows already
+    # give today, so nothing changes retroactively.
+    moved = score.get("reported_elsewhere") or {}
     cats = "".join(
-        _bar(name, val, examined=name not in unexamined)
+        _bar(name, val, examined=name not in unexamined,
+             elsewhere=[str(d) for d in (moved.get(name) or [])])
         for name, val in score["categories"].items()
     )
 

@@ -1275,6 +1275,15 @@ def test_finding_category_comes_from_the_finding_not_the_rubric():
     )
     assert [f.category for f in findings] == ["Security"]
     assert stats.recategorised == 1
+    # ...and the scorer must be able to tell that Auth is empty because it
+    # EXPORTED, not because it was clean. Without this, Auth scores a perfect
+    # 10.0 and renders as a full green bar over the very finding that moved.
+    # The counter above cannot carry that: it is a total, not a per-category
+    # trail, and it is what this test used to check alone.
+    assert [f.origin_category for f in findings] == ["Auth"]
+
+    from app.scan.scoring import compute_scores
+    assert compute_scores(findings)["reported_elsewhere"] == {"Auth": ["Security"]}
 
 
 @pytest.mark.parametrize("declared", [None, "", "RCE", "Testing", "auth"])
@@ -1293,6 +1302,9 @@ def test_an_unusable_declared_category_falls_back_to_the_rubric(declared):
     )
     assert [f.category for f in findings] == ["Auth"]
     assert stats.recategorised == 0
+    # It stayed, so nothing was exported -- an origin here would blank a
+    # category that is scoring its own findings perfectly well.
+    assert [f.origin_category for f in findings] == [None]
 
 
 def test_the_prompt_offers_exactly_the_rubric_categories():

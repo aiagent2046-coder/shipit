@@ -433,3 +433,50 @@ def test_a_full_audit_never_marks_anything_unchecked():
     html = render_report(r)
 
     assert "not checked" not in html
+
+
+def test_a_category_that_exported_its_findings_draws_no_bar():
+    """Auth read 10.0 as a full green bar on a repository whose endpoint runs
+    shell commands with no login check — because the model correctly filed
+    that as Security, leaving Auth holding nothing.
+
+    The row must say where the findings went. "not checked" would be a second
+    falsehood: the rubric ran, and it found something.
+    """
+    row = _gated([])
+    row["score"]["reported_elsewhere"] = {"Auth": ["Security"]}
+    html = render_report(row)
+
+    assert "reported under Security" in html
+    # The number and its bar are what lied; both must be gone for this row.
+    assert ">10.0<" not in html.split("Auth")[1].split("</div></div>")[0]
+    # And it must not be described as unexamined.
+    assert "not checked" not in html
+
+
+def test_the_two_blanked_rows_do_not_borrow_each_others_wording():
+    """`unexamined` and `reported_elsewhere` both blank a number, for opposite
+    reasons. A report that renders them alike tells the reader the wrong thing
+    in one of the two cases, and the wrong thing is the one that sends someone
+    hunting for an audit that already happened."""
+    row = _gated([], basis="static_only")
+    # Both names must exist in `categories`, or no row is rendered for them
+    # and the assertions below pass by measuring nothing.
+    assert {"Testing", "Auth"} <= set(row["score"]["categories"])
+    row["score"]["unexamined"] = ["Testing"]
+    row["score"]["reported_elsewhere"] = {"Auth": ["Security"]}
+    html = render_report(row)
+
+    assert "not checked" in html
+    assert "reported under Security" in html
+
+
+def test_a_row_stored_before_the_key_existed_renders_unchanged():
+    """Absent must read as "nothing was handed away" — the answer those rows
+    already give — not as an error and not as a blanked row."""
+    row = _gated([])
+    assert "reported_elsewhere" not in row["score"]
+    html = render_report(row)
+
+    assert "reported under" not in html
+    assert ">10.0<" in html  # Auth still draws its ordinary bar

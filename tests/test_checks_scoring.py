@@ -722,3 +722,102 @@ def test_the_dependency_check_fires_through_run_checks():
     ids = [f.rule_id for f in run_checks(buf)]
 
     assert "dependency-dir-committed" in ids
+
+
+# --- a category that handed all its findings to a neighbour ------------------
+#
+# Measured on kristina_agent_center under Sonnet 5. The auth rubric reported an
+# endpoint running arbitrary shell commands with no login check; the model filed
+# it as Security, because that is what it is. Auth was left holding nothing,
+# scored a perfect 10.0, was NOT in `unexamined`, and rendered as a full green
+# bar directly above an unauthenticated RCE.
+#
+# Third route to one defect: #22 was "never examined shows 10.0", #27 was
+# "category outranks its own critical", this is "category is empty because its
+# findings moved next door".
+
+
+def _f_from(origin: str, category: str, severity: str = "critical",
+            confidence: float = 0.95) -> ScoredFinding:
+    return ScoredFinding(rule_id="llm-auth", title="t", severity=severity,
+                         confidence=confidence, category=category,
+                         origin_category=origin)
+
+
+def test_a_category_that_exported_all_its_findings_does_not_score_ten():
+    scores = compute_scores([_f_from("Auth", "Security")])
+
+    assert scores["reported_elsewhere"] == {"Auth": ["Security"]}
+    # It must not be described as unexamined: the rubric ran and it found
+    # something. Saying "not checked" sends the reader hunting for an audit
+    # that already happened.
+    assert "Auth" not in scores["unexamined"]
+
+
+def test_the_emptied_category_does_not_vote_on_the_total():
+    """Its 10.0 is dead weight in the sense of issue #181, by a fourth route.
+
+    Not "no producer exists", not "no producer ran", not "the producer found
+    nothing" — but "the producer found things, and they are counted next
+    door". A fifth of the weight propping up the mean for a reason that has
+    nothing to do with the repository.
+    """
+    same = dict(rule_id="llm-auth", title="t", severity="critical",
+                confidence=0.95, category="Security")
+    # Identical findings in every respect but one: whether the scorer knows
+    # Auth is empty because it exported, or empty because it was clean. Any
+    # difference in the total is attributable to that one field and nothing
+    # else -- which is what a control this tight is for.
+    control = compute_scores([ScoredFinding(**same)])
+    moved = compute_scores([ScoredFinding(**same, origin_category="Auth")])
+
+    assert moved["categories"]["Auth"] == 10.0   # the arithmetic is unchanged
+    assert moved["total"] == 6.5                 # ...it simply does not vote
+    assert control["total"] == 6.6               # the propped-up reading
+    assert moved["total"] < control["total"], (
+        "an emptied category must not prop the mean up with a 10.0")
+
+
+def test_a_category_keeping_even_one_finding_scores_normally():
+    """Only the fully-emptied case qualifies.
+
+    A rubric that exports one finding and keeps another is scoring its own
+    remainder honestly, and blanking it would hide a real number.
+    """
+    scores = compute_scores([
+        _f_from("Auth", "Security"),
+        ScoredFinding(rule_id="llm-auth", title="t", severity="high",
+                      confidence=0.9, category="Auth"),
+    ])
+
+    assert scores["reported_elsewhere"] == {}
+    assert scores["categories"]["Auth"] == 9.1
+
+
+def test_an_ordinary_clean_category_is_not_marked_as_moved():
+    """The guard against the fix firing everywhere: a category with no
+    findings and no exports is genuinely clean and keeps its 10.0."""
+    scores = compute_scores([ScoredFinding(
+        rule_id="llm-security", title="t", severity="high", confidence=0.9,
+        category="Security")])
+
+    assert scores["reported_elsewhere"] == {}
+    assert scores["categories"]["Auth"] == 10.0
+    assert "Auth" not in scores["unexamined"]
+
+
+def test_origin_category_survives_the_trip_through_the_pipeline():
+    """The field is set by the scanner, travels as a dict, and is rebuilt into
+    a ScoredFinding by app/scan/pipeline.py — which copies only the names in
+    _SCORED_FIELDS. Omitting it there drops it silently: the producer still
+    sets it, the report still reads it off the dict, and only the SCORE
+    computes as though it were never set. Every test above would still pass.
+    """
+    from app.scan.pipeline import _SCORED_FIELDS
+
+    assert "origin_category" in _SCORED_FIELDS
+    finding = {k: v for k, v in vars(_f_from("Auth", "Security")).items()}
+    rebuilt = ScoredFinding(**{k: finding[k] for k in _SCORED_FIELDS
+                               if k in finding})
+    assert rebuilt.origin_category == "Auth"
+    assert compute_scores([rebuilt])["reported_elsewhere"] == {"Auth": ["Security"]}

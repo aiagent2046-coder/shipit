@@ -22,9 +22,17 @@ from app.scan.static import run_static_scan
 
 logger = logging.getLogger(__name__)
 
+# Every field that must survive the round trip out of the scanners, through
+# the findings dicts (which persist to findings_json) and back into a
+# ScoredFinding for the scorer. A field missing here is dropped silently: the
+# producer sets it, the report can still read it off the dict, and only the
+# SCORE quietly computes as though it were never set. "origin_category" is the
+# one that makes an emptied-by-recategorisation category visible, so leaving
+# it out restores exactly the defect it was added to fix, with every test
+# against compute_scores still passing.
 _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
                   "category", "file", "line", "masked", "explanation",
-                  "fix_hint", "context")
+                  "fix_hint", "context", "origin_category")
 
 
 # Bump when any part of the audit engine changes in a way that should
@@ -41,7 +49,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # byte-identical content recompute instead of reusing a now-stale row,
 # which is what stops an engine improvement (or bug fix) from being frozen
 # out by a result produced under the old engine.
-AUDIT_ENGINE_VERSION = "2026-08-14-1"
+AUDIT_ENGINE_VERSION = "2026-08-14-2"
 
 
 # The two values `score["basis"]` can take, named because they are now a
