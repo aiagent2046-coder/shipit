@@ -8,6 +8,7 @@ of truth; nothing is hardcoded except API shapes.
 
 from __future__ import annotations
 
+import copy
 import os
 import time
 from dataclasses import dataclass, replace
@@ -149,11 +150,18 @@ class LLMClient:
         Returns a new client; the original is untouched, which is what keeps a
         preview scan from changing the model of the paid audit running beside
         it. Providers are frozen dataclasses, so the copies cannot alias.
+
+        A shallow copy of self rather than a fresh LLMClient(...). Constructing
+        the base class discards whatever the receiver actually was: a subclass
+        would silently degrade to the real HTTP path, which is exactly what
+        happened the first time this ran against a test double -- the override
+        vanished and the "fake" reached out to a real URL and took a 403. In
+        production nothing subclasses this today, but a method that quietly
+        returns a different type than its receiver is a trap set for later.
         """
-        return LLMClient(
-            providers=[replace(p, model=model) for p in self.providers],
-            transport=self._transport,
-        )
+        clone = copy.copy(self)
+        clone.providers = [replace(p, model=model) for p in self.providers]
+        return clone
 
     def complete(self, system: str, user: str,
                  max_tokens: int = 4096) -> tuple[str, LLMUsage]:

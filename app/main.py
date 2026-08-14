@@ -422,7 +422,7 @@ async def _record_llm_usage(
 # caller has nothing to pay. Pro accounts are deliberately NOT subject to this;
 # their spend is bounded by PRO_DAILY_AUDIT_LIMIT (a call count) instead.
 DEFAULT_DAILY_SPEND_CAP_USD = Decimal(
-    os.environ.get("DEFAULT_DAILY_SPEND_CAP_USD", "2.00"))
+    os.environ.get("DEFAULT_DAILY_SPEND_CAP_USD", "20.00"))
 _ANON_SPEND_ALERT_FRACTION = Decimal("0.8")
 
 
