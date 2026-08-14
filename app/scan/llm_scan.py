@@ -671,6 +671,17 @@ class LLMScanStats:
     # verified -- just a partial set. app/scan/pipeline.py surfaces this in the
     # response's llm block so a truncated scan is visible, not silent.
     cost_cap_exceeded: bool = False
+    # Characters actually sent, system prompt included, summed over every
+    # call. The half of the accounting that was missing: until this existed,
+    # the only record of a prompt's size was the provider's own report of how
+    # much of it arrived, so a provider that read a quarter and billed for a
+    # quarter looked identical to a small repository.
+    prompt_chars: int = 0
+    # True when a provider reported far fewer input tokens than the bytes we
+    # sent can contain -- i.e. it cut the request down to fit and answered
+    # anyway. See _TRUNCATION_RATIO. This is the alarm that did not exist
+    # when a free-tier model reviewed 26% of tscircuit.com and scored it.
+    input_truncated: bool = False
 
 
 def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
@@ -754,8 +765,88 @@ def truncate_at_line(text: str, limit: int) -> str:
     return f"{head}\n{TRUNCATION_MARKER.format(n=hidden)}"
 
 
-def select_files(files: list[tuple[str, str]], rubric: str) -> list[tuple[str, str]]:
+# What build_prompt adds on top of the file contents select_files budgeted:
+# every line gets its number and a tab, plus the repo map, the rubric text and
+# the per-file tags. Measured on tscircuit.com, where a 900_000-character
+# selection went out as 1,030,541 characters -- 14.5%.
+#
+# An ESTIMATE, and only an estimate. The numbering costs per LINE, so the
+# percentage is a function of line length: 14.5% on tscircuit's real code,
+# over 25% on a file of twenty-character lines. Nothing here can be a bound,
+# which is why fit_to_window measures the finished prompt instead of trusting
+# this. Its job is to make the first attempt fit most of the time so that
+# trimming is rare, not to guarantee anything.
+_PROMPT_OVERHEAD = 1.15
+
+# Characters per reported input token above which the provider did not read
+# what we sent. Code measured 3.0 and the system prompt is prose, so a healthy
+# call lands between 3 and 3.5; 4.5 is a third of the prompt gone before it
+# raises anything. Set deliberately loose: a false alarm here would teach the
+# operator to ignore the field, and the case it exists for measured 11.4.
+_TRUNCATION_RATIO = 4.5
+
+# ...and only on prompts big enough for the ratio to mean anything. Length
+# truncation is a response to exceeding a context window, and the smallest
+# window in MODEL_INPUT_TOKENS is 200K tokens -- roughly 600,000 characters.
+# A prompt an order of magnitude under that was not cut for length, so the
+# ratio there is measuring provider bookkeeping (minimum billing units,
+# per-request overhead) rather than lost code.
+#
+# It also keeps the alarm off every stubbed test, whose doubles return a fixed
+# token count against whatever fixture they were handed -- correct for what
+# those tests drive (the cost cap needs deterministic tokens) and a 50:1 ratio
+# by construction. Naming that plainly: without a floor the field would read
+# `input_truncated: true` across most of the suite, which is how a real signal
+# gets trained into background noise.
+_TRUNCATION_MIN_CHARS = 50_000
+
+
+def content_budget(client: object) -> int:
+    """Characters of FILE CONTENT one rubric may spend on this client.
+
+    The smaller of our own MAX_TOTAL_CHARS and what the model's context window
+    can hold once the system prompt and build_prompt's line numbering are paid
+    for. A prediction, not a bound -- fit_to_window is the bound. Getting this
+    close matters anyway: it is the difference between selecting the right
+    files and selecting too many and then throwing the tail away.
+
+    Takes the client rather than a model name because the budget is a property
+    of the whole provider chain -- see LLMClient.input_char_budget. A
+    duck-typed test double without the method gets MAX_TOTAL_CHARS, the
+    historical value: such a double is not calling a provider, so there is no
+    window to exceed and nothing for a window to protect.
+    """
+    if not hasattr(client, "input_char_budget"):
+        return MAX_TOTAL_CHARS
+    room = int(client.input_char_budget() / _PROMPT_OVERHEAD) - len(SYSTEM_PROMPT)
+    return max(0, min(MAX_TOTAL_CHARS, room))
+
+
+# Stands in for "this client has no context window to exceed". Only a
+# duck-typed test double reaches it; every real chain answers with a number.
+# Large enough that fit_to_window never trims, so such a double sees exactly
+# the prompt it saw before windows existed.
+_NO_WINDOW = 1 << 40
+
+
+def request_limit_for(client: object) -> int:
+    """Characters ONE request to this client may contain, system prompt
+    included. The ceiling fit_to_window measures the finished prompt against,
+    as opposed to content_budget's prediction of it."""
+    if not hasattr(client, "input_char_budget"):
+        return _NO_WINDOW
+    return client.input_char_budget()
+
+
+def select_files(files: list[tuple[str, str]], rubric: str,
+                 budget: int = MAX_TOTAL_CHARS) -> list[tuple[str, str]]:
     """Files matching the rubric: most relevant first, then breadth.
+
+    `budget` defaults to MAX_TOTAL_CHARS, which is what every caller passed
+    before a model's context window could bind first. It is a parameter and
+    not a global read because two tiers now run different models in the same
+    worker process, and a module-level budget would be whichever tier set it
+    last.
 
     Two passes over the same matches. The first spends RELEVANCE_BUDGET_SHARE
     of the prompt on the files most likely to contain the rubric's subject;
@@ -784,7 +875,7 @@ def select_files(files: list[tuple[str, str]], rubric: str) -> list[tuple[str, s
     taken: set[str] = set()
     total = 0
 
-    reserve = int(MAX_TOTAL_CHARS * RELEVANCE_BUDGET_SHARE)
+    reserve = int(budget * RELEVANCE_BUDGET_SHARE)
     by_relevance = sorted(
         matched,
         key=lambda x: (-relevance(x[0], x[1], kw, lives_in), len(x[1]), x[0]))
@@ -797,7 +888,7 @@ def select_files(files: list[tuple[str, str]], rubric: str) -> list[tuple[str, s
         total += len(t)
 
     for n, t in sorted(matched, key=lambda x: (len(x[1]), x[0])):
-        if n in taken or total + len(t) > MAX_TOTAL_CHARS:
+        if n in taken or total + len(t) > budget:
             continue
         selected.append((n, t))
         total += len(t)
@@ -817,6 +908,41 @@ def build_prompt(selected: list[tuple[str, str]], rubric: str) -> str:
         )
         parts.append(f'<file path="{n}">\n{numbered}\n</file>')
     return "\n\n".join(parts)
+
+
+def fit_to_window(selected: list[tuple[str, str]], rubric: str,
+                  limit: int) -> tuple[list[tuple[str, str]], str]:
+    """Trim `selected` until the built prompt fits `limit` characters.
+
+    The last line of defence, and the only one that is a bound. content_budget
+    predicts the prompt's size from the content it selects; this measures the
+    prompt that actually exists. They differ because build_prompt's per-line
+    numbering costs more on short lines than on long ones, so the same 900,000
+    characters render as 1.03M of real code or 1.25M of twenty-character
+    lines. An estimate that is right on average is exactly the wrong tool
+    against a hard ceiling: being over by 10% on the wrong repository is the
+    provider silently discarding the tail of the prompt.
+
+    Trims from the END, which is the order select_files built: the relevance
+    pass first, then the breadth pass filling what was left with the smallest
+    remaining files. So the first thing dropped is the least relevant small
+    file, and the handler the rubric exists to read goes last.
+
+    Returns the prompt as well as the selection, because the caller needs the
+    exact string this measured -- rebuilding it would be a second chance to
+    disagree.
+    """
+    prompt = build_prompt(selected, rubric)
+    while selected and len(prompt) > limit:
+        # Proportional first, then one at a time. Dropping singly from a
+        # 300-file selection rebuilds a megabyte three hundred times; jumping
+        # straight to the ratio overshoots, because the files are not equal
+        # sizes and the ones at the end are the small ones.
+        over = 1 - limit / len(prompt)
+        drop = max(1, int(len(selected) * over * 0.75))
+        selected = selected[:-drop]
+        prompt = build_prompt(selected, rubric)
+    return selected, prompt
 
 
 def clip(text: str, limit: int) -> str:
@@ -1002,6 +1128,11 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     discarded with the frame. app/scan/pipeline.py passes one in for exactly
     that reason; the default keeps every other caller unchanged."""
     stats = stats if stats is not None else LLMScanStats()
+    # Resolved once, before the loop: every rubric this scan sends goes to the
+    # same chain, and re-deriving it per rubric would let a chain mutated
+    # mid-scan produce prompts of two different sizes in one audit.
+    budget = content_budget(client)
+    request_limit = request_limit_for(client)
     with zipfile.ZipFile(fileobj) as zf:
         files = _iter_code_files(zf)
     files_by_name = dict(files)
@@ -1011,17 +1142,33 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
       if stats.cost_cap_exceeded:
           break
       for rubric in rubrics:
-          selected = select_files(files, rubric)
+          selected = select_files(files, rubric, budget)
           if not selected:
               continue
           stats.prompts += 1
-          raw, usage = client.complete(SYSTEM_PROMPT,
-                                       build_prompt(selected, rubric),
-                                       max_tokens=8192)
+          selected, prompt = fit_to_window(
+              selected, rubric, request_limit - len(SYSTEM_PROMPT))
+          sent = len(SYSTEM_PROMPT) + len(prompt)
+          stats.prompt_chars += sent
+          raw, usage = client.complete(SYSTEM_PROMPT, prompt, max_tokens=8192)
           stats.calls += 1
           stats.input_tokens += usage.input_tokens
           stats.output_tokens += usage.output_tokens
           stats.model = usage.model
+          # Did the provider read what we sent? Checked per call, because a
+          # single rubric over the window is enough to make the score a
+          # statement about part of the repository, and averaging it across
+          # four calls would dilute exactly that.
+          #
+          # Compared against our own byte count, so it does not depend on
+          # trusting the accounting it is auditing. A model reporting ZERO
+          # input tokens is a provider that omitted the field, not one that
+          # read nothing -- that is missing bookkeeping, not truncation, and
+          # claiming otherwise would raise the alarm on every provider whose
+          # usage block we cannot parse.
+          if (sent >= _TRUNCATION_MIN_CHARS and usage.input_tokens
+                  and sent / usage.input_tokens > _TRUNCATION_RATIO):
+              stats.input_truncated = True
           for f in parse_findings(raw):
               stats.raw_findings += 1
               if not verify_finding(f, files_by_name):

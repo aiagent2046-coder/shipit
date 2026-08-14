@@ -54,11 +54,30 @@ from app.scan.pipeline import run_scan  # noqa: E402
 # nobody would notice which run used which.
 from scripts.batch_audit import REPOS  # noqa: E402
 
-# Measured per-audit averages, only for the dry-run estimate. Real cost comes
-# from each run's own usage block.
-_ROUGH_COST_PER_AUDIT = {"claude-sonnet-4.6": 0.92, "claude-sonnet-4-6": 0.92,
-                         "claude-sonnet-5": 1.20,
-                         "claude-haiku-4.5": 0.31, "claude-haiku-4-5": 0.31}
+# Per-audit averages for the --dry-run estimate only; real cost comes from
+# each run's own usage block.
+#
+# These are the MEASURED means over the batch sample, and they replace numbers
+# taken from a single small repository. The first estimate this script printed
+# was $12.30 against an actual $31.11 -- 2.5x low -- because Sonnet's figure
+# came from kristina_agent_center alone and was applied to a sample chosen for
+# size spread, where a 2447-file repository fills the whole per-rubric budget
+# and costs four times as much.
+#
+# Cost per audit is dominated by repository size, so any single number here is
+# an average over a specific sample and not a per-repo prediction. The spread
+# behind these means is wide: Sonnet ran $1.03 to $4.63.
+#
+# Haiku's figure is DOUBLE what the last run invoiced. That run measured a
+# provider silently truncating the input to fit a 200K window, so $0.39 was
+# the price of reading a quarter of each repository. Now that the prompt is
+# built to fit the window, the same audits send about twice as many tokens and
+# cost about twice as much. Quoting the invoiced number here would understate
+# the next run by 2x -- the same shape of error as the $12.30-against-$31.11
+# estimate two paragraphs up, from the opposite direction.
+_ROUGH_COST_PER_AUDIT = {"claude-sonnet-4.6": 3.50, "claude-sonnet-4-6": 3.50,
+                         "claude-sonnet-5": 4.55,   # +30% tokenizer, measured
+                         "claude-haiku-4.5": 0.80, "claude-haiku-4-5": 0.80}
 
 # How far apart two findings may sit and still be "the same place". Models
 # disagree about which line of a handler to point at. Three, because that is
@@ -197,8 +216,19 @@ def main(argv: list[str]) -> int:
                             usage.get("output_tokens") or 0)
             spent += cost
             findings = scan["findings"]
+            # The whole usage block, not just the money. The first run of
+            # this script recorded cost alone, and then could not answer the
+            # question the numbers raised: Sonnet cost NINE times Haiku where
+            # the price table says three, so one of them read far less of the
+            # same repository -- and the tokens that would say which were the
+            # one thing not written down.
             results[slug][model] = {
                 "served_model": served, "cost_usd": float(cost),
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+                "prompts": usage.get("prompts"),
+                "calls": usage.get("calls"),
+                "cost_cap_exceeded": usage.get("cost_cap_exceeded"),
                 "seconds": round(elapsed, 1),
                 "basis": scan["score"].get("basis"),
                 "total": scan["score"]["total"],
@@ -213,8 +243,11 @@ def main(argv: list[str]) -> int:
             note = ""
             if isinstance(scan["llm"], str):        # "failed: ..."
                 note = "  <- LLM STAGE FAILED, static-only"
+            if usage.get("cost_cap_exceeded"):
+                note += "  <- JOB_COST_CAP_USD hit, scan cut short"
             print(f"    {model:20s} {scan['score']['total']:>5}  "
                   f"{len(findings):>3} findings  {severities(findings):>12}  "
+                  f"{(usage.get('input_tokens') or 0)/1000:>7.0f}K in  "
                   f"${float(cost):.3f}  {elapsed:.0f}s{note}")
 
     if len(args.models) == 2 and results:
