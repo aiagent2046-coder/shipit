@@ -325,7 +325,8 @@ def _apply_gate(total: float, reasons: list[dict]) -> float:
 
 
 def compute_scores(findings: list[ScoredFinding],
-                   llm_ran: bool = True) -> dict:
+                   llm_ran: bool = True,
+                   llm_categories: frozenset[str] | None = None) -> dict:
     """Per-category subscores and their weighted mean.
 
     `llm_ran=False` marks a static-only audit, where LLM_ONLY_CATEGORIES had
@@ -338,6 +339,18 @@ def compute_scores(findings: list[ScoredFinding],
     The default is True so every existing caller keeps the full-audit
     behaviour; only the pipeline, which knows whether the stage ran, passes
     False.
+
+    `llm_categories` narrows that further: which LLM-only categories a producer
+    actually ran for. A boolean was enough while the stage was all-or-nothing,
+    and stopped being enough the moment the free tier ran ONE rubric -- with
+    llm_ran=True and no further detail, Auth, Money & Data and Frontend each
+    scored 10.0 and drew a full green bar off a stage that never looked at
+    them. That is issue #22 again, on a preview instead of a free static scan.
+
+    None means "all of them", which is what a paid audit does and what every
+    caller written before previews existed means. An empty set is not the same
+    as None and must not be conflated: it means the stage ran and covered none
+    of these categories.
     """
     by_cat = {
         cat: _score([f for f in findings if f.category == cat])
@@ -368,9 +381,15 @@ def compute_scores(findings: list[ScoredFinding],
         if not any(f.category == c for f in findings)
         and any(f.origin_category == c for f in findings)
     }
+    def _examined(cat: str) -> bool:
+        if cat not in LLM_ONLY_CATEGORIES:
+            return True          # a static producer always ran
+        if not llm_ran:
+            return False
+        return llm_categories is None or cat in llm_categories
+
     counted = [c for c in CATEGORIES
-               if (llm_ran or c not in LLM_ONLY_CATEGORIES)
-               and c not in reported_elsewhere]
+               if _examined(c) and c not in reported_elsewhere]
     divisor = sum(_RAW_CATEGORY_WEIGHT[c] for c in counted)
     total = sum(by_cat[c] * _RAW_CATEGORY_WEIGHT[c] for c in counted) / divisor
     # The gate reads only categories that were actually examined, for the same

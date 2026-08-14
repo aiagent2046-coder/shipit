@@ -17,7 +17,7 @@ import zipfile
 
 from app.llm.client import LLMClient, LLMError
 from app.scan.collapse import collapse_repeats
-from app.scan.llm_scan import LLMScanStats, run_llm_scan
+from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
 
@@ -50,7 +50,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # byte-identical content recompute instead of reusing a now-stale row,
 # which is what stops an engine improvement (or bug fix) from being frozen
 # out by a result produced under the old engine.
-AUDIT_ENGINE_VERSION = "2026-08-14-3"
+AUDIT_ENGINE_VERSION = "2026-08-14-4"
 
 
 # The three values `score["basis"]` can take, named because they are a pricing
@@ -276,6 +276,13 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
                 [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
                  for f in findings],
                 llm_ran=llm_ran,
+                # Derived from the rubrics that ran, never written out: a
+                # preview covers one of them, and a category no rubric looked
+                # at must not score 10.0 off the back of the ones that did.
+                # Reading RUBRICS is what keeps this correct when the free
+                # tier's rubric list is changed by an env var.
+                llm_categories=None if llm_rubrics is None else frozenset(
+                    RUBRICS[r]["category"] for r in llm_rubrics if r in RUBRICS),
             ),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0

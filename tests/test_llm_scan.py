@@ -1401,3 +1401,59 @@ def test_a_hardcoded_credential_is_named_as_Security_in_the_prompt():
     examples never said otherwise."""
     assert "credential hardcoded in source" in SYSTEM_PROMPT
     assert 'are "Security" even when you find' in SYSTEM_PROMPT
+
+
+# --- a preview through the real pipeline -------------------------------------
+
+
+def test_run_scan_at_preview_depth_does_not_credit_unrun_rubrics():
+    """End to end, because the wiring is where this silently reverts.
+
+    compute_scores learned which LLM categories were examined, and the
+    pipeline derives that set from the rubrics it actually ran. Passing None
+    from the pipeline puts the defect straight back -- Auth, Money & Data and
+    Frontend scoring 10.0 off a stage that never looked at them -- and every
+    test against compute_scores keeps passing, because each one hands the
+    argument in by hand. This one makes run_scan derive it.
+    """
+    from app.scan.pipeline import BASIS_PREVIEW, run_scan
+
+    raw = make_zip({
+        "package.json": b'{"dependencies":{"next":"14"}}',
+        "app/api/run.ts": (
+            b"import { exec } from 'child_process'\n"
+            b"export async function POST(req) {\n"
+            b"  const { cmd } = await req.json()\n"
+            b"  return exec(cmd)\n}\n"),
+    }).getvalue()
+
+    # A provider, because run_scan skips the stage entirely on an empty chain
+    # -- without one this asserts the static-only path while claiming to test
+    # the preview.
+    llm = FakeLLM("[]")
+    llm.providers = [Provider("anthropic", "https://x", "k", "m")]
+
+    scan = run_scan(raw, llm, llm_rubrics=("security",), depth=BASIS_PREVIEW)
+    assert llm.prompts, "the security rubric selected no file -- fixture is inert"
+
+    assert scan["score"]["basis"] == BASIS_PREVIEW
+    assert set(scan["score"]["unexamined"]) == {"Auth", "Money & Data",
+                                                "Frontend"}
+
+
+def test_run_scan_at_full_depth_still_credits_every_category():
+    """The control: a paid audit runs every rubric and nothing is unexamined.
+    Without this, "exclude everything" would pass the test above."""
+    from app.scan.pipeline import run_scan
+
+    raw = make_zip({
+        "package.json": b'{"dependencies":{"next":"14"}}',
+        "app/api/run.ts": b"export async function POST(req) { return 1 }\n",
+    }).getvalue()
+
+    llm = FakeLLM("[]")
+    llm.providers = [Provider("anthropic", "https://x", "k", "m")]
+
+    scan = run_scan(raw, llm)
+
+    assert scan["score"]["unexamined"] == []

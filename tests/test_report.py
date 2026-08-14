@@ -480,3 +480,83 @@ def test_a_row_stored_before_the_key_existed_renders_unchanged():
 
     assert "reported under" not in html
     assert ">10.0<" in html  # Auth still draws its ordinary bar
+
+
+# --- the free tier publishes findings, not numbers ---------------------------
+#
+# Two browser tabs on the same repository made this visible. The paid report
+# found an SSRF, a service-role key used as an HMAC secret, hardcoded bot
+# credentials and a rate limiter that fails open; the free report on the same
+# code drew Security as a full green 10.0 bar and reported one low finding.
+# The prose disclaimer was honest and nobody reads prose next to a green bar.
+
+
+def _preview(categories: dict | None = None) -> dict:
+    return {
+        "stack": "nextjs",
+        "score": {
+            "total": 9.9, "basis": "static+preview",
+            "categories": categories or {
+                "Security": 10.0, "Auth": 10.0, "Testing": 10.0,
+                "Deploy": 9.9, "Money & Data": 10.0, "Frontend": 10.0},
+            "unexamined": ["Auth", "Money & Data", "Frontend"],
+            "gated_by": [],
+        },
+        "findings": [_finding()],
+    }
+
+
+def test_a_preview_publishes_no_mark_out_of_ten():
+    html = render_report(_preview())
+
+    assert "Free scan" in html
+    assert "does not produce a mark out of ten" in html
+    # The headline number must be absent, not merely small. 9.9 is what this
+    # repository scored on the free tier while its paid audit read 4.7.
+    assert ">9.9<" not in html
+
+
+def test_a_preview_marks_what_it_looked_at_as_partly_checked():
+    """Neither a number nor "not checked".
+
+    Security WAS examined -- by regexes and one rubric on the cheapest model --
+    so calling it unchecked is false. But a 10.0 renders identically to a 10.0
+    a full audit produced, and the visitor cannot tell which they are reading.
+    """
+    html = render_report(_preview())
+
+    assert "partly checked" in html
+    assert "not checked" in html          # Auth / Money & Data / Frontend
+    # No category number survives anywhere on a free report.
+    for value in ("10.0", "9.9"):
+        assert f'class="cat-val">{value}<' not in html
+
+
+def test_a_preview_says_it_ran_a_security_review_and_static_only_does_not():
+    """The two free depths are different scans and must not share a claim.
+
+    A static-only result reached no model at all -- the spend cap, or a
+    provider failure. Printing the preview's wider scope over it would
+    overstate the thinnest audit the product produces.
+    """
+    preview = render_report(_preview())
+    row = _preview()
+    row["score"]["basis"] = "static_only"
+    static_only = render_report(row)
+
+    assert "one quick security review" in preview
+    assert "one quick security review" not in static_only
+    assert "does not produce a mark out of ten" in static_only
+
+
+def test_a_paid_audit_still_publishes_its_numbers():
+    """The guard against the fix leaking upwards: a paid report is the one
+    place a category number is earned, and it must keep drawing them."""
+    row = _preview()
+    row["score"]["basis"] = "static+llm"
+    row["score"]["unexamined"] = []
+    html = render_report(row)
+
+    assert "partly checked" not in html
+    assert 'class="cat-val">9.9<' in html
+    assert ">9.9<" in html   # and the headline ring is back

@@ -821,3 +821,73 @@ def test_origin_category_survives_the_trip_through_the_pipeline():
                                if k in finding})
     assert rebuilt.origin_category == "Auth"
     assert compute_scores([rebuilt])["reported_elsewhere"] == {"Auth": ["Security"]}
+
+
+# --- a preview runs SOME rubrics, not all of them ----------------------------
+
+
+def test_a_preview_does_not_credit_categories_no_rubric_looked_at():
+    """A boolean was enough while the LLM stage was all-or-nothing.
+
+    The free tier runs one rubric. With llm_ran=True and nothing finer, Auth,
+    Money & Data and Frontend each scored 10.0 off a stage that never looked
+    at them, counted in the mean, and drew a full green bar -- issue #22 again,
+    on a preview instead of a static scan.
+    """
+    findings = [ScoredFinding(rule_id="llm-security", title="t",
+                              severity="critical", confidence=0.9,
+                              category="Security")]
+    preview = compute_scores(findings, llm_ran=True,
+                             llm_categories=frozenset({"Security"}))
+
+    assert set(preview["unexamined"]) == set(LLM_ONLY_CATEGORIES)
+    # ...and a paid audit, which runs every rubric, still counts them.
+    paid = compute_scores(findings, llm_ran=True)
+    assert paid["unexamined"] == []
+    # The two must differ in the total, or the exclusion is cosmetic.
+    assert preview["total"] != paid["total"]
+
+
+def test_a_widened_preview_credits_the_rubric_it_gained():
+    """FREE_TIER_LLM_RUBRICS is env-configurable, so this cannot be hardcoded
+    to "Security". Adding the auth rubric must make Auth examined."""
+    findings = [ScoredFinding(rule_id="llm-auth", title="t", severity="high",
+                              confidence=0.9, category="Auth")]
+    wider = compute_scores(findings, llm_ran=True,
+                           llm_categories=frozenset({"Security", "Auth"}))
+
+    assert "Auth" not in wider["unexamined"]
+    assert set(wider["unexamined"]) == {"Money & Data", "Frontend"}
+
+
+def test_none_means_every_category_and_is_not_an_empty_set():
+    """The distinction every caller written before previews relies on: None is
+    "all of them", and an empty set is "the stage ran and covered none".
+    Conflating them makes a paid audit look like a preview."""
+    findings = [ScoredFinding(rule_id="llm-security", title="t",
+                              severity="high", confidence=0.9,
+                              category="Security")]
+
+    assert compute_scores(findings, llm_ran=True,
+                          llm_categories=None)["unexamined"] == []
+    assert set(compute_scores(findings, llm_ran=True,
+                              llm_categories=frozenset())["unexamined"]) == set(
+        LLM_ONLY_CATEGORIES)
+
+
+def test_the_preview_category_set_is_derived_from_the_rubrics_that_ran():
+    """The pipeline must read RUBRICS rather than repeat the mapping.
+
+    A second copy of "which rubric fills which category" drifts the moment a
+    rubric is added or its category changes, and the drift is silent: the
+    score simply credits a category nothing examined.
+    """
+    from app.scan.llm_scan import RUBRICS
+    from app.scan.pipeline import FREE_TIER_RUBRICS
+
+    for rubric in FREE_TIER_RUBRICS:
+        assert rubric in RUBRICS, (
+            f"FREE_TIER_LLM_RUBRICS names {rubric!r}, which no rubric "
+            "defines -- the preview would run nothing for it")
+    derived = frozenset(RUBRICS[r]["category"] for r in FREE_TIER_RUBRICS)
+    assert derived and derived <= set(CATEGORIES)
