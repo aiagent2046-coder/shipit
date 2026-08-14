@@ -343,6 +343,30 @@ def compute_scores(findings: list[ScoredFinding],
     # gate, and an unexamined one cannot fail it either.
     reasons = _gate_reasons(by_cat, counted, findings)
     total = round(_apply_gate(total, reasons), 1)
+    # ...and the same ceiling on the CATEGORY that holds the critical.
+    #
+    # The gate used to bound the headline alone, on the stated reasoning that
+    # subscores are diagnostic and may read higher than the total. The report
+    # even says so. Then a measured run said it back: kristina_agent_center
+    # scored Auth 8.1 while action_service_fixed.py:128 -- an endpoint running
+    # arbitrary shell commands as root with no authentication at all -- sat
+    # inside that category as a CRITICAL at 0.95 confidence. A reader asking
+    # "is my authentication sound?" reads the Auth bar, not the note beside
+    # the headline, and 8.1 answers yes.
+    #
+    # Scaled, not clamped, for the reason _apply_gate gives at length: a flat
+    # 6.9 would make one critical indistinguishable from six. Applied AFTER
+    # the total so the same gate is never counted twice -- the total already
+    # carries it.
+    # Only the "critical" route. A "subscore" reason means the category is
+    # ALREADY below GATE_THRESHOLD and is failing on its own arithmetic;
+    # scaling it again would punish the same fact twice and drag an honest 5.0
+    # down to 3.5. The defect is a category reading HIGH while holding a
+    # confident critical, and that is the one route this touches.
+    for reason in reasons:
+        cat = reason.get("category")
+        if reason.get("kind") == "critical" and cat in by_cat:
+            by_cat[cat] = round(by_cat[cat] * (GATED_MAX / 10.0), 1)
     if findings and total == 10.0:
         total = 9.9  # a perfect 10 with a non-empty findings list is a lie
     # Empty list, not omitted, when the gate did not fire: a consumer can
