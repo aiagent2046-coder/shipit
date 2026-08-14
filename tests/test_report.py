@@ -331,7 +331,7 @@ def test_capped_score_says_a_critical_caused_it():
         {"kind": "critical", "category": "Security",
          "rule_id": "env-file-committed", "title": "Committed .env file"},
     ]))
-    assert "capped" in html
+    assert "cannot exceed" in html
     assert "Committed .env file" in html
 
 
@@ -340,6 +340,31 @@ def test_capped_score_names_the_failing_category():
         {"kind": "subscore", "category": "Security", "value": 5.9},
     ]))
     assert "Security 5.9" in html
+
+
+def test_the_note_describes_compression_not_a_flat_ceiling():
+    """The gate scales the mean; it does not clip it.
+
+    The sentence said "capped at 6.9" -- the flat ceiling _apply_gate tried
+    first and rejected for flattening 40% of failing repos onto one number.
+    A real audit (ai-co-founder-matching) then published 5.1 directly above
+    those words, with 6.9 appearing nowhere else on the page: its category
+    mean was 7.4 and the gate compressed it. A reader who tries to reconcile
+    5.1 with "capped at 6.9" cannot, which is the headline contradicting the
+    text beside it -- the exact defect the gate exists to remove.
+
+    The total is set below GATED_MAX deliberately: at 6.5 the old wording
+    looked close enough to pass, and only a value that is plainly not the
+    cap can tell the two explanations apart.
+    """
+    row = _gated([{"kind": "subscore", "category": "Security", "value": 5.9}])
+    row["score"]["total"] = 5.1
+    html = render_report(row)
+
+    assert "cannot exceed 6.9" in html
+    assert "compressed" in html
+    assert "capped at 6.9" not in html, (
+        "describes the flat ceiling that was measured and rejected")
 
 
 def test_hostile_gate_reason_title_is_escaped():
@@ -357,10 +382,10 @@ def test_ungated_and_legacy_rows_print_no_cap_note():
     the scorer recorded reasons. Neither may print an explanation -- and the
     legacy row must not be described as ungated either, so it says nothing.
     """
-    assert "capped" not in render_report(_gated([]))
+    assert "cannot exceed" not in render_report(_gated([]))
     legacy = _gated([])
     del legacy["score"]["gated_by"]
-    assert "capped" not in render_report(legacy)
+    assert "cannot exceed" not in render_report(legacy)
 
 
 def test_a_capped_free_scan_explains_the_cap_too():
@@ -373,7 +398,7 @@ def test_a_capped_free_scan_explains_the_cap_too():
         [{"kind": "critical", "category": "Security",
           "rule_id": "env-file-committed", "title": "Committed .env file"}],
         basis="static_only"))
-    assert "capped" in html
+    assert "cannot exceed" in html
     assert "Committed .env file" in html
 
 

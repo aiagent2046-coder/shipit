@@ -72,3 +72,37 @@ def test_report_carries_tight_csp_and_baseline_headers():
     # Baseline headers still apply on the report too.
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
     assert resp.headers["X-Frame-Options"] == "DENY"
+
+
+def test_the_report_prints_the_stack_the_row_already_stores():
+    """Every web-served report read "stack: ?" for months.
+
+    The value is detected at scan time and written to the row; the report
+    header has a slot for it; the dict handed to render_report simply never
+    carried the key, so `result.get("stack", "?")` always took its default.
+    It survived because the CLI path builds its own dict and does pass it --
+    the reports read during development were the working ones.
+
+    A null column must still read "?" rather than the string "None", so both
+    rows are asserted here: the fix is one `if`, and dropping the guard is
+    the mutation this second half catches.
+    """
+    for stored, expected, forbidden in (("nextjs", "stack: nextjs", "stack: ?"),
+                                        (None, "stack: ?", "None")):
+        audit_id = str(uuid.uuid4())
+        row = {
+            "id": audit_id,
+            "access_token": "tok",
+            "stack": stored,
+            "score_json": {"total": 6.4,
+                           "categories": {"Security": 5.0, "Auth": 10.0}},
+            "findings_json": [],
+        }
+        app.dependency_overrides[get_audit_repo] = lambda: FakeAuditRepo(row)
+        try:
+            resp = client.get(f"/v1/audits/{audit_id}/report?token=tok")
+        finally:
+            app.dependency_overrides.pop(get_audit_repo, None)
+
+        assert expected in resp.text, f"stack={stored!r}"
+        assert forbidden not in resp.text, f"stack={stored!r}"

@@ -178,12 +178,23 @@ def render_report(result: dict, project_name: str = "your app") -> str:
                               for r in low)
             parts.append(f"a safety category below {GATE_THRESHOLD:.1f} "
                          f"({named})")
+        # "Capped at 6.9" described the flat ceiling that _apply_gate tried
+        # first and rejected, and this sentence was never updated when the
+        # gate became a scaling. It read as a contradiction on the page: a
+        # real audit (ai-co-founder-matching) published 5.1 above the words
+        # "capped at 6.9", and 6.9 appears nowhere else on it -- the mean was
+        # 7.4 and the gate compressed it, it did not clip it. A reader who
+        # tries to reconcile the two numbers cannot, which is the same defect
+        # the gate itself exists to remove, relocated into its explanation.
         gate_note = (
-            f'<section><p class="secnote">This score is capped at '
+            f'<section><p class="secnote">This score cannot exceed '
             f'{GATED_MAX:.1f} because the audit found {" and ".join(parts)}. '
-            f'Categories are scored independently and can read higher than '
-            f'the total: the cap is on what the headline is allowed to claim '
-            f'while something disqualifying is open.</p></section>'
+            f'The whole scale is compressed into that range rather than the '
+            f'number being clipped to it, so two repositories that both fail '
+            f'this check are still ranked against each other — which is why '
+            f'the score can read well below {GATED_MAX:.1f}. Categories are '
+            f'scored independently and can read higher than the total.'
+            f'</p></section>'
         )
 
     header_left = f'<div class="ring">{total:.1f}</div>'
