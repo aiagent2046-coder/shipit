@@ -17,8 +17,11 @@ result is the audit's bill, not a sample's. Counting is free: the
 count_tokens endpoint bills nothing and runs no inference.
 
 Needs ANTHROPIC_API_KEY (the direct API; the OpenAI-compatible reseller has
-no count_tokens endpoint). Prints per-rubric and total counts, the ratio
-between models, and the resulting cost per audit at each model's table price.
+no count_tokens endpoint). Reads it from the environment, and failing that
+from the checkout's own .env — on the production host that file IS
+/opt/shipit/.env, so the script works there with nothing exported. Prints
+per-rubric and total counts, the ratio between models, and the resulting
+cost per audit at each model's table price.
 """
 
 from __future__ import annotations
@@ -52,6 +55,38 @@ DEFAULT_MODELS = ["claude-sonnet-4-6", "claude-sonnet-5"]
 MEASURED_OUTPUT_TOKENS_PER_PROMPT = 1079
 
 
+def key_from_dotenv(path: Path) -> str | None:
+    """Read ONLY ANTHROPIC_API_KEY out of a .env file.
+
+    The documented incantation for the sibling scripts is `set -a; . ./.env;
+    set +a`, which works and exports every other secret in the file into the
+    shell as a side effect. Reading the one variable we need avoids that, and
+    avoids the alternative of putting a live key on a command line where it
+    lands in shell history.
+
+    Deliberately not a general dotenv parser: no interpolation, no multi-line
+    values, no `.env` precedence rules. It handles what this file is —
+    KEY=value lines, optionally `export`-prefixed and optionally quoted — and
+    returns None for anything else rather than guessing. The value is never
+    printed, logged, or included in an error message.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == "ANTHROPIC_API_KEY":
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            return value or None
+    return None
+
+
 def pack(root: Path) -> bytes:
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
@@ -78,10 +113,13 @@ def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__, file=sys.stderr)
         return 2
-    key = os.environ.get("ANTHROPIC_API_KEY")
+    dotenv = Path(__file__).resolve().parent.parent / ".env"
+    key = os.environ.get("ANTHROPIC_API_KEY") or key_from_dotenv(dotenv)
     if not key:
-        print("ANTHROPIC_API_KEY is not set — count_tokens is only on the "
-              "direct Anthropic API.", file=sys.stderr)
+        print(f"ANTHROPIC_API_KEY not in the environment and not in {dotenv}. "
+              "count_tokens is only on the direct Anthropic API — the "
+              "OpenAI-compatible reseller does not serve it, so an "
+              "AITUNNEL_API_KEY will not do.", file=sys.stderr)
         return 2
 
     root = Path(argv[0]).expanduser()
