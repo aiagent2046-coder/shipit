@@ -61,8 +61,9 @@ from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
 from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging
-from app.scan.pipeline import (AUDIT_ENGINE_VERSION,
-                              FREE_TIER_LLM_SKIP_REASON,
+from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
+                              BASIS_PREVIEW, FREE_TIER_MODEL,
+                              FREE_TIER_RUBRICS,
                               basis_for_account, content_digest)
 
 # Reused rather than reimplemented, which is the whole point: the worker must
@@ -310,24 +311,37 @@ async def _execute_job(
     # and secret scanning cost nothing to run and are what find committed
     # credentials; the LLM rubrics (auth, injection) are the paid depth.
     #
-    # This replaces a daily-spend-cap check. That check now guards nothing on
-    # this path -- an anonymous audit never reaches the provider at all -- and
-    # the anonymous budget it read is still spent by monitoring re-audits, which
-    # have a null account_id and have never consulted it. See the follow-up
-    # issue; do not read DEFAULT_DAILY_SPEND_CAP_USD as protection for this path.
-    llm_skip_reason: str | None = (
-        None if job.get("account_id") else FREE_TIER_LLM_SKIP_REASON)
-    if llm_skip_reason is not None:
-        # Called for its alert side effect only; the return value decides
-        # nothing now. Anonymous-attributed spend still accrues -- monitoring
-        # re-audits write usage rows with a null account_id and have never
-        # consulted this cap -- and this remains the only place that warns the
-        # operator when it climbs. Dropping the call would silently remove that
-        # alert along with the degrade it used to gate.
-        await _anon_daily_cap_exceeded(llm_usage_repo)
+    # The free tier now spends money, so the daily cap is load-bearing again.
+    #
+    # It had stopped being: an anonymous audit never reached the provider, so
+    # the check ran for its alert side effect and its return value decided
+    # nothing. The comment here said so, and said not to read the cap as
+    # protection for this path. That is no longer true, and the order below is
+    # the whole point -- the cap is consulted BEFORE the scan, because a
+    # ceiling checked afterwards has already been exceeded.
+    #
+    # Anonymous traffic is unauthenticated and unbounded, so this is the only
+    # thing between a preview scan and an arbitrary bill. Crossing the cap
+    # soft-degrades to static-only (the same path as a provider failure), never
+    # an error: a visitor who has paid nothing cannot be asked to pay, and the
+    # static rules alone are still the product that found a committed .env.
+    #
+    # Paid jobs skip the check entirely. Their spend is bounded by an account's
+    # call count, and letting anonymous volume degrade a paid audit would be
+    # the pricing boundary leaking in the direction that costs a customer.
+    llm_skip_reason: str | None = None
+    depth = BASIS_FULL
+    if not job.get("account_id"):
+        depth = BASIS_PREVIEW
+        if await _anon_daily_cap_exceeded(llm_usage_repo):
+            llm_skip_reason = "daily_spend_cap"
 
     scan = await _run_scan_offthread(
-        raw, llm_client, llm_skip_reason=llm_skip_reason)
+        raw, llm_client.with_model(FREE_TIER_MODEL) if depth == BASIS_PREVIEW
+        else llm_client,
+        llm_skip_reason=llm_skip_reason,
+        llm_rubrics=FREE_TIER_RUBRICS if depth == BASIS_PREVIEW else None,
+        depth=depth)
 
     # The audit still finalises as succeeded; the operator is the only one
     # who can act, and until now nothing told them. See _alert_llm_stage_failed.

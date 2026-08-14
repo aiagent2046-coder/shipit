@@ -29,8 +29,9 @@ def _score_color(total: float) -> str:
     return "#e5484d"
 
 
-def _bar(label: str, value: float, examined: bool = True) -> str:
-    """One category row. `examined=False` draws no bar and no number.
+def _bar(label: str, value: float, examined: bool = True,
+         elsewhere: list[str] | None = None, partial: bool = False) -> str:
+    """One category row. Neither flag set means a real bar and a real number.
 
     An unexamined category sits at 10.0 because nothing produced a finding
     in it, not because it is clean. Drawing that as a full green bar is the
@@ -38,7 +39,40 @@ def _bar(label: str, value: float, examined: bool = True) -> str:
     question ("is my auth safe?") with a confident yes nobody checked. The
     row stays, because hiding it would make the audit look narrower than it
     was; only the claim goes.
+
+    `elsewhere` is the second way a 10.0 lies, and it needs its own wording
+    rather than reusing "not checked": the rubric DID run, and it DID find
+    something -- the finding is simply filed under the category it belongs to.
+    Auth read 10.0 on a repository whose endpoint runs shell commands with no
+    login check, because the model correctly called that a Security problem.
     """
+    if elsewhere:
+        # Examined, and NOT clean: this rubric found things and they are
+        # counted under another heading. "not checked" would be a second
+        # falsehood -- it sends the reader hunting for an audit that already
+        # happened -- so the row names the destination instead.
+        where = ", ".join(escape(c) for c in elsewhere)
+        return (
+            f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
+            f'<div class="track"></div>'
+            f'<span class="cat-val cat-skip">reported under {where}</span></div>'
+        )
+    if partial:
+        # The third state, and the one that took two tabs side by side to see.
+        # A free scan drew Security as a full green 10.0 on a repository whose
+        # paid audit found an SSRF, a service-role key used as an HMAC secret
+        # and hardcoded bot credentials -- because the regexes that ran found
+        # nothing, and a category checked one way renders identically to a
+        # category checked every way.
+        #
+        # "not checked" would be wrong here (something did run) and a number
+        # would be worse (it reads as a verdict). The row says the scan was
+        # partial and the scope note above it says exactly what ran.
+        return (
+            f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
+            f'<div class="track"></div>'
+            f'<span class="cat-val cat-skip">partly checked</span></div>'
+        )
     if not examined:
         return (
             f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
@@ -130,7 +164,8 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     #
     # A missing basis means an audit from before the field existed. It is
     # treated as a full audit, exactly as it always was.
-    scored = str(score.get("basis") or "") != "static_only"
+    scored = str(score.get("basis") or "") not in ("static_only",
+                                                   "static+preview")
     findings = sorted(
         result.get("findings", []),
         key=lambda f: (_SEVERITY_ORDER.get(str(f.get("severity")), 9),
@@ -148,8 +183,24 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         unexamined = set(LLM_ONLY_CATEGORIES)
     else:
         unexamined = set()
+    # Absent on every row stored before the key existed, which reads as "no
+    # category handed its findings away" -- the same answer those rows already
+    # give today, so nothing changes retroactively.
+    moved = score.get("reported_elsewhere") or {}
+    # On the free tier no category number is published. Not because the
+    # arithmetic is wrong, but because none of these numbers is earned: the
+    # free scan reads Security with regexes and one rubric on the cheapest
+    # model, and Deploy and Testing by asking whether a file exists. A 10.0
+    # from that is indistinguishable on the page from a 10.0 a full audit
+    # produced, and the visitor cannot tell which they are looking at.
+    #
+    # What a free scan can honestly publish is what it looked at and what it
+    # found. The scope note says the first; the findings table says the second.
     cats = "".join(
-        _bar(name, val, examined=name not in unexamined)
+        _bar(name, val, examined=name not in unexamined,
+             elsewhere=[str(d) for d in (moved.get(name) or [])],
+             partial=not scored and name not in unexamined
+             and name not in moved)
         for name, val in score["categories"].items()
     )
 
@@ -178,12 +229,23 @@ def render_report(result: dict, project_name: str = "your app") -> str:
                               for r in low)
             parts.append(f"a safety category below {GATE_THRESHOLD:.1f} "
                          f"({named})")
+        # "Capped at 6.9" described the flat ceiling that _apply_gate tried
+        # first and rejected, and this sentence was never updated when the
+        # gate became a scaling. It read as a contradiction on the page: a
+        # real audit (ai-co-founder-matching) published 5.1 above the words
+        # "capped at 6.9", and 6.9 appears nowhere else on it -- the mean was
+        # 7.4 and the gate compressed it, it did not clip it. A reader who
+        # tries to reconcile the two numbers cannot, which is the same defect
+        # the gate itself exists to remove, relocated into its explanation.
         gate_note = (
-            f'<section><p class="secnote">This score is capped at '
+            f'<section><p class="secnote">This score cannot exceed '
             f'{GATED_MAX:.1f} because the audit found {" and ".join(parts)}. '
-            f'Categories are scored independently and can read higher than '
-            f'the total: the cap is on what the headline is allowed to claim '
-            f'while something disqualifying is open.</p></section>'
+            f'The whole scale is compressed into that range rather than the '
+            f'number being clipped to it, so two repositories that both fail '
+            f'this check are still ranked against each other — which is why '
+            f'the score can read well below {GATED_MAX:.1f}. Categories are '
+            f'scored independently and can read higher than the total.'
+            f'</p></section>'
         )
 
     header_left = f'<div class="ring">{total:.1f}</div>'
@@ -238,17 +300,32 @@ def render_report(result: dict, project_name: str = "your app") -> str:
             f'<small>{"finding" if len(findings) == 1 else "findings"}'
             '</small></div>'
         )
+        # The scope sentence is basis-specific because the two free depths are
+        # no longer the same scan. A preview reaches a model; a static-only
+        # result did not, either because the spend cap was reached or because
+        # the provider failed. Printing the wider claim over the narrower scan
+        # would overstate exactly the audit that is already the thinnest.
+        if str(score.get("basis") or "") == "static+preview":
+            ran = ('It checks credentials committed to the repository, a '
+                   'committed .env, a .gitignore that misses secret files, '
+                   'missing tests, missing CI and no Dockerfile, and then '
+                   'runs one quick security review over the code.')
+        else:
+            ran = ('It checks credentials committed to the repository, a '
+                   'committed .env, a .gitignore that misses secret files, '
+                   'missing tests, missing CI and no Dockerfile.')
         tier_note = (
             '<section><p class="secnote">A free scan does not produce a mark '
-            'out of ten, because it does not look at enough to earn one. It '
-            'checks credentials committed to the repository, a committed '
-            '.env, a .gitignore that misses secret files, missing tests, '
-            'missing CI and no Dockerfile. '
+            'out of ten, because it does not look at enough to earn one. '
+            + ran + ' '
             + _unexamined_sentence(score) +
-            ' Finding nothing in the checks that ran is not the same as '
-            'being sound: on one real repository this scan reported a single '
-            'low finding while a full audit found an unauthenticated endpoint '
-            'running commands as root.</p></section>'
+            ' The categories it did look at are marked "partly checked" '
+            'rather than scored, because one pass with the fastest model is '
+            'not the same examination a full audit makes. Finding nothing in '
+            'the checks that ran is not the same as being sound: on one real '
+            'repository this scan reported a single low finding while a full '
+            'audit found an unauthenticated endpoint running commands as '
+            'root.</p></section>'
         )
 
     # Split, don't hide. A secret in a test fixture and a secret in a running

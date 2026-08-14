@@ -331,7 +331,7 @@ def test_capped_score_says_a_critical_caused_it():
         {"kind": "critical", "category": "Security",
          "rule_id": "env-file-committed", "title": "Committed .env file"},
     ]))
-    assert "capped" in html
+    assert "cannot exceed" in html
     assert "Committed .env file" in html
 
 
@@ -340,6 +340,31 @@ def test_capped_score_names_the_failing_category():
         {"kind": "subscore", "category": "Security", "value": 5.9},
     ]))
     assert "Security 5.9" in html
+
+
+def test_the_note_describes_compression_not_a_flat_ceiling():
+    """The gate scales the mean; it does not clip it.
+
+    The sentence said "capped at 6.9" -- the flat ceiling _apply_gate tried
+    first and rejected for flattening 40% of failing repos onto one number.
+    A real audit (ai-co-founder-matching) then published 5.1 directly above
+    those words, with 6.9 appearing nowhere else on the page: its category
+    mean was 7.4 and the gate compressed it. A reader who tries to reconcile
+    5.1 with "capped at 6.9" cannot, which is the headline contradicting the
+    text beside it -- the exact defect the gate exists to remove.
+
+    The total is set below GATED_MAX deliberately: at 6.5 the old wording
+    looked close enough to pass, and only a value that is plainly not the
+    cap can tell the two explanations apart.
+    """
+    row = _gated([{"kind": "subscore", "category": "Security", "value": 5.9}])
+    row["score"]["total"] = 5.1
+    html = render_report(row)
+
+    assert "cannot exceed 6.9" in html
+    assert "compressed" in html
+    assert "capped at 6.9" not in html, (
+        "describes the flat ceiling that was measured and rejected")
 
 
 def test_hostile_gate_reason_title_is_escaped():
@@ -357,10 +382,10 @@ def test_ungated_and_legacy_rows_print_no_cap_note():
     the scorer recorded reasons. Neither may print an explanation -- and the
     legacy row must not be described as ungated either, so it says nothing.
     """
-    assert "capped" not in render_report(_gated([]))
+    assert "cannot exceed" not in render_report(_gated([]))
     legacy = _gated([])
     del legacy["score"]["gated_by"]
-    assert "capped" not in render_report(legacy)
+    assert "cannot exceed" not in render_report(legacy)
 
 
 def test_a_capped_free_scan_explains_the_cap_too():
@@ -373,7 +398,7 @@ def test_a_capped_free_scan_explains_the_cap_too():
         [{"kind": "critical", "category": "Security",
           "rule_id": "env-file-committed", "title": "Committed .env file"}],
         basis="static_only"))
-    assert "capped" in html
+    assert "cannot exceed" in html
     assert "Committed .env file" in html
 
 
@@ -408,3 +433,130 @@ def test_a_full_audit_never_marks_anything_unchecked():
     html = render_report(r)
 
     assert "not checked" not in html
+
+
+def test_a_category_that_exported_its_findings_draws_no_bar():
+    """Auth read 10.0 as a full green bar on a repository whose endpoint runs
+    shell commands with no login check — because the model correctly filed
+    that as Security, leaving Auth holding nothing.
+
+    The row must say where the findings went. "not checked" would be a second
+    falsehood: the rubric ran, and it found something.
+    """
+    row = _gated([])
+    row["score"]["reported_elsewhere"] = {"Auth": ["Security"]}
+    html = render_report(row)
+
+    assert "reported under Security" in html
+    # The number and its bar are what lied; both must be gone for this row.
+    assert ">10.0<" not in html.split("Auth")[1].split("</div></div>")[0]
+    # And it must not be described as unexamined.
+    assert "not checked" not in html
+
+
+def test_the_two_blanked_rows_do_not_borrow_each_others_wording():
+    """`unexamined` and `reported_elsewhere` both blank a number, for opposite
+    reasons. A report that renders them alike tells the reader the wrong thing
+    in one of the two cases, and the wrong thing is the one that sends someone
+    hunting for an audit that already happened."""
+    row = _gated([], basis="static_only")
+    # Both names must exist in `categories`, or no row is rendered for them
+    # and the assertions below pass by measuring nothing.
+    assert {"Testing", "Auth"} <= set(row["score"]["categories"])
+    row["score"]["unexamined"] = ["Testing"]
+    row["score"]["reported_elsewhere"] = {"Auth": ["Security"]}
+    html = render_report(row)
+
+    assert "not checked" in html
+    assert "reported under Security" in html
+
+
+def test_a_row_stored_before_the_key_existed_renders_unchanged():
+    """Absent must read as "nothing was handed away" — the answer those rows
+    already give — not as an error and not as a blanked row."""
+    row = _gated([])
+    assert "reported_elsewhere" not in row["score"]
+    html = render_report(row)
+
+    assert "reported under" not in html
+    assert ">10.0<" in html  # Auth still draws its ordinary bar
+
+
+# --- the free tier publishes findings, not numbers ---------------------------
+#
+# Two browser tabs on the same repository made this visible. The paid report
+# found an SSRF, a service-role key used as an HMAC secret, hardcoded bot
+# credentials and a rate limiter that fails open; the free report on the same
+# code drew Security as a full green 10.0 bar and reported one low finding.
+# The prose disclaimer was honest and nobody reads prose next to a green bar.
+
+
+def _preview(categories: dict | None = None) -> dict:
+    return {
+        "stack": "nextjs",
+        "score": {
+            "total": 9.9, "basis": "static+preview",
+            "categories": categories or {
+                "Security": 10.0, "Auth": 10.0, "Testing": 10.0,
+                "Deploy": 9.9, "Money & Data": 10.0, "Frontend": 10.0},
+            "unexamined": ["Auth", "Money & Data", "Frontend"],
+            "gated_by": [],
+        },
+        "findings": [_finding()],
+    }
+
+
+def test_a_preview_publishes_no_mark_out_of_ten():
+    html = render_report(_preview())
+
+    assert "Free scan" in html
+    assert "does not produce a mark out of ten" in html
+    # The headline number must be absent, not merely small. 9.9 is what this
+    # repository scored on the free tier while its paid audit read 4.7.
+    assert ">9.9<" not in html
+
+
+def test_a_preview_marks_what_it_looked_at_as_partly_checked():
+    """Neither a number nor "not checked".
+
+    Security WAS examined -- by regexes and one rubric on the cheapest model --
+    so calling it unchecked is false. But a 10.0 renders identically to a 10.0
+    a full audit produced, and the visitor cannot tell which they are reading.
+    """
+    html = render_report(_preview())
+
+    assert "partly checked" in html
+    assert "not checked" in html          # Auth / Money & Data / Frontend
+    # No category number survives anywhere on a free report.
+    for value in ("10.0", "9.9"):
+        assert f'class="cat-val">{value}<' not in html
+
+
+def test_a_preview_says_it_ran_a_security_review_and_static_only_does_not():
+    """The two free depths are different scans and must not share a claim.
+
+    A static-only result reached no model at all -- the spend cap, or a
+    provider failure. Printing the preview's wider scope over it would
+    overstate the thinnest audit the product produces.
+    """
+    preview = render_report(_preview())
+    row = _preview()
+    row["score"]["basis"] = "static_only"
+    static_only = render_report(row)
+
+    assert "one quick security review" in preview
+    assert "one quick security review" not in static_only
+    assert "does not produce a mark out of ten" in static_only
+
+
+def test_a_paid_audit_still_publishes_its_numbers():
+    """The guard against the fix leaking upwards: a paid report is the one
+    place a category number is earned, and it must keep drawing them."""
+    row = _preview()
+    row["score"]["basis"] = "static+llm"
+    row["score"]["unexamined"] = []
+    html = render_report(row)
+
+    assert "partly checked" not in html
+    assert 'class="cat-val">9.9<' in html
+    assert ">9.9<" in html   # and the headline ring is back

@@ -1050,9 +1050,16 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               # category the scorer does not weigh -- those score as free.
               declared = str(f.get("category") or "").strip()
               category = RUBRICS[rubric]["category"]
+              # Where it WOULD have been filed, kept only when the model moved
+              # it. The scorer needs this to tell a rubric that looked and
+              # found nothing from one that found things and handed them to a
+              # neighbour -- the second leaves its own category empty, and an
+              # empty category scores 10.0. See compute_scores.
+              origin: str | None = None
               if declared in RUBRIC_CATEGORIES:
                   if declared != category:
                       stats.recategorised += 1
+                      origin = category
                   category = declared
               findings.append(ScoredFinding(
                   rule_id=f"llm-{rubric}",
@@ -1065,6 +1072,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   explanation=clip(str(f.get("explanation", "")), 600),
                   fix_hint=clip(str(f.get("fix_hint", "")), 300),
                   context=context,
+                  origin_category=origin,
               ))
           # Cost cap: price the tokens accumulated so far (all calls this scan
           # used the same served model) and stop before the NEXT call if we've

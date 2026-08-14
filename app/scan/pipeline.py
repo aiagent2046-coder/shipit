@@ -11,20 +11,29 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import os
 import re
 import zipfile
 
 from app.llm.client import LLMClient, LLMError
 from app.scan.collapse import collapse_repeats
-from app.scan.llm_scan import LLMScanStats, run_llm_scan
+from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
 
 logger = logging.getLogger(__name__)
 
+# Every field that must survive the round trip out of the scanners, through
+# the findings dicts (which persist to findings_json) and back into a
+# ScoredFinding for the scorer. A field missing here is dropped silently: the
+# producer sets it, the report can still read it off the dict, and only the
+# SCORE quietly computes as though it were never set. "origin_category" is the
+# one that makes an emptied-by-recategorisation category visible, so leaving
+# it out restores exactly the defect it was added to fix, with every test
+# against compute_scores still passing.
 _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
                   "category", "file", "line", "masked", "explanation",
-                  "fix_hint", "context")
+                  "fix_hint", "context", "origin_category")
 
 
 # Bump when any part of the audit engine changes in a way that should
@@ -41,14 +50,45 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # byte-identical content recompute instead of reusing a now-stale row,
 # which is what stops an engine improvement (or bug fix) from being frozen
 # out by a result produced under the old engine.
-AUDIT_ENGINE_VERSION = "2026-08-14-1"
+AUDIT_ENGINE_VERSION = "2026-08-14-4"
 
 
-# The two values `score["basis"]` can take, named because they are now a
-# pricing boundary and not only a diagnostic. BASIS_STATIC_ONLY used to mean
-# "something went wrong or the budget ran out"; it is now also what the free
-# tier deliberately delivers.
+# The three values `score["basis"]` can take, named because they are a pricing
+# boundary and not only a diagnostic. BASIS_STATIC_ONLY used to mean "something
+# went wrong or the budget ran out", and still does -- it is what a preview
+# degrades to when the spend cap is reached or the provider fails.
 BASIS_FULL = "static+llm"
+
+# The free tier's depth, and why it cannot borrow either of the other two
+# names.
+#
+# `basis` is not only a label: it is the third component of the audit cache
+# key (AuditRepository.get_by_content_hash), and that key is a pricing
+# boundary. A preview scan reporting BASIS_FULL would let an anonymous
+# visitor's cheap result be served to a paying account that audits the same
+# content -- the exact cross-boundary reuse the cache's docstring records as
+# already fixed, re-opened from the other side. Reporting BASIS_STATIC_ONLY
+# would be a plain falsehood: an LLM ran, and its findings are in the result.
+#
+# So a third value, and every consumer that branches on depth must handle it.
+# A preview is a narrower scan by a weaker reader -- one rubric on
+# FREE_TIER_MODEL -- which is why what it publishes is findings rather than
+# scores: naming what was found is a claim the model can support, and a
+# number out of ten is not.
+BASIS_PREVIEW = "static+preview"
+
+# What the free tier spends. One rubric, because the security surface is the
+# product's wedge and the one a visitor most needs to see; the cheapest model,
+# because this is given away to unauthenticated traffic.
+#
+# Both are env-overridable so an operator can widen or narrow the giveaway
+# without a deploy -- but note that widening it costs money per anonymous
+# request, and the daily spend cap is what bounds that, not this.
+FREE_TIER_MODEL = os.environ.get("FREE_TIER_LLM_MODEL", "claude-haiku-4-5")
+FREE_TIER_RUBRICS: tuple[str, ...] = tuple(
+    r for r in os.environ.get("FREE_TIER_LLM_RUBRICS", "security").split(",")
+    if r.strip()
+)
 
 # Why a provider failure needs a name, and two of them.
 #
@@ -113,11 +153,19 @@ def basis_for_account(account_id: object | None) -> str:
     served a paid full audit out of the cache and a paying account could be
     served a free static one.
 
-    Static-only for anonymous is not a degradation to apologise for. It is the
-    free product: the static rules and secret scanning cost nothing to run, and
-    they are what found the committed .env in audit ed402e63.
+    Anonymous gets a preview, not a degraded paid audit. The static rules and
+    secret scanning cost nothing to run and are what found the committed .env
+    in audit ed402e63; the preview adds one rubric on the cheapest model, so a
+    visitor can SEE the problems that the paid depth then examines properly.
+    That is deliberate: a free scan whose reader learns nothing never becomes
+    a paying one.
+
+    It returns the ENTITLEMENT, not the outcome. A preview whose LLM stage is
+    skipped (spend cap) or fails still reports BASIS_STATIC_ONLY in its score,
+    so this value must never be read as a claim about what actually ran -- only
+    as what this caller may be served from the cache.
     """
-    return BASIS_FULL if account_id else BASIS_STATIC_ONLY
+    return BASIS_FULL if account_id else BASIS_PREVIEW
 
 
 def content_digest(data: bytes) -> str:
@@ -153,7 +201,9 @@ def content_digest(data: bytes) -> str:
 
 
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
-             llm_skip_reason: str | None = None) -> dict:
+             llm_skip_reason: str | None = None,
+             llm_rubrics: tuple[str, ...] | None = None,
+             depth: str = BASIS_FULL) -> dict:
     """Returns {"score", "findings", "llm": <stats | status>, "llm_usage"}.
 
     `llm` is a stats dict when the stage ran, and also a stats-shaped dict
@@ -176,6 +226,16 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
     made BEFORE it cost -- money the provider will bill regardless of the scan
     being useless. Reading spend off `llm` is what let a partial scan's cost
     disappear; the accounting path reads this key instead.
+
+    `llm_rubrics` narrows the stage to a subset (the free tier runs one);
+    None means every rubric.
+
+    `depth` is the basis to REPORT IF the stage actually runs -- BASIS_FULL for
+    a paid audit, BASIS_PREVIEW for the free tier. It is what the caller
+    intended, never a claim about what happened: if the stage is skipped or
+    fails, the result says BASIS_STATIC_ONLY regardless, because that is what
+    it then is. Keeping the two apart is what stops a preview that never
+    reached the provider from being cached and served as one.
     """
     static = run_static_scan(io.BytesIO(data))
     findings = static["findings"]
@@ -186,8 +246,9 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
 
     if llm_client.providers and llm_skip_reason is None:
         try:
-            llm_findings, stats = run_llm_scan(io.BytesIO(data), llm_client,
-                                               passes=llm_passes, stats=spend)
+            llm_findings, stats = run_llm_scan(
+                io.BytesIO(data), llm_client, passes=llm_passes, stats=spend,
+                **({} if llm_rubrics is None else {"rubrics": llm_rubrics}))
         except LLMError as exc:
             # A provider failure mid-audit silently degrades the score to
             # static-only (a real 402-mid-run once turned a 0.0 into a 9.2).
@@ -215,6 +276,13 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
                 [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
                  for f in findings],
                 llm_ran=llm_ran,
+                # Derived from the rubrics that ran, never written out: a
+                # preview covers one of them, and a category no rubric looked
+                # at must not score 10.0 off the back of the ones that did.
+                # Reading RUBRICS is what keeps this correct when the free
+                # tier's rubric list is changed by an env var.
+                llm_categories=None if llm_rubrics is None else frozenset(
+                    RUBRICS[r]["category"] for r in llm_rubrics if r in RUBRICS),
             ),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0
@@ -227,7 +295,7 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # The same flag now also keeps Auth and Money & Data out of the
             # mean on a static-only audit: nothing ran that could have filled
             # them, and their 10.0 means "not examined", not "clean".
-            "basis": BASIS_FULL if llm_ran else BASIS_STATIC_ONLY,
+            "basis": depth if llm_ran else BASIS_STATIC_ONLY,
         },
         "findings": findings,
         "llm": llm_summary,

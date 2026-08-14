@@ -143,6 +143,15 @@ async def get_audit_report(
                                "report from (score_json is missing or malformed)"},
         )
     result = {"score": score, "findings": row.get("findings_json") or []}
+    # The stack has been detected and stored on the row since the audit was
+    # written, and the report header has a slot for it -- but this dict never
+    # carried it, so EVERY web-served report printed "stack: ?" while the
+    # value sat one key away. Only the CLI path passed it, which is why it
+    # went unnoticed: the reports read during development were the ones that
+    # worked. Guarded on truthiness so a null column stays "?" rather than
+    # rendering the string "None".
+    if row.get("stack"):
+        result["stack"] = row["stack"]
     html = render_report(result, project_name=f"audit {audit_id[:8]}")
     # Tight CSP scoped to this self-contained report page: it inlines a
     # <style> block (hence style-src 'unsafe-inline') but loads no scripts,

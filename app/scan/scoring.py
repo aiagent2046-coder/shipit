@@ -128,6 +128,15 @@ class ScoredFinding:
     # downstream consumers (the future Fix Pack filter) branch reliably
     # instead of string-matching the title suffix.
     context: str | None = None
+    # The category this finding's PRODUCER would have assigned, recorded only
+    # when the model overrode it (app/scan/llm_scan.py). Findings are filed by
+    # what they are rather than by which rubric emitted them -- but a category
+    # that hands all of its findings to a neighbour then holds none of its own,
+    # and an empty category scores a perfect 10.0. Without this field there is
+    # nothing to tell "the auth rubric looked and found nothing" apart from
+    # "the auth rubric found two holes and filed them under Security", and the
+    # second one must never print as a clean bar. See compute_scores.
+    origin_category: str | None = None
 
 
 def _score(findings: list[ScoredFinding]) -> float:
@@ -316,7 +325,8 @@ def _apply_gate(total: float, reasons: list[dict]) -> float:
 
 
 def compute_scores(findings: list[ScoredFinding],
-                   llm_ran: bool = True) -> dict:
+                   llm_ran: bool = True,
+                   llm_categories: frozenset[str] | None = None) -> dict:
     """Per-category subscores and their weighted mean.
 
     `llm_ran=False` marks a static-only audit, where LLM_ONLY_CATEGORIES had
@@ -329,13 +339,57 @@ def compute_scores(findings: list[ScoredFinding],
     The default is True so every existing caller keeps the full-audit
     behaviour; only the pipeline, which knows whether the stage ran, passes
     False.
+
+    `llm_categories` narrows that further: which LLM-only categories a producer
+    actually ran for. A boolean was enough while the stage was all-or-nothing,
+    and stopped being enough the moment the free tier ran ONE rubric -- with
+    llm_ran=True and no further detail, Auth, Money & Data and Frontend each
+    scored 10.0 and drew a full green bar off a stage that never looked at
+    them. That is issue #22 again, on a preview instead of a free static scan.
+
+    None means "all of them", which is what a paid audit does and what every
+    caller written before previews existed means. An empty set is not the same
+    as None and must not be conflated: it means the stage ran and covered none
+    of these categories.
     """
     by_cat = {
         cat: _score([f for f in findings if f.category == cat])
         for cat in CATEGORIES
     }
+    # Categories that produced findings and then handed every one of them to a
+    # neighbour. Their 10.0 is dead weight in the exact sense issue #181
+    # describes, arriving by a fourth route: not "no producer exists" (Config,
+    # Correctness), not "no producer ran" (LLM_ONLY_CATEGORIES on a free scan),
+    # not "the producer found nothing" -- but "the producer found things, and
+    # they are counted next door".
+    #
+    # Measured on kristina_agent_center: the auth rubric reported an endpoint
+    # running arbitrary shell commands with no login check, the model filed it
+    # as Security because that is what it is, and Auth was left holding
+    # nothing. Auth printed 10.0, was NOT in `unexamined`, and rendered as a
+    # full green bar directly above an unauthenticated RCE. Counting it also
+    # propped the mean up by a fifth of the weight for a reason that has
+    # nothing to do with the repository.
+    #
+    # Only the fully-emptied case qualifies. A category that keeps one finding
+    # and exports another is scoring its own remainder honestly and is left
+    # alone.
+    reported_elsewhere = {
+        c: sorted({f.category for f in findings
+                   if f.origin_category == c and f.category != c})
+        for c in CATEGORIES
+        if not any(f.category == c for f in findings)
+        and any(f.origin_category == c for f in findings)
+    }
+    def _examined(cat: str) -> bool:
+        if cat not in LLM_ONLY_CATEGORIES:
+            return True          # a static producer always ran
+        if not llm_ran:
+            return False
+        return llm_categories is None or cat in llm_categories
+
     counted = [c for c in CATEGORIES
-               if llm_ran or c not in LLM_ONLY_CATEGORIES]
+               if _examined(c) and c not in reported_elsewhere]
     divisor = sum(_RAW_CATEGORY_WEIGHT[c] for c in counted)
     total = sum(by_cat[c] * _RAW_CATEGORY_WEIGHT[c] for c in counted) / divisor
     # The gate reads only categories that were actually examined, for the same
@@ -398,6 +452,13 @@ def compute_scores(findings: list[ScoredFinding],
     # Derived here rather than in each surface: working it out downstream
     # needs LLM_ONLY_CATEGORIES and the basis, and a second copy of that
     # rule is how the report starts disagreeing with the score.
-    unexamined = [c for c in CATEGORIES if c not in counted]
+    #
+    # `reported_elsewhere` is excluded here on purpose. Both keys name a
+    # category whose number must not be drawn, but for opposite reasons, and a
+    # report that conflates them tells the reader the wrong thing: "not
+    # checked" about a category that WAS checked is its own falsehood, and it
+    # sends someone hunting for an audit that already happened.
+    unexamined = [c for c in CATEGORIES
+                  if c not in counted and c not in reported_elsewhere]
     return {"total": total, "categories": by_cat, "gated_by": reasons,
-            "unexamined": unexamined}
+            "unexamined": unexamined, "reported_elsewhere": reported_elsewhere}

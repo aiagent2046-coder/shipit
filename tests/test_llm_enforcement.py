@@ -47,7 +47,10 @@ from app.main import (
     get_repo_fetcher,
     get_billing_transport,
 )
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
+from app.main import DEFAULT_DAILY_SPEND_CAP_USD
+from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
+                               BASIS_PREVIEW, FREE_TIER_MODEL,
+                               basis_for_account, content_digest)
 from tests.conftest import drain_audit_queue
 
 client = TestClient(app)
@@ -85,6 +88,19 @@ class CountingLLM(LLMClient):
         self._in = input_tokens
         self._out = output_tokens
         self._model = model
+        self.models_asked: list[str] = []
+
+    def with_model(self, model):
+        """Same double, model recorded.
+
+        The real one shallow-copies, and a copy of this fake would count its
+        calls into the copy -- leaving the test asserting on an object nothing
+        used. Returning self keeps one counter, and `models_asked` is the
+        stronger assertion anyway: it proves the preview asked for the cheap
+        model rather than merely that some call happened.
+        """
+        self.models_asked.append(model)
+        return self
 
     def complete(self, system, user, max_tokens=4096):
         self.calls += 1
@@ -213,6 +229,25 @@ def _auth_zip() -> io.BytesIO:
     })
 
 
+def _security_zip() -> io.BytesIO:
+    """A repo the SECURITY rubric selects.
+
+    _auth_zip's file is picked by the auth rubric and by no other, so a
+    preview -- which runs the security rubric alone -- makes zero calls on it.
+    That is correct behaviour and a useful property (a narrow preview is often
+    free), but it makes _auth_zip useless for asserting that the preview
+    reached the provider: the test would pass on a preview that never ran.
+    """
+    return make_zip({
+        "package.json": NEXT_PKG,
+        "app/api/run.ts": (
+            b"import { exec } from 'child_process'\n"
+            b"export async function POST(req) {\n"
+            b"  const { cmd } = await req.json()\n"
+            b"  return exec(cmd)\n}\n"),
+    })
+
+
 def _clear():
     for dep in (get_audit_repo, get_llm_usage_repo, get_llm_client,
                 get_account_repo, get_service_flags_repo):
@@ -233,7 +268,12 @@ async def test_anon_daily_cap_soft_degrades_to_static_only(monkeypatch,
     _reset_cache_before()
     _capture_alerts(monkeypatch)
     audit_repo = FakeAuditRepo()
-    usage_repo = FakeUsageRepo(anon_spend=Decimal("2.50"))  # over the $2.00 cap
+    # Derived from the cap, never hardcoded: this said $2.50 "over the $2.00
+    # cap" and silently became an UNDER-cap fixture the day the cap moved to
+    # $20 -- the test then asserted the degrade while exercising the happy
+    # path.
+    usage_repo = FakeUsageRepo(
+        anon_spend=DEFAULT_DAILY_SPEND_CAP_USD + Decimal("0.50"))
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     try:
@@ -245,24 +285,25 @@ async def test_anon_daily_cap_soft_degrades_to_static_only(monkeypatch,
         _clear()
 
     # Still accepted, still a real report -- the LLM stage is what is absent.
-    # Note the cap is no longer what causes this: anonymous audits are
-    # static-only at any spend level (see the test below). This case is kept
-    # because being over the cap must not break the audit either.
+    # The cap IS what causes this again: the free tier spends money now, so
+    # past the ceiling a preview degrades to static-only rather than being
+    # refused. A visitor who has paid nothing cannot be asked to pay.
     assert resp.status_code == 202
     assert audit_repo.rows[0]["score_json"]["basis"] == "static_only"
     assert llm.calls == 0                  # no LLM spend past the cap
     assert usage_repo.rows == []           # calls=0 -> no usage row
 
 
-async def test_anon_is_static_only_even_far_under_the_cap(monkeypatch,
-                                                          audit_queue):
-    """The free tier is static-only by policy, not because money ran out.
+async def test_anon_under_the_cap_gets_a_preview_not_silence(monkeypatch,
+                                                             audit_queue):
+    """The free tier spends money on purpose, and the cap is what bounds it.
 
-    This used to assert the opposite -- an anonymous audit under the cap ran the
-    LLM. The product changed: the static rules and secret scanning are free to
-    run and are what find committed credentials, while the auth and injection
-    rubrics are the paid depth. Spend is now irrelevant to this decision, which
-    is why the budget here is nearly untouched and the LLM still never runs.
+    This assertion has now inverted twice. It first said an anonymous audit
+    under the cap ran the LLM; then that the free tier was static-only by
+    policy and spend was irrelevant; now that a preview runs again -- one
+    rubric on the cheapest model, because a visitor who is shown nothing wrong
+    never becomes a customer. Each turn was a product decision, and the test
+    is the record of which one is in force.
     """
     _reset_cache_before()
     _capture_alerts(monkeypatch)
@@ -271,17 +312,21 @@ async def test_anon_is_static_only_even_far_under_the_cap(monkeypatch,
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     try:
-        resp = client.post("/v1/audits",
-                           files={"archive": ("app.zip", _auth_zip(), "application/zip")})
+        resp = client.post(
+            "/v1/audits",
+            files={"archive": ("app.zip", _security_zip(), "application/zip")})
         await drain_audit_queue(audit_queue, audit_repo=audit_repo,
                                 llm_client=llm, llm_usage_repo=usage_repo)
     finally:
         _clear()
 
     assert resp.status_code == 202
-    assert audit_repo.rows[0]["score_json"]["basis"] == "static_only"
-    assert llm.calls == 0
-    assert usage_repo.rows == []
+    assert audit_repo.rows[0]["score_json"]["basis"] == BASIS_PREVIEW
+    assert llm.calls                                  # it reached the provider
+    assert llm.models_asked == [FREE_TIER_MODEL]      # ...on the cheap model
+    # ...and the spend is journalled, or the cap above has nothing to read and
+    # the ceiling is decorative.
+    assert usage_repo.rows
 
 
 # --------------------------------------------------------------------------
@@ -418,9 +463,11 @@ async def test_alert_fires_at_80_percent_of_daily_cap(monkeypatch, audit_queue):
     _reset_cache_before()
     alerts = _capture_alerts(monkeypatch)
     audit_repo = FakeAuditRepo()
-    # $1.70 is 85% of the $2.00 cap: over the 80% alert line but under the cap,
-    # so the LLM still runs AND the operator is warned.
-    usage_repo = FakeUsageRepo(anon_spend=Decimal("1.70"))
+    # 85% of the cap: over the 80% alert line but under the ceiling, so the
+    # LLM still runs AND the operator is warned. Derived, because the literal
+    # that used to be here stopped meaning "85%" the moment the cap moved.
+    usage_repo = FakeUsageRepo(
+        anon_spend=DEFAULT_DAILY_SPEND_CAP_USD * Decimal("0.85"))
     llm = CountingLLM(input_tokens=1000, output_tokens=200)
     app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     try:
@@ -531,13 +578,20 @@ async def test_anonymous_caller_is_not_served_a_paid_audit_from_the_cache(
         _clear()
 
     assert resp.status_code == 202
-    # Asked only for free depth, never for the paid row.
+    # Asked only for free depth, never for the paid row. Asserted as "not the
+    # paid basis" rather than as a literal string: the free tier's name changed
+    # once (static_only -> static+preview) and the property this test exists
+    # for did not. A literal here fails on the rename and passes on the bug.
     assert audit_repo.basis_queries
-    assert set(audit_repo.basis_queries) == {"static_only"}
+    assert BASIS_FULL not in audit_repo.basis_queries
+    assert set(audit_repo.basis_queries) == {basis_for_account(None)}
     # A second row, scanned fresh at free depth, rather than the seeded one.
     assert len(audit_repo.rows) == 2
     fresh = audit_repo.rows[1]
-    assert fresh["score_json"]["basis"] == "static_only"
+    # Scanned at preview depth, not handed the seeded paid row. The point of
+    # this test is the boundary, not the depth's name.
+    assert fresh["score_json"]["basis"] == basis_for_account(None)
+    assert fresh["score_json"]["basis"] != BASIS_FULL
     assert not any((f.get("rule_id") or "").startswith("llm-")
                    for f in fresh["findings_json"])
     assert llm.calls == 0
