@@ -9,6 +9,7 @@ that widens its pattern, which is what keeps --delete safe.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -193,3 +194,127 @@ def test_mask_dsn_never_prints_the_password():
     masked = atd.mask_dsn(url)
     assert "s3cret-pass" not in masked
     assert "aws-0-eu.pooler.supabase.com/postgres" == masked
+
+
+# ---------------------------------------------------------------- deleting
+#
+# Everything above tests the CLASSIFIER: which rows count as synthetic, and
+# — the load-bearing half — which real ones must not. Twenty-nine tests, and
+# not one of them ran the code that does the deleting. So this shipped:
+#
+#     with conn.cursor() as cur:
+#         ...                              # probe phase
+#                                          # block exits, cur is closed
+#     with conn.transaction():
+#         cur.execute("DELETE FROM ...")   # InterfaceError: cursor is closed
+#
+# and the first --delete against production died on it. The transaction rolled
+# back and no row was touched, so the failure was loud and safe, but the #197
+# cleanup was blocked by it and only a live database could have revealed it.
+#
+# The fake below CLOSES ITS CURSORS FOR REAL, and that is the entire point of
+# it. Measured, not assumed: with __exit__ leaving the cursor usable, the
+# broken script passes test_delete_runs_on_a_cursor_that_is_open exactly as
+# happily as the fixed one. A test of the delete phase that cannot fail is
+# how a defect this shape survives a suite this size.
+
+
+class _FakeCursor:
+    """Context-managed, and genuinely unusable once the block exits."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.closed = False
+        self.rowcount = 0
+        self._rows: list[dict] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.closed = True
+        return False
+
+    def execute(self, sql, params=None):
+        if self.closed:
+            raise atd.psycopg.InterfaceError("the cursor is closed")
+        self._conn.statements.append(sql)
+        self.rowcount = 0
+        self._rows = []
+        if sql.startswith("DELETE FROM audits"):
+            self.rowcount = 1
+        elif sql.startswith("SELECT * FROM audits") and self._conn.seeded:
+            self._rows = [{"id": "aud-1",
+                           "repo_url": "https://github.com/acme/app",
+                           "created_at": "2026-07-22"}]
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeConn:
+    def __init__(self, seeded: bool = True):
+        self.seeded = seeded
+        self.statements: list[str] = []
+        self.cursors: list[_FakeCursor] = []
+
+    def cursor(self):
+        cur = _FakeCursor(self)
+        self.cursors.append(cur)
+        return cur
+
+    def transaction(self):
+        return contextlib.nullcontext()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _run_delete(monkeypatch, seeded: bool = True) -> _FakeConn:
+    conn = _FakeConn(seeded=seeded)
+    monkeypatch.setattr(atd.psycopg, "connect", lambda *a, **k: conn)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:p@db.example.com:5432/postgres")  # scan-allow: fixture
+    monkeypatch.setattr(sys, "argv",
+                        ["audit_test_data.py", "--delete", "--yes"])
+    assert atd.main() == 0
+    return conn
+
+
+def test_delete_runs_on_a_cursor_that_is_open(monkeypatch):
+    conn = _run_delete(monkeypatch)
+
+    assert any(s.startswith("DELETE FROM audits") for s in conn.statements), (
+        "the delete phase never issued its DELETE"
+    )
+
+
+def test_the_probe_cursor_is_not_reused_after_its_block(monkeypatch):
+    """States the defect directly, so a refactor folding the two phases back
+    onto one cursor fails here rather than in production.
+
+    The probe cursor must be closed by the time deleting starts -- that is
+    what its `with` block is for -- so the DELETE has to come from a
+    different cursor object.
+    """
+    conn = _run_delete(monkeypatch)
+
+    assert conn.cursors[0].closed, "the probe cursor outlived its own block"
+    assert len(conn.cursors) > 1, (
+        "the delete phase reused the probe cursor instead of opening one"
+    )
+
+
+def test_nothing_is_deleted_when_the_scan_finds_nothing(monkeypatch):
+    """The case that runs against a clean database: no synthetic rows means
+    no DELETE for any table, not an empty one issued per table."""
+    conn = _run_delete(monkeypatch, seeded=False)
+
+    assert not any(s.startswith("DELETE") for s in conn.statements)

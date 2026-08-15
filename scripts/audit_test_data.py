@@ -326,14 +326,27 @@ def main() -> int:
             return 0
 
         # Delete, children first, one transaction.
+        #
+        # A FRESH CURSOR. The probe cursor above lives in a `with` block that
+        # has already exited by the time execution reaches here, so it is
+        # closed, and reusing it raised
+        #
+        #     psycopg.InterfaceError: the cursor is closed
+        #
+        # on the first real --delete run against production. The transaction
+        # rolled back and no row was touched -- loud and safe -- but the
+        # issue #197 cleanup could not proceed, and the only thing that could
+        # have discovered it was running the script against a live database.
         print("\n=== Deleting ===")
         with conn.transaction():
-            for table in DELETION_ORDER:
-                ids = [row["id"] for row, _ in synthetic.get(table, [])]
-                if not ids:
-                    continue
-                cur.execute(f"DELETE FROM {table} WHERE id = ANY(%s)", (ids,))
-                print(f"{table:20s} deleted {cur.rowcount}")
+            with conn.cursor() as del_cur:
+                for table in DELETION_ORDER:
+                    ids = [row["id"] for row, _ in synthetic.get(table, [])]
+                    if not ids:
+                        continue
+                    del_cur.execute(
+                        f"DELETE FROM {table} WHERE id = ANY(%s)", (ids,))
+                    print(f"{table:20s} deleted {del_cur.rowcount}")
         print("Committed.")
 
     return 0
