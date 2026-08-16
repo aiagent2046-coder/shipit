@@ -8,6 +8,7 @@ run for real-Docker proof; the daemon is absent in CI and this sandbox.
 """
 
 import io
+import os
 import subprocess
 import zipfile
 
@@ -712,6 +713,121 @@ def test_minimal_check_passes_valid_js(monkeypatch):
     plan = FixpackPlan(files={"app.js": "const x = 1;\n"})
     res = minimal_check(plan)
     assert res.passed == 1 and res.failed == 0
+
+
+# --- minimal_check builds shell source out of client filenames --------------
+#
+# The script minimal_check assembles is handed to `docker run ... sh -c`, and
+# the only client-controlled pieces in it are the names of the changed .js
+# files. These tests do not inspect that string for quote characters -- they
+# hand it to a real /bin/sh with a fake `node` on PATH, because the question
+# is what sh does with it, and only sh can answer that.
+
+
+def _script_for(monkeypatch, files: dict[str, str]) -> tuple[str, list[str]]:
+    """(the `sh -c` script minimal_check built, the paths it named)."""
+    seen: list[list[str]] = []
+
+    def capture(argv, *, timeout):
+        seen.append(argv)
+        return completed(argv, 0, "")
+
+    monkeypatch.setattr(sc, "_run", capture)
+    minimal_check(FixpackPlan(files=files))
+    if not seen:
+        return "", []
+    return seen[0][-1], seen[0]
+
+
+def _sh(script: str, cwd) -> int:
+    """Run `script` through a real sh with a `node` that checks nothing but
+    its argument's contents -- exit 1 if the named file starts with BROKEN.
+
+    A stub rather than the real node so the test does not need a toolchain,
+    and so a file that does not exist is a hard failure rather than a
+    MODULE_NOT_FOUND the assertion might mistake for a syntax verdict.
+    """
+    bin_dir = cwd / "fakebin"
+    bin_dir.mkdir()
+    node = bin_dir / "node"
+    node.write_text(
+        '#!/bin/sh\n'
+        'shift\n'                                  # drop --check
+        'case "$1" in -*) exit 9;; esac\n'         # real node reads this as a flag
+        '[ -f "$1" ] || exit 9\n'                  # named a file that is not there
+        'head -c 6 "$1" | grep -q BROKEN && exit 1\n'
+        'exit 0\n'
+    )
+    node.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+    return subprocess.run(["sh", "-c", script], cwd=cwd, env=env).returncode
+
+
+def test_an_apostrophe_in_a_filename_does_not_fail_its_own_fix_pack(
+        monkeypatch, tmp_path):
+    """Measured before the fix: `node --check 'don't.js'` is "Unterminated
+    quoted string", sh exits 2, and minimal_check reports the file as a
+    syntax error -- blocking a correct Fix Pack over a legal filename."""
+    name = "don't.js"
+    script, _ = _script_for(monkeypatch, {name: "var a = 1;\n"})
+    (tmp_path / name).write_text("var a = 1;\n")
+
+    assert _sh(script, tmp_path) == 0
+
+
+def test_a_filename_cannot_smuggle_a_command_into_the_check(
+        monkeypatch, tmp_path):
+    """The quieter direction. `b' ; true '.js` made the old template read
+    `node --check 'b' ; true '.js'`, which exits 0 whatever the file holds --
+    we ship a file the record says we checked.
+
+    The payload writes a file rather than merely exiting 0, so the assertion
+    is about whether sh ran a second command at all, not about an exit code
+    that could be right for the wrong reason.
+    """
+    name = "b' ; touch pwned ; '.js"
+    script, _ = _script_for(monkeypatch, {name: "BROKEN(\n"})
+    (tmp_path / name).write_text("BROKEN(\n")
+
+    code = _sh(script, tmp_path)
+
+    assert not (tmp_path / "pwned").exists(), "sh ran a smuggled command"
+    assert code != 0, "the broken file passed the check"
+
+
+def test_a_filename_that_looks_like_a_flag_is_still_a_filename(
+        monkeypatch, tmp_path):
+    """Quoting and `./` fix two different things. Quoting stops sh splitting
+    the word; it does nothing about node reading `-e.js` as --eval and never
+    looking at the file. The check would report a pass on a file it never
+    opened."""
+    name = "-e.js"
+    script, _ = _script_for(monkeypatch, {name: "var a = 1;\n"})
+    (tmp_path / name).write_text("var a = 1;\n")
+
+    assert _sh(script, tmp_path) == 0
+
+
+def test_a_path_that_leaves_the_workdir_is_never_written(
+        monkeypatch, tmp_path):
+    """minimal_check writes plan.files onto the HOST with
+    os.path.join(workdir, path); _extract_repo_relative has guarded this
+    shape for as long as it has existed and this one did not."""
+    for escape in ("../pwned.js", "/tmp/pwned.js"):
+        script, argv = _script_for(monkeypatch, {escape: "var a = 1;\n"})
+
+        assert argv == [], f"{escape} reached docker"
+
+
+def test_an_ordinary_path_still_reaches_node(monkeypatch, tmp_path):
+    """The guard rejects a shape, not every path -- without this the previous
+    test passes on a minimal_check that checks nothing at all."""
+    script, argv = _script_for(monkeypatch, {"src/app.js": "var a = 1;\n"})
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.js").write_text("var a = 1;\n")
+
+    assert argv, "an ordinary changed file never reached docker"
+    assert _sh(script, tmp_path) == 0
 
 
 def test_recommendation_note_is_soft_and_mentions_tests():

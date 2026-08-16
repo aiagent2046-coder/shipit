@@ -1,4 +1,6 @@
 import io
+import os
+import subprocess
 import zipfile
 from dataclasses import FrozenInstanceError
 
@@ -312,6 +314,92 @@ def test_a_workspace_member_supplies_the_profile():
     commands = {step.name: step.command for step in profile.steps}
     assert commands["build"].endswith("pnpm --filter web run build")
     assert commands["tests"].endswith("pnpm --filter web run test")
+
+
+# No quote characters in the payload, deliberately. These commands interpolate
+# `name` BARE -- `pnpm --filter {workspace} run build` -- so a name carrying a
+# balanced pair of quotes is one shell word and proves nothing; the first draft
+# of this test used one and a mutation that dropped the quoting survived it.
+# A bare `;` is what actually separates commands here.
+MEMBER_HOSTILE_NAME = """
+{
+  "name": "web; touch pwned; x",
+  "scripts": {"build": "next build", "test": "jest"},
+  "dependencies": {"next": "15.0.0"},
+  "devDependencies": {"typescript": "5.7.0"}
+}
+"""
+
+
+HOSTILE_ROOT = """
+{
+  "name": "monorepo",
+  "private": true,
+  "packageManager": "%s@1.2.3",
+  "scripts": {"build": "turbo build"},
+  "devDependencies": {"eslint": "9"}
+}
+"""
+
+
+@pytest.mark.parametrize("manager", ["pnpm", "yarn", "npm"])
+def test_a_workspace_name_is_a_shell_argument_not_shell_source(
+        tmp_path, manager):
+    """`name` is arbitrary text out of the client's package.json, and every
+    command built from it is handed to `docker run ... sh -c <script>`.
+
+    Run through a real sh with the managers stubbed out, because the question
+    is what sh does with the string and only sh can answer it. The stub exits
+    0, so a failure here means the smuggled command ran, not that pnpm is
+    missing.
+
+    All three managers, because each has its own way of naming a member and
+    therefore its own interpolation -- with only pnpm covered, mutations that
+    unquoted the yarn and npm branches both survived.
+    """
+    # The root's `packageManager` field, not a lockfile: _package_manager
+    # reads the declared field first and MONOREPO_ROOT declares pnpm, so
+    # parametrising the lockfile selected pnpm three times over and left the
+    # yarn and npm branches untested -- their mutations survived.
+    profile = detect_verification_profile(make_zip({
+        "package.json": HOSTILE_ROOT % manager,
+        "apps/web/package.json": MEMBER_HOSTILE_NAME,
+        # tsconfig.json and no `typecheck` script is what routes the member
+        # through _exec_command, the second family of commands the name lands
+        # in. Without it only _script_command is exercised and half the sites
+        # go untested -- a mutation dropping the quoting from `exec` survived
+        # the first version of this test.
+        "apps/web/tsconfig.json": "{}",
+    }))
+    assert profile is not None
+    assert {step.name for step in profile.steps} >= {"typecheck", "build"}
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("pnpm", "corepack", "npm", "yarn", "npx"):
+        stub = bin_dir / tool
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+
+    for step in profile.steps:
+        subprocess.run(["sh", "-c", step.command], cwd=tmp_path, env=env)
+
+    assert not (tmp_path / "pwned").exists(), (
+        "a workspace name ran a command of its own")
+
+
+def test_an_ordinary_workspace_name_is_passed_through_unchanged():
+    """Quoting must not rewrite the strings every verifying repository runs
+    today: `@dub/utils` and `web` need no quotes and must not acquire any."""
+    profile = detect_verification_profile(make_zip({
+        "package.json": MONOREPO_ROOT,
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+        "apps/web/package.json": MEMBER_NEXT,
+    }))
+
+    commands = {step.name: step.command for step in profile.steps}
+    assert commands["build"].endswith("pnpm --filter web run build")
 
 
 def test_pnpm_is_put_on_path_before_every_command():

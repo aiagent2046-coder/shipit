@@ -341,7 +341,30 @@ def test_capped_score_names_the_failing_category():
     html = render_report(_gated([
         {"kind": "subscore", "category": "Security", "value": 5.9},
     ]))
-    assert "Security 5.9" in html
+    assert "Security" in html
+
+
+def test_the_cap_note_names_the_category_without_its_number():
+    """Measured on a real report: audit b504326, Drydock auditing itself.
+
+    The bars had just stopped publishing category numbers, because three
+    byte-identical runs of the same repository moved Security by 1.3. Three
+    lines below them this paragraph printed "a safety category below 7.0
+    (Security 5.3, Money & Data 3.9)" -- the numbers back, in a place nobody
+    re-read when the bars changed. The threshold stays: it is the boundary
+    the rows are already drawn against, so naming a category here says what
+    its row says and no more.
+
+    Two categories, because one would let a bare category name pass by
+    accident from the joining comma.
+    """
+    html = render_report(_gated([
+        {"kind": "subscore", "category": "Security", "value": 5.3},
+        {"kind": "subscore", "category": "Money & Data", "value": 3.9},
+    ]))
+    assert "below 7.0 (Money &amp; Data, Security)" in html
+    assert "5.3" not in html
+    assert "3.9" not in html
 
 
 def test_the_note_describes_compression_not_a_flat_ceiling():
@@ -397,8 +420,11 @@ def test_a_page_with_no_score_does_not_explain_the_score():
 
     # ...and the paid page still carries it, which is the whole point of the
     # paragraph: a headline that contradicts every bar above it needs saying.
+    # It names the category; the number stayed withheld everywhere, which is
+    # what the free page was originally wrong about.
     paid = render_report(_gated(reasons))
-    assert "cannot exceed" in paid and "Security 5.5" in paid
+    assert "cannot exceed" in paid and "Security" in paid
+    assert "5.5" not in paid
 
 
 def test_hostile_gate_reason_title_is_escaped():
@@ -636,6 +662,32 @@ def test_the_bar_width_does_not_republish_the_number():
 
 def _rendered_width(value: float) -> str:
     match = re.search(r'class="fill" style="width:(\d+)%', _scored(value))
+    assert match, "no category bar was drawn"
+    return match.group(1)
+
+
+def test_the_bar_colour_does_not_republish_the_number():
+    """The third channel, and the one that shipped broken.
+
+    Text and width snapped to the band; the colour kept _score_color, whose
+    boundaries are 8 and 5 where the bands' are 7.0 and 3.5. On a real report
+    (audit b504326) Security 5.3 drew yellow and Money & Data 3.9 drew red
+    under identical text and identical width -- the reader can see the two
+    rows differ and the page never says by what.
+
+    Rendered page again, for the reason above _rendered_width: asking _band
+    for a colour would leave the renderer free to ignore it.
+    """
+    same_band = {_rendered_colour(v) for v in (3.6, 5.3, 6.9)}
+    assert len(same_band) == 1, same_band
+
+    # ...and the bands are still told apart, or one flat colour would pass.
+    assert len({_rendered_colour(v) for v in (2.2, 5.3, 8.0)}) == 3
+
+
+def _rendered_colour(value: float) -> str:
+    match = re.search(r'class="fill" style="width:\d+%;background:(#\w+)',
+                      _scored(value))
     assert match, "no category bar was drawn"
     return match.group(1)
 

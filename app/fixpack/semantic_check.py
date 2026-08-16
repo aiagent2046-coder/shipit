@@ -52,6 +52,7 @@ from app.fixpack.verification import (
     VerificationReport,
     VerificationStage,
     VerificationStep,
+    sh_path,
 )
 
 # --- Tunables --------------------------------------------------------------
@@ -1080,6 +1081,25 @@ def missing_tests_pr_note() -> str:
     )
 
 
+def _within_workdir(path: str) -> bool:
+    """True if `path` stays inside the directory it will be joined onto.
+
+    _extract_repo_relative twenty lines up has this check and minimal_check
+    did not, on the same shape of input: os.path.join(workdir, path) with a
+    path that started life as a zip member name. os.path.join with an
+    absolute path DISCARDS the workdir entirely, and `..` walks out of it, so
+    either one writes wherever the backend process can write -- on the host,
+    not in the container.
+
+    Not reachable from today's only source: the zipball comes from GitHub,
+    and git trees cannot carry `..` components. That is a property of a
+    third party's format holding up a host-side file write, which is one
+    supplier away from not being true. The two paths in this module now
+    agree.
+    """
+    return bool(path) and not path.startswith("/") and ".." not in path.split("/")
+
+
 def minimal_check(plan: FixpackPlan) -> RunResult:
     """When there is no client suite, do a cheap, dependency-free sanity
     pass over the files we actually changed.
@@ -1098,7 +1118,8 @@ def minimal_check(plan: FixpackPlan) -> RunResult:
     (error set), never a regression.
     """
     js_files = [p for p in plan.files
-                if p.lower().endswith((".js", ".cjs", ".mjs"))]
+                if p.lower().endswith((".js", ".cjs", ".mjs"))
+                and _within_workdir(p)]
     if not js_files:
         return RunResult(0, 0, False, None)
 
@@ -1110,7 +1131,11 @@ def minimal_check(plan: FixpackPlan) -> RunResult:
                 os.makedirs(os.path.dirname(target) or workdir, exist_ok=True)
                 with open(target, "w", encoding="utf-8") as fh:
                     fh.write(text)
-        checks = " && ".join(f"node --check '{p}'" for p in js_files)
+        # sh_path, not f"'{p}'": these paths are filenames out of the client's
+        # repository, and this string is `sh -c` source. See sh_arg -- a valid
+        # file named don't.js blocked its own Fix Pack, and a file named
+        # `b' ; true '.js` passed this check while containing broken JS.
+        checks = " && ".join(f"node --check {sh_path(p)}" for p in js_files)
         try:
             proc = _run(
                 _docker_test_argv(NODE_IMAGE, workdir, checks),
