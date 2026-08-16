@@ -29,6 +29,61 @@ def _score_color(total: float) -> str:
     return "#e5484d"
 
 
+# A category is published as a band, not as a number, because a number is
+# more precision than the measurement has.
+#
+# MEASURED. Three audits of Avisafety-1/blank-slate, same revision, same
+# model, byte-identical input (prompt_chars 4,161,116 and input_tokens
+# 1,463,735 on all three):
+#
+#     Security       3.1   1.8   2.2      swing 1.3
+#     Money & Data   0.0   0.3   1.1      swing 1.1
+#     Auth           6.9   7.5   6.8      swing 0.7
+#     total          4.1   4.0   4.1      swing 0.1
+#
+# So one decimal place on a category claims +/-0.05 where the measurement
+# carries +/-1.3. The total is a different matter and keeps its number: the
+# static categories are constant and damp it, and it moved a tenth across
+# those three runs.
+#
+# The boundary at GATE_THRESHOLD is not chosen for looks. It is the line the
+# scorer already treats as the difference between a safety category that
+# holds and one that does not (see _apply_gate), so a reader who crosses it
+# has crossed something the engine acts on. The lower boundary is half of it:
+# a category at 3.5 has roughly twice the penalty of one at 7.0, which is the
+# coarsest statement the numbers support.
+#
+# Three bands rather than four: at a swing of 1.3, narrower bands would put
+# the same repository in different bands on consecutive runs, which is the
+# defect this replaces wearing fewer decimal places.
+_BAND_FLOOR = GATE_THRESHOLD / 2.0
+
+
+# The row's CSS class is `.cat-band`: the same shape as `.cat-skip`, because
+# a phrase does not fit `.cat-val`'s 34px numeric column, but in the body
+# colour rather than the muted grey -- "serious problems" is a verdict the
+# scan stands behind, where "not checked" is an absence.
+#
+# Written here and not beside the rule, because that stylesheet is emitted
+# verbatim into the customer's report: a CSS comment is shipped prose. This
+# one said the words "not checked" and broke a test that reads the whole
+# document, which is a cheap way to be reminded that the style block is
+# output and not source.
+
+
+def _band(value: float) -> tuple[str, int]:
+    """(what the row says, how full the bar is drawn) for a scored category.
+
+    The bar snaps to the band too. Leaving it proportional would re-publish
+    the exact number as a width -- the same claim, made in pixels.
+    """
+    if value >= GATE_THRESHOLD:
+        return "nothing serious found", 100
+    if value >= _BAND_FLOOR:
+        return "problems found", 60
+    return "serious problems", 25
+
+
 def _bar(label: str, value: float, examined: bool = True,
          elsewhere: list[str] | None = None, partial: bool = False) -> str:
     """One category row. Neither flag set means a real bar and a real number.
@@ -79,12 +134,12 @@ def _bar(label: str, value: float, examined: bool = True,
             f'<div class="track"></div>'
             f'<span class="cat-val cat-skip">not checked</span></div>'
         )
-    pct = int(value * 10)
+    label_text, pct = _band(value)
     return (
         f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
         f'<div class="track"><div class="fill" style="width:{pct}%;'
         f'background:{_score_color(value)}"></div></div>'
-        f'<span class="cat-val">{value:.1f}</span></div>'
+        f'<span class="cat-val cat-band">{label_text}</span></div>'
     )
 
 
@@ -453,6 +508,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
           border-top:1px solid #26262a}}
  .secnote{{color:#8b8d98;font-size:13px;margin:0}}
 .cat-skip{{color:#8b8d98;font-size:12px;width:auto;white-space:nowrap}}
+.cat-band{{font-size:12px;width:auto;white-space:nowrap}}
  footer{{margin-top:36px;color:#5a5c66;font-size:12px}}
 </style></head><body><div class="wrap">
 <header>

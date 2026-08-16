@@ -2,6 +2,8 @@
 names and titles come from a hostile archive and from the LLM.
 """
 
+import re
+
 from app.report.html import render_report
 
 
@@ -562,7 +564,89 @@ def test_a_row_stored_before_the_key_existed_renders_unchanged():
     html = render_report(row)
 
     assert "reported under" not in html
-    assert ">10.0<" in html  # Auth still draws its ordinary bar
+    # Auth still draws its ordinary bar. Checked by the band it lands in
+    # rather than by ">10.0<": categories publish a band now, because three
+    # runs of one repository on one revision swung Security by 1.3 and a
+    # decimal place claims a precision of 0.05.
+    assert "nothing serious found" in html
+
+
+# --- a category publishes a band, because a number is more than we measured ---
+#
+# Three audits of Avisafety-1/blank-slate, one revision, one model, and input
+# identical to the byte (prompt_chars 4,161,116 and input_tokens 1,463,735 on
+# all three):
+#
+#     Security       3.1   1.8   2.2      swing 1.3
+#     Money & Data   0.0   0.3   1.1      swing 1.1
+#     Auth           6.9   7.5   6.8      swing 0.7
+#     total          4.1   4.0   4.1      swing 0.1
+#
+# A decimal place claims +/-0.05. The categories carry +/-1.3, so the decimal
+# is a precision claim the engine cannot support. The TOTAL can: the static
+# categories are constant and damp it.
+
+
+def _scored(value: float) -> str:
+    row = result([_finding()])
+    row["score"]["basis"] = "static+llm"
+    row["score"]["categories"] = {"Security": value}
+    return render_report(row)
+
+
+def test_a_category_says_which_band_it_is_in():
+    assert "serious problems" in _scored(2.2)
+    assert "problems found" in _scored(5.0)
+    assert "nothing serious found" in _scored(8.0)
+
+
+def test_the_band_does_not_move_with_the_measured_swing():
+    """The point of the change in one assertion. Security read 3.1, 1.8 and
+    2.2 across three runs of the same bytes; all three must say the same
+    thing, or the coarsening has bought nothing."""
+    assert len({_band_text(v) for v in (3.1, 1.8, 2.2)}) == 1
+
+
+def _band_text(value: float) -> str:
+    from app.report.html import _band
+    return _band(value)[0]
+
+
+def test_the_boundary_is_the_one_the_scorer_already_acts_on():
+    """GATE_THRESHOLD, not a number chosen for looks: below it the scorer
+    treats a safety category as failing and caps the total."""
+    from app.scan.scoring import GATE_THRESHOLD
+
+    assert _band_text(GATE_THRESHOLD) == "nothing serious found"
+    assert _band_text(GATE_THRESHOLD - 0.1) != "nothing serious found"
+
+
+def test_the_bar_width_does_not_republish_the_number():
+    """A proportional fill would state the exact value in pixels -- the same
+    claim, made where nobody thought to look for it.
+
+    Read out of the RENDERED page, not out of _band: the helper returning one
+    width for a band proves nothing about the renderer using it, and the
+    mutation that made the fill proportional again left this green while it
+    asked _band directly."""
+    widths = {_rendered_width(v) for v in (1.0, 2.2, 3.4)}
+
+    assert len(widths) == 1, widths
+
+
+def _rendered_width(value: float) -> str:
+    match = re.search(r'class="fill" style="width:(\d+)%', _scored(value))
+    assert match, "no category bar was drawn"
+    return match.group(1)
+
+
+def test_the_total_keeps_its_number():
+    """Coarsening the headline too would throw away precision the engine does
+    have: the same three runs moved it 4.1 / 4.0 / 4.1."""
+    row = result([_finding()])
+    row["score"]["basis"] = "static+llm"
+
+    assert ">6.4<" in render_report(row)
 
 
 # --- the free tier publishes findings, not numbers ---------------------------
@@ -632,14 +716,25 @@ def test_a_preview_says_it_ran_a_security_review_and_static_only_does_not():
     assert "does not produce a mark out of ten" in static_only
 
 
-def test_a_paid_audit_still_publishes_its_numbers():
-    """The guard against the fix leaking upwards: a paid report is the one
-    place a category number is earned, and it must keep drawing them."""
+def test_a_paid_audit_publishes_a_band_and_keeps_its_headline():
+    """This test used to say a paid report is the one place a category number
+    is earned. It is not, and the measurement is why.
+
+    Three audits of Avisafety-1/blank-slate on one revision, one model and
+    byte-identical input swung Security 3.1 / 1.8 / 2.2 and Money & Data
+    0.0 / 0.3 / 1.1. A decimal place on a category claims a precision of
+    0.05 against a measurement carrying 1.3 -- so the category publishes the
+    band it lands in.
+
+    The TOTAL keeps its number: the same three runs moved it 4.1 / 4.0 / 4.1,
+    because the static categories are constant and damp it. Coarsening it too
+    would throw away precision the engine does have."""
     row = _preview()
     row["score"]["basis"] = "static+llm"
     row["score"]["unexamined"] = []
     html = render_report(row)
 
     assert "partly checked" not in html
-    assert 'class="cat-val">9.9<' in html
-    assert ">9.9<" in html   # and the headline ring is back
+    assert 'class="cat-val cat-band">nothing serious found<' in html
+    assert 'class="cat-val">9.9<' not in html
+    assert ">9.9<" in html   # ...and the headline ring keeps its number
