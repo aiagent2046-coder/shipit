@@ -107,6 +107,40 @@ BASIS_PARTIAL = "static+partial"
 # without a deploy -- but note that widening it costs money per anonymous
 # request, and the daily spend cap is what bounds that, not this.
 FREE_TIER_MODEL = os.environ.get("FREE_TIER_LLM_MODEL", "claude-haiku-4-5")
+
+# The per-provider spellings of that model, for a chain with more than one
+# provider. Same trap as LLM_MODEL one tier down, and worse here: the preview
+# is what unauthenticated visitors get, so a fallback that 400s turns every
+# free scan into a static-only report on the day the primary is down -- the
+# thinner report the visitor cannot tell apart from a real one.
+#
+# Empty on every deployment today, because every deployment runs one provider.
+# It exists so that adding a second one is a configuration change rather than
+# a silent downgrade.
+# A function, not an inline comprehension, so the reading can be tested
+# without reloading this module -- and a module-level constant built from the
+# environment is otherwise only testable by reloading, which leaves every
+# other importer holding the old value.
+_FREE_TIER_MODEL_ENV_BY_KIND = (
+    ("openai_compat", "FREE_TIER_LLM_MODEL_AITUNNEL"),
+    ("anthropic", "FREE_TIER_LLM_MODEL_ANTHROPIC"),
+)
+
+
+def free_tier_models_by_kind() -> dict[str, str]:
+    """The preview's model name per provider kind, for the kinds that set one.
+
+    Absent means "use FREE_TIER_MODEL", which is what a one-provider chain
+    wants and what with_model does with an unmapped kind. An empty value is
+    absent too: an operator commenting a line out leaves `VAR=` behind, and
+    that must not configure a model named "".
+    """
+    return {kind: value
+            for kind, var in _FREE_TIER_MODEL_ENV_BY_KIND
+            if (value := os.environ.get(var, "").strip())}
+
+
+FREE_TIER_MODEL_BY_KIND: dict[str, str] = free_tier_models_by_kind()
 FREE_TIER_RUBRICS: tuple[str, ...] = tuple(
     r for r in os.environ.get("FREE_TIER_LLM_RUBRICS", "security").split(",")
     if r.strip()
