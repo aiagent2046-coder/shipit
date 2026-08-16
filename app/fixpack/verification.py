@@ -9,11 +9,55 @@ from __future__ import annotations
 import io
 import json
 import re
+import shlex
 import zipfile
 from dataclasses import dataclass
 from typing import Literal
 
 from app.fixpack.generate import _repo_relative
+
+
+def sh_arg(value: str) -> str:
+    """One client-controlled string, safe to drop into a `sh -c` script.
+
+    Every command this module builds is handed to `docker run ... sh -c
+    <script>`, so anything interpolated into one is shell source. Two of the
+    pieces come from the client's repository -- a workspace's `name` out of
+    its package.json, and (in semantic_check.minimal_check) the path of a
+    changed .js file -- and both were pasted in raw, or wrapped in single
+    quotes, which is the same thing with an extra step.
+
+    The realistic failure is not an attack, it is an apostrophe. A perfectly
+    valid file named `don't.js` turns `node --check 'don't.js'` into
+    "Unterminated quoted string", sh exits 2, and minimal_check reports "node
+    --check reported a syntax error in a changed file" -- blocking a correct
+    Fix Pack over a filename. Measured, exit 2.
+
+    The other direction is worse and quieter: a file named `b' ; true '.js`
+    makes the same template read `node --check 'b' ; true '.js'`, which exits
+    0 whatever the file contains. Measured on broken JS, exit 0 -- we ship a
+    file the record says we checked.
+
+    Note what this is NOT. It is not a sandbox escape and not a privilege
+    boundary: the container these scripts run in exists to execute the
+    client's own `npm test`, i.e. client-authored shell, with --network none,
+    --cap-drop ALL, a read-only rootfs, a non-root user and nothing mounted
+    but the client's own files. Injecting into the script string buys an
+    attacker exactly what the design already hands them. The damage is to the
+    check's own integrity, which is the thing the product sells.
+    """
+    return shlex.quote(value)
+
+
+def sh_path(value: str) -> str:
+    """As sh_arg, for a path that a tool will parse as an argument.
+
+    The `./` matters separately from the quoting: quoting stops sh splitting
+    the word, and does nothing about node reading a file called `-e.js` as a
+    flag. An absolute path is left alone -- these are repo-relative in
+    practice, but prefixing one would silently aim the command elsewhere.
+    """
+    return sh_arg(value if value.startswith("/") else f"./{value}")
 
 
 StageName = Literal["install", "compile", "typecheck", "build", "import", "tests"]
@@ -317,11 +361,11 @@ def _script_command(manager: str, script: str, workspace: str | None) -> str:
         return f"{manager} run {script}"
 
     if manager == _PNPM:
-        return f"pnpm --filter {workspace} run {script}"
+        return f"pnpm --filter {sh_arg(workspace)} run {script}"
     if manager == _YARN:
-        return f"yarn workspace {workspace} run {script}"
+        return f"yarn workspace {sh_arg(workspace)} run {script}"
 
-    return f"npm run {script} --workspace {workspace}"
+    return f"npm run {script} --workspace {sh_arg(workspace)}"
 
 
 def _exec_command(manager: str, tool: str, workspace: str | None) -> str:
@@ -339,11 +383,11 @@ def _exec_command(manager: str, tool: str, workspace: str | None) -> str:
         return f"npx --no-install {tool}"
 
     if manager == _PNPM:
-        return f"pnpm --filter {workspace} exec {tool}"
+        return f"pnpm --filter {sh_arg(workspace)} exec {tool}"
     if manager == _YARN:
-        return f"yarn workspace {workspace} exec {tool}"
+        return f"yarn workspace {sh_arg(workspace)} exec {tool}"
 
-    return f"npm exec --workspace {workspace} -- {tool}"
+    return f"npm exec --workspace {sh_arg(workspace)} -- {tool}"
 
 
 def _node_framework(package: dict) -> Literal["nextjs", "vite"] | None:
