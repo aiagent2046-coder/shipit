@@ -71,17 +71,30 @@ _BAND_FLOOR = GATE_THRESHOLD / 2.0
 # output and not source.
 
 
-def _band(value: float) -> tuple[str, int]:
-    """(what the row says, how full the bar is drawn) for a scored category.
+def _band(value: float) -> tuple[str, int, str]:
+    """(what the row says, how full the bar is drawn, what colour) for a
+    scored category.
 
-    The bar snaps to the band too. Leaving it proportional would re-publish
-    the exact number as a width -- the same claim, made in pixels.
+    Everything visible about the row comes from here, and that is the point.
+    The bar snaps to the band because leaving it proportional would re-publish
+    the exact number as a width -- the same claim, made in pixels. The colour
+    is here for the same reason and was missed the first time: the row kept
+    _score_color, whose boundaries are 8 and 5, and the bands' are 7.0 and
+    3.5. A real report (audit b504326, Drydock auditing itself) drew Security
+    5.3 yellow and Money & Data 3.9 red under identical text and identical
+    width -- two rows in the same band, told apart only by colour, with
+    nothing on the page to say what the colour meant. Three channels, one
+    source.
+
+    _score_color still colours the headline ring, which is correct: the total
+    IS published as a number, and its swing across three byte-identical runs
+    was 0.1.
     """
     if value >= GATE_THRESHOLD:
-        return "nothing serious found", 100
+        return "nothing serious found", 100, "#30a46c"
     if value >= _BAND_FLOOR:
-        return "problems found", 60
-    return "serious problems", 25
+        return "problems found", 60, "#f5d90a"
+    return "serious problems", 25, "#e5484d"
 
 
 def _bar(label: str, value: float, examined: bool = True,
@@ -134,11 +147,11 @@ def _bar(label: str, value: float, examined: bool = True,
             f'<div class="track"></div>'
             f'<span class="cat-val cat-skip">not checked</span></div>'
         )
-    label_text, pct = _band(value)
+    label_text, pct, colour = _band(value)
     return (
         f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
         f'<div class="track"><div class="fill" style="width:{pct}%;'
-        f'background:{_score_color(value)}"></div></div>'
+        f'background:{colour}"></div></div>'
         f'<span class="cat-val cat-band">{label_text}</span></div>'
     )
 
@@ -328,8 +341,19 @@ def render_report(result: dict, project_name: str = "your app") -> str:
             parts.append(
                 f"a critical finding ({named})")
         if low:
-            named = ", ".join(f"{escape(r['category'])} {r['value']:.1f}"
-                              for r in low)
+            # Names only. This printed "Security 5.3, Money & Data 3.9" three
+            # lines under the bars that had just declined to publish those
+            # numbers -- the second time this paragraph has leaked a category
+            # value the rows withhold (the first was on the free page, see
+            # above). Withholding a number in one section and printing it in
+            # the next is not a smaller claim; it is the same claim, made
+            # where nobody thought to check it.
+            #
+            # The threshold itself stays, and is not a leak: it is the band
+            # boundary the rows are drawn against, so naming a category here
+            # says exactly what its row already says and nothing more.
+            named = ", ".join(sorted({escape(str(r["category"]))
+                                      for r in low}))
             parts.append(f"a safety category below {GATE_THRESHOLD:.1f} "
                          f"({named})")
         # "Capped at 6.9" described the flat ceiling that _apply_gate tried
