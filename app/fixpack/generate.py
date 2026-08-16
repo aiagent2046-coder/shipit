@@ -137,6 +137,17 @@ class SkippedFinding:
     # and that line happened to be a live API key. A rule id is our
     # vocabulary; the title is theirs.
     title: str = ""
+    # ...and why it matters, and what to do about it. The deep review writes
+    # both for every finding it makes, the audit report prints them, and this
+    # list dropped them at the boundary -- so the buyer of a Fix Pack got the
+    # title, the location, and one sentence repeated under every row saying
+    # the Pack would not touch it.
+    #
+    # That is the wrong half to keep. The findings this Pack does not rewrite
+    # are precisely the ones the customer has to fix themselves, and the
+    # analysis is the only part that helps them do it.
+    explanation: str = ""
+    fix_hint: str = ""
 
 
 @dataclass
@@ -468,6 +479,32 @@ def _why_not_fixable(finding: dict) -> str:
     return "Advisory findings: there is nothing in the code to rewrite."
 
 
+def _skipped(finding: dict, reason: str, *, file: str | None = None
+             ) -> SkippedFinding:
+    """One place that knows what a skipped finding carries.
+
+    Six call sites build these from a finding, and a field added to
+    SkippedFinding without touching all six reaches the buyer down some paths
+    and not others -- which is how `explanation` and `fix_hint` came to be
+    missing everywhere at once. This is the same guard _SCORED_FIELDS is in
+    the scan pipeline, for the same reason.
+
+    `file` is an override rather than always recomputed: _repo_relative
+    strips the leading segment and is NOT idempotent, so a call site that has
+    already stripped must pass its result rather than hand back a path that
+    would lose a second directory.
+    """
+    return SkippedFinding(
+        rule_id=str(finding.get("rule_id") or ""),
+        file=_repo_relative(finding.get("file", "")) if file is None else file,
+        line=finding.get("line", 0),
+        reason=reason,
+        title=str(finding.get("title") or ""),
+        explanation=str(finding.get("explanation") or ""),
+        fix_hint=str(finding.get("fix_hint") or ""),
+    )
+
+
 def _is_production_code(finding: dict) -> bool:
     """Is it somewhere worth rewriting? See the note in build_fixpack_plan:
     editing a comment, a doc example or a test fixture buys no security."""
@@ -534,28 +571,17 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
             # never learned that three CRITICAL findings about a live API key
             # in two source files had been filtered out before planning even
             # began. The PR listed what it did; nothing listed what it did not.
-            plan.skipped.append(SkippedFinding(
-                rule_id=f.get("rule_id", ""),
-                file=_repo_relative(f.get("file", "")),
-                line=f.get("line", 0),
-                reason=_why_not_fixable(f),
-                title=str(f.get("title") or ""),
-            ))
+            plan.skipped.append(_skipped(f, _why_not_fixable(f)))
             continue
         context = f.get("context")
         if not _is_production_code(f):
             # Recorded rather than dropped silently, so the PR body can show
             # that the finding was seen and deliberately left alone.
-            plan.skipped.append(SkippedFinding(
-                rule_id=f.get("rule_id", ""),
-                file=_repo_relative(f.get("file", "")),
-                line=f.get("line", 0),
-                reason=(
-                    f"{context or 'test path'} — not executable code, so "
-                    "editing it would change nothing an attacker can use; "
-                    "reported instead of rewritten"
-                ),
-            ))
+            plan.skipped.append(_skipped(f, (
+                f"{context or 'test path'} — not executable code, so "
+                "editing it would change nothing an attacker can use; "
+                "reported instead of rewritten"
+            )))
             continue
         eligible.append(f)
 
@@ -581,10 +607,9 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
         key = (f["rule_id"], repo_rel, f.get("line", 0))
         match = fresh_index.get(key)
         if match is None:
-            plan.skipped.append(SkippedFinding(
-                rule_id=f["rule_id"], file=repo_rel, line=f.get("line", 0),
-                reason="finding no longer matches on re-fetch (repo changed)",
-            ))
+            plan.skipped.append(_skipped(
+                f, "finding no longer matches on re-fetch (repo changed)",
+                file=repo_rel))
             continue
         raw_entry, raw_value = match
         per_file.setdefault(repo_rel, []).append((f, raw_entry, raw_value))
@@ -595,10 +620,8 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
         text = contents.get(raw_entry)
         if text is None:
             for f, _, _ in items:
-                plan.skipped.append(SkippedFinding(
-                    rule_id=f["rule_id"], file=repo_rel, line=f.get("line", 0),
-                    reason="file not readable on re-fetch",
-                ))
+                plan.skipped.append(_skipped(
+                    f, "file not readable on re-fetch", file=repo_rel))
             continue
 
         new_text = text
@@ -617,10 +640,9 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
         # than ship a PR that still leaks it. Mark every fix on it skipped.
         if not _verify_scrubbed(new_text, all_sensitive):
             for f, _ in applied:
-                plan.skipped.append(SkippedFinding(
-                    rule_id=f["rule_id"], file=repo_rel, line=f.get("line", 0),
-                    reason="could not safely remove the value; file left unchanged",
-                ))
+                plan.skipped.append(_skipped(
+                    f, "could not safely remove the value; file left unchanged",
+                    file=repo_rel))
             continue
 
         # Root-cause safety net: never ship a file our edit made
@@ -629,10 +651,9 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
         # emitting a PR that breaks the client's code.
         if not _validate_syntax(repo_rel, text, new_text):
             for f, _ in applied:
-                plan.skipped.append(SkippedFinding(
-                    rule_id=f["rule_id"], file=repo_rel, line=f.get("line", 0),
-                    reason="edit produced invalid syntax; file excluded from Fix Pack",
-                ))
+                plan.skipped.append(_skipped(
+                    f, "edit produced invalid syntax; file excluded from "
+                    "Fix Pack", file=repo_rel))
             logger.warning(
                 "fixpack: syntax validation failed for %s after applying "
                 "%d fix(es); excluding file from Fix Pack",
@@ -821,9 +842,56 @@ def render_pr_title(plan: FixpackPlan) -> str:
     return "Drydock Fix Pack: secure repository configuration"
 
 
+# GitHub rejects a pull request body over 65,536 characters, and the Fix Pack
+# gets no second attempt at delivery: the branch is already pushed and the
+# customer has already paid, so the request that fails is the one that hands
+# them the work. Kept well under the real ceiling because the body is assembled
+# from model-authored text whose length we do not control.
+#
+# It became load-bearing when the deep review's analysis moved into the
+# NOT-fixed list: up to 900 characters per finding, on audits that routinely
+# carry thirty. Before that the body could not plausibly reach the limit, and
+# nothing checked -- the same shape as building a prompt for a context window
+# nobody had measured.
+PR_BODY_LIMIT = 60_000
+
+_TRUNCATED = (
+    "\n\n---\n**This description was cut short** because it exceeded what "
+    "GitHub accepts in a pull request body. Your full audit report lists "
+    "every finding, including the ones below the cut."
+)
+
+_ANALYSIS_OMITTED = (
+    "The deep review's explanation for each of these is in your audit "
+    "report; there were too many to repeat here without exceeding what "
+    "GitHub accepts in a pull request body.\n"
+)
+
+
 def render_pr_body(plan: FixpackPlan) -> str:
     """PR description. Contains finding titles, files, and rotation
-    guidance — NEVER a secret value (the plan never carries one)."""
+    guidance — NEVER a secret value (the plan never carries one).
+
+    Degrades rather than overflows. The full body carries the deep review's
+    explanation and fix hint under every finding it did not rewrite; if that
+    exceeds what GitHub accepts, the analysis is dropped and the list is kept,
+    because a delivered pull request listing what is still open beats a 422 on
+    a Fix Pack the customer has paid for. The reader is told which one they
+    are looking at.
+    """
+    full = _render_pr_body(plan, with_analysis=True)
+    if len(full) <= PR_BODY_LIMIT:
+        return full
+    trimmed = _render_pr_body(plan, with_analysis=False)
+    if len(trimmed) <= PR_BODY_LIMIT:
+        return trimmed
+    # Still over with the analysis gone: a hard cut, marked. Returning an
+    # over-limit body would be a check that measures and does not enforce,
+    # which is the same thing as no check.
+    return trimmed[:PR_BODY_LIMIT - len(_TRUNCATED)] + _TRUNCATED
+
+
+def _render_pr_body(plan: FixpackPlan, *, with_analysis: bool) -> str:
     parts: list[str] = ["## Drydock Fix Pack\n"]
     parts.append(
         "This PR was generated automatically from your audit. It removes "
@@ -973,6 +1041,9 @@ def render_pr_body(plan: FixpackPlan) -> str:
                 f"remaining **{len(plan.skipped)}** are listed below, "
                 "unchanged, so you can see exactly what is still open:\n"
             )
+        if not with_analysis and any(s.explanation or s.fix_hint
+                                     for s in plan.skipped):
+            parts.append(_ANALYSIS_OMITTED)
         # Grouped by reason, because the reason is shared and the findings are
         # not. Repeating one long sentence under every bullet buries the
         # titles, which are the only part of this list a reader needs.
@@ -986,7 +1057,16 @@ def render_pr_body(plan: FixpackPlan) -> str:
             for s in group:
                 where = f"`{s.file}`" + (f":{s.line}" if s.line else "")
                 head = s.title or f"`{s.rule_id}`"
-                parts.append(f"- {head}" + (f" — {where}" if s.file else ""))
+                parts.append(f"- **{head}**"
+                             + (f" — {where}" if s.file else ""))
+                # Indented continuation paragraphs, so each stays its own
+                # block under the bullet instead of wrapping into the title.
+                if with_analysis and s.explanation:
+                    parts.append(f"\n  {s.explanation}")
+                if with_analysis and s.fix_hint:
+                    parts.append(f"\n  → {s.fix_hint}")
+                if with_analysis and (s.explanation or s.fix_hint):
+                    parts.append("")
             parts.append("")
 
     parts.append(

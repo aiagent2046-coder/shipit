@@ -17,6 +17,7 @@ import zipfile
 
 import pytest
 
+from app.fixpack import generate
 from app.fixpack.generate import (
     _is_test_path,
     _validate_syntax,
@@ -789,7 +790,131 @@ def test_skipped_findings_show_their_title_not_only_a_rule_id():
     line was a live API key. The rule id is our vocabulary; the title theirs."""
     body = render_pr_body(_mixed_findings_plan())
 
-    assert "Hardcoded API secret in source code — `action_service.py`:17" in body
+    # Title and location on one line, without pinning the emphasis around
+    # them: the title is now bold, because the deep review's analysis sits
+    # under each bullet and an unemphasised title gets lost in it. What this
+    # test is about is that the owner's words are there at all.
+    assert any("Hardcoded API secret in source code" in line
+               and "`action_service.py`:17" in line
+               for line in body.splitlines())
+
+
+# --- what the Pack does NOT fix, it at least explains (25-B) -------------
+#
+# The buyer of a Fix Pack used to get, for every finding it left alone, a
+# title, a location, and one sentence repeated under every row saying the Pack
+# would not touch it. The deep review writes an explanation and a fix hint for
+# every finding it makes, the audit report prints both, and this list dropped
+# them at the boundary -- keeping the half that says "not our problem" and
+# discarding the half that helps.
+
+
+def _reviewed_plan():
+    """A finding the Pack cannot rewrite, carrying the review's own words."""
+    zip_bytes = make_zip({"app.py": "print('hi')\n"})
+    return build_fixpack_plan(zip_bytes, [
+        finding(rule_id="llm-money", file="app.py", line=161,
+                title="Auto-reply call has no idempotency guard",
+                explanation="Two near-simultaneous sends both see count=1 "
+                            "and both trigger a paid call.",
+                fix_hint="Use an atomic UPDATE ... WHERE auto_reply_sent = "
+                         "false RETURNING."),
+    ])
+
+
+def test_a_finding_the_pack_leaves_alone_still_explains_itself():
+    body = render_pr_body(_reviewed_plan())
+
+    assert "both trigger a paid call" in body
+    assert "auto_reply_sent = false RETURNING" in body
+
+
+def test_the_analysis_travels_from_the_finding_to_the_plan():
+    """The producer, not only the consumer. SkippedFinding growing two fields
+    proves nothing about build_fixpack_plan filling them -- which is exactly
+    the gap that put this task in the backlog, and the fifth time this shape
+    has appeared in this codebase."""
+    plan = _reviewed_plan()
+
+    assert plan.skipped[0].explanation
+    assert plan.skipped[0].fix_hint
+
+
+def test_a_finding_without_analysis_renders_without_one():
+    """Static advisory rules carry no explanation, and must not sprout an
+    empty paragraph or a bare arrow."""
+    plan = build_fixpack_plan(make_zip({"app.py": "print('hi')\n"}), [
+        finding(rule_id="no-dockerfile", file="", line=0,
+                title="No Dockerfile"),
+    ])
+
+    body = render_pr_body(plan)
+
+    assert "No Dockerfile" in body
+    assert "→" not in body.split("NOT fixed by this pull request")[1]
+
+
+def test_the_body_stays_inside_what_github_accepts():
+    """GitHub rejects a body over 65,536 characters, and the Fix Pack gets no
+    second attempt: the branch is pushed and the customer has paid, so the
+    request that fails is the one that hands them the work.
+
+    Nothing checked this before, because before the analysis moved into the
+    body it could not plausibly get near the limit. Building for a receiver's
+    limit nobody measured is the same mistake as the context window.
+    """
+    many = [
+        finding(rule_id="llm-security", file=f"src/h{i}.py", line=i,
+                title=f"Finding number {i}",
+                explanation="x" * 600, fix_hint="y" * 300)
+        for i in range(200)
+    ]
+
+    body = render_pr_body(build_fixpack_plan(
+        make_zip({"app.py": "print('hi')\n"}), many))
+
+    assert len(body) <= generate.PR_BODY_LIMIT
+
+
+def test_the_oversized_body_keeps_the_list_and_says_what_it_dropped():
+    """Degrade, do not overflow: a delivered pull request listing what is
+    still open beats a 422 on a Fix Pack the customer has paid for -- and the
+    reader is told which of the two bodies they are looking at."""
+    many = [
+        finding(rule_id="llm-security", file=f"src/h{i}.py", line=i,
+                title=f"Finding number {i}",
+                explanation="x" * 600, fix_hint="y" * 300)
+        for i in range(200)
+    ]
+
+    body = render_pr_body(build_fixpack_plan(
+        make_zip({"app.py": "print('hi')\n"}), many))
+
+    assert "Finding number 0" in body and "Finding number 199" in body
+    assert "too many to repeat here" in body
+    assert "x" * 600 not in body
+
+
+def test_a_body_too_long_even_without_the_analysis_is_cut_and_says_so():
+    """The last resort, and it existed untested until a mutation said so.
+
+    Dropping the analysis is usually enough. It is not enough when the titles
+    alone overflow -- the deep review writes them and they can run long -- and
+    returning an over-limit body would be a check that measures without
+    enforcing, which is the same as no check.
+    """
+    many = [
+        finding(rule_id="llm-security", file=f"src/h{i}.py", line=i,
+                title=f"{i} " + "T" * 600, explanation="x" * 600)
+        for i in range(200)
+    ]
+
+    body = render_pr_body(build_fixpack_plan(
+        make_zip({"app.py": "print('hi')\n"}), many))
+
+    assert len(body) <= generate.PR_BODY_LIMIT
+    assert body.endswith(generate._TRUNCATED)
+    assert "cut short" in body
 
 
 # --- a Fix Pack may not claim a secret is gone while it is still there ---
