@@ -1,4 +1,4 @@
-import { scoreColor, scoreVerdict } from "@/lib/format";
+import { categoryBand, scoreColor, scoreVerdict } from "@/lib/format";
 import type { GateReason } from "@/lib/types";
 
 export function ScoreRing({ total }: { total: number }) {
@@ -54,15 +54,24 @@ function GateNote({ reasons }: { reasons?: GateReason[] }) {
     parts.push(`a critical finding (${named.join(", ")})`);
   }
   if (low.length > 0) {
-    const named = low.map((r) => `${r.category} ${r.value?.toFixed(1)}`);
+    // Names only. This printed "Security 1.9, Auth 1.6, Money & Data 3.9" on
+    // audit 2230094e — the exact category numbers the bars above are no longer
+    // allowed to publish, restated three lines under them. Withholding a number
+    // in one place and printing it in the next is not a smaller claim; it is
+    // the same claim, made where nobody thought to check it.
+    const named = [...new Set(low.map((r) => r.category))].sort();
     parts.push(`a failing safety category (${named.join(", ")})`);
   }
 
   // No threshold or cap number is restated here. GATE_THRESHOLD and GATED_MAX
   // live in app/scan/scoring.py and TypeScript cannot import them, so any
   // figure written into this copy is a second, unsynchronised original — it
-  // would keep printing 7.0 the day the rule moves. The reasons already carry
-  // the only numbers the reader needs: the failing subscore's own value.
+  // would keep printing 7.0 the day the rule moves.
+  //
+  // The sentence used to end "...the only numbers the reader needs: the
+  // failing subscore's own value". That was the justification for printing
+  // them, and it stopped being true when the bars became bands: a value whose
+  // measured swing is 1.3 is not a number the reader needs, on any surface.
   return (
     <p className="mt-3 text-sm text-muted">
       This score is capped because the audit found {parts.join(" and ")}.
@@ -91,7 +100,9 @@ export function CategoryBars({
   return (
     <>
       <div className="flex flex-col gap-2">
-        {Object.entries(categories).map(([name, value]) => (
+        {Object.entries(categories).map(([name, value]) => {
+          const band = categoryBand(value);
+          return (
           <div key={name} className="flex items-center gap-3 text-sm">
             <span className="w-24 shrink-0 text-muted">{name}</span>
             {skipped.has(name) ? (
@@ -107,18 +118,19 @@ export function CategoryBars({
                   <div
                     className="h-full rounded-full"
                     style={{
-                      width: `${(value / 10) * 100}%`,
-                      background: scoreColor(value),
+                      width: `${band.pct}%`,
+                      background: band.color,
                     }}
                   />
                 </div>
-                <span className="w-8 shrink-0 text-right font-mono tabular-nums">
-                  {value.toFixed(1)}
+                <span className="shrink-0 text-right text-xs text-muted">
+                  {band.label}
                 </span>
               </>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
       <GateNote reasons={gatedBy} />
     </>
