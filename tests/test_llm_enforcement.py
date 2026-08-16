@@ -89,8 +89,9 @@ class CountingLLM(LLMClient):
         self._out = output_tokens
         self._model = model
         self.models_asked: list[str] = []
+        self.by_kind_asked: list[dict] = []
 
-    def with_model(self, model):
+    def with_model(self, model, *, by_kind=None):
         """Same double, model recorded.
 
         The real one shallow-copies, and a copy of this fake would count its
@@ -98,8 +99,13 @@ class CountingLLM(LLMClient):
         used. Returning self keeps one counter, and `models_asked` is the
         stronger assertion anyway: it proves the preview asked for the cheap
         model rather than merely that some call happened.
+
+        `by_kind` is recorded rather than ignored: a double that quietly drops
+        an argument its subject now takes is how a caller stops passing one
+        without any test noticing.
         """
         self.models_asked.append(model)
+        self.by_kind_asked.append(dict(by_kind or {}))
         return self
 
     def complete(self, system, user, max_tokens=4096):
@@ -327,6 +333,38 @@ async def test_anon_under_the_cap_gets_a_preview_not_silence(monkeypatch,
     # ...and the spend is journalled, or the cap above has nothing to read and
     # the ceiling is decorative.
     assert usage_repo.rows
+
+
+async def test_the_preview_carries_the_per_provider_spellings(monkeypatch,
+                                                            audit_queue):
+    """The worker must pass the mapping, not merely the name.
+
+    with_model taking `by_kind` proves nothing about anyone using it, and a
+    mutation removing the argument left the whole suite green -- the sixth
+    time in this codebase that a producer went untested behind a tested
+    consumer. Without it, a two-provider deployment sends the preview's model
+    under one spelling to both, and the fallback 400s on the one day it is
+    needed.
+    """
+    _reset_cache_before()
+    _capture_alerts(monkeypatch)
+    import app.worker.main as worker_mod
+    monkeypatch.setattr(worker_mod, "FREE_TIER_MODEL_BY_KIND",
+                        {"anthropic": "claude-haiku-4-5"})
+    audit_repo = FakeAuditRepo()
+    usage_repo = FakeUsageRepo(anon_spend=Decimal("0.10"))
+    llm = CountingLLM(input_tokens=1000, output_tokens=200)
+    app.dependency_overrides[get_audit_repo] = lambda: audit_repo
+    try:
+        client.post("/v1/audits",
+                    files={"archive": ("app.zip", _security_zip(),
+                                       "application/zip")})
+        await drain_audit_queue(audit_queue, audit_repo=audit_repo,
+                                llm_client=llm, llm_usage_repo=usage_repo)
+    finally:
+        _clear()
+
+    assert llm.by_kind_asked == [{"anthropic": "claude-haiku-4-5"}]
 
 
 # --------------------------------------------------------------------------

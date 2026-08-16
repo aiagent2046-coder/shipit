@@ -63,6 +63,7 @@ from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging
 from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                               BASIS_PREVIEW, FREE_TIER_MODEL,
+                              FREE_TIER_MODEL_BY_KIND,
                               FREE_TIER_RUBRICS,
                               basis_for_account, content_digest)
 
@@ -337,8 +338,10 @@ async def _execute_job(
             llm_skip_reason = "daily_spend_cap"
 
     scan = await _run_scan_offthread(
-        raw, llm_client.with_model(FREE_TIER_MODEL) if depth == BASIS_PREVIEW
-        else llm_client,
+        raw,
+        llm_client.with_model(FREE_TIER_MODEL,
+                              by_kind=FREE_TIER_MODEL_BY_KIND)
+        if depth == BASIS_PREVIEW else llm_client,
         llm_skip_reason=llm_skip_reason,
         llm_rubrics=FREE_TIER_RUBRICS if depth == BASIS_PREVIEW else None,
         depth=depth)

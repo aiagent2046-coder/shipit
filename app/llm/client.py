@@ -9,6 +9,7 @@ of truth; nothing is hardcoded except API shapes.
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 import os
 import time
 from dataclasses import dataclass, replace
@@ -178,6 +179,40 @@ class Provider:
     model: str
 
 
+# Where each provider's own spelling of the model name is configured.
+#
+# The same model is named differently per provider: AITunnel wants
+# claude-sonnet-4.6 (dot), the direct Anthropic API wants claude-sonnet-4-6
+# (dash), and the wrong one is a 400 on every request. One LLM_MODEL for the
+# whole chain therefore cannot be right for both -- it configures the primary
+# and mis-configures the fallback, which fails for a reason unrelated to the
+# outage the fallback exists to survive. A spare tyre that only fits the car
+# you are not driving.
+#
+# Per-provider variables rather than translating a dot to a dash. A mechanical
+# swap is inference about a naming scheme nobody promised to keep, and this
+# project has been burned by exactly that: `"-5" in name` read as "a Claude 5
+# model" and matched claude-haiku-4-5. Version numbers are not a grammar. Both
+# spellings are already listed by hand in PRICE_TABLE, in the sampling-param
+# sets and in MODEL_INPUT_TOKENS; this is the same discipline applied to
+# configuration.
+_MODEL_ENV_BY_KIND = {
+    "openai_compat": "AITUNNEL_LLM_MODEL",
+    "anthropic": "ANTHROPIC_LLM_MODEL",
+}
+
+
+def model_for_kind(kind: str, fallback: str) -> str:
+    """The model name to request from a provider of this kind.
+
+    Falls back to the shared name, so a single-provider deployment -- which is
+    every deployment today -- keeps working with LLM_MODEL alone and nothing
+    to learn. The per-kind variable only has to be set by an operator who runs
+    two providers, which is exactly the operator this exists for.
+    """
+    return os.environ.get(_MODEL_ENV_BY_KIND.get(kind, ""), "") or fallback
+
+
 def providers_from_env() -> list[Provider]:
     chain: list[Provider] = []
     model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
@@ -186,12 +221,14 @@ def providers_from_env() -> list[Provider]:
     aitunnel_url = os.environ.get("AITUNNEL_BASE_URL")  # e.g. https://.../v1
     if aitunnel_key and aitunnel_url:
         chain.append(Provider("openai_compat", aitunnel_url.rstrip("/"),
-                              aitunnel_key, model))
+                              aitunnel_key,
+                              model_for_kind("openai_compat", model)))
 
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     if anthropic_key:
         chain.append(Provider("anthropic", "https://api.anthropic.com",
-                              anthropic_key, model))
+                              anthropic_key,
+                              model_for_kind("anthropic", model)))
     return chain
 
 
@@ -201,7 +238,8 @@ class LLMClient:
         self.providers = providers if providers is not None else providers_from_env()
         self._transport = transport  # injectable for tests
 
-    def with_model(self, model: str) -> LLMClient:
+    def with_model(self, model: str, *,
+                   by_kind: Mapping[str, str] | None = None) -> LLMClient:
         """The same provider chain, asking for a different model.
 
         The free tier runs a cheaper model than the paid one, and `LLM_MODEL`
@@ -221,9 +259,19 @@ class LLMClient:
         vanished and the "fake" reached out to a real URL and took a 403. In
         production nothing subclasses this today, but a method that quietly
         returns a different type than its receiver is a trap set for later.
+
+        `by_kind` carries the per-provider spellings, the same problem
+        providers_from_env solves with AITUNNEL_LLM_MODEL / ANTHROPIC_LLM_MODEL
+        and for the same reason: one name stamped onto a chain configures the
+        primary and mis-configures the fallback. It is optional because a
+        one-provider chain -- every deployment today -- has nothing to
+        disambiguate.
         """
         clone = copy.copy(self)
-        clone.providers = [replace(p, model=model) for p in self.providers]
+        clone.providers = [
+            replace(p, model=(by_kind or {}).get(p.kind, model))
+            for p in self.providers
+        ]
         return clone
 
     def input_char_budget(self) -> int:

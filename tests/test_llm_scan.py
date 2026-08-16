@@ -18,6 +18,7 @@ import pytest
 from app.llm import client as client_mod
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan import llm_scan
+from app.scan import pipeline as pipeline_mod
 from app.scan.llm_scan import (
     RUBRICS,
     SYSTEM_PROMPT,
@@ -1692,3 +1693,104 @@ def test_run_scan_at_full_depth_still_credits_every_category():
     scan = run_scan(raw, llm)
 
     assert scan["score"]["unexamined"] == []
+
+
+# --- one model name per PROVIDER, not one per chain (#29) --------------------
+#
+# The same model is spelled differently by each provider: AITunnel wants
+# claude-sonnet-4.6 (dot), the direct Anthropic API wants claude-sonnet-4-6
+# (dash), and the wrong one is a 400 on every request. One LLM_MODEL for the
+# whole chain cannot be right for both -- it configures the primary and
+# mis-configures the fallback, which then fails for a reason unrelated to the
+# outage it exists to survive. A spare tyre that only fits the car you are not
+# driving.
+#
+# This project has already paid for that spelling once: FREE_TIER_LLM_MODEL
+# shipped as the dashed name against an AITunnel-only deployment, and every
+# preview would have 400ed and degraded to static-only in silence.
+
+
+def _chain(monkeypatch, **env):
+    for k in ("LLM_MODEL", "AITUNNEL_LLM_MODEL", "ANTHROPIC_LLM_MODEL",
+              "AITUNNEL_API_KEY", "AITUNNEL_BASE_URL", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("AITUNNEL_API_KEY", "k1")
+    monkeypatch.setenv("AITUNNEL_BASE_URL", "https://aitunnel.example/v1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k2")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    return {p.kind: p.model for p in client_mod.providers_from_env()}
+
+
+def test_each_provider_can_be_told_its_own_spelling(monkeypatch):
+    models = _chain(monkeypatch,
+                    LLM_MODEL="claude-sonnet-4.6",
+                    ANTHROPIC_LLM_MODEL="claude-sonnet-4-6")
+
+    assert models == {"openai_compat": "claude-sonnet-4.6",
+                      "anthropic": "claude-sonnet-4-6"}
+
+
+def test_one_name_still_serves_a_one_provider_chain(monkeypatch):
+    """Every deployment today runs a single provider. The per-kind variables
+    exist so that adding a second one is a configuration change rather than a
+    silent downgrade -- not so that anyone has to learn them first."""
+    models = _chain(monkeypatch, LLM_MODEL="claude-sonnet-4.6")
+
+    assert set(models.values()) == {"claude-sonnet-4.6"}
+
+
+def test_an_unset_override_does_not_blank_the_model(monkeypatch):
+    """An empty string is what an operator leaves behind after commenting a
+    value out, and it must read as "not set" rather than as a model named ""."""
+    models = _chain(monkeypatch, LLM_MODEL="claude-sonnet-4.6",
+                    ANTHROPIC_LLM_MODEL="")
+
+    assert models["anthropic"] == "claude-sonnet-4.6"
+
+
+def test_with_model_can_respell_per_provider():
+    """The free tier's path. It runs a different model from the paid one, and
+    a preview that 400s on the fallback turns every free scan static-only on
+    the day the primary is down -- the thinner report a visitor cannot tell
+    apart from a real one."""
+    chain = LLMClient(providers=[
+        Provider("openai_compat", "https://a", "k", "claude-sonnet-4.6"),
+        Provider("anthropic", "https://b", "k", "claude-sonnet-4-6"),
+    ])
+
+    swapped = chain.with_model("claude-haiku-4.5",
+                               by_kind={"anthropic": "claude-haiku-4-5"})
+
+    assert [p.model for p in swapped.providers] == [
+        "claude-haiku-4.5", "claude-haiku-4-5"]
+
+
+def test_with_model_without_a_mapping_is_unchanged():
+    chain = LLMClient(providers=[
+        Provider("openai_compat", "https://a", "k", "x"),
+        Provider("anthropic", "https://b", "k", "y"),
+    ])
+
+    assert [p.model for p in chain.with_model("z").providers] == ["z", "z"]
+
+
+def test_the_free_tier_mapping_is_read_from_the_environment(monkeypatch):
+    """The producer behind FREE_TIER_MODEL_BY_KIND.
+
+    The constant is built at import, so without a function to call, the only
+    way to test the reading is to reload the module -- which leaves every
+    other importer holding the value from before.
+    """
+    monkeypatch.setenv("FREE_TIER_LLM_MODEL_ANTHROPIC", "claude-haiku-4-5")
+    monkeypatch.delenv("FREE_TIER_LLM_MODEL_AITUNNEL", raising=False)
+
+    assert pipeline_mod.free_tier_models_by_kind() == {
+        "anthropic": "claude-haiku-4-5"}
+
+
+def test_a_blanked_free_tier_override_is_not_a_model_named_nothing(monkeypatch):
+    monkeypatch.setenv("FREE_TIER_LLM_MODEL_ANTHROPIC", "  ")
+    monkeypatch.delenv("FREE_TIER_LLM_MODEL_AITUNNEL", raising=False)
+
+    assert pipeline_mod.free_tier_models_by_kind() == {}
