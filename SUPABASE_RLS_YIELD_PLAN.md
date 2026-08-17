@@ -227,28 +227,38 @@ email address** and **every handover token**. That is not an inference about
 what data looks sensitive; it is a documented intent-implementation mismatch,
 and the oracle now reports it as such (`intent_mismatch`).
 
-### A false positive the first run produced, and the correction
+### A correction the first run forced, and what it did NOT clear
 
 `founder_profiles` in our own customer's repo was flagged on the column
-`user_id`. Its policy is the Supabase quickstart's own text — "Public profiles
-are viewable by everyone." — in a founder-MATCHING app where profiles are
-meant to be browsable. Telling that customer their public profiles are exposed
-is the `*`-without-credentials error running in the opposite direction, and
-that direction is more expensive: it is the one that reaches a report.
-
-`user_id`, `owner_id`, `notes`, `content` are now WEAK hints. Nearly every
-table in a multi-tenant app carries them, public ones included, so a weak hint
-alone yields **`uncertain`** — printed for a human, kept out of the count. The
+`user_id`. That was indefensible: nearly every table in a multi-tenant app
+carries it, public ones included, so it cannot distinguish a leak from a
+directory. `user_id`, `owner_id`, `notes`, `content` are now WEAK hints
+yielding **`uncertain`** — printed for a human, kept out of the count. The
 verdict has three states because two forced this table into a bucket where
 both answers were wrong.
+
+**The correction changed the reason and not the verdict.** Re-run, the table is
+still counted — on `birth_month`, a STRONG hint. The tightening was real
+(private-table counts fell from 56 to 21 and 84 to 52 across the two large
+schemas), and it did not clear this finding: a table declared world-readable
+that carries a fragment of a date of birth is a defensible observation, and an
+earlier read of it as "almost certainly a false positive" was wrong.
+
+But it is not the same KIND of finding as servexaapp's, and the summary now
+says so. An intent mismatch is the author contradicting their own predicate —
+provable as a bug without knowing anything about the product. A deliberate
+public policy over a table that happens to carry PII is a judgement about what
+the customer meant to publish: worth telling them, in a different sentence.
+Reporting both as "your data is exposed" is how a true finding and a debatable
+one arrive with equal weight and the reader ends up trusting neither.
 
 A second false-positive path was found the same way, before it could be
 quoted: `ALTER TABLE IF EXISTS … ENABLE ROW LEVEL SECURITY` went unmatched, so
 any table protected that way read as "RLS never enabled".
 
-**So the honest headline is 2 of 4, with `avatar_interactions` (RLS never
-enabled, flagged only on `user_id`) still to be confirmed by eye.** Both
-servexaapp findings are solid; the customer repo's remaining one is not yet.
+`avatar_interactions` (RLS never enabled, flagged only on `user_id`) now sits
+in `uncertain`, which is the right place until someone reads what it stores. If
+those rows hold conversation content, the hint set is missing something.
 
 ### What this changes about Part C
 

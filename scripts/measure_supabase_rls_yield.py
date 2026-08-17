@@ -601,6 +601,23 @@ def main() -> int:
     print(f"        anon can read it          : {len(exposed)}"
           f"  {_pct(len(exposed), len(with_private))} of those")
     print()
+    # Two findings of the same shape are not two findings of the same
+    # strength, and the difference is already in the data.
+    #
+    # An intent mismatch is the author contradicting their own predicate
+    # ("...by token" over USING (true)): we can prove it is a bug without
+    # knowing anything about the product. A deliberate public policy over a
+    # table that happens to carry a PII column ("Public profiles are viewable
+    # by everyone" over a row with birth_month) is a judgement call about what
+    # the customer meant to publish — worth telling them, and NOT the same
+    # sentence. Reporting both as "your data is exposed" is how a true finding
+    # and a debatable one arrive with equal weight and the reader trusts
+    # neither.
+    proven = [r for r in exposed if r.intent_mismatches]
+    print(f"  of which self-contradicting  : {len(proven)}"
+          f"  (a policy promising a scope it does not enforce — provable "
+          f"without judging the product)")
+    print()
     print(f"EXPOSURE RATE: {len(exposed)}/{len(measurable)} "
           f"{_pct(len(exposed), len(measurable))} of repos whose schema we can "
           f"actually read.")
