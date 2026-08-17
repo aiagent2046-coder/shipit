@@ -1009,7 +1009,53 @@ is never passed), so the disallowed wildcard+credentials combination can't
 occur. Allowed methods are `GET, POST` (the only methods the API uses);
 allowed request headers are `Authorization` and `Content-Type`.
 
+## Release notes
+
+- **`v2026.08.17-7` (`a90b860`), deployed 2026-08-17.** Paid audits now run
+  **two LLM passes** (union-of-N; `PAID_AUDIT_PASSES`, `app/scan/pipeline.py`).
+  The reason is measured, not assumed: repeated same-engine runs of unchanged
+  code showed a single pass is a sample, not a census — one pass held 23–27 of
+  a 34-key union on `ai-co-founder-matching`, criticals reproduced ~81–100% but
+  highs only 65–84%, and one real BOLA appeared in 2 of 4 runs. Two passes lift
+  union coverage to ~75–80%. Shipped together:
+  - **Monitoring diffs against the union of every prior audit**, not just the
+    latest (`AuditRepository.list_findings_by_repo_url`) — otherwise the
+    measured single-pass flicker would DM a paying subscriber about unchanged
+    code roughly every third high.
+  - **The full-audit report says its findings are two passes, not a census**
+    (render-side, paid-only note): a listed finding is real, the absence of one
+    is weaker evidence than its presence.
+  - `scripts/batch_audit.py` became the pinned reproducibility harness that
+    produced these numbers (SHA-pinned series, off-series rows named and
+    skipped).
+
+  Deploy-time facts to remember:
+  - **`JOB_COST_CAP_USD` default rose 6.50 → 13.00** because a real repo
+    measured ~$3.93/pass and the old cap would cut pass two short. The
+    production `.env` does **not** set this key, so the code default applies —
+    no `.env` edit was needed on this host. A future host that pins it must
+    raise it by hand; nothing validates it (`validate-production-env.py` does
+    not list it).
+  - **`AUDIT_ENGINE_VERSION` bumped `2026-08-16-1` → `2026-08-18-1`**, so the
+    audit cache re-rolls: the first re-audit of each repo recomputes on the
+    two-pass engine. Expect a one-off spend bump (re-rolled cache + the second
+    pass) that settles as the cache re-warms.
+  - No migration: the DB change added a read query only. Verified live:
+    `GET /version` reports `v2026.08.17-7` (the tag, not a bare SHA), release
+    `a90b860`, and the deploy health gate passed.
+
 ## Known gaps (honest list, post-deploy)
+
+- **A monitoring re-audit's one-pass row can be reused by a paid job.** Paid
+  audits are two passes; the preview and continuous-monitoring re-audits stay
+  at one (cost is per push, and the union baseline above absorbs single-pass
+  flicker there). But the audit content-hash cache key does not encode the pass
+  count, so a monitoring row written at one pass can be served to a paid job of
+  byte-identical content on the same `AUDIT_ENGINE_VERSION` — handing a paying
+  customer a one-pass result. Accepted for now: it needs the same content on
+  the same engine version, and the fix (recording pass count on the row and in
+  the cache key) is not worth the column until it is seen happening. Noted at
+  `PAID_AUDIT_PASSES` in `app/scan/pipeline.py`.
 
 - **Every foreign key is `ON DELETE NO ACTION`, and that is deliberate.**
   Reviewed 2026-08-02 across all ten of them: `audit_jobs.{audit_id,
