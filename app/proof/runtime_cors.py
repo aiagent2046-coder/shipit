@@ -61,7 +61,7 @@ def runtime_cors_applicable(
     if not (static.before.success and static.before.status == "success"):
         return False, "static cors_open found nothing to reproduce"
 
-    if not _has_root_dockerfile(original_zip):
+    if not has_root_dockerfile(original_zip):
         # Booting a repo through a Deploy Pack Dockerfile we generated would
         # conflate two questions: is the app's CORS open, and is our generated
         # Dockerfile right. When the answer is "the stand did not come up",
@@ -78,17 +78,37 @@ def _static_cors_report(reports: list[ProofReport]) -> ProofReport | None:
     return None
 
 
-def _has_root_dockerfile(zip_bytes: bytes) -> bool:
-    """A Dockerfile at the archive root, tolerating the single-folder wrapper
-    GitHub zips add (`repo-main/Dockerfile`)."""
+def has_root_dockerfile(zip_bytes: bytes) -> bool:
+    """A Dockerfile at the BUILD ROOT — the directory `docker build` would be
+    pointed at.
+
+    Tolerates the single-folder wrapper GitHub zips add (`repo-main/…`), and
+    nothing else. The first version accepted any path of two segments or
+    fewer, which is the same test only while the wrapper is present: on an
+    already-stripped archive it also admits `backend/Dockerfile`, a file that
+    builds one COMPONENT of a monorepo.
+
+    Measured 2026-08-17: that sent tiangolo/full-stack-fastapi-template — no
+    root Dockerfile, only `backend/Dockerfile` — to the runner, where
+    `docker build` found nothing at the root it was given and failed in 1.2
+    seconds. The probe recorded `error`, which was true and useless: the
+    stand did not come up because we should never have asked it to.
+    """
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            names = zf.namelist()
+            names = [n.replace("\\", "/") for n in zf.namelist()]
     except Exception:  # noqa: BLE001 — an unreadable zip is simply not bootable
         return False
 
-    for name in names:
-        parts = name.replace("\\", "/").split("/")
-        if parts and parts[-1] == "Dockerfile" and len(parts) <= 2:
-            return True
+    if any(n == "Dockerfile" for n in names):
+        return True
+
+    # Single-folder wrapper: every entry lives under one top-level directory,
+    # so THAT directory is the build root. Mirrors _strip_root in
+    # app/scan/checks.py, which solves the same problem for the scanner.
+    tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
+    if len(tops) == 1:
+        root = next(iter(tops))
+        return f"{root}/Dockerfile" in names
+
     return False

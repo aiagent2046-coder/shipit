@@ -297,11 +297,261 @@ Docker cannot run in unit tests, so:
    under-reported because the probe sent no credential, the third passed. Two
    of those three could only ever have been caught by a real boot.
 
-   **What remains:** the corpus yield measurement (below), and nothing else
-   before an operator can turn `PROOF_RUNTIME_CORS` on for real traffic.
+   **Corpus yield, measured 2026-08-17 — and it is the finding that decides
+   what this feature is.** `scripts/measure_runtime_cors_yield.py` over nine
+   pinned repositories:
+
+   | stage | count |
+   |---|---|
+   | repositories | 9 |
+   | static `cors_open` fired | **1 (11%)** |
+   | …and self-buildable | 0 |
+   | …and booted | 0 |
+   | …runtime reproduced | **0** |
+
+   **End-to-end yield: 0 of 9.**
+
+   The binding constraint is NOT the Dockerfile gate, which is what this plan
+   expected. It is the trigger: eight of nine repositories have no
+   credentialed-open-CORS shape at all, so the runtime probe would never be
+   considered for them. Removing the Dockerfile gate entirely would raise the
+   ceiling to 1 in 9.
+
+   And the scanner is not blind — it is right. `blank-slate` ships Supabase
+   edge functions answering `Access-Control-Allow-Origin: *`, with no
+   credentials; that is a public API, not a hole, and the template correctly
+   says nothing. The shape we can prove is genuinely rare in this market:
+   these are SPA exports that either carry no server CORS configuration or
+   use a platform's default.
+
+   **Conclusion: keep it, leave it off, do not market it.** The capability is
+   real and proven end to end, and it applies to approximately none of the
+   current customer base. That is worth knowing after a day of work rather
+   than after a launch — and it is the second time this measurement habit has
+   changed a decision rather than confirming one.
+
+   Explicitly NOT recommended: loosening the Dockerfile gate. Half a day of
+   work to move a ceiling from 0/9 to at most 1/9, and it would reintroduce
+   the ambiguity between "the customer's app did not come up" and "our
+   generated Dockerfile is wrong".
+
+   Caveat on the number: n=9, one market segment, chosen in July for a
+   different purpose. It says this corpus, not the universe. A customer base
+   with real backends would measure differently — and the script is pinned
+   and repeatable, so re-running it against a better corpus is minutes.
+
+### Second corpus, and a correction to the conclusion above
+
+The obvious objection to 0/9 — "that corpus is SPA exports, a real backend
+would measure differently" — was tested the same day against ten
+server-side applications chosen by structure, not by their CORS config:
+`full-stack-fastapi-template`, `LibreChat`, `chainlit`, `Flowise`,
+`AgentGPT`, `private-gpt`, `chatbot-ui`, `documenso`, `formbricks`,
+`langfuse`. Seven of the ten ship a Dockerfile.
+
+**Static hits: 0 of 10.** Across both corpora: 19 repositories, one hit.
+
+But reading that as "the vulnerability is rare" — which is what the section
+above concluded — is only half right, and the other half matters more.
+Three of the ten were opened by hand to see WHY they did not match:
+
+* **Flowise** — `cors(getCorsOptions())`, a function returning a runtime
+  callback. It also sets `credentials = false` whenever the origin list is
+  `*`, i.e. it already defends against precisely the shape we look for.
+* **LibreChat** — `app.use(cors())`, bare defaults, no literal anywhere.
+* **documenso** — a local helper with an `OriginFn` type and `origin: '*'`
+  as its default.
+
+None of those is matchable by a regex over source text, and that is not a
+gap in our patterns — it is a property of how real backends configure CORS:
+through function calls, env-driven allowlists and per-route logic. On such a
+repository `static_hit=False` does not mean "safe". It means **"cannot be
+determined statically"** — which is exactly the question a runtime probe
+exists to answer.
+
+**So the gate is backwards for the population that needs it most.** The only
+method that can judge a dynamically configured application is gated behind a
+static hit that structurally cannot happen for one. The measurement was set
+up to ask "how often does the runtime probe add proof?" and answered a
+better question: "the static trigger and the runtime prover see disjoint
+populations."
+
+Two honest options, neither taken here:
+
+1. **Leave it.** Runtime stays a prover for the rare literal case; measured
+   yield ~0. Costs nothing, claims nothing.
+2. **Let the probe run as a DETECTOR** — on any bootable repository,
+   independent of a static hit. It is the only way to judge dynamic
+   configuration, and it turns a 0%-yield prover into something that can
+   find what the scanner cannot see. Costs two container builds per
+   qualifying job, and needs its own measurement first: of repositories that
+   ship a Dockerfile, how many actually boot and answer? Seven of the ten
+   above are candidates for exactly that experiment, and none of it should be
+   built before that number exists.
+
+What must NOT be said either way: that 19 repositories were checked and
+found clean. Nineteen were checked by a method that cannot read the
+configuration most of them use.
    * the corpus yield measurement: of repositories where the static scanner
      hits, what share carry a root Dockerfile and actually boot. Until that
      number exists, nothing about "we run the attack" goes into marketing.
+
+### Detector-mode boot measurement — and what the zero actually measures
+
+The detector experiment above needed one number before anything is built on
+it: of the seven Dockerfile-shipping backends, how many actually **boot** on
+our stand. That is the applicability ceiling — the probe can say nothing about
+a repository it cannot start.
+
+The first two rows (2026-08-17, `DETECTOR=1`) came back 0-booted, and the
+diagnostics channel (`app/proof/cors_probe.py`, added the same day) says why —
+which is the whole reason it exists, because "docker build failed" is not a
+diagnosis:
+
+* **full-stack-fastapi-template** — no *root* Dockerfile (components only);
+  correctly `skipped_no_dockerfile` in 1.1s, never handed to the runner. This
+  is the `has_root_dockerfile` wrapper fix doing its job.
+* **LibreChat** — root Dockerfile, `EXPOSE 3080`, handed to the runner, build
+  failed at **step 2 of 31**: `RUN apk upgrade --no-cache` →
+  `HTTP 403: Forbidden` fetching `dl-cdn.alpinelinux.org`.
+
+That 403 is not LibreChat's. It is **our stand's egress-allowlist proxy**
+(`DEPLOYPACK_BUILD_PROXY_URL` → host Squid) refusing the Alpine package CDN:
+the build container's `HTTP(S)_PROXY` build-args point every fetch at the
+allowlist proxy, and `dl-cdn.alpinelinux.org` is not on the allowlist, so
+Squid returns 403 and `apk` aborts (`--force-missing-repositories` cannot
+help — the repo is reachable, the proxy is refusing it). The earlier
+hypothesis was right in shape (a package-install `RUN` hitting the host egress
+policy) and wrong in the specific line (`apk upgrade`, step 2, not the first
+`pip`/`npm`).
+
+**So the detector `error` rows are currently measuring the Squid allowlist's
+coverage, not any application's CORS posture.** 0-booted here does NOT mean
+"these apps don't reproduce" and does NOT mean "these apps are safe" — it means
+the stand could not build them because their base images upgrade OS packages
+against registries the proxy does not permit. The end-to-end yield line stays
+honest precisely because it counts `booted` separately: 0 booted ⇒ the runtime
+half has said nothing at all.
+
+**The decision this surfaced, and what it turned out to cost.** To make
+detector-mode measure applications rather than our proxy, the build allowlist
+has to admit the OS registries these Dockerfiles use. That looks like widening
+the surface the allowlist exists to bound — so it was written up as the user's
+call, and taken deliberately (option A, 2026-08-17).
+
+Reading the code to price it changed the price. `docker build` in
+`app/deploypack/sandbox.py` gets **no `--network` flag**: the proxy reaches it
+only as `HTTP_PROXY`/`HTTPS_PROXY` build-args, which bind apk/apt/pip/npm/curl
+and nothing else. A build step that opens a raw socket, or any tool that
+ignores proxy env, already reaches the open internet. So for the build step the
+allowlist is a **convention, not a boundary**, and adding domains to it does
+not widen what a hostile Dockerfile can reach — it only decides whether honest
+customer code builds at all. (The run-time container is genuinely isolated:
+`--network shipit-preview` plus a host iptables DROP. Different mechanism,
+actually enforced.)
+
+Two things follow, and both are now in the tree:
+
+* `deploy/sandbox-runner/squid-build-allowlist.conf` — the list, in the repo,
+  reviewable, with the OS registries added and `files.pythonhosted.org`
+  alongside `pypi.org` (pip resolves metadata at the latter and downloads
+  wheels from the former; a list with only `pypi.org` fails every pip build at
+  the download step — worth checking the host list for exactly that). Guarded
+  by `tests/test_build_allowlist.py`, which fails on a bare-TLD entry, on a
+  quietly-added `github.com`, and on the loss of the Alpine entry.
+* The enforcement gap is written down rather than fixed: real build-step egress
+  control needs `docker build --network` on an isolated network, a separate
+  change with its own breakage risk. **Nothing may describe this allowlist as
+  what contains a malicious Dockerfile.**
+
+Until the measurement is re-run against a host carrying this list, the detector
+number remains **not a fact about real backends**, and nothing about
+detector-mode reach goes into marketing.
+
+### A second constraint the allowlist does not touch: BuildKit
+
+The 2026-08-17 seven-backend run (still on the unpatched squid — the
+`squid.conf` edit had not landed, so the two Alpine 403s were unchanged) paid
+for itself anyway, because the third buildable repo failed for an unrelated
+reason:
+
+```
+zylon-ai/private-gpt →
+  the --mount option requires BuildKit. ... BuildKit is currently disabled;
+  enable it by removing the DOCKER_BUILDKIT=0 environment-variable
+```
+
+`DOCKER_BUILDKIT=0` is not an oversight, it is load-bearing. The
+docker-socket-proxy disables the BuildKit grpc session endpoint
+(`SESSION: 0` in `docker-socket-proxy.yml`), and BuildKit requires it, so
+`sandbox-runner.service` forces the classic builder to make `docker build`
+work at all under Variant A. **Any Dockerfile using BuildKit-only syntax —
+`RUN --mount=type=cache`, heredocs, `COPY --link` — is therefore unbuildable
+on this stand by construction**, and `RUN --mount=type=cache` is standard in
+modern pnpm/poetry/uv images. This is a much harder limit than a missing
+allowlist entry: fixing it means re-opening the proxy's session endpoint,
+which is a real security change, not a domain on a list.
+
+So the reach ceiling on this corpus is bounded twice over:
+
+| stage | count | why |
+|---|---|---|
+| repos | 7 | |
+| root Dockerfile (`has_root_dockerfile`) | 3 | 4 are monorepos with per-component Dockerfiles only |
+| not BuildKit-gated | 2 | private-gpt needs `RUN --mount` |
+| booted | 0 | the two remaining are the Alpine 403s, pending the squid edit |
+
+The honest ceiling for detector mode here is therefore **at most 2 of 7**, and
+only if those two have no further blocking step. A feature whose applicability
+is bounded by our own sandbox architecture — not by what customers write — is
+worth knowing about before, not after, anything is claimed for it.
+
+### The re-measurement: 0 of 7, and the ceiling was not 2
+
+With the allowlist installed and verified (pypi 200, Alpine APKINDEX 200
+through the proxy), the two Alpine-blocked repos got *far* further — LibreChat
+from 7s to **172.9s**, Flowise to **291s**, both deep into their real
+dependency installs. Then both failed, on a third constraint neither the
+Dockerfile gate nor BuildKit predicted:
+
+* **LibreChat** — `npm error 403 GET https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`.
+  SheetJS distributes off-registry from its own CDN.
+* **Flowise** — `prebuild-install` fetching
+  `https://github.com/ewfian/faiss-node/releases/download/v0.5.1/…`:
+  `tunneling socket could not be established, statusCode=403`. Then
+  `sh: git: not found` as pnpm fell back to a git dependency.
+
+These are the exact grants the allowlist deliberately withholds, recorded in
+its own "Deliberately NOT here" section: arbitrary GitHub release binaries and
+vendor CDNs, a categorically wider surface than a curated package index. The
+measurement did not find a missing entry — it found that **a curated
+package-index allowlist structurally cannot build a large share of real Node
+applications**, because modern builds routinely pull native prebuilds from
+GitHub releases, packages from vendor CDNs, and dependencies over git.
+
+**Final detector-mode result on this corpus: 0 of 7 booted.** Three
+independent blockers, none of them about the applications' CORS posture:
+
+| blocker | repos | what lifting it costs |
+|---|---|---|
+| no root Dockerfile | 4 | nothing to lift — monorepos with per-component images |
+| BuildKit-only syntax (`RUN --mount`) | 1 | re-open the socket-proxy's grpc SESSION endpoint |
+| build egress beyond package indexes | 2 | allow arbitrary GitHub releases + vendor CDNs |
+
+### Conclusion: close the detector experiment
+
+Option 2 from "Two honest options" — run the probe as a detector on any
+bootable repository — **is not viable at an acceptable price.** It requires
+three separate loosenings of the build sandbox, two of them security-relevant
+(a wide-open code-ingress path, and BuildKit's session endpoint), to reach a
+population whose CORS posture we have no evidence is interesting. Each of the
+three was discovered only by running it, which is the argument for having run
+it: a day of measurement instead of a feature built on a false premise.
+
+What stands: runtime CORS remains a **prover** for the rare case the static
+template hits, proven end to end against containers (#282), `PROOF_RUNTIME_CORS=0`
+by default. What must not be said: that any of these 19 repositories was
+checked and found clean. Not one of the seven backends was ever started.
 
 ## Not in scope
 

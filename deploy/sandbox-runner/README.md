@@ -91,14 +91,45 @@ backend (shipit-ops, /opt/shipit)               runner (shipit-runner, /opt/ship
    iptables -I DOCKER-USER -s "$SUBNET" ! -d "$SUBNET" -j DROP
    ```
 
-6. **Start the proxy, then the runner:**
+6. **Install the build-step egress allowlist** (host admin; the Squid that
+   `DEPLOYPACK_BUILD_PROXY_URL`/`FIXPACK_INSTALL_PROXY_URL` point at):
+   ```
+   .venv/bin/python deploy/scripts/install_build_allowlist.py
+   ```
+   Installs the list, collapses the inline `acl allowed_dst dstdomain …` lines
+   into one reference to it, validates with `squid -k parse` (restoring the
+   backup if that fails — a proxy that will not start takes every build on the
+   host with it), reloads, and finally proves the grant by fetching the Alpine
+   APKINDEX through the proxy. It exits non-zero if that comes back anything
+   but 200, so a half-applied change cannot report success.
+
+   It is a script rather than a README step because it was a README step
+   twice, and twice the operator pasted the block while the one line that
+   mattered — a prose "now edit squid.conf" between two runnable commands —
+   did nothing. Both times the follow-up measurement then ran against an
+   unpatched proxy and had to be thrown away.
+
+   The shipped list is a strict superset of the three inline entries prod
+   carried before it (`.npmjs.org`, `.pypi.org`, `.pythonhosted.org`), so the
+   replacement cannot regress a build that works today;
+   `tests/test_build_allowlist.py` fails if someone later narrows one, and
+   `tests/test_install_build_allowlist.py` pins the rewrite against the exact
+   config the host has.
+   Read that file's header before adding a line: for the **build** step this
+   list is a convention, not a boundary (`docker build` gets no `--network`),
+   so a domain added here does not widen what a hostile build can reach — it
+   only decides whether honest customer code builds at all. Missing entries are
+   expensive in a different way: they surface as `docker build failed` with no
+   reason, which is what cost a whole detector measurement on 2026-08-17.
+
+7. **Start the proxy, then the runner:**
    ```
    docker compose -f deploy/sandbox-runner/docker-socket-proxy.yml up -d
    cp deploy/sandbox-runner/sandbox-runner.service /etc/systemd/system/
    systemctl daemon-reload && systemctl enable --now sandbox-runner
    ```
 
-7. **Verify the chain:**
+8. **Verify the chain:**
    ```
    # runner is up and can see docker THROUGH the proxy:
    curl --unix-socket /run/shipit-runner/sandbox.sock http://x/healthz
@@ -106,6 +137,10 @@ backend (shipit-ops, /opt/shipit)               runner (shipit-runner, /opt/ship
    # proxy really blocks a denied endpoint (exec):
    docker -H tcp://127.0.0.1:2375 ps        # allowed
    docker -H tcp://127.0.0.1:2375 info      # blocked (INFO=0) → 403
+   # build allowlist actually admits the OS registry that used to 403:
+   curl -sI -x http://127.0.0.1:3128 \
+       https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/APKINDEX.tar.gz \
+       | head -1        # → HTTP/1.1 200 (was: 403 Forbidden)
    ```
 
 ## Security posture — read this, don't overclaim

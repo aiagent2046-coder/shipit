@@ -80,11 +80,24 @@ def run_cors_probe(
     verify: Callable[..., Any] = verify_deploy_pack,
     fetch: Callable[..., Mapping[str, str]] | None = None,
     stop: Callable[[str | None, str | None], None] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> ExploitAttempt:
     """Boot ``build_dir``, probe it cross-origin, tear it down.
 
     ``verify``/``fetch``/``stop`` are injectable so the status table below can
     be tested without docker — the same pattern sandbox.py uses for ``run``.
+
+    ``diagnostics``, when given, is filled with the tail of a failed build's
+    output. It is DELIBERATELY NOT evidence: app/proof/types.py forbids raw
+    customer content there because evidence is stored in proof_json and
+    rendered into a PR, and a build log can echo an ARG or a token. This
+    channel goes to the caller that asked for it and no further.
+
+    It exists because "docker build failed" is not a diagnosis. Measured
+    2026-08-17: LibreChat failed in seven seconds and the run could not say
+    whether that was a missing build arg, a blocked package registry or a
+    full disk — three answers implying three different decisions about
+    whether this feature can work at all.
     """
     started = time.monotonic()
     fetch = fetch or _default_fetch
@@ -103,6 +116,11 @@ def run_cors_probe(
         )
     except Exception as exc:  # noqa: BLE001 — infrastructure, not a verdict
         return _error(f"sandbox raised {type(exc).__name__}", started)
+
+    if diagnostics is not None:
+        log = str(getattr(result, "build_log", "") or "")
+        if log:
+            diagnostics["build_log_tail"] = log[-4000:]
 
     if not getattr(result, "ok", False):
         # THE LOAD-BEARING BRANCH. A workspace that did not build or never
