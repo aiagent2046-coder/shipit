@@ -275,12 +275,30 @@ Docker cannot run in unit tests, so:
    Any release that changes runner-side code needs that clone updated and the
    unit restarted, by hand.
 
-   **What remains:**
-   * a re-run of `scripts/e2e_proof_cors_probe.py` with the cookie fix, to see
-     the vulnerable app come back `success` and the patched one `failure`.
-     Until that has been observed, the probe's positive path is still
-     unproven — the first boot proved only that the negative paths and the
-     infrastructure work.
+   **VERIFIED 2026-08-17, against real containers.** With the cookie fix on
+   the runner, `scripts/e2e_proof_cors_probe.py` passes:
+
+   ```
+   [1/2] vulnerable  status: success   reason: credentialed_reflection
+         allow_origin: https://drydock-proof.invalid   allow_credentials: true
+   [2/2] patched     status: failure   reason: no_cors_headers
+         allow_origin: None
+   OK: reproduced before the fix, refused after it.
+   ```
+
+   That is the whole chain proven end to end: build → boot → real
+   cross-origin credentialed request → oracle → teardown, on both
+   workspaces, through the runner's socket. For this class the product can
+   now say "the attack worked before the patch and does not after" and mean
+   it literally.
+
+   It took three runs to get there, and each failure was worth its cost: the
+   first 404'd because the runner is a separate deployment, the second
+   under-reported because the probe sent no credential, the third passed. Two
+   of those three could only ever have been caught by a real boot.
+
+   **What remains:** the corpus yield measurement (below), and nothing else
+   before an operator can turn `PROOF_RUNTIME_CORS` on for real traffic.
    * the corpus yield measurement: of repositories where the static scanner
      hits, what share carry a root Dockerfile and actually boot. Until that
      number exists, nothing about "we run the attack" goes into marketing.
