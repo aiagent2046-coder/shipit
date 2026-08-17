@@ -30,6 +30,24 @@ set -Eeuo pipefail
 # Then deploy the tag it printed:
 #   deploy/scripts/deploy-production.sh --revision v2026.08.07-1
 
+# --- failure must be loud ---------------------------------------------------
+# This script died in complete silence three times in two days. Its first
+# action was `git fetch --quiet --prune --tags`; a stale local tag whose name
+# matched a different remote tag object failed the fetch; --quiet swallowed
+# git's one line naming the problem; and set -e exited before anything was
+# printed. Piped through `| tail`, the operator saw a command that ran,
+# printed nothing, and appeared to succeed — on the script that decides what
+# production is called, whose own header warns that a missing tag leaves
+# /version reporting a bare SHA. Under set -e, a step that cannot name its
+# own failure reads as success.
+on_error() {
+  local status=$?
+  echo "tag-release: FAILED (exit $status) at: ${BASH_COMMAND}" >&2
+  echo "tag-release: nothing this run printed above the line was completed." >&2
+  exit "$status"
+}
+trap on_error ERR
+
 REMOTE="${SHIPIT_TAG_REMOTE:-origin}"
 REVISION="origin/main"
 PUSH=0
@@ -79,8 +97,67 @@ command -v git >/dev/null
 # Fetch tags before computing the counter, or two people tagging on the same
 # day both compute -1 and the second push is rejected. Fetching makes the
 # collision visible here instead.
+#
+# The fetch has one expected failure: " ! [rejected] ... would clobber
+# existing tag", which is what a second machine holds whenever two people
+# (or one person and one agent) tagged the same release — same tag name,
+# same commit, different tag objects. That case is resolved here, loudly:
+# the local copy is a stale duplicate and the remote's is canonical, so
+# deleting it loses nothing and the refetch restores it. The case it must
+# NOT resolve is the same name on DIFFERENT commits — that is a
+# disagreement about what was released, and a script has no business
+# picking a side in it.
+#
+# LC_ALL=C because the resolution parses git's message text; a localized
+# "rejected" would silently take the unrecognised-failure path instead.
+fetch_tags() {
+  local out
+  if out="$(LC_ALL=C git fetch --prune --tags "$REMOTE" 2>&1)"; then
+    # A fetch that BRINGS tags prints lines. That is news, not an error.
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return 0
+  fi
+  printf '%s\n' "$out" >&2
+
+  local stale
+  stale="$(printf '%s\n' "$out" | sed -n \
+    's/^ ! \[rejected\][[:space:]]*\([^[:space:]]*\).*would clobber existing tag.*/\1/p')"
+  # No message of our own for an unrecognised failure: git's is already
+  # above, and the ERR trap names the step. A line here would be a second
+  # copy of the trap's job -- unkillable by any test, and mutation-checking
+  # this script is how its last silent death was supposed to be caught.
+  [[ -z "$stale" ]] && return 1
+
+  local name local_sha remote_sha
+  while read -r name; do
+    [[ -z "$name" ]] && continue
+    local_sha="$(git rev-parse --verify "refs/tags/${name}^{commit}")"
+    # The peeled ref first (annotated tags), the plain ref as fallback
+    # (lightweight ones).
+    remote_sha="$(git ls-remote "$REMOTE" "refs/tags/${name}^{}" | cut -f1)"
+    [[ -z "$remote_sha" ]] && \
+      remote_sha="$(git ls-remote "$REMOTE" "refs/tags/${name}" | cut -f1)"
+    if [[ -n "$remote_sha" && "$local_sha" == "$remote_sha" ]]; then
+      echo "tag-release: local tag $name is a stale duplicate of $REMOTE's" \
+           "(same commit ${local_sha:0:7}, different tag object — the same" \
+           "release was tagged twice). Replacing it with $REMOTE's." >&2
+      git tag -d "$name" >/dev/null
+    else
+      echo "tag-release: local tag $name points at ${local_sha:0:7} but" \
+           "$REMOTE has ${remote_sha:0:7} under that name." >&2
+      echo "tag-release: that is a disagreement about what was released;" \
+           "refusing to pick a side." >&2
+      echo "tag-release: inspect both (git show $name; git ls-remote $REMOTE" \
+           "refs/tags/$name), delete the wrong one, and re-run." >&2
+      return 1
+    fi
+  done <<< "$stale"
+
+  git fetch --prune --tags "$REMOTE"
+}
+
 if [[ "$SKIP_FETCH" -eq 0 ]]; then
-  git fetch --quiet --prune --tags "$REMOTE"
+  fetch_tags
 fi
 
 TARGET_SHA="$(git rev-parse --verify "${REVISION}^{commit}")"
