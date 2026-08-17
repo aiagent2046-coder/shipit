@@ -20,6 +20,7 @@ skipped attempts so the registry shape is stable from day one.
 from app.proof.compare import build_proof_report, run_proof_pair
 from app.proof.gate import decide_proof_gate, proof_gate_mode
 from app.proof.workspace import apply_plan_to_zip
+from app.proof.stage import run_proof_stage
 from app.proof.registry import TEMPLATE_IDS, get_template, list_templates
 from app.proof.render import render_proof_markdown
 from app.proof.types import ExploitAttempt, ProofReport, proof_report_to_json
@@ -37,4 +38,5 @@ __all__ = [
     "render_proof_markdown",
     "run_proof_pair",
     "apply_plan_to_zip",
+    "run_proof_stage",
 ]
