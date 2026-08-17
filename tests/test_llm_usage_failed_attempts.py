@@ -406,8 +406,9 @@ async def test_every_attempt_of_a_retried_job_is_billed(
 
     total = await LlmUsageRepository().sum_by_audit_job(enqueued["id"])
     assert total["attempts"] == 3               # one row per attempt
-    assert total["calls"] == 6                  # two rubrics x three attempts
-    assert total["cost_usd"] == 6 * ONE_CALL_USD
+    # two rubrics x PAID_AUDIT_PASSES x three attempts
+    assert total["calls"] == _FULL_SCAN_CALLS * 3
+    assert total["cost_usd"] == _FULL_SCAN_CALLS * 3 * ONE_CALL_USD
 
     # And the rows are distinguishable: only the winning attempt has an audit.
     pool = await db_mod.get_pool()
@@ -439,7 +440,8 @@ async def test_a_dead_lettered_job_still_has_its_spend_on_record(
 
     total = await LlmUsageRepository().sum_by_audit_job(enqueued["id"])
     assert total["attempts"] == 3               # max_attempts scans happened
-    assert total["cost_usd"] == 6 * ONE_CALL_USD
+    # three attempts, each a full paid scan (two rubrics x PAID_AUDIT_PASSES)
+    assert total["cost_usd"] == _FULL_SCAN_CALLS * 3 * ONE_CALL_USD
 
     pool = await db_mod.get_pool()
     async with pool.connection() as conn:
