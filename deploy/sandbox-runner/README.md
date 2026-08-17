@@ -94,20 +94,27 @@ backend (shipit-ops, /opt/shipit)               runner (shipit-runner, /opt/ship
 6. **Install the build-step egress allowlist** (host admin; the Squid that
    `DEPLOYPACK_BUILD_PROXY_URL`/`FIXPACK_INSTALL_PROXY_URL` point at):
    ```
-   cp /etc/squid/squid.conf /etc/squid/squid.conf.bak
-   install -m 0644 deploy/sandbox-runner/squid-build-allowlist.conf \
-       /etc/squid/squid-build-allowlist.conf
-   # In /etc/squid/squid.conf, replace the inline domain lines
-   #     acl allowed_dst dstdomain .npmjs.org        (and .pypi.org, …)
-   # with the single file reference — http_access is already correct and is
-   # NOT touched:
-   #     acl allowed_dst dstdomain "/etc/squid/squid-build-allowlist.conf"
-   squid -k parse && systemctl reload squid
+   .venv/bin/python deploy/scripts/install_build_allowlist.py
    ```
+   Installs the list, collapses the inline `acl allowed_dst dstdomain …` lines
+   into one reference to it, validates with `squid -k parse` (restoring the
+   backup if that fails — a proxy that will not start takes every build on the
+   host with it), reloads, and finally proves the grant by fetching the Alpine
+   APKINDEX through the proxy. It exits non-zero if that comes back anything
+   but 200, so a half-applied change cannot report success.
+
+   It is a script rather than a README step because it was a README step
+   twice, and twice the operator pasted the block while the one line that
+   mattered — a prose "now edit squid.conf" between two runnable commands —
+   did nothing. Both times the follow-up measurement then ran against an
+   unpatched proxy and had to be thrown away.
+
    The shipped list is a strict superset of the three inline entries prod
    carried before it (`.npmjs.org`, `.pypi.org`, `.pythonhosted.org`), so the
    replacement cannot regress a build that works today;
-   `tests/test_build_allowlist.py` fails if someone later narrows one.
+   `tests/test_build_allowlist.py` fails if someone later narrows one, and
+   `tests/test_install_build_allowlist.py` pins the rewrite against the exact
+   config the host has.
    Read that file's header before adding a line: for the **build** step this
    list is a convention, not a boundary (`docker build` gets no `--network`),
    so a domain added here does not widen what a hostile build can reach — it
