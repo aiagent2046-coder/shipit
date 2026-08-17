@@ -82,12 +82,24 @@ a reflection of it cannot be a legitimate allowlist entry.
 **Exploit confirmed (`success`) iff both hold on the same response:**
 
 1. `Access-Control-Allow-Origin` equals `https://drydock-proof.invalid`
-   (reflection) **or** is literally `*`; and
+   — i.e. the server *reflected* an origin it had never seen; and
 2. `Access-Control-Allow-Credentials` is `true`.
 
-Either alone is not a finding: `*` without credentials is a public API, and
-credentials with a correctly pinned origin is normal. It is the pair that lets
-a page on any origin read authenticated responses.
+Either alone is not a finding: reflection without credentials exposes only
+what an anonymous caller could already read, and credentials with a correctly
+pinned origin is normal operation.
+
+**Corrected while implementing P0 (2026-08-17).** This section first read
+"reflection **or** literally `*`". The `*` half is wrong: per the Fetch
+standard a browser rejects `Access-Control-Allow-Origin: *` outright when the
+request's credentials mode is `include`, so no page ever reads a private
+response that way. Reporting it as a confirmed exploit would have printed
+"атака сработала" over an attack that cannot happen — the same overstatement
+the preceding release removed from the static templates. `*` with credentials
+is now reported as a real misconfiguration that is **not** exploitable
+(`wildcard_with_credentials_blocked_by_browser`), and only reflection earns
+`exploitable=True`. Implemented and mutation-tested in
+`app/proof/cors_oracle.py` / `tests/test_proof_cors_oracle.py`.
 
 Evidence recorded: the two header values verbatim, the status code, and the
 request line. No bodies — a body from a customer's app can contain their data.
@@ -194,10 +206,16 @@ Docker cannot run in unit tests, so:
 
 ## Phasing
 
-1. **P0 — oracle + fixture app.** Pure function, table tests, a two-file
-   FastAPI fixture with `allow_origins=["*"], allow_credentials=True`. No
-   docker, no runner. Proves the decision logic before spending an hour on
-   infrastructure.
+1. **P0 — oracle. DONE 2026-08-17.** `app/proof/cors_oracle.py`: pure
+   function over response headers, seven-case table, five mutants killed
+   (including one that restores this plan's original wildcard bug). Not
+   registered in `app/proof/registry.py` — a template id in the registry is a
+   capability the product claims, and nothing is behind this one until P1.
+
+   The fixture app that this phase originally carried moved to P1: it exists
+   only to be booted, so until the runner endpoint can boot it, it would be
+   dead code that rots. Real framework header sets are covered in the table
+   instead (Starlette lowercase, Express title-case, padded values).
 2. **P1 — runner endpoint.** `/proof/cors-probe`, both boots, teardown,
    `SandboxResult` → `ExploitAttempt` mapping, status table enforced.
 3. **P2 — wire into routing.** Runtime attempt tried only when static
