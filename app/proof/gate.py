@@ -40,19 +40,28 @@ def proof_gate_mode() -> GateMode:
 
 
 def decide_proof_gate(
-    report: ProofReport | None,
+    report: ProofReport | None | object,
     reports: list[ProofReport] | None = None,
 ) -> GateDecision:
     """Map proof report(s) onto a delivery decision.
 
     ``report`` is the primary (legacy). When ``reports`` is provided, every
     report is evaluated and the strongest failure wins.
+
+    Also accepts a ``ProofStageResult`` (has ``.primary`` / ``.reports``) so
+    callers that still do ``decide_proof_gate(await run_proof_stage(...))``
+    keep working after stage routing.
     """
+    if report is not None and hasattr(report, "primary") and hasattr(report, "reports"):
+        if reports is None:
+            reports = list(getattr(report, "reports") or [])
+        report = getattr(report, "primary")
+
     candidates: list[ProofReport] = []
     if reports:
         candidates.extend(reports)
     elif report is not None:
-        candidates.append(report)
+        candidates.append(report)  # type: ignore[arg-type]
 
     if not candidates:
         return "pass"
