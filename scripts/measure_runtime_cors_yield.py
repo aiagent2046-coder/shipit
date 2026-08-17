@@ -283,6 +283,18 @@ def main() -> int:
                 print("    --- build log tail ---", flush=True)
                 for line in r.build_log_tail.strip().splitlines()[-15:]:
                     print(f"    | {line}", flush=True)
+            else:
+                # An absent log is itself a diagnosis, and it has exactly one
+                # likely cause. The probe runs ON THE RUNNER, which is a
+                # separate deployment (/opt/shipit-runner) that
+                # deploy-production.sh never touches — so a runner predating
+                # the diagnostics channel returns an error with nothing
+                # attached, and the operator sees the same silence twice.
+                # Measured 2026-08-17: this exact skew burned three runs.
+                print("    (no build log returned — the RUNNER may predate "
+                      "the diagnostics channel;\n"
+                      "     update /opt/shipit-runner to this revision and "
+                      "restart sandbox-runner)", flush=True)
 
     total = len(results)
     hits = [r for r in results if r.static_hit]
