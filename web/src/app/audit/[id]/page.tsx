@@ -134,7 +134,21 @@ function AuditPageInner() {
   // honesty requirement did not go away, it moved: CategoryBars renders an
   // unexamined category as "not checked" instead of a full green bar, which
   // is the specific lie that mattered (issue #181).
-  const scored = !view || view.score.basis !== "static_only";
+  //
+  // BOTH free bases, not just static_only. "static+preview" was added later
+  // as the second free depth and this predicate was never widened, so every
+  // preview scan took the paid branch: audit 2b957672 published a 3.8 ring
+  // and "Not production-ready yet" while /pricing sells the free tier as
+  // "No readiness score out of 10" and the landing page says it gives none
+  // "on purpose". The page was handing out the paid tier's own listed
+  // differentiator, and contradicting the price list on the same site.
+  //
+  // Same rule and same spelling as app/report/html.py, which has excluded
+  // both all along -- this is the surface that drifted, not that one.
+  const scored =
+    !view ||
+    (view.score.basis !== "static_only" &&
+      view.score.basis !== "static+preview");
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
@@ -227,13 +241,23 @@ function AuditPageInner() {
               categories={view.score.categories}
               gatedBy={view.score.gated_by}
               unexamined={view.score.unexamined}
+              scored={scored}
             />
             {!scored && (
               <div className="mt-4 text-sm text-muted">
+                {/* Basis-specific, because the two free depths stopped being
+                    the same scan. A preview reaches a model; a static-only
+                    result did not, either because the spend cap was hit or
+                    because the provider failed. Printing the wider claim over
+                    the narrower scan overstates the thinnest audit there is.
+                    Same split, same wording as app/report/html.py. */}
                 <p>
                   These are the checks that run for free: credentials committed
                   to the repository, a committed .env, a .gitignore that misses
-                  secret files, no tests, no CI, no Dockerfile.
+                  secret files, no tests, no CI, no Dockerfile
+                  {view.score.basis === "static+preview"
+                    ? ", and then one quick security review over the code."
+                    : "."}
                 </p>
                 <p className="mt-2">
                   Not checked here: whether your routes verify who is calling

@@ -109,6 +109,67 @@ def test_the_cap_paragraph_names_categories_without_their_values():
         "the cap paragraph must still name which category failed")
 
 
+# --- the free tier ----------------------------------------------------------
+#
+# The report has withheld the score on both free bases for as long as the
+# second one has existed. The page excluded only "static_only", so every
+# "static+preview" scan took the paid branch. Audit 2b957672 published a 3.8
+# ring and "Not production-ready yet" while /pricing sells the free tier as
+# "No readiness score out of 10" and lists that score as what the $10 buys.
+#
+# The root cause was in the types, not the predicate: Score.basis listed two
+# of the backend's four values, so `basis !== "static+preview"` was a compile
+# error and the correct branch could not be written.
+
+_PAGE_TSX = _WEB / "app" / "audit" / "[id]" / "page.tsx"
+_TYPES_TS = _WEB / "lib" / "types.ts"
+
+
+def test_the_basis_union_lists_every_basis_the_backend_emits():
+    """A union narrower than the wire makes the honest branch unwriteable."""
+    from app.scan.pipeline import (
+        BASIS_FULL, BASIS_PARTIAL, BASIS_PREVIEW, BASIS_STATIC_ONLY,
+    )
+
+    text = _TYPES_TS.read_text()
+    declared = re.search(r"basis\?:([^;]+);", text)
+    assert declared, "Score.basis is not declared as a union"
+
+    for value in (BASIS_FULL, BASIS_PARTIAL, BASIS_PREVIEW, BASIS_STATIC_ONLY):
+        assert f'"{value}"' in declared.group(1), value
+
+
+def test_both_free_bases_withhold_the_score_on_the_page():
+    """The page's `scored` predicate must exclude exactly what the report's
+    does -- app/report/html.py has excluded both since preview existed."""
+    scored = _PAGE_TSX.read_text().split("const scored =")[1].split(";")[0]
+
+    assert '"static_only"' in scored
+    assert '"static+preview"' in scored
+    # A cut-short full audit is not free and keeps its score.
+    assert '"static+partial"' not in scored
+
+
+def test_a_partly_checked_category_is_not_given_a_band():
+    """Deploy and Testing are decided by asking whether a file exists. Drawing
+    that as a full green "nothing serious found" is the claim `partial`
+    exists to prevent -- and banding made it worse, because a sentence
+    asserts where 10.0 merely invited doubt."""
+    bars = _SCORE_RING_TSX.read_text().split("export function CategoryBars")[1]
+
+    assert "partly checked" in bars
+    assert re.search(r"const partial = !scored && !skipped\.has\(name\)", bars)
+
+
+def test_the_cap_paragraph_is_withheld_where_there_is_no_score():
+    """It explains a headline number. A free page has none, so it opened
+    "This score is capped..." under a header saying there is no score."""
+    bars = _SCORE_RING_TSX.read_text().split("export function CategoryBars")[1]
+
+    assert re.search(r"\{scored && <GateNote", bars), (
+        "the cap paragraph renders regardless of whether a score was published")
+
+
 def test_the_total_keeps_its_number_on_the_page():
     """Coarsening the headline too would throw away precision the engine does
     have: the same three byte-identical runs moved it 4.1 / 4.0 / 4.1. Without
