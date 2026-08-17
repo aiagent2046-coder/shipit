@@ -85,3 +85,41 @@ def test_a_config_without_the_acl_is_refused_rather_than_guessed() -> None:
 
 def test_the_trailing_newline_survives() -> None:
     assert rewrite(PROD, LIST).endswith("\n")
+
+
+# --- inline mode ------------------------------------------------------------
+
+def test_inline_writes_one_acl_line_per_domain_and_no_file_reference() -> None:
+    """The escape hatch for a squid that will not read the referenced file:
+    same grant, no dependency on ACL-file parsing."""
+    out = rewrite(PROD, LIST, domains=[".npmjs.org", "dl-cdn.alpinelinux.org"])
+    lines = out.splitlines()
+    assert "acl allowed_dst dstdomain .npmjs.org" in lines
+    assert "acl allowed_dst dstdomain dl-cdn.alpinelinux.org" in lines
+    assert str(LIST) not in out
+
+
+def test_inline_keeps_every_domain_above_the_rule_that_uses_them() -> None:
+    domains = [".npmjs.org", ".pypi.org", "dl-cdn.alpinelinux.org"]
+    lines = rewrite(PROD, LIST, domains=domains).splitlines()
+    rule = lines.index("http_access allow allowed_dst")
+    for d in domains:
+        assert lines.index(f"acl allowed_dst dstdomain {d}") < rule
+
+
+def test_inline_is_idempotent_too() -> None:
+    domains = [".npmjs.org", "dl-cdn.alpinelinux.org"]
+    once = rewrite(PROD, LIST, domains=domains)
+    assert rewrite(once, LIST, domains=domains) == once
+
+
+def test_switching_between_file_and_inline_does_not_accumulate() -> None:
+    """The operator will try one, then the other. Neither may leave the other's
+    lines behind — a stale reference beside inline domains would grant twice
+    and confuse the next reader about which one is live."""
+    domains = [".npmjs.org", "dl-cdn.alpinelinux.org"]
+    as_file = rewrite(PROD, LIST)
+    as_inline = rewrite(as_file, LIST, domains=domains)
+    assert str(LIST) not in as_inline
+    back_to_file = rewrite(as_inline, LIST)
+    assert back_to_file.count("acl allowed_dst") == 1
