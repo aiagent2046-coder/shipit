@@ -433,3 +433,67 @@ def test_a_private_table_that_is_locked_down_counts_as_private_not_exposed() -> 
     assert r.private_tables == 1
     assert r.exposed_tables == []
     assert r.stage == "not_exposed"
+
+
+# --- the class the hint set was missing -------------------------------------
+
+AVATAR = """
+create table if not exists public.avatar_interactions (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  match_id uuid not null references public.matches(id) on delete cascade,
+  summary text,
+  key_points text[],
+  next_actions text[],
+  sentiment text,
+  created_at timestamptz default now()
+);
+"""
+
+
+def test_a_model_written_judgement_about_a_person_counts() -> None:
+    """READ FROM A REAL REPO, and the oracle got it wrong first.
+
+    summary / key_points / next_actions / sentiment, one row per pair of
+    matched founders, RLS never enabled — so the anon key returns what the
+    model concluded about every user, including how one feels about another.
+    The oracle called it `uncertain` because the only name it recognised was
+    `user_id`.
+
+    In an AI product the most sensitive rows are rarely the profile; they are
+    the model's conclusions about someone. A leaked `sentiment` toward another
+    user is worse than a leaked email address, and that class was simply not
+    modelled.
+    """
+    t = parse_schema(AVATAR)["avatar_interactions"]
+    assert t.private_shaped[0] == "yes"
+    assert t.anon_readable[0]
+
+
+def test_a_foreign_key_into_auth_users_is_structural_evidence() -> None:
+    """Not a name guess: the FK says the row belongs to one authenticated
+    person. With free text beside it, anon reading the table crosses tenants.
+    """
+    t = parse_schema("""
+        create table public.notes_by_user (
+          id uuid primary key,
+          owner uuid references auth.users(id),
+          content text
+        );
+    """)["notes_by_user"]
+    verdict, why = t.private_shaped
+    assert verdict == "yes"
+    assert "auth.users" in why
+
+
+def test_the_auth_users_key_alone_does_not_convict_a_lookup_table() -> None:
+    """A join row of two ids carries nothing to leak; the free-text half of
+    the rule is what makes it a finding."""
+    t = parse_schema("""
+        create table public.memberships (
+          user_id uuid references auth.users(id),
+          team_id uuid,
+          joined_at timestamptz
+        );
+    """)["memberships"]
+    assert t.private_shaped[0] != "yes"

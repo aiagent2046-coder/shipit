@@ -256,9 +256,41 @@ A second false-positive path was found the same way, before it could be
 quoted: `ALTER TABLE IF EXISTS … ENABLE ROW LEVEL SECURITY` went unmatched, so
 any table protected that way read as "RLS never enabled".
 
-`avatar_interactions` (RLS never enabled, flagged only on `user_id`) now sits
-in `uncertain`, which is the right place until someone reads what it stores. If
-those rows hold conversation content, the hint set is missing something.
+### Reading `avatar_interactions` — and the class the hints did not model
+
+`uncertain` did its job: it sent someone to look, and looking changed the
+answer. The table is
+
+```sql
+user_id    uuid NOT NULL REFERENCES auth.users(id),
+match_id   uuid NOT NULL REFERENCES public.matches(id),
+summary    text,      key_points   text[],
+next_actions text[],  sentiment    text
+```
+
+— a model-written debrief of a conversation between two matched founders:
+what was said, what to do next, and **how one of them feels about the other**.
+RLS never enabled, so the anon key returns that for every user. It is arguably
+the most sensitive table in the application, and the oracle had shrugged at it
+because the only name it recognised was `user_id`.
+
+The miss was not "user_id should be strong". It was a whole missing class:
+**model-derived judgements about people**. In an AI product the most sensitive
+rows are rarely the profile — they are what the model concluded about someone,
+and a leaked `sentiment` toward another user is worse than a leaked email
+address. That class is what this market is made of, so `sentiment`, `summary`,
+`transcript`, `analysis`, `assessment`, `key_points`, `insight`,
+`recommendation`, `diagnosis`, `evaluation` are now STRONG.
+
+Reading the DDL also produced a better signal than any name list:
+**`REFERENCES auth.users`**. That is structural — it says the row belongs to
+one authenticated person — and paired with any free-text column it means anon
+reading the table crosses tenants. It replaces `user_id` as the deciding
+ownership signal, being the thing `user_id` was a bad proxy for.
+
+The pairing is load-bearing in both directions: the FK alone convicted a
+two-column join table in the first draft, because `_has_free_text` was asking
+the wrong list and `user_id` satisfied both halves by itself.
 
 ### What this changes about Part C
 

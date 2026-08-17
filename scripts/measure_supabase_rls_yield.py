@@ -127,6 +127,18 @@ STRONG_COLUMN_HINTS: tuple[str, ...] = (
     "stripe_", "customer_id", "payment", "card_last", "iban",
     "ssn", "tax_id", "passport", "birth", "dob",
     "ip_address",
+    # Model-derived judgements ABOUT a person. Added after reading
+    # `avatar_interactions` in a real repo: summary / key_points /
+    # next_actions / sentiment, one row per pair of matched founders, RLS
+    # never enabled. The oracle had called it `uncertain` because the only
+    # name it recognised was `user_id`.
+    #
+    # This is a whole class the hint set did not model, and it is the class
+    # our market is made of: in an AI product the most sensitive rows are
+    # rarely the profile — they are what the model concluded about someone.
+    # A leaked `sentiment` toward another user is worse than a leaked email.
+    "sentiment", "summary", "transcript", "analysis", "assessment",
+    "key_points", "insight", "recommendation", "diagnosis", "evaluation",
 )
 
 # WEAK: an ownership marker or free text. NOT sufficient alone, and that is a
@@ -143,10 +155,19 @@ STRONG_COLUMN_HINTS: tuple[str, ...] = (
 # Nearly every table in a multi-tenant app carries user_id, public ones
 # included. A weak hint alone yields `uncertain`: printed for a human, kept out
 # of the headline count.
-WEAK_COLUMN_HINTS: tuple[str, ...] = (
+WEAK_OWNERSHIP_HINTS: tuple[str, ...] = (
     "user_id", "owner_id", "auth_id", "profile_id",
-    "notes", "message", "content", "user_agent", "hash",
 )
+
+# Free text that may hold anything, including nothing. Weak on its own for the
+# same reason — a `content` column is as likely to be a blog body as a private
+# note — but it is the half that makes an auth.users key mean something.
+WEAK_FREE_TEXT_HINTS: tuple[str, ...] = (
+    "notes", "message", "content", "body", "text", "description",
+    "user_agent", "hash",
+)
+
+WEAK_COLUMN_HINTS: tuple[str, ...] = WEAK_OWNERSHIP_HINTS + WEAK_FREE_TEXT_HINTS
 
 # A policy whose NAME promises a scope its predicate does not enforce. This is
 # the strongest evidence in the whole measurement, because it is the author's
@@ -197,6 +218,7 @@ class Table:
     name: str
     schema: str
     columns: list[str] = field(default_factory=list)
+    references_auth_users: bool = False
     rls_enabled: bool = False
     open_policy: str = ""      # why anon keeps a read (the clause, condensed)
     open_policy_sql: str = ""  # the statement itself, for eyeball verification
@@ -221,12 +243,31 @@ class Table:
                        if any(h in c.lower() for h in STRONG_COLUMN_HINTS)), "")
         if strong:
             return "yes", f"column `{strong}`"
+        # Structural, not a name guess: a foreign key into `auth.users` says
+        # the row belongs to one authenticated person. Paired with any free
+        # text, that is per-person content, and anon reading it crosses
+        # tenants. Stronger evidence than a column called `user_id`, which is
+        # what this replaces as the deciding signal.
+        if self.references_auth_users and self._has_free_text:
+            return "yes", "rows key off auth.users and carry free text"
         weak = next((c for c in self.columns
                      if any(h in c.lower() for h in WEAK_COLUMN_HINTS)), "")
         if weak:
             return "uncertain", (f"only `{weak}`, which nearly every table in a "
                                  f"multi-tenant app carries")
         return "no", "no private-looking table name or column"
+
+    @property
+    def _has_free_text(self) -> bool:
+        """Free text only — NOT the ownership markers.
+
+        A first version asked WEAK_COLUMN_HINTS, which contains `user_id`, so
+        `user_id REFERENCES auth.users` satisfied both halves of the rule by
+        itself and convicted a two-column join table. Caught by the test
+        written to forbid exactly that.
+        """
+        return any(any(h in c.lower() for h in WEAK_FREE_TEXT_HINTS)
+                   for c in self.columns)
 
     @property
     def intent_mismatch(self) -> str:
@@ -336,10 +377,13 @@ def parse_schema(sql: str) -> dict[str, Table]:
     tables: dict[str, Table] = {}
     for m in _CREATE_TABLE.finditer(sql):
         name = m.group("name")
+        body = m.group("body")
         tables[name.lower()] = Table(
             name=name,
             schema=(m.group("schema") or "public").lower(),
-            columns=_columns(m.group("body")),
+            columns=_columns(body),
+            references_auth_users=bool(
+                re.search(r"references\s+auth\s*\.\s*users", body, re.I)),
         )
 
     for m in _ENABLE_RLS.finditer(sql):
