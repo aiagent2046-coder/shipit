@@ -232,10 +232,31 @@ Docker cannot run in unit tests, so:
    and the docker end-to-end has not been executed — this environment has no
    docker, so every test here drives injected doubles. The first real boot is
    P2's first task and may well find something these cannot.
-3. **P2 — wire into routing.** Runtime attempt tried only when static
-   `cors_open` fired and the plan touches its file; on `skipped`/`error` the
-   static report stands. Measure yield on the batch corpus before promising
-   anything externally.
+3. **P2 — wiring. CODE COMPLETE 2026-08-17, UNVERIFIED AGAINST DOCKER.**
+   `app/proof/runtime_cors.py` decides applicability, `stage.py` runs the two
+   probes and **appends** the runtime report beside the static one,
+   `render.py` gives runtime reports their own verdict wording, row label,
+   cells and method note (plus the header transcript in the details), and
+   both proof flags are documented in `.env.example`.
+
+   Gated four ways, each a reason not to boot: `PROOF_RUNTIME_CORS` **off by
+   default**, the static `cors_open` must have fired (which already implies
+   the plan touches its file — see `routing.py`), and the workspace must
+   carry a root `Dockerfile`. 20 tests, 4 mutants killed: runtime replacing
+   the static report, the flag defaulting on, booting without a Dockerfile,
+   booting when the scanner found nothing.
+
+   **What remains, and it is the part that matters:**
+   * `scripts/e2e_proof_cors_probe.py` exists but **has never been run** —
+     no docker in the authoring environment. It builds a deliberately
+     vulnerable FastAPI app and its patched twin and asserts
+     success-then-failure. Running it green on a runner host is the first
+     real boot this feature has ever had, and it may falsify something these
+     tests cannot see (that `/` redirects, that Starlette's reflection
+     behaviour differs from the assumption, that 8000 is the wrong port).
+   * the corpus yield measurement: of repositories where the static scanner
+     hits, what share carry a root Dockerfile and actually boot. Until that
+     number exists, nothing about "we run the attack" goes into marketing.
 
 ## Not in scope
 
