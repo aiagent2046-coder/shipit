@@ -32,6 +32,11 @@ Usage (from /opt/shipit — needs outbound access to codeload.github.com):
     LIMIT=3 .venv/bin/python scripts/measure_supabase_rls_yield.py
     VERBOSE=1 .venv/bin/python scripts/measure_supabase_rls_yield.py
 
+    SHOW=avatar_interactions .venv/bin/python scripts/measure_supabase_rls_yield.py
+        Print the DDL, columns and policies of matching tables. What an
+        `uncertain` verdict is asking for: go and read what the table stores,
+        then decide. Schema only — no row is ever fetched.
+
     SCREEN=1 .venv/bin/python scripts/measure_supabase_rls_yield.py
         Resolve CANDIDATES to their current SHAs, report which qualify, and
         print paste-ready pinned tuples for CORPUS. Corpus assembly has to be
@@ -520,9 +525,61 @@ def screen(candidates: tuple[str, ...]) -> int:
     return 0
 
 
+# --- reading one table by hand ----------------------------------------------
+
+def show(pattern: str, corpus: tuple[tuple[str, str], ...]) -> int:
+    """Print the DDL for tables whose name matches ``pattern``.
+
+    An `uncertain` verdict is an instruction to go and look, and the loop it
+    starts — see a name, wonder what it stores, decide — will run once per
+    borderline table for as long as this measurement exists. Doing that with an
+    ad-hoc grep leaves no record of what was read before the call was made.
+
+    Schema only. No row is fetched, here or anywhere in this script.
+    """
+    hits = 0
+    for slug, sha in corpus:
+        try:
+            zf = fetch(slug, sha)
+        except Exception as exc:  # noqa: BLE001
+            print(f"{slug}: fetch failed: {type(exc).__name__}")
+            continue
+        sql = "\n".join(_texts(zf, (".sql",)).values())
+        if not sql:
+            continue
+        for name, table in parse_schema(sql).items():
+            if pattern.lower() not in name:
+                continue
+            hits += 1
+            private, why_private = table.private_shaped
+            readable, why_readable = table.anon_readable
+            print(f"\n=== {slug} :: {table.schema}.{table.name} ===")
+            print(f"verdict : {private} ({why_private})")
+            print(f"readable: {readable} ({why_readable})")
+            print(f"columns : {', '.join(table.columns)}")
+            if table.open_policy_sql:
+                print(f"policy  : {table.open_policy_sql}")
+            # The CREATE TABLE itself, so column types and defaults are
+            # visible — `content text` and `content jsonb` invite different
+            # guesses about what is stored.
+            for m in _CREATE_TABLE.finditer(sql):
+                if m.group("name").lower() == name:
+                    print("ddl     :")
+                    for line in " ".join(m.group(0).split()).split(","):
+                        print(f"          {line.strip()}")
+                    break
+    if not hits:
+        print(f"no table matching {pattern!r} in the corpus")
+    return 0
+
+
 def main() -> int:
     if (os.environ.get("SCREEN") or "").strip().lower() in ("1", "true", "yes"):
         return screen(CANDIDATES)
+
+    wanted = (os.environ.get("SHOW") or "").strip()
+    if wanted:
+        return show(wanted, CORPUS)
 
     verbose = (os.environ.get("VERBOSE") or "").strip().lower() in (
         "1", "true", "yes")
