@@ -482,6 +482,38 @@ the metadata and did not know about the `git_describe` field. Replacing the
 script mid-run is safe, since `git checkout` renames a new file into place and
 the running shell keeps reading the original inode.
 
+### The sandbox runner is NOT deployed by deploy-production.sh
+
+`deploy-production.sh` owns `/opt/shipit` (control) and `/srv/shipit/releases`
+(the backend). It does not touch the sandbox runner, which is a **separate
+deployment**: its own git clone at `/opt/shipit-runner`, its own venv, its own
+`sandbox-runner.service` running as `shipit-runner` (see
+`deploy/sandbox-runner/README.md`).
+
+So a release that changes runner-side code — `app/runner/`,
+`app/deploypack/sandbox.py`, `app/fixpack/semantic_check.py`,
+`app/fixpack/verification.py`, `app/proof/cors_probe.py` — is **half
+deployed** until the runner clone is updated by hand:
+
+    cd /opt/shipit-runner
+    git pull
+    chown -R shipit-runner:shipit-runner /opt/shipit-runner   # pull ran as root
+    systemctl restart sandbox-runner
+    systemctl is-active sandbox-runner
+
+Only re-run the venv install when `requirements.txt` changed; the package is
+installed editable, so code alone needs no pip step.
+
+**How this presents when it is skipped.** On 2026-08-17 the backend was on a
+release carrying the new `POST /proof/cors-probe` while the runner still ran
+August 6th's code: the call came back `404 {"detail":"Not Found"}` from a
+socket that was otherwise healthy. That failure was loud, which was luck — the
+same skew on an endpoint that merely gained a field would have been a silent
+version mismatch. Check the runner whenever a release touches the files above,
+and remember that `systemctl is-active` on the wrong unit name reports
+`inactive` for a runner that is in fact serving (the unit is
+`sandbox-runner`, not `shipit-sandbox-runner`).
+
 ### Deploying from CI
 
 `.github/workflows/deploy-production.yml` deploys a release tag over SSH. It is

@@ -214,6 +214,40 @@ def test_the_probe_only_ever_addresses_loopback() -> None:
     assert seen["headers"]["Origin"] == PROBE_ORIGIN
 
 
+def test_the_probe_sends_a_credential() -> None:
+    """Without a cookie the probe under-reports, and a real container proved
+    it: Starlette 0.40 (what fastapi 0.115 pulls) reflects the caller's Origin
+    only `if self.allow_all_origins and has_cookie`, and answers a bare `*`
+    otherwise. The first e2e boot came back "not exploitable" for an app a
+    browser session could actually read cross-origin.
+
+    The claim this template makes is about CREDENTIALED reads; a request
+    carrying no credential cannot demonstrate one."""
+    import sys
+    import types as pytypes
+
+    import app.proof.cors_probe as probe_mod
+
+    seen: dict = {}
+
+    class _Resp:
+        headers: dict = {}
+
+    fake_httpx = pytypes.ModuleType("httpx")
+    fake_httpx.get = lambda url, **kw: (seen.update(kw), _Resp())[1]  # type: ignore[attr-defined]
+    original = sys.modules.get("httpx")
+    sys.modules["httpx"] = fake_httpx
+    try:
+        probe_mod._default_fetch(21234, "/", PROBE_ORIGIN)
+    finally:
+        if original is not None:
+            sys.modules["httpx"] = original
+        else:
+            del sys.modules["httpx"]
+
+    assert seen["headers"]["Cookie"] == probe_mod.PROBE_COOKIE
+
+
 def test_evidence_never_carries_a_response_body() -> None:
     """proof_json is rendered into a PR; a body from a customer's app can
     contain their users' data."""
