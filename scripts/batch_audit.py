@@ -44,11 +44,13 @@ Usage (on the VPS, from /opt/shipit, with .env exported):
     .venv/bin/python scripts/batch_audit.py
 
 Runs are cumulative: existing <name>__run*.json files in batch_reports/ are
-counted, new runs are numbered after them, and the summary reads them all.
+counted, new runs are numbered after them, and the summary reads every row
+that belongs to the series -- rows whose LLM stage failed and rows written by
+a different engine (see off_series) are named, skipped and never averaged.
 Re-running the script therefore extends every series instead of redoing it.
 To add runs beyond the defaults, raise the entry's `runs` (it is a target
-TOTAL, not an increment): a series that already holds that many files runs
-nothing new and only re-prints the summary.
+TOTAL of usable rows, not an increment): a series that already holds that
+many runs nothing new and only re-prints the summary.
 
 Cost note: blank-slate is the expensive one (~1.46M input tokens/run
 measured); the whole default set is roughly $25-45 through AITunnel.
@@ -82,12 +84,11 @@ class Series:
     runs: int          # target TOTAL runs on disk, existing files included
     slug: str          # owner/repo on GitHub
     sha: str           # full commit SHA -- a branch head would silently fork the series
-    # Byte size of the LLM prompt on the runs this series extends. A pinned
-    # SHA proves the INPUT matched only for GitHub sources; the local-archive
-    # series has no SHA, and blank-slate's prior three audits recorded prompt
-    # chars but not the revision, so this is the splice check: a run whose
-    # prompt_chars differ is measuring a different input and the summary must
-    # say so rather than average it in.
+    # Byte size of the LLM prompt on the runs this series extends. The pinned
+    # SHA fixes what the REPO contributes to the prompt; this fixes the rest
+    # of it -- the engine's own assembly, which moves between releases. A row
+    # whose prompt_chars differ was written by a different engine or input
+    # and may not join the series (see off_series). 0 = first run defines it.
     expect_prompt_chars: int = 0
 
 
@@ -154,6 +155,37 @@ def llm_ran(scan: dict) -> bool:
     llm = scan.get("llm")
     return (isinstance(llm, dict) and llm.get("skipped_reason") is None
             and not llm.get("failure"))
+
+
+def off_series(s: Series, scan: dict) -> str:
+    """Why this row may not join the series, or '' if it may.
+
+    The prompt-signature check exists because it caught a real event twice on
+    the same day (2026-08-17): the host ran a stale checkout, whose engine
+    assembled a prompt 969 chars smaller than the current one for every repo.
+    Full, healthy, paid LLM runs -- of a different engine's distribution. A
+    warning was not enough the first time, so membership is enforced, not
+    advised: rows that fail it are named and skipped, never averaged."""
+    if not llm_ran(scan):
+        return "LLM stage did not run (static-only/degraded row)"
+    got = scan["llm"].get("prompt_chars")
+    if s.expect_prompt_chars and got != s.expect_prompt_chars:
+        return (f"prompt_chars {got} != {s.expect_prompt_chars} -- a"
+                " different engine or input wrote this row")
+    return ""
+
+
+def usable_rows(s: Series, verbose: bool = False) -> list[dict]:
+    rows = []
+    for p in existing_runs(s.name):
+        scan = json.loads(p.read_text())
+        reason = off_series(s, scan)
+        if reason:
+            if verbose:
+                print(f"  ignoring {p.name}: {reason}", flush=True)
+        else:
+            rows.append(scan)
+    return rows
 
 
 def _key(f: dict) -> tuple[str, str]:
@@ -238,17 +270,15 @@ def main() -> int:
 
     for s in SERIES:
         have = existing_runs(s.name)
-        valid = [p for p in have if llm_ran(json.loads(p.read_text()))]
-        for p in set(have) - set(valid):
-            print(f"  ignoring {p.name}: LLM stage did not run"
-                  " (static-only/degraded row)", flush=True)
+        print(f"\n=== {s.name} ===", flush=True)
+        valid = usable_rows(s, verbose=True)
         # New runs are numbered after every existing file, ignored ones
-        # included -- a degraded row keeps its name so nothing is ever
+        # included -- an off-series row keeps its name so nothing is ever
         # overwritten; it just stops counting.
         next_i = (int(have[-1].stem.rsplit("run", 1)[1]) + 1) if have else 1
         todo = s.runs - len(valid)
-        print(f"\n=== {s.name}: {len(valid)} usable on disk,"
-              f" {max(todo, 0)} to run ===", flush=True)
+        print(f"  {len(valid)} usable on disk, {max(todo, 0)} to run",
+              flush=True)
         if todo > 0:
             try:
                 data = fetch_repack(s.slug, s.sha)
@@ -263,36 +293,33 @@ def main() -> int:
                 t0 = time.time()
                 scan = run_scan(data, client)
                 dt = time.time() - t0
-                if not llm_ran(scan):
-                    # A dead provider (the measured case: account balance at
-                    # zero, 402 on every call) fails every run after this one
-                    # too. Stopping the batch is what keeps a burnt-out night
-                    # run from being twenty static scans pretending to be a
-                    # measurement. The row is kept for diagnosis under a name
-                    # the series will never read.
-                    p = OUT / f"{s.name}__failed-{int(time.time())}.json"
+                reason = off_series(s, scan)
+                if reason:
+                    # Both known causes mean every further run of this series
+                    # fails the same way: a dead provider (measured: balance
+                    # at zero, 402 on every call) fails the other series too,
+                    # and a signature mismatch means THIS engine cannot extend
+                    # this series at all -- a human must decide whether the
+                    # expectation moves or the series closes. The paid row is
+                    # kept for that decision under a name the series glob
+                    # never reads.
+                    p = OUT / f"{s.name}__offseries-{int(time.time())}.json"
                     p.write_text(json.dumps(scan, indent=1))
-                    print(f"  !! LLM stage did not run: {scan['llm']}\n"
-                          f"  row kept as {p.name}; STOPPING the batch --"
-                          f" every further run would fail the same way",
+                    print(f"  !! {reason}\n"
+                          f"  row kept as {p.name}; this series stops here",
                           flush=True)
-                    return 1
+                    if not llm_ran(scan):
+                        print("  provider is dead -- STOPPING the whole batch",
+                              flush=True)
+                        return 1
+                    break
                 (OUT / f"{s.name}__run{i}.json").write_text(
                     json.dumps(scan, indent=1))
-                llm = scan["llm"]
-                print(f"  run {i}: total {scan['score']['total']},"
-                      f" prompt_chars {llm.get('prompt_chars')}, {dt:.0f}s",
+                print(f"  run {i}: total {scan['score']['total']}, prompt_chars"
+                      f" {scan['llm'].get('prompt_chars')}, {dt:.0f}s",
                       flush=True)
-                if (s.expect_prompt_chars
-                        and llm.get("prompt_chars") != s.expect_prompt_chars):
-                    print(f"  !! prompt_chars {llm.get('prompt_chars')} !="
-                          f" {s.expect_prompt_chars} recorded on the prior"
-                          f" audits -- the input moved; this run starts a NEW"
-                          f" series and must not be spliced with the old one",
-                          flush=True)
 
-        scans = [sc for p in existing_runs(s.name)
-                 if llm_ran(sc := json.loads(p.read_text()))]
+        scans = usable_rows(s)
         if scans:
             summarize(s.name, scans)
 
