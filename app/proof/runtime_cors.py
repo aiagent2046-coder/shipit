@@ -61,7 +61,7 @@ def runtime_cors_applicable(
     if not (static.before.success and static.before.status == "success"):
         return False, "static cors_open found nothing to reproduce"
 
-    if not _has_root_dockerfile(original_zip):
+    if not has_root_dockerfile(original_zip):
         # Booting a repo through a Deploy Pack Dockerfile we generated would
         # conflate two questions: is the app's CORS open, and is our generated
         # Dockerfile right. When the answer is "the stand did not come up",
@@ -78,7 +78,7 @@ def _static_cors_report(reports: list[ProofReport]) -> ProofReport | None:
     return None
 
 
-def _has_root_dockerfile(zip_bytes: bytes) -> bool:
+def has_root_dockerfile(zip_bytes: bytes) -> bool:
     """A Dockerfile at the archive root, tolerating the single-folder wrapper
     GitHub zips add (`repo-main/Dockerfile`)."""
     try:
