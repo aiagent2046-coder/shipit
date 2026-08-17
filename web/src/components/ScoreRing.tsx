@@ -86,9 +86,22 @@ export function CategoryBars({
   categories,
   gatedBy,
   unexamined,
+  scored = true,
 }: {
   categories: Record<string, number>;
   gatedBy?: GateReason[];
+  /** False on a free scan. Drives two things, exactly as in
+   * app/report/html.py: a category the free scan DID look at is marked
+   * "partly checked" rather than banded, and the cap paragraph is withheld
+   * because there is no published score for it to explain.
+   *
+   * Without it this component drew Deploy and Testing as full green
+   * "nothing serious found" on audit 2b957672 -- a free scan that decides
+   * those two by asking whether a file exists. The HTML report for the same
+   * audit said "partly checked" on all three rows it examined. Banding made
+   * that worse rather than better: "10.0" was a number a reader could
+   * distrust, "nothing serious found" is a sentence that asserts. */
+  scored?: boolean;
   /** Categories nothing produced a finding for, from the scorer. They sit at
    * 10.0 for want of a producer, and drawing that as a full bar answers "is
    * my auth safe?" with a yes nobody checked — issue #181, at the row level.
@@ -102,6 +115,7 @@ export function CategoryBars({
       <div className="flex flex-col gap-2">
         {Object.entries(categories).map(([name, value]) => {
           const band = categoryBand(value);
+          const partial = !scored && !skipped.has(name);
           return (
           <div key={name} className="flex items-center gap-3 text-sm">
             <span className="w-24 shrink-0 text-muted">{name}</span>
@@ -110,6 +124,18 @@ export function CategoryBars({
                 <div className="h-2 flex-1 rounded-full bg-border/40" />
                 <span className="shrink-0 text-right text-xs text-muted">
                   not checked
+                </span>
+              </>
+            ) : partial ? (
+              // Not "not checked" -- something did run, and saying nothing
+              // ran would send the reader hunting for an audit that already
+              // happened. Not a band either: the free scan reads Security
+              // with regexes and one pass of the cheapest model, and Deploy
+              // and Testing by asking whether a file exists.
+              <>
+                <div className="h-2 flex-1 rounded-full bg-border/40" />
+                <span className="shrink-0 text-right text-xs text-muted">
+                  partly checked
                 </span>
               </>
             ) : (
@@ -132,7 +158,13 @@ export function CategoryBars({
           );
         })}
       </div>
-      <GateNote reasons={gatedBy} />
+      {/* Only where a score is published. This paragraph explains a headline
+          number and a free scan has none, so on the free page it opened
+          "This score is capped..." under a header that says there is no
+          score -- and named the failing category while every row above it
+          declined to. The report fixed this on its side; this copy did not
+          have the flag to fix it with until now. */}
+      {scored && <GateNote reasons={gatedBy} />}
     </>
   );
 }

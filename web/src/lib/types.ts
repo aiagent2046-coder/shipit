@@ -37,7 +37,18 @@ export interface GateReason {
 export interface Score {
   total: number;
   categories: Record<string, number>;
-  basis?: "static+llm" | "static_only";
+  // Every value app/scan/pipeline.py can emit: BASIS_FULL, BASIS_PREVIEW,
+  // BASIS_PARTIAL, BASIS_STATIC_ONLY. The union listed only two of them, and
+  // that omission is the whole reason the free-tier bug lived: TypeScript
+  // rejected `basis !== "static+preview"` as a comparison with no overlap, so
+  // the predicate that decides whether a score may be published could not be
+  // written correctly even by someone looking straight at it. A type that
+  // under-describes the wire makes the honest branch unwriteable.
+  //
+  // "static+partial" is a full audit whose rubric run was cut short. It is
+  // NOT free, and it must keep its score -- it is listed here so the union
+  // matches the backend, not so it joins the free tier.
+  basis?: "static+llm" | "static+partial" | "static+preview" | "static_only";
   // Optional because audits stored before this key existed have none, which
   // means "unknown", not "ungated" — an empty array is the ungated case.
   gated_by?: GateReason[];
