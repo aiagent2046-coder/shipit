@@ -134,6 +134,7 @@ class RepoResult:
     probe_detail: str = ""
     boot_detail: str = ""
     container_port: int = 0
+    build_log_tail: str = ""
     seconds: float = 0.0
     error: str = ""
 
@@ -218,9 +219,11 @@ def measure_one(slug: str, sha: str, port: int,
     # not a before/after pair, so there is no patched half to build.
     container_port = exposed_port(data)
     result.container_port = container_port
+    diagnostics: dict = {}
     try:
         probe = sandbox_client.run_cors_probe(
             data, host_port=port, container_port=container_port,
+            diagnostics=diagnostics,
             # These are real applications, not the two-file e2e fixture: a
             # node monorepo image takes far longer than the 300s default, and
             # a timeout would be recorded as "did not boot".
@@ -236,6 +239,7 @@ def measure_one(slug: str, sha: str, port: int,
     result.probe_detail = probe.detail[:200]
     result.probe_reason = str((probe.evidence or {}).get("reason", ""))
     result.boot_detail = str((probe.evidence or {}).get("boot_detail", ""))[:120]
+    result.build_log_tail = str(diagnostics.get("build_log_tail", ""))[-1500:]
     result.seconds = round(time.time() - started, 1)
     return result
 
@@ -275,6 +279,10 @@ def main() -> int:
             print(f"    detail: {r.probe_detail}", flush=True)
             if r.boot_detail:
                 print(f"    boot  : {r.boot_detail}", flush=True)
+            if r.build_log_tail:
+                print("    --- build log tail ---", flush=True)
+                for line in r.build_log_tail.strip().splitlines()[-15:]:
+                    print(f"    | {line}", flush=True)
 
     total = len(results)
     hits = [r for r in results if r.static_hit]

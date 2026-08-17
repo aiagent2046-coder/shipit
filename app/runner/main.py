@@ -217,8 +217,10 @@ async def proof_cors_probe(
         build_dir = Path(tempfile.mkdtemp(prefix="shipit-runner-cors-"))
         try:
             _extract_zip(raw, build_dir)
+            diagnostics: dict = {}
             attempt = run_cors_probe(
                 build_dir,
+                diagnostics=diagnostics,
                 host_port=m["host_port"],
                 container_port=m["container_port"],
                 path=m.get("path", "/"),
@@ -233,6 +235,9 @@ async def proof_cors_probe(
                 "detail": attempt.detail,
                 "evidence": attempt.evidence,
                 "duration_ms": attempt.duration_ms,
+                # Beside the attempt, never inside it: build output is the
+                # customer's and must not reach proof_json (app/proof/types.py).
+                "diagnostics": diagnostics,
             }
         finally:
             import shutil

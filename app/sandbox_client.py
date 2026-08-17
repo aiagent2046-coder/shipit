@@ -275,8 +275,13 @@ def run_cors_probe(
     build_timeout_s: int = 300,
     boot_timeout_s: int = 60,
     memory_limit: str | None = None,
+    diagnostics: dict | None = None,
 ) -> ExploitAttempt:
     """Boot one workspace on the runner and probe it cross-origin.
+
+    ``diagnostics``, when given, receives non-evidence troubleshooting data
+    (currently the tail of a failed build's log). It never enters proof_json —
+    see app/proof/cors_probe.run_cors_probe.
 
     Takes zip BYTES rather than a directory: the caller already holds the
     workspace as a zip (original from intake, patched from apply_plan_to_zip),
@@ -299,6 +304,8 @@ def run_cors_probe(
         "memory_limit": memory_limit,
     }
     data = _post("/proof/cors-probe", content=zip_bytes, manifest=manifest)
+    if diagnostics is not None:
+        diagnostics.update(data.get("diagnostics") or {})
     return ExploitAttempt(
         template_id=data["template_id"],
         status=data["status"],

@@ -289,3 +289,31 @@ def test_an_errored_before_can_never_be_verified() -> None:
     after = _probe(_verify(_Boot(False, "docker build failed")), _headers())
     report = build_proof_report(before, after, informational=False)
     assert report.verified is False
+
+
+def test_a_failed_build_reports_its_log_outside_the_evidence() -> None:
+    """"docker build failed" is not a diagnosis, and the log that explains it
+    must not become evidence.
+
+    app/proof/types.py forbids raw customer content in evidence because
+    evidence is stored in proof_json and rendered into a PR, and a build log
+    can echo an ARG or a token. So the log travels through an explicit
+    diagnostics channel to the caller that asked for it, and no further.
+    """
+    class _Failed(_Boot):
+        def __init__(self):
+            super().__init__(False, "docker build failed")
+            self.build_log = "npm ERR! 403 Forbidden\nsecret=hunter2\n"
+
+    diagnostics: dict = {}
+    attempt = run_cors_probe(
+        Path("/nonexistent"), host_port=21000, container_port=8000,
+        verify=_verify(_Failed()), fetch=_headers(),
+        stop=lambda c, i: None, diagnostics=diagnostics,
+    )
+
+    assert attempt.status == "error"
+    assert "403 Forbidden" in diagnostics["build_log_tail"]
+    # The log must not have leaked into what gets stored and rendered.
+    assert "403" not in str(attempt.evidence)
+    assert "hunter2" not in str(attempt.evidence)
