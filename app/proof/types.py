@@ -41,8 +41,12 @@ class ProofReport:
     """Before/after comparison for one template.
 
     ``verified`` is true only when the exploit succeeded on the original
-    workspace and failed on the patched one. ``informational`` is always
-    True in the MVP — delivery is never blocked by this report.
+    workspace and failed on the patched one.
+
+    ``informational`` controls the PR footer note. When the delivery gate
+    is ``soft`` or ``hard`` we pass ``informational=False`` so the section
+    does not claim the report is non-blocking. The actual block decision
+    lives in ``app.proof.gate.decide_proof_gate``.
     """
 
     template_id: TemplateId

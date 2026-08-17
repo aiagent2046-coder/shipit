@@ -1,7 +1,8 @@
 """PR-body markdown for Proof-of-Exploit reports.
 
-Informational only in MVP: the section documents what was tried. It does
-not claim the Fix Pack is blocked when verification fails.
+The section always documents what was tried. When the report is not
+informational (gate mode soft/hard) the footer note is omitted so we do
+not contradict a soft warning or a hard block that the processor applied.
 """
 
 from __future__ import annotations
@@ -18,11 +19,16 @@ def render_proof_markdown(report: ProofReport) -> str:
     after_cell = _cell(report.after.success, report.after.status)
 
     if report.verified:
-        verdict = "**верифицирован** — атака сработала до патча и не сработала после"
+        verdict = (
+            "**верифицирован** — атака сработала до патча и не сработала после"
+        )
     elif report.before.status in ("error",) or report.after.status in ("error",):
         verdict = "не завершён (ошибка инфраструктуры)"
     elif not report.before.success:
-        verdict = "не воспроизведён на исходном коде (статический finding без runtime-доказательства)"
+        verdict = (
+            "не воспроизведён на исходном коде "
+            "(статический finding без runtime-доказательства)"
+        )
     else:
         verdict = "не подтверждён — атака всё ещё срабатывает после патча"
 
@@ -49,6 +55,20 @@ def render_proof_markdown(report: ProofReport) -> str:
         lines.append("")
         lines.append(
             "> Informational only: этот отчёт не блокирует доставку PR."
+        )
+    elif (
+        not report.verified
+        and report.before.success
+        and report.before.status == "success"
+        and report.after.status not in ("error", "skipped")
+    ):
+        # Soft-gate case: still delivered, but the report must not look
+        # like a clean pass. Hard-gate jobs never reach PR rendering.
+        lines.append("")
+        lines.append(
+            "> ⚠️ Soft gate: эксплойт всё ещё срабатывает после предложенного "
+            "патча. PR доставлен для ручного разбора — не мержите, пока "
+            "причина не устранена."
         )
 
     return "\n".join(lines)
