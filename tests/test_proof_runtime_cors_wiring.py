@@ -261,3 +261,55 @@ def test_a_static_section_still_carries_the_static_note() -> None:
     md = render_proof_markdown(_static_cors(True))
     assert "Проверка статическая" in md
     assert "Проверка динамическая" not in md
+
+
+# --- the build root ---------------------------------------------------------
+
+def test_a_component_dockerfile_is_not_a_build_root(monkeypatch) -> None:
+    """`backend/Dockerfile` builds one service of a monorepo, not the repo.
+
+    Measured 2026-08-17: the first version of this check accepted any path of
+    two segments or fewer — the same test as "root or GitHub wrapper" only
+    while the wrapper is present. On an already-stripped archive it also
+    admitted component Dockerfiles, and
+    tiangolo/full-stack-fastapi-template (backend/Dockerfile, no root one)
+    was sent to the runner, where docker build found nothing at the root it
+    was given and failed in 1.2 seconds. `error` was true and useless: the
+    stand did not come up because it should never have been asked.
+    """
+    monkeypatch.setenv("PROOF_RUNTIME_CORS", "1")
+    ok, reason = runtime_cors_applicable(
+        [_static_cors(True)],
+        _zip({"backend/Dockerfile": "FROM python\n",
+              "frontend/index.html": "<html>\n",
+              "README.md": "# x\n"}),
+    )
+    assert ok is False
+    assert "Dockerfile" in reason
+
+
+def test_the_github_wrapper_is_still_tolerated(monkeypatch) -> None:
+    """The case the loose check existed for has to keep working: one
+    top-level folder holding everything, Dockerfile directly inside it."""
+    monkeypatch.setenv("PROOF_RUNTIME_CORS", "1")
+    ok, _r = runtime_cors_applicable(
+        [_static_cors(True)],
+        _zip({"repo-main/Dockerfile": "FROM python\n",
+              "repo-main/app.py": "x = 1\n"}),
+    )
+    assert ok is True
+
+
+def test_a_wrapper_with_only_a_component_dockerfile_does_not_count(
+    monkeypatch,
+) -> None:
+    """Wrapper present AND the Dockerfile one level deeper inside it — the
+    two exceptions must not combine into a third."""
+    monkeypatch.setenv("PROOF_RUNTIME_CORS", "1")
+    ok, reason = runtime_cors_applicable(
+        [_static_cors(True)],
+        _zip({"repo-main/backend/Dockerfile": "FROM python\n",
+              "repo-main/app.py": "x = 1\n"}),
+    )
+    assert ok is False
+    assert "Dockerfile" in reason

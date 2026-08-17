@@ -266,6 +266,15 @@ def main() -> int:
               f"{r.probe_reason} ({r.seconds}s)", flush=True)
         if r.error:
             print(f"    error: {r.error}", flush=True)
+        # An `error` row that does not say WHY is the silence this project
+        # keeps removing (see deploy/scripts/tag-release.sh). Measured: two
+        # rows came back `error` in 1.2s and 18.5s with nothing printed, and
+        # the cause -- a Dockerfile that was not at the build root -- sat in
+        # the JSON nobody had opened yet.
+        if r.probe_status == "error":
+            print(f"    detail: {r.probe_detail}", flush=True)
+            if r.boot_detail:
+                print(f"    boot  : {r.boot_detail}", flush=True)
 
     total = len(results)
     hits = [r for r in results if r.static_hit]
