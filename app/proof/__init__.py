@@ -20,7 +20,11 @@ findings sit in files the plan rewrites.
 from app.proof.compare import build_proof_report, run_proof_pair
 from app.proof.gate import decide_proof_gate, proof_gate_mode
 from app.proof.registry import TEMPLATE_IDS, get_template, list_templates
-from app.proof.render import render_proof_markdown, render_proof_sections
+from app.proof.render import (
+    render_proof_markdown,
+    render_proof_sections,
+    render_proof_with_artifacts,
+)
 from app.proof.stage import ProofStageResult, run_proof_stage
 from app.proof.types import ExploitAttempt, ProofReport, proof_report_to_json
 from app.proof.workspace import apply_plan_to_zip
@@ -38,6 +42,7 @@ __all__ = [
     "proof_report_to_json",
     "render_proof_markdown",
     "render_proof_sections",
+    "render_proof_with_artifacts",
     "run_proof_pair",
     "apply_plan_to_zip",
     "run_proof_stage",

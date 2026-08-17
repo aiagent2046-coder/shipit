@@ -7,16 +7,22 @@ not contradict a soft warning or a hard block that the processor applied.
 
 from __future__ import annotations
 
+from app.proof.artifacts import ProofArtifact, render_artifacts_markdown
 from app.proof.types import ProofReport
 
 
 def render_proof_markdown(report: ProofReport | object) -> str:
     """Render one ProofReport as a PR section. Empty string if skipped.
 
-    Also accepts a ``ProofStageResult`` and renders all of its reports.
+    Also accepts a ``ProofStageResult`` and renders all of its reports
+    plus artifacts.
     """
     if hasattr(report, "reports") and hasattr(report, "primary"):
-        return render_proof_sections(list(getattr(report, "reports") or []))
+        arts = list(getattr(report, "artifacts", None) or [])
+        return render_proof_with_artifacts(
+            list(getattr(report, "reports") or []),
+            arts,
+        )
 
     if not isinstance(report, ProofReport):
         return ""
@@ -121,3 +127,15 @@ def render_proof_sections(reports: list[ProofReport]) -> str:
     parts = [render_proof_markdown(r) for r in reports]
     parts = [p for p in parts if p]
     return "\n\n---\n\n".join(parts)
+
+
+def render_proof_with_artifacts(
+    reports: list[ProofReport],
+    artifacts: list[ProofArtifact] | None = None,
+) -> str:
+    """Reports sections plus optional artifact blocks."""
+    body = render_proof_sections(reports)
+    art = render_artifacts_markdown(list(artifacts or []))
+    if body and art:
+        return body + "\n\n" + art
+    return body or art
