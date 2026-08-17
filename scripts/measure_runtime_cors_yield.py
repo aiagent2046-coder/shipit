@@ -21,11 +21,26 @@ of, and its frequency here says which half deserves the reader's weight.
 COSTS NO LLM MONEY. It runs the static template and docker only — the expense
 is host CPU and minutes, roughly two builds per qualifying repo.
 
+DETECTOR=1 asks the other half of the question. It drops the static-hit gate
+and probes every buildable repository in the BACKENDS corpus, because the
+static template can only match LITERAL configuration and real backends do not
+write it that way — they use `cors(getCorsOptions())`, `app.use(cors())`, an
+env-driven allowlist. On those, `static_hit=False` means "cannot be determined
+statically", not "safe", and gating the probe behind it means the only method
+that could answer never runs. Detector mode measures whether the probe can
+REACH such applications at all; it is an experiment, not the shipped
+behaviour (app/proof/runtime_cors.py still requires the static hit).
+
 Usage on a host with the runner (from /opt/shipit):
     set -a; . ./.env; set +a
     .venv/bin/python scripts/measure_runtime_cors_yield.py
 
     LIMIT=3 .venv/bin/python scripts/measure_runtime_cors_yield.py   # first 3
+    DETECTOR=1 .venv/bin/python scripts/measure_runtime_cors_yield.py
+
+Detector mode builds real application images — node monorepos, a Postgres-
+backed API — so budget tens of minutes and disk for the layers, and run it
+with LIMIT first.
 
 Writes batch_reports/runtime_cors_yield.json alongside the printed table.
 """
@@ -68,8 +83,43 @@ CORPUS: tuple[tuple[str, str], ...] = (
      "c15be34f488521123a0ff77a30a7f885c3f1fdc6"),
 )
 
+# DETECTOR=1 corpus: server-side applications that ship a root Dockerfile,
+# chosen by structure and never by their CORS configuration. Seven of the ten
+# candidates screened on 2026-08-17; the other three (chainlit, chatbot-ui,
+# formbricks) have no root Dockerfile and cannot be booted.
+#
+# NONE of these produced a static hit, which is the whole point of running
+# them: they configure CORS through function calls and env-driven allowlists
+# (Flowise `cors(getCorsOptions())`, LibreChat `app.use(cors())`, documenso's
+# own OriginFn helper) that no regex over source can read. On such a
+# repository the static template says nothing because it CAN say nothing —
+# not because the application is safe. Only a booted app can answer.
+BACKENDS: tuple[tuple[str, str], ...] = (
+    ("tiangolo/full-stack-fastapi-template",
+     "162344da111e833b30892728372ab95331f06873"),
+    ("danny-avila/LibreChat",
+     "57ea1137f66dcde298e2bb6b634dd4d72d6c297d"),
+    ("FlowiseAI/Flowise",
+     "9291856d1ea4a4ceea9f8fef8ce14f4f6c81e8eb"),
+    ("reworkd/AgentGPT",
+     "18b073ab05b2902e1d052c3d2799786d8623b5e5"),
+    ("zylon-ai/private-gpt",
+     "4a030776a31a901ad80b1bf4d7faa2c1a367efbb"),
+    ("documenso/documenso",
+     "779de01fe8fb8c242da867b6c1fa38c70e448c3a"),
+    ("langfuse/langfuse",
+     "da0e8c5eb08819d59268101b7f86a4b4c8089984"),
+)
+
 OUT = Path(__file__).resolve().parent.parent / "batch_reports"
 BASE_PORT = 31200
+
+# Real applications do not all serve on 8000: LibreChat is 3080, Flowise and
+# documenso 3000, private-gpt 8001. Guessing one number would measure "we
+# picked the wrong port" and report it as "the app did not boot" — the
+# error/failure distinction this whole feature is built around, undone by a
+# constant. The Dockerfile already declares it.
+DEFAULT_CONTAINER_PORT = 8000
 
 
 @dataclass
@@ -83,6 +133,7 @@ class RepoResult:
     probe_reason: str = ""
     probe_detail: str = ""
     boot_detail: str = ""
+    container_port: int = 0
     seconds: float = 0.0
     error: str = ""
 
@@ -103,7 +154,32 @@ def fetch_repack(slug: str, sha: str) -> bytes:
     return out.getvalue()
 
 
-def measure_one(slug: str, sha: str, port: int) -> RepoResult:
+def exposed_port(zip_bytes: bytes) -> int:
+    """The port the image declares, from the Dockerfile's first EXPOSE.
+
+    Guessing one constant would report "we picked the wrong port" as "the app
+    did not boot" — collapsing exactly the error/failure distinction this
+    feature is built on. Falls back to 8000 when nothing is declared, which is
+    a guess and is recorded as one in the result row.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for name in zf.namelist():
+                parts = name.replace("\\", "/").split("/")
+                if parts and parts[-1] == "Dockerfile" and len(parts) <= 2:
+                    text = zf.read(name).decode("utf-8", errors="replace")
+                    for line in text.splitlines():
+                        stripped = line.strip()
+                        if stripped.upper().startswith("EXPOSE"):
+                            token = stripped.split()[1].split("/")[0]
+                            return int(token)
+    except Exception:  # noqa: BLE001 — an unreadable Dockerfile is a guess too
+        pass
+    return DEFAULT_CONTAINER_PORT
+
+
+def measure_one(slug: str, sha: str, port: int,
+                detector: bool = False) -> RepoResult:
     result = RepoResult(slug=slug, sha=sha)
     started = time.time()
     try:
@@ -114,13 +190,18 @@ def measure_one(slug: str, sha: str, port: int) -> RepoResult:
         return result
 
     # Stage 1 — the production trigger. No static hit, no runtime probe, ever.
+    #
+    # DETECTOR mode suspends that rule on purpose. The static template can only
+    # match literal configuration, and real backends do not write it that way,
+    # so gating on it means the one method that could judge them never runs.
+    # The hit is still recorded, because the comparison IS the experiment.
     attempt = get_template("cors_open")(data)
     result.static_hit = bool(attempt.success)
     result.static_files = [
         str(s.get("file")) for s in (attempt.evidence or {}).get("samples", [])
         if isinstance(s, dict)
     ][:5]
-    if not result.static_hit:
+    if not result.static_hit and not detector:
         result.probe_status = "no_static_hit"
         result.seconds = round(time.time() - started, 1)
         return result
@@ -135,9 +216,15 @@ def measure_one(slug: str, sha: str, port: int) -> RepoResult:
 
     # Stage 3+4 — boot and ask. One workspace: this measures the population,
     # not a before/after pair, so there is no patched half to build.
+    container_port = exposed_port(data)
+    result.container_port = container_port
     try:
         probe = sandbox_client.run_cors_probe(
-            data, host_port=port, container_port=8000,
+            data, host_port=port, container_port=container_port,
+            # These are real applications, not the two-file e2e fixture: a
+            # node monorepo image takes far longer than the 300s default, and
+            # a timeout would be recorded as "did not boot".
+            build_timeout_s=1800, boot_timeout_s=120,
         )
     except Exception as exc:  # noqa: BLE001 — a runner outage is not a verdict
         result.probe_status = "runner_unavailable"
@@ -154,24 +241,35 @@ def measure_one(slug: str, sha: str, port: int) -> RepoResult:
 
 
 def main() -> int:
-    limit = int(os.environ.get("LIMIT", "0")) or len(CORPUS)
-    corpus = CORPUS[:limit]
+    detector = (os.environ.get("DETECTOR") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+    source = BACKENDS if detector else CORPUS
+    limit = int(os.environ.get("LIMIT", "0")) or len(source)
+    corpus = source[:limit]
     OUT.mkdir(exist_ok=True)
+
+    if detector:
+        print("DETECTOR MODE: probing every buildable repo regardless of a "
+              "static hit.\nThis measures whether the probe can REACH these "
+              "applications at all — not\nwhether they are vulnerable. Expect "
+              "`failure` (no open CORS) as the healthy\nanswer for mature "
+              "projects; `error` means the stand did not come up.\n",
+              flush=True)
 
     results: list[RepoResult] = []
     for i, (slug, sha) in enumerate(corpus):
         print(f"[{i + 1}/{len(corpus)}] {slug}", flush=True)
-        r = measure_one(slug, sha, BASE_PORT + i)
+        r = measure_one(slug, sha, BASE_PORT + i, detector=detector)
         results.append(r)
         print(f"    static_hit={r.static_hit} dockerfile={r.dockerfile} "
-              f"probe={r.probe_status} {r.probe_reason} ({r.seconds}s)",
-              flush=True)
+              f"port={r.container_port or '-'} probe={r.probe_status} "
+              f"{r.probe_reason} ({r.seconds}s)", flush=True)
         if r.error:
             print(f"    error: {r.error}", flush=True)
 
     total = len(results)
     hits = [r for r in results if r.static_hit]
-    buildable = [r for r in hits if r.dockerfile]
+    buildable = [r for r in (results if detector else hits) if r.dockerfile]
     booted = [r for r in buildable
               if r.probe_status in ("success", "failure")]
     reproduced = [r for r in booted if r.probe_status == "success"]
@@ -203,7 +301,15 @@ def main() -> int:
           "both halves of, and its share decides which half a reader should "
           "weigh.")
 
+    if detector:
+        print()
+        print("DETECTOR READING: `booted` is the applicability number — how "
+              "often the probe\ncan speak at all about a repository the static "
+              "template cannot read. A\n`failure` among those is a real "
+              "answer ('no open CORS'), not a silence.")
+
     payload = {
+        "mode": "detector" if detector else "trigger",
         "measured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "corpus_size": total,
         "static_hits": len(hits),
