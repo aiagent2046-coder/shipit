@@ -16,6 +16,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.proof.compare import run_proof_pair
 from app.proof.routing import select_templates
+from app.proof.artifacts import artifacts_to_json, build_artifacts
 from app.proof.types import ProofReport, proof_report_to_json
 from app.proof.workspace import apply_plan_to_zip
 
@@ -29,10 +30,12 @@ class ProofStageResult:
     ``primary`` is the report the gate / legacy callers focus on (first
     verified, else first actionable, else first). ``reports`` is the full
     ordered list for multi-section PR bodies and aggregate gating.
+    ``artifacts`` holds log/storyboard blobs for PR rendering.
     """
 
     primary: ProofReport | None = None
     reports: list[ProofReport] = field(default_factory=list)
+    artifacts: list = field(default_factory=list)
 
     @property
     def detail(self) -> str:
@@ -80,9 +83,14 @@ async def run_proof_stage(
             reports.append(report)
 
         primary = _pick_primary(reports)
-        payload = _proof_json_payload(primary, reports)
+        artifacts = []
+        for report in reports:
+            artifacts.extend(build_artifacts(report))
+        payload = _proof_json_payload(primary, reports, artifacts)
         await fixpack_repo.set_proof_json(job_id, payload)
-        return ProofStageResult(primary=primary, reports=reports)
+        return ProofStageResult(
+            primary=primary, reports=reports, artifacts=artifacts,
+        )
     except Exception:  # noqa: BLE001 — proof must never kill delivery
         logger.exception(
             "Fix Pack job %s: proof stage failed, continuing without it",
@@ -107,14 +115,17 @@ def _pick_primary(reports: list[ProofReport]) -> ProofReport | None:
 def _proof_json_payload(
     primary: ProofReport | None,
     reports: list[ProofReport],
+    artifacts: list | None = None,
 ) -> dict[str, Any]:
     """Backward-compatible jsonb: primary fields at top level + reports[]."""
     if primary is None:
-        return {
+        payload: dict[str, Any] = {
             "template_id": None,
             "verified": False,
             "reports": [proof_report_to_json(r) for r in reports],
         }
-    payload = proof_report_to_json(primary)
-    payload["reports"] = [proof_report_to_json(r) for r in reports]
+    else:
+        payload = proof_report_to_json(primary)
+        payload["reports"] = [proof_report_to_json(r) for r in reports]
+    payload["artifacts"] = artifacts_to_json(artifacts or [])
     return payload
