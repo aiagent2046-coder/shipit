@@ -57,6 +57,22 @@ _HEADER_CRED_TRUE = re.compile(
     re.IGNORECASE,
 )
 
+# A PLACEHOLDER, and every `details` string that reports one of these says so.
+#
+# Locking an app to localhost:3000 closes the hole and breaks the customer's
+# production frontend if the PR is merged unread. The diff shows it, but the
+# summary line used to read only "pinned FastAPI allow_origins away from `*`",
+# which describes the safety half and hides the breaking half -- a reader
+# skimming the fix list would merge it. Naming the placeholder is what makes
+# the fix list agree with the diff underneath it.
+#
+# Why not substitute an env lookup on the Python paths, as the JS one does:
+# `os.environ[...]` is only valid where `os` is already imported, and
+# _validate_syntax parses the file rather than resolving names, so an injected
+# lookup would pass validation and raise NameError in production -- trading a
+# CORS hole for a crash. An inline "change me" comment is out for the same
+# class of reason: _HEADER_ORIGIN_STAR also matches .json and .yml config,
+# where a comment is a syntax error. Disclosure is the honest fix here.
 _CORS_SAFE_ORIGIN_PY = '["http://localhost:3000"]'
 _CORS_SAFE_ORIGIN_JS = "process.env.CORS_ORIGIN || 'http://localhost:3000'"
 _CORS_SAFE_ORIGIN_HEADER = "http://localhost:3000"
@@ -93,7 +109,10 @@ def _fix_cors_in_text(path: str, text: str) -> tuple[str | None, str]:
         if n:
             out = out2
             changed = True
-            details.append("pinned FastAPI allow_origins away from `*`")
+            details.append(
+                "replaced FastAPI allow_origins=[\"*\"] with the placeholder "
+                "http://localhost:3000 — set your real origin before merging"
+            )
 
     if _EXPRESS_CRED.search(out):
         if _EXPRESS_ORIGIN_TRUE.search(out):
@@ -103,7 +122,10 @@ def _fix_cors_in_text(path: str, text: str) -> tuple[str | None, str]:
             if n:
                 out = out2
                 changed = True
-                details.append("replaced Express origin:true with env-based origin")
+                details.append(
+                    "replaced Express origin:true with process.env.CORS_ORIGIN "
+                    "(falls back to http://localhost:3000 — set CORS_ORIGIN)"
+                )
         if _EXPRESS_ORIGIN_STAR.search(out):
             out2, n = _EXPRESS_ORIGIN_STAR.subn(
                 r"\1" + _CORS_SAFE_ORIGIN_JS, out, count=1,
@@ -111,7 +133,10 @@ def _fix_cors_in_text(path: str, text: str) -> tuple[str | None, str]:
             if n:
                 out = out2
                 changed = True
-                details.append("replaced Express origin:'*' with env-based origin")
+                details.append(
+                    "replaced Express origin:'*' with process.env.CORS_ORIGIN "
+                    "(falls back to http://localhost:3000 — set CORS_ORIGIN)"
+                )
 
     if _FLASK_CRED.search(out) and _FLASK_ORIGINS_STAR.search(out):
         out2, n = _FLASK_ORIGINS_STAR.subn(
@@ -120,7 +145,10 @@ def _fix_cors_in_text(path: str, text: str) -> tuple[str | None, str]:
         if n:
             out = out2
             changed = True
-            details.append("pinned Flask CORS origins away from `*`")
+            details.append(
+                "replaced Flask CORS origins='*' with the placeholder "
+                "http://localhost:3000 — set your real origin before merging"
+            )
 
     if _HEADER_CRED_TRUE.search(out) and _HEADER_ORIGIN_STAR.search(out):
         out2, n = _HEADER_ORIGIN_STAR.subn(
@@ -129,7 +157,10 @@ def _fix_cors_in_text(path: str, text: str) -> tuple[str | None, str]:
         if n:
             out = out2
             changed = True
-            details.append("replaced Access-Control-Allow-Origin * with localhost")
+            details.append(
+                "replaced Access-Control-Allow-Origin * with the placeholder "
+                "http://localhost:3000 — set your real origin before merging"
+            )
 
     if not changed:
         return None, ""

@@ -29,6 +29,44 @@ def test_cors_fastapi_star_is_pinned() -> None:
     assert fixes[0].rule_id == "cors-open-credentials"
 
 
+def test_every_cors_fix_names_the_placeholder_origin_it_substituted() -> None:
+    """The fix list must not describe only the safety half of the rewrite.
+
+    Each of these rewrites closes the hole AND pins the app to
+    http://localhost:3000 (or an env var defaulting to it), which breaks the
+    customer's production frontend if the PR is merged unread. The summary
+    used to say only "pinned FastAPI allow_origins away from `*`" — true, and
+    silent about the half that a reader needed to act on before merging.
+
+    Anchored per framework rather than once, because each branch writes its
+    own detail string and a single sample would let three of them drift.
+    """
+    cases = {
+        "main.py": (
+            'app.add_middleware(CORSMiddleware, allow_origins=["*"], '
+            "allow_credentials=True)\n"
+        ),
+        "server.js": (
+            "app.use(cors({ origin: true, credentials: true }))\n"
+        ),
+        "flask_app.py": (
+            'CORS(app, origins="*", supports_credentials=True)\n'
+        ),
+        "headers.conf": (
+            'add_header Access-Control-Allow-Origin "*";\n'
+            'add_header Access-Control-Allow-Credentials "true";\n'
+        ),
+    }
+    for path, src in cases.items():
+        _updates, fixes = apply_cors_fixes({path: src})
+        assert fixes, path
+        detail = fixes[0].detail
+        assert "localhost:3000" in detail, (path, detail)
+        # ...and it has to read as an instruction, not as trivia.
+        assert ("set your real origin" in detail
+                or "set CORS_ORIGIN" in detail), (path, detail)
+
+
 def test_cors_without_credentials_is_left_alone() -> None:
     src = "app.add_middleware(CORSMiddleware, allow_origins=[\"*\"])\n"
     updates, fixes = apply_cors_fixes({"main.py": src})
