@@ -234,6 +234,46 @@ def test_if_not_exists_is_handled() -> None:
         "create table if not exists public.users (id uuid, email text);")
 
 
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("stmt", [
+    "alter table public.users enable row level security;",
+    "alter table if exists public.users enable row level security;",
+    "alter table only public.users enable row level security;",
+    "alter table if exists only public.users enable row level security;",
+    "alter table users enable row level security;",
+    'alter table "public"."users" enable row level security;',
+    "alter table public.users\n  enable row level security;",
+    "ALTER TABLE IF EXISTS public.users ENABLE ROW LEVEL SECURITY;",
+])
+def test_every_valid_spelling_of_enabling_rls_is_recognised(stmt) -> None:
+    """A spelling the reader misses reports the table as "RLS never enabled" —
+    a FALSE EXPOSURE, in the direction that invents a finding about a
+    customer's data.
+
+    `IF EXISTS` was missed by the first version. It is valid PostgreSQL and
+    common in generated migrations, so every table protected that way would
+    have been reported as wide open. Found by probing the regex with the
+    syntax variants, not by a repository happening to use one — which is the
+    only reason it was found before the number was quoted.
+    """
+    t = parse_schema(USERS + stmt)["users"]
+    assert t.rls_enabled, f"not recognised: {stmt!r}"
+    assert not t.anon_readable[0]
+
+
+def test_an_exposed_verdict_carries_the_statement_that_caused_it() -> None:
+    """A finding about someone's data that cannot be checked against the
+    source is a finding that gets believed instead of read."""
+    t = parse_schema(USERS + """
+        alter table public.users enable row level security;
+        create policy "anyone can read" on public.users for select using (true);
+    """)["users"]
+    assert "create policy" in t.open_policy_sql.lower()
+    assert "using (true)" in t.open_policy_sql.lower()
+
+
 def test_multiple_migrations_concatenate_into_one_view_of_the_table() -> None:
     """Real repos enable RLS in a later migration than the CREATE TABLE."""
     t = parse_schema(USERS + """

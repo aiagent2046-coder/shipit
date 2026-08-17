@@ -130,8 +130,15 @@ _CREATE_TABLE = re.compile(
     r"(?P<body>.*?)\)\s*;",
     re.IGNORECASE | re.DOTALL,
 )
+# `ALTER TABLE [IF EXISTS] [ONLY] name ENABLE ROW LEVEL SECURITY` — the
+# optional clauses are not decoration. A first version omitted IF EXISTS, and
+# since that form is valid PostgreSQL and common in generated migrations, every
+# table protected that way was reported as "RLS never enabled": a FALSE
+# EXPOSURE, in the direction that invents findings about a customer's data.
+# Caught by probing the regex with the syntax variants rather than by a repo
+# happening to use one.
 _ENABLE_RLS = re.compile(
-    r"alter\s+table\s+(?:only\s+)?"
+    r"alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?"
     r'(?:"?(?:[a-z0-9_]+)"?\s*\.\s*)?"?(?P<name>[a-z0-9_]+)"?\s+'
     r"enable\s+row\s+level\s+security",
     re.IGNORECASE,
@@ -156,7 +163,8 @@ class Table:
     schema: str
     columns: list[str] = field(default_factory=list)
     rls_enabled: bool = False
-    open_policy: str = ""      # the policy text that leaves anon a read
+    open_policy: str = ""      # why anon keeps a read (the clause, condensed)
+    open_policy_sql: str = ""  # the statement itself, for eyeball verification
     policies_for_read: int = 0
 
     @property
@@ -291,6 +299,10 @@ def parse_schema(sql: str) -> dict[str, Table]:
             t.policies_for_read += 1
         if open_read and not t.open_policy:
             t.open_policy = why
+            # Keep the statement, not just the verdict. A finding about a
+            # customer's data that a human cannot check against the source is
+            # a finding that gets believed instead of read.
+            t.open_policy_sql = " ".join(m.group(0).split())[:300]
     return tables
 
 
@@ -312,6 +324,7 @@ class RepoResult:
     private_tables: int = 0
     exposed_tables: list[str] = field(default_factory=list)
     exposure_reasons: list[str] = field(default_factory=list)
+    exposure_sql: list[str] = field(default_factory=list)
     stage: str = "not_attempted"
     error: str = ""
 
@@ -383,6 +396,8 @@ def measure_one(slug: str, sha: str) -> RepoResult:
             result.exposed_tables.append(t.name)
             result.exposure_reasons.append(
                 f"{t.name}: {why_private}; {why_readable}")
+            if t.open_policy_sql:
+                result.exposure_sql.append(f"{t.name}: {t.open_policy_sql}")
 
     result.stage = "exposed" if result.exposed_tables else "not_exposed"
     return result
@@ -453,6 +468,8 @@ def main() -> int:
         # to be checkable by a human without opening the JSON.
         for reason in r.exposure_reasons:
             print(f"    EXPOSED {reason}", flush=True)
+        for stmt in r.exposure_sql:
+            print(f"      SQL   {stmt}", flush=True)
         if verbose and r.schema_files:
             print(f"    schema: {', '.join(r.schema_files[:6])}", flush=True)
 
