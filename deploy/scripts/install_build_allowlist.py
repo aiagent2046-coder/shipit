@@ -176,9 +176,26 @@ def main() -> int:
     # this script ran. That failure is far worse than the one being fixed, so
     # it is detected here and rolled back automatically rather than left for
     # whoever runs the next build to discover.
-    pypi_code, pypi_probe = _probe("https://pypi.org/simple/")
-    print(f"pypi (worked before this change): HTTP {pypi_code or '(no answer)'}")
+    pypi_code, pypi_probe, endpoint = _probe("https://pypi.org/simple/")
+    print(f"pypi via {endpoint} (worked before this change): "
+          f"HTTP {pypi_code or '(no answer)'}")
     if pypi_code != "200":
+        if pypi_probe.returncode == 7:
+            # Nothing listening anywhere we know to look. This is NOT evidence
+            # about the allowlist, and must not be reported as if it were.
+            print(f"\nCannot reach the proxy at any of "
+                  f"{', '.join(proxy_endpoints())} — so this run has said "
+                  "NOTHING about the allowlist, in either direction.",
+                  file=sys.stderr)
+            print(f"curl: {pypi_probe.stderr.strip()}", file=sys.stderr)
+            print("\nFind where it actually listens, then re-run:\n"
+                  "    ss -lntp | grep 3128\n"
+                  "    systemctl status squid --no-pager | head -20\n"
+                  "    grep -n http_port /etc/squid/squid.conf",
+                  file=sys.stderr)
+            _print_squid_log_tail()
+            return 1
+
         print("\nREGRESSION: a grant that worked before this change no longer "
               "resolves.", file=sys.stderr)
         if not args.inline:
@@ -200,10 +217,10 @@ def main() -> int:
 
     # Prove the grant that blocked the 2026-08-17 detector run now resolves.
     # Reporting success without this is how the last two attempts "passed".
-    code, probe = _probe(
+    code, probe, endpoint = _probe(
         "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/APKINDEX.tar.gz"
     )
-    print(f"alpine APKINDEX through the proxy: HTTP {code or '(no answer)'}")
+    print(f"alpine APKINDEX via {endpoint}: HTTP {code or '(no answer)'}")
     if code == "200":
         return 0
 
@@ -221,21 +238,70 @@ def main() -> int:
     return 1
 
 
-def _probe(url: str) -> tuple[str, subprocess.CompletedProcess]:
-    """Fetch ``url`` through the proxy, returning (http_code, process).
+def docker_bridge_gateway() -> str | None:
+    """The address a build container reaches the host on.
 
-    `%{http_code}` is `000` when curl never received an HTTP response at all —
-    which for an https URL through a proxy is the CONNECT tunnel being refused,
-    NOT a 403 from the origin. The process is returned so the caller can print
-    what curl said, because a status alone has proved twice today to be
-    unactionable.
+    `_build_proxy_argv` in app/deploypack/sandbox.py hands builds
+    `HTTP_PROXY=http://host.docker.internal:3128` plus
+    `--add-host=host.docker.internal:host-gateway`, so from inside a build the
+    proxy is the docker bridge gateway. That name does not resolve on the host
+    itself, hence looking the interface up here.
     """
     proc = subprocess.run(
-        ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
-         "-x", "http://127.0.0.1:3128", url],
-        capture_output=True, text=True, timeout=30,
+        ["ip", "-4", "-o", "addr", "show", "docker0"],
+        capture_output=True, text=True, timeout=10,
     )
-    return (proc.stdout or "").strip(), proc
+    if proc.returncode != 0:
+        return None
+    m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", proc.stdout)
+    return m.group(1) if m else None
+
+
+def proxy_endpoints() -> list[str]:
+    """Where to look for the proxy, nearest-truth last.
+
+    MEASURED 2026-08-17: squid is NOT listening on loopback on the prod host —
+    a probe of 127.0.0.1:3128 fails to connect outright, while the access log
+    shows live CONNECT attempts from 172.17.0.2, a build container. Verifying
+    on loopback therefore tested an address nothing uses and reported `000`
+    twice while saying nothing about the grant.
+
+    A check has to run against the path the thing being checked actually
+    takes.
+    """
+    endpoints = ["127.0.0.1:3128"]
+    gateway = docker_bridge_gateway()
+    if gateway:
+        endpoints.append(f"{gateway}:3128")
+    return endpoints
+
+
+def _probe(url: str) -> tuple[str, subprocess.CompletedProcess, str]:
+    """Fetch ``url`` through the proxy, returning (http_code, process, endpoint).
+
+    Tries each candidate endpoint and returns the first that gets an answer of
+    any kind — a proxy that answers 403 is still the proxy; one that refuses
+    the TCP connection is the wrong address.
+
+    `%{http_code}` is `000` when curl never received an HTTP response at all.
+    For an https URL that is either a refused CONNECT or, as here, nothing
+    listening. The process is returned so the caller can print what curl said,
+    because a status alone has proved twice today to be unactionable.
+    """
+    last: tuple[str, subprocess.CompletedProcess, str] | None = None
+    for endpoint in proxy_endpoints():
+        proc = subprocess.run(
+            ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+             "-x", f"http://{endpoint}", url],
+            capture_output=True, text=True, timeout=30,
+        )
+        code = (proc.stdout or "").strip()
+        last = (code, proc, endpoint)
+        # curl exit 7 == could not connect: wrong address, try the next.
+        if proc.returncode != 7:
+            return last
+    assert last is not None
+    return last
 
 
 def _print_squid_log_tail(path: Path = Path("/var/log/squid/access.log"),
