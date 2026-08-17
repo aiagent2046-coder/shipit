@@ -10,6 +10,26 @@ from __future__ import annotations
 from app.proof.artifacts import ProofArtifact, render_artifacts_markdown
 from app.proof.types import ProofReport
 
+# Printed under every proof section, and load-bearing rather than decorative.
+#
+# All three templates are static scanners: secrets_leak re-runs
+# app.scan.secrets, sqli and cors_open match regexes over the workspace zip.
+# Nothing in app/proof/ opens a socket, starts a container, or executes the
+# target — `success` means "the pattern is present", not "the attack ran".
+#
+# The wording here used to say "атака сработала до патча и не сработала
+# после". On a leaked key that is nearly true; on a regex hit for sqli or
+# cors_open it is a claim the code cannot support, and a false positive would
+# have told a customer their app was exploited. This project has removed the
+# same overstatement three times (#22, #27, #35) — a report about proof is the
+# last place to reintroduce it. What survives the correction is still the
+# thing competitors do not do: a checkable before/after inside the PR.
+_METHOD_NOTE = (
+    "_Проверка статическая: сканер ищет уязвимую конструкцию в коде до и "
+    "после патча. Атака не выполняется — «найдено» означает наличие "
+    "конструкции, а не подтверждённую эксплуатацию._"
+)
+
 
 def render_proof_markdown(report: ProofReport | object) -> str:
     """Render one ProofReport as a PR section. Empty string if skipped.
@@ -35,29 +55,29 @@ def render_proof_markdown(report: ProofReport | object) -> str:
 
     if report.verified:
         verdict = (
-            "**верифицирован** — атака сработала до патча и не сработала после"
+            "**подтверждён** — уязвимая конструкция найдена до патча "
+            "и отсутствует после"
         )
     elif report.before.status in ("error",) or report.after.status in ("error",):
         verdict = "не завершён (ошибка инфраструктуры)"
     elif not report.before.success:
-        verdict = (
-            "не воспроизведён на исходном коде "
-            "(статический finding без runtime-доказательства)"
-        )
+        verdict = "не найден на исходном коде — сравнивать нечего"
     else:
-        verdict = "не подтверждён — атака всё ещё срабатывает после патча"
+        verdict = "не подтверждён — конструкция на месте и после патча"
 
     lines = [
-        "## Proof-of-Exploit → Proof-of-Fix",
+        "## Проверка «до / после»",
         "",
         f"**Шаблон:** `{report.template_id}`",
         f"**Вердикт:** {verdict}",
         "",
         "| | До патча | После патча |",
         "|---|---|---|",
-        f"| Эксплуатация | {before_cell} | {after_cell} |",
+        f"| Уязвимая конструкция | {before_cell} | {after_cell} |",
         "",
         f"_{report.detail}_",
+        "",
+        _METHOD_NOTE,
     ]
 
     evidence_bits = _evidence_lines(report)
@@ -79,9 +99,9 @@ def render_proof_markdown(report: ProofReport | object) -> str:
     ):
         lines.append("")
         lines.append(
-            "> ⚠️ Soft gate: эксплойт всё ещё срабатывает после предложенного "
-            "патча. PR доставлен для ручного разбора — не мержите, пока "
-            "причина не устранена."
+            "> ⚠️ Soft gate: уязвимая конструкция осталась на месте и после "
+            "предложенного патча. PR доставлен для ручного разбора — не "
+            "мержите, пока причина не устранена."
         )
 
     return "\n".join(lines)
@@ -92,7 +112,10 @@ def _cell(success: bool, status: str) -> str:
         return "пропущено"
     if status == "error":
         return "ошибка"
-    return "✅ успех" if success else "❌ нет"
+    # "найдена"/"не найдена", not "успех"/"нет": the column reports what the
+    # scanner saw in the code, and a ✅ next to "успех" read as a successful
+    # attack.
+    return "⚠️ найдена" if success else "✅ не найдена"
 
 
 def _evidence_lines(report: ProofReport) -> list[str]:

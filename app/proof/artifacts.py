@@ -109,7 +109,7 @@ def _artifact(kind: ArtifactKind, template_id: str, content: str) -> ProofArtifa
 
 def _build_log(report: ProofReport) -> str:
     lines = [
-        "Drydock Proof-of-Exploit log",
+        "Drydock before/after check log",
         f"template: {report.template_id}",
         f"verified: {report.verified}",
         f"detail:   {report.detail}",
@@ -134,10 +134,12 @@ def _build_log(report: ProofReport) -> str:
         "",
         "=== VERDICT ===",
         (
-            "PASS — exploit reproduced before and failed after"
+            "PASS — vulnerable pattern present before, absent after"
             if report.verified
-            else "FAIL — exploit not verified (see detail)"
+            else "FAIL — pattern still present after the patch (see detail)"
         ),
+        "method: static scan of the workspace before and after the patch;"
+        " no attack is executed",
     ]
     return "\n".join(lines) + "\n"
 
@@ -165,9 +167,14 @@ def _evidence_log_lines(evidence: dict[str, Any] | None) -> list[str]:
 
 
 def _build_storyboard(report: ProofReport) -> str:
-    """Two-panel ASCII film strip — works in any monospace PR view."""
-    before = "EXPLOIT OK" if report.before.success else "NO EXPLOIT"
-    after = "EXPLOIT OK" if report.after.success else "BLOCKED"
+    """Two-panel ASCII film strip — works in any monospace PR view.
+
+    Panels say what the scanner saw, not what an attacker achieved: these
+    templates are static (see app/proof/render.py's _METHOD_NOTE). "EXPLOIT
+    OK" over a regex hit was a claim the code cannot support.
+    """
+    before = "VULN FOUND" if report.before.success else "NOT FOUND"
+    after = "VULN FOUND" if report.after.success else "CLEARED"
     verdict = "VERIFIED" if report.verified else "NOT VERIFIED"
     tid = report.template_id[:18]
     return "\n".join([
