@@ -613,8 +613,15 @@ def test_a_row_stored_before_the_key_existed_renders_unchanged():
 # categories are constant and damp it.
 
 
-def _scored(value: float) -> str:
-    row = result([_finding()])
+def _scored(value: float, findings: list[dict] | None = None) -> str:
+    # A LOW finding, deliberately. The first fixture here reused _finding() --
+    # a critical at 0.9 in Security -- so test_a_category_says_which_band_it_is
+    # asserted "nothing serious found" over a confident critical, enshrining
+    # the exact sentence #35 exists to remove. These tests are about the
+    # value->band mapping alone; the serious-finding override has its own.
+    quiet = {"severity": "low", "confidence": 0.9, "category": "Security",
+             "title": "quiet", "file": "a.py", "line": 1}
+    row = result(findings if findings is not None else [quiet])
     row["score"]["basis"] = "static+llm"
     row["score"]["categories"] = {"Security": value}
     return render_report(row)
@@ -645,6 +652,93 @@ def test_the_boundary_is_the_one_the_scorer_already_acts_on():
 
     assert _band_text(GATE_THRESHOLD) == "nothing serious found"
     assert _band_text(GATE_THRESHOLD - 0.1) != "nothing serious found"
+
+
+# --- a confident serious finding forbids the top band -----------------------
+#
+# Measured twice, on different repositories, two days apart. Audit ba360e21:
+# Auth held "Unauthenticated chat endpoint accepts caller-supplied user_id"
+# and unsalted SHA-256 passwords -- two highs -- and banded "nothing serious
+# found", because one high costs 1.0 x confidence against a threshold of 7.0,
+# so a category needs FOUR confident highs to leave the top band. Audit
+# b4bf9c07: Auth banded "nothing serious found" over "No authentication on
+# any API endpoint". The page contradicts itself: the row says nothing
+# serious, the table directly below it says "⚠️ Important".
+#
+# Render-side, not scorer-side, on purpose. The scorer's critical ceiling
+# already keeps a critical-holding category out of the top band, but doing
+# the same for highs in the scorer would push gated categories below
+# GATE_THRESHOLD and fire the total's gate -- a fleet-wide scoring change,
+# not a wording fix. The band is the only thing lying here, so the band is
+# what changes; stored audits are fixed retroactively because the renderer
+# recomputes from findings it already has.
+
+
+def _high(category: str = "Security", confidence: float = 0.9) -> dict:
+    return {"severity": "high", "confidence": confidence,
+            "category": category, "title": "unauthenticated endpoint",
+            "file": "api.py", "line": 10}
+
+
+def test_a_confident_high_forbids_nothing_serious_found():
+    html = _scored(8.6, [_high()])
+
+    assert "nothing serious found" not in html
+    assert 'cat-band">problems found<' in html
+
+
+def test_an_unconfident_high_does_not_cap_the_band():
+    """Same floor as the critical gate, same reasoning: severity is a claim
+    about impact, confidence about certainty, and a categorical statement --
+    which a band is -- needs its own floor. A producer that says "high if
+    real, but I am guessing" must not rewrite the row by itself."""
+    from app.scan.scoring import CRITICAL_GATE_MIN_CONFIDENCE
+
+    html = _scored(8.6, [_high(confidence=CRITICAL_GATE_MIN_CONFIDENCE - 0.1)])
+
+    assert "nothing serious found" in html
+
+
+def test_mediums_alone_do_not_cap_the_band():
+    """The rule is about serious findings, not any findings: a category at
+    8.6 over two mediums has earned its band arithmetically."""
+    medium = {"severity": "medium", "confidence": 0.95, "category": "Security",
+              "title": "verbose errors", "file": "api.py", "line": 3}
+
+    assert "nothing serious found" in _scored(8.6, [medium])
+
+
+def test_the_cap_lands_on_the_finding_category_not_its_neighbours():
+    """Category-scoped: a high filed under Security must not strip the top
+    band from Auth. Both categories rendered, one high in Security."""
+    row = result([_high("Security")])
+    row["score"]["basis"] = "static+llm"
+    row["score"]["categories"] = {"Security": 8.6, "Auth": 9.0}
+    html = render_report(row)
+
+    assert re.search(r'Auth</span>.*?cat-band">nothing serious found<', html)
+    assert re.search(r'Security</span>.*?cat-band">problems found<', html)
+
+
+def test_a_low_band_is_not_raised_by_the_cap():
+    """The override forbids the top band; it must never LIFT a row. A
+    category at 2.2 holding a high stays "serious problems"."""
+    assert "serious problems" in _scored(2.2, [_high()])
+
+
+def test_an_old_critical_holding_audit_is_capped_render_side():
+    """Stored audits from before the scorer's critical ceiling carry a
+    category at 8+ with a critical inside -- the kristina_agent_center shape
+    (Auth 8.1 over a root-shell endpoint). The renderer must not repeat the
+    number's claim just because the score predates the rule."""
+    crit = {"severity": "critical", "confidence": 0.95, "category": "Auth",
+            "title": "root shell, no auth", "file": "svc.py", "line": 128}
+    row = result([crit])
+    row["score"]["basis"] = "static+llm"
+    row["score"]["categories"] = {"Auth": 8.1}
+    html = render_report(row)
+
+    assert "nothing serious found" not in html
 
 
 def test_the_bar_width_does_not_republish_the_number():

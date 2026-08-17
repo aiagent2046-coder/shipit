@@ -10,8 +10,8 @@ from __future__ import annotations
 from html import escape
 
 from app.report.plain_language import plain_fields, tier
-from app.scan.scoring import (GATE_THRESHOLD, GATED_MAX,
-                              LLM_ONLY_CATEGORIES)
+from app.scan.scoring import (CRITICAL_GATE_MIN_CONFIDENCE, GATE_THRESHOLD,
+                              GATED_MAX, LLM_ONLY_CATEGORIES)
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -71,7 +71,37 @@ _BAND_FLOOR = GATE_THRESHOLD / 2.0
 # output and not source.
 
 
-def _band(value: float) -> tuple[str, int, str]:
+# The categories whose rows may not claim the top band, because they hold a
+# finding the same page marks "Fix before launch" or "Important".
+#
+# Measured twice, two days apart. Audit ba360e21: Auth held an
+# unauthenticated endpoint taking user_id from the query string and unsalted
+# SHA-256 passwords -- two highs -- and banded "nothing serious found",
+# because one high costs 1.0 x confidence against a threshold of 7.0: a
+# category needs FOUR confident highs to leave the top band. Audit b4bf9c07:
+# Auth top-banded over "No authentication on any API endpoint". Banding made
+# this worse than the number it replaced -- "7.2" invited doubt, a sentence
+# asserts.
+#
+# Render-side, not scorer-side. The scorer already keeps a critical-holding
+# category out of the top band (the GATED_MAX ceiling in compute_scores), but
+# extending that to highs would push gated categories under GATE_THRESHOLD
+# and fire the total's gate -- a fleet-wide scoring change wearing a wording
+# fix's clothes. Only the sentence lies; only the sentence changes. Doing it
+# here also fixes every STORED audit, including pre-ceiling rows like
+# kristina_agent_center's Auth 8.1 over a root-shell endpoint, which no
+# scorer change can reach.
+#
+# The floor is the critical gate's own (0.7), for its own reason: severity is
+# a claim about impact, confidence a claim about certainty, and a band -- a
+# categorical sentence -- needs a floor rather than the weighted arithmetic.
+def _serious_categories(findings: list[dict]) -> set[str]:
+    return {str(f.get("category")) for f in findings
+            if str(f.get("severity")) in ("critical", "high")
+            and float(f.get("confidence", 0)) >= CRITICAL_GATE_MIN_CONFIDENCE}
+
+
+def _band(value: float, holds_serious: bool = False) -> tuple[str, int, str]:
     """(what the row says, how full the bar is drawn, what colour) for a
     scored category.
 
@@ -91,6 +121,11 @@ def _band(value: float) -> tuple[str, int, str]:
     was 0.1.
     """
     if value >= GATE_THRESHOLD:
+        if holds_serious:
+            # The override forbids the top band; it never lifts a row. A
+            # category whose arithmetic already reads lower keeps its lower
+            # band -- the two branches below are unreachable from here.
+            return "problems found", 60, "#f5d90a"
         return "nothing serious found", 100, "#30a46c"
     if value >= _BAND_FLOOR:
         return "problems found", 60, "#f5d90a"
@@ -98,7 +133,8 @@ def _band(value: float) -> tuple[str, int, str]:
 
 
 def _bar(label: str, value: float, examined: bool = True,
-         elsewhere: list[str] | None = None, partial: bool = False) -> str:
+         elsewhere: list[str] | None = None, partial: bool = False,
+         serious: bool = False) -> str:
     """One category row. Neither flag set means a real bar and a real number.
 
     An unexamined category sits at 10.0 because nothing produced a finding
@@ -147,7 +183,7 @@ def _bar(label: str, value: float, examined: bool = True,
             f'<div class="track"></div>'
             f'<span class="cat-val cat-skip">not checked</span></div>'
         )
-    label_text, pct, colour = _band(value)
+    label_text, pct, colour = _band(value, holds_serious=serious)
     return (
         f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
         f'<div class="track"><div class="fill" style="width:{pct}%;'
@@ -298,11 +334,13 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     #
     # What a free scan can honestly publish is what it looked at and what it
     # found. The scope note says the first; the findings table says the second.
+    serious_cats = _serious_categories(findings)
     cats = "".join(
         _bar(name, val, examined=name not in unexamined,
              elsewhere=[str(d) for d in (moved.get(name) or [])],
              partial=not scored and name not in unexamined
-             and name not in moved)
+             and name not in moved,
+             serious=name in serious_cats)
         for name, val in score["categories"].items()
     )
 

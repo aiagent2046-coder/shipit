@@ -103,14 +103,52 @@ export interface CategoryBand {
   color: string;
 }
 
-export function categoryBand(value: number): CategoryBand {
+export function categoryBand(
+  value: number,
+  holdsSerious: boolean = false,
+): CategoryBand {
   if (value >= GATE_THRESHOLD) {
+    if (holdsSerious) {
+      // Forbids the top band; never lifts a row already below it.
+      return { label: "problems found", pct: 60, color: "#eab308" };
+    }
     return { label: "nothing serious found", pct: 100, color: "#10b981" };
   }
   if (value >= BAND_FLOOR) {
     return { label: "problems found", pct: 60, color: "#eab308" };
   }
   return { label: "serious problems", pct: 25, color: "#e5484d" };
+}
+
+// The categories whose rows may not claim the top band: they hold a finding
+// the same page marks "Fix before launch" or "Important". One high costs
+// 1.0 x confidence against a threshold of 7.0, so a category needs four
+// confident highs to leave the top band on arithmetic alone -- audit
+// ba360e21 top-banded Auth over an unauthenticated endpoint and unsalted
+// SHA-256 passwords, and audit b4bf9c07 top-banded Auth over "No
+// authentication on any API endpoint", with "⚠️ Important" rows directly
+// below the sentence. Render-side so stored audits are fixed too; see
+// app/report/html.py _serious_categories for the full reasoning.
+//
+// 0.7 is CRITICAL_GATE_MIN_CONFIDENCE -- the scorer's own floor for letting
+// one finding make a categorical claim. A second unsynchronised copy, like
+// GATE_THRESHOLD above; tests/test_web_score_parity.py holds both to the
+// Python values.
+const SERIOUS_BAND_MIN_CONFIDENCE = 0.7;
+
+export function seriousCategories(
+  findings: { category?: string; severity: string; confidence?: number }[],
+): Set<string> {
+  return new Set(
+    findings
+      .filter(
+        (f) =>
+          (f.severity === "critical" || f.severity === "high") &&
+          (f.confidence ?? 0) >= SERIOUS_BAND_MIN_CONFIDENCE &&
+          f.category,
+      )
+      .map((f) => f.category as string),
+  );
 }
 
 export function scoreVerdict(total: number): string {
