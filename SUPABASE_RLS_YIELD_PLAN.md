@@ -187,3 +187,72 @@ If Part A comes back like CORS — 1 in 9 — the class is rare and this ends he
 cheaply, having cost a day of static parsing and no live contact. If it comes
 back 5+ in 9, there is a real feature, and Part B is the next build. Either way
 the number comes first.
+
+---
+
+## Part A result, measured 2026-08-17
+
+| stage | count |
+|---|---|
+| repos examined | 9 |
+| uses Supabase | **7 (78%)** |
+| commits its own schema | 4 (57% of those) |
+| has a private-shaped table | 4 |
+| anon can read one | **2** |
+
+**Exposure rate: 2 of 4** repos whose schema can be read.
+**Blind spot: 3 of 7** Supabase repos commit no schema — undetermined, not
+secure, and precisely the population Part C exists for.
+
+This is the opposite of the CORS result, and the applicability number carries
+it: 78% of this corpus uses Supabase at all, against a CORS shape that turned
+out to be genuinely rare. **Go.**
+
+### The findings, and why they are not heuristic
+
+Both are the same shape, and the evidence is the author's own words:
+
+```sql
+-- servexaapp
+CREATE POLICY "Anyone can view an invitation by token (validated in code)"
+  ON public.organisation_invitations FOR SELECT USING (true);
+CREATE POLICY "Public can read by token"
+  ON public.handover_tokens FOR SELECT TO anon, authenticated USING (true);
+```
+
+The names promise a scope the predicates do not enforce. The developer
+believes the token gates the read — `.eq('token', …)` in client code — and the
+database was never told, so the anon key returns **every invitation with its
+email address** and **every handover token**. That is not an inference about
+what data looks sensitive; it is a documented intent-implementation mismatch,
+and the oracle now reports it as such (`intent_mismatch`).
+
+### A false positive the first run produced, and the correction
+
+`founder_profiles` in our own customer's repo was flagged on the column
+`user_id`. Its policy is the Supabase quickstart's own text — "Public profiles
+are viewable by everyone." — in a founder-MATCHING app where profiles are
+meant to be browsable. Telling that customer their public profiles are exposed
+is the `*`-without-credentials error running in the opposite direction, and
+that direction is more expensive: it is the one that reaches a report.
+
+`user_id`, `owner_id`, `notes`, `content` are now WEAK hints. Nearly every
+table in a multi-tenant app carries them, public ones included, so a weak hint
+alone yields **`uncertain`** — printed for a human, kept out of the count. The
+verdict has three states because two forced this table into a bucket where
+both answers were wrong.
+
+A second false-positive path was found the same way, before it could be
+quoted: `ALTER TABLE IF EXISTS … ENABLE ROW LEVEL SECURITY` went unmatched, so
+any table protected that way read as "RLS never enabled".
+
+**So the honest headline is 2 of 4, with `avatar_interactions` (RLS never
+enabled, flagged only on `user_id`) still to be confirmed by eye.** Both
+servexaapp findings are solid; the customer repo's remaining one is not yet.
+
+### What this changes about Part C
+
+The customer repo is the natural first live target: we have the relationship,
+so consent can actually be asked for, which no repository in a survey can
+offer. That is the only route to an end-to-end number, and it stays gated on
+their explicit yes.

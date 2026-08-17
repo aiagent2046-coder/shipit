@@ -113,15 +113,45 @@ PUBLIC_BY_DESIGN = frozenset({
     "testimonials", "reviews", "events", "locations", "stores",
 })
 
-PRIVATE_COLUMN_HINTS: tuple[str, ...] = (
+# STRONG: a column whose presence means the row is about a person and carries
+# something they would not publish. One of these is enough.
+STRONG_COLUMN_HINTS: tuple[str, ...] = (
     "email", "phone", "mobile", "address", "postcode", "zip_code",
-    "password", "passwd", "hash", "salt",
+    "password", "passwd", "salt",
     "token", "api_key", "secret", "credential",
     "stripe_", "customer_id", "payment", "card_last", "iban",
     "ssn", "tax_id", "passport", "birth", "dob",
-    "user_id", "owner_id", "auth_id",
-    "ip_address", "user_agent",
-    "notes", "message", "content",
+    "ip_address",
+)
+
+# WEAK: an ownership marker or free text. NOT sufficient alone, and that is a
+# correction, not caution.
+#
+# MEASURED 2026-08-17: `user_id` alone flagged `founder_profiles` in a
+# founder-MATCHING app, whose exposure is the Supabase quickstart's own policy,
+# "Public profiles are viewable by everyone." Telling that customer their
+# public profiles are exposed is the `*`-without-credentials error running in
+# the opposite direction — inventing a finding instead of missing one — and it
+# is the more expensive direction, because it is the one we would put in a
+# report and send.
+#
+# Nearly every table in a multi-tenant app carries user_id, public ones
+# included. A weak hint alone yields `uncertain`: printed for a human, kept out
+# of the headline count.
+WEAK_COLUMN_HINTS: tuple[str, ...] = (
+    "user_id", "owner_id", "auth_id", "profile_id",
+    "notes", "message", "content", "user_agent", "hash",
+)
+
+# A policy whose NAME promises a scope its predicate does not enforce. This is
+# the strongest evidence in the whole measurement, because it is the author's
+# own description of what they meant: "Anyone can view an invitation by token
+# (validated in code)" over `USING (true)` says plainly that the token was
+# supposed to be the gate and the database was never told.
+_SCOPING_INTENT = re.compile(
+    r"\b(by\s+token|with\s+token|own|owner|their|theirs|mine|self|"
+    r"member|invited|shared\s+with)\b",
+    re.IGNORECASE,
 )
 
 _CREATE_TABLE = re.compile(
@@ -168,23 +198,45 @@ class Table:
     policies_for_read: int = 0
 
     @property
-    def private_shaped(self) -> tuple[bool, str]:
-        """Does this table look like it holds data the app treats as private?
+    def private_shaped(self) -> tuple[str, str]:
+        """Does this table hold data the app treats as private?
 
-        Returns (verdict, why) — the reason is printed so a human can overrule
-        a heuristic that is, unavoidably, a heuristic.
+        Returns (verdict, why) where verdict is "yes", "uncertain" or "no".
+        Three states, because two forced a table carrying only `user_id` into
+        one bucket or the other and both answers were wrong. `uncertain` is
+        printed for a human and kept out of the headline count.
         """
         low = self.name.lower()
         singular = low[:-1] if low.endswith("s") else low
         if low in PUBLIC_BY_DESIGN or singular in PUBLIC_BY_DESIGN:
-            return False, f"`{self.name}` reads as public-by-design"
+            return "no", f"`{self.name}` reads as public-by-design"
         if low in PRIVATE_TABLE_NAMES or singular in PRIVATE_TABLE_NAMES:
-            return True, f"table name `{self.name}`"
-        hit = next((c for c in self.columns
-                    if any(h in c.lower() for h in PRIVATE_COLUMN_HINTS)), "")
-        if hit:
-            return True, f"column `{hit}`"
-        return False, "no private-looking table name or column"
+            return "yes", f"table name `{self.name}`"
+        strong = next((c for c in self.columns
+                       if any(h in c.lower() for h in STRONG_COLUMN_HINTS)), "")
+        if strong:
+            return "yes", f"column `{strong}`"
+        weak = next((c for c in self.columns
+                     if any(h in c.lower() for h in WEAK_COLUMN_HINTS)), "")
+        if weak:
+            return "uncertain", (f"only `{weak}`, which nearly every table in a "
+                                 f"multi-tenant app carries")
+        return "no", "no private-looking table name or column"
+
+    @property
+    def intent_mismatch(self) -> str:
+        """The author's own words against their own predicate.
+
+        A policy called "Anyone can view an invitation by token (validated in
+        code)" sitting on `USING (true)` says the token was meant to be the
+        gate and the database was never told. That is not a heuristic about
+        what data looks private — it is documentary evidence of a bug, and it
+        is the most convincing thing this measurement can produce.
+        """
+        if self.open_policy_sql and _SCOPING_INTENT.search(self.open_policy_sql):
+            return ("the policy's own name promises a scope its predicate does "
+                    "not enforce")
+        return ""
 
     @property
     def anon_readable(self) -> tuple[bool, str]:
@@ -325,6 +377,9 @@ class RepoResult:
     exposed_tables: list[str] = field(default_factory=list)
     exposure_reasons: list[str] = field(default_factory=list)
     exposure_sql: list[str] = field(default_factory=list)
+    uncertain_tables: list[str] = field(default_factory=list)
+    uncertain_reasons: list[str] = field(default_factory=list)
+    intent_mismatches: list[str] = field(default_factory=list)
     stage: str = "not_attempted"
     error: str = ""
 
@@ -352,6 +407,45 @@ def _texts(zf: zipfile.ZipFile, suffixes: tuple[str, ...],
             except Exception:  # noqa: BLE001 — an unreadable file is not data
                 continue
     return out
+
+
+def classify(tables: dict[str, Table], result: RepoResult) -> RepoResult:
+    """Sort one repo's tables into counted, uncertain, and ignored.
+
+    Separate from measure_one so it can be tested without a network fetch. It
+    was inline until mutation testing showed the rule that matters most here —
+    `uncertain` stays out of the headline — had no test at all: deleting the
+    branch left every oracle test green, because they all stop at the Table
+    level and never reach the counting.
+    """
+    for t in tables.values():
+        private, why_private = t.private_shaped
+        if private == "no":
+            continue
+        readable, why_readable = t.anon_readable
+        if not readable:
+            if private == "yes":
+                result.private_tables += 1
+            continue
+        if private == "uncertain":
+            # Readable, but we cannot defend calling it private. Shown, never
+            # counted — an unconfident finding put in a customer's report is
+            # worse than no finding.
+            result.uncertain_tables.append(t.name)
+            result.uncertain_reasons.append(
+                f"{t.name}: {why_private}; {why_readable}")
+            continue
+        result.private_tables += 1
+        result.exposed_tables.append(t.name)
+        result.exposure_reasons.append(
+            f"{t.name}: {why_private}; {why_readable}")
+        if t.open_policy_sql:
+            result.exposure_sql.append(f"{t.name}: {t.open_policy_sql}")
+        if t.intent_mismatch:
+            result.intent_mismatches.append(f"{t.name}: {t.intent_mismatch}")
+
+    result.stage = "exposed" if result.exposed_tables else "not_exposed"
+    return result
 
 
 def measure_one(slug: str, sha: str) -> RepoResult:
@@ -386,20 +480,7 @@ def measure_one(slug: str, sha: str) -> RepoResult:
 
     tables = parse_schema("\n".join(sql_files.values()))
     result.tables = len(tables)
-    for t in tables.values():
-        private, why_private = t.private_shaped
-        if not private:
-            continue
-        result.private_tables += 1
-        readable, why_readable = t.anon_readable
-        if readable:
-            result.exposed_tables.append(t.name)
-            result.exposure_reasons.append(
-                f"{t.name}: {why_private}; {why_readable}")
-            if t.open_policy_sql:
-                result.exposure_sql.append(f"{t.name}: {t.open_policy_sql}")
-
-    result.stage = "exposed" if result.exposed_tables else "not_exposed"
+    classify(tables, result)
     return result
 
 
@@ -470,6 +551,10 @@ def main() -> int:
             print(f"    EXPOSED {reason}", flush=True)
         for stmt in r.exposure_sql:
             print(f"      SQL   {stmt}", flush=True)
+        for note in r.intent_mismatches:
+            print(f"      INTENT {note}", flush=True)
+        for note in r.uncertain_reasons:
+            print(f"    uncertain (not counted) {note}", flush=True)
         if verbose and r.schema_files:
             print(f"    schema: {', '.join(r.schema_files[:6])}", flush=True)
 

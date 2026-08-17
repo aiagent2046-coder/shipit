@@ -32,9 +32,13 @@ create table public.users (
 
 
 def _verdict(sql: str, table: str = "users") -> tuple[bool, bool]:
-    """(private_shaped, anon_readable) for one table."""
+    """(counts_as_private, anon_readable) for one table.
+
+    `private_shaped` returns three states; a bare "yes" is what the headline
+    count uses, so that is what these assertions compare against.
+    """
     t = parse_schema(sql)[table]
-    return t.private_shaped[0], t.anon_readable[0]
+    return t.private_shaped[0] == "yes", t.anon_readable[0]
 
 
 # --- the base case ----------------------------------------------------------
@@ -48,6 +52,7 @@ def test_the_reason_is_reported_so_a_human_can_overrule_it() -> None:
     """Every verdict prints why. A heuristic that cannot be checked is a
     heuristic that gets believed."""
     t = parse_schema(USERS)["users"]
+    assert t.private_shaped[0] == "yes"
     assert "users" in t.private_shaped[1]
     assert "RLS never enabled" in t.anon_readable[1]
 
@@ -281,3 +286,150 @@ def test_multiple_migrations_concatenate_into_one_view_of_the_table() -> None:
         alter table public.users enable row level security;
     """)["users"]
     assert t.rls_enabled
+
+
+# --- the third state, and why it exists -------------------------------------
+
+def test_user_id_alone_is_not_enough_to_call_a_table_private() -> None:
+    """MEASURED: `user_id` alone flagged `founder_profiles` in a founder-
+    MATCHING app whose exposure is the Supabase quickstart's own policy,
+    "Public profiles are viewable by everyone."
+
+    Nearly every table in a multi-tenant app carries user_id, public ones
+    included. Counting that is the `*`-without-credentials error running the
+    other way — inventing a finding rather than missing one — and that is the
+    more expensive direction, because it is the one that reaches a customer.
+    """
+    t = parse_schema("""
+        create table public.founder_profiles (
+          id uuid primary key,
+          user_id uuid,
+          headline text
+        );
+        create policy "Public profiles are viewable by everyone."
+          on public.founder_profiles for select using (true);
+    """)["founder_profiles"]
+    verdict, why = t.private_shaped
+    assert verdict == "uncertain"
+    assert "user_id" in why
+
+
+def test_user_id_beside_a_strong_column_does_count() -> None:
+    """The weak hint does not veto a strong one."""
+    t = parse_schema("""
+        create table public.entries (
+          id uuid primary key,
+          user_id uuid,
+          email text
+        );
+    """)["entries"]
+    assert t.private_shaped[0] == "yes"
+
+
+def test_a_private_table_name_beats_a_weak_column() -> None:
+    t = parse_schema("""
+        create table public.orders (
+          id uuid primary key,
+          user_id uuid
+        );
+    """)["orders"]
+    assert t.private_shaped[0] == "yes"
+
+
+# --- the author's own words -------------------------------------------------
+
+def test_a_policy_promising_a_scope_it_does_not_enforce_is_flagged() -> None:
+    """The strongest evidence this measurement can produce, because it is not
+    a guess about what looks private — it is the author stating the intent
+    their predicate fails to implement.
+
+    Both real findings in the first run were this shape: "Anyone can view an
+    invitation by token (validated in code)" and "Public can read by token",
+    each sitting on USING (true). The token was meant to be the gate; the
+    database was never told, so anon reads every row.
+    """
+    t = parse_schema("""
+        create table public.organisation_invitations (
+          id uuid primary key,
+          email text,
+          token text
+        );
+        alter table public.organisation_invitations enable row level security;
+        create policy "Anyone can view an invitation by token (validated in code)"
+          on public.organisation_invitations for select using (true);
+    """)["organisation_invitations"]
+    assert t.private_shaped[0] == "yes"
+    assert t.anon_readable[0]
+    assert t.intent_mismatch
+
+
+def test_a_policy_that_declares_itself_public_is_not_an_intent_mismatch() -> None:
+    """"Public profiles are viewable by everyone" over USING (true) is a
+    policy doing exactly what it says. Whatever else that is, it is not the
+    author contradicting themselves, and calling it one would put words in
+    their mouth."""
+    t = parse_schema("""
+        create table public.entries (
+          id uuid primary key,
+          email text
+        );
+        create policy "Anyone can read entries"
+          on public.entries for select using (true);
+    """)["entries"]
+    assert t.anon_readable[0]
+    assert not t.intent_mismatch
+
+
+# --- what reaches the headline count ----------------------------------------
+
+from scripts.measure_supabase_rls_yield import (  # noqa: E402
+    RepoResult, classify,
+)
+
+_MIXED = """
+create table public.users (id uuid, email text);
+create table public.founder_profiles (id uuid, user_id uuid, headline text);
+create table public.products (id uuid, title text);
+create policy a on public.users for select using (true);
+create policy b on public.founder_profiles for select using (true);
+create policy c on public.products for select using (true);
+"""
+
+
+def test_an_uncertain_table_is_shown_but_never_counted() -> None:
+    """The rule the whole three-state change exists for. It had no test until
+    mutation testing deleted the branch and every oracle test stayed green —
+    they all stop at the Table level and never reach the counting."""
+    r = classify(parse_schema(_MIXED), RepoResult(slug="x", sha="y"))
+    assert r.exposed_tables == ["users"]
+    assert r.uncertain_tables == ["founder_profiles"]
+    assert "founder_profiles" not in r.exposed_tables
+
+
+def test_a_repo_whose_only_open_table_is_uncertain_is_not_reported_exposed() -> None:
+    """One uncertain table must not tip a repository into the numerator; that
+    is precisely how a customer receives a finding we cannot defend."""
+    r = classify(parse_schema("""
+        create table public.founder_profiles (id uuid, user_id uuid);
+        create policy b on public.founder_profiles for select using (true);
+    """), RepoResult(slug="x", sha="y"))
+    assert r.stage == "not_exposed"
+    assert r.uncertain_tables == ["founder_profiles"]
+
+
+def test_a_public_by_design_table_reaches_neither_bucket() -> None:
+    r = classify(parse_schema(_MIXED), RepoResult(slug="x", sha="y"))
+    assert "products" not in r.exposed_tables + r.uncertain_tables
+
+
+def test_a_private_table_that_is_locked_down_counts_as_private_not_exposed() -> None:
+    """The denominator has to keep it: a repo with private tables, all closed,
+    is the case that makes 'exposed / has-private-tables' mean anything."""
+    r = classify(parse_schema("""
+        create table public.users (id uuid, email text);
+        alter table public.users enable row level security;
+        create policy p on public.users for select using (auth.uid() = id);
+    """), RepoResult(slug="x", sha="y"))
+    assert r.private_tables == 1
+    assert r.exposed_tables == []
+    assert r.stage == "not_exposed"
