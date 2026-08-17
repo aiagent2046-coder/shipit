@@ -143,6 +143,19 @@ def existing_runs(name: str) -> list[Path]:
                   key=lambda p: int(p.stem.rsplit("run", 1)[1]))
 
 
+def llm_ran(scan: dict) -> bool:
+    """A run whose LLM stage failed or was skipped is a static-only scan
+    wearing a series member's filename. Measured 2026-08-17: the AITunnel
+    balance ran out mid-batch, every remaining repo silently degraded to
+    static-only and scored 9.7-9.9, and the survey-era numbering then
+    OVERWROTE two banked full runs with those rows. Such a run is never a
+    sample of the distribution these series measure, so it neither counts
+    toward a series' target nor enters its summary."""
+    llm = scan.get("llm")
+    return (isinstance(llm, dict) and llm.get("skipped_reason") is None
+            and not llm.get("failure"))
+
+
 def _key(f: dict) -> tuple[str, str]:
     # Same identity monitoring uses (app/monitor/diff.py): (rule_id, file),
     # line excluded. The alert-threshold question this series answers is asked
@@ -225,9 +238,17 @@ def main() -> int:
 
     for s in SERIES:
         have = existing_runs(s.name)
-        todo = s.runs - len(have)
-        print(f"\n=== {s.name}: {len(have)} on disk, {max(todo, 0)} to run ===",
-              flush=True)
+        valid = [p for p in have if llm_ran(json.loads(p.read_text()))]
+        for p in set(have) - set(valid):
+            print(f"  ignoring {p.name}: LLM stage did not run"
+                  " (static-only/degraded row)", flush=True)
+        # New runs are numbered after every existing file, ignored ones
+        # included -- a degraded row keeps its name so nothing is ever
+        # overwritten; it just stops counting.
+        next_i = (int(have[-1].stem.rsplit("run", 1)[1]) + 1) if have else 1
+        todo = s.runs - len(valid)
+        print(f"\n=== {s.name}: {len(valid)} usable on disk,"
+              f" {max(todo, 0)} to run ===", flush=True)
         if todo > 0:
             try:
                 data = fetch_repack(s.slug, s.sha)
@@ -238,17 +259,31 @@ def main() -> int:
                 print(f"  SKIP: {exc}", flush=True)
                 todo = 0
         if todo > 0:
-            for i in range(len(have) + 1, s.runs + 1):
+            for i in range(next_i, next_i + todo):
                 t0 = time.time()
                 scan = run_scan(data, client)
                 dt = time.time() - t0
+                if not llm_ran(scan):
+                    # A dead provider (the measured case: account balance at
+                    # zero, 402 on every call) fails every run after this one
+                    # too. Stopping the batch is what keeps a burnt-out night
+                    # run from being twenty static scans pretending to be a
+                    # measurement. The row is kept for diagnosis under a name
+                    # the series will never read.
+                    p = OUT / f"{s.name}__failed-{int(time.time())}.json"
+                    p.write_text(json.dumps(scan, indent=1))
+                    print(f"  !! LLM stage did not run: {scan['llm']}\n"
+                          f"  row kept as {p.name}; STOPPING the batch --"
+                          f" every further run would fail the same way",
+                          flush=True)
+                    return 1
                 (OUT / f"{s.name}__run{i}.json").write_text(
                     json.dumps(scan, indent=1))
                 llm = scan["llm"]
-                chars = llm.get("prompt_chars") if isinstance(llm, dict) else "?"
-                print(f"  run {i}/{s.runs}: total {scan['score']['total']},"
-                      f" prompt_chars {chars}, {dt:.0f}s", flush=True)
-                if (s.expect_prompt_chars and isinstance(llm, dict)
+                print(f"  run {i}: total {scan['score']['total']},"
+                      f" prompt_chars {llm.get('prompt_chars')}, {dt:.0f}s",
+                      flush=True)
+                if (s.expect_prompt_chars
                         and llm.get("prompt_chars") != s.expect_prompt_chars):
                     print(f"  !! prompt_chars {llm.get('prompt_chars')} !="
                           f" {s.expect_prompt_chars} recorded on the prior"
@@ -256,7 +291,8 @@ def main() -> int:
                           f" series and must not be spliced with the old one",
                           flush=True)
 
-        scans = [json.loads(p.read_text()) for p in existing_runs(s.name)]
+        scans = [sc for p in existing_runs(s.name)
+                 if llm_ran(sc := json.loads(p.read_text()))]
         if scans:
             summarize(s.name, scans)
 
