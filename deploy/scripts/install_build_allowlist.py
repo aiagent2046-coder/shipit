@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -169,6 +170,15 @@ def main() -> int:
         return 1
     print("squid reloaded")
 
+    # Never probe straight after a reload — see wait_for_proxy.
+    listening = wait_for_proxy()
+    if listening is None:
+        print(f"\nthe proxy did not start accepting connections again at "
+              f"{', '.join(proxy_endpoints())} — this run has said NOTHING "
+              "about the allowlist. Check `systemctl status squid`.",
+              file=sys.stderr)
+        return 1
+
     # REGRESSION GATE, checked before the new grant. This edit replaces the
     # inline domains with a file, so if squid loads that file as empty the ACL
     # matches nothing, `http_access deny all` catches everything, and EVERY
@@ -274,6 +284,34 @@ def proxy_endpoints() -> list[str]:
     if gateway:
         endpoints.append(f"{gateway}:3128")
     return endpoints
+
+
+def wait_for_proxy(timeout_s: float = 20.0) -> str | None:
+    """Block until the proxy accepts a TCP connection again, or give up.
+
+    MEASURED 2026-08-17, and this one nearly did real damage. `systemctl reload
+    squid` sends SIGHUP; squid closes its listening socket while it
+    reconfigures. Probing immediately after the reload therefore raced it and
+    got ECONNREFUSED — curl's own message said `after 0 ms` — on a proxy that
+    had been listening continuously for three weeks.
+
+    The regression gate below would have read that as "a grant that worked
+    before no longer resolves" and RESTORED THE BACKUP, undoing a correct
+    change and reporting a failure that never happened. It escaped only
+    because that run had nothing to write. A check that can revert a good
+    change on a race is worse than no check.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        for endpoint in proxy_endpoints():
+            host, _, port = endpoint.partition(":")
+            try:
+                with socket.create_connection((host, int(port)), timeout=2):
+                    return endpoint
+            except OSError:
+                continue
+        time.sleep(0.5)
+    return None
 
 
 def _probe(url: str) -> tuple[str, subprocess.CompletedProcess, str]:
