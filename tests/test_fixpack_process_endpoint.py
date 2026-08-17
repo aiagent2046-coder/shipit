@@ -168,10 +168,24 @@ class FakeFixpackRepo:
         self.details: dict[str, str | None] = {}
         self.claimed: list[str] = []
         self.released: list[str] = []
+        self.proof_json: dict[str, dict] = {}
         self._reap = reap or {"requeued": 0, "failed": 0}
 
     async def reap_stale_running(self, *, max_age_minutes, max_attempts):
         return self._reap
+
+    async def set_proof_json(self, job_id, proof):
+        """The proof stage persists through this; without it every delivery
+        test in this file ran with a dead proof stage and passed anyway.
+
+        run_proof_stage catches every exception and returns an empty result
+        so proof can never kill delivery (app/proof/stage.py). That fail-open
+        swallowed the AttributeError this fake used to raise: the whole suite
+        was green, and none of it exercised the proof gate it was supposed to
+        cover. Same shape as the other silent-degradation defects this
+        project has fixed (#30, #36) -- a step that cannot report its own
+        failure reads as success."""
+        self.proof_json[job_id] = proof
 
     async def claim_one_paid(self):
         # Atomic-claim analogue: hand back each paid job exactly once, leased
@@ -865,7 +879,13 @@ class LeaseFixpackRepo:
         self.jobs = {j["id"]: dict(j) for j in jobs}
         self.order = [j["id"] for j in jobs]
         self.delivered: dict[str, str] = {}
+        self.proof_json: dict[str, dict] = {}
         self.claims = 0
+
+    async def set_proof_json(self, job_id, proof):
+        # See FakeFixpackRepo.set_proof_json above for why its absence was
+        # invisible.
+        self.proof_json[job_id] = proof
 
     async def reap_stale_running(self, *, max_age_minutes, max_attempts):
         requeued, failed = 0, []

@@ -191,6 +191,12 @@ class _FakeFixpackRepo:
         self.statuses = {}
         self.details = {}
         self.delivered = {}
+        self.proof_json = {}
+
+    async def set_proof_json(self, job_id, proof):
+        # Without this the proof stage raises AttributeError, run_proof_stage
+        # swallows it fail-open, and the suite passes with a dead proof stage.
+        self.proof_json[job_id] = proof
 
     async def reap_stale_running(self, *, max_age_minutes, max_attempts):
         return {"requeued": 0, "failed": 0}
