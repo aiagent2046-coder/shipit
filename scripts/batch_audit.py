@@ -11,18 +11,22 @@ measurements were made on.
 What each series is for:
   ai-co-founder-matching  #34 -- the production pair (5.5 and 5.1, a third of
                           the findings list changed) proved the variance;
-                          three runs on the current engine give it a band and
-                          per-severity reproduction rates.
+                          runs on the current engine give it a band and
+                          per-severity reproduction rates. ALSO #33: audit
+                          fb00b177 -- the 22-finding, hand-verified 20/22 run
+                          behind the stuck-flag severity rule -- was of THIS
+                          repository (audits.repo_url for fb00b177-55b2, same
+                          content hash), a fact this file spent a day not
+                          knowing while planning a separate series around a
+                          customer archive nobody could find. The stuck-flag
+                          findings should hold at medium/low across runs while
+                          the SSRF stays high+; and since precision here is
+                          hand-verified, this series measures reproduction of
+                          KNOWN-TRUE findings, not findings in general.
   blank-slate             #34 second profile; #32 recall -- the union of these
                           runs plus the existing Haiku run, hand-verified, is
                           the denominator a single run's recall is measured
                           against.
-  fb00b177                #33 -- the stuck-flag severity rule acts on the
-                          model, so its only verification is repeated runs:
-                          the three stuck-flag findings should hold at
-                          medium/low while the SSRF stays high+. Also the only
-                          series with hand-verified precision (20/22), so it
-                          measures reproduction of KNOWN-TRUE findings.
   zombiecodersmarteditor  clean control (9.6/9.7 on 2026-08-17): does a clean
                           repo stay clean across runs? Decides whether
                           monitoring can alert on any new critical/high or
@@ -37,8 +41,7 @@ What each series is for:
 
 Usage (on the VPS, from /opt/shipit, with .env exported):
     set -a; . ./.env; set +a
-    FB00B177_ZIP=/path/to/customer-archive.zip \
-        .venv/bin/python scripts/batch_audit.py
+    .venv/bin/python scripts/batch_audit.py
 
 Runs are cumulative: existing <name>__run*.json files in batch_reports/ are
 counted, new runs are numbered after them, and the summary reads them all.
@@ -57,7 +60,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import statistics
 import sys
 import time
@@ -78,9 +80,8 @@ from app.scan.pipeline import run_scan  # noqa: E402
 class Series:
     name: str          # report filename stem; keep stable, runs accumulate under it
     runs: int          # target TOTAL runs on disk, existing files included
-    slug: str = ""     # owner/repo on GitHub, empty for a local archive
-    sha: str = ""      # full commit SHA -- a branch head would silently fork the series
-    zip_env: str = ""  # env var naming a local zip, for repos we must not name here
+    slug: str          # owner/repo on GitHub
+    sha: str           # full commit SHA -- a branch head would silently fork the series
     # Byte size of the LLM prompt on the runs this series extends. A pinned
     # SHA proves the INPUT matched only for GitHub sources; the local-archive
     # series has no SHA, and blank-slate's prior three audits recorded prompt
@@ -91,13 +92,14 @@ class Series:
 
 
 SERIES = [
-    Series(name="aiagent2046-coder__ai-co-founder-matching", runs=3,
+    Series(name="aiagent2046-coder__ai-co-founder-matching", runs=4,
            slug="aiagent2046-coder/ai-co-founder-matching",
            sha="c15be34f488521123a0ff77a30a7f885c3f1fdc6"),
-    # The two production runs (5.5 / 5.1, engine 2026-08-14-5) are not on
-    # disk here and are not spliced in: the engine moved since. The band is
-    # read across these three, with the production pair quoted alongside as
-    # the prior engine's measurement.
+    # runs=4, the sum of two merged plans (3 for #34's band + a series for
+    # #33's stuck-flag rule, which turned out to be this same repository).
+    # The three production runs (fb00b177 and the 5.5/5.1 pair, engine
+    # 2026-08-14-5) are not on disk here and are not spliced in: the engine
+    # moved since. They are quoted alongside as the prior engine's numbers.
     Series(name="Avisafety-1__blank-slate", runs=4,
            slug="Avisafety-1/blank-slate",
            sha="5e82a79a2b5381bd544d7bbc21722ee7a5d1a4d6",
@@ -108,7 +110,6 @@ SERIES = [
            # three are a closed series on a prior engine -- the July totals
            # (4.1/4.0/4.1) are quoted next to today's, never averaged in.
            expect_prompt_chars=4_162_085),
-    Series(name="fb00b177", runs=3, zip_env="FB00B177_ZIP"),
     Series(name="SahonSrabon__zombiecodersmarteditor", runs=3,
            slug="SahonSrabon/zombiecodersmarteditor",
            sha="a787a111ede8c17ad23cd38a46eaa0f39b543aa0",
@@ -135,15 +136,6 @@ def fetch_repack(slug: str, sha: str) -> bytes:
                 continue
             dst.writestr(parts[1], src.read(zi))
     return out.getvalue()
-
-
-def load_source(s: Series) -> bytes:
-    if s.zip_env:
-        path = os.environ.get(s.zip_env, "")
-        if not path:
-            raise RuntimeError(f"set {s.zip_env}=/path/to/archive.zip")
-        return Path(path).read_bytes()
-    return fetch_repack(s.slug, s.sha)
 
 
 def existing_runs(name: str) -> list[Path]:
@@ -238,7 +230,7 @@ def main() -> int:
               flush=True)
         if todo > 0:
             try:
-                data = load_source(s)
+                data = fetch_repack(s.slug, s.sha)
                 validate_zip(io.BytesIO(data), size_bytes=len(data))
                 detect_stack(io.BytesIO(data))
             except Exception as exc:  # noqa: BLE001 -- batch must continue,
