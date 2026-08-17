@@ -57,10 +57,16 @@ def test_build_artifacts_log_and_storyboard() -> None:
     assert "stripe-live-key" in log.content
     assert "sk_l****" in log.content
     assert log.content_sha256
+    # The log states its method, so a reader of the artifact alone cannot
+    # mistake a static scan for an executed attack.
+    assert "no attack is executed" in log.content
     board = next(a for a in arts if a.kind == "storyboard")
     assert "VERIFIED" in board.content
-    assert "EXPLOIT OK" in board.content
-    assert "BLOCKED" in board.content
+    # Panels report what the scanner saw, not what an attacker achieved:
+    # "EXPLOIT OK" over a regex hit is a claim these templates cannot make.
+    assert "VULN FOUND" in board.content
+    assert "CLEARED" in board.content
+    assert "EXPLOIT" not in board.content
 
 
 def test_render_artifacts_markdown_has_details() -> None:

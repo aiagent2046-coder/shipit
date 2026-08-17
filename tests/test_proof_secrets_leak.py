@@ -158,6 +158,41 @@ def test_render_contains_verdict() -> None:
     )
     report = build_proof_report(before, after, informational=False)
     md = render_proof_markdown(report)
-    assert "Proof-of-Exploit" in md
+    assert "Проверка «до / после»" in md
     assert "secrets_leak" in md
-    assert "верифицирован" in md
+    assert "подтверждён" in md
+
+
+def test_a_verified_report_does_not_claim_an_attack_was_executed():
+    """The section a customer reads may not say the exploit ran.
+
+    All three templates are static scanners -- secrets_leak re-runs
+    app.scan.secrets, sqli and cors_open match regexes -- and nothing in
+    app/proof/ opens a socket or starts a container. The verified verdict
+    used to read "атака сработала до патча и не сработала после": close
+    enough on a leaked key, unsupportable on a regex hit, and on a false
+    positive it told a customer their app had been exploited.
+
+    Anchored on the strongest wording (the verified branch), because that is
+    the one that overclaims, plus the method note that keeps the section
+    honest when only the table is read.
+    """
+    before = ExploitAttempt(
+        template_id="sqli", status="success", success=True,
+        detail="found 1 likely SQL injection sink(s)",
+        evidence={"finding_count": 1, "samples": []},
+    )
+    after = ExploitAttempt(
+        template_id="sqli", status="failure", success=False,
+        detail="no high-confidence SQL injection sinks found",
+        evidence={"finding_count": 0, "samples": []},
+    )
+    md = render_proof_markdown(
+        build_proof_report(before, after, informational=False))
+
+    assert "Атака не выполняется" in md
+    assert "статическая" in md
+    # No wording anywhere in the section may assert a executed attack.
+    for banned in ("атака сработала", "эксплойт всё ещё срабатывает",
+                   "атака всё ещё"):
+        assert banned not in md, banned

@@ -90,7 +90,7 @@ def test_proof_section_in_pr_body_after_secrets_fix(monkeypatch):
     assert summary.get("blocked", 0) == 0
 
     body = captured["body"]
-    assert "Proof-of-Exploit" in body, body
+    assert "Проверка «до / после»" in body, body
     assert "secrets_leak" in body
     assert "Soft gate" not in body
     assert stripe_key not in body
