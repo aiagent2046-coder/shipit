@@ -1,0 +1,13 @@
+Restore tests/test_fixpack_process_endpoint.py from pre-PLACEHOLDER commit
+and add FakeFixpackRepo.set_proof_json.
+
+Run on a machine with the branch checked out:
+
+  git show 7a52b51:tests/test_fixpack_process_endpoint.py > tests/test_fixpack_process_endpoint.py
+
+Then add these two hunks to FakeFixpackRepo:
+
+  self.proof_json: dict[str, dict] = {}
+
+  async def set_proof_json(self, job_id, proof):
+      self.proof_json[job_id] = proof
