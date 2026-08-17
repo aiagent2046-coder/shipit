@@ -1,0 +1,50 @@
+--- a/app/main.py
++++ b/app/main.py
+@@ -81,7 +81,7 @@ from app.fixpack.semantic_check import run_semantic_check
+ from app.proof import (
+     decide_proof_gate,
+-    render_proof_markdown,
++    render_proof_sections,
+     run_proof_stage,
+ )
+ from app.ingest.github_fetch import RepoFetchError
+@@ -1357,15 +1357,16 @@ async def _process_one_paid_job(
+             return "blocked"
+ 
+         # Proof-of-Exploit → Proof-of-Fix (soft/hard gate via PROOF_GATE_MODE).
+-        proof_report = await run_proof_stage(
++        proof_stage = await run_proof_stage(
+             job_id=job_id, zip_bytes=zip_bytes, plan=plan,
+             fixpack_repo=fixpack_repo,
+         )
+-        gate = decide_proof_gate(proof_report)
++        proof_report = proof_stage.primary
++        gate = decide_proof_gate(proof_report, reports=proof_stage.reports)
+         if gate == "hard_fail":
+             detail = (
+                 f"proof gate (hard): exploit still succeeds after patch "
+-                f"({proof_report.detail if proof_report else 'no report'})"
++                f"({proof_stage.detail})"
+             )
+             logger.warning(
+                 "Fix Pack job %s blocked by proof gate: %s",
+@@ -1386,8 +1387,8 @@ async def _process_one_paid_job(
+         body = render_fixpack_pr_body(plan)
+         if semantic.pr_note:
+             body = f"{body}\n\n{semantic.pr_note}"
+-        if proof_report is not None:
+-            section = render_proof_markdown(proof_report)
++        if proof_stage.reports:
++            section = render_proof_sections(proof_stage.reports)
+             if section:
+                 body = f"{body}\n\n---\n\n{section}"
+         if gate == "soft_fail":
+@@ -1395,7 +1396,7 @@ async def _process_one_paid_job(
+             # operators and status queries can see it without parsing the PR.
+             soft_detail = (
+                 f"delivered with soft proof gate: exploit still succeeds "
+-                f"after patch ({proof_report.detail if proof_report else ''})"
++                f"after patch ({proof_stage.detail})"
+             )
+             logger.warning(
+                 "Fix Pack job %s soft proof gate: %s",
