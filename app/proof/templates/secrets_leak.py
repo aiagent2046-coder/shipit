@@ -19,7 +19,7 @@ from app.scan.secrets import NON_PRODUCTION_CONTEXTS, scan_secrets
 
 # Findings at or above this severity count as a successful "exploit"
 # for proof purposes. Low/informational (anon keys, dev DSN defaults)
-do not.
+# do not.
 _PROOF_SEVERITIES = frozenset({"critical", "high"})
 
 
