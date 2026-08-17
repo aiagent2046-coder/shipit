@@ -44,6 +44,28 @@ TEMPLATE_ID = "cors_open_runtime"
 # check, so a slow reply here means something is wrong rather than warming up.
 PROBE_TIMEOUT_S = 10
 
+# The probe MUST send a credential, and the first real boot is what taught us
+# that (2026-08-17, scripts/e2e_proof_cors_probe.py against a container).
+#
+# The claim this template makes is about CREDENTIALED cross-origin reads, and a
+# request carrying no credentials cannot demonstrate one. Frameworks know that
+# too, and gate their behaviour on it: Starlette 0.40 — what `fastapi==0.115.0`
+# pulls — reflects the caller's Origin only `if self.allow_all_origins and
+# has_cookie`, answering a bare `*` otherwise. (Starlette 1.6 keys the same
+# branch off allow_credentials instead, so the two versions disagree about the
+# identical application.)
+#
+# Without a cookie the probe therefore UNDER-REPORTS: an app that a real
+# browser session could read cross-origin comes back as "not exploitable,
+# the browser blocks `*` with credentials". A false negative that understates
+# risk, on the one template that exists to state risk precisely. The plan
+# specified this header; the implementation dropped it; nothing but a real
+# container could have caught it, which is exactly what the e2e was for.
+#
+# Value is inert and self-identifying: it is a fabricated name that matches no
+# session scheme, sent to a container in a sandbox with no egress.
+PROBE_COOKIE = "drydock_proof=1"
+
 
 def run_cors_probe(
     build_dir: Path,
@@ -137,10 +159,14 @@ def run_cors_probe(
 def _default_fetch(
     host_port: int, path: str, probe_origin: str,
 ) -> Mapping[str, str]:
-    """GET the booted app from a foreign origin and return its headers.
+    """GET the booted app from a foreign origin, with a credential, and return
+    its headers.
 
     The URL is built from the port WE published on loopback; nothing from the
     repository under test contributes to it (see the module's SECURITY note).
+    The Cookie is what makes this a credentialed request — see PROBE_COOKIE
+    for the measurement that forced it.
+
     A preflight OPTIONS is not sent: the oracle judges the actual response,
     and a server that reflects on GET is exploitable whether or not its
     preflight agrees.
@@ -150,7 +176,7 @@ def _default_fetch(
     url = f"http://127.0.0.1:{int(host_port)}{path if path.startswith('/') else '/' + path}"
     response = httpx.get(
         url,
-        headers={"Origin": probe_origin},
+        headers={"Origin": probe_origin, "Cookie": PROBE_COOKIE},
         timeout=PROBE_TIMEOUT_S,
         follow_redirects=False,
     )

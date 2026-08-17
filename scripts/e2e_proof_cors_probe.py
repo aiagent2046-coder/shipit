@@ -15,11 +15,21 @@ It builds two tiny FastAPI apps:
 
   VULNERABLE — CORSMiddleware with allow_origins=["*"] AND
                allow_credentials=True, which Starlette turns into origin
-               REFLECTION: it echoes back whatever Origin it was handed. That
-               is the shape the oracle calls exploitable, and it is worth
-               knowing that the framework's own behaviour, not our regex,
-               produces it.
+               REFLECTION **for a credentialed request**: it echoes back
+               whatever Origin it was handed. That is the shape the oracle
+               calls exploitable, and it is worth knowing that the framework's
+               own behaviour, not our regex, produces it.
   PATCHED    — the same app with the origin pinned to one host.
+
+FIRST RUN, 2026-08-17: this script failed, and the failure was real. The
+vulnerable app answered a bare `*` and the probe reported "not exploitable".
+Cause: Starlette 0.40 (what fastapi==0.115.0 pulls) reflects only
+`if self.allow_all_origins and has_cookie`, and the probe was sending no
+Cookie — so an app a browser session could read cross-origin was being
+judged safe. Fixed in app/proof/cors_probe.py (PROBE_COOKIE). Starlette 1.6
+keys the same branch off allow_credentials instead, so the two versions
+disagree about an identical application; the oracle judges headers rather
+than frameworks, which is why only the probe needed changing.
 
 Expected: the first probe returns status=success (credentialed reflection),
 the second returns status=failure (the pinned origin is not ours). Any other

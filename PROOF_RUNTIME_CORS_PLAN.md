@@ -246,14 +246,41 @@ Docker cannot run in unit tests, so:
    the static report, the flag defaulting on, booting without a Dockerfile,
    booting when the scanner found nothing.
 
-   **What remains, and it is the part that matters:**
-   * `scripts/e2e_proof_cors_probe.py` exists but **has never been run** —
-     no docker in the authoring environment. It builds a deliberately
-     vulnerable FastAPI app and its patched twin and asserts
-     success-then-failure. Running it green on a runner host is the first
-     real boot this feature has ever had, and it may falsify something these
-     tests cannot see (that `/` redirects, that Starlette's reflection
-     behaviour differs from the assumption, that 8000 is the wrong port).
+   **First real boot: 2026-08-17, and it falsified an assumption — exactly
+   the sentence above, which turned out to be right about the risk and even
+   about the example.** Both containers built, answered `HTTP 200 on /`, were
+   probed and torn down: the infrastructure works end to end. But the
+   deliberately vulnerable app came back **not exploitable**. It answered a
+   bare `*`, because Starlette 0.40 (what `fastapi==0.115.0` pulls) reflects
+   the caller's Origin only `if self.allow_all_origins and has_cookie` — and
+   the probe was sending no Cookie. Starlette 1.6 keys the same branch off
+   `allow_credentials`, so two versions of one framework disagree about an
+   identical application.
+
+   The oracle was right and the probe was wrong: this template's claim is
+   about CREDENTIALED cross-origin reads, and a request carrying no
+   credential cannot demonstrate one. Uncorrected it would have
+   systematically **under-reported** — an app a real browser session could
+   read cross-origin, filed as safe. This plan specified `Cookie:
+   session=<любой>` in the oracle section and the implementation dropped it;
+   nothing but a real container could have caught that. Fixed via
+   `PROBE_COOKIE` in `app/proof/cors_probe.py`, pinned by test.
+
+   Also worth recording, because it is a deploy fact nobody had written down:
+   the sandbox runner is a **separate deployment** (`/opt/shipit-runner`, its
+   own clone, venv and `sandbox-runner.service`), and
+   `deploy/scripts/deploy-production.sh` never touches it. The first attempt
+   returned `404 Not Found` from `/proof/cors-probe` because the backend was
+   on the new release and the runner was still running August 6th's code.
+   Any release that changes runner-side code needs that clone updated and the
+   unit restarted, by hand.
+
+   **What remains:**
+   * a re-run of `scripts/e2e_proof_cors_probe.py` with the cookie fix, to see
+     the vulnerable app come back `success` and the patched one `failure`.
+     Until that has been observed, the probe's positive path is still
+     unproven — the first boot proved only that the negative paths and the
+     infrastructure work.
    * the corpus yield measurement: of repositories where the static scanner
      hits, what share carry a root Dockerfile and actually boot. Until that
      number exists, nothing about "we run the attack" goes into marketing.
