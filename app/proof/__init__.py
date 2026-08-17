@@ -12,23 +12,24 @@ Delivery gate is controlled by ``PROOF_GATE_MODE`` (see ``app.proof.gate``):
 * ``hard`` — non-verified reproducible exploit becomes ``blocked``
   (same shape as a semantic-check regression)
 
-Templates live in ``app.proof.templates``. Only ``secrets_leak`` is
-implemented; ``sqli`` and ``cors_open`` are registered stubs that return
-skipped attempts so the registry shape is stable from day one.
+Templates live in ``app.proof.templates``. Stage routing (``app.proof.routing``)
+picks which templates to run based on the Fix Pack plan and whether
+findings sit in files the plan rewrites.
 """
 
 from app.proof.compare import build_proof_report, run_proof_pair
 from app.proof.gate import decide_proof_gate, proof_gate_mode
-from app.proof.workspace import apply_plan_to_zip
-from app.proof.stage import run_proof_stage
 from app.proof.registry import TEMPLATE_IDS, get_template, list_templates
-from app.proof.render import render_proof_markdown
+from app.proof.render import render_proof_markdown, render_proof_sections
+from app.proof.stage import ProofStageResult, run_proof_stage
 from app.proof.types import ExploitAttempt, ProofReport, proof_report_to_json
+from app.proof.workspace import apply_plan_to_zip
 
 __all__ = [
     "TEMPLATE_IDS",
     "ExploitAttempt",
     "ProofReport",
+    "ProofStageResult",
     "build_proof_report",
     "decide_proof_gate",
     "get_template",
@@ -36,6 +37,7 @@ __all__ = [
     "proof_gate_mode",
     "proof_report_to_json",
     "render_proof_markdown",
+    "render_proof_sections",
     "run_proof_pair",
     "apply_plan_to_zip",
     "run_proof_stage",

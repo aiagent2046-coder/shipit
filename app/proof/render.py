@@ -10,8 +10,17 @@ from __future__ import annotations
 from app.proof.types import ProofReport
 
 
-def render_proof_markdown(report: ProofReport) -> str:
-    """Render one ProofReport as a PR section. Empty string if skipped."""
+def render_proof_markdown(report: ProofReport | object) -> str:
+    """Render one ProofReport as a PR section. Empty string if skipped.
+
+    Also accepts a ``ProofStageResult`` and renders all of its reports.
+    """
+    if hasattr(report, "reports") and hasattr(report, "primary"):
+        return render_proof_sections(list(getattr(report, "reports") or []))
+
+    if not isinstance(report, ProofReport):
+        return ""
+
     if report.before.status == "skipped" and report.after.status == "skipped":
         return ""
 
@@ -62,8 +71,6 @@ def render_proof_markdown(report: ProofReport) -> str:
         and report.before.status == "success"
         and report.after.status not in ("error", "skipped")
     ):
-        # Soft-gate case: still delivered, but the report must not look
-        # like a clean pass. Hard-gate jobs never reach PR rendering.
         lines.append("")
         lines.append(
             "> ⚠️ Soft gate: эксплойт всё ещё срабатывает после предложенного "
@@ -88,7 +95,7 @@ def _evidence_lines(report: ProofReport) -> list[str]:
         evidence = attempt.evidence or {}
         count = evidence.get("finding_count")
         if isinstance(count, int):
-            bits.append(f"{label}: найдено секретов (high+): {count}")
+            bits.append(f"{label}: найдено (high+): {count}")
         samples = evidence.get("samples")
         if isinstance(samples, list) and samples:
             for sample in samples[:3]:
@@ -96,9 +103,21 @@ def _evidence_lines(report: ProofReport) -> list[str]:
                     continue
                 path = sample.get("file", "?")
                 line = sample.get("line", "?")
-                masked = sample.get("masked", "?")
                 rule = sample.get("rule_id", "?")
-                bits.append(
-                    f"{label}: `{path}:{line}` — {rule} (`{masked}`)"
-                )
+                masked = sample.get("masked")
+                snippet = sample.get("snippet")
+                extra = masked or snippet or ""
+                if extra:
+                    bits.append(
+                        f"{label}: `{path}:{line}` — {rule} (`{extra}`)"
+                    )
+                else:
+                    bits.append(f"{label}: `{path}:{line}` — {rule}")
     return bits
+
+
+def render_proof_sections(reports: list[ProofReport]) -> str:
+    """Join multiple proof sections with horizontal rules. Empty if none."""
+    parts = [render_proof_markdown(r) for r in reports]
+    parts = [p for p in parts if p]
+    return "\n\n---\n\n".join(parts)

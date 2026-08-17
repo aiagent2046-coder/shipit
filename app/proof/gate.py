@@ -13,6 +13,9 @@ Mode is read from ``PROOF_GATE_MODE`` (default ``soft``):
 Infrastructure failures and skipped templates never block (fail-open).
 A report is only actionable when the original workspace actually
 reproduced the exploit (``before.success``).
+
+When multiple reports are present (stage routing), the strongest decision
+wins: hard_fail > soft_fail > pass.
 """
 
 from __future__ import annotations
@@ -36,26 +39,48 @@ def proof_gate_mode() -> GateMode:
     return raw  # type: ignore[return-value]
 
 
-def decide_proof_gate(report: ProofReport | None) -> GateDecision:
-    """Map a (possibly missing) ProofReport onto a delivery decision.
+def decide_proof_gate(
+    report: ProofReport | None | object,
+    reports: list[ProofReport] | None = None,
+) -> GateDecision:
+    """Map proof report(s) onto a delivery decision.
 
-    Returns:
-        ``pass``      — deliver normally
-        ``soft_fail`` — deliver with a strong warning
-        ``hard_fail`` — withhold the PR (status=blocked)
+    ``report`` is the primary (legacy). When ``reports`` is provided, every
+    report is evaluated and the strongest failure wins.
+
+    Also accepts a ``ProofStageResult`` (has ``.primary`` / ``.reports``) so
+    callers that still do ``decide_proof_gate(await run_proof_stage(...))``
+    keep working after stage routing.
     """
-    if report is None:
+    if report is not None and hasattr(report, "primary") and hasattr(report, "reports"):
+        if reports is None:
+            reports = list(getattr(report, "reports") or [])
+        report = getattr(report, "primary")
+
+    candidates: list[ProofReport] = []
+    if reports:
+        candidates.extend(reports)
+    elif report is not None:
+        candidates.append(report)  # type: ignore[arg-type]
+
+    if not candidates:
         return "pass"
 
-    # Only actionable when the original workspace actually reproduced the
-    # exploit. A static finding that never reproduced is not a delivery gate.
+    decisions = [_decide_one(r) for r in candidates]
+    if "hard_fail" in decisions:
+        return "hard_fail"
+    if "soft_fail" in decisions:
+        return "soft_fail"
+    return "pass"
+
+
+def _decide_one(report: ProofReport) -> GateDecision:
     if not report.before.success or report.before.status != "success":
         return "pass"
 
     if report.verified:
         return "pass"
 
-    # Infrastructure / skip on either side → fail-open.
     if report.before.status in ("error", "skipped") or report.after.status in (
         "error",
         "skipped",
