@@ -7,14 +7,12 @@
  from app.scan.secrets import (
      NON_PRODUCTION_CONTEXTS,
      RULES,
-@@ -790,6 +791,44 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
+@@ -790,6 +791,42 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
      # fix AND the same exposure; the untracking and the .gitignore are still
      # worth having. It is a reason to stop CLAIMING, which is what the PR body
      # does with this list.
 +
 +    # --- Static CORS / SQLi rewrites (independent of audit rule_ids).
-+    # Build a working tree of repo-relative texts (plan.files wins over
-+    # original contents) so we fix the version the PR will actually ship.
 +    working: dict[str, str] = {}
 +    for name, text in contents.items():
 +        rel = _repo_relative(name)
