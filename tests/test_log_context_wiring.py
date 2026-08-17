@@ -399,8 +399,9 @@ async def test_the_monitoring_drain_binds_the_run_and_its_audit(
             return [{"telegram_chat_id": "chat-1"}]
 
     class _Audits:
-        async def get_latest_by_repo_url(self, repo_full_name, basis):
-            return None
+        async def list_findings_by_repo_url(self, repo_full_name, basis,
+                                            limit=50):
+            return []
 
     class _Runs:
         def __init__(self):
