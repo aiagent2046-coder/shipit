@@ -506,6 +506,53 @@ only if those two have no further blocking step. A feature whose applicability
 is bounded by our own sandbox architecture — not by what customers write — is
 worth knowing about before, not after, anything is claimed for it.
 
+### The re-measurement: 0 of 7, and the ceiling was not 2
+
+With the allowlist installed and verified (pypi 200, Alpine APKINDEX 200
+through the proxy), the two Alpine-blocked repos got *far* further — LibreChat
+from 7s to **172.9s**, Flowise to **291s**, both deep into their real
+dependency installs. Then both failed, on a third constraint neither the
+Dockerfile gate nor BuildKit predicted:
+
+* **LibreChat** — `npm error 403 GET https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`.
+  SheetJS distributes off-registry from its own CDN.
+* **Flowise** — `prebuild-install` fetching
+  `https://github.com/ewfian/faiss-node/releases/download/v0.5.1/…`:
+  `tunneling socket could not be established, statusCode=403`. Then
+  `sh: git: not found` as pnpm fell back to a git dependency.
+
+These are the exact grants the allowlist deliberately withholds, recorded in
+its own "Deliberately NOT here" section: arbitrary GitHub release binaries and
+vendor CDNs, a categorically wider surface than a curated package index. The
+measurement did not find a missing entry — it found that **a curated
+package-index allowlist structurally cannot build a large share of real Node
+applications**, because modern builds routinely pull native prebuilds from
+GitHub releases, packages from vendor CDNs, and dependencies over git.
+
+**Final detector-mode result on this corpus: 0 of 7 booted.** Three
+independent blockers, none of them about the applications' CORS posture:
+
+| blocker | repos | what lifting it costs |
+|---|---|---|
+| no root Dockerfile | 4 | nothing to lift — monorepos with per-component images |
+| BuildKit-only syntax (`RUN --mount`) | 1 | re-open the socket-proxy's grpc SESSION endpoint |
+| build egress beyond package indexes | 2 | allow arbitrary GitHub releases + vendor CDNs |
+
+### Conclusion: close the detector experiment
+
+Option 2 from "Two honest options" — run the probe as a detector on any
+bootable repository — **is not viable at an acceptable price.** It requires
+three separate loosenings of the build sandbox, two of them security-relevant
+(a wide-open code-ingress path, and BuildKit's session endpoint), to reach a
+population whose CORS posture we have no evidence is interesting. Each of the
+three was discovered only by running it, which is the argument for having run
+it: a day of measurement instead of a feature built on a false premise.
+
+What stands: runtime CORS remains a **prover** for the rare case the static
+template hits, proven end to end against containers (#282), `PROOF_RUNTIME_CORS=0`
+by default. What must not be said: that any of these 19 repositories was
+checked and found clean. Not one of the seven backends was ever started.
+
 ## Not in scope
 
 * SQLi and BOLA runtime probes — need endpoint discovery, seeded state and an
