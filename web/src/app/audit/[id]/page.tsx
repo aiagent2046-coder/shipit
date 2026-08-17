@@ -242,6 +242,7 @@ function AuditPageInner() {
               gatedBy={view.score.gated_by}
               unexamined={view.score.unexamined}
               scored={scored}
+              findings={view.findings}
             />
             {!scored && (
               <div className="mt-4 text-sm text-muted">

@@ -58,23 +58,34 @@ def test_the_band_floor_is_derived_and_not_typed_out():
 
 
 def _ts_bands() -> list[tuple[str, int, str]]:
-    """(label, pct, colour) for each branch of categoryBand, in source order."""
+    """(label, pct, colour) for each DISTINCT band of categoryBand, in source
+    order. Distinct, because the serious-finding override is a fourth return
+    statement that reuses the middle band verbatim -- one more branch, not one
+    more band. A branch that invented a fourth (label, pct, colour) triple
+    would still fail the count below."""
     body = _FORMAT_TS.read_text().split("export function categoryBand")[1]
+    body = body.split("export ")[0]
     found = re.findall(
         r'label: "([^"]+)", pct: (\d+), color: "(#[0-9a-fA-F]+)"', body)
-    assert len(found) == 3, f"expected three bands, found {len(found)}"
-    return [(label, int(pct), colour) for label, pct, colour in found]
+    distinct = list(dict.fromkeys(
+        (label, int(pct), colour) for label, pct, colour in found))
+    assert len(distinct) == 3, f"expected three bands, found {distinct}"
+    return distinct
 
 
 def test_both_surfaces_use_the_same_words_and_widths():
     """A reader who opens the report from the page must not be told two
     different things about one category. The colours are allowed to differ --
     the two surfaces have different palettes -- but the claim may not."""
-    python = [_band(v) for v in (GATE_THRESHOLD, GATE_THRESHOLD / 2, 0.0)]
+    # As (label, width) pairs rather than in source order: the serious-finding
+    # override sits above the top-band return in the TS, so branch order and
+    # band order stopped agreeing -- position was always the fragile axis here,
+    # the pairing of words to widths is the claim.
+    python = {(_band(v)[0], _band(v)[1])
+              for v in (GATE_THRESHOLD, GATE_THRESHOLD / 2, 0.0)}
+    ts = {(label, pct) for label, pct, _ in _ts_bands()}
 
-    for (ts_label, ts_pct, _), (py_label, py_pct, _) in zip(_ts_bands(), python):
-        assert ts_label == py_label
-        assert ts_pct == py_pct
+    assert ts == python
 
 
 def test_the_web_bands_are_told_apart_by_colour():
@@ -168,6 +179,85 @@ def test_the_cap_paragraph_is_withheld_where_there_is_no_score():
 
     assert re.search(r"\{scored && <GateNote", bars), (
         "the cap paragraph renders regardless of whether a score was published")
+
+
+# --- the serious-finding band override ---------------------------------------
+#
+# A category holding a confident critical or high may not claim the top band:
+# audits ba360e21 and b4bf9c07 both top-banded Auth over unauthenticated
+# endpoints, because one high costs 1.0 x confidence against a threshold of
+# 7.0. The rule is render-side (so stored audits are fixed too) and therefore
+# duplicated across both renderers, like the band itself.
+
+
+def test_the_serious_override_exists_in_both_renderers():
+    from app.report.html import _band
+
+    assert _band(8.6, holds_serious=True)[0] == "problems found"
+    assert _band(8.6, holds_serious=False)[0] == "nothing serious found"
+    # Never lifts: a low row with the flag stays in its own band.
+    assert _band(2.2, holds_serious=True)[0] == "serious problems"
+
+    # The branch, not the parameter: a mutation that deleted the override's
+    # body left "holdsSerious" sitting in the signature and this assertion
+    # green. The claim is that inside the top-band branch the flag returns
+    # the middle band.
+    ts = _FORMAT_TS.read_text().split("export function categoryBand")[1]
+    ts = ts.split("export ")[0]
+    assert re.search(
+        r'if \(holdsSerious\) \{[^}]*"problems found"', ts), (
+        "categoryBand has no serious-finding branch returning the middle band")
+
+
+def test_the_ts_confidence_floor_is_the_scorers():
+    """0.7 is CRITICAL_GATE_MIN_CONFIDENCE. TypeScript cannot import it, so
+    this is the copy that would silently drift when the scorer's moves."""
+    from app.scan.scoring import CRITICAL_GATE_MIN_CONFIDENCE
+
+    text = _FORMAT_TS.read_text()
+    declared = re.search(
+        r"const SERIOUS_BAND_MIN_CONFIDENCE = ([0-9.]+);", text)
+    assert declared, "the TS floor is not declared as a plain number"
+    assert float(declared.group(1)) == CRITICAL_GATE_MIN_CONFIDENCE
+
+
+def test_both_renderers_select_serious_categories_the_same_way():
+    """Same severities, same floor, same scoping to the finding's category.
+    Checked structurally on the TS (it has no test runner) and behaviourally
+    on the Python."""
+    from app.report.html import _serious_categories
+
+    findings = [
+        {"category": "Auth", "severity": "high", "confidence": 0.9},
+        {"category": "Security", "severity": "medium", "confidence": 0.95},
+        {"category": "Deploy", "severity": "high", "confidence": 0.5},
+        {"category": "Money & Data", "severity": "critical", "confidence": 0.7},
+    ]
+    assert _serious_categories(findings) == {"Auth", "Money & Data"}
+
+    ts = _FORMAT_TS.read_text().split("export function seriousCategories")[1]
+    ts = ts.split("export ")[0]
+    assert '"critical"' in ts and '"high"' in ts
+    assert "SERIOUS_BAND_MIN_CONFIDENCE" in ts
+
+
+def test_the_bars_ask_the_band_about_serious_findings():
+    """The whole chain, on the component: computing the set and then not
+    consulting it renders every band uncapped. A mutation that dropped the
+    second argument of categoryBand survived every other assertion here."""
+    bars = _SCORE_RING_TSX.read_text().split("export function CategoryBars")[1]
+
+    assert "seriousCategories(findings)" in bars
+    assert re.search(r"categoryBand\(value,\s*serious\.has\(name\)\)", bars)
+
+
+def test_the_page_hands_findings_to_the_bars():
+    """The override starves silently without them: CategoryBars defaults
+    findings to [] and every band renders uncapped."""
+    page = _PAGE_TSX.read_text()
+
+    assert re.search(r"<CategoryBars[^>]*findings=\{view\.findings\}", page,
+                     re.DOTALL), "CategoryBars is rendered without findings"
 
 
 def test_the_total_keeps_its_number_on_the_page():

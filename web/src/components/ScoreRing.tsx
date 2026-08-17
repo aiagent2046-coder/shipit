@@ -1,4 +1,9 @@
-import { categoryBand, scoreColor, scoreVerdict } from "@/lib/format";
+import {
+  categoryBand,
+  scoreColor,
+  scoreVerdict,
+  seriousCategories,
+} from "@/lib/format";
 import type { GateReason } from "@/lib/types";
 
 export function ScoreRing({ total }: { total: number }) {
@@ -87,6 +92,7 @@ export function CategoryBars({
   gatedBy,
   unexamined,
   scored = true,
+  findings = [],
 }: {
   categories: Record<string, number>;
   gatedBy?: GateReason[];
@@ -108,13 +114,19 @@ export function CategoryBars({
    * Read from the score rather than derived here: the rule for which
    * categories an LLM-less scan cannot fill lives in app/scan/scoring.py. */
   unexamined?: string[];
+  /** The audit's findings, for the serious-finding band override: a category
+   * holding a confident critical or high may not claim the top band, because
+   * the table below marks those rows "Important". See seriousCategories in
+   * lib/format.ts and _serious_categories in app/report/html.py. */
+  findings?: { category?: string; severity: string; confidence?: number }[];
 }) {
   const skipped = new Set(unexamined ?? []);
+  const serious = seriousCategories(findings);
   return (
     <>
       <div className="flex flex-col gap-2">
         {Object.entries(categories).map(([name, value]) => {
-          const band = categoryBand(value);
+          const band = categoryBand(value, serious.has(name));
           const partial = !scored && !skipped.has(name);
           return (
           <div key={name} className="flex items-center gap-3 text-sm">
