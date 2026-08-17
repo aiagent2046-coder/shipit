@@ -10,12 +10,15 @@ from __future__ import annotations
 from app.proof.artifacts import ProofArtifact, render_artifacts_markdown
 from app.proof.types import ProofReport
 
-# Printed under every proof section, and load-bearing rather than decorative.
+# Printed under a STATIC proof section, and load-bearing rather than
+# decorative.
 #
-# All three templates are static scanners: secrets_leak re-runs
+# The three routed templates are static scanners: secrets_leak re-runs
 # app.scan.secrets, sqli and cors_open match regexes over the workspace zip.
-# Nothing in app/proof/ opens a socket, starts a container, or executes the
-# target — `success` means "the pattern is present", not "the attack ran".
+# None of them opens a socket, starts a container, or executes the target —
+# `success` means "the pattern is present", not "the attack ran". (Since P1
+# there is also cors_open_runtime, which does boot the app; it carries
+# _RUNTIME_METHOD_NOTE below instead, and nothing routes to it yet.)
 #
 # The wording here used to say "атака сработала до патча и не сработала
 # после". On a leaked key that is nearly true; on a regex hit for sqli or
@@ -29,6 +32,30 @@ _METHOD_NOTE = (
     "после патча. Атака не выполняется — «найдено» означает наличие "
     "конструкции, а не подтверждённую эксплуатацию._"
 )
+
+# The runtime counterpart. A report from app/proof/cors_probe.py earned a
+# stronger sentence than the static note above: the application was actually
+# built, started and asked. Printing the static disclaimer over it would
+# understate the evidence just as badly as the old wording overstated it —
+# the note has to describe the method that ran, not the method most templates
+# use.
+_RUNTIME_METHOD_NOTE = (
+    "_Проверка динамическая: приложение собрано и запущено в изолированной "
+    "песочнице, запрос с постороннего Origin выполнен реально, вердикт "
+    "вынесен по ответным заголовкам._"
+)
+
+# Which note belongs to which template. A template absent from this map falls
+# back to the static note, which is the safe direction: understating a static
+# check costs nothing, overstating one is the defect this map exists to avoid.
+_METHOD_NOTES: dict[str, str] = {
+    "cors_open_runtime": _RUNTIME_METHOD_NOTE,
+}
+
+# Templates whose report describes a booted application rather than a scan.
+# Kept beside the notes so a future runtime template cannot pick up the
+# stronger verdict wording while still printing the static disclaimer.
+_RUNTIME_TEMPLATES = frozenset({"cors_open_runtime"})
 
 
 def render_proof_markdown(report: ProofReport | object) -> str:
@@ -50,20 +77,41 @@ def render_proof_markdown(report: ProofReport | object) -> str:
     if report.before.status == "skipped" and report.after.status == "skipped":
         return ""
 
-    before_cell = _cell(report.before.success, report.before.status)
-    after_cell = _cell(report.after.success, report.after.status)
+    runtime = str(report.template_id) in _RUNTIME_TEMPLATES
+    before_cell = _cell(report.before.success, report.before.status, runtime)
+    after_cell = _cell(report.after.success, report.after.status, runtime)
+    row_label = "Кросс-доменный запрос" if runtime else "Уязвимая конструкция"
 
     if report.verified:
+        # The runtime wording is stronger BECAUSE the evidence is: the app was
+        # built, started, and answered. Saying "конструкция найдена" over a
+        # real request would undersell it exactly as badly as the old static
+        # wording oversold a regex.
         verdict = (
+            "**подтверждён** — запрос с постороннего origin получил доступ "
+            "до патча и не получает после"
+            if runtime else
             "**подтверждён** — уязвимая конструкция найдена до патча "
             "и отсутствует после"
         )
     elif report.before.status in ("error",) or report.after.status in ("error",):
-        verdict = "не завершён (ошибка инфраструктуры)"
+        verdict = (
+            "не завершён — приложение не удалось собрать или запросить"
+            if runtime else
+            "не завершён (ошибка инфраструктуры)"
+        )
     elif not report.before.success:
-        verdict = "не найден на исходном коде — сравнивать нечего"
+        verdict = (
+            "запущенное приложение не подтвердило доступ — сравнивать нечего"
+            if runtime else
+            "не найден на исходном коде — сравнивать нечего"
+        )
     else:
-        verdict = "не подтверждён — конструкция на месте и после патча"
+        verdict = (
+            "не подтверждён — доступ выдаётся и после патча"
+            if runtime else
+            "не подтверждён — конструкция на месте и после патча"
+        )
 
     lines = [
         "## Проверка «до / после»",
@@ -73,11 +121,11 @@ def render_proof_markdown(report: ProofReport | object) -> str:
         "",
         "| | До патча | После патча |",
         "|---|---|---|",
-        f"| Уязвимая конструкция | {before_cell} | {after_cell} |",
+        f"| {row_label} | {before_cell} | {after_cell} |",
         "",
         f"_{report.detail}_",
         "",
-        _METHOD_NOTE,
+        _METHOD_NOTES.get(str(report.template_id), _METHOD_NOTE),
     ]
 
     evidence_bits = _evidence_lines(report)
@@ -107,14 +155,16 @@ def render_proof_markdown(report: ProofReport | object) -> str:
     return "\n".join(lines)
 
 
-def _cell(success: bool, status: str) -> str:
+def _cell(success: bool, status: str, runtime: bool = False) -> str:
     if status == "skipped":
         return "пропущено"
     if status == "error":
-        return "ошибка"
-    # "найдена"/"не найдена", not "успех"/"нет": the column reports what the
-    # scanner saw in the code, and a ✅ next to "успех" read as a successful
-    # attack.
+        return "не проверено"
+    # The static column reports what the scanner saw in the code; the runtime
+    # column reports what the running application did. Neither says "успех",
+    # which read as a successful attack whichever half produced it.
+    if runtime:
+        return "⚠️ доступ разрешён" if success else "✅ отклонён"
     return "⚠️ найдена" if success else "✅ не найдена"
 
 
@@ -122,6 +172,23 @@ def _evidence_lines(report: ProofReport) -> list[str]:
     bits: list[str] = []
     for label, attempt in (("до", report.before), ("после", report.after)):
         evidence = attempt.evidence or {}
+
+        # Runtime evidence is the transcript, and it is the whole point of
+        # having booted the app: the reader sees the headers the server
+        # actually sent, not our summary of them.
+        if "allow_origin" in evidence or "allow_credentials" in evidence:
+            origin = evidence.get("allow_origin")
+            creds = evidence.get("allow_credentials")
+            bits.append(
+                f"{label}: `Access-Control-Allow-Origin: "
+                f"{origin if origin else '(отсутствует)'}`"
+            )
+            bits.append(
+                f"{label}: `Access-Control-Allow-Credentials: "
+                f"{creds if creds else '(отсутствует)'}`"
+            )
+            continue
+
         count = evidence.get("finding_count")
         if isinstance(count, int):
             bits.append(f"{label}: найдено (high+): {count}")
