@@ -26,6 +26,21 @@ import app.main as main_mod
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 
 
+class FakeFixpackRepoWithProof(FakeFixpackRepo):
+    """Extends the process-endpoint fake with proof_json persistence.
+
+    run_proof_stage always calls set_proof_json; without it the stage
+    fail-opens (returns None) and the PR body never gets the section.
+    """
+
+    def __init__(self, jobs: list[dict], reap: dict[str, int] | None = None):
+        super().__init__(jobs, reap)
+        self.proof_json: dict[str, dict] = {}
+
+    async def set_proof_json(self, job_id, proof):
+        self.proof_json[job_id] = proof
+
+
 def _healthy_runner(monkeypatch):
     monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
     monkeypatch.setattr(main_mod.sandbox_client, "minimal_check", local_minimal_check)
@@ -60,7 +75,7 @@ def test_proof_section_in_pr_body_after_secrets_fix(monkeypatch):
             branch="drydock/fix-pack-proof",
         )
 
-    fixpack_repo = FakeFixpackRepo(jobs)
+    fixpack_repo = FakeFixpackRepoWithProof(jobs)
     override(FakeAuditRepo(audits), fixpack_repo,
              fake_fetcher_returning(zip_bytes), fake_opener,
              llm_client=ExplodingLLM())
@@ -119,7 +134,7 @@ def test_proof_hard_gate_blocks_when_secret_survives(monkeypatch):
             branch="drydock/fix-pack-x",
         )
 
-    fixpack_repo = FakeFixpackRepo(jobs)
+    fixpack_repo = FakeFixpackRepoWithProof(jobs)
     override(FakeAuditRepo(audits), fixpack_repo,
              fake_fetcher_returning(zip_bytes), fake_opener,
              llm_client=ExplodingLLM())
