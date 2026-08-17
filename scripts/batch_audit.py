@@ -9,9 +9,10 @@ that already exist, which is why every entry is pinned to the revision those
 measurements were made on.
 
 What each series is for:
-  ai-co-founder-matching  #34 -- two runs exist (5.5 and 5.1, a third of the
-                          findings list changed). Three more turn the pair
-                          into a band and per-severity reproduction rates.
+  ai-co-founder-matching  #34 -- the production pair (5.5 and 5.1, a third of
+                          the findings list changed) proved the variance;
+                          three runs on the current engine give it a band and
+                          per-severity reproduction rates.
   blank-slate             #34 second profile; #32 recall -- the union of these
                           runs plus the existing Haiku run, hand-verified, is
                           the denominator a single run's recall is measured
@@ -22,12 +23,17 @@ What each series is for:
                           medium/low while the SSRF stays high+. Also the only
                           series with hand-verified precision (20/22), so it
                           measures reproduction of KNOWN-TRUE findings.
-  VibeBrowserProductPage  clean control (9.2): does a clean repo stay clean
-                          across runs? Decides whether monitoring can alert
-                          on any new critical/high or only on reproducing
-                          classes. Replaces tiagosvalerio/rexisdata-landing
-                          (9.8 control in the old list), which no longer
-                          resolves anonymously -- gone private or deleted.
+  zombiecodersmarteditor  clean control (9.6/9.7 on 2026-08-17): does a clean
+                          repo stay clean across runs? Decides whether
+                          monitoring can alert on any new critical/high or
+                          only on reproducing classes. Third holder of the
+                          role: rexisdata-landing (9.8) went private or
+                          deleted, and VibeBrowserProductPage -- picked as its
+                          replacement on its July score of 9.2 -- scored
+                          6.3/6.4 with ~10 LLM findings when the survey re-ran
+                          it on today's engine, which disqualifies it as a
+                          control and is itself a datum: engine drift moved a
+                          repo three points in a month.
 
 Usage (on the VPS, from /opt/shipit, with .env exported):
     set -a; . ./.env; set +a
@@ -85,24 +91,28 @@ class Series:
 
 
 SERIES = [
-    Series(name="aiagent2046-coder__ai-co-founder-matching", runs=5,
+    Series(name="aiagent2046-coder__ai-co-founder-matching", runs=3,
            slug="aiagent2046-coder/ai-co-founder-matching",
            sha="c15be34f488521123a0ff77a30a7f885c3f1fdc6"),
-    # The two existing runs (5.5 / 5.1) went through the production pipeline,
-    # not this script, so they are not on disk here; runs=5 spends 3 new runs
-    # and the band is read across all five (the two production totals are
-    # printed alongside by hand -- their full JSONs live in the audit rows).
-    Series(name="Avisafety-1__blank-slate", runs=2,
+    # The two production runs (5.5 / 5.1, engine 2026-08-14-5) are not on
+    # disk here and are not spliced in: the engine moved since. The band is
+    # read across these three, with the production pair quoted alongside as
+    # the prior engine's measurement.
+    Series(name="Avisafety-1__blank-slate", runs=4,
            slug="Avisafety-1/blank-slate",
            sha="5e82a79a2b5381bd544d7bbc21722ee7a5d1a4d6",
-           # prompt_chars on all three existing byte-identical audits. The SHA
-           # above is today's main head, resolved 2026-08-17; if the repo moved
-           # since the audits, this check is what catches it.
-           expect_prompt_chars=4_161_116),
+           # Measured on the two 2026-08-17 survey runs at this SHA, which
+           # matched each other byte for byte. NOT the 4,161,116 the three
+           # July audits recorded: same repo, but the engine's prompt assembly
+           # changed in between (truncation fixes among others), so those
+           # three are a closed series on a prior engine -- the July totals
+           # (4.1/4.0/4.1) are quoted next to today's, never averaged in.
+           expect_prompt_chars=4_162_085),
     Series(name="fb00b177", runs=3, zip_env="FB00B177_ZIP"),
-    Series(name="dzianisv__VibeBrowserProductPage", runs=3,
-           slug="dzianisv/VibeBrowserProductPage",
-           sha="d767bc1246c38d32045ffe51407278b6658155ed"),
+    Series(name="SahonSrabon__zombiecodersmarteditor", runs=3,
+           slug="SahonSrabon/zombiecodersmarteditor",
+           sha="a787a111ede8c17ad23cd38a46eaa0f39b543aa0",
+           expect_prompt_chars=932_766),
 ]
 
 OUT = Path(__file__).resolve().parent.parent / "batch_reports"
