@@ -310,6 +310,36 @@ def test_full_report_is_unchanged_and_missing_basis_keeps_its_score():
     assert 'class="ring"' in html2 and "6.4" in html2
 
 
+def test_a_full_audit_says_its_findings_are_two_passes_not_a_census():
+    """The paid tier's honesty note: a full audit is passes=2 (union-of-N) and
+    a model's findings are a sample, so the list is "the strongest issues we
+    can confirm", never a proof the rest is clean. Measured on four
+    same-engine runs of unchanged code -- highs reproduced 65-84%, one real
+    critical in 2 of 4 -- which is why the page must not imply exhaustiveness.
+
+    Anchored on the asymmetry sentence, not a stray word: the whole point is
+    that absence is weaker evidence than presence, and a note that lost that
+    clause would still contain "audit" and "findings"."""
+    scored = result([_finding()])
+    scored["score"]["basis"] = "static+llm"
+    html = render_report(scored)
+    assert "How complete is this list" in html
+    assert "the absence of one is weaker evidence than its presence" in html
+
+
+def test_a_free_scan_makes_no_two_pass_claim():
+    """The note is basis-specific like the free scope note above it: a free
+    scan is one pass of the cheapest model and may not promise it read the
+    code twice. static_only and static+preview both count as unscored."""
+    for basis in ("static_only", "static+preview"):
+        r = result([_finding()])
+        r["score"]["basis"] = basis
+        r["score"]["unexamined"] = ["Auth", "Money & Data"]
+        html = render_report(r)
+        assert "How complete is this list" not in html, basis
+        assert "reads your code with a language model twice" not in html, basis
+
+
 # --- why a score was capped -------------------------------------------------
 
 def _gated(reasons: list[dict], basis: str = "static+llm") -> dict:

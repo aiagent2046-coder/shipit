@@ -1,5 +1,5 @@
 """Findings diff for continuous monitoring: which critical/high findings in a
-new audit are NEW versus the previous audit of the same repo.
+new audit are NEW versus every prior audit of the same repo.
 
 A finding's identity across audit runs is (rule_id, file). We deliberately
 EXCLUDE `line`: the LLM/static scanners report a line number, but it shifts when
@@ -13,7 +13,15 @@ findings set (any severity), and the finding is critical or high now. So a
 finding that was medium before and is high now on the same (rule_id, file) is
 NOT flagged -- it's the same issue re-scored, not a new one. Severity-escalation
 alerts are a deliberate non-goal of this MVP.
-"""
+
+`previous` should be the UNION of all prior comparable audits, not the latest
+one (the caller flattens AuditRepository.list_findings_by_repo_url). The LLM
+stage is sampled, not deterministic: four same-engine runs of unchanged code
+(2026-08-18) reproduced high-severity keys in ~65-84% of runs and one real
+critical in 2 of 4. Against a latest-only baseline that flicker IS the alert
+stream -- a high that skipped one run and returned would DM a paying
+subscriber about code nobody touched. Union membership is what separates "the
+sampler missed it last time" from "this push introduced it"."""
 
 from __future__ import annotations
 

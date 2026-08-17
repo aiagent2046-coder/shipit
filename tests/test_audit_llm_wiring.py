@@ -93,6 +93,55 @@ async def test_llm_findings_merged_when_providers_configured():
     assert any(f["rule_id"] == "llm-auth" for f in row["findings_json"])
 
 
+async def test_a_paid_audit_runs_two_passes_and_the_preview_runs_one():
+    """PAID_AUDIT_PASSES is wired, not narrated. The docstring that claimed
+    passes=2 while every caller passed 1 was quoted as fact twice before
+    anyone checked (task #13); this pins the claim to the call count, so the
+    next regression is a red test instead of a discovered sentence.
+
+    Measured reason for 2 (2026-08-18, four same-engine runs): one pass
+    surfaces 23-27 of a 34-key union -- a paid single pass was a sample sold
+    as a census."""
+
+    class CountingLLM(FakeLLM):
+        """The counter is a shared list, not an int: the preview path clones
+        the client via with_model (copy.copy), and an int bumped on the clone
+        would leave the original's attribute at 0."""
+
+        def __init__(self, counter):
+            super().__init__(response="[]")
+            self._counter = counter
+
+        def complete(self, system, user, max_tokens=4096):
+            self._counter.append(1)
+            return super().complete(system, user, max_tokens)
+
+    # Matches the auth rubric ("password", "token") AND the preview's
+    # security rubric ("query", "input"), so the anon leg below has a prompt
+    # to count rather than passing on an empty rubric match.
+    fixture = {
+        "package.json": NEXT_PKG,
+        "app/auth.ts": b"const password = 'x'  // auth token, sql query input",
+    }
+
+    baseline: list = []
+    run_scan(make_zip(fixture).getvalue(), CountingLLM(baseline),
+             llm_passes=1)
+    assert baseline, "the fixture must reach at least one rubric"
+
+    paid: list = []
+    await run_audit_job(make_zip(fixture).getvalue(),
+                        llm_client=CountingLLM(paid), account_id=_ACCOUNT_ID)
+    assert len(paid) == 2 * len(baseline)
+
+    # The preview stays a single pass of its narrowed rubric set -- fewer
+    # calls than even one full pass, and certainly no doubling.
+    anon: list = []
+    await run_audit_job(make_zip(fixture).getvalue(),
+                        llm_client=CountingLLM(anon), account_id=None)
+    assert 0 < len(anon) <= len(baseline)
+
+
 async def test_llm_failure_degrades_to_static_only_not_500():
     row = await run_audit_job(
         make_zip(AUTH_ZIP).getvalue(),

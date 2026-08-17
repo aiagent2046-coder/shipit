@@ -44,11 +44,16 @@ class FakeSubscriptionRepo:
 
 
 class FakeAuditRepo:
-    def __init__(self, previous=None):
-        self._previous = previous
+    """`previous` keeps the old single-audit shape most tests use; `history`
+    lets the flicker tests hand the processor several prior audits, which is
+    what the real repository method returns."""
 
-    async def get_latest_by_repo_url(self, repo_full_name, basis):
-        return self._previous
+    def __init__(self, previous=None, history=None):
+        self._history = history if history is not None else (
+            [previous["findings_json"]] if previous else [])
+
+    async def list_findings_by_repo_url(self, repo_full_name, basis, limit=50):
+        return self._history
 
 
 class FakeMonitoringRepo:
@@ -233,6 +238,40 @@ def test_no_new_findings_is_silent(monkeypatch):
          "telegram_user_id": "111"},
     ])
     audits = FakeAuditRepo(previous={"findings_json": [_f("r1", "a.py", "critical", line=1)]})
+    runs = FakeMonitoringRepo([_run()])
+    _override(subscription_repo=subs, monitoring_repo=runs, audit_repo=audits)
+    try:
+        resp = client.post("/internal/monitoring/process-pending", headers=auth())
+    finally:
+        _clear()
+
+    assert resp.json()["no_new"] == 1
+    assert resp.json()["notified"] == 0
+    assert sent == []
+    assert runs.runs["run-1"]["status"] == "done"
+
+
+def test_a_finding_the_sampler_dropped_and_resurfaced_is_not_news(monkeypatch):
+    """The union baseline, on the measurement that forced it: across four
+    same-engine runs of unchanged code a real critical appeared in only 2 of 4
+    (batch series, 2026-08-18). Here run N-2 saw the critical, run N-1 -- the
+    latest audit -- did not, and the current re-audit sees it again. Against a
+    latest-only baseline this DMs a paying subscriber about code nobody
+    touched; against the union it is silence."""
+    enable_monitoring(monkeypatch)
+    monkeypatch.setenv("MONITORING_PROCESS_TOKEN", "montoken")
+    sent = _capture_dms(monkeypatch)
+    _audit_returns(monkeypatch, [_f("llm-auth", "edge.ts", "critical"),
+                                 _f("r1", "a.py", "high")])
+
+    subs = FakeSubscriptionRepo([
+        {"repo_full_name": "acme/app", "telegram_chat_id": "111",
+         "telegram_user_id": "111"},
+    ])
+    audits = FakeAuditRepo(history=[
+        [_f("r1", "a.py", "high")],                                  # latest
+        [_f("llm-auth", "edge.ts", "critical"), _f("r1", "a.py", "high")],
+    ])
     runs = FakeMonitoringRepo([_run()])
     _override(subscription_repo=subs, monitoring_repo=runs, audit_repo=audits)
     try:

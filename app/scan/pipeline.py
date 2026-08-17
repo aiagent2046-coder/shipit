@@ -50,7 +50,29 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # byte-identical content recompute instead of reusing a now-stale row,
 # which is what stops an engine improvement (or bug fix) from being frozen
 # out by a result produced under the old engine.
-AUDIT_ENGINE_VERSION = "2026-08-16-1"
+AUDIT_ENGINE_VERSION = "2026-08-18-1"
+
+# How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
+# not because two is round: measured on four same-engine runs of a real repo
+# (ai-co-founder-matching @ c15be34, 2026-08-18), one pass surfaces 23-27 of
+# the 34 finding keys the four-run union holds (~53-79%, high-severity keys
+# reproducing at 84%, mediums 77%), so a single pass is a sample and was being
+# sold as a census. Two passes lift coverage to roughly 75-80% of the union
+# and make criticals effectively certain, at about twice the provider cost --
+# which is why JOB_COST_CAP_USD moved when this landed (app/scan/llm_scan.py)
+# and why this constant's change bumped AUDIT_ENGINE_VERSION above: a 2-pass
+# result is a different distribution, and a cached 1-pass row must not be
+# served as one.
+#
+# The free preview stays at one pass: it is static+one-rubric by policy and
+# its own text says it is a preview. Monitoring re-audits also stay at one
+# pass (cost is per push, and the union baseline in app/monitor/diff.py is
+# what absorbs single-pass flicker there) -- which means a monitoring row can
+# be reused by a paid job's content-hash lookup and hand a paying customer a
+# 1-pass result. Known, accepted for now: it needs the same content hash on
+# the same engine version, and the fix (recording passes on the row) is not
+# worth the column until it is seen happening.
+PAID_AUDIT_PASSES = int(os.environ.get("PAID_AUDIT_PASSES", "2"))
 
 
 # The three values `score["basis"]` can take, named because they are a pricing

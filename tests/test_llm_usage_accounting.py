@@ -22,6 +22,7 @@ from app.llm import pricing
 from app.llm.client import (LLMClient, LLMUsage, Provider,
                              supports_sampling_params)
 from app.main import app, get_audit_repo
+from app.scan.pipeline import PAID_AUDIT_PASSES
 from tests.conftest import (drain_audit_queue, force_pro_account,
                            run_audit_job)
 
@@ -174,12 +175,13 @@ async def test_audit_records_one_usage_row_with_cost():
     # the free tier is static-only and never reaches the provider.
     assert row["account_id"] == _ACCOUNT_ID
     assert row["model"] == "claude-sonnet-4.6"
-    # Only the 'auth' rubric matches this content, so one .complete() call.
-    assert row["calls"] == 1
-    assert row["input_tokens"] == 1000
-    assert row["output_tokens"] == 200
-    # cost = (1000/1e6)*3 + (200/1e6)*15 = 0.003 + 0.003 = 0.006
-    assert row["cost_usd"] == Decimal("0.006")
+    # Only the 'auth' rubric matches this content; a paid audit prompts each
+    # matching rubric PAID_AUDIT_PASSES times.
+    assert row["calls"] == PAID_AUDIT_PASSES
+    assert row["input_tokens"] == 1000 * PAID_AUDIT_PASSES
+    assert row["output_tokens"] == 200 * PAID_AUDIT_PASSES
+    # per pass: (1000/1e6)*3 + (200/1e6)*15 = 0.003 + 0.003 = 0.006
+    assert row["cost_usd"] == Decimal("0.006") * PAID_AUDIT_PASSES
     # job_id links to the audit that was just persisted.
     assert row["job_id"] == audit_repo.rows[0]["id"]
 

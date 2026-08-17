@@ -98,13 +98,24 @@ MAX_TOTAL_CHARS = 900_000
 # under the cap, and back to truncating exactly the large repositories the
 # budget raise was for. 6.50 restores the same thin backstop margin.
 #
+# Raised from 6.50 to 13.00 when paid audits became passes=2
+# (PAID_AUDIT_PASSES, app/scan/pipeline.py). The old cap was sized for one
+# pass; a real repository measured $3.93/pass, so a two-pass audit lands
+# around $7.86 and the 6.50 cap would cut its second pass short -- handing
+# the paying tier, whose whole point is fuller coverage, a partial second
+# pass. 13.00 keeps the same shape as before: above the intended cost
+# (~$7.86 measured, $6.38 formula-worst-case per two passes) with backstop
+# room, not on top of it. THE PRODUCTION .env SETS ITS OWN VALUE and was
+# 6.00 when this landed -- deploys must raise it there too, or this default
+# never applies.
+#
 # Worst case is not the bill. It assumes all four rubrics fill the entire
 # 900_000 budget on both passes; the web rubric measured $1.56 across three
 # repositories, and dubinc/dub -- 4212 files, the largest thing measured --
 # came to $1.06 of that. The number that matters for pricing is the measured
 # one; the number that matters here is the one that must never be hit by a
 # scan that is behaving.
-JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "6.50"))
+JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "13.00"))
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "venv/")
 # .pipe is Tinybird's query definition format. It earned its place: on a real
 # paid audit the money rubric reported getWebhookEvents as an unbounded query
@@ -1196,18 +1207,20 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     on a real saturated repo: the model is not deterministic even at
     temperature=0, and a repo with more true issues than the per-prompt
     cap makes any single pass a sample (critical findings were 100%
-    reproducible, high ~50-70% by coordinates). The free audit uses one
-    pass — score and criticals are stable, which is what the shareable
-    report leads with. Every caller today passes 1.
+    reproducible, high ~50-70% by coordinates; re-measured 2026-08-18
+    across four runs of ai-co-founder-matching -- one pass holds 23-27
+    of a 34-key union, highs reproducing at 84%). The free audit uses
+    one pass — score and criticals are stable, which is what the
+    shareable report leads with. Paid audits pass PAID_AUDIT_PASSES=2
+    (app/worker/main.py); the preview and monitoring re-audits pass 1.
 
-    This docstring used to say the paid Fix Pack ran passes=2. No caller ever
+    This docstring once said the paid Fix Pack ran passes=2 when no caller
     did, and the sentence was quoted as fact twice before anyone checked it.
-    It also could not be made true as written: one pass over a real CRM
-    measured 1,268,531 input tokens = $3.93, so a second lands at ~$7.86
-    against JOB_COST_CAP_USD=6.50 — the cap would cut it partway and hand a
-    paying customer a partially-scanned audit. Wiring passes=2 means raising
-    the cap on purpose and re-checking the Pack's margin, not flipping an
-    argument. See docs/shipit-architecture.md 2.2, v0.3 note.
+    Wiring it for real (2026-08-18) took what the correction predicted: one
+    pass over a real CRM measured 1,268,531 input tokens = $3.93, a second
+    lands at ~$7.86, so JOB_COST_CAP_USD rose 6.50 -> 13.00 alongside --
+    otherwise the cap would cut pass two partway and hand a paying customer
+    a partially-scanned audit. See docs/shipit-architecture.md 2.2.
 
     `stats` lets the CALLER own the accumulator instead of receiving it back on
     return. That is the difference between recording and losing the money when

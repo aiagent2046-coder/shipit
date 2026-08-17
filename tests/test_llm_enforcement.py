@@ -50,6 +50,7 @@ from app.main import (
 from app.main import DEFAULT_DAILY_SPEND_CAP_USD
 from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                                BASIS_PREVIEW, FREE_TIER_MODEL,
+                               PAID_AUDIT_PASSES,
                                basis_for_account, content_digest)
 from tests.conftest import drain_audit_queue
 
@@ -398,8 +399,9 @@ async def test_pro_account_not_subject_to_dollar_cap(monkeypatch, audit_queue):
 
     assert resp.status_code == 202
     # Pro ran the LLM despite anon spend being over the cap, and the anon
-    # aggregate was never even consulted for a pro caller.
-    assert llm.calls == 1
+    # aggregate was never even consulted for a pro caller. One matching
+    # rubric times PAID_AUDIT_PASSES: a paid audit is union-of-2.
+    assert llm.calls == PAID_AUDIT_PASSES
     assert usage_repo.sum_calls == 0
     assert len(usage_repo.rows) == 1
     assert usage_repo.rows[0]["account_id"] is not None
@@ -652,19 +654,17 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
     from app.llm.pricing import cost_usd
     from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRICS
 
-    # A deliberate 2x safety factor, NOT a description of anything that runs.
-    # It used to say "what a Fix Pack runs", and that was wrong and expensively
-    # so: nothing in the codebase passes `passes=2`. run_scan is only ever
-    # called with llm_passes=1, and a Fix Pack's deep review is a second
-    # single-pass audit through run_repo_audit, with its own cap.
-    #
-    # Reading this comment as fact produced a cost analysis off by double --
-    # "$6.38 per Fix Pack" against a $10 price, when the real per-scan ceiling
-    # is four calls and $3.19, with $3.53 the worst ever measured. Kept at 2
-    # anyway: a cap has to sit above the intended cost with room, and doubling
-    # here is what stops someone lowering JOB_COST_CAP_USD to just above
-    # today's traffic.
-    passes = 2
+    # The intended depth times a deliberate 2x safety factor. Since
+    # 2026-08-18 a paid audit really does run PAID_AUDIT_PASSES=2 (the
+    # sentence that used to claim so while nothing passed 2 is a story this
+    # comment previously told); the formula prices 4 so the cap sits a
+    # doubling above the deepest scan the worker actually launches, which is
+    # what stops someone lowering JOB_COST_CAP_USD to just above today's
+    # traffic. The formula's 4-chars-per-token also undershoots the measured
+    # 2.85, so the real guardband is thinner than it looks here -- the
+    # measured two-pass cost is ~$7.86 against the 13.00 cap.
+    from app.scan.pipeline import PAID_AUDIT_PASSES
+    passes = PAID_AUDIT_PASSES * 2
     calls = len(RUBRICS) * passes
     # ~4 characters per token is the standard rough conversion; the point is
     # the order of magnitude, not a token-exact figure.
@@ -673,8 +673,8 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
                           output_tokens=8192 * calls)
 
     assert JOB_COST_CAP_USD > worst_case, (
-        f"JOB_COST_CAP_USD is {JOB_COST_CAP_USD}, but a two-pass scan at "
-        f"MAX_TOTAL_CHARS={MAX_TOTAL_CHARS:,} costs about {worst_case:.2f}. "
-        "Every Fix Pack on a large repository would stop mid-scan and return "
-        "a partial result. Raise the cap, or lower the budget."
+        f"JOB_COST_CAP_USD is {JOB_COST_CAP_USD}, but {passes} passes at "
+        f"MAX_TOTAL_CHARS={MAX_TOTAL_CHARS:,} cost about {worst_case:.2f}. "
+        "Every paid audit of a large repository would stop mid-scan and "
+        "return a partial result. Raise the cap, or lower the budget."
     )

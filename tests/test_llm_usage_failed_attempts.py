@@ -30,8 +30,14 @@ import pytest
 import app.db as db_mod
 from app.db import AuditJobRepository, AuditRepository, LlmUsageRepository
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
+from app.scan.pipeline import PAID_AUDIT_PASSES
 from app.worker import main as worker
 from app.worker.main import JobExecutionError, _execute_job
+
+# Every _job() below carries an account, so its scan runs the paid depth:
+# each matching rubric is prompted PAID_AUDIT_PASSES times, and the money a
+# both-rubric fixture spends is 2 x passes calls.
+_FULL_SCAN_CALLS = 2 * PAID_AUDIT_PASSES
 
 NEXT_PKG = json.dumps({"dependencies": {"next": "15.0.0", "react": "19.0.0"}}).encode()
 
@@ -166,8 +172,8 @@ async def test_a_successful_audit_still_writes_exactly_one_linked_row():
     row = usage.rows[0]
     assert row["job_id"] == audit_id            # still points at the audit
     assert row["audit_job_id"] == job["id"]     # and now also at the queue row
-    assert row["calls"] == 2                    # both rubrics matched
-    assert row["cost_usd"] == 2 * ONE_CALL_USD
+    assert row["calls"] == _FULL_SCAN_CALLS     # both rubrics, paid passes
+    assert row["cost_usd"] == _FULL_SCAN_CALLS * ONE_CALL_USD
 
 
 async def test_a_scan_that_never_called_the_llm_still_writes_nothing():
@@ -201,7 +207,7 @@ async def test_the_row_lands_when_the_audit_cannot_be_persisted():
     row = usage.rows[0]
     assert row["job_id"] is None                # there is no audit to point at
     assert row["audit_job_id"] == job["id"]     # but the job is still known
-    assert row["cost_usd"] == 2 * ONE_CALL_USD
+    assert row["cost_usd"] == _FULL_SCAN_CALLS * ONE_CALL_USD
 
 
 async def test_the_row_lands_when_the_persist_raises():
@@ -217,7 +223,7 @@ async def test_the_row_lands_when_the_persist_raises():
 
     assert len(usage.rows) == 1
     assert usage.rows[0]["audit_job_id"] == job["id"]
-    assert usage.rows[0]["cost_usd"] == 2 * ONE_CALL_USD
+    assert usage.rows[0]["cost_usd"] == _FULL_SCAN_CALLS * ONE_CALL_USD
 
 
 async def test_the_row_lands_when_the_lease_is_lost_mid_persist():
@@ -235,7 +241,7 @@ async def test_the_row_lands_when_the_lease_is_lost_mid_persist():
 
     assert len(usage.rows) == 1
     assert usage.rows[0]["audit_job_id"] == job["id"]
-    assert usage.rows[0]["cost_usd"] == 2 * ONE_CALL_USD
+    assert usage.rows[0]["cost_usd"] == _FULL_SCAN_CALLS * ONE_CALL_USD
 
 
 async def test_calls_made_before_a_provider_failure_are_still_charged():
@@ -400,8 +406,9 @@ async def test_every_attempt_of_a_retried_job_is_billed(
 
     total = await LlmUsageRepository().sum_by_audit_job(enqueued["id"])
     assert total["attempts"] == 3               # one row per attempt
-    assert total["calls"] == 6                  # two rubrics x three attempts
-    assert total["cost_usd"] == 6 * ONE_CALL_USD
+    # two rubrics x PAID_AUDIT_PASSES x three attempts
+    assert total["calls"] == _FULL_SCAN_CALLS * 3
+    assert total["cost_usd"] == _FULL_SCAN_CALLS * 3 * ONE_CALL_USD
 
     # And the rows are distinguishable: only the winning attempt has an audit.
     pool = await db_mod.get_pool()
@@ -433,7 +440,8 @@ async def test_a_dead_lettered_job_still_has_its_spend_on_record(
 
     total = await LlmUsageRepository().sum_by_audit_job(enqueued["id"])
     assert total["attempts"] == 3               # max_attempts scans happened
-    assert total["cost_usd"] == 6 * ONE_CALL_USD
+    # three attempts, each a full paid scan (two rubrics x PAID_AUDIT_PASSES)
+    assert total["cost_usd"] == _FULL_SCAN_CALLS * 3 * ONE_CALL_USD
 
     pool = await db_mod.get_pool()
     async with pool.connection() as conn:

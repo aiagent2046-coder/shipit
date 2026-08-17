@@ -1,26 +1,73 @@
-"""Batch reproducibility run: real vibe-coded repos through the full
-audit pipeline (static + LLM), N runs each, variance report.
+"""Reproducibility series: fixed repos through the full audit pipeline
+(static + LLM), N runs each, variance and reproduction report.
+
+This used to be a breadth survey -- ten repos x 2 runs, asking whether the
+score moves at all. It does (tasks #32-#34 hold the measurements), so the
+question changed: not WHETHER but BY HOW MUCH, and that is answered by depth
+on fixed revisions, not by more repos. The series below continue measurements
+that already exist, which is why every entry is pinned to the revision those
+measurements were made on.
+
+What each series is for:
+  ai-co-founder-matching  #34 -- the production pair (5.5 and 5.1, a third of
+                          the findings list changed) proved the variance;
+                          runs on the current engine give it a band and
+                          per-severity reproduction rates. ALSO #33: audit
+                          fb00b177 -- the 22-finding, hand-verified 20/22 run
+                          behind the stuck-flag severity rule -- was of THIS
+                          repository (audits.repo_url for fb00b177-55b2, same
+                          content hash), a fact this file spent a day not
+                          knowing while planning a separate series around a
+                          customer archive nobody could find. The stuck-flag
+                          findings should hold at medium/low across runs while
+                          the SSRF stays high+; and since precision here is
+                          hand-verified, this series measures reproduction of
+                          KNOWN-TRUE findings, not findings in general.
+  blank-slate             #34 second profile; #32 recall -- the union of these
+                          runs plus the existing Haiku run, hand-verified, is
+                          the denominator a single run's recall is measured
+                          against.
+  zombiecodersmarteditor  clean control (9.6/9.7 on 2026-08-17): does a clean
+                          repo stay clean across runs? Decides whether
+                          monitoring can alert on any new critical/high or
+                          only on reproducing classes. Third holder of the
+                          role: rexisdata-landing (9.8) went private or
+                          deleted, and VibeBrowserProductPage -- picked as its
+                          replacement on its July score of 9.2 -- scored
+                          6.3/6.4 with ~10 LLM findings when the survey re-ran
+                          it on today's engine, which disqualifies it as a
+                          control and is itself a datum: engine drift moved a
+                          repo three points in a month.
 
 Usage (on the VPS, from /opt/shipit, with .env exported):
     set -a; . ./.env; set +a
-    .venv/bin/python batch_audit.py            # RUNS=2 by default
-    RUNS=3 .venv/bin/python batch_audit.py     # more runs, more cost
+    .venv/bin/python scripts/batch_audit.py
 
-Cost note: each run = up to 2 rubric prompts of up to ~90-100K tokens.
-10 repos x 2 runs is a realistic ~$10-30 through AITunnel. Start with 2.
+Runs are cumulative: existing <name>__run*.json files in batch_reports/ are
+counted, new runs are numbered after them, and the summary reads every row
+that belongs to the series -- rows whose LLM stage failed and rows written by
+a different engine (see off_series) are named, skipped and never averaged.
+Re-running the script therefore extends every series instead of redoing it.
+To add runs beyond the defaults, raise the entry's `runs` (it is a target
+TOTAL of usable rows, not an increment): a series that already holds that
+many runs nothing new and only re-prints the summary.
 
-Writes: /tmp/batch_reports/<repo>__run<N>.json and a summary table.
+Cost note: blank-slate is the expensive one (~1.46M input tokens/run
+measured); the whole default set is roughly $25-45 through AITunnel.
+
+Writes: batch_reports/<name>__run<N>.json and a summary. batch_reports/ is
+gitignored -- the JSONs hold customer code paths and belong on the host.
 """
 from __future__ import annotations
 
 import io
 import json
-import os
 import statistics
 import sys
 import time
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -30,30 +77,56 @@ from app.ingest.validators import validate_zip  # noqa: E402
 from app.llm.client import LLMClient  # noqa: E402
 from app.scan.pipeline import run_scan  # noqa: E402
 
-REPOS = [
-    # (owner/repo, branch) -- selected 2026-07-12 from live GitHub search
-    # for Lovable/Bolt/v0 export markers; mixed stacks, sizes, hygiene.
-    ("PramodDutta/qaskills", "main"),                       # nextjs, static 0.0 -- known FP case (blog code samples)
-    ("Avisafety-1/blank-slate", "main"),                    # vite, 48 static findings
-    ("dalebooth9-ui/servexaapp", "main"),                   # vite, 714 files
-    ("aliganey2016000-del/Minhaaj.com", "main"),            # vite, static 5.3
-    ("5streams/peri-track-insights-quiz", "main"),          # vite, mid
-    ("furkanyildirim4409-beep/blossom-db-forge", "main"),   # vite, 14 findings
-    ("tiagosvalerio/rexisdata-landing", "main"),            # vite, clean 9.8 -- control
-    ("dzianisv/VibeBrowserProductPage", "main"),            # nextjs, 9.2
-    ("SahonSrabon/zombiecodersmarteditor", "main"),         # nextjs, small
-    ("tscircuit/tscircuit.com", "main"),                    # vite, mature OSS -- maturity control
+
+@dataclass(frozen=True)
+class Series:
+    name: str          # report filename stem; keep stable, runs accumulate under it
+    runs: int          # target TOTAL runs on disk, existing files included
+    slug: str          # owner/repo on GitHub
+    sha: str           # full commit SHA -- a branch head would silently fork the series
+    # Byte size of the LLM prompt on the runs this series extends. The pinned
+    # SHA fixes what the REPO contributes to the prompt; this fixes the rest
+    # of it -- the engine's own assembly, which moves between releases. A row
+    # whose prompt_chars differ was written by a different engine or input
+    # and may not join the series (see off_series). 0 = first run defines it.
+    expect_prompt_chars: int = 0
+
+
+SERIES = [
+    Series(name="aiagent2046-coder__ai-co-founder-matching", runs=4,
+           slug="aiagent2046-coder/ai-co-founder-matching",
+           sha="c15be34f488521123a0ff77a30a7f885c3f1fdc6"),
+    # runs=4, the sum of two merged plans (3 for #34's band + a series for
+    # #33's stuck-flag rule, which turned out to be this same repository).
+    # The three production runs (fb00b177 and the 5.5/5.1 pair, engine
+    # 2026-08-14-5) are not on disk here and are not spliced in: the engine
+    # moved since. They are quoted alongside as the prior engine's numbers.
+    Series(name="Avisafety-1__blank-slate", runs=4,
+           slug="Avisafety-1/blank-slate",
+           sha="5e82a79a2b5381bd544d7bbc21722ee7a5d1a4d6",
+           # Measured on the two 2026-08-17 survey runs at this SHA, which
+           # matched each other byte for byte. NOT the 4,161,116 the three
+           # July audits recorded: same repo, but the engine's prompt assembly
+           # changed in between (truncation fixes among others), so those
+           # three are a closed series on a prior engine -- the July totals
+           # (4.1/4.0/4.1) are quoted next to today's, never averaged in.
+           expect_prompt_chars=4_162_085),
+    Series(name="SahonSrabon__zombiecodersmarteditor", runs=3,
+           slug="SahonSrabon/zombiecodersmarteditor",
+           sha="a787a111ede8c17ad23cd38a46eaa0f39b543aa0",
+           expect_prompt_chars=932_766),
 ]
 
-RUNS = int(os.environ.get("RUNS", "2"))
 OUT = Path(__file__).resolve().parent.parent / "batch_reports"
 OUT.mkdir(exist_ok=True)
 
+_SEV_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1}
 
-def fetch_repack(slug: str, branch: str) -> bytes:
-    """GitHub zip nests everything under repo-branch/; strip it so the
+
+def fetch_repack(slug: str, sha: str) -> bytes:
+    """GitHub zip nests everything under <repo>-<sha>/; strip it so the
     archive looks like a user export (files at root)."""
-    url = f"https://codeload.github.com/{slug}/zip/refs/heads/{branch}"
+    url = f"https://codeload.github.com/{slug}/zip/{sha}"
     raw = urllib.request.urlopen(url, timeout=120).read()
     src = zipfile.ZipFile(io.BytesIO(raw))
     out = io.BytesIO()
@@ -66,46 +139,191 @@ def fetch_repack(slug: str, branch: str) -> bytes:
     return out.getvalue()
 
 
+def existing_runs(name: str) -> list[Path]:
+    return sorted(OUT.glob(f"{name}__run*.json"),
+                  key=lambda p: int(p.stem.rsplit("run", 1)[1]))
+
+
+def llm_ran(scan: dict) -> bool:
+    """A run whose LLM stage failed or was skipped is a static-only scan
+    wearing a series member's filename. Measured 2026-08-17: the AITunnel
+    balance ran out mid-batch, every remaining repo silently degraded to
+    static-only and scored 9.7-9.9, and the survey-era numbering then
+    OVERWROTE two banked full runs with those rows. Such a run is never a
+    sample of the distribution these series measure, so it neither counts
+    toward a series' target nor enters its summary."""
+    llm = scan.get("llm")
+    return (isinstance(llm, dict) and llm.get("skipped_reason") is None
+            and not llm.get("failure"))
+
+
+def off_series(s: Series, scan: dict) -> str:
+    """Why this row may not join the series, or '' if it may.
+
+    The prompt-signature check exists because it caught a real event twice on
+    the same day (2026-08-17): the host ran a stale checkout, whose engine
+    assembled a prompt 969 chars smaller than the current one for every repo.
+    Full, healthy, paid LLM runs -- of a different engine's distribution. A
+    warning was not enough the first time, so membership is enforced, not
+    advised: rows that fail it are named and skipped, never averaged."""
+    if not llm_ran(scan):
+        return "LLM stage did not run (static-only/degraded row)"
+    got = scan["llm"].get("prompt_chars")
+    if s.expect_prompt_chars and got != s.expect_prompt_chars:
+        return (f"prompt_chars {got} != {s.expect_prompt_chars} -- a"
+                " different engine or input wrote this row")
+    return ""
+
+
+def usable_rows(s: Series, verbose: bool = False) -> list[dict]:
+    rows = []
+    for p in existing_runs(s.name):
+        scan = json.loads(p.read_text())
+        reason = off_series(s, scan)
+        if reason:
+            if verbose:
+                print(f"  ignoring {p.name}: {reason}", flush=True)
+        else:
+            rows.append(scan)
+    return rows
+
+
+def _key(f: dict) -> tuple[str, str]:
+    # Same identity monitoring uses (app/monitor/diff.py): (rule_id, file),
+    # line excluded. The alert-threshold question this series answers is asked
+    # about exactly this key, so measuring reproduction under any tighter key
+    # would answer a question nobody acts on.
+    return (f.get("rule_id") or "", f.get("file") or "")
+
+
+def summarize(name: str, scans: list[dict]) -> None:
+    n = len(scans)
+    totals = [s["score"]["total"] for s in scans]
+    print(f"\n--- {name}  ({n} run{'s' * (n > 1)}) ---")
+    print(f"total: {totals}  band {min(totals)}..{max(totals)}"
+          f"  median {statistics.median(totals)}")
+
+    cats: dict[str, list[float]] = {}
+    for s in scans:
+        for c, v in s["score"]["categories"].items():
+            cats.setdefault(c, []).append(v)
+    for c, vals in sorted(cats.items()):
+        spread = round(max(vals) - min(vals), 2)
+        print(f"  {c:14s} {str(vals):30s} swing {spread}")
+
+    prompt_chars = {(s.get("llm") or {}).get("prompt_chars")
+                    for s in scans if isinstance(s.get("llm"), dict)}
+    if len(prompt_chars) > 1:
+        print(f"  !! prompt_chars differ across runs: {sorted(prompt_chars)}"
+              " -- these runs did not read the same input; the band above"
+              " mixes measurements and must not be quoted")
+
+    if n < 2:
+        return
+
+    # LLM findings only: the static stage is deterministic and would report
+    # 100% reproduction of itself, drowning the number that moves.
+    per_run_keys: list[set] = []
+    sev_by_key: dict[tuple, dict[int, str]] = {}
+    for i, s in enumerate(scans):
+        llm = [f for f in s["findings"]
+               if (f.get("rule_id") or "").startswith("llm-")]
+        per_run_keys.append({_key(f) for f in llm})
+        for f in llm:
+            best = sev_by_key.setdefault(_key(f), {})
+            sev = f.get("severity", "?")
+            # (rule_id, file) can hold several findings in one run; keep the
+            # worst, which is the one an alert would fire on.
+            if _SEV_ORDER.get(sev, 0) >= _SEV_ORDER.get(best.get(i, ""), 0):
+                best[i] = sev
+
+    union = set().union(*per_run_keys)
+    by_sev: dict[str, list[float]] = {}
+    print(f"  llm finding keys: union {len(union)}, "
+          f"per-run {[len(k) for k in per_run_keys]}")
+    rows = []
+    for k in union:
+        seen = sum(k in run for run in per_run_keys)
+        sevs = [sev_by_key[k].get(i, "-") for i in range(n)]
+        worst = max((s for s in sevs if s in _SEV_ORDER),
+                    key=lambda s: _SEV_ORDER[s], default="?")
+        by_sev.setdefault(worst, []).append(seen / n)
+        rows.append((-_SEV_ORDER.get(worst, 0), k[1], k[0], seen, sevs))
+    print("  reproduction by severity (share of runs a key appears in,"
+          " averaged over keys of that worst-severity):")
+    for sev in ("critical", "high", "medium", "low"):
+        if sev in by_sev:
+            rates = by_sev[sev]
+            print(f"    {sev:8s} {sum(rates) / len(rates):>4.0%}"
+                  f"  ({len(rates)} keys)")
+    print("  per-key severities across runs ('-' = absent that run):")
+    for _, file, rule, seen, sevs in sorted(rows):
+        flag = "" if len(set(sevs)) == 1 else "  <- moves"
+        print(f"    {seen}/{n} {file:44.44s} {rule:20.20s} {sevs}{flag}")
+
+
 def main() -> int:
     client = LLMClient()
     if not client.providers:
         print("no LLM providers configured -- export .env first", file=sys.stderr)
         return 2
 
-    rows = []
-    for slug, branch in REPOS:
-        safe = slug.replace("/", "__")
-        try:
-            data = fetch_repack(slug, branch)
-            validate_zip(io.BytesIO(data), size_bytes=len(data))
-            stack = detect_stack(io.BytesIO(data)).value
-        except Exception as exc:  # noqa: BLE001 -- batch must continue
-            rows.append((slug, "SKIP", str(exc)[:60], []))
-            continue
+    for s in SERIES:
+        have = existing_runs(s.name)
+        print(f"\n=== {s.name} ===", flush=True)
+        valid = usable_rows(s, verbose=True)
+        # New runs are numbered after every existing file, ignored ones
+        # included -- an off-series row keeps its name so nothing is ever
+        # overwritten; it just stops counting.
+        next_i = (int(have[-1].stem.rsplit("run", 1)[1]) + 1) if have else 1
+        todo = s.runs - len(valid)
+        print(f"  {len(valid)} usable on disk, {max(todo, 0)} to run",
+              flush=True)
+        if todo > 0:
+            try:
+                data = fetch_repack(s.slug, s.sha)
+                validate_zip(io.BytesIO(data), size_bytes=len(data))
+                detect_stack(io.BytesIO(data))
+            except Exception as exc:  # noqa: BLE001 -- batch must continue,
+                # and runs already on disk still deserve their summary below
+                print(f"  SKIP: {exc}", flush=True)
+                todo = 0
+        if todo > 0:
+            for i in range(next_i, next_i + todo):
+                t0 = time.time()
+                scan = run_scan(data, client)
+                dt = time.time() - t0
+                reason = off_series(s, scan)
+                if reason:
+                    # Both known causes mean every further run of this series
+                    # fails the same way: a dead provider (measured: balance
+                    # at zero, 402 on every call) fails the other series too,
+                    # and a signature mismatch means THIS engine cannot extend
+                    # this series at all -- a human must decide whether the
+                    # expectation moves or the series closes. The paid row is
+                    # kept for that decision under a name the series glob
+                    # never reads.
+                    p = OUT / f"{s.name}__offseries-{int(time.time())}.json"
+                    p.write_text(json.dumps(scan, indent=1))
+                    print(f"  !! {reason}\n"
+                          f"  row kept as {p.name}; this series stops here",
+                          flush=True)
+                    if not llm_ran(scan):
+                        print("  provider is dead -- STOPPING the whole batch",
+                              flush=True)
+                        return 1
+                    break
+                (OUT / f"{s.name}__run{i}.json").write_text(
+                    json.dumps(scan, indent=1))
+                print(f"  run {i}: total {scan['score']['total']}, prompt_chars"
+                      f" {scan['llm'].get('prompt_chars')}, {dt:.0f}s",
+                      flush=True)
 
-        totals, llm_verified = [], []
-        for i in range(1, RUNS + 1):
-            t0 = time.time()
-            scan = run_scan(data, client)
-            dt = time.time() - t0
-            totals.append(scan["score"]["total"])
-            llm = scan["llm"]
-            llm_verified.append(llm.get("verified") if isinstance(llm, dict) else llm)
-            (OUT / f"{safe}__run{i}.json").write_text(json.dumps(scan, indent=1))
-            print(f"  {slug} run {i}/{RUNS}: score {scan['score']['total']}, "
-                  f"llm={llm if isinstance(llm, str) else llm}, {dt:.0f}s", flush=True)
-        rows.append((slug, stack, totals, llm_verified))
+        scans = usable_rows(s)
+        if scans:
+            summarize(s.name, scans)
 
-    print("\n=== REPRODUCIBILITY SUMMARY ===")
-    print(f"{'repo':45s} {'stack':10s} {'scores':22s} {'spread':7s} llm_verified")
-    for slug, stack, totals, llm_v in rows:
-        if stack == "SKIP":
-            print(f"{slug:45s} SKIP       {totals}")
-            continue
-        spread = round(max(totals) - min(totals), 2)
-        med = statistics.median(totals)
-        print(f"{slug:45s} {stack:10s} {str(totals):22s} {spread:<7} {llm_v}  (median {med})")
-    print(f"\nreports: {OUT}/  (RUNS={RUNS})")
+    print(f"\nreports: {OUT}/")
     return 0
 
 

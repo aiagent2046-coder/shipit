@@ -630,6 +630,51 @@ class AuditRepository:
             row = await cur.fetchone()
         return _row_to_audit(row) if row else None
 
+    async def list_findings_by_repo_url(
+        self, repo_full_name: str, basis: str, limit: int = 50
+    ) -> list[list[dict[str, Any]]]:
+        """findings_json of the last `limit` completed audits of this repo at
+        this scan depth, newest first. Same normalization and same
+        basis-has-no-default reasoning as get_latest_by_repo_url above.
+
+        This backs the monitoring diff's UNION baseline. Measured on four
+        same-engine, same-content runs (2026-08-18): high-severity LLM finding
+        keys reproduce in only ~65-84% of runs and one real critical appeared
+        in 2 of 4, so a baseline of one prior audit makes roughly every third
+        high look "new" on a re-audit of unchanged code -- a DM to a paying
+        subscriber about nothing. A finding seen in ANY prior audit is not
+        news, whichever run happened to surface it.
+
+        engine_version is deliberately not filtered: an old engine's sighting
+        of (rule_id, file) still proves the finding predates this push, which
+        is the only question the baseline answers. `limit` bounds a pathological
+        history (audits are capped at one per repo per 24h, so 50 spans weeks);
+        past it the oldest sightings age out, which can resurface an ancient
+        finding as new -- preferred over an unbounded read."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return []
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select findings_json
+                from audits
+                where repo_url is not null
+                      and lower(regexp_replace(
+                          repo_url,
+                          '^https://github\\.com/(.+?)(\\.git)?/?$',
+                          '\\1')) = %s
+                      and status = 'completed'
+                      and score_json->>'basis' = %s
+                order by created_at desc
+                limit %s
+                """,
+                (repo_full_name, basis, limit),
+            )
+            rows = await cur.fetchall()
+        return [row[0] or [] for row in rows]
+
     async def get(self, audit_id: str) -> dict[str, Any] | None:
         try:
             pool = await get_pool()

@@ -759,12 +759,19 @@ async def _process_one_monitoring_run(
 
         # Baseline BEFORE the new audit persists, so the diff reflects only what
         # this push introduced.
-        # BASIS_FULL: this path re-audits at full depth, so only a full prior
-        # audit is a comparable baseline. A free static-only row as the baseline
-        # would make every LLM finding look newly appeared.
-        previous = await audit_repo.get_latest_by_repo_url(
+        # BASIS_FULL: this path re-audits at full depth, so only full prior
+        # audits are a comparable baseline. A free static-only row in the
+        # baseline would make every LLM finding look newly appeared.
+        #
+        # The UNION of prior audits, not the latest one. A single-pass scan is
+        # a sample: measured on four same-engine runs of unchanged code
+        # (2026-08-18), high-severity keys reproduce at ~65-84% and one real
+        # critical showed in 2 of 4 -- against a latest-only baseline, about
+        # every third high on a re-audit would DM the subscriber as "new"
+        # with nothing pushed. Seen in ANY prior audit means not news.
+        prior = await audit_repo.list_findings_by_repo_url(
             repo_full_name, BASIS_FULL)
-        previous_findings = (previous or {}).get("findings_json") or []
+        previous_findings = [f for findings in prior for f in findings]
 
         try:
             result = await run_repo_audit(
