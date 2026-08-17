@@ -55,6 +55,7 @@ import httpx
 
 from app.deploypack.sandbox import SandboxResult
 from app.fixpack.semantic_check import RunResult, TestRunner
+from app.proof.types import ExploitAttempt
 from app.fixpack.verification import (
     VerificationProfile,
     VerificationStage,
@@ -262,6 +263,49 @@ def verify_deploy_pack(
     return SandboxResult(
         ok=data["ok"], detail=data["detail"], build_log=data.get("build_log", ""),
         container=data.get("container"), image_tag=data.get("image_tag"),
+    )
+
+
+def run_cors_probe(
+    zip_bytes: bytes,
+    *,
+    host_port: int,
+    container_port: int,
+    path: str = "/",
+    build_timeout_s: int = 300,
+    boot_timeout_s: int = 60,
+    memory_limit: str | None = None,
+) -> ExploitAttempt:
+    """Boot one workspace on the runner and probe it cross-origin.
+
+    Takes zip BYTES rather than a directory: the caller already holds the
+    workspace as a zip (original from intake, patched from apply_plan_to_zip),
+    so writing it to disk only to re-zip it would be work for nothing.
+
+    One workspace per call — run it twice and compare with
+    app.proof.compare.build_proof_report.
+
+    A runner outage raises SandboxRunnerUnavailable, same as every other call
+    here. Callers must map that to an `error` attempt, never to `failure`:
+    "we could not check" and "we checked and it was clean" are different
+    claims, and only one of them is safe to imply.
+    """
+    manifest = {
+        "host_port": host_port,
+        "container_port": container_port,
+        "path": path,
+        "build_timeout_s": build_timeout_s,
+        "boot_timeout_s": boot_timeout_s,
+        "memory_limit": memory_limit,
+    }
+    data = _post("/proof/cors-probe", content=zip_bytes, manifest=manifest)
+    return ExploitAttempt(
+        template_id=data["template_id"],
+        status=data["status"],
+        success=bool(data["success"]),
+        detail=data.get("detail", ""),
+        evidence=data.get("evidence") or {},
+        duration_ms=int(data.get("duration_ms", 0)),
     )
 
 

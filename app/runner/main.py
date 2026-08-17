@@ -37,6 +37,7 @@ from app.fixpack.verification import (
     verification_profile_from_wire,
     verification_stage_to_wire,
 )
+from app.proof.cors_probe import run_cors_probe
 from app.runner.auth import require_sandbox_token
 
 app = FastAPI(title="shipit-sandbox-runner", version="0.1.0")
@@ -196,6 +197,48 @@ async def fixpack_run_verification(
             for stage in stages
         ]
     }
+
+
+@app.post("/proof/cors-probe")
+async def proof_cors_probe(
+    request: Request, _: None = Depends(require_sandbox_token)
+) -> dict:
+    """Boot ONE workspace, send a real cross-origin request, judge the answer.
+
+    One workspace per call: the caller runs it twice (original, patched) and
+    compares with app.proof.compare. See app/proof/cors_probe.py for why the
+    probe lives on this side of the boundary — the container publishes on the
+    runner's loopback, so nothing in the API process can reach it.
+    """
+    raw = await request.body()
+    m = _manifest(request)
+
+    def _do() -> dict:
+        build_dir = Path(tempfile.mkdtemp(prefix="shipit-runner-cors-"))
+        try:
+            _extract_zip(raw, build_dir)
+            attempt = run_cors_probe(
+                build_dir,
+                host_port=m["host_port"],
+                container_port=m["container_port"],
+                path=m.get("path", "/"),
+                build_timeout_s=m.get("build_timeout_s", 300),
+                boot_timeout_s=m.get("boot_timeout_s", 60),
+                memory_limit=m.get("memory_limit"),
+            )
+            return {
+                "template_id": attempt.template_id,
+                "status": attempt.status,
+                "success": attempt.success,
+                "detail": attempt.detail,
+                "evidence": attempt.evidence,
+                "duration_ms": attempt.duration_ms,
+            }
+        finally:
+            import shutil
+            shutil.rmtree(build_dir, ignore_errors=True)
+
+    return await _guarded(_do)
 
 
 @app.post("/fixpack/minimal-check")
