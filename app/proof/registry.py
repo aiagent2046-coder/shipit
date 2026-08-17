@@ -1,8 +1,9 @@
 """Exploit template registry.
 
 Templates are pure callables: workspace zip bytes in, ExploitAttempt out.
-No docker, no network in the MVP secrets path — runtime templates will
-later go through sandbox-runner, but the registry interface stays the same.
+No docker, no network on the static path (secrets_leak, sqli, cors_open).
+Runtime HTTP templates can later share this registry without changing
+callers.
 """
 
 from __future__ import annotations
@@ -51,14 +52,23 @@ def list_templates() -> tuple[dict[str, Any], ...]:
         },
         {
             "id": "sqli",
-            "implemented": False,
-            "needs_runtime": True,
-            "summary": "HTTP SQLi probe against a sandboxed app (stub)",
+            "implemented": True,
+            "needs_runtime": False,
+            "summary": "Static scan for dynamic SQL sinks fed by request-shaped input",
         },
         {
             "id": "cors_open",
-            "implemented": False,
-            "needs_runtime": True,
-            "summary": "CORS Origin probe against a sandboxed app (stub)",
+            "implemented": True,
+            "needs_runtime": False,
+            "summary": "Static scan for allow-any-origin CORS combined with credentials",
         },
+    )
+
+
+def implemented_templates() -> tuple[TemplateId, ...]:
+    """Template ids whose ``run`` is more than a skipped stub."""
+    return tuple(
+        row["id"]  # type: ignore[misc]
+        for row in list_templates()
+        if row["implemented"]
     )

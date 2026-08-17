@@ -1,8 +1,8 @@
-"""Unit tests for Proof-of-Exploit scaffold (no docker).
+"""Unit tests for the secrets_leak proof template and shared registry.
 
-Stripe-shaped values are assembled at runtime so the source tree never
-contains a literal that GitHub secret scanning (or our own scanner on
-this repo) would flag as a committed credential.
+Uses synthetic zip workspaces. Stripe keys are assembled at runtime so this
+file never holds a literal sk_live_… pattern that secret scanning would flag
+as a committed credential.
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ def test_registry_lists_three_templates() -> None:
     assert TEMPLATE_IDS == ("secrets_leak", "sqli", "cors_open")
     meta = {row["id"]: row for row in list_templates()}
     assert meta["secrets_leak"]["implemented"] is True
-    assert meta["sqli"]["implemented"] is False
-    assert meta["cors_open"]["implemented"] is False
+    assert meta["sqli"]["implemented"] is True
+    assert meta["cors_open"]["implemented"] is True
 
 
 def test_unknown_template_raises() -> None:
@@ -79,9 +79,9 @@ def test_proof_pair_verified_when_secret_removed() -> None:
     })
     report = run_proof_pair("secrets_leak", original, patched)
     assert report.verified is True
-    assert report.informational is True
     assert report.before.success is True
     assert report.after.success is False
+    assert report.template_id == "secrets_leak"
 
 
 def test_proof_pair_not_verified_when_secret_remains() -> None:
@@ -94,19 +94,21 @@ def test_proof_pair_not_verified_when_secret_remains() -> None:
     assert report.after.success is True
 
 
-def test_stubs_skip() -> None:
+def test_static_templates_fail_clean_on_empty() -> None:
+    """Implemented static templates report failure (not skipped) on a clean zip."""
     empty = _zip_with({"README.md": "x\n"})
     for tid in ("sqli", "cors_open"):
         attempt = get_template(tid)(empty)
-        assert attempt.status == "skipped"
+        assert attempt.status == "failure"
         assert attempt.success is False
 
 
-def test_skipped_pair_is_not_verified() -> None:
+def test_clean_pair_is_not_verified() -> None:
     empty = _zip_with({"README.md": "x\n"})
     report = run_proof_pair("sqli", empty, empty)
     assert report.verified is False
-    assert report.before.status == "skipped"
+    assert report.before.status == "failure"
+    assert report.after.status == "failure"
 
 
 def test_json_roundtrip() -> None:
@@ -131,13 +133,31 @@ def test_json_roundtrip() -> None:
     assert restored == report
 
 
-def test_render_contains_verdict_and_informational_note() -> None:
-    original = _zip_with({
-        "cfg.py": f'STRIPE = "{_FAKE_STRIPE}"\n',
-    })
-    patched = _zip_with({"cfg.py": "STRIPE = os.environ['STRIPE']\n"})
-    report = run_proof_pair("secrets_leak", original, patched)
+def test_render_contains_verdict() -> None:
+    before = ExploitAttempt(
+        template_id="secrets_leak",
+        status="success",
+        success=True,
+        detail="found 1",
+        evidence={
+            "finding_count": 1,
+            "samples": [{
+                "file": "cfg.py", "line": 1,
+                "rule_id": "stripe-live-key",
+                "severity": "critical",
+                "masked": "sk_l****(32 chars)",
+            }],
+        },
+    )
+    after = ExploitAttempt(
+        template_id="secrets_leak",
+        status="failure",
+        success=False,
+        detail="none",
+        evidence={"finding_count": 0, "samples": []},
+    )
+    report = build_proof_report(before, after, informational=False)
     md = render_proof_markdown(report)
     assert "Proof-of-Exploit" in md
+    assert "secrets_leak" in md
     assert "верифицирован" in md
-    assert "Informational only" in md
