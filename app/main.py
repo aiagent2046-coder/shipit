@@ -79,6 +79,11 @@ from app.fixpack.generate import (
     render_pr_title as render_fixpack_pr_title,
 )
 from app.fixpack.semantic_check import run_semantic_check
+from app.proof import (
+    decide_proof_gate,
+    render_proof_markdown,
+    run_proof_stage,
+)
 from app.ingest.github_fetch import RepoFetchError
 from app.ingest.stack_detect import detect_stack
 from app import sandbox_client
@@ -1351,10 +1356,63 @@ async def _process_one_paid_job(
             )
             return "blocked"
 
+        # Proof-of-Exploit → Proof-of-Fix (soft/hard gate via PROOF_GATE_MODE).
+        proof_report = await run_proof_stage(
+            job_id=job_id, zip_bytes=zip_bytes, plan=plan,
+            fixpack_repo=fixpack_repo,
+        )
+        gate = decide_proof_gate(proof_report)
+        if gate == "hard_fail":
+            detail = (
+                f"proof gate (hard): exploit still succeeds after patch "
+                f"({proof_report.detail if proof_report else 'no report'})"
+            )
+            logger.warning(
+                "Fix Pack job %s blocked by proof gate: %s",
+                job_id, detail,
+                extra={"step": "proof_gate",
+                       "duration_ms": _elapsed_ms(started)},
+            )
+            await fixpack_repo.mark_status(job_id, "blocked", detail=detail)
+            await _record_fix_outcome(
+                fix_outcome_repo, job=job, outcome="blocked",
+                rule_ids=_rule_ids_from_plan(plan),
+                is_regression=False,
+                pr_url=None,
+            )
+            return "blocked"
+
         title = render_fixpack_pr_title(plan)
         body = render_fixpack_pr_body(plan)
         if semantic.pr_note:
             body = f"{body}\n\n{semantic.pr_note}"
+        if proof_report is not None:
+            section = render_proof_markdown(proof_report)
+            if section:
+                body = f"{body}\n\n---\n\n{section}"
+        if gate == "soft_fail":
+            # Job still delivers; surface the soft failure in detail so
+            # operators and status queries can see it without parsing the PR.
+            soft_detail = (
+                f"delivered with soft proof gate: exploit still succeeds "
+                f"after patch ({proof_report.detail if proof_report else ''})"
+            )
+            logger.warning(
+                "Fix Pack job %s soft proof gate: %s",
+                job_id, soft_detail,
+                extra={"step": "proof_gate",
+                       "duration_ms": _elapsed_ms(started)},
+            )
+            # Best-effort detail write; delivery continues regardless.
+            try:
+                await fixpack_repo.mark_status(
+                    job_id, "running", detail=soft_detail,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "Fix Pack job %s: could not persist soft-gate detail",
+                    job_id,
+                )
 
         # The second half of what was bought. Failure here must not cost the
         # customer the fix they also paid for, so the PR still opens and the

@@ -1037,6 +1037,23 @@ class FixpackJobRepository:
             rows = await cur.fetchall()
         return {row["status"]: int(row["jobs"]) for row in rows}
 
+    async def set_proof_json(self, job_id: str, proof: dict) -> None:
+        """Persist a Proof-of-Exploit report on the job (jsonb).
+
+        Called after the proof pair runs and before the PR is opened (or
+        blocked). Failures here must not break delivery — callers wrap this
+        in try/except. No-op when DATABASE_URL is not set.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                "update fixpack_jobs set proof_json = %s::jsonb where id = %s",
+                (json.dumps(proof), uuid.UUID(job_id)),
+            )
+
     async def mark_fixpack_delivered(self, job_id: str, pr_url: str) -> None:
         """A paid Fix Pack job whose fix PR was successfully opened: record
         the PR url and advance status to 'delivered'. 'delivered' is the
