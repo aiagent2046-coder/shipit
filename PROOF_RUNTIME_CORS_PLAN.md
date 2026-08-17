@@ -297,8 +297,48 @@ Docker cannot run in unit tests, so:
    under-reported because the probe sent no credential, the third passed. Two
    of those three could only ever have been caught by a real boot.
 
-   **What remains:** the corpus yield measurement (below), and nothing else
-   before an operator can turn `PROOF_RUNTIME_CORS` on for real traffic.
+   **Corpus yield, measured 2026-08-17 — and it is the finding that decides
+   what this feature is.** `scripts/measure_runtime_cors_yield.py` over nine
+   pinned repositories:
+
+   | stage | count |
+   |---|---|
+   | repositories | 9 |
+   | static `cors_open` fired | **1 (11%)** |
+   | …and self-buildable | 0 |
+   | …and booted | 0 |
+   | …runtime reproduced | **0** |
+
+   **End-to-end yield: 0 of 9.**
+
+   The binding constraint is NOT the Dockerfile gate, which is what this plan
+   expected. It is the trigger: eight of nine repositories have no
+   credentialed-open-CORS shape at all, so the runtime probe would never be
+   considered for them. Removing the Dockerfile gate entirely would raise the
+   ceiling to 1 in 9.
+
+   And the scanner is not blind — it is right. `blank-slate` ships Supabase
+   edge functions answering `Access-Control-Allow-Origin: *`, with no
+   credentials; that is a public API, not a hole, and the template correctly
+   says nothing. The shape we can prove is genuinely rare in this market:
+   these are SPA exports that either carry no server CORS configuration or
+   use a platform's default.
+
+   **Conclusion: keep it, leave it off, do not market it.** The capability is
+   real and proven end to end, and it applies to approximately none of the
+   current customer base. That is worth knowing after a day of work rather
+   than after a launch — and it is the second time this measurement habit has
+   changed a decision rather than confirming one.
+
+   Explicitly NOT recommended: loosening the Dockerfile gate. Half a day of
+   work to move a ceiling from 0/9 to at most 1/9, and it would reintroduce
+   the ambiguity between "the customer's app did not come up" and "our
+   generated Dockerfile is wrong".
+
+   Caveat on the number: n=9, one market segment, chosen in July for a
+   different purpose. It says this corpus, not the universe. A customer base
+   with real backends would measure differently — and the script is pinned
+   and repeatable, so re-running it against a better corpus is minutes.
    * the corpus yield measurement: of repositories where the static scanner
      hits, what share carry a root Dockerfile and actually boot. Until that
      number exists, nothing about "we run the attack" goes into marketing.
