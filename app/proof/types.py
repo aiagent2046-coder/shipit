@@ -14,7 +14,24 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-TemplateId = Literal["secrets_leak", "sqli", "cors_open"]
+TemplateId = Literal["secrets_leak", "sqli", "cors_open", "cors_open_runtime"]
+
+# The same tuple the validators below check against, named once so a new id
+# cannot be accepted in one function and rejected in the other.
+#
+# `cors_open_runtime` is deliberately a SEPARATE id from `cors_open` rather
+# than a flag on it. proof_json is stored and later read by people deciding
+# whether to trust a fix, and the two are different kinds of evidence: one is
+# a regex over the source, the other is a booted application answering a real
+# cross-origin request. A single id would make a stored row ambiguous forever
+# — nobody reading it a month later could tell which claim it carried.
+#
+# Note that being in this contract is not the same as being in
+# app/proof/registry.py, which is what the product actually offers. This id is
+# storable and renderable before the runtime probe is wired into routing.
+VALID_TEMPLATE_IDS: tuple[str, ...] = (
+    "secrets_leak", "sqli", "cors_open", "cors_open_runtime",
+)
 
 AttemptStatus = Literal[
     "success",      # attack worked (exploit confirmed)
@@ -68,7 +85,7 @@ def proof_report_from_json(value: object) -> ProofReport:
         raise ValueError("proof_json must be an object")
 
     template_id = value.get("template_id")
-    if template_id not in ("secrets_leak", "sqli", "cors_open"):
+    if template_id not in VALID_TEMPLATE_IDS:
         raise ValueError("proof_json.template_id is invalid")
 
     before = _attempt_from_json(value.get("before"), "before")
@@ -106,7 +123,7 @@ def _attempt_from_json(value: object, field: str) -> ExploitAttempt:
     evidence = value.get("evidence")
     duration_ms = value.get("duration_ms", 0)
 
-    if template_id not in ("secrets_leak", "sqli", "cors_open"):
+    if template_id not in VALID_TEMPLATE_IDS:
         raise ValueError(f"proof_json.{field}.template_id is invalid")
     if status not in ("success", "failure", "skipped", "error"):
         raise ValueError(f"proof_json.{field}.status is invalid")

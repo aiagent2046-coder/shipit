@@ -216,8 +216,22 @@ Docker cannot run in unit tests, so:
    only to be booted, so until the runner endpoint can boot it, it would be
    dead code that rots. Real framework header sets are covered in the table
    instead (Starlette lowercase, Express title-case, padded values).
-2. **P1 — runner endpoint.** `/proof/cors-probe`, both boots, teardown,
-   `SandboxResult` → `ExploitAttempt` mapping, status table enforced.
+2. **P1 — runner endpoint. DONE 2026-08-17.** `app/proof/cors_probe.py`
+   (boot → probe → judge → teardown, injectable `verify`/`fetch`/`stop`),
+   `POST /proof/cors-probe` on the runner, `sandbox_client.run_cors_probe`,
+   and `cors_open_runtime` added to the stored template-id contract.
+   15 tests, 4 mutants killed: boot-failure downgraded to `failure`, every
+   app reported exploitable, teardown removed, probe leaving loopback.
+
+   **Deviation:** one workspace per call, not both zips in one request. Single
+   zip body like `/deploypack/verify`, an independent timeout per boot, and
+   the comparison stays in `compare.py` where the static path already does it.
+   The caller runs it twice.
+
+   Still open before this can run for real: nothing calls it yet (that is P2),
+   and the docker end-to-end has not been executed — this environment has no
+   docker, so every test here drives injected doubles. The first real boot is
+   P2's first task and may well find something these cannot.
 3. **P2 — wire into routing.** Runtime attempt tried only when static
    `cors_open` fired and the plan touches its file; on `skipped`/`error` the
    static report stands. Measure yield on the batch corpus before promising
