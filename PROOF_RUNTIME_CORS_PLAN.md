@@ -468,6 +468,44 @@ Until the measurement is re-run against a host carrying this list, the detector
 number remains **not a fact about real backends**, and nothing about
 detector-mode reach goes into marketing.
 
+### A second constraint the allowlist does not touch: BuildKit
+
+The 2026-08-17 seven-backend run (still on the unpatched squid — the
+`squid.conf` edit had not landed, so the two Alpine 403s were unchanged) paid
+for itself anyway, because the third buildable repo failed for an unrelated
+reason:
+
+```
+zylon-ai/private-gpt →
+  the --mount option requires BuildKit. ... BuildKit is currently disabled;
+  enable it by removing the DOCKER_BUILDKIT=0 environment-variable
+```
+
+`DOCKER_BUILDKIT=0` is not an oversight, it is load-bearing. The
+docker-socket-proxy disables the BuildKit grpc session endpoint
+(`SESSION: 0` in `docker-socket-proxy.yml`), and BuildKit requires it, so
+`sandbox-runner.service` forces the classic builder to make `docker build`
+work at all under Variant A. **Any Dockerfile using BuildKit-only syntax —
+`RUN --mount=type=cache`, heredocs, `COPY --link` — is therefore unbuildable
+on this stand by construction**, and `RUN --mount=type=cache` is standard in
+modern pnpm/poetry/uv images. This is a much harder limit than a missing
+allowlist entry: fixing it means re-opening the proxy's session endpoint,
+which is a real security change, not a domain on a list.
+
+So the reach ceiling on this corpus is bounded twice over:
+
+| stage | count | why |
+|---|---|---|
+| repos | 7 | |
+| root Dockerfile (`has_root_dockerfile`) | 3 | 4 are monorepos with per-component Dockerfiles only |
+| not BuildKit-gated | 2 | private-gpt needs `RUN --mount` |
+| booted | 0 | the two remaining are the Alpine 403s, pending the squid edit |
+
+The honest ceiling for detector mode here is therefore **at most 2 of 7**, and
+only if those two have no further blocking step. A feature whose applicability
+is bounded by our own sandbox architecture — not by what customers write — is
+worth knowing about before, not after, anything is claimed for it.
+
 ## Not in scope
 
 * SQLi and BOLA runtime probes — need endpoint discovery, seeded state and an
