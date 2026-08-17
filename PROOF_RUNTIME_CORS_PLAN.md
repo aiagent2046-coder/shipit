@@ -396,6 +396,52 @@ configuration most of them use.
      hits, what share carry a root Dockerfile and actually boot. Until that
      number exists, nothing about "we run the attack" goes into marketing.
 
+### Detector-mode boot measurement — and what the zero actually measures
+
+The detector experiment above needed one number before anything is built on
+it: of the seven Dockerfile-shipping backends, how many actually **boot** on
+our stand. That is the applicability ceiling — the probe can say nothing about
+a repository it cannot start.
+
+The first two rows (2026-08-17, `DETECTOR=1`) came back 0-booted, and the
+diagnostics channel (`app/proof/cors_probe.py`, added the same day) says why —
+which is the whole reason it exists, because "docker build failed" is not a
+diagnosis:
+
+* **full-stack-fastapi-template** — no *root* Dockerfile (components only);
+  correctly `skipped_no_dockerfile` in 1.1s, never handed to the runner. This
+  is the `has_root_dockerfile` wrapper fix doing its job.
+* **LibreChat** — root Dockerfile, `EXPOSE 3080`, handed to the runner, build
+  failed at **step 2 of 31**: `RUN apk upgrade --no-cache` →
+  `HTTP 403: Forbidden` fetching `dl-cdn.alpinelinux.org`.
+
+That 403 is not LibreChat's. It is **our stand's egress-allowlist proxy**
+(`DEPLOYPACK_BUILD_PROXY_URL` → host Squid) refusing the Alpine package CDN:
+the build container's `HTTP(S)_PROXY` build-args point every fetch at the
+allowlist proxy, and `dl-cdn.alpinelinux.org` is not on the allowlist, so
+Squid returns 403 and `apk` aborts (`--force-missing-repositories` cannot
+help — the repo is reachable, the proxy is refusing it). The earlier
+hypothesis was right in shape (a package-install `RUN` hitting the host egress
+policy) and wrong in the specific line (`apk upgrade`, step 2, not the first
+`pip`/`npm`).
+
+**So the detector `error` rows are currently measuring the Squid allowlist's
+coverage, not any application's CORS posture.** 0-booted here does NOT mean
+"these apps don't reproduce" and does NOT mean "these apps are safe" — it means
+the stand could not build them because their base images upgrade OS packages
+against registries the proxy does not permit. The end-to-end yield line stays
+honest precisely because it counts `booted` separately: 0 booted ⇒ the runtime
+half has said nothing at all.
+
+**The decision this surfaces (host config, security tradeoff, user's call):**
+to make detector-mode measure applications rather than our proxy, the build
+allowlist has to admit the OS/package registries these Dockerfiles use
+(`dl-cdn.alpinelinux.org`, and by the same token debian/ubuntu mirrors, npm,
+pypi). That widens what a build container may reach — the exact surface the
+allowlist exists to bound — so it is not a silent default. Until it is decided
+and the measurement re-run, the detector number is **not yet a fact about
+real backends**, and nothing about detector-mode reach goes into marketing.
+
 ## Not in scope
 
 * SQLi and BOLA runtime probes — need endpoint discovery, seeded state and an
