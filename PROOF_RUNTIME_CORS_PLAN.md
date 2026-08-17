@@ -339,6 +339,59 @@ Docker cannot run in unit tests, so:
    different purpose. It says this corpus, not the universe. A customer base
    with real backends would measure differently — and the script is pinned
    and repeatable, so re-running it against a better corpus is minutes.
+
+### Second corpus, and a correction to the conclusion above
+
+The obvious objection to 0/9 — "that corpus is SPA exports, a real backend
+would measure differently" — was tested the same day against ten
+server-side applications chosen by structure, not by their CORS config:
+`full-stack-fastapi-template`, `LibreChat`, `chainlit`, `Flowise`,
+`AgentGPT`, `private-gpt`, `chatbot-ui`, `documenso`, `formbricks`,
+`langfuse`. Seven of the ten ship a Dockerfile.
+
+**Static hits: 0 of 10.** Across both corpora: 19 repositories, one hit.
+
+But reading that as "the vulnerability is rare" — which is what the section
+above concluded — is only half right, and the other half matters more.
+Three of the ten were opened by hand to see WHY they did not match:
+
+* **Flowise** — `cors(getCorsOptions())`, a function returning a runtime
+  callback. It also sets `credentials = false` whenever the origin list is
+  `*`, i.e. it already defends against precisely the shape we look for.
+* **LibreChat** — `app.use(cors())`, bare defaults, no literal anywhere.
+* **documenso** — a local helper with an `OriginFn` type and `origin: '*'`
+  as its default.
+
+None of those is matchable by a regex over source text, and that is not a
+gap in our patterns — it is a property of how real backends configure CORS:
+through function calls, env-driven allowlists and per-route logic. On such a
+repository `static_hit=False` does not mean "safe". It means **"cannot be
+determined statically"** — which is exactly the question a runtime probe
+exists to answer.
+
+**So the gate is backwards for the population that needs it most.** The only
+method that can judge a dynamically configured application is gated behind a
+static hit that structurally cannot happen for one. The measurement was set
+up to ask "how often does the runtime probe add proof?" and answered a
+better question: "the static trigger and the runtime prover see disjoint
+populations."
+
+Two honest options, neither taken here:
+
+1. **Leave it.** Runtime stays a prover for the rare literal case; measured
+   yield ~0. Costs nothing, claims nothing.
+2. **Let the probe run as a DETECTOR** — on any bootable repository,
+   independent of a static hit. It is the only way to judge dynamic
+   configuration, and it turns a 0%-yield prover into something that can
+   find what the scanner cannot see. Costs two container builds per
+   qualifying job, and needs its own measurement first: of repositories that
+   ship a Dockerfile, how many actually boot and answer? Seven of the ten
+   above are candidates for exactly that experiment, and none of it should be
+   built before that number exists.
+
+What must NOT be said either way: that 19 repositories were checked and
+found clean. Nineteen were checked by a method that cannot read the
+configuration most of them use.
    * the corpus yield measurement: of repositories where the static scanner
      hits, what share carry a root Dockerfile and actually boot. Until that
      number exists, nothing about "we run the attack" goes into marketing.
