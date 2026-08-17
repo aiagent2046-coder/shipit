@@ -433,14 +433,40 @@ against registries the proxy does not permit. The end-to-end yield line stays
 honest precisely because it counts `booted` separately: 0 booted ⇒ the runtime
 half has said nothing at all.
 
-**The decision this surfaces (host config, security tradeoff, user's call):**
-to make detector-mode measure applications rather than our proxy, the build
-allowlist has to admit the OS/package registries these Dockerfiles use
-(`dl-cdn.alpinelinux.org`, and by the same token debian/ubuntu mirrors, npm,
-pypi). That widens what a build container may reach — the exact surface the
-allowlist exists to bound — so it is not a silent default. Until it is decided
-and the measurement re-run, the detector number is **not yet a fact about
-real backends**, and nothing about detector-mode reach goes into marketing.
+**The decision this surfaced, and what it turned out to cost.** To make
+detector-mode measure applications rather than our proxy, the build allowlist
+has to admit the OS registries these Dockerfiles use. That looks like widening
+the surface the allowlist exists to bound — so it was written up as the user's
+call, and taken deliberately (option A, 2026-08-17).
+
+Reading the code to price it changed the price. `docker build` in
+`app/deploypack/sandbox.py` gets **no `--network` flag**: the proxy reaches it
+only as `HTTP_PROXY`/`HTTPS_PROXY` build-args, which bind apk/apt/pip/npm/curl
+and nothing else. A build step that opens a raw socket, or any tool that
+ignores proxy env, already reaches the open internet. So for the build step the
+allowlist is a **convention, not a boundary**, and adding domains to it does
+not widen what a hostile Dockerfile can reach — it only decides whether honest
+customer code builds at all. (The run-time container is genuinely isolated:
+`--network shipit-preview` plus a host iptables DROP. Different mechanism,
+actually enforced.)
+
+Two things follow, and both are now in the tree:
+
+* `deploy/sandbox-runner/squid-build-allowlist.conf` — the list, in the repo,
+  reviewable, with the OS registries added and `files.pythonhosted.org`
+  alongside `pypi.org` (pip resolves metadata at the latter and downloads
+  wheels from the former; a list with only `pypi.org` fails every pip build at
+  the download step — worth checking the host list for exactly that). Guarded
+  by `tests/test_build_allowlist.py`, which fails on a bare-TLD entry, on a
+  quietly-added `github.com`, and on the loss of the Alpine entry.
+* The enforcement gap is written down rather than fixed: real build-step egress
+  control needs `docker build --network` on an isolated network, a separate
+  change with its own breakage risk. **Nothing may describe this allowlist as
+  what contains a malicious Dockerfile.**
+
+Until the measurement is re-run against a host carrying this list, the detector
+number remains **not a fact about real backends**, and nothing about
+detector-mode reach goes into marketing.
 
 ## Not in scope
 
