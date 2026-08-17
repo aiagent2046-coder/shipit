@@ -37,6 +37,7 @@ import zipfile
 from dataclasses import dataclass, field
 
 from app.scan.checks import find_committed_env_files, gitignore_covers_env
+from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
 from app.scan.secrets import (
     NON_PRODUCTION_CONTEXTS,
     RULES,
@@ -790,6 +791,42 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     # fix AND the same exposure; the untracking and the .gitignore are still
     # worth having. It is a reason to stop CLAIMING, which is what the PR body
     # does with this list.
+
+    # --- Static CORS / SQLi rewrites (independent of audit rule_ids).
+    working: dict[str, str] = {}
+    for name, text in contents.items():
+        rel = _repo_relative(name)
+        if not rel or rel.endswith("/"):
+            continue
+        working[rel] = plan.files.get(rel, text)
+    for rel, text in plan.files.items():
+        working.setdefault(rel, text)
+
+    for apply_fn, label in (
+        (apply_cors_fixes, "cors"),
+        (apply_sqli_fixes, "sqli"),
+    ):
+        updates, static_fixes = apply_fn(working)
+        for rel, new_text in updates.items():
+            original = working.get(rel, "")
+            if not _validate_syntax(rel, original, new_text):
+                logger.warning(
+                    "fixpack: %s rewrite for %s failed syntax validation; "
+                    "leaving file unchanged",
+                    label, rel,
+                )
+                continue
+            plan.files[rel] = new_text
+            working[rel] = new_text
+            for sf in static_fixes:
+                if sf.file != rel:
+                    continue
+                plan.config_fixes.append(ConfigFix(
+                    rule_id=sf.rule_id,
+                    title=sf.title,
+                    detail=f"`{sf.file}` — {sf.detail}",
+                ))
+
     if known_secret_values:
         delivered: dict[str, str] = {}
         for name, text in contents.items():
