@@ -66,10 +66,31 @@ def test_the_registry_that_blocked_the_detector_run_is_present() -> None:
 def test_pip_can_reach_the_host_that_actually_serves_wheels() -> None:
     """pypi.org resolves metadata; the wheel comes from files.pythonhosted.org.
     A list carrying only the first fails every pip build at the download step —
-    the kind of half-configuration that looks correct in review."""
-    entries = _entries()
+    the kind of half-configuration that looks correct in review.
+
+    Entries are compared with the leading dot stripped, because `.pypi.org` and
+    `pypi.org` are the same grant to squid and an assertion that only matched
+    one spelling would pass by not applying."""
+    entries = {e.lstrip(".") for e in _entries()}
     if "pypi.org" in entries:
-        assert "files.pythonhosted.org" in entries
+        assert "pythonhosted.org" in entries or "files.pythonhosted.org" in entries
+
+
+def test_the_grants_prod_already_had_are_not_narrowed() -> None:
+    """This file REPLACES three inline entries in the host's squid.conf
+    (`.npmjs.org`, `.pypi.org`, `.pythonhosted.org`, read 2026-08-17), so it
+    must be a strict superset of them. The first draft wrote
+    `registry.npmjs.org` instead of `.npmjs.org` — tighter, and a silent
+    regression for any build reaching a different npmjs.org host.
+
+    Narrowing here breaks builds that work today in order to fix builds that
+    do not; that trade needs to fail loudly rather than ship."""
+    entries = set(_entries())
+    for grant in (".npmjs.org", ".pypi.org", ".pythonhosted.org"):
+        assert grant in entries, (
+            f"{grant} was allowed on prod before this file existed; dropping or "
+            "narrowing it regresses builds that currently succeed"
+        )
 
 
 def test_the_broader_github_grant_is_not_quietly_added() -> None:

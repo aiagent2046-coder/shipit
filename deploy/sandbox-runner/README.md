@@ -94,14 +94,20 @@ backend (shipit-ops, /opt/shipit)               runner (shipit-runner, /opt/ship
 6. **Install the build-step egress allowlist** (host admin; the Squid that
    `DEPLOYPACK_BUILD_PROXY_URL`/`FIXPACK_INSTALL_PROXY_URL` point at):
    ```
+   cp /etc/squid/squid.conf /etc/squid/squid.conf.bak
    install -m 0644 deploy/sandbox-runner/squid-build-allowlist.conf \
        /etc/squid/squid-build-allowlist.conf
-   # once, in /etc/squid/squid.conf, before any other http_access rule:
-   #   acl build_allowlist dstdomain "/etc/squid/squid-build-allowlist.conf"
-   #   http_access allow build_allowlist
-   #   http_access deny all
+   # In /etc/squid/squid.conf, replace the inline domain lines
+   #     acl allowed_dst dstdomain .npmjs.org        (and .pypi.org, …)
+   # with the single file reference — http_access is already correct and is
+   # NOT touched:
+   #     acl allowed_dst dstdomain "/etc/squid/squid-build-allowlist.conf"
    squid -k parse && systemctl reload squid
    ```
+   The shipped list is a strict superset of the three inline entries prod
+   carried before it (`.npmjs.org`, `.pypi.org`, `.pythonhosted.org`), so the
+   replacement cannot regress a build that works today;
+   `tests/test_build_allowlist.py` fails if someone later narrows one.
    Read that file's header before adding a line: for the **build** step this
    list is a convention, not a boundary (`docker build` gets no `--network`),
    so a domain added here does not widen what a hostile build can reach — it
