@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from html import escape
 
+from app.report.grouping import group_for_display
 from app.report.plain_language import plain_fields, tier
 from app.scan.scoring import (CRITICAL_GATE_MIN_CONFIDENCE, GATE_THRESHOLD,
                               GATED_MAX, LLM_ONLY_CATEGORIES)
@@ -304,8 +305,12 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # treated as a full audit, exactly as it always was.
     scored = str(score.get("basis") or "") not in ("static_only",
                                                    "static+preview")
+    # Grouped BEFORE sorting so a group sorts by the severity it kept, and
+    # for display only — the score was computed over every row upstream and is
+    # not recomputed here. See app/report/grouping.py for why the penalty is
+    # deliberately left alone.
     findings = sorted(
-        result.get("findings", []),
+        group_for_display(result.get("findings", [])),
         key=lambda f: (_SEVERITY_ORDER.get(str(f.get("severity")), 9),
                        -float(f.get("confidence", 0))),
     )

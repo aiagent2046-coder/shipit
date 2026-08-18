@@ -20,6 +20,7 @@ from app.db import (
     FixpackJobRepository,
 )
 from app.fixpack.generate import has_auto_fixable_findings
+from app.report.grouping import group_for_display
 from app.log_context import set_log_context
 from app.report.html import render_report
 from app.routes.dependencies import (
@@ -58,8 +59,12 @@ async def get_audit(
     # how to rewrite, and a second copy of that list in TypeScript would drift
     # from this one -- which is precisely what #132 was about. The page uses it
     # to explain instead of offering a purchase that cannot deliver.
+    # `fixpack_auto_fixable` is computed over the STORED rows, before any
+    # grouping: what the Fix Pack can rewrite is a fact about the findings, not
+    # about how many rows the reader is shown.
     return {
         **row,
+        "findings_json": group_for_display(row.get("findings_json") or []),
         "fixpack_auto_fixable": has_auto_fixable_findings(
             row.get("findings_json") or []
         ),
