@@ -119,9 +119,23 @@ class Repo:
 
 def _git(args: list[str], cwd: str | None = None,
          timeout: int = _SHOW_TIMEOUT_S) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True,
+    """Decoded by us, not by subprocess, with errors replaced.
+
+    `text=True` decodes as strict UTF-8 and raises on anything else. A survey
+    of strangers' repositories will meet a UTF-16 migration eventually — one
+    did, at repo ~120 of 199 — and a decode error inside a worker killed the
+    entire run. The same file is what the shipped detector reads, and it
+    decodes with errors="replace"; matching that here keeps the measurement
+    reading exactly what production reads, mojibake included.
+    """
+    proc = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True,
         timeout=timeout, check=False,
+    )
+    return subprocess.CompletedProcess(
+        proc.args, proc.returncode,
+        proc.stdout.decode("utf-8", errors="replace"),
+        proc.stderr.decode("utf-8", errors="replace"),
     )
 
 
@@ -141,12 +155,29 @@ def _is_schema_file(path: str) -> bool:
 
 
 def inspect(slug: str, workdir: Path) -> Repo:
-    """One repository, read through a blobless partial clone.
+    """One repository, and never more than one.
+
+    ONE REPOSITORY MUST NOT BE ABLE TO END THE RUN. The first full pass died
+    at repo ~120 of 199 on a UTF-16 `.sql` file, and 119 completed inspections
+    went with it. The decode is fixed below, but the shape of that failure is
+    the thing worth guarding: a survey of strangers' repositories will keep
+    meeting inputs nobody predicted, and each one belongs in a record with a
+    reason, excluded from every denominator — exactly how an unreachable repo
+    is already treated.
+    """
+    try:
+        return _inspect(slug, workdir)
+    except Exception as exc:                      # noqa: BLE001
+        return Repo(slug=slug, error=f"{type(exc).__name__}: {exc}"[:200])
+
+
+def _inspect(slug: str, workdir: Path) -> Repo:
+    """Read through a blobless partial clone.
 
     `--filter=blob:none --no-checkout` fetches commits and trees but no file
     contents: enough to list every path for a couple of hundred kilobytes, with
     the handful of files we actually read fetched on demand. A full clone of
-    the same repository is tens of megabytes, and 190 of those is a different
+    the same repository is tens of megabytes, and 199 of those is a different
     kind of script.
     """
     repo = Repo(slug=slug)
@@ -306,7 +337,7 @@ def main() -> int:
     print("FUNNEL")
     print("=" * 72)
     print(f"candidates from search           : {len(slugs)}")
-    print(f"  unreachable (gone/renamed)     : {len(unreachable)}"
+    print(f"  not inspected (gone / failed)  : {len(unreachable)}"
           "   <- excluded from every denominator below")
     print(f"  reachable                      : {len(reachable)}")
     print(f"    carries {GENERATOR_MARKER:<22}: {len(lovable)}"
@@ -325,7 +356,8 @@ def main() -> int:
           f"{_rate(len(exposed_write), len(with_schema))}")
 
     if unreachable:
-        print(f"\nUnreachable ({len(unreachable)}), excluded rather than "
+        print(f"\nNot inspected ({len(unreachable)}) — deleted, renamed, or "
+              "something this reader\ncould not handle. Excluded rather than "
               "counted as anything:")
         for r in unreachable[:15]:
             print(f"  {r.slug}: {r.error}")
