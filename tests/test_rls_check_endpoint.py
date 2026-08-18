@@ -222,3 +222,56 @@ def test_a_service_role_key_is_refused_at_the_edge_too(client) -> None:
     assert body["status"] == "refused"
     assert "service_role" in body["reason"]
     assert body["exposed_tables"] == []
+
+
+# --- a key supplied at the edge ---------------------------------------------
+
+def test_a_supplied_key_lets_a_tidy_repository_be_checked(client) -> None:
+    """MEASURED: our own project commits no key — a `.env.example` and nothing
+    else. Without this the check refuses exactly the customers with the best
+    hygiene."""
+    use_fetch(lambda *_a, **_k: (200, [{"id": "1"}]))
+    body = post(client, data=make_zip({
+        "repo/supabase/migrations/0001.sql":
+            "create table public.users (id uuid primary key, email text);",
+    }), anon_key=jwt()).json()
+    assert body["status"] == "checked"
+    assert body["project_ref"] == REF
+    assert body["key_source"] == "supplied"
+    assert body["exposed_tables"] == ["users"]
+
+
+def test_a_supplied_service_role_key_is_refused_at_the_edge(client) -> None:
+    calls = []
+    use_fetch(lambda *a, **k: (calls.append(a), (200, [{"id": "1"}]))[1])
+    body = post(client, data=make_zip({"repo/a.ts": "x"}),
+                anon_key=jwt(role="service_role")).json()
+    assert body["status"] == "refused"
+    assert "service_role" in body["reason"]
+    assert calls == []
+
+
+def test_the_supplied_key_does_not_come_back_in_the_response(client) -> None:
+    """It arrives in a request body and must not leave in a response one."""
+    use_fetch(lambda *_a, **_k: (200, []))
+    blob = json.dumps(post(client, anon_key=jwt()).json())
+    assert jwt() not in blob
+    assert "eyJ" not in blob
+
+
+def test_the_ledger_never_receives_the_key(client, ledger) -> None:
+    """The ledger row is rendered and kept. A credential belonging to a
+    customer must not acquire a second home in our database."""
+    use_fetch(lambda *_a, **_k: (200, []))
+    post(client, anon_key=jwt())
+    blob = json.dumps({"started": ledger.started, "completed": ledger.completed})
+    assert jwt() not in blob
+    assert "eyJ" not in blob
+
+
+def test_no_supplied_key_still_reads_the_repository(client) -> None:
+    """The control: adding the parameter must not turn the original path off."""
+    use_fetch(lambda *_a, **_k: (200, [{"id": "1"}]))
+    body = post(client).json()
+    assert body["key_source"] == "repository"
+    assert body["status"] == "checked"
