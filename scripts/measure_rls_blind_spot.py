@@ -53,6 +53,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -143,6 +144,11 @@ class Repo:
     has_supabase_dir: bool = False
     sql_paths: list[str] = field(default_factory=list)
     schema_paths: list[str] = field(default_factory=list)
+    # Tables named by a `supabase gen types typescript` file, which is
+    # generated FROM THE LIVE PROJECT and can therefore name a table that has
+    # no migration — the measured gap this field exists to size.
+    types_files: list[str] = field(default_factory=list)
+    types_tables: list[str] = field(default_factory=list)
 
     read_findings: list[str] = field(default_factory=list)
     write_findings: list[str] = field(default_factory=list)
@@ -300,6 +306,7 @@ def _inspect(slug: str, workdir: Path) -> Repo:
             if repo.is_lovable or repo.is_v0:
                 break
 
+    _read_generated_types(repo, dest, paths)
     repo.has_supabase_dir = any(p.startswith("supabase/") for p in paths)
     repo.sql_paths = [p for p in paths if p.lower().endswith(".sql")]
     repo.schema_paths = [p for p in repo.sql_paths if _is_schema_file(p)]
@@ -334,6 +341,40 @@ def _run_detector(repo: Repo, dest: Path) -> None:
         return
     repo.read_findings = [f.title for f in findings if f.rule_id == RULE_ID]
     repo.write_findings = [f.title for f in findings if f.rule_id == WRITE_RULE_ID]
+
+
+
+# Every table entry in a `supabase gen types typescript` file is an identifier
+# whose object opens with `Row:`. Matching on that rather than on the file's
+# name is what keeps this from depending on where somebody put it.
+_TYPES_TABLE = re.compile(r"(\w+):\s*\{\s*Row:")
+
+# Only files whose NAME suggests generated types are read. In a blobless clone
+# every file read is a fetch, and reading all TypeScript in every repository to
+# find one file would cost more than the question is worth. The consequence is
+# stated rather than hidden: a generated types file under an unusual name is
+# missed, so this number is a LOWER bound.
+_TYPES_NAME_HINTS = ("types", "database", "supabase", "schema")
+
+
+def _read_generated_types(repo: Repo, dest: Path, paths: list[str]) -> None:
+    candidates = [
+        p for p in paths
+        if p.lower().endswith((".ts", ".tsx"))
+        and any(h in p.rsplit("/", 1)[-1].lower() for h in _TYPES_NAME_HINTS)
+    ]
+    for path in candidates[:12]:
+        shown = _git(["show", f"HEAD:{path}"], cwd=str(dest))
+        if shown.returncode != 0 or "Row:" not in shown.stdout:
+            continue
+        found = sorted({m.group(1).lower()
+                        for m in _TYPES_TABLE.finditer(shown.stdout)})
+        if not found:
+            continue
+        repo.types_files.append(path)
+        for name in found:
+            if name not in repo.types_tables:
+                repo.types_tables.append(name)
 
 
 def wilson(hits: int, total: int) -> tuple[float, float]:
@@ -483,6 +524,23 @@ def main() -> int:
     strata = [s for s in STRATA if not wanted or s.key == wanted]
 
     results = [run_stratum(s, workers, limit, keep) for s in strata]
+
+    # ONE REPOSITORY FAILING IS THEIRS; ALL OF THEM FAILING THE SAME WAY IS
+    # OURS. The per-repo guard that stops a single bad input from ending the
+    # run also turns a programming error into a plausible dataset: a NameError
+    # in this file once produced 199 "not inspected" repositories and a funnel
+    # of zeros that read like a finding. A run is not a measurement if the
+    # thing being measured never ran.
+    for result in results:
+        failures = [r.error for r in result.repos if r.error]
+        if failures and len(failures) == len(result.repos) and \
+                len(set(failures)) == 1:
+            print(f"\n!! every repository in `{result.stratum.key}` failed "
+                  f"identically:\n   {failures[0]}\n"
+                  f"   That is this script, not those repositories. "
+                  f"No number below is a measurement.")
+            return 2
+
     for result in results:
         report(result)
 
@@ -551,3 +609,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
