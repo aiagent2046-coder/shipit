@@ -18,6 +18,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routes.dependencies import (
+    get_audit_repo,
+    get_repo_fetcher,
     get_rls_fetch,
     get_rls_live_check_repo,
 )
@@ -286,3 +288,126 @@ def test_the_response_says_how_many_answers_prove_nothing(client) -> None:
     assert body["exposed_tables"] == []
     assert body["inconclusive"] == 0
     assert body["empty_but_unproven"] == len(body["attempts"]) > 0
+
+
+# --- reachable from a report the customer is already looking at -------------
+#
+# `POST /v1/rls-check` takes an archive because it has to work standalone. A
+# browser rendering a finished report does not have the customer's repository,
+# and asking for it again is a bad trade for a button — so the audit-scoped
+# route re-fetches from the stored repo_url, the way the Fix Pack already does.
+
+class FakeAudits:
+    def __init__(self, row=None):
+        self.row = row
+        self.asked = []
+
+    async def get_authorized(self, audit_id, token):
+        self.asked.append((audit_id, token))
+        return self.row
+
+
+AUDIT_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def use_audits(row):
+    fake = FakeAudits(row)
+    app.dependency_overrides[get_audit_repo] = lambda: fake
+    return fake
+
+
+def use_fetcher(fn):
+    app.dependency_overrides[get_repo_fetcher] = lambda: fn
+
+
+@pytest.fixture(autouse=True)
+def _clean_audit_overrides():
+    yield
+    app.dependency_overrides.pop(get_audit_repo, None)
+    app.dependency_overrides.pop(get_repo_fetcher, None)
+
+
+def post_audit(client, *, consent=CONSENT_PHRASE, token="t", **extra):
+    return client.post(
+        f"/v1/audits/{AUDIT_ID}/rls-check",
+        data={"consent": consent, "token": token, **extra},
+    )
+
+
+def test_the_audit_route_re_reads_the_repository_itself(client) -> None:
+    use_audits({"id": AUDIT_ID,
+                "repo_url": "https://github.com/acme/app"})
+    fetched = []
+
+    def fetcher(owner, repo):
+        fetched.append((owner, repo))
+        return REPO
+
+    use_fetcher(fetcher)
+    use_fetch(lambda *_a, **_k: (200, [{"id": "1"}]))
+
+    body = post_audit(client, anon_key=jwt()).json()
+    assert fetched == [("acme", "app")]
+    assert body["status"] == "checked"
+    assert body["exposed_tables"] == ["users"]
+
+
+def test_a_wrong_token_is_answered_404_and_checks_nothing(client) -> None:
+    """The same rule as GET /v1/audits/{id}: 404 rather than 403, so this never
+    confirms an id exists to somebody who does not hold its token."""
+    audits = use_audits(None)
+    calls = []
+    use_fetcher(lambda o, r: calls.append((o, r)) or REPO)
+    use_fetch(lambda *_a, **_k: (200, [{"id": "1"}]))
+
+    response = post_audit(client, token="wrong")
+    assert response.status_code == 404
+    assert audits.asked == [(AUDIT_ID, "wrong")]
+    assert calls == []
+
+
+def test_consent_is_checked_before_the_audit_is_even_looked_up(client) -> None:
+    audits = use_audits({"id": AUDIT_ID, "repo_url": "https://github.com/a/b"})
+    response = post_audit(client, consent="true")
+    assert response.status_code == 422
+    assert audits.asked == []
+
+
+def test_an_uploaded_archive_audit_is_refused_with_a_way_forward(client) -> None:
+    """No repo_url to re-read. That is a refusal with a reason — the customer
+    can still use the archive route — not a 400 that reads like a breakage."""
+    use_audits({"id": AUDIT_ID, "repo_url": None})
+    use_fetch(lambda *_a, **_k: (200, [{"id": "1"}]))
+    body = post_audit(client).json()
+    assert body["status"] == "refused"
+    assert "/v1/rls-check" in body["reason"]
+    assert body["exposed_tables"] == []
+
+
+def test_a_failed_re_fetch_closes_the_ledger_row(client, ledger) -> None:
+    """A row left open means "a check was started and we do not know what
+    happened", which is more alarming than what actually happened."""
+    use_audits({"id": AUDIT_ID, "repo_url": "https://github.com/acme/app"})
+
+    def boom(owner, repo):
+        raise RuntimeError("404 from github")
+
+    use_fetcher(boom)
+    use_fetch(lambda *_a, **_k: (200, []))
+
+    body = post_audit(client).json()
+    assert body["status"] == "refused"
+    assert ledger.started
+    assert ledger.completed[0]["outcome"] == "refused"
+
+
+def test_both_routes_answer_in_the_same_shape(client) -> None:
+    """Two hand-built dicts is how a count added in one place goes missing from
+    the other."""
+    use_audits({"id": AUDIT_ID, "repo_url": "https://github.com/acme/app"})
+    use_fetcher(lambda o, r: REPO)
+    use_fetch(lambda *_a, **_k: (200, []))
+
+    from_archive = post(client).json()
+    from_audit = post_audit(client).json()
+    assert set(from_archive) == set(from_audit)
