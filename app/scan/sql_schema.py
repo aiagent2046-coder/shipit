@@ -92,6 +92,93 @@ _REFERENCES = re.compile(
 )
 
 
+_DOLLAR_TAG = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
+
+
+def _strip_comments(sql: str) -> str:
+    """Blank out `--` and `/* */`, replacing them with spaces of equal length.
+
+    MEASURED 2026-08-18. A repository's exported SQL carried the header
+
+        -- CREATE TABLE STATEMENT (generated)
+
+    and the reader produced a table called `statement`. Worse than the phantom:
+    the comment's `(` opened a body that ran on until the next `);`, swallowing
+    the real CREATE TABLE that followed, so a table the customer actually has
+    disappeared from the schema.
+
+    It goes wrong in both directions, which is why this is not cosmetic. A
+    commented-out `-- alter table t enable row level security;` counted as
+    protection — a real hole we would never report. A commented-out
+    `/* create policy p … using (true); */` counted as a hole — a finding
+    about a line the developer had already disabled.
+
+    Lengths are preserved because parse_schema orders statements by their
+    offset in this text, and shortening it would reorder the migration chain.
+
+    Quoting rules followed: `''` doubling inside single-quoted strings, and
+    dollar-quoted bodies passed over whole. Backslash is NOT treated as an
+    escape — Postgres ships `standard_conforming_strings = on`, so `'C:\\'` is
+    a complete string, and reading the backslash as an escape would run the
+    scanner past the closing quote and into live SQL.
+
+    Dollar-quoted bodies are left INTACT rather than skipped. Supabase
+    migrations routinely wrap real policies in `DO $$ … END $$;`, and dropping
+    those would hide protection that exists — the expensive direction.
+    """
+    out = list(sql)
+    index, end = 0, len(sql)
+    while index < end:
+        char = sql[index]
+        if char == "'":
+            index += 1
+            while index < end:
+                if sql[index] == "'":
+                    if index + 1 < end and sql[index + 1] == "'":
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        if char == '"':
+            index += 1
+            while index < end and sql[index] != '"':
+                index += 1
+            index += 1
+            continue
+        if char == "$":
+            tag = _DOLLAR_TAG.match(sql, index)
+            if tag:
+                closing = sql.find(tag.group(0), tag.end())
+                index = end if closing < 0 else closing + len(tag.group(0))
+                continue
+        if sql.startswith("--", index):
+            stop = sql.find("\n", index)
+            stop = end if stop < 0 else stop
+            out[index:stop] = " " * (stop - index)
+            index = stop
+            continue
+        if sql.startswith("/*", index):
+            depth, cursor = 1, index + 2
+            while cursor < end and depth:
+                if sql.startswith("/*", cursor):
+                    depth += 1
+                    cursor += 2
+                elif sql.startswith("*/", cursor):
+                    depth -= 1
+                    cursor += 2
+                else:
+                    cursor += 1
+            for position in range(index, min(cursor, end)):
+                if out[position] != "\n":
+                    out[position] = " "
+            index = cursor
+            continue
+        index += 1
+    return "".join(out)
+
+
 def _is_constant_true(clause: str) -> bool:
     """An empty clause counts: a policy that constrains nothing constrains
     nothing, and Postgres treats the absent half as permissive."""
@@ -249,6 +336,7 @@ def parse_schema(sql: str) -> dict[str, Table]:
     where it cannot be sure the answer must land on "not a finding" — see
     _CREATE_TABLE handling below.
     """
+    sql = _strip_comments(sql)
     tables: dict[str, Table] = {}
     events: list[tuple[int, str, re.Match[str]]] = []
     for kind, pattern in (
