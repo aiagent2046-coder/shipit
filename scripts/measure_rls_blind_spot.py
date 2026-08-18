@@ -493,17 +493,31 @@ def main() -> int:
         print(f"  {result.stratum.label:<34} "
               f"{_rate(len(result.with_schema), len(result.supa))}")
 
-    if len(results) > 1:
-        print("\nDifferences, so nobody reads them off overlapping intervals "
-              "by eye:")
-        for i, a in enumerate(results):
-            for b in results[i + 1:]:
-                p = two_proportion_p(len(a.with_schema), len(a.supa),
-                                     len(b.with_schema), len(b.supa))
-                verdict = "distinguishable" if p < 0.05 else \
-                    "NOT distinguishable at this sample size"
-                print(f"  {a.stratum.key} vs {b.stratum.key}: p = {p:.2f}"
-                      f"  — {verdict}")
+    pairs = [(a, b) for i, a in enumerate(results) for b in results[i + 1:]]
+    if pairs:
+        # THE THRESHOLD MOVES WITH THE NUMBER OF QUESTIONS ASKED. Three
+        # pairwise tests at 0.05 each carry a 14% chance of at least one false
+        # positive when nothing differs at all, so one p just under 0.05 out of
+        # three is the expected amount of noise rather than a result. Printing
+        # the plain 0.05 verdict beside three comparisons is how a survey
+        # announces a difference it did not find.
+        threshold = 0.05 / len(pairs)
+        print(f"\nDifferences. {len(pairs)} comparisons were made, so the "
+              f"threshold is 0.05/{len(pairs)} = {threshold:.3f}\n"
+              "(Bonferroni) — not 0.05. Overlapping intervals do not imply "
+              "no difference either;\nneither reading is safe by eye.")
+        for a, b in pairs:
+            p = two_proportion_p(len(a.with_schema), len(a.supa),
+                                 len(b.with_schema), len(b.supa))
+            if p < threshold:
+                verdict = "distinguishable"
+            elif p < 0.05:
+                verdict = ("below 0.05 but NOT below the corrected threshold "
+                           "— expected noise")
+            else:
+                verdict = "not distinguishable"
+            print(f"  {a.stratum.key} vs {b.stratum.key}: p = {p:.3f}"
+                  f"  — {verdict}")
 
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps({
