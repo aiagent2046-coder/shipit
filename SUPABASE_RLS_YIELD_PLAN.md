@@ -225,6 +225,64 @@ table returns, which is why `empty_result` carries `alone_proves_nothing` and
 means something only as the after half of a pair whose before half read real
 rows out of that same table.
 
+## Part C result, measured 2026-08-18 — and it contradicts Part A
+
+Run against our own project (`egoprezwkjaqacxtjwfl`), owner consenting, three
+rows maximum, no value stored.
+
+| table | rows in DB | anon read | verdict |
+|---|---|---|---|
+| `agent_projects` | 14 | **3** | **EXPOSED** — real rows returned |
+| `founder_profiles` | 24 | 0 | protected — ambiguity resolved by the row count |
+| `avatar_interactions` | 0 | 0 | undetermined — the table is empty |
+
+`agent_projects` handed a public key `idea` (111 chars), `summary` (220),
+`domain` and the match it belongs to: startup ideas and model-written debriefs
+of founder conversations, readable by any visitor.
+
+### Static was wrong on both counts, in both directions
+
+| table | Part A, from committed migrations | Part C, live |
+|---|---|---|
+| `founder_profiles` | EXPOSED (`USING (true)`) | **protected** — false positive |
+| `avatar_interactions` | EXPOSED (RLS never enabled) | RLS **is** enabled live — false positive |
+| `agent_projects` | **never seen** | EXPOSED |
+
+The migrations in the repository do not describe the deployment. Both static
+findings are stale, and the one real exposure sits in a table that is not in
+the migrations at all — created through the dashboard or some other path, so no
+amount of SQL parsing could have found it.
+
+The oracle's heuristics were not the problem: `agent_projects` carries
+`summary`, which is a STRONG hint, so it WOULD have been flagged had it been in
+the input. The input was incomplete, which is a different failure and not one
+better patterns can fix.
+
+### What this does and does not prove
+
+n = 1 project. One deployment drifting from its migrations does not establish
+that all do, and this is our own project rather than a customer's.
+
+But the direction is what matters: static erred **both ways at once** — two
+false positives and one miss — and the miss was invisible by construction. So
+the Part A rate (2 of 4) is a statement about repositories, not deployments,
+and it must never be quoted as the second. That distinction was already written
+into this plan; what is new is knowing how large the gap can be.
+
+### The consequence for the product
+
+A static RLS finding cannot be shipped to a customer as "your data is exposed".
+On the only deployment we have been able to check, that sentence would have
+been wrong twice and silent about the one case that was true. It can be shipped
+as "your committed migrations say X — here is a one-request check against your
+deployment", which is the live probe, and which is why it exists.
+
+The `empty_result` caveat also earned itself here. `founder_profiles` returned
+nothing, and that only became "protected" because an independent row count said
+the table holds 24 rows. `avatar_interactions` returned the identical answer
+and stays undetermined, because it is empty. Same response, two different
+truths — exactly what `alone_proves_nothing` is for.
+
 ## Not in scope (yet)
 
 * **Part C live yield** against real deployments — deferred until Part A clears
