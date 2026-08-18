@@ -283,6 +283,41 @@ the table holds 24 rows. `avatar_interactions` returned the identical answer
 and stays undetermined, because it is empty. Same response, two different
 truths — exactly what `alone_proves_nothing` is for.
 
+### The first verified before/after on a live deployment
+
+| | anon reads | rows in table |
+|---|---|---|
+| before | **3** (`idea`, `summary`, `domain`, …) | 14 |
+| after `enable_rls_on_agent_projects` | **0** | 14 |
+
+The fix is the policy `messages_select` already uses, pointed at the same
+`match_id`: readable by the two founders in that match and nobody else.
+
+Two checks separate a fix from breakage, and both were run:
+
+* **the rows are still there** — 14 before, 14 after. A table emptied by a
+  migration would give the same probe result and none of the value.
+* **a legitimate participant still sees their own** — simulated as
+  `authenticated` with a real participant's `sub`: 3 of 14 visible, which is
+  their matches. Enabling RLS without a workable policy closes the table to the
+  application too, and that failure surfaces in production rather than here.
+
+The `empty_result` ambiguity resolves itself in this pair without any
+out-of-band help: the BEFORE half read real rows out of that same table, so the
+after half returning none is a change rather than an empty table. The
+independent row count was belt-and-braces, not the proof.
+
+So the claim at the top of this document is now literally true, once, on a real
+deployment:
+
+> "We did not guess your data was exposed. We read three of your rows through
+> the front door with the public key from your own repo… The Fix Pack enabled
+> RLS, and the same request now returns nothing."
+
+What remains unproven is that it generalises. One project, ours, and the fix
+was applied by hand rather than by a Fix Pack. The class is real; the pipeline
+around it is not built.
+
 ## Not in scope (yet)
 
 * **Part C live yield** against real deployments — deferred until Part A clears
