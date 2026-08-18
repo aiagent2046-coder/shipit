@@ -1,0 +1,115 @@
+# Discovery output, NOT a corpus. Membership is re-decided by reading the
+# repository itself (see scripts/measure_rls_blind_spot.py).
+#
+# Query : "@supabase/supabase-js" filename:package.json
+# Order : GitHub code-search relevance, page 1, taken in the order returned
+# Fetched: 2026-08-18   (population at that moment: 467968)
+#
+# THE CONTROL GROUP: Supabase projects with no generator marker on them. Any
+# repository here that turns out to carry `lovable-tagger`, a `.bolt/`
+# directory or a v0 marker is EXCLUDED and counted as excluded — it belongs to
+# another stratum, and leaving it in would blur the only comparison this
+# stratum exists to make.
+#
+# The entry criterion differs from the other two on purpose, and it changes
+# what can be computed. Here "uses Supabase" is how the sample was drawn, so
+# its rate is not a finding and is not reported. The conditional rate — given
+# Supabase, is the schema committed — is exactly the quantity being compared,
+# and it survives the difference.
+roninoss/create-expo-stack
+ryaker/appstore-connect-mcp
+Hackdex-App/hackdex-website
+codeforpakistan/numainda-next
+supajump/supajump
+Data-Advantage/VibeReference
+MrAlvaroLG/Pensar
+sup-Udh/link-up
+Xenonesis/Budget-Buddy
+lucasps136/baseClaudeReactWebtemplate
+elevate-for-humanity/Elevate-lms
+notargiacomo/combonautas-rpg
+dreamos-sys/dream
+nathano091189-design/rooted-visions-site
+alooooo133/Ali-HSE
+eabemp1/BuildMind
+Samuelfmedeiros/Portifolio
+nomadcoders/wemake
+dev-lou/SpatialSync
+Mahmoudmoe123/Soombook
+Miguelgut625/TravelQuest
+ateeshayjain/Kunbaa
+iBob78/Apex-collector
+MadScientist85/GROKCON-APP
+LuckyYaduvanshi5/Failed_Taska
+UelitonFOX/vidashield-v2
+jajajawwswws-lab/senac_oficial_estoque
+kay8723/CookMate-AI
+Peym4n/viennaflow-app
+improdead/intellect
+ptiporki19/combo-1
+ArjunCodess/analyzr
+Rhyred/TechTalk_Dark_Red
+boshjerns/MithrilWhisperApp
+aeonark/aeonark-rfp
+hiluxtechnology/construction
+xbunny-md/LION-GUARD
+afsaralam2011-hue/ERP-Management
+KaruhX/onsen-coffee-net
+OnlyXtremeVehicle/oxv-coach-app
+hollaugo/tutorials
+BgtPtr/Szakdolgozat
+iglesiaipuccontabilidad-netizen/IGLESIA_CONTABILIDAD.bak
+LAXMIKANT02/MoodFit
+samoskito/bussola-ia
+omkarr404/Agri-Sahayak
+richardhahahaha/ai-supernova
+wersplat/temp-react-app
+lux-ok/ds-sv5-test
+qes00/b-xiomi
+Aishwaryfilms/final-web
+IvanTatarchuk/Matadora-business
+dwoods360-cyber/ironframe-live
+alekz7/taskmind
+Tanmay1202/EnviRon
+DannShop/DSD-Invoices
+youdonghyeon06/2026_seminar_project3
+DanieleSimonini/advplus-monitor
+ro-mihaiu/blossomcraft
+volkov163/migom
+ZufarSyaafie/HeritageGuard
+Giving-Back-Studio/ooshBE
+Deep4474/Garget
+Thetimii/thecompletelazytrend-backend
+mscartozzoni/dr-marcio-samara
+jankiewiet1/circav2-vercel
+tbutler1803/RACATOMSITE
+Codemethemoney/autonomous-agent-system
+3ighty6/neonfreak-live
+Aishwaryfilms/code
+walusungumsukwa0899-design/onlinecampusmarket
+csirgo/TecnoJobs
+geminisaventuras/sos-venezuela
+jer-novi/BACKUP-eindproject
+sp3c73r-ops/easyagry
+devSync52/sync-ai-platform-techno
+Tsarcasm831/ToonCharacterAnimator
+eric-nichols-nyc/audiograph
+ComplianceGGPH/ggph-buletin
+Chi-Shan0707/Game
+kkotium-dot/kkotium-garden
+nicasmar/dharma-gates
+SICQR/hotmess-ultimate
+maladroit1/birthday-ai-app
+ianye23301/WillowCare
+Tsukishima168/kiwimu-mbti
+EugeneBoondock/unifriend
+Shubhampraja2/Shabari1
+RasmusGunnar/fcn-fans-app
+shawtybaby671-ai/bookish-palm-tree
+dpulseai/FIMS-APPS
+hakumenterprise/-Hakum-Batangas
+csci701s25/crescendo
+thetobysiu/VMProtect-license-manager
+dijonmusters/fetching-and-caching-supabase-data-in-next-js-13-server-components
+fjkiani/backend
+sethrimer3/SoL-RTS
