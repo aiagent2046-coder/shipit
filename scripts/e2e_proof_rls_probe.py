@@ -201,9 +201,13 @@ def main() -> int:
         psql(AUTH_UID_STUB)
 
         print("starting postgrest…", flush=True)
+        # PG_PASSWORD is a literal defined at the top of this file for a
+        # container on a docker-internal network that `finally` tears down. It
+        # reaches no real database and is not a credential for anything.
+        db_uri = f"postgres://authenticator:{PG_PASSWORD}@{PG}:5432/postgres"  # scan-allow: throwaway e2e container
         sh("docker", "run", "-d", "--name", REST, "--network", NET,
            "-p", f"127.0.0.1:{REST_PORT}:3000",
-           "-e", f"PGRST_DB_URI=postgres://authenticator:{PG_PASSWORD}@{PG}:5432/postgres",
+           "-e", f"PGRST_DB_URI={db_uri}",
            "-e", "PGRST_DB_SCHEMAS=public",
            "-e", "PGRST_DB_ANON_ROLE=anon",
            "postgrest/postgrest:v12.2.3", quiet=True)
