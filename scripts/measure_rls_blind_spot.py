@@ -72,21 +72,57 @@ from app.scan.rls import (  # noqa: E402
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-# Tracked, because it is an INPUT: the run cannot be reproduced or disputed
-# without the list it drew from. The result JSON goes to batch_reports/, which
-# is gitignored, like every other measurement output here.
-CANDIDATES = ROOT / "scripts" / "data" / "lovable_candidates.txt"
+# Tracked, because they are INPUTS: a run cannot be reproduced or disputed
+# without the list it drew from, and GitHub's code search is not reachable from
+# the script (the session proxy allows only repository-scoped API paths), so
+# these lists are captured artefacts rather than something the script can
+# regenerate. The result JSON goes to batch_reports/, which is gitignored, like
+# every other measurement output here.
+DATA = ROOT / "scripts" / "data"
 OUT = ROOT / "batch_reports" / "rls_blind_spot.json"
-
-# The marker that decides membership, checked against the repo rather than
-# against the search result that suggested it.
-GENERATOR_MARKER = "lovable-tagger"
 
 # `@supabase/supabase-js` in a package.json is the load-bearing signal: it is
 # the client the anon key is handed to. A `supabase/` directory alone is
 # weaker — it can hold only edge functions or a config.toml — so it is recorded
 # separately rather than folded in.
 SUPABASE_DEP = "@supabase/supabase-js"
+
+# Markers that identify a generator, checked against the repository rather than
+# against the search result that suggested it. `lovable-tagger` is a build
+# plugin in package.json; `.bolt/` is bolt's own scaffolding directory; the v0
+# marker is included so the control stratum can exclude it, not because v0 is
+# measured here.
+LOVABLE_MARKERS = ("lovable-tagger", "lovable.dev")
+BOLT_DIR = ".bolt/"
+V0_MARKERS = ("v0.dev", "v0-user-next.config")
+
+
+@dataclass(frozen=True)
+class Stratum:
+    """One population, its candidate list, and how membership is decided.
+
+    THE THREE ARE NOT POOLED, and the reason is in the entry criteria. Lovable
+    and bolt are drawn on a GENERATOR marker, so "uses Supabase" is a funnel
+    stage inside them and its rate means something. The control is drawn on the
+    Supabase dependency itself, so that rate is how the sample was built and is
+    not a finding. The conditional rate — given Supabase, is the schema
+    committed — is the same question in all three, which is why it is the one
+    being compared.
+    """
+
+    key: str
+    label: str
+    candidates: str
+    # Whether "uses Supabase" was the entry criterion rather than a stage.
+    supabase_is_entry: bool = False
+
+
+STRATA = (
+    Stratum("lovable", "Lovable (`lovable-tagger`)", "lovable_candidates.txt"),
+    Stratum("bolt", "bolt (`.bolt/` scaffolding)", "bolt_candidates.txt"),
+    Stratum("handwritten", "no generator marker (control)",
+            "handwritten_candidates.txt", supabase_is_entry=True),
+)
 
 _CLONE_TIMEOUT_S = 120
 _SHOW_TIMEOUT_S = 60
@@ -95,11 +131,14 @@ _SHOW_TIMEOUT_S = 60
 @dataclass
 class Repo:
     slug: str
+    stratum: str = ""
     sha: str = ""
     reachable: bool = False
     error: str = ""
 
     is_lovable: bool = False
+    is_bolt: bool = False
+    is_v0: bool = False
     has_supabase_dep: bool = False
     has_supabase_dir: bool = False
     sql_paths: list[str] = field(default_factory=list)
@@ -115,6 +154,20 @@ class Repo:
     @property
     def commits_schema(self) -> bool:
         return bool(self.schema_paths)
+
+    def belongs_to(self, stratum: Stratum) -> bool:
+        """Is this repository a member of the stratum it was drawn for?
+
+        The control is defined by ABSENCE, so it carries the exclusions: a
+        repository found by searching for the Supabase dependency may still
+        turn out to be Lovable or bolt output, and leaving it in would blur
+        the only comparison the control exists to make.
+        """
+        if stratum.key == "lovable":
+            return self.is_lovable
+        if stratum.key == "bolt":
+            return self.is_bolt
+        return not (self.is_lovable or self.is_bolt or self.is_v0)
 
 
 def _git(args: list[str], cwd: str | None = None,
@@ -220,17 +273,31 @@ def _inspect(slug: str, workdir: Path) -> Repo:
         if shown.returncode != 0:
             continue
         text = shown.stdout
-        if GENERATOR_MARKER in text:
+        lowered = text.lower()
+        if any(m in lowered for m in LOVABLE_MARKERS):
             repo.is_lovable = True
+        if any(m in lowered for m in V0_MARKERS):
+            repo.is_v0 = True
         if SUPABASE_DEP in text and manifest.rsplit("/", 1)[-1] == "package.json":
             repo.has_supabase_dep = True
 
-    if not repo.is_lovable:
+    # bolt is decided by its scaffolding directory, which is in the tree and
+    # needs no blob fetched. Structural rather than a string in a manifest
+    # somebody may have rewritten.
+    repo.is_bolt = any(p.startswith(BOLT_DIR) for p in paths)
+
+    if not (repo.is_lovable or repo.is_v0):
         for readme in [p for p in paths
                        if p.rsplit("/", 1)[-1].lower().startswith("readme")][:3]:
             shown = _git(["show", f"HEAD:{readme}"], cwd=str(dest))
-            if shown.returncode == 0 and "lovable.dev" in shown.stdout.lower():
+            if shown.returncode != 0:
+                continue
+            lowered = shown.stdout.lower()
+            if any(m in lowered for m in LOVABLE_MARKERS):
                 repo.is_lovable = True
+            if any(m in lowered for m in V0_MARKERS):
+                repo.is_v0 = True
+            if repo.is_lovable or repo.is_v0:
                 break
 
     repo.has_supabase_dir = any(p.startswith("supabase/") for p in paths)
@@ -295,10 +362,10 @@ def _rate(hits: int, total: int) -> str:
             f"[95% CI {100 * low:.0f}-{100 * high:.0f}%]")
 
 
-def load_candidates() -> list[str]:
+def load_candidates(filename: str) -> list[str]:
     slugs: list[str] = []
     seen: set[str] = set()
-    for line in CANDIDATES.read_text().splitlines():
+    for line in (DATA / filename).read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#") or line in seen:
             continue
@@ -307,108 +374,163 @@ def load_candidates() -> list[str]:
     return slugs
 
 
-def main() -> int:
-    slugs = load_candidates()
-    limit = int(os.environ.get("LIMIT", "0")) or len(slugs)
-    slugs = slugs[:limit]
-    workers = int(os.environ.get("WORKERS", "8"))
-    keep = os.environ.get("KEEP") == "1"
+def two_proportion_p(hits_a: int, n_a: int, hits_b: int, n_b: int) -> float:
+    """Two-sided p for "these two rates are the same", normal approximation.
 
-    workdir = Path(tempfile.mkdtemp(prefix="rls-blind-spot-"))
-    print(f"{len(slugs)} candidate repos, {workers} workers, clones in {workdir}\n")
+    Printed so a difference between strata is not read off two overlapping
+    intervals by eye. Overlapping 95% intervals do NOT imply no difference, and
+    non-overlapping ones are a stricter test than the comparison actually needs
+    — either way, eyeballing them is how a survey acquires a conclusion its
+    numbers do not support.
+    """
+    if n_a == 0 or n_b == 0:
+        return 1.0
+    pooled = (hits_a + hits_b) / (n_a + n_b)
+    se = math.sqrt(pooled * (1 - pooled) * (1 / n_a + 1 / n_b))
+    if se == 0:
+        return 1.0
+    z = abs(hits_a / n_a - hits_b / n_b) / se
+    return math.erfc(z / math.sqrt(2))
+
+
+@dataclass
+class Result:
+    stratum: Stratum
+    repos: list[Repo]
+
+    @property
+    def unreachable(self) -> list[Repo]:
+        return [r for r in self.repos if not r.reachable]
+
+    @property
+    def members(self) -> list[Repo]:
+        return [r for r in self.repos
+                if r.reachable and r.belongs_to(self.stratum)]
+
+    @property
+    def supa(self) -> list[Repo]:
+        return [r for r in self.members if r.uses_supabase]
+
+    @property
+    def with_schema(self) -> list[Repo]:
+        return [r for r in self.supa if r.commits_schema]
+
+    @property
+    def blind(self) -> list[Repo]:
+        return [r for r in self.supa if not r.commits_schema]
+
+
+def run_stratum(stratum: Stratum, workers: int, limit: int,
+                keep: bool) -> Result:
+    slugs = load_candidates(stratum.candidates)[:limit] if limit \
+        else load_candidates(stratum.candidates)
+    workdir = Path(tempfile.mkdtemp(prefix=f"rls-{stratum.key}-"))
+    print(f"[{stratum.key}] {len(slugs)} candidates, clones in {workdir}")
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             repos = list(pool.map(lambda s: inspect(s, workdir), slugs))
     finally:
         if not keep:
             shutil.rmtree(workdir, ignore_errors=True)
+    for repo in repos:
+        repo.stratum = stratum.key
+    return Result(stratum, repos)
 
-    unreachable = [r for r in repos if not r.reachable]
-    reachable = [r for r in repos if r.reachable]
-    # Membership decided by the repository, not by the search that found it.
-    lovable = [r for r in reachable if r.is_lovable]
-    supa = [r for r in lovable if r.uses_supabase]
-    with_schema = [r for r in supa if r.commits_schema]
-    blind = [r for r in supa if not r.commits_schema]
-    exposed_read = [r for r in with_schema if r.read_findings]
-    exposed_write = [r for r in with_schema if r.write_findings]
 
+def report(result: Result) -> None:
+    stratum, s = result.stratum, result
+    print("\n" + "=" * 72)
+    print(f"{stratum.label}")
     print("=" * 72)
-    print("FUNNEL")
-    print("=" * 72)
-    print(f"candidates from search           : {len(slugs)}")
-    print(f"  not inspected (gone / failed)  : {len(unreachable)}"
-          "   <- excluded from every denominator below")
-    print(f"  reachable                      : {len(reachable)}")
-    print(f"    carries {GENERATOR_MARKER:<22}: {len(lovable)}"
-          "   <- the corpus, verified in-repo")
-    print(f"      uses {SUPABASE_DEP:<23}: {_rate(len(supa), len(lovable))}")
-    print(f"        commits its schema       : {_rate(len(with_schema), len(supa))}")
-    print(f"        commits NO schema        : {_rate(len(blind), len(supa))}"
+    print(f"candidates from search          : {len(s.repos)}")
+    print(f"  not inspected (gone / failed) : {len(s.unreachable)}"
+          "   <- excluded from every denominator")
+    print(f"  members, verified in-repo     : {len(s.members)}")
+    if stratum.supabase_is_entry:
+        print(f"    uses Supabase               : {len(s.supa)}"
+              "   <- the entry criterion, not a finding")
+    else:
+        print(f"    uses Supabase               : "
+              f"{_rate(len(s.supa), len(s.members))}")
+    print(f"      commits its schema        : "
+          f"{_rate(len(s.with_schema), len(s.supa))}")
+    print(f"      commits NO schema         : {_rate(len(s.blind), len(s.supa))}"
           "   <- THE BLIND SPOT")
-    print()
-    print("Within the repos whose schema can be read — secondary, and a "
-          "statement about\nrepositories rather than deployments (Part C, n=1, "
-          "found the two disagree):")
-    print(f"  a private-shaped table is anon-readable : "
-          f"{_rate(len(exposed_read), len(with_schema))}")
-    print(f"  a table is anon-writable                : "
-          f"{_rate(len(exposed_write), len(with_schema))}")
 
-    if unreachable:
-        print(f"\nNot inspected ({len(unreachable)}) — deleted, renamed, or "
-              "something this reader\ncould not handle. Excluded rather than "
-              "counted as anything:")
-        for r in unreachable[:15]:
-            print(f"  {r.slug}: {r.error}")
-        if len(unreachable) > 15:
-            print(f"  … and {len(unreachable) - 15} more")
+    read_hits = [r for r in s.with_schema if r.read_findings]
+    write_hits = [r for r in s.with_schema if r.write_findings]
+    print(f"  anon-readable private table   : "
+          f"{_rate(len(read_hits), len(s.with_schema))}")
+    print(f"  anon-writable table           : "
+          f"{_rate(len(write_hits), len(s.with_schema))}")
 
-    dropped = [r for r in reachable if not r.is_lovable]
+    dir_no_sql = [r for r in s.blind if r.has_supabase_dir]
+    print(f"  of the blind, carry `supabase/` with no SQL in it: "
+          f"{len(dir_no_sql)}/{len(s.blind)}")
+
+    dropped = [r for r in s.repos if r.reachable and not r.belongs_to(stratum)]
     if dropped:
-        print(f"\nSearch hits that are not Lovable repos ({len(dropped)}) — "
-              "dropped on\nre-verification, which is what re-verification is "
-              "for:")
-        for r in dropped[:10]:
-            print(f"  {r.slug}")
-        if len(dropped) > 10:
-            print(f"  … and {len(dropped) - 10} more")
+        shown = ", ".join(r.slug for r in dropped[:6])
+        print(f"  not members ({len(dropped)}), dropped on re-verification: "
+              f"{shown}{' …' if len(dropped) > 6 else ''}")
 
-    # A repo with a supabase/ directory but no committed SQL is the blind spot
-    # in its clearest form: the developer used the CLI or the dashboard, and the
-    # schema lives only in the project.
-    dir_no_sql = [r for r in blind if r.has_supabase_dir]
-    print(f"\nOf the {len(blind)} blind-spot repos, {len(dir_no_sql)} carry a "
-          "`supabase/` directory\nwith no schema SQL in it — configured "
-          "against a live project whose tables\nwere never written down here.")
 
-    if exposed_read or exposed_write:
-        print("\nRepos where the committed SQL describes an open table:")
-        for r in with_schema:
-            if r.read_findings or r.write_findings:
-                print(f"  {r.slug}  read={len(r.read_findings)} "
-                      f"write={len(r.write_findings)}")
+def main() -> int:
+    limit = int(os.environ.get("LIMIT", "0"))
+    workers = int(os.environ.get("WORKERS", "8"))
+    keep = os.environ.get("KEEP") == "1"
+    wanted = os.environ.get("STRATUM", "")
+    strata = [s for s in STRATA if not wanted or s.key == wanted]
+
+    results = [run_stratum(s, workers, limit, keep) for s in strata]
+    for result in results:
+        report(result)
+
+    print("\n" + "=" * 72)
+    print("THE COMPARISON: given Supabase, is the schema committed?")
+    print("=" * 72)
+    for result in results:
+        print(f"  {result.stratum.label:<34} "
+              f"{_rate(len(result.with_schema), len(result.supa))}")
+
+    if len(results) > 1:
+        print("\nDifferences, so nobody reads them off overlapping intervals "
+              "by eye:")
+        for i, a in enumerate(results):
+            for b in results[i + 1:]:
+                p = two_proportion_p(len(a.with_schema), len(a.supa),
+                                     len(b.with_schema), len(b.supa))
+                verdict = "distinguishable" if p < 0.05 else \
+                    "NOT distinguishable at this sample size"
+                print(f"  {a.stratum.key} vs {b.stratum.key}: p = {p:.2f}"
+                      f"  — {verdict}")
 
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(json.dumps({
-        "query": '"lovable-tagger" filename:package.json (pages 1-2, 2026-08-18)',
-        "candidates": len(slugs),
-        "unreachable": len(unreachable),
-        "lovable": len(lovable),
-        "uses_supabase": len(supa),
-        "commits_schema": len(with_schema),
-        "blind_spot": len(blind),
-        "blind_spot_ci": wilson(len(blind), len(supa)),
-        "anon_readable": len(exposed_read),
-        "anon_writable": len(exposed_write),
-        "repos": [asdict(r) for r in repos],
+        "fetched": "2026-08-18",
+        "strata": [{
+            "key": r.stratum.key,
+            "label": r.stratum.label,
+            "candidates": len(r.repos),
+            "unreachable": len(r.unreachable),
+            "members": len(r.members),
+            "uses_supabase": len(r.supa),
+            "supabase_is_entry": r.stratum.supabase_is_entry,
+            "commits_schema": len(r.with_schema),
+            "blind_spot": len(r.blind),
+            "blind_spot_ci": wilson(len(r.blind), len(r.supa)),
+            "anon_readable": len([x for x in r.with_schema if x.read_findings]),
+            "anon_writable": len([x for x in r.with_schema if x.write_findings]),
+        } for r in results],
+        "repos": [asdict(x) for r in results for x in r.repos],
     }, indent=2))
     print(f"\nwrote {OUT}")
 
-    if len(supa) < 25:
-        print("\nREFUSING TO REPORT A RATE: fewer than 25 Supabase repos "
-              "reached.\nThe interval would be as useless as the 3-of-7 this "
-              "run exists to replace.")
+    thin = [r.stratum.key for r in results if len(r.supa) < 25]
+    if thin:
+        print(f"\nREFUSING TO REPORT A RATE for {', '.join(thin)}: fewer than "
+              "25 Supabase repos\nreached. The interval would be as useless as "
+              "the 3-of-7 this run exists to replace.")
         return 1
     return 0
 
