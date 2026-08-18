@@ -53,7 +53,6 @@ import io
 import json
 import math
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -71,6 +70,10 @@ from app.scan.rls import (  # noqa: E402
     _SCHEMA_PATH_HINTS,
     read_committed_sql,
     scan_rls,
+)
+from app.proof.supabase_tables import (  # noqa: E402
+    _TYPES_MARKER,
+    _TYPES_TABLE,
 )
 from app.scan.sql_schema import parse_schema  # noqa: E402
 
@@ -354,10 +357,13 @@ def _run_detector(repo: Repo, dest: Path) -> None:
 
 
 
-# Every table entry in a `supabase gen types typescript` file is an identifier
-# whose object opens with `Row:`. Matching on that rather than on the file's
-# name is what keeps this from depending on where somebody put it.
-_TYPES_TABLE = re.compile(r"(\w+):\s*\{\s*Row:")
+# THE MATCHER IS IMPORTED, NOT REIMPLEMENTED. A first version of this file
+# carried its own copy and drifted from production within the hour: the
+# product required a `Tables: {` marker before matching and this did not, so
+# every hand-written interface with a `Row` field counted as a table and the
+# first numbers this script produced were inflated. That is the two-readers
+# failure this project has written down three times, and it cost a measurement
+# rather than a customer only because the measurement ran first.
 
 # Only files whose NAME suggests generated types are read. In a blobless clone
 # every file read is a fetch, and reading all TypeScript in every repository to
@@ -375,7 +381,7 @@ def _read_generated_types(repo: Repo, dest: Path, paths: list[str]) -> None:
     ]
     for path in candidates[:12]:
         shown = _git(["show", f"HEAD:{path}"], cwd=str(dest))
-        if shown.returncode != 0 or "Row:" not in shown.stdout:
+        if shown.returncode != 0 or _TYPES_MARKER not in shown.stdout:
             continue
         found = sorted({m.group(1).lower()
                         for m in _TYPES_TABLE.finditer(shown.stdout)})
