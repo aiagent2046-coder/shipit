@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from app.scan.checks import find_committed_env_files, gitignore_covers_env
 from app.fixpack.rls_policy import PolicyProposal, migration_filename, propose_read_policy
 from app.scan.rls import RULE_ID as RLS_RULE_ID
+from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
 from app.scan.rls import read_committed_sql
 from app.scan.sql_schema import parse_schema
 from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
@@ -484,6 +485,18 @@ def _why_not_fixable(finding: dict) -> str:
             "Found by the deep review. This Fix Pack rewrites only findings "
             "from the static rules, so these are reported and NOT changed — "
             "they are still yours to fix."
+        )
+    if rule_id == RLS_WRITE_RULE_ID:
+        # NOT "advisory, nothing to rewrite". There is plenty to rewrite — one
+        # ALTER TABLE closes it — and calling a critical finding advisory is
+        # the same failure as dropping it. We decline for a reason the buyer
+        # is entitled to hear: we do not know which writes their application
+        # makes with the anon key, and turning RLS on would stop those too.
+        return (
+            "Closing this needs one line of SQL, but we cannot tell from your "
+            "repository which writes your app makes with the public key — "
+            "enabling Row Level Security would stop those as well. The finding "
+            "explains the change; it is deliberately yours to apply."
         )
     return "Advisory findings: there is nothing in the code to rewrite."
 

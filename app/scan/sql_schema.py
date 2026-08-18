@@ -60,6 +60,15 @@ _REFERENCES = re.compile(
 )
 
 
+def _is_constant_true(clause: str) -> bool:
+    """An empty clause counts: a policy that constrains nothing constrains
+    nothing, and Postgres treats the absent half as permissive."""
+    if not clause:
+        return True
+    return bool(re.fullmatch(r"true|1\s*=\s*1|\(\s*true\s*\)",
+                             clause.strip(), re.IGNORECASE))
+
+
 @dataclass(frozen=True)
 class ForeignKey:
     column: str
@@ -90,6 +99,34 @@ class Policy:
         """No TO clause means PUBLIC, which includes anon."""
         return not self.roles or bool(self.roles & {"public", "anon"})
 
+    def applies_to(self, command: str) -> bool:
+        return self.command in (command, "all")
+
+    def opens(self, command: str) -> bool:
+        """Does this policy let anon perform `command` on any row?
+
+        WHICH CLAUSE MATTERS DEPENDS ON THE COMMAND, and getting that wrong
+        reads a locked table as open or the reverse:
+
+          insert -> WITH CHECK decides what a new row may look like; USING is
+                    not consulted at all, so a FOR INSERT policy is judged on
+                    WITH CHECK alone.
+          update -> USING selects WHICH rows may be touched. That is the half
+                    that decides whether anon can rewrite somebody ELSE's row,
+                    which is the harm.
+          delete -> USING, same reason.
+
+        A FOR ALL policy with only USING applies that expression to WITH CHECK
+        too, which is why the insert branch falls back to it.
+        """
+        if not self.reaches_anon or not self.applies_to(command):
+            return False
+        if command == "insert":
+            clause = self.with_check or self.using
+        else:
+            clause = self.using
+        return _is_constant_true(clause)
+
     @property
     def is_unconditional(self) -> bool:
         """`USING (true)` and friends — RLS switched on and wide open.
@@ -98,10 +135,7 @@ class Policy:
         policy carrying only WITH CHECK constrains writes and leaves reads
         unqualified.
         """
-        if not self.using:
-            return True
-        return bool(re.fullmatch(r"true|1\s*=\s*1|\(\s*true\s*\)",
-                                 self.using.strip(), re.IGNORECASE))
+        return _is_constant_true(self.using)
 
 
 @dataclass
@@ -120,6 +154,30 @@ class Table:
     @property
     def read_policies(self) -> list[Policy]:
         return [p for p in self.policies if p.applies_to_read]
+
+    def anon_can_write(self) -> tuple[frozenset[str], str]:
+        """Which of insert/update/delete the anonymous role can perform.
+
+        Supabase grants all three to `anon` on a public-schema table by
+        default, so with RLS off every one of them is live. Measured on a real
+        project: the table an anon key could read was also one it could
+        UPDATE, TRUNCATE and DELETE, and nothing in the audit said so.
+
+        RLS on with no write policy is default-deny, exactly as for reads.
+        """
+        if self.schema not in ("public", ""):
+            return frozenset(), f"schema `{self.schema}` is not exposed"
+        if not self.rls_enabled:
+            return frozenset({"insert", "update", "delete"}), "RLS never enabled"
+        open_commands = {
+            command
+            for command in ("insert", "update", "delete")
+            for policy in self.policies
+            if policy.opens(command)
+        }
+        if not open_commands:
+            return frozenset(), "RLS on, no unconditional write policy"
+        return frozenset(open_commands), "permissive write policy"
 
     @property
     def anon_can_read(self) -> tuple[bool, str]:

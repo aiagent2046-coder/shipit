@@ -12,7 +12,7 @@ import io
 import zipfile
 
 from app.fixpack.generate import build_fixpack_plan
-from app.scan.rls import RULE_ID, scan_rls
+from app.scan.rls import RULE_ID, WRITE_RULE_ID, scan_rls
 
 
 def make_zip(entries: dict[str, str]) -> bytes:
@@ -135,6 +135,32 @@ def test_a_finding_whose_table_is_not_in_the_schema_is_refused() -> None:
     }])
     assert not [p for p in plan.files if "enable_rls" in p]
     assert [s for s in plan.skipped if s.rule_id == RULE_ID]
+
+
+def test_a_write_finding_is_declined_with_its_own_reason() -> None:
+    """It is NOT "advisory, nothing to rewrite" — one ALTER TABLE would close
+    it. We decline because we cannot see which writes the customer's app makes
+    with the anon key, and saying otherwise files a critical finding under a
+    label that invites skipping it."""
+    plan = build_fixpack_plan(make_zip(WITH_PRECEDENT),
+                              _findings(WITH_PRECEDENT))
+    reasons = [s.reason for s in plan.skipped if s.rule_id == WRITE_RULE_ID]
+    assert reasons, [s.rule_id for s in plan.skipped]
+    assert "advisory" not in reasons[0].lower()
+    assert "which writes your app makes" in reasons[0]
+
+
+def test_a_write_finding_generates_no_migration() -> None:
+    """Turning RLS on to close writes also closes reads. The read generator
+    refuses without a precedent for exactly that reason, and the write rule
+    has no precedent to look for at all."""
+    entries = {"supabase/migrations/0001.sql": """
+        create table public.products (id uuid primary key, title text);
+    """}
+    findings = _findings(entries)
+    assert [f["rule_id"] for f in findings] == [WRITE_RULE_ID]
+    plan = build_fixpack_plan(make_zip(entries), findings)
+    assert not [p for p in plan.files if "enable_rls" in p]
 
 
 # --- it does not disturb the rest of the Pack -------------------------------
