@@ -10,6 +10,7 @@ import { ScoreRing, CategoryBars } from "@/components/ScoreRing";
 import { FindingsList, SeveritySummary } from "@/components/FindingsList";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
+import { RlsCheck } from "@/components/RlsCheck";
 
 interface View {
   id: string;
@@ -260,13 +261,22 @@ function AuditPageInner() {
                     ? ", and then one quick security review over the code."
                     : "."}
                 </p>
+                {/* Row-level security moved OUT of this list when the static
+                    detector shipped, and it has to be described accurately
+                    rather than just deleted: what runs reads the committed
+                    migrations, and a repository is not a deployment. The block
+                    below is how that gets settled. */}
+                <p className="mt-2">
+                  Row-level security is read from your committed migrations —
+                  what your repository says, not what your database does. The
+                  two often differ, which is what the live check below is for.
+                </p>
                 <p className="mt-2">
                   Not checked here: whether your routes verify who is calling
-                  them, whether passwords are hashed, whether row-level security
-                  is on, and whether user input reaches somewhere dangerous.
-                  Those are left out of the score rather than counted as
-                  passing, so it cannot rise for a check we skipped — but it
-                  cannot tell you they are fine either.
+                  them, whether passwords are hashed, and whether user input
+                  reaches somewhere dangerous. Those are left out of the score
+                  rather than counted as passing, so it cannot rise for a check
+                  we skipped — but it cannot tell you they are fine either.
                 </p>
               </div>
             )}
@@ -288,6 +298,8 @@ function AuditPageInner() {
             repoUrl={view.repoUrl}
             autoFixable={view.autoFixable}
           />
+
+          <RlsCheck auditId={view.id} token={token} repoUrl={view.repoUrl} />
 
           <div className="mt-8">
             <h2 className="mb-3 text-lg font-semibold">

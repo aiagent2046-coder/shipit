@@ -18,6 +18,7 @@ import type {
   PaypalSubscription,
   PersistedAudit,
   Pricing,
+  RlsCheckResult,
   UsdtInvoice,
   UsdtInvoiceStatus,
 } from "./types";
@@ -359,4 +360,26 @@ export async function getInstallationStatus(
     `${API_BASE_URL}/v1/github/installation-status${q}`,
   );
   return parse<InstallationStatus>(res);
+}
+
+// POST /v1/audits/{id}/rls-check — ask the customer's own Supabase project,
+// with its public key, whether it hands out rows it should not.
+//
+// `consent` is passed through from what the customer TYPED. It is deliberately
+// not a constant this function supplies: the backend demands an exact phrase
+// precisely because a boolean is what a client sets by default, and a UI that
+// hardcoded the phrase behind a click would be that boolean with extra steps.
+export async function runRlsCheck(
+  auditId: string,
+  input: { consent: string; token?: string | null; anonKey?: string },
+): Promise<RlsCheckResult> {
+  const form = new FormData();
+  form.append("consent", input.consent);
+  if (input.token) form.append("token", input.token);
+  if (input.anonKey) form.append("anon_key", input.anonKey);
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/rls-check`,
+    { method: "POST", headers: { ...authHeaders() }, body: form },
+  );
+  return parse<RlsCheckResult>(res);
 }

@@ -360,3 +360,38 @@ export interface InstallationStatus {
   installed: boolean | null;
   install_url: string | null;
 }
+
+// POST /v1/audits/{id}/rls-check — the one consented request the product makes
+// against a customer's own database.
+//
+// `status` is the load-bearing field and there are only two values, neither of
+// which means "your database is fine": "checked" (we asked) and "refused" (we
+// did not, and `reason` says why).
+export interface RlsAttempt {
+  // "success" = rows came back. "failure" = we asked and got none, which is
+  // NOT the same as protected. "skipped"/"error" = the request settled nothing.
+  status: string;
+  detail: string;
+  evidence: Record<string, unknown>;
+}
+
+export interface RlsCheckResult {
+  persisted: boolean;
+  status: "checked" | "refused";
+  reason: string;
+  project_ref: string;
+  // "repository" (we found the key) or "supplied" (the customer handed it over).
+  key_source: string;
+  checked: string[];
+  // Named, not counted: "we checked 12 of your 40" is a different report from
+  // "we checked your tables".
+  not_checked: string[];
+  exposed_tables: string[];
+  // Requests that settled nothing — a rejected key, a 5xx.
+  inconclusive: number;
+  // Answers that came back empty and CANNOT be read as protection: RLS filters
+  // rather than denying, so a protected table and an empty one answer alike.
+  empty_but_unproven: number;
+  max_tables: number;
+  attempts: RlsAttempt[];
+}
