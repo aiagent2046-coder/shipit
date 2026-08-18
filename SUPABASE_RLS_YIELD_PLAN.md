@@ -170,6 +170,61 @@ sidesteps every barrier the CORS detector died on.
   own. Part C is the only source of a real end-to-end yield, and it is gated on
   consent.
 
+## Part B result, measured 2026-08-18
+
+Run against a real Postgres + PostgREST on the host (`scripts/e2e_proof_rls_probe.py`):
+
+```
+BEFORE: status=success  анонимный ключ прочитал 3 строк(и) из `founders`
+        rows_read=3 columns=[id, email, phone, sentiment]
+        shapes={id: str(36), email: str(19), phone: str(12), sentiment: str(8)}
+AFTER : status=failure  анонимный запрос вернул пустой результат
+        rows_read=0  alone_proves_nothing=True
+verified=True  exploit succeeded before, failed after
+```
+
+`email: str(19)` is the length of the fabricated address in the fixture, which
+is how the run shows it read the rows rather than reporting that it did. No
+value reached the evidence.
+
+**It passed on the first attempt, which is worth less than the CORS e2e
+failing on its first.** That one earned its keep immediately by catching a
+missing Cookie; this one has never been seen to go red, and a green that has
+never been red proves only that the script ran. So the e2e now has a NEGATIVE
+CONTROL — `NEGATIVE_CONTROL=1` skips the fix and the run must FAIL — and CI
+executes both directions on every change to the probe, the oracle, `compare.py`
+or `types.py`. Same shape as the `TMPDIR=/tmp` control that guards the runner's
+bind-mount test.
+
+**Part B is closed.** The prover works, and it was proven without pointing it
+at anyone: fabricated data, our own throwaway containers, no customer's key,
+no live project.
+
+### The two rules that live in code rather than in this document
+
+A plan cannot stop a caller and a default can, so both are branches with tests
+and every one is mutation-checked:
+
+* **`consent` has no default.** A caller that has not thought about it cannot
+  accidentally read a real person's database, and the result is `skipped` —
+  never `failure`, because "the attack did not work" over a check that never
+  ran is the inflation removed twice already.
+* **The URL is not the repository's to choose.** It is read out of the
+  customer's own source, so an unrestricted request is an SSRF primitive: a
+  repo could aim our infrastructure at a metadata endpoint or an internal
+  service and collect the answer. Only `https://<ref>.supabase.co` is accepted;
+  loopback needs a flag production never sets. The table name is validated too
+  — it comes from parsed customer SQL and goes into the request path.
+
+### What PostgREST actually does, recorded because the intuition is wrong
+
+RLS **filters** rows, it does not deny. A correctly secured table answers
+`200 []`, not `403`. Anyone expecting a denial reads the normal secure case as
+an error and the exposed case as normal — and `200 []` is also what an EMPTY
+table returns, which is why `empty_result` carries `alone_proves_nothing` and
+means something only as the after half of a pair whose before half read real
+rows out of that same table.
+
 ## Not in scope (yet)
 
 * **Part C live yield** against real deployments — deferred until Part A clears

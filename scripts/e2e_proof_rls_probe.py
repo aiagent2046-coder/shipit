@@ -31,11 +31,17 @@ PostgREST's behaviour, and pulling in the whole Supabase stack would add
 Kong, GoTrue, Realtime and Studio to prove a fact about one HTTP endpoint.
 
     python scripts/e2e_proof_rls_probe.py
+    NEGATIVE_CONTROL=1 python scripts/e2e_proof_rls_probe.py
+
+The second form skips the fix and asserts the run FAILS. This script passed on
+its first real attempt, so unlike the CORS e2e it has never been seen to go
+red — and a green that has never been red proves only that it ran.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -53,6 +59,9 @@ REST = "shipit-rls-e2e-rest"
 NET = "shipit-rls-e2e-net"
 PG_PASSWORD = "e2e-not-a-real-password"  # noqa: S105 — local throwaway container
 REST_PORT = 54399
+
+NEGATIVE_CONTROL = (os.environ.get("NEGATIVE_CONTROL") or "").strip().lower() in (
+    "1", "true", "yes")
 
 # Fabricated. See the module docstring: nothing here belongs to a person.
 SCHEMA_VULNERABLE = f"""
@@ -204,9 +213,19 @@ def main() -> int:
         print(f"\nBEFORE: status={before.status} detail={before.detail}")
         print(f"        evidence={before.evidence}")
 
-        print("\napplying the FIX (RLS on, policy keyed to the caller)…",
-              flush=True)
-        psql(SCHEMA_PATCHED)
+        # NEGATIVE CONTROL, same idea as the TMPDIR=/tmp control in
+        # check_runner_bindmount_namespace.py. This script passed on its first
+        # real run, which means nobody has yet seen it FAIL — and a green that
+        # has never been red proves only that it ran. With the fix skipped the
+        # after-probe must still read rows, the pair must not verify, and this
+        # script must exit non-zero. CI runs both directions.
+        if NEGATIVE_CONTROL:
+            print("\nNEGATIVE CONTROL: skipping the fix. This run MUST fail.",
+                  flush=True)
+        else:
+            print("\napplying the FIX (RLS on, policy keyed to the caller)…",
+                  flush=True)
+            psql(SCHEMA_PATCHED)
         # PostgREST caches the schema; make it re-read rather than waiting.
         sh("docker", "kill", "-s", "SIGUSR1", REST, quiet=True)
         time.sleep(2)
@@ -220,6 +239,18 @@ def main() -> int:
 
         ok = (before.status == "success" and after.status == "failure"
               and report.verified)
+
+        if NEGATIVE_CONTROL:
+            if ok:
+                print("\nNEGATIVE CONTROL FAILED: the pair verified without "
+                      "the fix ever being applied.\n        Whatever this "
+                      "script proves, it is not that RLS closed anything.",
+                      file=sys.stderr)
+                return 1
+            print("\nOK (negative control): without the fix the table still "
+                  "read, and nothing verified.")
+            return 0
+
         if not ok:
             print("\nFAILED: expected success -> failure -> verified.\n"
                   "        A vulnerable table that did not read means the "
