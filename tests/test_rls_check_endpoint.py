@@ -275,3 +275,14 @@ def test_no_supplied_key_still_reads_the_repository(client) -> None:
     body = post(client).json()
     assert body["key_source"] == "repository"
     assert body["status"] == "checked"
+
+
+def test_the_response_says_how_many_answers_prove_nothing(client) -> None:
+    """The first live run returned `exposed_tables: []` and `inconclusive: 0`
+    over nine answers that each carried `alone_proves_nothing`. Both numbers
+    were correct and the pair read as an all-clear."""
+    use_fetch(lambda *_a, **_k: (200, []))
+    body = post(client).json()
+    assert body["exposed_tables"] == []
+    assert body["inconclusive"] == 0
+    assert body["empty_but_unproven"] == len(body["attempts"]) > 0

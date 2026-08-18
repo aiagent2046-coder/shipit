@@ -192,3 +192,52 @@ def test_no_row_value_reaches_the_evidence() -> None:
     result = run_live_rls_check(REPO, consent=True, fetch=rows)
     blob = json.dumps([a.evidence for a in result.attempts])
     assert "a@b.c" not in blob
+
+
+# --- the summary must not read as an all-clear ------------------------------
+#
+# MEASURED on the first live run through the endpoint: nine tables, nine empty
+# answers, and a summary of `exposed_tables: []` with `inconclusive: 0`. Both
+# numbers correct, the pair misleading — every attempt carried
+# `alone_proves_nothing`, and what actually settled the run was a row count
+# taken through the service role, which a customer does not have.
+
+def test_empty_answers_are_counted_rather_than_read_as_protection() -> None:
+    result = run_live_rls_check(REPO, consent=True, fetch=empty)
+    assert result.exposed_tables == []
+    assert result.inconclusive == 0
+    # The number that stops the pair above from reading as "all clear".
+    assert result.empty_but_unproven == len(result.attempts) > 0
+
+
+def test_a_real_denial_is_not_counted_as_unproven() -> None:
+    """THE CONTROL THAT MAKES THE COUNTER MEAN SOMETHING. The oracle also
+    returns `failure` when the database REFUSED the key (42501) — that stands
+    on its own, unlike an empty result, so counting it would put every
+    correctly-locked table into a bucket labelled "we could not tell"."""
+    def denied_by_rls(*_args, **_kwargs):
+        return 403, {"code": "42501", "message": "permission denied"}
+
+    result = run_live_rls_check(REPO, consent=True, fetch=denied_by_rls)
+    assert all(a.status == "failure" for a in result.attempts)
+    assert result.empty_but_unproven == 0
+    assert result.inconclusive == 0
+
+
+def test_a_table_postgrest_does_not_expose_is_not_counted_either() -> None:
+    def undefined(*_args, **_kwargs):
+        return 404, {"code": "PGRST205", "message": "not found"}
+
+    result = run_live_rls_check(REPO, consent=True, fetch=undefined)
+    assert result.empty_but_unproven == 0
+
+
+def test_rows_coming_back_are_not_counted_as_unproven() -> None:
+    result = run_live_rls_check(REPO, consent=True, fetch=rows)
+    assert result.exposed_tables
+    assert result.empty_but_unproven == 0
+
+
+def test_a_refused_check_counts_nothing() -> None:
+    result = run_live_rls_check(REPO, consent=False, fetch=empty)
+    assert result.empty_but_unproven == 0

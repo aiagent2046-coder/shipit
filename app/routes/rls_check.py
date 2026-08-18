@@ -147,6 +147,10 @@ async def create_rls_check(
         "not_checked": result.not_checked,
         "exposed_tables": result.exposed_tables,
         "inconclusive": result.inconclusive,
+        # Reported beside the other two on purpose: 0 exposed and 0
+        # inconclusive read as an all-clear, and over a run of empty answers
+        # that is not what happened. See LiveCheckResult.empty_but_unproven.
+        "empty_but_unproven": result.empty_but_unproven,
         "max_tables": MAX_TABLES,
         "attempts": [
             {"status": a.status, "detail": a.detail, "evidence": a.evidence}

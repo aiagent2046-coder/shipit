@@ -724,3 +724,34 @@ one we refuse to send anywhere.
 The remaining honest routes are asking the customer for names, or reading them
 from a Supabase session they authorise separately. Both are new decisions with
 their own consent questions, and neither is made here.
+
+### What the endpoint run added, 2026-08-18
+
+The layer-level run above went straight to the probe. Running the same check
+through `POST /v1/rls-check` closed the last gap — the consent ledger, which
+nothing before it could exercise. Two rows, both closed: the `checked` run with
+nine tables, and a `refused` one from a masked key paste. **A refusal is
+recorded**, which was the behaviour the tests asserted and the ledger now
+demonstrates.
+
+The masked-key guard added the same day fired on its first real use, naming
+the cause instead of surfacing as a request failure. That paste has now failed
+three times in this project and produced three different symptoms; only the
+third was legible.
+
+**And the run exposed a defect in the response itself.** The summary read
+
+    "exposed_tables": [],
+    "inconclusive": 0,
+
+over nine attempts that each carried `alone_proves_nothing`. Both numbers were
+correct and the pair reads as "nothing open, everything settled". What
+actually settled that run was a row count through the service role — which a
+customer does not have.
+
+`empty_but_unproven` now sits beside the other two counts. It counts only the
+`failure`s that carry the caveat: a database that REFUSED the key (`42501`)
+and a table PostgREST does not expose are also `failure`, they stand on their
+own, and counting them would file every correctly-locked table under "we could
+not tell". That control is a test, because without it the counter would be a
+worse lie than the omission it fixes.
