@@ -55,7 +55,7 @@ def test_migrations_and_client_code_are_merged_with_their_source() -> None:
     entries = {**MIGRATION, "repo/src/db.ts":
                "supabase.from('users').select('*'); supabase.from('carts')"}
     found = {c.name: c.source for c in find_probe_tables(make_zip(entries))}
-    assert found["users"] == "both"
+    assert found["users"] == "migrations+client-code"
     assert found["products"] == "migrations"
     assert found["carts"] == "client-code"
 
@@ -118,3 +118,66 @@ def test_only_source_files_are_read_for_from_calls() -> None:
 def test_a_non_public_schema_table_is_not_offered() -> None:
     assert names({"repo/supabase/migrations/0001.sql":
                   "create table internal.audit (id uuid primary key);"}) == []
+
+
+# --- generated types, the only source that can outrun the migrations --------
+#
+# MEASURED across 226 Supabase repositories: of the 74 that commit no schema,
+# 16 carry a `supabase gen types typescript` file — 22% [14-32%] of the blind
+# spot going from no table names at all to between 3 and 52 of them. It splits
+# hard by generator (Lovable 54%, bolt and hand-written 6%), and the paths say
+# why: almost every one is `src/integrations/supabase/types.ts`, Lovable's own
+# scaffold, which writes the integration and not the migrations.
+
+GENERATED_TYPES = {"repo/src/integrations/supabase/types.ts": """
+export type Database = {
+  public: {
+    Tables: {
+      agent_projects: {
+        Row: { id: string; summary: string | null }
+        Insert: { id?: string }
+        Update: { id?: string }
+      }
+      founder_profiles: {
+        Row: { id: string; email: string }
+        Insert: { id?: string }
+      }
+    }
+    Views: { [_ in never]: never }
+  }
+}
+"""}
+
+
+def test_a_generated_types_file_names_tables_no_migration_declares() -> None:
+    """The measured gap, in one test. `agent_projects` was the only table ever
+    found genuinely exposed on the deployment we checked, and it appeared in
+    neither the migrations nor the client code."""
+    found = {c.name: c.source for c in find_probe_tables(make_zip(GENERATED_TYPES))}
+    assert set(found) == {"agent_projects", "founder_profiles"}
+    assert found["agent_projects"] == "generated-types"
+
+
+def test_provenance_survives_when_several_sources_agree() -> None:
+    """"Only the generated types know about this table" is the interesting
+    case, so the sources are kept rather than collapsed to a flag."""
+    entries = {**GENERATED_TYPES,
+               "repo/supabase/migrations/0001.sql":
+                   "create table public.founder_profiles (id uuid primary key);",
+               "repo/src/db.ts": "supabase.from('founder_profiles').select('*')"}
+    found = {c.name: c.source for c in find_probe_tables(make_zip(entries))}
+    assert found["founder_profiles"] == "migrations+client-code+generated-types"
+    assert found["agent_projects"] == "generated-types"
+
+
+def test_a_hand_written_interface_is_not_mistaken_for_a_table_map() -> None:
+    """`Row:` appears in plenty of hand-written TypeScript. `Tables: {` is what
+    says this file is the generator's output, and without that scope any
+    interface with a Row field would put invented names into a URL aimed at a
+    customer's database."""
+    assert names({"repo/src/grid.ts": """
+        export interface DataGrid {
+          header: { Row: string[] }
+          footer: { Row: string[] }
+        }
+    """}) == []

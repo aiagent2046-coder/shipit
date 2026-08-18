@@ -69,8 +69,10 @@ from app.scan.rls import (  # noqa: E402
     RULE_ID,
     WRITE_RULE_ID,
     _SCHEMA_PATH_HINTS,
+    read_committed_sql,
     scan_rls,
 )
+from app.scan.sql_schema import parse_schema  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 # Tracked, because they are INPUTS: a run cannot be reproduced or disputed
@@ -149,6 +151,9 @@ class Repo:
     # no migration — the measured gap this field exists to size.
     types_files: list[str] = field(default_factory=list)
     types_tables: list[str] = field(default_factory=list)
+    # Every public table the committed SQL declares, so "does the types file
+    # name something the migrations do not" is answerable without a re-run.
+    sql_tables: list[str] = field(default_factory=list)
 
     read_findings: list[str] = field(default_factory=list)
     write_findings: list[str] = field(default_factory=list)
@@ -339,6 +344,11 @@ def _run_detector(repo: Repo, dest: Path) -> None:
     except Exception as exc:                      # noqa: BLE001
         repo.error = f"detector: {type(exc).__name__}: {exc}"[:200]
         return
+    buf.seek(0)
+    sql, _paths = read_committed_sql(buf)
+    repo.sql_tables = sorted(
+        t.name.lower() for t in parse_schema(sql).values()
+        if t.schema in ("public", ""))
     repo.read_findings = [f.title for f in findings if f.rule_id == RULE_ID]
     repo.write_findings = [f.title for f in findings if f.rule_id == WRITE_RULE_ID]
 
@@ -609,4 +619,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
