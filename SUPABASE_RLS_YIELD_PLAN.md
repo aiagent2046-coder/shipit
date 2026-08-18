@@ -755,3 +755,75 @@ and a table PostgREST does not expose are also `failure`, they stand on their
 own, and counting them would file every correctly-locked table under "we could
 not tell". That control is a test, because without it the counter would be a
 worse lie than the omission it fixes.
+
+---
+
+## A third source of table names, measured 2026-08-18
+
+The probe can only ask about tables something in the repository names. Part C
+and the first end-to-end run both landed on the same limit: `agent_projects`,
+the one table ever found genuinely exposed on the deployment we own, is in
+neither the migrations nor the client code.
+
+`supabase gen types typescript` writes its file **from the live project**, so
+it is the only thing in a repository that can name a table no migration
+declares. Whether that helps is a number.
+
+| | |
+|---|---|
+| Supabase repositories in the corpus | 226 |
+| carrying a generated types file | 98 (43%) |
+
+**Where there is no schema at all — the blind spot:**
+
+| stratum | rescued |
+|---|---|
+| Lovable | 13/24 = 54% [35–72%] |
+| bolt | 1/18 = 6% [1–26%] |
+| no generator marker | 2/32 = 6% [2–20%] |
+| **all** | **16/74 = 22% [14–32%]** |
+
+Tables gained by those 16: min 1, median 4, max 52. For them the difference is
+not "a few more tables" but "nothing to check" against "a real check".
+
+The split by generator is large and the paths explain it: almost every one is
+`src/integrations/supabase/types.ts`, Lovable's own scaffold. It writes the
+integration and the types, and not the migrations — which fits the earlier
+post-hoc finding that 62% of Lovable's blind repositories carry a `supabase/`
+directory with no SQL in it.
+
+**Where a schema DOES exist — the `agent_projects` case:**
+
+| | |
+|---|---|
+| commit a schema | 152 |
+| and carry generated types | 82 |
+| whose types name a table the SQL does not | **36/82 = 44% [34–55%]** |
+| as a share of all schema-committing repos | 24% [18–31%] |
+| tables reachable only this way, corpus-wide | **643** |
+
+So nearly a quarter of the repositories that DO commit migrations still hold
+tables the schema reader cannot see, and the types file names them. That is
+the measured form of what Part C found once by hand.
+
+### Two decisions in the reader
+
+Table entries are matched on `<name>: { Row:`, the shape the generator emits,
+rather than on the file's name — the name is a convention and several of the
+16 use a different one. `Tables: {` scopes it: `Row:` appears in ordinary
+hand-written TypeScript, and without the scope any interface with a Row field
+would put invented names into a URL aimed at a customer's database.
+
+### What it still does not close
+
+A table that no migration declares, no code queries, and no generated file
+names remains invisible, and 42% of the blind spot gains nothing here. The
+honest routes left are asking the customer for names or reading them from a
+session they authorise separately — both new consent questions, neither taken.
+
+### A note on the measurement itself
+
+The script carried its own copy of the matcher and drifted from production
+within the hour — the same two-readers failure this document's own tooling
+section describes. It did not move any number here, which is luck rather than
+design, so the script now imports the matcher rather than restating it.
