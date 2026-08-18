@@ -1,0 +1,62 @@
+name: e2e-proof-rls
+
+# The RLS probe against a REAL Postgres + PostgREST, not an injected `fetch`.
+#
+# Its own workflow rather than a job in e2e-sandbox-runner.yml, because it
+# shares nothing with that chain: no runner, no Unix socket, no
+# docker-socket-proxy. It needs a docker daemon and nothing else — which is the
+# property that makes this whole proof class viable where the CORS detector
+# died (no build, no container of the customer's, no build-time egress).
+#
+# Proves, over real HTTP to a real database:
+#   1. a table with RLS never enabled hands its rows to the anon role;
+#   2. enabling RLS with a caller-keyed policy closes it;
+#   3. the pair comes out `verified` through app/proof/compare.py;
+#   4. no row VALUE reaches the evidence that gets stored and rendered;
+#   5. and, as a negative control, that skipping the fix makes all of that FAIL.
+#
+# All data is fabricated in the script. Nothing here touches a real project —
+# that is Part C, and it is gated on consent.
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "app/proof/rls_oracle.py"
+      - "app/proof/rls_probe.py"
+      - "app/proof/compare.py"
+      - "app/proof/types.py"
+      - "scripts/e2e_proof_rls_probe.py"
+      - ".github/workflows/e2e-proof-rls.yml"
+
+jobs:
+  e2e-rls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      # The script imports the REAL app.proof modules, and app/proof/__init__.py
+      # reaches app.proof.stage, which imports starlette. That is the point —
+      # an e2e that stubbed the import chain would not be exercising what ships.
+      # It cost a red CI to notice, because the host venv already had them.
+      - name: Install shipit (locked, hash-verified deps)
+        run: |
+          pip install --require-hashes -r requirements-dev.txt
+          pip install -e . --no-deps
+      - name: Pre-pull the images (keeps the probe's own timing honest)
+        run: |
+          docker pull postgres:16-alpine
+          docker pull postgrest/postgrest:v12.2.3
+      - name: Anon reads the table, the fix closes it, the pair verifies
+        run: python scripts/e2e_proof_rls_probe.py
+      - name: Negative control — without the fix, nothing may verify
+        # A green that has never been red proves only that the script ran.
+        # This run skips the fix; the after-probe must still read rows and the
+        # pair must not verify. Same shape as the TMPDIR=/tmp control in
+        # check_runner_bindmount_namespace.py.
+        env:
+          NEGATIVE_CONTROL: "1"
+        run: python scripts/e2e_proof_rls_probe.py
