@@ -1141,11 +1141,25 @@ async def test_payer_contact_is_not_format_checked_by_the_database(real_db):
 
 
 # Every foreign key in the schema, with the delete action it is meant to have.
-# All ten are NO ACTION, reviewed 2026-08-02 -- see "Known gaps" in README.md
-# for the reasoning. The short version: NO ACTION cannot orphan a row, it
-# refuses the delete that would; nothing in the application deletes a parent;
-# and four of these keys reach money, where a cascade would quietly take a
-# payment history with an account instead of making a human stop.
+# Ten are NO ACTION, reviewed 2026-08-02 -- see "Known gaps" in
+# docs/status-active.md for the reasoning. The short version: NO ACTION cannot
+# orphan a row, it refuses the delete that would; nothing in the application
+# deletes a parent; and four of these keys reach money, where a cascade would
+# quietly take a payment history with an account instead of making a human stop.
+#
+# ONE IS DIFFERENT, ON PURPOSE. `rls_live_checks.audit_id` is SET NULL, and it
+# is the one row in this schema whose whole job is to outlive what it points
+# at: the record that we sent a request to a database belonging to a third
+# party. NO ACTION would let a consent row block an audit-retention job, and a
+# ledger that stops unrelated deletes is a ledger somebody eventually removes.
+# CASCADE would erase the record along with the audit, which is worse still.
+#
+# SET NULL is safe HERE and not in `payments` for a concrete reason: every
+# column that gives the row meaning -- who consented, when, in which words,
+# which project ref, which tables were asked about, what came back -- is on the
+# row itself. `audit_id` is the least load-bearing column on it. A payment with
+# no owner is money received that appears in nobody's history; a consent record
+# with no audit is still a complete account of one check.
 #
 # This is a decision, not an oversight, so it is pinned. Changing an entry here
 # is fine -- changing one without noticing is what this prevents.
@@ -1159,6 +1173,7 @@ EXPECTED_DELETE_ACTIONS = {
     "llm_usage_audit_job_id_fkey": "NO ACTION",
     "payments_account_id_fkey": "NO ACTION",
     "payments_audit_id_fkey": "NO ACTION",
+    "rls_live_checks_audit_id_fkey": "SET NULL",
     "subscriptions_account_id_fkey": "NO ACTION",
 }
 

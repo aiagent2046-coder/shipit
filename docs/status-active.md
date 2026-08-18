@@ -1089,8 +1089,8 @@ allowed request headers are `Authorization` and `Content-Type`.
   the cache key) is not worth the column until it is seen happening. Noted at
   `PAID_AUDIT_PASSES` in `app/scan/pipeline.py`.
 
-- **Every foreign key is `ON DELETE NO ACTION`, and that is deliberate.**
-  Reviewed 2026-08-02 across all ten of them: `audit_jobs.{audit_id,
+- **Every foreign key is `ON DELETE NO ACTION` except one, and both parts are
+  deliberate.** Reviewed 2026-08-02 across ten of them: `audit_jobs.{audit_id,
   account_id}`, `fixpack_jobs.audit_id`, `fix_outcomes.{audit_id,
   fixpack_job_id}`, `llm_usage.{account_id,audit_job_id}`,
   `payments.{account_id,audit_id}`, `subscriptions.account_id`.
@@ -1115,6 +1115,22 @@ allowed request headers are `Authorization` and `Content-Type`.
   Decide the semantics when there is a requirement to decide them against — an
   erasure request, or a retention policy for old audits. Choosing now would be
   guessing, and the guess is recorded in the `payments` table.
+
+  **The exception is `rls_live_checks.audit_id`, which is `SET NULL`** (added
+  2026-08-18 with migration 0031). That table is the consent ledger for the
+  live RLS check — the record that we sent a request to a database belonging to
+  a third party — and it is the one row in this schema whose job is to outlive
+  what it points at. `NO ACTION` would let a consent row block the
+  audit-retention job this section anticipates, and a ledger that stops
+  unrelated deletes is a ledger somebody eventually removes. `CASCADE` would
+  erase the record along with the audit, which is worse.
+
+  `SET NULL` is safe here for the reason it is not safe on `payments`: every
+  column that gives the row meaning — who consented, when, in which words,
+  which project ref, which tables were asked about, what came back — is on the
+  row itself. `audit_id` is the least load-bearing column on it. A payment with
+  no owner is money received that appears in nobody's history; a consent record
+  with no audit is still a complete account of one check.
 
 - `POST /v1/audits` intake now accepts a public GitHub `repo_url` as an
   alternative to a zip upload (see above). Still NOT supported by design:
