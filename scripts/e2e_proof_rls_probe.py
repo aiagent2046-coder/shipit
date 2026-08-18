@@ -114,9 +114,26 @@ def sh(*args: str, check: bool = True, quiet: bool = False) -> str:
 
 
 def psql(sql: str) -> None:
+    """Run SQL in the container, over TCP rather than the Unix socket.
+
+    `-h 127.0.0.1` is load-bearing, not style. The official postgres image
+    initialises by starting a TEMPORARY server with `listen_addresses=\'\'` —
+    reachable on the Unix socket and not on TCP — running its init scripts,
+    then shutting it down and starting the real one. A readiness check over the
+    socket therefore passes against the temporary server and the next statement
+    hits the gap while it restarts.
+
+    Measured in CI 2026-08-18: wait_for() reported postgres ready, and the very
+    next call failed with "connection to server on socket … No such file or
+    directory". The host run had passed because the timing fell differently,
+    which is the whole reason this job exists in CI as well.
+
+    Since the temporary server has no TCP listener at all, connecting this way
+    cannot see it, and readiness means what it says.
+    """
     proc = subprocess.run(
-        ["docker", "exec", "-i", PG, "psql", "-U", "postgres", "-v",
-         "ON_ERROR_STOP=1", "-q"],
+        ["docker", "exec", "-i", PG, "psql", "-h", "127.0.0.1",
+         "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-q"],
         input=sql, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         raise RuntimeError(f"psql failed: {proc.stderr.strip()[-800:]}")
