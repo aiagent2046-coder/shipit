@@ -79,6 +79,36 @@ class LiveCheckResult:
                 for a in self.attempts if a.status == "success"]
 
     @property
+    def empty_but_unproven(self) -> int:
+        """Answers that came back empty and cannot be read as protection.
+
+        MEASURED on the first live run through the endpoint: nine tables, nine
+        empty answers, and a summary that read
+
+            "exposed_tables": [],
+            "inconclusive": 0,
+
+        which a customer reads as "nothing open, everything settled". Both
+        numbers were correct and the pair was misleading, because every one of
+        those nine attempts carried `alone_proves_nothing`. RLS filters rather
+        than denying, so a protected table and an EMPTY table answer
+        identically — and a new project's tables are empty all the time.
+
+        What settled that run was an independent row count taken through the
+        service role, which a customer does not have. So the count belongs in
+        the summary: 0 exposed, 0 inconclusive, N answers that need something
+        else to interpret.
+
+        NOT every `failure` counts here, and that is what makes the number
+        mean something. The oracle also returns `failure` for a database that
+        REFUSED the key (`42501`) and for a table PostgREST does not expose —
+        both of which stand on their own, and neither carries the caveat.
+        """
+        return sum(1 for a in self.attempts
+                   if a.status == "failure"
+                   and a.evidence.get("alone_proves_nothing"))
+
+    @property
     def inconclusive(self) -> int:
         """Requests that ran and settled nothing — a bad key, a 5xx, a table
         PostgREST does not expose. Counted separately from `failure` because
