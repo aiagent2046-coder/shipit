@@ -231,10 +231,30 @@ def write_finding(table: Table, commands: frozenset[str], why: str,
     )
 
 
+def _migration_order(rel: str) -> tuple[str, str]:
+    """Sort key: FILENAME first, full path second.
+
+    parse_schema applies statements in the order it receives them, so the order
+    files are concatenated in is the order the migrations are believed to have
+    run. Supabase names migrations with a timestamp prefix, and that prefix —
+    not the directory — is what encodes time.
+
+    MEASURED: a real repository keeps 258 superseded migrations in
+    `supabase/migrations/archive/` beside 50 live ones. By full path,
+    `…/archive/20251022…` sorts AFTER `…/20260523…`, because "a" is greater
+    than "2" — so the oldest migrations in the repository were applied last and
+    the schema came out reading like 2025. Sorting on the basename puts them
+    back in the order they were written, and the archive then does what an
+    archive should: it is history, superseded by everything after it.
+
+    The full path breaks ties so the order is total and a run is repeatable.
+    """
+    return (rel.rsplit("/", 1)[-1], rel)
+
+
 def read_committed_sql(fileobj: BinaryIO) -> tuple[str, list[str]]:
-    """Concatenated .sql from the archive, plus the paths it came from."""
-    paths: list[str] = []
-    chunks: list[str] = []
+    """Concatenated .sql from the archive, in migration order, plus its paths."""
+    kept: list[tuple[str, str]] = []
     with zipfile.ZipFile(fileobj) as zf:
         for info in zf.infolist():
             if info.is_dir() or not info.filename.lower().endswith(".sql"):
@@ -243,9 +263,9 @@ def read_committed_sql(fileobj: BinaryIO) -> tuple[str, list[str]]:
             if not any(h in rel.lower() for h in _SCHEMA_PATH_HINTS) \
                     and "/" in rel:
                 continue
-            paths.append(rel)
-            chunks.append(zf.read(info).decode("utf-8", errors="replace"))
-    return "\n".join(chunks), paths
+            kept.append((rel, zf.read(info).decode("utf-8", errors="replace")))
+    kept.sort(key=lambda pair: _migration_order(pair[0]))
+    return "\n".join(text for _, text in kept), [rel for rel, _ in kept]
 
 
 def scan_rls(fileobj: BinaryIO) -> list[CheckFinding]:

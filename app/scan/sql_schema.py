@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass, field
 
 _CREATE_TABLE = re.compile(
-    r"create\s+table\s+(?:if\s+not\s+exists\s+)?"
+    r"create\s+table\s+(?P<ine>if\s+not\s+exists\s+)?"
     r'(?:"?(?P<schema>[a-z0-9_]+)"?\s*\.\s*)?"?(?P<name>[a-z0-9_]+)"?\s*\('
     r"(?P<body>.*?)\)\s*;",
     re.IGNORECASE | re.DOTALL,
@@ -42,11 +42,43 @@ _ENABLE_RLS = re.compile(
     re.IGNORECASE,
 )
 
+# The mirror of _ENABLE_RLS. Without it a table switched off again reads as
+# protected — the quiet direction of this error, but still a wrong answer about
+# a customer's data.
+_DISABLE_RLS = re.compile(
+    r"alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?"
+    r'(?:"?(?:[a-z0-9_]+)"?\s*\.\s*)?"?(?P<name>[a-z0-9_]+)"?\s+'
+    r"disable\s+row\s+level\s+security",
+    re.IGNORECASE,
+)
+
 _CREATE_POLICY = re.compile(
     r"create\s+policy\s+(?P<pname>\"[^\"]+\"|'[^']+'|[a-z0-9_]+)\s+on\s+"
     r'(?:"?(?:[a-z0-9_]+)"?\s*\.\s*)?"?(?P<table>[a-z0-9_]+)"?'
     r"(?P<rest>.*?);",
     re.IGNORECASE | re.DOTALL,
+)
+
+# MEASURED 2026-08-18, and the reason parse_schema stopped reading statements
+# in three independent passes. A real repository's migrations contained
+#
+#   CREATE POLICY "Allow public to insert KYC documents" ON kyc_documents
+#     FOR INSERT TO anon, authenticated WITH CHECK (true);
+#
+# and, four migrations later, the developer's own fix:
+#
+#   DROP POLICY IF EXISTS "Allow public to insert KYC documents" ON …;
+#
+# A reader that knows only CREATE reported the hole its owner had already
+# closed — a KYC document table, named in a file inside a directory called
+# `archive`. That is the most expensive shape of wrong this product has: not a
+# guess that missed, but a confident accusation contradicted by the customer's
+# own commit.
+_DROP_POLICY = re.compile(
+    r"drop\s+policy\s+(?:if\s+exists\s+)?"
+    r"(?P<pname>\"[^\"]+\"|'[^']+'|[a-z0-9_]+)\s+on\s+"
+    r'(?:"?(?:[a-z0-9_]+)"?\s*\.\s*)?"?(?P<table>[a-z0-9_]+)"?',
+    re.IGNORECASE,
 )
 
 _FOR_CLAUSE = re.compile(r"\bfor\s+(select|insert|update|delete|all)\b",
@@ -58,6 +90,93 @@ _REFERENCES = re.compile(
     r"\"?(?P<table>[a-z0-9_]+)\"?\s*(?:\(\s*\"?(?P<column>[a-z0-9_]+)\"?\s*\))?",
     re.IGNORECASE,
 )
+
+
+_DOLLAR_TAG = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
+
+
+def _strip_comments(sql: str) -> str:
+    """Blank out `--` and `/* */`, replacing them with spaces of equal length.
+
+    MEASURED 2026-08-18. A repository's exported SQL carried the header
+
+        -- CREATE TABLE STATEMENT (generated)
+
+    and the reader produced a table called `statement`. Worse than the phantom:
+    the comment's `(` opened a body that ran on until the next `);`, swallowing
+    the real CREATE TABLE that followed, so a table the customer actually has
+    disappeared from the schema.
+
+    It goes wrong in both directions, which is why this is not cosmetic. A
+    commented-out `-- alter table t enable row level security;` counted as
+    protection — a real hole we would never report. A commented-out
+    `/* create policy p … using (true); */` counted as a hole — a finding
+    about a line the developer had already disabled.
+
+    Lengths are preserved because parse_schema orders statements by their
+    offset in this text, and shortening it would reorder the migration chain.
+
+    Quoting rules followed: `''` doubling inside single-quoted strings, and
+    dollar-quoted bodies passed over whole. Backslash is NOT treated as an
+    escape — Postgres ships `standard_conforming_strings = on`, so `'C:\\'` is
+    a complete string, and reading the backslash as an escape would run the
+    scanner past the closing quote and into live SQL.
+
+    Dollar-quoted bodies are left INTACT rather than skipped. Supabase
+    migrations routinely wrap real policies in `DO $$ … END $$;`, and dropping
+    those would hide protection that exists — the expensive direction.
+    """
+    out = list(sql)
+    index, end = 0, len(sql)
+    while index < end:
+        char = sql[index]
+        if char == "'":
+            index += 1
+            while index < end:
+                if sql[index] == "'":
+                    if index + 1 < end and sql[index + 1] == "'":
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        if char == '"':
+            index += 1
+            while index < end and sql[index] != '"':
+                index += 1
+            index += 1
+            continue
+        if char == "$":
+            tag = _DOLLAR_TAG.match(sql, index)
+            if tag:
+                closing = sql.find(tag.group(0), tag.end())
+                index = end if closing < 0 else closing + len(tag.group(0))
+                continue
+        if sql.startswith("--", index):
+            stop = sql.find("\n", index)
+            stop = end if stop < 0 else stop
+            out[index:stop] = " " * (stop - index)
+            index = stop
+            continue
+        if sql.startswith("/*", index):
+            depth, cursor = 1, index + 2
+            while cursor < end and depth:
+                if sql.startswith("/*", cursor):
+                    depth += 1
+                    cursor += 2
+                elif sql.startswith("*/", cursor):
+                    depth -= 1
+                    cursor += 2
+                else:
+                    cursor += 1
+            for position in range(index, min(cursor, end)):
+                if out[position] != "\n":
+                    out[position] = " "
+            index = cursor
+            continue
+        index += 1
+    return "".join(out)
 
 
 def _is_constant_true(clause: str) -> bool:
@@ -202,32 +321,103 @@ class Table:
 
 
 def parse_schema(sql: str) -> dict[str, Table]:
-    """Tables keyed by lowercased name, with RLS state and policies attached."""
-    tables: dict[str, Table] = {}
+    """Tables keyed by lowercased name, with RLS state and policies attached.
 
-    for match in _CREATE_TABLE.finditer(sql):
-        body = match.group("body")
-        name = match.group("name")
+    STATEMENTS ARE APPLIED IN THE ORDER THEY APPEAR, which is the whole point.
+    Three independent passes — every CREATE TABLE, then every ENABLE, then
+    every CREATE POLICY — cannot express a policy being dropped, and a
+    migration chain is a sequence of edits rather than a description. The
+    caller concatenates files in path order, so for `supabase/migrations/`
+    (timestamp-prefixed by convention) text order is migration order.
+
+    It is still not a replay: `sql` is whatever SQL the repository committed,
+    which may include drafts and one-off scripts alongside the chain. Reading
+    it in order is strictly closer to the truth than reading it as a set, and
+    where it cannot be sure the answer must land on "not a finding" — see
+    _CREATE_TABLE handling below.
+    """
+    sql = _strip_comments(sql)
+    tables: dict[str, Table] = {}
+    events: list[tuple[int, str, re.Match[str]]] = []
+    for kind, pattern in (
+        ("create_table", _CREATE_TABLE),
+        ("enable", _ENABLE_RLS),
+        ("disable", _DISABLE_RLS),
+        ("create_policy", _CREATE_POLICY),
+        ("drop_policy", _DROP_POLICY),
+    ):
+        events.extend((m.start(), kind, m) for m in pattern.finditer(sql))
+    events.sort(key=lambda e: e[0])
+
+    for _, kind, match in events:
+        if kind == "create_table":
+            _apply_create_table(tables, match)
+            continue
+        table = tables.get(match.group("name" if kind in ("enable", "disable")
+                                      else "table").lower())
+        if table is None:
+            continue
+        if kind == "enable":
+            table.rls_enabled = True
+        elif kind == "disable":
+            table.rls_enabled = False
+        elif kind == "create_policy":
+            table.policies.append(
+                _policy(match.group("pname"), table.name, match.group("rest")))
+        else:
+            _drop_policy(table, match.group("pname"))
+
+    return tables
+
+
+def _apply_create_table(tables: dict[str, Table], match: re.Match[str]) -> None:
+    """What a REPEATED CREATE TABLE means, which is two different things.
+
+    `CREATE TABLE IF NOT EXISTS` is an idempotent migration whose entire
+    purpose is to do nothing when the table is already there. Treating it as a
+    fresh declaration threw away the RLS and the policies established earlier
+    in the chain, and the table then read as "RLS never enabled" — an exposure
+    fabricated by a no-op. So it MERGES: new columns and keys, existing
+    protection untouched.
+
+    A plain `CREATE TABLE` repeated is different. Postgres rejects that against
+    a live table, so in committed SQL it means the declaration starts over —
+    in practice a pg_dump or a squashed baseline restating the whole schema.
+    MEASURED: one repository keeps 258 superseded migrations beside a dumped
+    baseline, and merging the two left the baseline carrying permissive
+    policies from 2025 that it exists to replace. So it RESETS, and everything
+    the archive said about that table stops applying at that line.
+    """
+    name = match.group("name")
+    body = match.group("body")
+    existing = tables.get(name.lower())
+    if existing is None or not match.group("ine"):
         tables[name.lower()] = Table(
             name=name,
             schema=(match.group("schema") or "public").lower(),
             columns=_columns(body),
             foreign_keys=_foreign_keys(body),
         )
+        return
+    for column in _columns(body):
+        if column not in existing.columns:
+            existing.columns.append(column)
+    known = {(k.column, k.target) for k in existing.foreign_keys}
+    for key in _foreign_keys(body):
+        if (key.column, key.target) not in known:
+            existing.foreign_keys.append(key)
 
-    for match in _ENABLE_RLS.finditer(sql):
-        table = tables.get(match.group("name").lower())
-        if table:
-            table.rls_enabled = True
 
-    for match in _CREATE_POLICY.finditer(sql):
-        table = tables.get(match.group("table").lower())
-        if not table:
-            continue
-        table.policies.append(
-            _policy(match.group("pname"), table.name, match.group("rest")))
+def _drop_policy(table: Table, raw_name: str) -> None:
+    """Remove every policy of that name, comparing case-insensitively.
 
-    return tables
+    Postgres treats a quoted identifier as case-sensitive, so this can drop
+    slightly more than the database would. That direction is deliberate: an
+    over-eager drop makes a table look MORE protected and costs us a finding,
+    while an under-eager one reports a hole the customer already closed.
+    """
+    wanted = raw_name.strip('"').strip("'").lower()
+    table.policies[:] = [p for p in table.policies if p.name.lower() != wanted]
 
 
 def _policy(raw_name: str, table: str, rest: str) -> Policy:
