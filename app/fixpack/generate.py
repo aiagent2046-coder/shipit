@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import io
+import time
 import json
 import logging
 import re
@@ -37,6 +38,10 @@ import zipfile
 from dataclasses import dataclass, field
 
 from app.scan.checks import find_committed_env_files, gitignore_covers_env
+from app.fixpack.rls_policy import PolicyProposal, migration_filename, propose_read_policy
+from app.scan.rls import RULE_ID as RLS_RULE_ID
+from app.scan.rls import read_committed_sql
+from app.scan.sql_schema import parse_schema
 from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
 from app.scan.secrets import (
     NON_PRODUCTION_CONTEXTS,
@@ -56,6 +61,8 @@ _EXCLUDED_SECRET_RULE_IDS = frozenset({"supabase-anon-key"})
 SECRET_RULE_IDS = frozenset(r.id for r in RULES) - _EXCLUDED_SECRET_RULE_IDS
 
 _CHECK_RULE_IDS = frozenset({"env-file-committed", "gitignore-missing-secrets"})
+
+_RLS_RULE_IDS = frozenset({RLS_RULE_ID})
 
 # rule_id -> the environment variable name we substitute the literal with.
 # Small, explicit, and deliberately not clever: a sensible conventional
@@ -409,7 +416,8 @@ def _is_fixable_rule(finding: dict) -> bool:
     Most rules are advice -- "no tests", "no Dockerfile" -- and no amount of
     code generation turns them into a pull request.
     """
-    return finding.get("rule_id") in (SECRET_RULE_IDS | _CHECK_RULE_IDS)
+    return finding.get("rule_id") in (
+        SECRET_RULE_IDS | _CHECK_RULE_IDS | _RLS_RULE_IDS)
 
 
 # Below this length a dotenv value is not a credential, it is configuration.
@@ -827,6 +835,13 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                     detail=f"`{sf.file}` — {sf.detail}",
                 ))
 
+    # --- RLS: a migration per exposed table, or a recorded refusal. --------
+    #
+    # Emitted as a NEW migration rather than an edit, because the existing ones
+    # are history: a customer's migration chain has already run against their
+    # database and rewriting a link in it desynchronises the two.
+    _plan_rls_fixes(plan, eligible, zip_bytes)
+
     if known_secret_values:
         delivered: dict[str, str] = {}
         for name, text in contents.items():
@@ -840,6 +855,62 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
             known_secret_values, delivered)
 
     return plan
+
+
+
+def _plan_rls_fixes(plan: FixpackPlan, eligible: list[dict],
+                    zip_bytes: bytes) -> None:
+    """Add a guarded RLS migration for each exposed table we can justify.
+
+    A refusal is recorded in `skipped` rather than dropped. The customer paid
+    for a Fix Pack; "we saw this and would not guess at your authorisation
+    model" is information, and silence is not.
+    """
+    rls_findings = [f for f in eligible if f.get("rule_id") == RLS_RULE_ID]
+    if not rls_findings:
+        return
+
+    sql, _paths = read_committed_sql(io.BytesIO(zip_bytes))
+    schema = parse_schema(sql) if sql.strip() else {}
+    stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+
+    for index, finding in enumerate(rls_findings):
+        table = _table_from_finding(finding)
+        if table is None:
+            plan.skipped.append(_skipped(
+                finding, "could not identify the table from the finding"))
+            continue
+        result = propose_read_policy(table, schema)
+        if not isinstance(result, PolicyProposal):
+            plan.skipped.append(_skipped(finding, result.reason))
+            continue
+        # Distinct second granularity per table, so two migrations in one Pack
+        # cannot collide on a filename and cannot apply out of order.
+        path = migration_filename(result.table, f"{stamp}{index:02d}")
+        plan.files[path] = result.sql
+        plan.config_fixes.append(ConfigFix(
+            rule_id=RLS_RULE_ID,
+            title=f"Row Level Security for `{result.table}`",
+            detail=(
+                f"`{path}` — {result.summary}. Enabling RLS without a policy "
+                f"would close the table to your application too, so the "
+                f"migration adds both, and only where no read policy exists "
+                f"yet."
+            ),
+        ))
+
+
+def _table_from_finding(finding: dict) -> str | None:
+    """The table this finding is about, from the title the detector wrote
+    (``Table `x` is readable …``).
+
+    It does NOT check the name against the schema: propose_read_policy already
+    refuses an unknown table, with a better reason than this could give. A
+    second guard here looked like defence in depth and was really an untested
+    branch — mutation testing removed it by surviving.
+    """
+    match = re.search(r"`([A-Za-z_][A-Za-z0-9_]*)`", finding.get("title", ""))
+    return match.group(1) if match else None
 
 
 def _plural(n: int, singular: str, plural: str | None = None) -> str:
