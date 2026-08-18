@@ -3461,3 +3461,84 @@ class AuditJobRepository:
                 for row in error_rows
             ],
         }
+
+
+class RlsLiveCheckRepository:
+    """The consent ledger for the live RLS check (migration 0031).
+
+    Every other stage of an audit reads a copy of the customer's code. This one
+    sends a request to a database that belongs to somebody, and it is the only
+    thing this product does that reaches outside our infrastructure and touches
+    a third party's system. If it is ever questioned, the answer has to be a
+    row rather than a log line that rotated out.
+
+    THE ROW IS WRITTEN BEFORE THE REQUESTS GO OUT. A ledger that only records
+    completed checks cannot show the one that crashed halfway, which is exactly
+    the case somebody would ask about. `outcome` and `result_json` stay NULL
+    until `complete()` — and a NULL pair is itself the record that something
+    was started and did not finish.
+
+    Same not-configured contract as every other repository here: with no
+    DATABASE_URL these no-op and return None rather than failing, so a missing
+    analytics store never breaks the check itself.
+
+    THE ANON KEY IS NEVER PASSED TO THIS CLASS. It has no parameter for one.
+    """
+
+    async def start(
+        self, *, audit_id: str | None, client_key: str, consent_phrase: str,
+    ) -> dict[str, Any] | None:
+        """Record the intent to check, before anything is sent.
+
+        `consent_phrase` is what the caller actually typed, not a boolean. A
+        boolean stores our interpretation of their act; the phrase stores the
+        act, and the two differ exactly when someone asks which happened.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        parsed_audit_id = uuid.UUID(audit_id) if audit_id else None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into rls_live_checks
+                    (audit_id, client_key, consent_phrase)
+                values (%s, %s, %s)
+                returning id, audit_id, client_key, project_ref,
+                          consent_phrase, tables_asked, outcome, result_json,
+                          created_at, completed_at
+                """,
+                (parsed_audit_id, client_key, consent_phrase),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def complete(
+        self, check_id: str, *, project_ref: str, outcome: str,
+        tables_asked: list[str], result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Close the row out with what actually happened."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update rls_live_checks
+                   set project_ref  = %s,
+                       outcome      = %s,
+                       tables_asked = %s::jsonb,
+                       result_json  = %s::jsonb,
+                       completed_at = now()
+                 where id = %s
+                returning id, audit_id, client_key, project_ref,
+                          consent_phrase, tables_asked, outcome, result_json,
+                          created_at, completed_at
+                """,
+                (project_ref or None, outcome, json.dumps(tables_asked),
+                 json.dumps(result), uuid.UUID(str(check_id))),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
