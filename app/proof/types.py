@@ -14,7 +14,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-TemplateId = Literal["secrets_leak", "sqli", "cors_open", "cors_open_runtime"]
+TemplateId = Literal[
+    "secrets_leak", "sqli", "cors_open", "cors_open_runtime",
+    "rls_open_runtime",
+]
 
 # The same tuple the validators below check against, named once so a new id
 # cannot be accepted in one function and rejected in the other.
@@ -29,8 +32,12 @@ TemplateId = Literal["secrets_leak", "sqli", "cors_open", "cors_open_runtime"]
 # Note that being in this contract is not the same as being in
 # app/proof/registry.py, which is what the product actually offers. This id is
 # storable and renderable before the runtime probe is wired into routing.
+# `rls_open_runtime` is likewise its own id: an anon `select` that came back
+# with rows is a different claim from a regex over migrations, and a stored
+# proof_json row has to stay unambiguous about which one it carried.
 VALID_TEMPLATE_IDS: tuple[str, ...] = (
     "secrets_leak", "sqli", "cors_open", "cors_open_runtime",
+    "rls_open_runtime",
 )
 
 AttemptStatus = Literal[
