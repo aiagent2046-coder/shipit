@@ -80,6 +80,44 @@ def test_both_readers_agree_on_rls_state(name, sql) -> None:
     assert fix_parse(sql)["t"].rls_enabled == measure_parse(sql)["t"].rls_enabled
 
 
+# --- where they no longer agree, on purpose ---------------------------------
+#
+# On 2026-08-18 the production reader learned that a migration chain is a
+# sequence of edits: DROP POLICY, DISABLE ROW LEVEL SECURITY, and what a
+# repeated CREATE TABLE means. The measurement reader did not follow, and that
+# is deliberate — its numbers are published in SUPABASE_RLS_YIELD_PLAN.md and
+# were computed by the code as it stands. Changing it would detach a recorded
+# result from the thing that produced it.
+#
+# So the divergence is pinned rather than left to be discovered. These tests
+# fail if production regresses, and they also fail if the measurement reader
+# catches up without this file being updated — which is the moment to converge
+# the two and re-run Part A, not to edit an assertion.
+
+DIVERGENT = {
+    "a dropped policy": """
+        create table public.t (id uuid primary key, email text);
+        alter table public.t enable row level security;
+        create policy "open" on public.t for select using (true);
+        drop policy "open" on public.t;
+    """,
+    "rls disabled again": """
+        create table public.t (id uuid primary key, email text);
+        alter table public.t enable row level security;
+        alter table public.t disable row level security;
+    """,
+}
+
+
+@pytest.mark.parametrize("name,sql", list(DIVERGENT.items()))
+def test_the_measurement_reader_is_known_to_be_behind(name, sql) -> None:
+    """Production is right here and the measurement tool is not. Asserted so
+    the gap is a recorded decision instead of a surprise in six months."""
+    fix = fix_parse(sql)["t"]
+    measure = measure_parse(sql)["t"]
+    assert fix.anon_can_read[0] != measure.anon_readable[0], name
+
+
 def test_both_readers_find_the_same_columns() -> None:
     sql = """
         create table public.t (
