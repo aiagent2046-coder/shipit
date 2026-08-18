@@ -24,6 +24,7 @@ from app.db import (
     LlmUsageRepository,
     MonitoringRunRepository,
     PaymentRepository,
+    RlsLiveCheckRepository,
     ServiceFlagsRepository,
     SubscriptionRepository,
 )
@@ -82,6 +83,7 @@ _audit_repo = AuditRepository()
 _audit_job_repo = AuditJobRepository()
 _fixpack_repo = FixpackJobRepository()
 _fix_outcome_repo = FixOutcomeRepository()
+_rls_live_check_repo = RlsLiveCheckRepository()
 _account_repo = AccountRepository()
 _payment_repo = PaymentRepository()
 _subscription_repo = SubscriptionRepository()
@@ -144,6 +146,20 @@ def get_fixpack_repo() -> FixpackJobRepository:
 def get_fix_outcome_repo() -> FixOutcomeRepository:
     """Same as get_audit_repo, for the fix_outcomes knowledge base."""
     return _fix_outcome_repo
+
+
+def get_rls_live_check_repo() -> RlsLiveCheckRepository:
+    """Same as get_audit_repo, for the live-RLS-check consent ledger."""
+    return _rls_live_check_repo
+
+
+def get_rls_fetch():
+    """Outbound transport for the live RLS check. None -> the probe's own
+    httpx call in production; overridden in tests so the suite never sends a
+    request to a real Supabase project. Same idea as get_billing_transport,
+    and load-bearing for a different reason: a test that forgot to override
+    this would probe somebody's database."""
+    return None
 
 
 def get_subscription_repo() -> SubscriptionRepository:
