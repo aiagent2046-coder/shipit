@@ -66,6 +66,8 @@ class LiveCheckResult:
     status: str                       # "checked" | "refused"
     reason: str = ""                  # populated when refused
     project_ref: str = ""
+    # "repository" or "supplied" — which act produced the credential.
+    key_source: str = ""
     attempts: list[ExploitAttempt] = field(default_factory=list)
     checked: list[str] = field(default_factory=list)
     not_checked: list[str] = field(default_factory=list)
@@ -88,6 +90,7 @@ def run_live_rls_check(
     zip_bytes: bytes,
     *,
     consent: bool,
+    anon_key: str | None = None,
     max_tables: int = MAX_TABLES,
     fetch: Callable[..., tuple[int, Any]] | None = None,
 ) -> LiveCheckResult:
@@ -104,7 +107,7 @@ def run_live_rls_check(
             reason="no confirmed consent from the owner of the project",
         )
 
-    target = find_supabase_target(io.BytesIO(zip_bytes))
+    target = find_supabase_target(io.BytesIO(zip_bytes), supplied_key=anon_key)
     if isinstance(target, TargetRefusal):
         return LiveCheckResult(status="refused", reason=target.reason)
 
@@ -140,6 +143,7 @@ def _ask(target: SupabaseTarget, candidates: list[TableCandidate],
     return LiveCheckResult(
         status="checked",
         project_ref=target.ref,
+        key_source=target.source,
         attempts=attempts,
         checked=[c.name for c in chosen],
         # Named, not just counted. "We checked 12 of your 40 tables" is a

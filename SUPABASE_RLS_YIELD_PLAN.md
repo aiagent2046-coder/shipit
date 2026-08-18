@@ -658,3 +658,69 @@ repos in the first state; the other two put most of theirs in the second.
 v0 (its marker is recognised only so the control can exclude it), Cursor, and
 Replit. And the whole thing remains a statement about repositories: Part C's
 n = 1 is unchanged, and nothing here says what any deployment actually does.
+
+---
+
+## The first end-to-end run of the shipped pipeline, 2026-08-18
+
+Migration 0031 applied (backup verified, 31 of 31, `State: OK`), then the probe
+run against our own project with consent — the first time the pieces built in
+#285–#291 were exercised together against a live database.
+
+Nine tables asked, nine `200 []`. That result **on its own establishes almost
+nothing**, and the run is a good demonstration of why `alone_proves_nothing`
+exists: an empty answer from a protected table and an empty answer from an
+empty table are the same bytes. What separates them is an independent row
+count, taken through the service role on a project we own.
+
+| table | rows | anon read | verdict |
+|---|---|---|---|
+| `messages` | 1939 | 0 | protected |
+| `swipes` | 81 | 0 | protected |
+| `founder_profiles` | 24 | 0 | protected |
+| `agent_messages` | 20 | 0 | protected |
+| `video_rooms` | 15 | 0 | protected |
+| `matches` | 14 | 0 | protected |
+| `agent_context` | 1 | 0 | protected |
+| `github_connections` | 1 | 0 | protected |
+| `avatar_interactions` | 0 | 0 | **undetermined — the table is empty** |
+
+Eight of nine settled. `founder_profiles` matches Part C exactly (24 rows, anon
+reads 0), which is the only independent cross-check available and it agrees.
+
+The key was accepted: a rejected one answers 401 and the oracle returns
+`error`, not `failure`. That distinction is what makes the nine `failure`s
+readable at all.
+
+### The measured ceiling of a repository-derived table list
+
+The project has **11** public tables. The probe asked about **9**. It did not
+ask about:
+
+* **`agent_projects`** — 14 rows, RLS on, one policy. The only table ever found
+  genuinely exposed on this deployment, and the one we closed in Part C. It
+  appears in neither the migrations nor the client code, so **the probe would
+  never have asked about it**.
+* `tool_events` — empty, RLS on, no policies (default deny).
+
+Part C established that static analysis could not see this table. This run
+establishes that the *live probe*, given table names from the same repository,
+cannot either. The client-code source added in #291 rescues the case where the
+schema is uncommitted; it does not rescue the case where nothing in the
+repository names the table at all.
+
+**The wording consequence is not optional.** A report may say "we checked the
+N tables we could name from your repository". It may not say "we checked your
+tables". `not_checked` names what did not fit under the request ceiling — a
+table we never found cannot appear there by construction, which is exactly the
+gap a customer would otherwise read as covered.
+
+### What would close it, and what would not
+
+Not enumeration: PostgREST's OpenAPI document is refused to the anon key
+(recorded above), and the only credential that could list the tables is the
+one we refuse to send anywhere.
+
+The remaining honest routes are asking the customer for names, or reading them
+from a Supabase session they authorise separately. Both are new decisions with
+their own consent questions, and neither is made here.

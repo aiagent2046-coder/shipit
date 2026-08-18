@@ -168,3 +168,90 @@ def test_the_key_is_carried_but_never_the_masked_finding() -> None:
     assert isinstance(target, SupabaseTarget)
     assert target.anon_key == jwt()
     assert "•" not in target.anon_key
+
+
+# --- a key the customer hands over ------------------------------------------
+#
+# MEASURED 2026-08-18: our own project's repository commits no key at all — a
+# `.env.example` and nothing else. Good hygiene, and it means the premise this
+# module was built on holds for many vibe-coded repositories and not for the
+# tidier ones. Without this path the check refuses exactly the customers who
+# did the right thing.
+
+def test_a_supplied_key_is_used_when_the_repo_has_none() -> None:
+    target = find_supabase_target(
+        make_zip({"repo/README.md": "# no keys here"}), supplied_key=jwt())
+    assert isinstance(target, SupabaseTarget)
+    assert target.ref == REF
+    assert target.source == "supplied"
+
+
+def test_a_supplied_key_wins_over_one_found_in_the_tree() -> None:
+    """Handing one over is a deliberate act by somebody who knows which
+    project is theirs. Our regex over their files is not better information."""
+    target = find_supabase_target(
+        make_zip(env(jwt(ref=OTHER_REF))), supplied_key=jwt())
+    assert isinstance(target, SupabaseTarget)
+    assert target.ref == REF
+
+
+def test_the_url_is_still_built_from_the_key_not_from_the_caller() -> None:
+    """The security property this whole module turns on survives the new path:
+    a caller cannot aim the probe at an address of their choosing, because
+    there is no address parameter — only a key, whose own claim names it."""
+    target = find_supabase_target(
+        make_zip({"repo/a.ts": "x"}), supplied_key=jwt(ref=OTHER_REF))
+    assert isinstance(target, SupabaseTarget)
+    assert target.project_url == f"https://{OTHER_REF}.supabase.co"
+
+
+def test_a_supplied_service_role_key_is_refused_the_same_way() -> None:
+    result = find_supabase_target(
+        make_zip({"repo/a.ts": "x"}), supplied_key=jwt(role="service_role"))
+    assert isinstance(result, TargetRefusal)
+    assert "service_role" in result.reason
+    assert "bypasses" in result.reason.lower()
+
+
+def test_a_masked_paste_is_named_rather_than_failing_as_a_request() -> None:
+    """Bullets copied instead of the characters — same length, non-ASCII. It
+    has cost this project two debugging sessions, once surfacing as a
+    UnicodeEncodeError and once as a plausible-looking empty result."""
+    masked = "•" * len(jwt())
+    result = find_supabase_target(make_zip({"repo/a.ts": "x"}),
+                                  supplied_key=masked)
+    assert isinstance(result, TargetRefusal)
+    assert "masked" in result.reason
+
+
+def test_a_non_supabase_jwt_supplied_by_hand_is_refused() -> None:
+    result = find_supabase_target(make_zip({"repo/a.ts": "x"}),
+                                  supplied_key=jwt(iss="auth0"))
+    assert isinstance(result, TargetRefusal)
+
+
+def test_an_empty_supplied_key_falls_back_to_the_repository() -> None:
+    """A blank form field is not an instruction. It must not turn a repository
+    that DOES carry a key into a refusal."""
+    for blank in (None, "", "   "):
+        target = find_supabase_target(make_zip(env(jwt())),
+                                      supplied_key=blank)
+        assert isinstance(target, SupabaseTarget), blank
+        assert target.source == "repository"
+
+
+def test_a_supplied_key_with_a_malformed_ref_is_not_turned_into_a_hostname() -> None:
+    """The ref is interpolated into a URL, and on this path the CALLER chose
+    the key — so `https://{ref}.supabase.co` with a ref of `evil.example.com/x`
+    resolves to a host that is not Supabase at all. `rls_probe` would refuse it
+    too, but a refusal at the boundary can name the reason and one deeper in
+    reads as a malfunction.
+
+    Written because mutation testing said so: deleting the shape check left
+    every other test green.
+    """
+    result = find_supabase_target(
+        make_zip({"repo/a.ts": "x"}),
+        supplied_key=jwt(ref="evil.example.com/x"))
+    assert isinstance(result, TargetRefusal)
+    assert "ref" in result.reason

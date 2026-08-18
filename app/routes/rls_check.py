@@ -66,6 +66,12 @@ async def create_rls_check(
     audit_id: str | None = Form(
         None, description="Link the check to a persisted audit, if you have one.",
     ),
+    anon_key: str | None = Form(
+        None,
+        description="Your project's PUBLIC anon key, if the repository does "
+                    "not commit it. Optional — we look in the repository "
+                    "first. Never a service_role key: that one is refused.",
+    ),
     limiter: RateLimiter = Depends(get_rate_limiter),
     check_repo: RlsLiveCheckRepository = Depends(get_rls_live_check_repo),
     rls_fetch=Depends(get_rls_fetch),
@@ -129,12 +135,14 @@ async def create_rls_check(
     # HTTPS requests. Called directly it would block the event loop for
     # seconds, and every other request to this process with it.
     result = await run_in_threadpool(
-        run_live_rls_check, raw, consent=True, fetch=rls_fetch)
+        run_live_rls_check, raw, consent=True, anon_key=anon_key,
+        fetch=rls_fetch)
 
     payload = {
         "status": result.status,
         "reason": result.reason,
         "project_ref": result.project_ref,
+        "key_source": result.key_source,
         "checked": result.checked,
         "not_checked": result.not_checked,
         "exposed_tables": result.exposed_tables,
