@@ -1,4 +1,4 @@
-"""Detect tables the anonymous Supabase key can read, from committed SQL.
+"""Detect tables the anonymous Supabase key can read or write, from committed SQL.
 
 Promoted out of scripts/measure_supabase_rls_yield.py, where the heuristics
 below were refined over three measurement rounds against real repositories.
@@ -16,6 +16,13 @@ So a finding from here says what the repository says, and nothing about the
 database. That is worth reporting — it is free, it needs no credential, and it
 is right often enough to be useful — but it is not "your data is exposed", and
 the explanation the customer reads must not claim to be.
+
+TWO RULES, NOT ONE. Reading and writing are different questions about the same
+table and they disagree: a catalogue anyone can read is an API, a catalogue
+anyone can rewrite is not a design. So the read rule carries a
+public-by-design exclusion and the write rule deliberately carries none. Only
+the read rule has a Fix Pack behind it — see _why_not_fixable in
+app/fixpack/generate.py for what the customer is told about the other.
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from app.scan.checks import CheckFinding
 from app.scan.sql_schema import Table, parse_schema
 
 RULE_ID = "rls-table-anon-readable"
+WRITE_RULE_ID = "rls-table-anon-writable"
 
 PRIVATE_TABLE_NAMES = frozenset({
     "users", "user", "profiles", "profile", "accounts", "account",
@@ -141,6 +149,88 @@ def table_is_reported(table: Table) -> tuple[bool, str]:
     return True, f"{why_private}; {why_readable}"
 
 
+def write_finding(table: Table, commands: frozenset[str], why: str,
+                  path: str) -> CheckFinding:
+    """The finding for a table the anonymous key can modify.
+
+    NO PUBLIC-BY-DESIGN EXCLUSION HERE, and that is the difference from the
+    read rule rather than an oversight. A catalogue being readable is an API;
+    a catalogue anyone can rewrite is not a design, and the heuristics that
+    decide whether DATA is private have nothing to say about it. So this rule
+    does not guess at what the table holds, which is also why it can be more
+    confident than its read counterpart.
+
+    UPDATE and DELETE are separated from INSERT because they are different
+    claims. Anonymous INSERT is a real pattern — a waitlist, a contact form,
+    feedback — and calling it a hole would be noise. Anonymous UPDATE or
+    DELETE means any visitor can rewrite or erase rows belonging to somebody
+    else, and no application intends that.
+    """
+    destructive = sorted(commands & {"update", "delete"})
+    if destructive:
+        verbs = " and ".join(destructive).upper()
+        return CheckFinding(
+            rule_id=WRITE_RULE_ID,
+            title=f"Anyone can {destructive[0]} rows in `{table.name}`",
+            severity="critical",
+            # Higher than the read rule's 0.6: that one has to guess whether
+            # the data is private, and this one does not. What remains
+            # uncertain is only whether the deployment matches the migrations.
+            confidence=0.75,
+            category="Security",
+            file=path,
+            explanation=(
+                f"Your migrations leave `{table.name}` open to {verbs} by the "
+                f"anonymous key ({why}). That key ships to every visitor's "
+                f"browser, so anyone who opens your site can change or delete "
+                f"rows — including rows belonging to your other users.\n\n"
+                f"Supabase grants insert, update and delete to `anon` on a "
+                f"public table by default; Row Level Security is the only "
+                f"thing that takes them back.\n\n"
+                f"We read this from your repository, NOT from your database — "
+                f"the two often differ, so treat it as something to check."
+            ),
+            fix_hint=(
+                f"Check it against your own project with a harmless write:\n"
+                f"    curl -X PATCH '<project-url>/rest/v1/{table.name}?id=eq.<some-id>' \\\n"
+                f"      -H 'apikey: <anon-key>' -H 'Content-Type: application/json' \\\n"
+                f"      -d '{{}}'\n"
+                f"Anything but a permission error means it is open. The fix is "
+                f"Row Level Security: with it enabled and no write policy, "
+                f"Postgres denies every write by default, which is what you "
+                f"want if this table is only written by your server."
+            ),
+        )
+
+    return CheckFinding(
+        rule_id=WRITE_RULE_ID,
+        title=f"Anyone can add rows to `{table.name}`",
+        # Deliberately not critical. A waitlist or a contact form is SUPPOSED
+        # to accept anonymous inserts, and the customer knows which of their
+        # tables those are.
+        severity="medium",
+        confidence=0.6,
+        category="Security",
+        file=path,
+        explanation=(
+            f"`{table.name}` accepts rows from the anonymous key ({why}). If "
+            f"this is a signup, contact or feedback form, that is the intended "
+            f"design and the thing to check is rate limiting rather than "
+            f"access.\n\n"
+            f"If it is not, note that an unrestricted insert also lets someone "
+            f"write rows attributed to your other users, because nothing "
+            f"constrains what the new row may contain.\n\n"
+            f"Read from your repository, not from your database."
+        ),
+        fix_hint=(
+            "If anonymous inserts are intended, a `WITH CHECK` on the policy "
+            "can still pin the columns a stranger may set. If they are not, "
+            "enabling Row Level Security without an insert policy denies them "
+            "outright."
+        ),
+    )
+
+
 def read_committed_sql(fileobj: BinaryIO) -> tuple[str, list[str]]:
     """Concatenated .sql from the archive, plus the paths it came from."""
     paths: list[str] = []
@@ -172,7 +262,14 @@ def scan_rls(fileobj: BinaryIO) -> list[CheckFinding]:
         return []
 
     schema = parse_schema(sql)
+    path = paths[0] if paths else ""
     findings: list[CheckFinding] = []
+
+    for table in schema.values():
+        commands, why_write = table.anon_can_write()
+        if commands:
+            findings.append(write_finding(table, commands, why_write, path))
+
     for table in schema.values():
         reported, why = table_is_reported(table)
         if not reported:
