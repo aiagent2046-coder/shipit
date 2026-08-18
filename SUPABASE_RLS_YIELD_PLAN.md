@@ -292,6 +292,30 @@ The pairing is load-bearing in both directions: the FK alone convicted a
 two-column join table in the first draft, because `_has_free_text` was asking
 the wrong list and `user_id` satisfied both halves by itself.
 
+### The number held while the oracle changed underneath it
+
+Three runs, with the oracle tightened once (weak hints demoted) and widened
+twice (the AI-judgement class, the auth.users key). The headline did not move:
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| uses Supabase | 7/9 | 7/9 | 7/9 |
+| exposed / measurable | 2/4 | 2/4 | 2/4 |
+| blind spot | 3/7 | 3/7 | 3/7 |
+
+What moved is completeness *inside* the repositories — private-table counts
+went 56 → 21 → 32 for blank-slate and 84 → 52 → 61 for servexaapp as the hints
+were corrected in both directions — and which tables are named. A rate that
+survives its own oracle being rewritten twice is the reproducibility check the
+CORS measurement did not get until late.
+
+`blank-slate` is the strongest single evidence that this oracle can say NO: 140
+tables, 32 of them private-shaped, zero exposed. And its one `uncertain` —
+`airspace_layers`, open, carrying only `description` — is public aviation
+reference data, correctly kept out of the count by the third state.
+
+**Part A is closed. Go.**
+
 ### What this changes about Part C
 
 The customer repo is the natural first live target: we have the relationship,
