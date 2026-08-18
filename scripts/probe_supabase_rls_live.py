@@ -51,6 +51,24 @@ def main(argv: list[str]) -> int:
     if not key:
         print("refusing: SUPABASE_ANON_KEY is not set", file=sys.stderr)
         return 2
+    if not key.isascii():
+        # MEASURED 2026-08-18: the key arrived with its characters replaced
+        # one-for-one by bullets — a masked rendering that had been copied
+        # instead of the value. Length matched exactly, so nothing looked
+        # wrong until httpx raised UnicodeEncodeError building the header, and
+        # the probe reported that as "the request did not complete" for every
+        # table.
+        #
+        # That is a true statement and a useless one. A key that cannot be put
+        # in a header is a configuration mistake the operator can fix in ten
+        # seconds, not an infrastructure failure, and the two must not read
+        # the same. Caught here, before any request, and named.
+        bad = sorted({c for c in key if not c.isascii()})[:5]
+        print(f"refusing: SUPABASE_ANON_KEY contains non-ASCII characters "
+              f"({''.join(bad)!r}). This is almost always a MASKED value that "
+              f"was copied instead of the key itself — the mask preserves the "
+              f"length, so it looks right.", file=sys.stderr)
+        return 2
 
     url = f"https://{ref}.supabase.co"
     print(f"project: {url}")
