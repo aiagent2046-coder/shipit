@@ -42,8 +42,16 @@ from app.scan.secrets import _iter_text_files
 # through. Deliberately narrow: `.from(` with a variable inside is not a name
 # we can resolve, and guessing one would put an invented string into a URL
 # aimed at a customer's database.
-_FROM_CALL = re.compile(r"\.from\(\s*[\"'`]([a-z_][a-z0-9_]{0,62})[\"'`]\s*\)",
-                        re.IGNORECASE)
+#
+# The lookbehind excludes `supabase.storage.from('avatars')`, which is the
+# identical call shape against a STORAGE BUCKET. A bucket is not a table:
+# probing one says nothing about the customer's rows, and reporting one as a
+# missing table is a false claim about their data. Excluded by CALL SITE
+# rather than by a list of bucket-ish names, because `documents` and `files`
+# are perfectly ordinary table names and a name list would drop the real ones.
+_FROM_CALL = re.compile(
+    r"(?<!storage)\.from\(\s*[\"'`]([a-z_][a-z0-9_]{0,62})[\"'`]\s*\)",
+    re.IGNORECASE)
 
 # A name is interpolated into request paths and into report text. Validating it
 # where its origin is still known beats validating it deep in a request builder.

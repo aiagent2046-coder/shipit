@@ -181,3 +181,27 @@ def test_a_hand_written_interface_is_not_mistaken_for_a_table_map() -> None:
           footer: { Row: string[] }
         }
     """}) == []
+
+
+def test_a_storage_bucket_is_not_probed_as_a_table() -> None:
+    """`supabase.storage.from('avatars')` is the identical call shape against
+    a STORAGE BUCKET, and the probe sends a real request to whatever this
+    returns. Asking a customer's project about a bucket as though it were a
+    table proves nothing about their rows and puts an invented table name in a
+    URL aimed at their database.
+
+    Excluded by call site, not by a list of bucket-ish names: `documents` and
+    `files` are ordinary table names, and a name list would drop the real ones
+    along with the buckets."""
+    assert names({"repo/src/upload.ts": """
+        await supabase.storage.from('avatars').upload(path, file);
+        await supabase.storage.from('documents').list();
+    """}) == []
+
+
+def test_a_table_keeps_its_place_when_the_same_file_uploads_to_storage() -> None:
+    """The exclusion is the storage receiver, not the word `from`."""
+    assert names({"repo/src/upload.ts": """
+        await supabase.storage.from('avatars').upload(path, file);
+        const { data } = await supabase.from('documents').select('*');
+    """}) == ["documents"]
