@@ -827,3 +827,101 @@ The script carried its own copy of the matcher and drifted from production
 within the hour — the same two-readers failure this document's own tooling
 section describes. It did not move any number here, which is luck rather than
 design, so the script now imports the matcher rather than restating it.
+
+---
+
+## The schema was not the question, measured 2026-08-19 on n = 495
+
+A paying customer applied a Fix Pack and re-ran the audit. Score 4.8, one
+critical: *service-role client used for all agent-chat queries — RLS bypassed*.
+Thirty-six findings, and thirty-five of them from the deep review. The static
+side contributed `no-dockerfile`.
+
+Read against that repository, our own coverage looks worse than the score does:
+
+| | |
+|---|---|
+| API routes constructing a service-role client | 21 of 29 |
+| tables they reach | `founder_profiles`, `messages`, `agent_context`, `matches`, `agent_messages`, `github_connections`, `swipes`, `video_rooms` |
+| RLS enabled on those tables | all 8, carrying 11 policies |
+| what our RLS detector reported | `avatar_interactions` — the one table no application code queries |
+
+Every policy on the eight live tables is decorative on the server paths, and
+the detector graded the schema and passed. The one table it flagged was
+genuinely flagged correctly and was also the only one that did not matter. The
+detector was not wrong; it was answering a different question.
+
+### The rule, and what it costs to be sure
+
+`app/scan/service_role.py`: a file on an HTTP path by framework convention
+(Next App Router `app/**/route.ts`, Pages Router `pages/api/**`, SvelteKit
+`+server.ts`, Nuxt `server/api/**`) that READS a service-role environment
+variable. High, confidence 0.7, category Auth, collapsed to one row.
+
+Supabase Edge Functions are excluded deliberately — the function *is* the
+trusted server there, and reporting it is telling the customer off for
+following Supabase's manual.
+
+### How often it fires
+
+`scripts/measure_service_role_routes.py`, same three strata as the blind-spot
+run, 495 repositories, all reachable.
+
+| stratum | uses Supabase | has server handlers | a handler holds the key |
+|---|---|---|---|
+| Lovable | 76 / 192 | 5/76 = 7% [3–14%] | 2/5 |
+| bolt | 73 / 199 | 9/73 = 12% [7–22%] | 4/9 |
+| control (no marker) | 78 / 90 | 35/78 = 45% [34–56%] | 11/35 = 31% [19–48%] |
+| **pooled, given handlers exist** | | | **17/49 = 35% [23–49%]** |
+
+The prior question dominates. Most vibe-coded Supabase repos have no server at
+all — the generators emit SPAs that talk to Supabase from the browser, where
+RLS genuinely is the only boundary and this rule is silent by construction.
+Where a server exists, the pattern is in about a third of them.
+
+244 files outside handlers read a service-role key in the same corpus — seed
+scripts, edge functions, admin tooling. Every one would be a finding without
+the handler filter, which is doing more work than the match is.
+
+### Reading the hits, which is what the sample is for
+
+Eight hits read by hand. No false positive on the claim: all eight really did
+build a service-role client inside an HTTP route. They split hard on whether
+it is a *defect* — `circletel` calls `authenticateAdmin()` first,
+`usesafe-DPC-UI` says in a comment that it bypasses RLS deliberately and checks
+the session, `Neural-Nexus` needs `auth.admin.createUser` and has no other
+option; `devSync52`'s billing route has a module-level admin client and no
+visible check at all. That split is why the finding says what is true of all
+of them — nothing is behind the filtering in the file — rather than "you have a
+vulnerability", and why confidence is 0.7.
+
+**One false positive, and it would have shipped.** The first pattern accepted
+"Supabase and secret in any arrangement" and matched
+`SUPABASE_OAUTH_CLIENT_SECRET` in `kyleledbetter/dreamschemas` — the Management
+API's OAuth secret, in a route that never touches a project database.
+`SUPABASE_JWT_SECRET` was the same mistake waiting. Tightened to end at
+`SECRET_KEY`; it removed exactly those 2 hits of 170 and dropped one repository
+from the flagged set. Found by reading, not by testing.
+
+### Not auto-fixable, and the Pack says so by name
+
+Swapping the key is one line and would break every route it touched: the
+user-scoped client needs that route's own JWT, and some of its queries
+deliberately cross users. Getting it wrong here does not leave data exposed —
+it takes the customer's app down. `_why_not_fixable` declines it with that
+reason rather than under "advisory findings", which is the same distinction the
+write rule already earns.
+
+So the honest scope statement is unchanged: the Fix Pack still rewrites only
+secrets, `.env`, `.gitignore` and RLS reads. This rule adds a *finding*, not a
+fix — but a deterministic one, on every route, for no tokens, where the deep
+review's own disclosure is that two passes catch roughly three-quarters.
+
+### What it still does not see
+
+A handler this rule cannot name — an Express app whose routes are built at
+runtime, a Fastify plugin, anything not on a filename convention. And the
+inverse of the split above: it cannot tell the guarded admin route from the
+unguarded one, so a customer with five deliberate service-role routes reads the
+same sentence as a customer with twenty-one accidental ones. Sizing that would
+need a second heuristic over the same files, and nothing here measures it yet.
