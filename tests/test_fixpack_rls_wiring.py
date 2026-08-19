@@ -13,6 +13,8 @@ import zipfile
 
 from app.fixpack.generate import build_fixpack_plan
 from app.scan.rls import RULE_ID, WRITE_RULE_ID, scan_rls
+from app.scan.service_role import RULE_ID as SERVICE_ROLE_RULE_ID
+from app.scan.service_role import scan_service_role
 
 
 def make_zip(entries: dict[str, str]) -> bytes:
@@ -191,3 +193,42 @@ def test_two_exposed_tables_get_distinct_migration_filenames() -> None:
     assert len(set(migrations)) == 2
     assert {"agent_projects", "agent_notes"} == {
         p.rsplit("_enable_rls_", 1)[1][: -len(".sql")] for p in migrations}
+
+
+# --- the service-role rule, which the Pack must decline BY NAME -------------
+
+def test_a_service_role_route_is_declined_with_its_own_reason() -> None:
+    """The third rule that is neither fixable nor advisory, and it is the one
+    most likely to be mistaken for a one-line fix: swap the key, done. It is
+    not — the user-scoped client needs that route's own JWT, and some of its
+    queries deliberately cross users. So the reason has to say what the buyer
+    would otherwise assume we were too lazy to do, and it must not read as
+    "there is nothing here to rewrite" when there plainly is.
+    """
+    entries = {"app/api/messages/route.ts": """
+        import { createClient } from '@supabase/supabase-js';
+        const admin = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+        export async function GET() { return Response.json(await admin.from('m').select()); }
+    """}
+    findings = [vars(f) for f in scan_service_role(io.BytesIO(make_zip(entries)))]
+    assert [f["rule_id"] for f in findings] == [SERVICE_ROLE_RULE_ID]
+
+    plan = build_fixpack_plan(make_zip(entries), findings)
+    reasons = [s.reason for s in plan.skipped if s.rule_id == SERVICE_ROLE_RULE_ID]
+    assert reasons, [s.rule_id for s in plan.skipped]
+    assert "advisory" not in reasons[0].lower()
+    assert "cross users" in reasons[0]
+    assert not plan.files
+
+
+def test_a_service_role_route_is_not_silently_rewritten() -> None:
+    """The failure this guards is not a missing fix, it is an ATTEMPTED one.
+    A find-and-replace of the key name would look like a fix in the diff and
+    take the customer's route down in production, where a wrong RLS fix merely
+    leaves data as exposed as it already was."""
+    entries = {"app/api/messages/route.ts":
+               "const k = process.env.SUPABASE_SERVICE_ROLE_KEY;"}
+    findings = [vars(f) for f in scan_service_role(io.BytesIO(make_zip(entries)))]
+    plan = build_fixpack_plan(make_zip(entries), findings)
+    assert plan.files == {}
+    assert plan.secret_fixes == []

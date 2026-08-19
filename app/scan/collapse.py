@@ -21,6 +21,12 @@ COLLAPSIBLE = frozenset((
     "jwt-in-code",
     "sql-secret-assignment",
     "generic-assignment",
+    # One fact about the project -- "the server does not go through RLS" --
+    # spread across every route that holds the key. Measured on a paying
+    # customer's repository: 21 of 29 routes. Left uncollapsed that is 21 high
+    # findings, which is both a report nobody can read and a score sunk by one
+    # design decision counted twenty-one times.
+    "supabase-service-role-route",
 ))
 
 
