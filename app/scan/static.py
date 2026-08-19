@@ -6,6 +6,7 @@ from typing import BinaryIO
 
 from app.scan.checks import run_checks
 from app.scan.rls import scan_rls
+from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
@@ -36,6 +37,14 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=r.rule_id, title=r.title, severity=r.severity,
             confidence=r.confidence, category=r.category, file=r.file,
             explanation=r.explanation, fix_hint=r.fix_hint,
+        ))
+
+    fileobj.seek(0)
+    for d in scan_schema_drift(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=d.rule_id, title=d.title, severity=d.severity,
+            confidence=d.confidence, category=d.category, file=d.file,
+            explanation=d.explanation, fix_hint=d.fix_hint,
         ))
 
     fileobj.seek(0)
