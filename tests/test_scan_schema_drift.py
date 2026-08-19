@@ -214,3 +214,22 @@ def test_the_finding_moves_a_static_only_score():
     }))
     assert drifted["score"]["categories"]["Security"] \
         < clean["score"]["categories"]["Security"]
+
+
+def test_the_sentence_reads_correctly_for_a_single_table():
+    """Half the corpus drifts by exactly one or two tables (p25 = 1), so the
+    single-table wording is the common case, not the edge case. Customer-facing
+    text saying "queries `todos` ... creates them" reads as carelessness about
+    the very report it is asking them to trust."""
+    one = scan_schema_drift(make_zip({
+        "repo/supabase/migrations/0001.sql": SCHEMA,
+        "repo/src/a.ts": "supabase.from('waitlist').select();",
+    }))[0].explanation
+    assert "creates it" in one and "creates them" not in one
+
+    many = scan_schema_drift(make_zip({
+        "repo/supabase/migrations/0001.sql": SCHEMA,
+        "repo/src/a.ts": ("supabase.from('waitlist').select();"
+                          "supabase.from('leads').select();"),
+    }))[0].explanation
+    assert "creates them" in many

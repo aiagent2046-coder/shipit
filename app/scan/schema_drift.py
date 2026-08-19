@@ -146,32 +146,46 @@ def _listed(names: set[str]) -> str:
     return f"{text} and {rest} more" if rest else text
 
 
+def _them(names: set[str]) -> tuple[str, str]:
+    """(pronoun, verb) agreeing with the count.
+
+    MEASURED: p25 of the gap is 1 table, so the singular is the common case
+    rather than an edge one -- "queries `todos` ... creates them" is what half
+    the reports would have said. Customer-facing text that does not agree with
+    itself reads as carelessness about the very report it asks them to trust.
+    """
+    return ("it", "was") if len(names) == 1 else ("them", "were")
+
+
 def _explain(from_types: set[str], from_code: set[str], dynamic: bool) -> str:
     parts: list[str] = []
 
     if from_types:
         # The strong claim, and the only one licensed to speak about the
         # database: `supabase gen types typescript` reads the live project.
+        pronoun, was = _them(from_types)
+        plural = "these tables" if len(from_types) > 1 else "this table"
         parts.append(
             f"Your generated Supabase types name {_listed(from_types)}, which "
-            "no migration in this repository creates. That file is generated "
-            "from the live project, so these tables were in your database when "
-            "it was written -- they exist outside your migrations, which means "
-            "no review, no code review and no static scan has ever looked at "
-            "their access rules."
+            f"no migration in this repository creates. That file is generated "
+            f"from the live project, so {plural} {was} in your database when "
+            f"it was written -- {pronoun} exists outside your migrations, "
+            f"which means no review, no pull request and no static scan has "
+            f"ever looked at the access rules."
         )
 
     if from_code:
         # The weak claim. It describes the CODE. It must not be read as a
         # statement about the database, because a stale call to a dropped
         # table produces exactly this evidence.
+        pronoun, _ = _them(from_code)
         parts.append(
             f"Your code queries {_listed(from_code)}, and no migration in this "
-            "repository creates them. This says what your application expects, "
-            "not what your database contains: the same evidence appears if the "
-            "table was created in the Supabase dashboard, and if it was dropped "
-            "and the call left behind. Either way the table is outside the "
-            "schema that gets reviewed."
+            f"repository creates {pronoun}. This says what your application "
+            f"expects, not what your database contains: the same evidence "
+            f"appears if the table was created in the Supabase dashboard, and "
+            f"if it was dropped and the call left behind. Either way the table "
+            f"is outside the schema that gets reviewed."
         )
 
     caveat = (
