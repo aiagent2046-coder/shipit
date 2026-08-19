@@ -8,36 +8,54 @@ tables this repository talks about and its migrations do not, so that the gap
 is at least visible to the person who could close it, and so the live probe
 (app/proof/rls_probe.py) has names to ask about.
 
-MEASURED 2026-08-19, n=399 repositories drawn from two generators, of which
-150 use Supabase and 108 both commit a schema and stay under the reader's cap:
+MEASURED 2026-08-19 by scripts/measure_schema_drift.py, which runs THIS
+detector -- not a copy of its rules -- over 540 candidate repositories in three
+strata. 225 use Supabase, 152 of those commit a schema:
 
 | question                                              | result               |
 |-------------------------------------------------------|----------------------|
-| commit a schema AND call a table it does not declare  | 50% [41-59] (54/108) |
-|   -- Lovable                                          | 51% [38-64] (26/51)  |
-|   -- bolt                                             | 49% [37-62] (28/57)  |
-| size of the gap                                       | median 3, p90 13, max 67 |
-| contain a `.from(variable)`, which names no table     | 72% [63-80]          |
-| Supabase repos yielding no literal name at all        | 15% [10-21]          |
+| commit a schema AND name a table it does not declare  | 61% [53-69] (93/152) |
+|   -- Lovable                                          | 62% [48-74] (31/50)  |
+|   -- bolt                                             | 54% [41-66] (30/56)  |
+|   -- no generator marker (control)                    | 70% [55-81] (32/46)  |
+| size of the gap                                       | median 3, p25 1, p90 33 |
+| commit no schema at all -- invisible to any static scan | 32% (73/225)       |
+| carry a generated types file, among those with a schema | 54% (82/152)       |
+| contain a `.from(variable)`, which names no table      | 29% [23-35]         |
 
-An earlier pass over n=40 per stratum put the first number at 62% [46-76];
-the full corpus moved it to 50% and the intervals overlap, so the small-sample
-figure was the noisier estimate rather than a different world. The wording
-below is written against 50%, not 62% -- record at
-/home/syndiai/reality-diff-m3.json.
+TWO EARLIER PASSES GOT THIS WRONG IN BOTH DIRECTIONS, and the corrections are
+recorded because each one was a real defect and not a rounding:
 
-THE 50% IS A FLOOR, NOT A POINT ESTIMATE OF WHAT THIS CODE FINDS. The
-measurement dropped bucket-shaped names (`documents`, `files`, `media`, ...)
-by NAME; app/scan/table_names.py drops them by CALL SITE, keeping
-`supabase.from('documents')` and discarding only
-`supabase.storage.from('documents')`. Those are ordinary table names, so this
-detector sees a superset of what was counted. Nobody has measured how much
-larger, and it is stated here rather than quietly enjoyed.
+  62% [46-76]  n=40 per stratum, ad-hoc script. Small sample.
+  50% [41-59]  n=108, two strata, ad-hoc script. LOWER because that script
+               dropped bucket-shaped names (`documents`, `files`, `media`) BY
+               NAME, discarding real tables along with the buckets. This code
+               drops them by CALL SITE, so it sees more -- and the 50% was
+               written into this docstring as a floor, which is what it was.
+  61% [53-69]  n=152, three strata, THIS detector. The control stratum, absent
+               from the 50%, is the highest of the three at 70%.
 
-Independently, #296 measured the generated-types source on a different corpus
-(n=226): of 82 repositories carrying both a schema and a types file, 44%
-[34-55] have a types file naming a table the SQL does not. The two numbers are
-NOT pooled. Different corpora, and a stronger claim on the types side.
+The control being highest matters: the gap is not an artefact of one code
+generator. Hand-written Supabase projects drift MORE, and by a wider margin
+(median 8 tables against Lovable's 3).
+
+THE DYNAMIC-CALL NUMBER WAS OVERSTATED THREEFOLD, and the fix is in the
+measurement rather than the wording. The earlier script's regex counted every
+`.from(` with a non-literal argument, so `Array.from(new Set(x))` -- in half
+the JavaScript ever written -- was scored as a Supabase call this detector
+could not resolve. That produced 63-72%. Filtering by receiver gives 29%
+[23-35]. The disclosure in the finding is still unconditional, because 29% of
+repositories is not a rare case, and because a detector that admits
+incompleteness only when a regex tells it to is claiming completeness the rest
+of the time.
+
+Record: batch_reports/schema_drift.json, one row per repository pinned to the
+SHA that was read.
+
+Independently, #296 measured the generated-types source on an overlapping
+corpus (n=226): of 82 repositories carrying both a schema and a types file, 44%
+[34-55] have a types file naming a table the SQL does not. Consistent with the
+82/152 counted here.
 
 TWO SOURCES, TWO CLAIMS, AND THE DIFFERENCE IS THE POINT.
 
@@ -69,9 +87,9 @@ from app.scan.table_names import is_reportable, read_named_tables
 
 RULE_ID = "schema-drift-undeclared-table"
 
-# How many names go in the report before it stops being read. The gap's p90 is
-# 13 and its maximum 67; a finding listing 67 tables is a wall, and the point
-# of the finding is that somebody acts on it.
+# How many names go in the report before it stops being read. MEASURED: the
+# gap's p90 is 33 tables and one repository drifts by 200. A finding listing
+# 200 tables is a wall, and the point of a finding is that somebody acts on it.
 _MAX_LISTED = 12
 
 # Views are not missing tables -- they are derived objects a migration may

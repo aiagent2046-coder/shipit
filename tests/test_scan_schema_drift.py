@@ -67,8 +67,8 @@ def test_silent_when_everything_named_is_declared():
 
 
 def test_one_finding_lists_every_drifted_table():
-    # MEASURED 2026-08-19 (n=108): median gap 3 tables, p90 13, max 67. One
-    # finding per table would put 67 entries in a report nobody then reads.
+    # MEASURED 2026-08-19 (n=152): median gap 3 tables, p90 33, max 200. One
+    # finding per table would put 200 entries in a report nobody then reads.
     findings = scan_schema_drift(make_zip({
         "repo/supabase/migrations/0001.sql": SCHEMA,
         "repo/src/a.ts": ("supabase.from('waitlist').select();"
@@ -116,9 +116,10 @@ def test_a_stale_call_is_never_called_an_existing_table():
 
 
 def test_the_list_never_claims_to_be_complete():
-    # MEASURED 2026-08-19: 72% [63-80] of the repositories analysed contain a
+    # MEASURED 2026-08-19: 29% [23-35] of Supabase repositories contain a
     # `.from(variable)`, which names no table. A list presented without that
-    # caveat is claiming a completeness it does not have.
+    # caveat is claiming a completeness it does not have. (An earlier pass said
+    # 72%; its regex counted `Array.from`, which is not a Supabase call.)
     finding = scan_schema_drift(make_zip({
         "repo/supabase/migrations/0001.sql": SCHEMA,
         "repo/src/a.ts": ("supabase.from('waitlist').select();"
