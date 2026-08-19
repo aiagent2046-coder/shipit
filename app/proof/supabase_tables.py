@@ -45,45 +45,27 @@ here, and no ordering trick recovers it.
 
 from __future__ import annotations
 
-import re
-import zipfile
 from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.scan.rls import private_shape, read_committed_sql
-from app.scan.secrets import _iter_text_files
 from app.scan.sql_schema import parse_schema
-
-# `.from('table')` / `.from("table")`, the one call every supabase-js read goes
-# through. Deliberately narrow: `.from(` with a variable inside is not a name
-# we can resolve, and guessing one would put an invented string into a URL
-# aimed at a customer's database.
-_FROM_CALL = re.compile(r"\.from\(\s*[\"'`]([a-z_][a-z0-9_]{0,62})[\"'`]\s*\)",
-                        re.IGNORECASE)
-
-# The name is interpolated into a request path. rls_probe validates it too;
-# validating here as well means a bad name is refused where its origin is still
-# known, rather than deep in a request builder.
-_TABLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$", re.IGNORECASE)
-
-_SOURCE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte",
-                ".py", ".dart", ".kt", ".swift")
-
-# Every table entry in a generated types file is an identifier whose object
-# opens with `Row:`. Matched on that shape rather than on the file's name,
-# because the name is a convention and the shape is what the generator emits.
-_TYPES_TABLE = re.compile(r"(\w+):\s*\{\s*Row:")
-
-# `Tables: {` scopes the match to the table map. Without it, `Row:` inside
-# Insert/Update/Relationships blocks would be matched too — and, worse, any
-# hand-written interface that happens to contain a `Row` field.
-_TYPES_MARKER = "Tables: {"
-
-# PostgREST reaches these on its own; they are not the customer's tables and
-# probing them says nothing about their data.
-_NOT_THEIRS = frozenset({
-    "rpc", "graphql", "schema_migrations", "supabase_migrations",
-})
+# The matchers moved to app/scan/table_names.py when a second consumer
+# appeared (app/scan/schema_drift.py). They are re-exported here because
+# scripts/measure_rls_blind_spot.py imports `_TYPES_MARKER` and `_TYPES_TABLE`
+# from this module, and a measurement script that reads a DIFFERENT matcher
+# than production is the failure SUPABASE_RLS_YIELD_PLAN.md already recorded
+# once. One definition, imported twice.
+from app.scan.table_names import (  # noqa: F401
+    _FROM_CALL,
+    _NOT_THEIRS,
+    _SOURCE_EXTS,
+    _TABLE_NAME,
+    _TYPES_MARKER,
+    _TYPES_TABLE,
+    is_reportable,
+    read_named_tables,
+)
 
 
 @dataclass(frozen=True)
@@ -117,21 +99,12 @@ def find_probe_tables(fileobj: BinaryIO) -> list[TableCandidate]:
     }
 
     fileobj.seek(0)
-    from_code: set[str] = set()
-    from_types: set[str] = set()
-    with zipfile.ZipFile(fileobj) as zf:
-        for name, text in _iter_text_files(zf):
-            if not name.lower().endswith(_SOURCE_EXTS):
-                continue
-            for match in _FROM_CALL.finditer(text):
-                from_code.add(match.group(1).lower())
-            if _TYPES_MARKER in text:
-                for match in _TYPES_TABLE.finditer(text):
-                    from_types.add(match.group(1).lower())
+    named = read_named_tables(fileobj)
+    from_code, from_types = named.from_code, named.from_types
 
     candidates: list[TableCandidate] = []
     for name in sorted(set(from_sql) | from_code | from_types):
-        if name in _NOT_THEIRS or not _TABLE_NAME.fullmatch(name):
+        if not is_reportable(name):
             continue
         table = from_sql.get(name)
         where = []
