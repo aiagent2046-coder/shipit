@@ -121,7 +121,13 @@ def scan_schema_drift(fileobj: BinaryIO) -> list[CheckFinding]:
         # what the repository documents, which is a fact about the repository
         # and is why the confidence is not lower either.
         confidence=0.6 if from_types else 0.5,
-        category="Money & Data",
+        # Security, NOT "Money & Data". compute_scores(llm_ran=False) excludes
+        # LLM_ONLY_CATEGORIES from the mean and app/db.py lists them as
+        # `unexamined`, so a static finding filed there would not move the
+        # score AND would print under a heading saying nobody looked. The free
+        # tier is static-only and is the only thing most visitors ever see.
+        # app/scan/rls.py files under Security for the same reason.
+        category="Security",
         file=paths[0] if paths else "",
         explanation=_explain(from_types, from_code, named.has_dynamic_from),
         fix_hint=(
