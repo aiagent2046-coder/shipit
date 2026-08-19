@@ -128,13 +128,34 @@ jobs:
       # adds nine SC2312 findings that have nothing to do with this class of
       # bug, and a gate that fails for unrelated reasons is a gate people
       # start skipping.
+      # DO NOT REACH FOR apt UNLESS SOMETHING IS MISSING. This step used to
+      # run `apt-get update && apt-get install shellcheck` unconditionally. On
+      # 2026-08-19 the apt mirror stopped answering and the step hung twice in
+      # a row, on two different runners, nine minutes each — while `smoke` and
+      # `web-build`, the two workflows that touch no apt, passed on the same
+      # commit in under a minute. Every merge in the repository was blocked by
+      # a package manager fetching a binary the runner image already ships.
+      #
+      # The job's timeout-minutes: 30 does bound it, so this was never an
+      # infinite hang — but thirty minutes of yellow per attempt is a gate
+      # nobody can work with, and the failure it eventually reports has
+      # nothing to do with the change under test.
       - name: Lint shell scripts
         shell: bash
+        # A second bound, inside the job's own. The install is the only part
+        # of this workflow that talks to a third-party host, so it is the only
+        # part that can stall on one — and when it does, failing in three
+        # minutes tells you that much more usefully than failing in thirty.
+        timeout-minutes: 3
         run: |
           set -Eeuo pipefail
 
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
+          if ! command -v shellcheck > /dev/null; then
+            echo "shellcheck not in the runner image — installing"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq shellcheck
+          fi
+          shellcheck --version
 
           git ls-files -z '*.sh' | xargs -0 shellcheck \
             --severity=info \
