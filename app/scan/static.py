@@ -9,6 +9,7 @@ from app.scan.rls import scan_rls
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
+from app.scan.service_role import scan_service_role
 
 
 def run_static_scan(fileobj: BinaryIO) -> dict:
@@ -51,7 +52,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         findings.append(ScoredFinding(
             rule_id=c.rule_id, title=c.title, severity=c.severity,
             confidence=c.confidence, category=c.category, file=c.file,
-            explanation=c.explanation, fix_hint=c.fix_hint,
+            line=c.line, explanation=c.explanation, fix_hint=c.fix_hint,
+        ))
+
+    fileobj.seek(0)
+    for h in scan_service_role(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=h.rule_id, title=h.title, severity=h.severity,
+            confidence=h.confidence, category=h.category, file=h.file,
+            line=h.line, explanation=h.explanation, fix_hint=h.fix_hint,
         ))
 
     return {

@@ -42,6 +42,7 @@ from app.fixpack.rls_policy import PolicyProposal, migration_filename, propose_r
 from app.scan.rls import RULE_ID as RLS_RULE_ID
 from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
 from app.scan.rls import read_committed_sql
+from app.scan.service_role import RULE_ID as SERVICE_ROLE_RULE_ID
 from app.scan.sql_schema import parse_schema
 from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
 from app.scan.secrets import (
@@ -497,6 +498,21 @@ def _why_not_fixable(finding: dict) -> str:
             "repository which writes your app makes with the public key — "
             "enabling Row Level Security would stop those as well. The finding "
             "explains the change; it is deliberately yours to apply."
+        )
+    if rule_id == SERVICE_ROLE_RULE_ID:
+        # The temptation is a one-line substitution -- swap the key, done --
+        # and it would break every route it touched. The service-role client
+        # works without a caller; the user-scoped one needs that route's own
+        # JWT, and some of its queries deliberately cross users and must keep
+        # the admin client. Which is which is a reading of the route, not a
+        # find-and-replace, and getting it wrong here does not leave data
+        # exposed -- it takes the customer's app down.
+        return (
+            "Swapping the key is one line, but which of this route's queries "
+            "may run as the caller — and which genuinely have to cross users — "
+            "is a decision about your app that we cannot read off your code. "
+            "Getting it wrong breaks the route rather than leaving it open, so "
+            "the finding shows you where to look and the change stays yours."
         )
     return "Advisory findings: there is nothing in the code to rewrite."
 

@@ -22,6 +22,11 @@ class CheckFinding:
     confidence: float
     category: str
     file: str = ""
+    # Most checks here are about a file's EXISTENCE, so they have no line and
+    # leave this at 0. app/scan/service_role.py has one -- it points at the
+    # statement that reads the key -- and a finding that names a 400-line
+    # route file without saying where is a finding the owner has to re-find.
+    line: int = 0
     # Written for someone who shipped their first app and does not know the
     # jargon. The LLM findings already arrive with these filled in, and they
     # read well precisely because the model is told to describe a concrete
@@ -33,13 +38,29 @@ class CheckFinding:
     fix_hint: str = ""
 
 
-def _strip_root(names: list[str]) -> list[str]:
-    """Normalize single-root exports (Lovable/Bolt wrap in one folder)."""
+def archive_root(names: list[str]) -> str:
+    """The single wrapping directory an export uses, or "" when there is none.
+
+    A GitHub archive and a Lovable/Bolt export wrap everything in one folder;
+    a zip a customer made by hand often does not. Callers that strip that
+    segment UNCONDITIONALLY are wrong on the second kind, and wrong in a way
+    that hides: app/scan/service_role.py asks whether a path sits inside an
+    `app/` tree, and on a rootless archive the unconditional strip removed the
+    very segment it was about to look for, so every route went unreported and
+    the scan looked clean.
+    """
     tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
     if len(tops) == 1 and all("/" in n or n.endswith("/") for n in names):
-        root = next(iter(tops)) + "/"
-        return [n[len(root):] for n in names if n != root]
-    return names
+        return next(iter(tops)) + "/"
+    return ""
+
+
+def _strip_root(names: list[str]) -> list[str]:
+    """Normalize single-root exports (Lovable/Bolt wrap in one folder)."""
+    root = archive_root(names)
+    if not root:
+        return names
+    return [n[len(root):] for n in names if n != root]
 
 
 # Directories a package manager fills, which belong in .gitignore rather than

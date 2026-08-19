@@ -294,3 +294,117 @@ def test_a_predicated_sibling_IS_accepted_as_a_precedent() -> None:
     sibling, policy = found
     assert sibling.name == "messages"
     assert policy.name == "messages_select"
+
+
+# --- the table's own policy comes first -------------------------------------
+#
+# MEASURED 2026-08-19 on a real customer's repository, after a paid Fix Pack.
+# `avatar_interactions` already carried
+#
+#     CREATE POLICY "users see own interactions" ON public.avatar_interactions
+#       FOR SELECT USING ((select auth.uid()) = user_id);
+#
+# and was missing exactly one line: ALTER TABLE … ENABLE ROW LEVEL SECURITY,
+# without which a policy does not apply. The generator went straight to the
+# sibling search and proposed a policy scoped by `match_id` — readable by BOTH
+# participants of a match, on a table holding what a model concluded about one
+# founder for the other, `sentiment` among its columns.
+#
+# The customer was saved by the `if not exists` guard, which saw the existing
+# SELECT policy and created nothing. Being right by way of a guard written for
+# something else is not being right.
+
+OWN_POLICY = """
+create table public.matches (id uuid primary key);
+create table public.messages (
+  id uuid primary key,
+  match_id uuid references matches(id),
+  body text
+);
+alter table public.messages enable row level security;
+create policy "messages_select" on public.messages for select using (
+  EXISTS (SELECT 1 FROM matches m WHERE m.id = messages.match_id));
+
+create table public.avatar_interactions (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id),
+  match_id uuid not null references public.matches(id),
+  summary text,
+  sentiment text
+);
+create policy "users see own interactions" on public.avatar_interactions
+  for select using ((select auth.uid()) = user_id);
+"""
+
+
+def test_a_table_with_its_own_policy_only_needs_rls_switched_on() -> None:
+    result = propose_read_policy("avatar_interactions", parse_schema(OWN_POLICY))
+    assert isinstance(result, PolicyProposal)
+    assert result.enables_existing == "users see own interactions"
+    assert result.predicate == ""
+    assert "create policy" not in result.sql.lower()
+    assert "enable row level security" in result.sql.lower()
+
+
+def test_it_does_not_widen_what_the_author_already_wrote() -> None:
+    """THE ONE THAT MATTERS. A sibling scoped by `match_id` is right there and
+    would have been copied. Its predicate is wider than the author's own —
+    every participant of a match, rather than the row's owner."""
+    result = propose_read_policy("avatar_interactions", parse_schema(OWN_POLICY))
+    assert isinstance(result, PolicyProposal)
+    assert "match_id" not in result.sql
+    assert "messages" not in result.sql
+
+
+def test_an_unconditional_own_policy_does_not_count_as_protection() -> None:
+    """`USING (true)` applies to anon too, so switching RLS on beside it
+    changes nothing and the table stays open. Those must fall through to the
+    sibling search, where a real predicate can come from."""
+    schema = parse_schema(OWN_POLICY.replace(
+        "using ((select auth.uid()) = user_id)", "using (true)"))
+    result = propose_read_policy("avatar_interactions", schema)
+    assert isinstance(result, PolicyProposal)
+    assert result.enables_existing == ""
+    assert "create policy" in result.sql.lower()
+
+
+def test_a_table_with_rls_already_on_is_not_offered_an_enable() -> None:
+    """RLS on with a predicated read policy is the correct configuration, and
+    `anon_can_read` refuses it before this branch is reached. The control that
+    stops the new path from swallowing the old refusal."""
+    schema = parse_schema(OWN_POLICY + """
+        alter table public.avatar_interactions enable row level security;
+    """)
+    assert isinstance(propose_read_policy("avatar_interactions", schema),
+                      PolicyRefusal)
+
+
+def test_the_summary_says_what_it_actually_does() -> None:
+    """A Pack whose PR body says "policy copied from messages" while the SQL
+    only flips a switch describes a change the customer did not get."""
+    result = propose_read_policy("avatar_interactions", parse_schema(OWN_POLICY))
+    assert isinstance(result, PolicyProposal)
+    assert "existing policy" in result.summary
+    assert "users see own interactions" in result.summary
+
+
+def test_rls_already_on_beside_a_wide_policy_is_not_answered_with_enable() -> None:
+    """A table can be reachable WITH RLS on: a `USING (true)` policy leaves it
+    open, and a narrow policy sitting beside it changes nothing. Answering
+    that with "switch RLS on" proposes a migration that is already applied and
+    fixes nothing — the finding would clear and the hole would stay.
+
+    Written because mutation testing said so: deleting the `rls_enabled` guard
+    left every other test green, because the branch is only reachable through
+    this combination.
+    """
+    schema = parse_schema(OWN_POLICY + """
+        alter table public.avatar_interactions enable row level security;
+        create policy "oops_open" on public.avatar_interactions
+          for select using (true);
+    """)
+    result = propose_read_policy("avatar_interactions", schema)
+    # Whatever it answers, it must not be "just enable RLS" — that is done.
+    if isinstance(result, PolicyProposal):
+        assert result.enables_existing == ""
+        assert "create policy" in result.sql.lower()
