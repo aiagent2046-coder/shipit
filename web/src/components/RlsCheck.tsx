@@ -84,6 +84,15 @@ export function RlsCheck({
         most three rows from each. No value from those rows is stored or shown:
         the result records column names, a count, and lengths.
       </p>
+      {/* Named explicitly because the first customer to see this block went
+          looking for a field to paste their GitHub URL into. There is none —
+          the repository comes from the audit — and saying which one is being
+          read is a better answer than a field that should not exist. */}
+      <p className="mt-2 text-sm text-muted">
+        We work out which tables to ask about from{" "}
+        <span className="font-mono text-xs">{repoUrl}</span>, the repository
+        this audit ran on. Nothing to paste — we re-read it ourselves.
+      </p>
 
       {!result && (
         <div className="mt-4 space-y-3">
@@ -110,6 +119,7 @@ export function RlsCheck({
               type="text"
               value={phrase}
               onChange={(e) => setPhrase(e.target.value)}
+              placeholder={CONSENT_PHRASE}
               className="mt-1 w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-sm"
             />
           </label>
@@ -121,6 +131,22 @@ export function RlsCheck({
           >
             {running ? <Spinner /> : "Run the check"}
           </button>
+          {/* A disabled button with no reason is a dead end, and this one was:
+              the first customer to reach it typed their repository URL into
+              the confirmation field and had nothing telling them why nothing
+              happened. The phrase requirement stays — it is what makes consent
+              an act rather than a default — but it now says when it is unmet. */}
+          {!running && phrase.trim() !== CONSENT_PHRASE && (
+            <p className="text-xs text-muted">
+              {phrase.trim() === ""
+                ? <>Type <code className="font-mono">{CONSENT_PHRASE}</code> in the
+                   field above to enable the button. We ask for the words rather
+                   than a checkbox because this sends requests to your live
+                   database.</>
+                : <>That is not the confirmation phrase. Type{" "}
+                   <code className="font-mono">{CONSENT_PHRASE}</code> exactly.</>}
+            </p>
+          )}
         </div>
       )}
 
