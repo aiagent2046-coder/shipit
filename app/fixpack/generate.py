@@ -42,6 +42,7 @@ from app.fixpack.rls_policy import PolicyProposal, migration_filename, propose_r
 from app.scan.rls import RULE_ID as RLS_RULE_ID
 from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
 from app.scan.rls import read_committed_sql
+from app.scan.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
 from app.scan.service_role import RULE_ID as SERVICE_ROLE_RULE_ID
 from app.scan.sql_schema import parse_schema
 from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
@@ -513,6 +514,18 @@ def _why_not_fixable(finding: dict) -> str:
             "is a decision about your app that we cannot read off your code. "
             "Getting it wrong breaks the route rather than leaving it open, so "
             "the finding shows you where to look and the change stays yours."
+        )
+    if rule_id == CI_DEPLOY_RULE_ID:
+        # Which of the two repositories is the source of truth is a fact about
+        # how the owner's projects relate, and it is not in either of them.
+        # Guessing would either silently redirect a deployment or silently
+        # neuter one -- both worse than saying so.
+        return (
+            "Which repository this deployment should follow is a decision "
+            "about your projects, not something either of them states. "
+            "Pointing the deploy at the wrong one would redirect production, "
+            "so the finding shows you where to look and the change stays "
+            "yours."
         )
     return "Advisory findings: there is nothing in the code to rewrite."
 
