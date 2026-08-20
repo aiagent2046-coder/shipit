@@ -20,8 +20,6 @@ export function Header() {
               strokeLinecap="round"
               strokeLinejoin="round"
             >
-              {/* Graving-dock cross-section: a basin (U) cradling a hull
-                  raised on keel blocks — a ship in dry dock. */}
               <path d="M3 5v13h18V5" />
               <path d="M6.5 8h11l-2.2 5h-6.6z" />
               <path d="M10 13v5M14 13v5" />
@@ -29,12 +27,19 @@ export function Header() {
           </span>
           Drydock
         </Link>
-        <nav className="flex items-center gap-2 sm:gap-3">
+        <nav className="flex items-center gap-1 sm:gap-3">
           <Link
             href="/pricing"
-            className="rounded-md px-3 py-1.5 text-sm text-muted transition-colors hover:text-text"
+            className="rounded-md px-2 py-1.5 text-sm text-muted transition-colors hover:text-text sm:px-3"
           >
             Pricing
+          </Link>
+          <Link
+            href="/ru"
+            className="rounded-md px-2 py-1.5 text-sm text-muted transition-colors hover:text-text sm:px-3"
+            aria-label="Русская версия сайта"
+          >
+            RU
           </Link>
           <ApiKeyWidget />
           <ThemeToggle />
