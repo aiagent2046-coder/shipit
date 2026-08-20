@@ -63,11 +63,11 @@ export default function RussianHomePage() {
           aria-label="Оплата через Robokassa — официальный сайт платёжной системы"
         >
           <img
-            src="https://logo-teka.com/wp-content/uploads/2025/09/robokassa-logo.svg"
+            src="/robokassa-badge.svg"
             alt="Robokassa"
-            width="170"
-            height="40"
-            className="h-8 w-auto"
+            width="74"
+            height="42"
+            className="h-10 w-auto"
           />
           <span>Оплата через платёжную систему Robokassa</span>
         </a>
