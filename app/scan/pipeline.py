@@ -51,7 +51,18 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # byte-identical content recompute instead of reusing a now-stale row,
 # which is what stops an engine improvement (or bug fix) from being frozen
 # out by a result produced under the old engine.
-AUDIT_ENGINE_VERSION = "2026-08-18-1"
+# FOUR ENGINE CHANGES SHIPPED BEHIND A STALE STRING. Between 2026-08-18 and
+# 2026-08-20 the static stage gained schema_drift (#298), service_role (#299),
+# the sellability stamp (#305) and ci_deploy_source (#306). None of them
+# touched this constant, so every repository already in the cache kept being
+# served its pre-change result: a customer re-ran an audit after the deploy,
+# got a byte-identical report, and concluded the new rule did not work. It ran
+# nowhere, because the audit never ran at all.
+#
+# The comment above already said to bump it. Saying so is evidently not
+# enough — see tests/test_engine_version_pins_the_scanners.py, which fails
+# when the set of wired scanners changes and this string does not.
+AUDIT_ENGINE_VERSION = "2026-08-20-1"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
