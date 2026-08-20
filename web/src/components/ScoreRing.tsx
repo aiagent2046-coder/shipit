@@ -77,9 +77,29 @@ function GateNote({ reasons }: { reasons?: GateReason[] }) {
   // failing subscore's own value". That was the justification for printing
   // them, and it stopped being true when the bars became bands: a value whose
   // measured swing is 1.3 is not a number the reader needs, on any surface.
+  // The third route in, and the only one that can fire alone on a repository
+  // where every category is clean. "The audit found X" is the wrong frame for
+  // it: a critical says the code is dangerous, this says the report may not be
+  // about the code that runs. Kept as its own sentence for that reason — and
+  // because it is the reason a 9.8 with a green ring was misleading enough to
+  // need a gate at all.
+  const scope = reasons.filter((r) => r.kind === "unaudited_deployment");
+  const scopeNamed = [...new Set(scope.map((r) => r.title || r.rule_id))];
+
   return (
     <p className="mt-3 text-sm text-muted">
-      This score is capped because the audit found {parts.join(" and ")}.
+      {parts.length > 0 && (
+        <>This score is capped because the audit found {parts.join(" and ")}. </>
+      )}
+      {scope.length > 0 && (
+        <>
+          {parts.length > 0
+            ? "It is also capped because "
+            : "This score is capped because "}
+          the audit may not describe the code you actually run (
+          {scopeNamed.join(", ")}). A score is a statement about what we read.{" "}
+        </>
+      )}
       Categories are scored independently and can read higher than the total:
       the cap is on what the headline is allowed to claim while something
       disqualifying is open.

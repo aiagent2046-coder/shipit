@@ -244,3 +244,119 @@ def test_a_wrapping_folder_is_still_stripped() -> None:
     write and cannot find in their editor."""
     found = scan({"ai-co-founder-matching-87553a7/app/api/x/route.ts": ROUTE})
     assert [f.file for f in found] == ["app/api/x/route.ts"]
+
+
+# --- the key one import away, which is the ORDINARY shape -------------------
+#
+# MEASURED after shipping. On aiagent2046-coder/devtools-aggregator the rule
+# found NOTHING, and the repository is not innocent: 8 of its 16 routes reach
+# the admin client through `src/lib/supabase-admin.ts`, which holds
+# SUPABASE_SERVICE_ROLE_KEY. Factoring the admin client into a module is what
+# a tidy codebase does, and the first version of this rule treated it as a way
+# to disappear. The docstring called that a rare edge; the second real
+# repository it met was built that way.
+
+HELPER = """
+import { createClient } from '@supabase/supabase-js';
+let adminClient = null;
+export function getSupabaseAdmin() {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL,
+                      process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+"""
+
+VIA_HELPER = """
+import { getSupabaseAdmin } from '@/lib/supabase-admin';
+
+export async function GET() {
+  return Response.json(await getSupabaseAdmin().from('notes').select('*'));
+}
+"""
+
+
+def test_a_route_that_imports_the_key_holder_is_reported() -> None:
+    found = scan({"repo/src/lib/supabase-admin.ts": HELPER,
+                  "repo/src/app/api/notes/route.ts": VIA_HELPER})
+    assert [f.file for f in found] == ["src/app/api/notes/route.ts"]
+    assert "imports `supabase-admin`" in found[0].explanation
+
+
+def test_the_finding_is_filed_against_the_route_not_the_helper() -> None:
+    """The route is what is reachable over HTTP, and the route is what has to
+    change. Filing it against the helper would name a file that is doing
+    nothing wrong on its own — a module holding a key is how you are supposed
+    to hold one."""
+    found = scan({"repo/src/lib/supabase-admin.ts": HELPER,
+                  "repo/src/app/api/notes/route.ts": VIA_HELPER})
+    assert all("lib/" not in f.file for f in found)
+
+
+def test_the_line_points_at_the_import() -> None:
+    """The line in THIS file that puts the key on this route — actionable
+    without opening a second file."""
+    found = scan({"repo/src/lib/supabase-admin.ts": HELPER,
+                  "repo/src/app/api/notes/route.ts": VIA_HELPER})
+    assert found[0].line == 2
+
+
+def test_a_helper_nobody_reachable_imports_is_not_reported() -> None:
+    """The whole basis of the rule is that the file is reached over HTTP. A
+    module holding the key that only a seed script imports is the key being
+    used exactly as intended."""
+    assert scan({"repo/src/lib/supabase-admin.ts": HELPER,
+                 "repo/scripts/seed.ts": "import { getSupabaseAdmin } from '@/lib/supabase-admin';"}) == []
+
+
+def test_every_alias_scheme_resolves_to_the_same_module() -> None:
+    """`@/lib/x`, `~/lib/x` and `../../lib/x` are three ways to write one
+    import, and a project picks one. Matching on the final segment is what
+    makes the rule independent of which."""
+    for spec in ("@/lib/supabase-admin", "~/lib/supabase-admin",
+                 "../../lib/supabase-admin", "@/lib/supabase-admin.ts"):
+        found = scan({
+            "repo/src/lib/supabase-admin.ts": HELPER,
+            "repo/src/app/api/x/route.ts":
+                f"import {{ getSupabaseAdmin }} from '{spec}';\nexport async function GET() {{}}",
+        })
+        assert len(found) == 1, spec
+
+
+def test_a_route_importing_an_ordinary_module_is_not_reported() -> None:
+    """The import has to reach a module that actually holds the key. Without
+    that the rule degrades into "this route imports something"."""
+    assert scan({"repo/src/lib/format.ts": "export const f = (x) => x;",
+                 "repo/src/app/api/x/route.ts":
+                     "import { f } from '@/lib/format';\nexport async function GET() {}"}) == []
+
+
+def test_one_route_is_not_matched_to_another_by_basename() -> None:
+    """Why handlers are excluded from the helper index, and it is not tidiness.
+
+    The App Router names EVERY handler `route.ts`, so indexing handlers by
+    basename would file all of them under one key — and the next route to
+    import anything ending in `/route` would be told it holds a key that lives
+    in a different endpoint entirely. The basename shortcut is safe for `lib/`
+    modules, whose names differ, and unsafe here for a reason the framework
+    guarantees.
+    """
+    found = scan({
+        "repo/src/app/api/admin/route.ts":
+            "const k = process.env.SUPABASE_SERVICE_ROLE_KEY;\n"
+            "export async function GET() {}",
+        "repo/src/app/api/notes/route.ts":
+            "import { helper } from './route';\nexport async function GET() {}",
+    })
+    assert [f.file for f in found] == ["src/app/api/admin/route.ts"]
+
+
+def test_a_key_holder_inside_a_vendored_tree_is_not_indexed() -> None:
+    """A repository that commits node_modules would otherwise hand every
+    dependency to the helper index — and a dependency that reads a
+    service-role variable in its own examples would attach itself to any route
+    importing something of the same name."""
+    assert scan({
+        "repo/node_modules/some-dep/supabase-admin.ts":
+            "const k = process.env.SUPABASE_SERVICE_ROLE_KEY;",
+        "repo/src/app/api/x/route.ts":
+            "import { a } from '@/lib/supabase-admin';\nexport async function GET() {}",
+    }) == []

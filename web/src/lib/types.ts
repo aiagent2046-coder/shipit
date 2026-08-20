@@ -27,7 +27,11 @@ export const CATEGORY_NAMES = [
 // and the confidence floor, and a second copy of that rule will not stay in
 // agreement with the first.
 export interface GateReason {
-  kind: "subscore" | "critical";
+  // "unaudited_deployment" is the third route into the gate and the only
+  // one that is not a statement about the code: it says the report may not
+  // be about what runs. See SCOPE_INVALIDATING_RULE_IDS in
+  // app/scan/scoring.py.
+  kind: "subscore" | "critical" | "unaudited_deployment";
   category: string;
   value?: number; // subscore only
   rule_id?: string; // critical only

@@ -407,15 +407,39 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         # 7.4 and the gate compressed it, it did not clip it. A reader who
         # tries to reconcile the two numbers cannot, which is the same defect
         # the gate itself exists to remove, relocated into its explanation.
-        gate_note = (
-            f'<section><p class="secnote">This score cannot exceed '
-            f'{GATED_MAX:.1f} because the audit found {" and ".join(parts)}. '
+        # The third route into the gate does not fit "the audit found X", and
+        # forcing it there would misdescribe it. A critical says the code is
+        # dangerous; this says THE REPORT MAY NOT BE ABOUT THE RUNNING CODE.
+        # It gets its own sentence, and it is the only one that can appear
+        # alone -- a repository whose every category is clean still cannot
+        # present a passing headline when its own CI deploys something else.
+        scope = [r for r in score["gated_by"]
+                 if r.get("kind") == "unaudited_deployment"]
+        sentences = []
+        if parts:
+            sentences.append(
+                f'This score cannot exceed {GATED_MAX:.1f} because the audit '
+                f'found {" and ".join(parts)}.')
+        if scope:
+            named = ", ".join(sorted({escape(str(r.get("title") or
+                                                 r.get("rule_id")))
+                                      for r in scope}))
+            sentences.append(
+                f'This score cannot exceed {GATED_MAX:.1f} because the audit '
+                f'may not describe the code you actually run ({named}). A '
+                f'score is a statement about what we read, and this '
+                f'repository ships something else.'
+                if not parts else
+                f'It is held there for a second reason: the audit may not '
+                f'describe the code you actually run ({named}).')
+        sentences.append(
             f'The whole scale is compressed into that range rather than the '
             f'number being clipped to it, so two repositories that both fail '
             f'this check are still ranked against each other — which is why '
             f'the score can read well below {GATED_MAX:.1f}. Categories are '
-            f'scored independently and can read higher than the total.'
-            f'</p></section>'
+            f'scored independently and can read higher than the total.')
+        gate_note = (
+            f'<section><p class="secnote">{" ".join(sentences)}</p></section>'
         )
 
     header_left = f'<div class="ring">{total:.1f}</div>'

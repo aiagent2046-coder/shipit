@@ -62,7 +62,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # The comment above already said to bump it. Saying so is evidently not
 # enough — see tests/test_engine_version_pins_the_scanners.py, which fails
 # when the set of wired scanners changes and this string does not.
-AUDIT_ENGINE_VERSION = "2026-08-20-1"
+AUDIT_ENGINE_VERSION = "2026-08-20-2"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
