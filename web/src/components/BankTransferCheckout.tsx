@@ -11,7 +11,7 @@ import {
   reportBankTransferPaid,
 } from "@/lib/api";
 import { useApiKey } from "./providers";
-import { Field } from "./UsdtCheckout";
+import { Field } from "./Field";
 import { Spinner } from "./Spinner";
 import { SupportEmail } from "./SupportEmail";
 

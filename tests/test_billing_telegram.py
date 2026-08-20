@@ -17,7 +17,7 @@ import uuid
 import httpx
 
 from app.accounts import api_key_prefix
-from app.billing import telegram_stars, usdt_trc20
+from app.billing import deliver_key_once, telegram_stars
 from app.main import (
     app,
     get_account_repo,
@@ -420,14 +420,22 @@ async def test_rotatekey_no_account_returns_helpful_message():
     assert "sk_live_" not in _last_text(calls)
 
 
-# --- 6. /link USDT payment claiming ---
+# --- 6. /link payment claiming ---
+#
+# The fixtures below are USDT payments, and USDT is no longer a way to pay.
+# They are still the right fixture: /link's job is to hand over the key a
+# COMPLETED payment already bought, and a completed USDT invoice from before
+# the rail was withdrawn is exactly that -- someone's money, and a key they
+# have not collected. The lookup survived the removal deliberately; these
+# tests are what says it still works.
+
 
 async def _completed_usdt_payment(payments, accounts, tx_hash, *, chat_id=None):
-    """A credited USDT payment as the poller leaves it: status completed,
+    """A credited USDT payment as the poller left it: status completed,
     external_ref = tx hash, linked to a real account."""
     acct = await accounts.create(api_key="sk_live_usdtkey", tier="pro")
     row = await payments.create(
-        account_id=acct["id"], provider=usdt_trc20.PROVIDER,
+        account_id=acct["id"], provider=telegram_stars.RETIRED_USDT_PROVIDER,
         external_ref=tx_hash, amount=5.5, currency="USDT",
         status="completed", tier_granted="pro",
     )
@@ -472,18 +480,24 @@ async def test_link_is_idempotent_for_same_chat():
     assert accounts.rotations == [next(iter(accounts.by_id))]
 
 
-async def test_link_after_web_checkout_already_took_the_key():
-    """The two doors to one USDT payment. If the payer already saw the key on
-    the web checkout page, /link must not hand out a second one -- and must not
-    blow up reaching for a key that was never stored (the original bug: /link
-    read api_key straight off get_by_id)."""
+async def test_link_after_another_door_already_took_the_key():
+    """Two doors to one payment. If the key already went out somewhere else,
+    /link must not hand out a second one -- and must not blow up reaching for a
+    key that was never stored (the original bug: /link read api_key straight
+    off get_by_id).
+
+    The other door used to be the USDT invoice poll. That endpoint is gone, so
+    the test goes through deliver_key_once directly, which is what BOTH doors
+    always called: the one-shot claim is the invariant, not the endpoint that
+    happened to be on the other side of it."""
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
     acct, row = await _completed_usdt_payment(payments, accounts, "0xweb")
 
-    # The browser polled first and was handed the key.
-    web = await usdt_trc20.invoice_status(
-        payments, accounts, row["id"], address="T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb")
-    assert web["api_key"] is not None
+    # Somewhere else claimed the delivery first and was handed the key.
+    web_key = await deliver_key_once(
+        account_repo=accounts, payment_repo=payments, payment=row)
+    assert web_key is not None
+    web = {"api_key": web_key}
 
     result = await _send(_text_update("/link 0xweb", 777), accounts, payments, calls)
     assert result["result"] == "already_delivered"
@@ -523,13 +537,17 @@ async def test_link_pending_payment_reports_pending():
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
     # A payment row that carries the tx hash but isn't credited yet.
     await payments.create(
-        account_id=None, provider=usdt_trc20.PROVIDER, external_ref="0xpending",
+        account_id=None, provider=telegram_stars.RETIRED_USDT_PROVIDER, external_ref="0xpending",
         amount=5.5, currency="USDT", status="pending", tier_granted="pro",
     )
     result = await _send(_text_update("/link 0xpending", 444),
                          accounts, payments, calls)
     assert result["result"] == "pending"
-    assert "pending" in _last_text(calls).lower()
+    # It will never be confirmed now -- the poller that would have gone with
+    # the rail. The message must send the payer to a human rather than tell
+    # them to wait for something that is not coming.
+    text = _last_text(calls).lower()
+    assert "never confirmed" in text and "support" in text
 
 
 async def test_link_without_hash_shows_usage():

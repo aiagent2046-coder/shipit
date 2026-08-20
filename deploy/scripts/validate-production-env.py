@@ -23,9 +23,20 @@ from pathlib import Path
 # connection strings and base64 padding are full of them.
 GLUED_LINE = re.compile(r"^([A-Z][A-Z0-9_]{2,})=")
 
-# base58: no 0, O, I or l, so a transposed character is usually caught rather
-# than silently accepted. Mainnet addresses start with T and are 34 characters.
-TRON_ADDRESS = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+# Variables that configured a payment rail this product no longer has. Kept as
+# a list rather than deleted with the code, because the .env on a running host
+# is not rewritten by a deploy: these lines survive the removal, and a set value
+# reads to the operator as a live rail.
+RETIRED_RAIL_VARIABLES = (
+    "PAYPAL_CLIENT_ID",
+    "PAYPAL_CLIENT_SECRET",
+    "PAYPAL_ENV",
+    "PAYPAL_MONITOR_PLAN_ID",
+    "PAYPAL_WEBHOOK_ID",
+    "USDT_POLL_TOKEN",
+    "USDT_TRC20_ADDRESS",
+    "TRONGRID_API_KEY",
+)
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -150,9 +161,7 @@ def main() -> int:
             "BANK_TRANSFER_CARD", "BANK_TRANSFER_ACCOUNT",
         )
     )
-    rails_configured = bank_configured or bool(
-        values.get("USDT_TRC20_ADDRESS", "").strip()
-    )
+    rails_configured = bank_configured
 
     if rails_configured:
         for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_CHAT_ID",
@@ -172,12 +181,6 @@ def main() -> int:
             "AITUNNEL_API_KEY and AITUNNEL_BASE_URL must be configured together"
         )
 
-    if values.get("USDT_TRC20_ADDRESS", "").strip():
-        if not values.get("USDT_POLL_TOKEN", "").strip():
-            errors.append(
-                "USDT_POLL_TOKEN is required when USDT_TRC20_ADDRESS is configured"
-            )
-
     # Format checks. These never print the offending value: on 2026-08-02 an
     # error message that echoed USDT_TRC20_ADDRESS put a live bearer token --
     # which is what the variable wrongly held -- into the journal and into an
@@ -192,13 +195,19 @@ def main() -> int:
                 f"its own; both {name} and {glued.group(1)} are wrong"
             )
 
-    address = values.get("USDT_TRC20_ADDRESS", "").strip()
-    if address and not TRON_ADDRESS.match(address):
-        errors.append(
-            "USDT_TRC20_ADDRESS is not a TRON address (expected 'T' followed "
-            "by 33 base58 characters); every USDT payment silently stays "
-            "pending while this is wrong"
-        )
+    # A variable belonging to a rail that no longer exists. Not an error --
+    # a leftover line hurts nothing and refusing to boot over it would be an
+    # outage caused by tidiness -- but it must be SAID, because an operator who
+    # sees USDT_TRC20_ADDRESS in .env has every reason to believe that rail is
+    # live and that money sent to it will be noticed. It will not be. Nothing
+    # reads these any more.
+    for name in sorted(RETIRED_RAIL_VARIABLES):
+        if values.get(name, "").strip():
+            warnings.append(
+                f"{name} is set, but the payment rail it configured was "
+                "removed: nothing reads it, and money arriving on that rail "
+                "will not be seen by anything. Delete the line."
+            )
 
     database_url = values.get("DATABASE_URL", "").strip()
     if database_url and not database_url.startswith(("postgresql://", "postgres://")):

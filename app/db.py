@@ -318,35 +318,6 @@ async def bank_transfer_amount_lock():
     yield
 
 
-def usdt_poll_lock():
-    """The USDT poller's advisory lock, on a distinct key so it never serializes
-    against a Fix Pack or monitoring run (see _advisory_processor_lock).
-
-    Unlike those two, here the lock is not belt-and-suspenders -- it is the only
-    thing stopping a double grant. Both of them claim each unit of work atomically
-    first (claim_one_paid / claim_one_pending), so their lock merely makes "one run
-    at a time" explicit. The USDT poller has no such claim: it reads
-    get_by_external_ref, finds nothing, and only then creates an account and marks
-    the invoice completed. Two overlapping runs both pass that check and both
-    grant. The partial unique index on payments(provider, external_ref) does not
-    catch it either, because completing a USDT invoice is an UPDATE of the same
-    already-existing pending row (invoice_payment_id is known up front), not a
-    competing INSERT. The result is two pro accounts for one payment, the second
-    mark_completed overwriting the first's account_id, so the key the payer was
-    handed points at an orphaned account.
-
-    Concurrency does not need an overlapping timer to happen: /internal/billing/
-    poll-usdt is plain authenticated HTTP, reachable by an operator curl during a
-    scheduled run, by two app instances mid-deploy, or from a second host.
-
-    Trade-off, the same one the other two processors already accept: the lock holds
-    one of the pool's max_size=5 connections for the whole poller run, including
-    the TronGrid HTTP call (30s timeout in fetch_transfers). A slow poll therefore
-    ties a connection up for that long. The alternative -- no lock -- is
-    double-granting a paid account, which is worse."""
-    return _advisory_processor_lock(_USDT_POLL_LOCK_KEY)
-
-
 def _json_field(value: Any) -> Any:
     """jsonb columns: psycopg3 may hand back an already-parsed
     dict/list, or a raw string depending on codec registration --

@@ -38,12 +38,11 @@ import os
 import time
 import uuid
 
-import httpx
 import pytest
 
 import app.db as db_mod
 from app.accounts import api_key_prefix, generate_api_key
-from app.billing import bank_transfer, usdt_trc20
+from app.billing import bank_transfer
 from app.db import (
     AccountRepository,
     AuditRepository,
@@ -397,36 +396,15 @@ async def test_all_repository_write_paths(real_db):
     async with db_mod.monitoring_processor_lock():
         pass
 
-    # usdt_poll_lock: same round-trip. Its mutual-exclusion behaviour under real
-    # concurrency is a separate test below.
-    async with db_mod.usdt_poll_lock():
+    # fixpack_processor_lock: same round-trip. Its mutual-exclusion behaviour
+    # under real concurrency is a separate test below.
+    async with db_mod.fixpack_processor_lock():
         pass
 
 
-ADDRESS = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"  # checksum-valid, as in test_billing_usdt.py
-USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
-
-
-def _matching_transport(transfer: dict) -> httpx.MockTransport:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"success": True, "data": [transfer]})
-    return httpx.MockTransport(handler)
-
-
-def _forbidden_transport() -> httpx.MockTransport:
-    """Fails loudly if it is ever reached. Given to the callers that must be
-    locked out: fetch_transfers is the first thing poll_and_match does, so a
-    request arriving here means a contender got past the lock."""
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise AssertionError(
-            "locked-out poll reached TronGrid -- usdt_poll_lock did not hold"
-        )
-    return httpx.MockTransport(handler)
-
-
-async def test_usdt_poll_lock_second_caller_skipped(real_db):
-    """Three overlapping USDT polls on REAL Postgres: one runs, two are refused
-    and do nothing, and the one paid invoice yields exactly one pro account.
+async def test_processor_lock_second_caller_skipped(real_db):
+    """Three overlapping processor runs on REAL Postgres: one holds the lock,
+    two are refused and do nothing.
 
     This is the assertion a FakePool cannot make. `pg_try_advisory_lock` is a
     SESSION lock, so mutual exclusion depends on the callers holding DIFFERENT
@@ -434,69 +412,29 @@ async def test_usdt_poll_lock_second_caller_skipped(real_db):
     fake returning a canned {"locked": ...} proves only that the wrapper reads
     the column it was handed.
 
-    It matters more here than for the other two processors: they claim each unit
-    of work atomically first (claim_one_paid / claim_one_pending), so their lock
-    is belt-and-suspenders. The USDT poller has no such claim -- it reads
-    get_by_external_ref, finds nothing, then creates an account and completes the
-    invoice -- and the partial unique index on payments(provider, external_ref)
-    can't catch a second run either, because completing a USDT invoice UPDATEs
-    the same already-existing pending row rather than INSERTing a competing one.
-    Without this lock both contenders grant, the last mark_completed overwrites
-    account_id, and the account whose key the payer was handed is orphaned.
-
-    THREE concurrent callers, not more, deliberately: the winner holds one of the
-    pool's max_size=5 connections for its whole run and each contender takes
-    another, so a wider fan-out would exhaust the pool and fail for a reason that
-    has nothing to do with the lock.
-
-    The winner is pinned open with an event rather than by hoping asyncio
-    interleaves the three calls favourably: a plain gather could let it finish
-    first, after which the contenders would each acquire the free lock in turn
-    and the test would pass while proving nothing."""
-    payment_repo = PaymentRepository()
-    account_repo = AccountRepository()
-    run = uuid.uuid4().hex[:12]
-
-    # A pending Pro invoice at an amount no other pending row shares:
-    # poll_and_match keys pending invoices by exact micro-USDT, so a duplicate
-    # amount left behind by an earlier test would shadow this one in that dict.
-    amount = 5.0 + (int(run[:6], 16) % 999_999 + 1) / 1_000_000
-    invoice = await payment_repo.create(
-        account_id=None, provider=usdt_trc20.PROVIDER, external_ref=None,
-        amount=amount, currency=usdt_trc20.CURRENCY, status="pending",
-        tier_granted="pro", product=usdt_trc20.PRODUCT_PRO,
-    )
-    assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
-    tx_id = f"0xsmoke-lock-{run}"
-    transfer = {
-        "transaction_id": tx_id, "type": "Transfer", "from": "TSenderXYZ",
-        "to": ADDRESS, "value": str(usdt_trc20.amount_to_micros(amount)),
-        "token_info": {"symbol": "USDT", "address": USDT_CONTRACT, "decimals": 6},
-    }
-
+    It was written against usdt_poll_lock, where the lock was the only thing
+    standing between two polls and a double grant. That rail is gone; the lock
+    machinery is not, and the Fix Pack processor still depends on it. Retargeted
+    rather than deleted: the wrapper is what is under test, and it would have
+    lost its only real-concurrency coverage.
+    """
     holding = asyncio.Event()   # winner: "I hold the lock"
     release = asyncio.Event()   # driver: "the contenders have had their turn"
 
     async def winner():
-        async with db_mod.usdt_poll_lock():
+        async with db_mod.fixpack_processor_lock():
             holding.set()
             await asyncio.wait_for(release.wait(), timeout=30)
-            return await usdt_trc20.poll_and_match(
-                payment_repo, account_repo, address=ADDRESS,
-                transport=_matching_transport(transfer),
-            )
+            return "ran"
 
     async def contender():
         await holding.wait()      # only race once the lock is genuinely held
         try:
-            async with db_mod.usdt_poll_lock():
-                await usdt_trc20.poll_and_match(
-                    payment_repo, account_repo, address=ADDRESS,
-                    transport=_forbidden_transport(),
-                )
+            async with db_mod.fixpack_processor_lock():
                 return "acquired"
         except ProcessorLockBusy:
-            # Exactly what app.main.poll_usdt turns into {"skipped_locked": True}.
+            # Exactly what the processor endpoint turns into
+            # {"skipped_locked": True}.
             return "busy"
 
     async def drive():
@@ -506,32 +444,15 @@ async def test_usdt_poll_lock_second_caller_skipped(real_db):
         finally:
             release.set()
 
-    matched, contended = await asyncio.gather(winner(), drive())
+    ran, contended = await asyncio.gather(winner(), drive())
 
-    # Neither overlapping poll got in.
+    assert ran == "ran"
+    # Neither overlapping run got in.
     assert contended == ["busy", "busy"]
 
-    # The one caller that did get in completed the whole job.
-    assert matched["matched"] == 1
-    completed = await payment_repo.get(invoice["id"])
-    assert completed["status"] == "completed"
-    assert completed["external_ref"] == tx_id
-    assert completed["account_id"] is not None
-
-    # And the grant happened exactly once: one payment row bears this tx, and the
-    # account it points at is the pro account that was created for it.
-    granted = await account_repo.get_by_id(completed["account_id"])
-    assert granted is not None and granted["tier"] == "pro"
-    pool = await db_mod.get_pool()
-    async with pool.connection() as conn:
-        cur = await conn.execute(
-            "select count(*) as n from payments where external_ref = %s", (tx_id,)
-        )
-        assert (await cur.fetchone())["n"] == 1
-
-    # The winner's `finally` really did pg_advisory_unlock: the next timer firing
-    # must not be locked out forever by a finished run.
-    async with db_mod.usdt_poll_lock():
+    # The winner's `finally` really did pg_advisory_unlock: the next timer
+    # firing must not be locked out forever by a finished run.
+    async with db_mod.fixpack_processor_lock():
         pass
 
 
@@ -867,17 +788,18 @@ async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db):
     await fixpack_repo.mark_status(job["id"], "failed", "smoke cleanup")
 
 
-async def test_usdt_poll_lock_does_not_serialize_against_other_processors(real_db):
-    """The distinct key is load-bearing, on REAL Postgres: holding the USDT lock
-    must not block a Fix Pack or monitoring run. A shared key would silently
-    couple three independent schedulers -- a 30s TronGrid call would stall the
-    Fix Pack backlog, and each would report the other's work as skipped_locked.
-    Only real Postgres can show this, since the keys are only ever compared by
-    its lock manager."""
-    async with db_mod.usdt_poll_lock():
-        async with db_mod.fixpack_processor_lock():
-            pass
+async def test_the_processor_locks_do_not_serialize_against_each_other(real_db):
+    """The distinct keys are load-bearing, on REAL Postgres: holding one
+    processor's lock must not block another's. A shared key would silently
+    couple independent schedulers -- a long run on one would stall the other's
+    backlog, and each would report the other's work as skipped_locked. Only
+    real Postgres can show this, since the keys are only ever compared by its
+    lock manager."""
+    async with db_mod.fixpack_processor_lock():
         async with db_mod.monitoring_processor_lock():
+            pass
+    async with db_mod.bank_transfer_amount_lock():
+        async with db_mod.fixpack_processor_lock():
             pass
 
 

@@ -11,13 +11,10 @@ import type {
   BillingDetails,
   CreateAuditResponse,
   FixpackStatus,
-  FixpackUsdtInvoice,
   InstallationStatus,
   PersistedAudit,
   Pricing,
   RlsCheckResult,
-  UsdtInvoice,
-  UsdtInvoiceStatus,
 } from "./types";
 
 export const API_BASE_URL = (
@@ -188,32 +185,6 @@ export async function getAudit(
 export function reportUrl(id: string, token?: string | null): string {
   const q = token ? `?token=${encodeURIComponent(token)}` : "";
   return `${API_BASE_URL}/v1/audits/${encodeURIComponent(id)}/report${q}`;
-}
-
-export async function createUsdtInvoice(): Promise<UsdtInvoice> {
-  const res = await request(`${API_BASE_URL}/v1/billing/usdt/invoice`, {
-    method: "POST",
-  });
-  return parse<UsdtInvoice>(res);
-}
-
-export async function getUsdtInvoice(id: string): Promise<UsdtInvoiceStatus> {
-  const res = await request(
-    `${API_BASE_URL}/v1/billing/usdt/invoice/${encodeURIComponent(id)}`,
-  );
-  return parse<UsdtInvoiceStatus>(res);
-}
-
-// Open a USDT invoice to buy a Fix Pack for one specific audit. The returned
-// invoice is polled with getUsdtInvoice, exactly like the Pro invoice.
-export async function createFixpackUsdtInvoice(
-  auditId: string,
-): Promise<FixpackUsdtInvoice> {
-  const res = await request(
-    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/usdt-invoice`,
-    { method: "POST" },
-  );
-  return parse<FixpackUsdtInvoice>(res);
 }
 
 // Who the payer says they are. Both required by the backend: a card transfer

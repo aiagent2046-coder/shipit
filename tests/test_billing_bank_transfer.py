@@ -1200,7 +1200,13 @@ def test_pro_and_fixpack_share_one_invoice_budget(monkeypatch):
 def test_bank_transfer_refuses_when_nothing_is_auto_fixable(monkeypatch):
     """Same refusal on the card route. Three sell points grew independently
     and already duplicate the audit and repo_url gates, so the thing that
-    breaks is one of them being missed -- see #128."""
+    breaks is one of them being missed -- see #128.
+
+    THE OTHER TWO SELL POINTS ARE GONE. USDT and PayPal were removed as ways
+    to pay, and the four cases below came with the USDT route: they were the
+    only place each was checked. A gate is not tested because it is written
+    down three times; it is tested because some test exercises it. Moved here
+    rather than deleted with the endpoint that happened to host them."""
     _configure_bank(monkeypatch)
     payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
     audit = audits.add(findings=[
@@ -1215,5 +1221,78 @@ def test_bank_transfer_refuses_when_nothing_is_auto_fixable(monkeypatch):
         assert r.status_code == 409
         assert r.json()["detail"]["reason"] == "no_auto_fixable_findings"
         assert len(payments.rows) == 0
+    finally:
+        _clear()
+
+
+def test_fixpack_invoice_for_an_unknown_audit_is_404(monkeypatch):
+    """Nothing to sell against. A 404 rather than an invoice, because an
+    invoice opened against an audit that does not exist can be paid and can
+    never be fulfilled."""
+    _configure_bank(monkeypatch)
+    payments, audits = FakePaymentRepo(), FakeAuditRepo()
+    _override({get_payment_repo: payments, get_audit_repo: audits})
+    try:
+        r = client.post(
+            f"/v1/audits/{uuid.uuid4()}/fixpack/bank-transfer", json=PAYER)
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "audit_not_found"
+        assert len(payments.rows) == 0
+    finally:
+        _clear()
+
+
+def test_a_finding_only_in_a_comment_is_not_something_to_sell(monkeypatch):
+    """The seam with #132. That change stopped the Fix Pack from rewriting
+    comments; this one stops us charging for the rewrite it will not do."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(findings=[
+        {"rule_id": "aws-access-key-id", "file": "app.py", "line": 3,
+         "title": "AWS Access Key ID", "context": "comment"},
+    ])
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        r = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer", json=PAYER)
+        assert r.status_code == 409
+        assert len(payments.rows) == 0
+    finally:
+        _clear()
+
+
+def test_an_audit_with_no_findings_at_all_is_refused(monkeypatch):
+    """A clean repository. Nothing was found, so there is nothing to fix --
+    and this is the state a customer is most likely to try to buy from,
+    because a good score reads as 'everything is fine, but let me tidy up'."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(findings=[])
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        assert client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer",
+            json=PAYER).status_code == 409
+        assert len(payments.rows) == 0
+    finally:
+        _clear()
+
+
+def test_a_real_secret_is_still_sellable(monkeypatch):
+    """The boundary, and the reason the three refusals above are safe. A check
+    that refused everything would be worse than the bug it guards: it would
+    stop the product selling at all, on the one rail that still sells."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add()     # default fixture: a real secret
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        r = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer", json=PAYER)
+        assert r.status_code == 201
+        assert len(payments.rows) == 1
     finally:
         _clear()

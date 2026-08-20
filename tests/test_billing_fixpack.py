@@ -6,10 +6,14 @@ creates a paid `fixpack_jobs` row for the audit (generation is a separate
 follow-up). V1 offers it only for audits run from a GitHub URL (repo_url
 not null); a zip-upload audit has no repo to open a fix PR against.
 
-Same no-real-Telegram / no-real-chain / no-real-Postgres posture as
-tests/test_billing_telegram.py and tests/test_billing_usdt.py: Bot API and
-TronGrid calls are faked with httpx.MockTransport and the repositories are
-in-memory fakes.
+Same no-real-Telegram / no-real-Postgres posture as
+tests/test_billing_telegram.py: Bot API calls are faked with
+httpx.MockTransport and the repositories are in-memory fakes.
+
+THE USDT SELL POINT USED TO BE TESTED HERE. It is gone, and the four cases it
+carried alone -- unknown audit, a finding only in a comment, an audit with no
+findings, and the boundary that a real secret still sells -- moved to
+tests/test_billing_bank_transfer.py, which is where the surviving rail lives.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import uuid
 import httpx
 from fastapi.testclient import TestClient
 
-from app.billing import telegram_stars, usdt_trc20
+from app.billing import telegram_stars
 from app.db import STALE_LEASE_DETAIL_PREFIX
 from app.main import (
     app,
@@ -40,8 +44,6 @@ from tests.conftest import (
 
 client = TestClient(app)
 
-ADDRESS = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"
-USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 REPO_URL = "https://github.com/acme/widget"
 
 
@@ -154,21 +156,6 @@ def _telegram_transport(calls: list):
         calls.append((method, json.loads(request.content) if request.content else {}))
         return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
     return httpx.MockTransport(handler)
-
-
-def _trongrid_transport(transfers: list, *, success: bool = True):
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"success": success, "data": transfers})
-    return httpx.MockTransport(handler)
-
-
-def _transfer(value_micros: int, *, tx_id: str, to: str = ADDRESS):
-    return {
-        "transaction_id": tx_id, "type": "Transfer", "from": "TSenderXYZ",
-        "to": to, "value": str(value_micros),
-        "token_info": {"symbol": "USDT", "address": USDT_CONTRACT, "decimals": 6},
-        "block_timestamp": 1784040468000,
-    }
 
 
 def _text_update(text: str, chat_id: int = 555):
@@ -364,130 +351,6 @@ def _clear():
         app.dependency_overrides.pop(dep, None)
 
 
-def test_usdt_fixpack_invoice_github_audit(monkeypatch):
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    monkeypatch.delenv("FIXPACK_USDT_PRICE", raising=False)
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    audit = audits.add(repo_url=REPO_URL)
-    _override(audits=audits, payments=payments)
-    try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
-        assert r.status_code == 201
-        body = r.json()
-        assert body["address"] == ADDRESS
-        assert _TRON_ADDR_RE.match(body["address"])
-        assert body["audit_id"] == audit["id"]
-        # 12 USDT base price + sub-dollar nonce.
-        assert 12.0 <= body["amount"] < 13.0
-        # A pending fixpack payment row scoped to the audit was persisted.
-        row = next(iter(payments.rows.values()))
-        assert row["product"] == "fixpack"
-        assert row["audit_id"] == audit["id"]
-        assert row["status"] == "pending"
-    finally:
-        _clear()
-
-
-def test_usdt_fixpack_invoice_env_overrides_price(monkeypatch):
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    monkeypatch.setenv("FIXPACK_USDT_PRICE", "20")
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    audit = audits.add(repo_url=REPO_URL)
-    _override(audits=audits, payments=payments)
-    try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
-        assert r.status_code == 201
-        assert 20.0 <= r.json()["amount"] < 21.0
-    finally:
-        _clear()
-
-
-def test_usdt_fixpack_invoice_zip_audit_is_422(monkeypatch):
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    audit = audits.add(repo_url=None)
-    _override(audits=audits, payments=payments)
-    try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
-        assert r.status_code == 422
-        assert r.json()["detail"]["reason"] == "not_github_audit"
-        # No invoice/payment created.
-        assert payments.rows == {}
-    finally:
-        _clear()
-
-
-def test_usdt_fixpack_invoice_unknown_audit_is_404(monkeypatch):
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    _override(audits=audits, payments=payments)
-    try:
-        r = client.post(f"/v1/audits/{uuid.uuid4()}/fixpack/usdt-invoice")
-        assert r.status_code == 404
-        assert r.json()["detail"]["reason"] == "audit_not_found"
-    finally:
-        _clear()
-
-
-# =========================================================================
-# 4. USDT poll completing a fixpack invoice
-# =========================================================================
-
-async def test_usdt_poll_matches_fixpack_and_creates_job_not_account():
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    fixpacks, accounts = FakeFixpackRepo(), FakeAccountRepo()
-    audit = audits.add(stack="vite-react", repo_url=REPO_URL)
-
-    inv = await usdt_trc20.create_fixpack_invoice(
-        payments, address=ADDRESS, audit_id=audit["id"])
-    micros = usdt_trc20.amount_to_micros(inv["amount"])
-    transport = _trongrid_transport([_transfer(micros, tx_id="0xfixpack")])
-
-    result = await usdt_trc20.poll_and_match(
-        payments, accounts, address=ADDRESS, transport=transport,
-        fixpack_repo=fixpacks, audit_repo=audits)
-    assert result["matched"] == 1
-
-    # Invoice row completed, still no account.
-    row = payments.rows[inv["invoice_id"]]
-    assert row["status"] == "completed"
-    assert row["external_ref"] == "0xfixpack"
-    assert row["account_id"] is None
-    assert accounts.by_id == {}
-
-    # A paid fixpack job for the audit exists, with the audit's stack.
-    assert len(fixpacks.rows) == 1
-    job = fixpacks.rows[0]
-    assert job["audit_id"] == audit["id"]
-    assert job["status"] == "paid"
-    assert job["stack"] == "vite-react"
-
-
-async def test_usdt_poll_fixpack_is_idempotent():
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    fixpacks, accounts = FakeFixpackRepo(), FakeAccountRepo()
-    audit = audits.add(repo_url=REPO_URL)
-
-    inv = await usdt_trc20.create_fixpack_invoice(
-        payments, address=ADDRESS, audit_id=audit["id"])
-    micros = usdt_trc20.amount_to_micros(inv["amount"])
-    transport = _trongrid_transport([_transfer(micros, tx_id="0xsamefp")])
-
-    first = await usdt_trc20.poll_and_match(
-        payments, accounts, address=ADDRESS, transport=transport,
-        fixpack_repo=fixpacks, audit_repo=audits)
-    second = await usdt_trc20.poll_and_match(
-        payments, accounts, address=ADDRESS, transport=transport,
-        fixpack_repo=fixpacks, audit_repo=audits)
-    assert first["matched"] == 1
-    assert second["matched"] == 0        # same tx, already applied
-    assert len(fixpacks.rows) == 1       # no second job
-
-
-# =========================================================================
-# 5. GET /v1/audits/{audit_id}/fixpack-status — results-page poll target
-# =========================================================================
-
 def _override_status(*, audits, fixpacks):
     app.dependency_overrides[get_audit_repo] = lambda: audits
     app.dependency_overrides[get_fixpack_repo] = lambda: fixpacks
@@ -573,40 +436,14 @@ def test_fixpack_status_unknown_audit_is_404():
         _clear()
 
 
-def test_usdt_fixpack_invoice_refused_while_a_job_is_live(monkeypatch):
-    """The same sell-side refusal as the bank-transfer route, on the USDT one.
-
-    Worth having in both places rather than trusting the shared helper: the
-    three sell points grew independently (they already duplicate the audit and
-    repo_url gates), so the thing that breaks is one of them being missed when
-    a fourth provider is added.
-    """
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    fixpacks = FakeFixpackRepo()
-    audit = audits.add(repo_url=REPO_URL)
-    fixpacks.rows.append({
-        "id": str(uuid.uuid4()), "audit_id": audit["id"], "pack": "fixpack",
-        "stack": "fastapi", "status": "running", "verified": None,
-        "detail": None, "pr_url": None, "pr_delivered": False,
-        "created_at": datetime.datetime.now(datetime.timezone.utc),
-    })
-    _override(audits=audits, payments=payments)
-    app.dependency_overrides[get_fixpack_repo] = lambda: fixpacks
-    try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
-        assert r.status_code == 409
-        assert r.json()["detail"]["reason"] == "fixpack_already_in_progress"
-        assert payments.rows == {}
-    finally:
-        _clear()
-
-
 # --- refusing to sell what cannot be delivered ---
 #
 # Audit 05fa18f5 was sold a Fix Pack with zero fixable findings. The job ran,
 # found nothing, and the payer was charged for "Nothing to auto-fix". It was
 # computable before the sale, from the findings already on the audit.
+#
+# The per-rail refusals live with the rail (test_billing_bank_transfer.py).
+# What stays here is the answer the AUDIT gives the page, which no rail owns.
 
 
 ADVICE_ONLY = [
@@ -615,67 +452,6 @@ ADVICE_ONLY = [
     {"rule_id": "no-ci", "file": "", "line": 0, "title": "No CI",
      "context": None},
 ]
-
-
-def test_usdt_refuses_when_nothing_is_auto_fixable(monkeypatch):
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    audit = audits.add(repo_url=REPO_URL, findings=ADVICE_ONLY)
-    _override(audits=audits, payments=payments)
-    try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
-        assert r.status_code == 409
-        assert r.json()["detail"]["reason"] == "no_auto_fixable_findings"
-        assert payments.rows == {}
-    finally:
-        _clear()
-
-
-def test_a_finding_only_in_a_comment_is_not_something_to_sell(monkeypatch):
-    """The seam with #132. That change stopped the Fix Pack from rewriting
-    comments; this one stops us charging for the rewrite it will not do."""
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    audit = audits.add(repo_url=REPO_URL, findings=[
-        {"rule_id": "aws-access-key-id", "file": "app.py", "line": 3,
-         "title": "AWS Access Key ID", "context": "comment"},
-    ])
-    _override(audits=audits, payments=payments)
-    try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
-        assert r.status_code == 409
-    finally:
-        _clear()
-
-
-def test_a_real_secret_is_still_sellable(monkeypatch):
-    """The boundary. A check that refuses everything would be worse than the
-    bug: it would stop the product selling at all."""
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    audit = audits.add(repo_url=REPO_URL)     # default fixture: a real secret
-    _override(audits=audits, payments=payments)
-    try:
-        r = client.post(f"/v1/audits/{audit['id']}/fixpack/usdt-invoice")
-        assert r.status_code == 201
-    finally:
-        _clear()
-
-
-def test_an_audit_with_no_findings_at_all_is_refused(monkeypatch):
-    """A clean repository. Nothing was found, so there is nothing to fix --
-    and this is the state a customer is most likely to try to buy from,
-    because a good score reads as 'everything is fine, but let me tidy up'."""
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", ADDRESS)
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    audit = audits.add(repo_url=REPO_URL, findings=[])
-    _override(audits=audits, payments=payments)
-    try:
-        assert client.post(
-            f"/v1/audits/{audit['id']}/fixpack/usdt-invoice"
-        ).status_code == 409
-    finally:
-        _clear()
 
 
 def test_the_audit_response_tells_the_page_whether_to_offer_a_fix_pack():

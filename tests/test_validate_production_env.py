@@ -165,15 +165,20 @@ def test_the_ambient_environment_cannot_satisfy_a_check(
 def test_the_conditional_requirement_that_actually_broke(
     tmp_path, monkeypatch, capsys
 ):
-    """The exact pair from the outage: USDT_POLL_TOKEN is required only
-    because USDT_TRC20_ADDRESS is set, and it was the ambient copy that hid
-    its absence from the file."""
-    monkeypatch.setenv("USDT_POLL_TOKEN", "value-only-in-the-operators-shell")
+    """A requirement that exists only because another variable is set, hidden
+    by an ambient copy of the missing one.
+
+    The pair from the 2026-07-31 outage was USDT_POLL_TOKEN / USDT_TRC20_ADDRESS,
+    and that rail is gone. The SHAPE of the defect is not: the surviving
+    conditional is that configuring a payment rail requires a confirmation
+    path, and the same ambient shell can hide the same absence. Retargeted
+    rather than deleted -- the bug was never about USDT."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "value-only-in-the-operators-shell")
 
     assert _run(tmp_path, monkeypatch, {
-        **COMPLETE_ENV, "USDT_TRC20_ADDRESS": "TFakeAddressNotReal000000000000000",
+        **COMPLETE_ENV, "BANK_TRANSFER_CARD": "0000 0000 0000 0000",
     }) == 78
-    assert "USDT_POLL_TOKEN is required" in capsys.readouterr().err
+    assert "TELEGRAM_BOT_TOKEN is required" in capsys.readouterr().err
 
 
 def test_an_ambient_environment_cannot_turn_the_checks_on_either(
@@ -215,8 +220,9 @@ def test_a_complete_file_still_passes_with_a_hostile_environment(
     values must not break a valid file either. Only the file is read, so a
     shell exporting nonsense changes nothing."""
     monkeypatch.setenv("ENVIRONMENT", "development")
-    monkeypatch.setenv("PAYPAL_ENV", "live")          # would demand a webhook id
-    monkeypatch.setenv("USDT_TRC20_ADDRESS", "TFake000000000000000000000000000")
+    # Would demand TELEGRAM_BOT_TOKEN / _ADMIN_CHAT_ID / _WEBHOOK_SECRET if the
+    # script merged the shell into the file. It does not.
+    monkeypatch.setenv("BANK_TRANSFER_CARD", "0000 0000 0000 0000")
 
     assert _run(tmp_path, monkeypatch, COMPLETE_ENV) == 0
 
@@ -286,34 +292,38 @@ def test_a_lowercase_prefix_is_not_treated_as_a_glued_line(
     assert _run(tmp_path, monkeypatch, env) == 0
 
 
-def test_a_malformed_tron_address_is_refused(tmp_path, monkeypatch, capsys):
-    """Independently of the glue check: a transposed or truncated address is
-    still an address-shaped string that no check used to look at."""
-    env = dict(COMPLETE_ENV)
-    env["USDT_TRC20_ADDRESS"] = "TBTwuY1oQMLw2wxc3FWB8TFtu1dTnuv"  # 31 chars
-    env["USDT_POLL_TOKEN"] = "fake-usdt-token-not-real"
+def test_a_variable_for_a_removed_rail_is_named_out_loud(
+    tmp_path, monkeypatch, capsys,
+):
+    """A .env on a running host is not rewritten by a deploy. When USDT and
+    PayPal were removed, their lines stayed exactly where the operator put
+    them -- and a set USDT_TRC20_ADDRESS reads as a live rail to the person
+    who set it. Nothing reads it now, so money sent there is money nobody
+    sees.
 
-    assert _run(tmp_path, monkeypatch, env) == 78
-    assert "USDT_TRC20_ADDRESS is not a TRON address" in capsys.readouterr().err
-
-
-def test_a_well_formed_tron_address_passes(tmp_path, monkeypatch):
-    """The address restored from backup on 2026-08-02. It is a public
-    receiving address, not a secret."""
+    A WARNING, not an error, and the boundary matters: refusing to boot over a
+    leftover line would turn tidiness into an outage. It has to be said, not
+    enforced."""
     env = dict(COMPLETE_ENV)
     env["USDT_TRC20_ADDRESS"] = "TBTwuY1oQMLw2wxc3FWB8TFtu1dTnuvZuf"
-    env["USDT_POLL_TOKEN"] = "fake-usdt-token-not-real"
-    # Setting an address configures a payment rail, which now also requires a
-    # confirmation path. Added so this keeps testing the address FORMAT rather
-    # than tripping a rule it says nothing about -- and so a green result here
-    # means the format passed, not that nothing else was checked.
-    env.update({
-        "TELEGRAM_BOT_TOKEN": "000:fake-bot-token",
-        "TELEGRAM_ADMIN_CHAT_ID": "12345",
-        "TELEGRAM_WEBHOOK_SECRET": "fake-webhook-secret",
-    })
 
     assert _run(tmp_path, monkeypatch, env) == 0
+
+    err = capsys.readouterr().err
+    assert "USDT_TRC20_ADDRESS is set" in err
+    assert "will not be seen by anything" in err
+
+
+def test_an_empty_line_for_a_removed_rail_says_nothing(tmp_path, monkeypatch, capsys):
+    """The boundary. An operator who cleared the value has already done the
+    thing the warning asks for; repeating it every boot trains the reader to
+    scroll past the whole block."""
+    env = dict(COMPLETE_ENV)
+    env["USDT_TRC20_ADDRESS"] = ""
+    env["PAYPAL_CLIENT_ID"] = "   "
+
+    assert _run(tmp_path, monkeypatch, env) == 0
+    assert "USDT_TRC20_ADDRESS is set" not in capsys.readouterr().err
 
 
 def test_no_check_ever_prints_the_value_it_rejected(

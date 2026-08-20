@@ -43,11 +43,16 @@ RETIRED_ENDPOINTS = [
     ("GET", "/v1/paypal/orders/ORDER-1"),
     ("POST", "/v1/paypal/subscriptions"),
     ("POST", "/v1/webhooks/paypal"),
+    ("POST", "/v1/billing/usdt/invoice"),
+    ("GET", "/v1/billing/usdt/invoice/INV-1"),
+    ("POST", "/v1/audits/00000000-0000-0000-0000-000000000000/fixpack/usdt-invoice"),
+    ("POST", "/internal/billing/poll-usdt"),
 ]
 
 RETIRED_MODULES = [
     "app.billing.paypal",
     "app.routes.paypal",
+    "app.billing.usdt_trc20",
 ]
 
 

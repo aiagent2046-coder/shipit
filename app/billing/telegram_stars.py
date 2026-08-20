@@ -67,6 +67,11 @@ edit_message_text = tg.edit_message_text
 PROVIDER = "telegram_stars"
 CURRENCY = "XTR"
 
+# The provider string USDT/TRC20 rows carry. That rail is gone, but /link still
+# reads the books under this name: a completed invoice is a payment someone
+# made, and the key it bought is still theirs to collect.
+RETIRED_USDT_PROVIDER = "usdt_trc20"
+
 # Price of the pro tier, in Stars. Env-overridable so it can be tuned
 # without a code change; a plain constant default keeps it configured-out
 # of the box. Stars are whole units -- `amount` in a LabeledPrice is the
@@ -422,7 +427,7 @@ async def handle_update(
         Fix Pack scoped to that audit (GitHub-URL audits only).
       * message.text "/mykey" -> resend the delivery message for the
         account already linked to this chat_id (key recovery).
-      * message.text "/link <tx_hash>" -> a USDT payer claims a credited
+      * message.text "/link <reference>" -> a payer claims a credited
         on-chain payment by its tx hash, linking it to this chat_id so
         /mykey can recover it thereafter.
     """
@@ -697,11 +702,9 @@ _NO_ACCOUNT_TEXT = (
     "If you paid with Telegram Stars, your key is linked automatically at "
     "purchase — if you don't see it, make sure you're messaging from the "
     "same Telegram account you paid with.\n\n"
-    "If you paid with USDT (TRC20), send `/link <tx_hash>` with your "
-    "payment's transaction hash to link it to this chat, then run /mykey "
-    "again.\n\n"
-    "If you paid by bank transfer, send `/link DRY-XXXXXX` with the reference "
-    "code from the payment page instead."
+    "If you paid by bank transfer, send `/link DRY-XXXXXX` with the "
+    "reference code from the payment page to link it to this chat, then run "
+    "/mykey again."
 )
 
 
@@ -1209,7 +1212,7 @@ async def _handle_link(
     # a different one (enforced atomically in
     # PaymentRepository.link_telegram_chat_id's WHERE clause). This is an
     # accepted MVP-level residual risk, not a bug to eliminate here.
-    from app.billing import bank_transfer, usdt_trc20
+    from app.billing import bank_transfer
 
     chat_id = message["chat"]["id"]
     parts = text.split(maxsplit=1)
@@ -1217,9 +1220,8 @@ async def _handle_link(
     if not claim:
         await send_message(
             chat_id,
-            "Usage: `/link <tx_hash>` — the transaction hash of your USDT "
-            "(TRC20) payment, or `/link DRY-XXXXXX` — the reference code of "
-            "your bank transfer.",
+            "Usage: `/link DRY-XXXXXX` — the reference code of your bank "
+            "transfer.",
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "link", "result": "missing_hash"}
@@ -1240,15 +1242,22 @@ async def _handle_link(
             "please retry `/link` later."
         )
     else:
-        provider = usdt_trc20.PROVIDER
+        # USDT/TRC20 was removed as a way to pay, and its poller with it. A
+        # completed invoice from before the removal is still a payment someone
+        # made, and /link is how they collect the key it bought -- so the
+        # LOOKUP stays. What changes is that nothing can move an invoice to
+        # completed any more, so a pending one will stay pending forever and
+        # must be told to ask a human rather than to wait for a poller.
+        provider = RETIRED_USDT_PROVIDER
         not_found_text = (
-            "That transaction hash wasn't found. If you just sent the "
-            "payment, the poller runs on an interval — wait a few minutes "
-            "and try `/link` again."
+            "That transaction hash wasn't found. USDT (TRC20) is no longer a "
+            "way to pay here. If you paid before it was withdrawn and your "
+            "key never arrived, email support with the hash."
         )
         pending_text = (
-            "That payment is still pending confirmation. The poller runs on "
-            "an interval — please retry `/link` shortly."
+            "That payment was never confirmed, and USDT (TRC20) has since "
+            "been withdrawn — nothing will confirm it now. Email support with "
+            "the transaction hash and we will sort it out by hand."
         )
 
     row = await payment_repo.get_by_external_ref(provider, claim)
@@ -1313,7 +1322,7 @@ async def _handle_link(
         )
         return {"ok": True, "handled": "link", "result": "already_claimed"}
 
-    # /link and the web checkout's invoice poll are two doors to the same USDT
+    # /link and the web checkout's invoice poll are two doors to the same
     # payment, and the key it grants exists in neither place: the poller that
     # granted it discarded the plaintext. So both doors go through the one
     # delivery claim -- whichever the payer reaches first mints and hands over
