@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import BinaryIO
 
 from app.scan.checks import run_checks
+from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.rls import scan_rls
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
@@ -53,6 +54,14 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=c.rule_id, title=c.title, severity=c.severity,
             confidence=c.confidence, category=c.category, file=c.file,
             line=c.line, explanation=c.explanation, fix_hint=c.fix_hint,
+        ))
+
+    fileobj.seek(0)
+    for d in scan_ci_deploy_source(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=d.rule_id, title=d.title, severity=d.severity,
+            confidence=d.confidence, category=d.category, file=d.file,
+            line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
         ))
 
     fileobj.seek(0)
