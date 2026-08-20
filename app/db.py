@@ -1229,11 +1229,18 @@ REAL_PR_URL = r"^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$"
 
 class FixOutcomeRepository:
     """The fix-outcome knowledge base (migration 0014). One row per terminal
-    Fix Pack job outcome; collection only, nothing reads it for decisions yet
-    (see PHASE_B_KNOWLEDGE_BASE_PLAN.md). Same real/fake split and
-    not-configured contract as the other repositories: when DATABASE_URL isn't
-    set, record()/set_pr_merged_by_pr_url() no-op instead of failing, so the
-    Fix Pack delivery path never breaks over a missing analytics store."""
+    Fix Pack job outcome.
+
+    It was collection-only from 0014 until 2026-08-20 -- the plan said so
+    explicitly, and PHASE_B_KNOWLEDGE_BASE_PLAN.md is where. `get_by_job` is
+    the first read that DECIDES anything: app/fixpack/merit.py asks it whether
+    a Fix Pack did what it was sold as, so a refund is a decision with a record
+    behind it rather than a matter of belief.
+
+    Same real/fake split and not-configured contract as the other
+    repositories: when DATABASE_URL isn't set, record()/
+    set_pr_merged_by_pr_url() no-op instead of failing, so the Fix Pack
+    delivery path never breaks over a missing analytics store."""
 
     async def record(
         self, *, fixpack_job_id: str | None, audit_id: str | None,
@@ -1267,6 +1274,43 @@ class FixOutcomeRepository:
             )
             row = await cur.fetchone()
         return _row_to_fix_outcome(row)
+
+    async def get_by_job(self, fixpack_job_id: str) -> dict[str, Any] | None:
+        """The terminal outcome recorded for one Fix Pack job, or None.
+
+        Written for app/fixpack/merit.py, which is the first thing to READ this
+        table for a decision. The class docstring above said "collection only,
+        nothing reads it for decisions yet" from migration 0014 until now; the
+        rows were always the evidence for "did this Fix Pack do what it was
+        sold as", and the only reason nobody asked was that asking meant
+        reading four tables by hand.
+
+        Newest first. A job has one terminal outcome, but `record` has no
+        uniqueness constraint behind it -- a retried worker could write two --
+        and in that case the later one is the one that describes how it ended.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(fixpack_job_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, fixpack_job_id, audit_id, rule_ids, stack,
+                       outcome, is_regression, pr_url, pr_merged,
+                       created_at, updated_at
+                from fix_outcomes where fixpack_job_id = %s
+                order by created_at desc
+                limit 1
+                """,
+                (parsed_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_fix_outcome(row) if row else None
 
     async def learning_readiness(
         self, *, min_labelled: int, min_audits: int,

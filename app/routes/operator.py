@@ -30,6 +30,7 @@ from app.db import (
     PaymentRepository,
 )
 from app.deploypack.preview import PreviewRegistry
+from app.fixpack.merit import UNDETERMINED, Reason, Verdict, assess
 from app.routes._shared import (
     _json_object_body,
     _require_bearer_token,
@@ -298,11 +299,76 @@ def _spend_view(spend: dict) -> dict:
 
 
 
+@router.get("/internal/payments/{payment_id}/fixpack-merit")
+async def fixpack_merit(
+    payment_id: str,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
+) -> dict:
+    """Did the Fix Pack this payment bought do what it was sold as?
+
+    Requires `Authorization: Bearer <SERVICE_FLAGS_TOKEN>`, the same operator
+    credential the refund endpoint takes -- this reads a customer's purchase
+    history and belongs to the same audience.
+
+    READ THIS BEFORE USING THE ANSWER. It is not a "was the customer right to
+    complain" check, and app/fixpack/merit.py explains at length why that
+    distinction is the whole design. `owed` means OUR OWN RECORDS show the Fix
+    Pack did not deliver what it was sold as -- refund without argument.
+    `undetermined` is the common answer and stays a real one. Nothing here can
+    deny a refund; the mechanism exists to find the cases where we are at
+    fault, not to catch a customer lying.
+
+    Deliberately GET and deliberately side-effect free. The verdict is
+    something to consult BEFORE deciding, so it must be safe to ask twice, and
+    asking must not record anything about a refund that has not happened.
+
+    404 when there is no such payment.
+    """
+    token = _service_flags_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "SERVICE_FLAGS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    try:
+        uuid.UUID(payment_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request", "detail": "payment_id must be a UUID"},
+        )
+
+    payment = await payment_repo.get(payment_id)
+    if payment is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found", "detail": "no payment with that id"},
+        )
+
+    verdict = await assess_payment(
+        payment, fixpack_repo=fixpack_repo, outcome_repo=outcome_repo)
+    return {
+        "payment_id": str(payment["id"]),
+        "audit_id": payment.get("audit_id"),
+        "status": payment.get("status"),
+        "refunded_at": payment.get("refunded_at"),
+        **verdict.as_dict(),
+    }
+
+
 @router.post("/internal/payments/{payment_id}/refund")
 async def refund_payment(
     payment_id: str,
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
     # The same outbound seam the bot uses. Named for billing because that is
     # where it started; what it is, is "the transport the tests replace", and
     # telling a customer about their refund needs exactly that.
@@ -391,7 +457,61 @@ async def refund_payment(
         )
 
     delivery = await _tell_them_about_the_refund(payment, transport=transport)
-    return {**payment, "notified": list(delivery.delivered)}
+    # Wrapped HERE and deliberately not in the GET next door. The record of the
+    # refund is this endpoint's whole product, and it is already written by the
+    # time we get here; letting an unreachable analytics table raise would turn
+    # a completed refund into a 500 that gets retried. The GET is the opposite
+    # case -- the operator asked for the verdict and nothing else, so a failure
+    # there must surface rather than answer "undetermined" and be believed.
+    try:
+        verdict = await assess_payment(
+            payment, fixpack_repo=fixpack_repo, outcome_repo=outcome_repo)
+    except Exception:  # noqa: BLE001
+        logger.warning("could not assess the Fix Pack behind a refund",
+                       exc_info=True)
+        verdict = Verdict(UNDETERMINED, (Reason(
+            "assessment_unavailable",
+            "The Fix Pack records could not be read while recording this "
+            "refund. The refund itself is recorded; ask again on the "
+            "fixpack-merit endpoint.",
+        ),))
+    return {
+        **payment,
+        "notified": list(delivery.delivered),
+        "fixpack_merit": verdict.as_dict(),
+    }
+
+
+async def assess_payment(
+    payment: dict, *, fixpack_repo, outcome_repo,
+) -> Verdict:
+    """What our own records say about the Fix Pack this payment bought.
+
+    Returns UNDETERMINED with a reason for anything that is not a Fix Pack
+    purchase, rather than inventing a verdict about a Pro subscription. The
+    caller renders `reasons` next to the number, the same way the score does:
+    a conclusion with nothing attached is an authority nobody can check.
+    """
+    if (payment.get("product") or "") != "fixpack":
+        return Verdict(UNDETERMINED, (Reason(
+            "not_a_fixpack",
+            "This payment did not buy a Fix Pack, so there is no generated "
+            "work to judge.",
+        ),))
+
+    audit_id = payment.get("audit_id")
+    if not audit_id:
+        return Verdict(UNDETERMINED, (Reason(
+            "no_audit",
+            "This Fix Pack payment carries no audit id, so the job it paid "
+            "for cannot be found.",
+        ),))
+
+    job = await fixpack_repo.get_by_audit(str(audit_id))
+    outcome = None
+    if job is not None:
+        outcome = await outcome_repo.get_by_job(str(job["id"]))
+    return assess(job=job, outcome=outcome)
 
 
 def _refund_body(payment: dict) -> str:

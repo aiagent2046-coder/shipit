@@ -205,6 +205,29 @@ async def test_all_repository_write_paths(real_db):
     assert outcome is not None
     assert outcome["rule_ids"] == ["SEC001", "CFG002"]  # jsonb array round-trip
     assert outcome["pr_merged"] is None
+
+    # get_by_job: the first read of this table that DECIDES anything. From
+    # migration 0014 until 2026-08-20 nothing read fix_outcomes at all --
+    # "collection only, nothing reads it for decisions yet" is what its
+    # docstring said -- so this SELECT has never run against real Postgres
+    # before, jsonb round-trip of rule_ids included. app/fixpack/merit.py
+    # treats that column as a list, and a str would make every verdict wrong
+    # in the direction of "it fixed nothing".
+    by_job = await outcome_repo.get_by_job(job_id)
+    assert by_job is not None, "the outcome just recorded is not readable back"
+    assert isinstance(by_job["rule_ids"], list)
+    assert by_job["rule_ids"] == ["SEC001", "CFG002"]
+    assert by_job["is_regression"] is False
+
+    # The verdict an operator would see, computed from the real rows rather
+    # than from a dict a test wrote.
+    from app.fixpack.merit import DELIVERED, assess
+    verdict = assess(job=await fixpack_repo.get(job_id), outcome=by_job)
+    assert verdict.conclusion == DELIVERED
+    assert any("SEC001" in r.detail for r in verdict.reasons)
+
+    assert await outcome_repo.get_by_job(str(uuid.uuid4())) is None
+    assert await outcome_repo.get_by_job("not-a-uuid") is None
     updated = await outcome_repo.set_pr_merged_by_pr_url(pr_url, True)
     assert updated == 1  # rowcount of the matched delivered outcome
 
