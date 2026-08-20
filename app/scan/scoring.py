@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.scan.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
+
 SEVERITY_WEIGHT = {"critical": 2.0, "high": 1.0, "medium": 0.4, "low": 0.1}
 
 # Only categories a producer can actually assign. "Correctness" and "Config"
@@ -195,6 +197,25 @@ def _score(findings: list[ScoredFinding]) -> float:
 # follow-on to this one: it would need re-measuring against the stored audits
 # the way GATE_ON_CRITICAL was, since a fourth gated category moves every
 # repository that currently passes.
+# Findings that do not say the repository is bad — they say THIS REPORT IS NOT
+# ABOUT THE RUNNING CODE. Nothing in the rest of this module can express that:
+# every other mechanism here is a penalty inside a category, and a penalty
+# averages away.
+#
+# MEASURED, which is why it exists. donjonson-hash/devtools-aggregator carries
+# `ci-deploys-a-different-repository` at high/0.8 — its CI builds the audited
+# repository and then resets the server to somebody else's. That is one high
+# finding in Deploy, so Deploy fell to ~9.1, five other categories stayed at
+# 10.0, and the headline moved 9.9 -> 9.8 with the ring still green. The owner
+# reads a pass over a report that says, in its own words, that it describes
+# code their users never run.
+#
+# A category penalty is the wrong instrument for a claim about the report's
+# own scope. The gate is the right one: it already exists to stop a flattering
+# headline, it publishes its reason beside the number, and it scales rather
+# than clamps so ordering survives.
+SCOPE_INVALIDATING_RULE_IDS = frozenset({CI_DEPLOY_RULE_ID})
+
 GATED_CATEGORIES = ("Security", "Auth", "Money & Data")
 
 # Set at 7.0 because that is where these subscores stop meaning "some issues"
@@ -294,6 +315,11 @@ def _gate_reasons(by_cat: dict[str, float], counted: list[str],
         {"kind": "critical", "category": f.category, "rule_id": f.rule_id,
          "title": f.title}
         for f in _gating_criticals(findings, counted)
+    ]
+    reasons += [
+        {"kind": "unaudited_deployment", "category": f.category,
+         "rule_id": f.rule_id, "title": f.title}
+        for f in findings if f.rule_id in SCOPE_INVALIDATING_RULE_IDS
     ]
     return reasons
 

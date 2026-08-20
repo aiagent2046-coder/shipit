@@ -35,6 +35,17 @@ fires on about a third.
 scripts, edge functions, admin tooling. Every one would be a false positive
 without is_request_handler(); the filter is doing more work than the match.
 
+THE KEY IS OFTEN ONE IMPORT AWAY, and the first version of this rule missed
+every such route. MEASURED on aiagent2046-coder/devtools-aggregator, the
+second real repository it met: the rule found NOTHING there, while 8 of the
+16 routes reach the admin client through `src/lib/supabase-admin.ts`, which
+holds SUPABASE_SERVICE_ROLE_KEY. Factoring an admin client into a module is
+what a tidy codebase does — it must not be what makes the finding disappear.
+So a handler is reported when it reads the key ITSELF or when it imports a
+module that does, and the finding is filed against the ROUTE either way: the
+route is what is reachable, and a module holding a key is how you are
+supposed to hold one.
+
 WHAT THE FINDING CLAIMS, and the wording is bounded by this. It claims a fact
 that is fully readable from the repository: this file is reached over HTTP and
 it names the credential that bypasses every Row Level Security policy in the
@@ -181,6 +192,85 @@ def service_role_env_reads(text: str) -> list[tuple[str, int]]:
     return list(seen.items())
 
 
+# What a module is imported AS. Covers ESM (`from '@/lib/db'`), dynamic
+# import and CommonJS require; the captured specifier is reduced to its final
+# segment because that is the only part that survives every alias scheme a
+# project might use (`@/lib/x`, `~/lib/x`, `../../lib/x` all end in `x`).
+_IMPORT_SPECIFIER = re.compile(
+    r"""(?:\bfrom|\brequire\s*\(|\bimport\s*\()\s*["'`]([^"'`\n]+)["'`]""")
+
+# Vendored or generated trees. A repository that commits node_modules would
+# otherwise have every dependency read looking for a helper.
+_SKIP_DIRS = ("node_modules/", "/node_modules/", ".next/", "dist/", "build/",
+              "vendor/", "coverage/", ".venv/")
+
+# Enough to cover a large app without turning one scan into a directory walk
+# of somebody's committed dependencies.
+_MAX_MODULES_READ = 1500
+
+
+def _key_holding_modules(fileobj: BinaryIO) -> dict[str, tuple[str, int]]:
+    """module basename -> (env var, line) for non-handler files holding a key.
+
+    Keyed by basename rather than by path because that is what an import can
+    be matched on without resolving `@/`, `~/`, tsconfig paths and relative
+    walks — four alias schemes, any of which a project may use, none of which
+    is in the archive in a form this can read.
+
+    The cost of the shortcut is stated rather than hidden: two modules with
+    the same basename are not told apart. The claim that survives it is still
+    "a handler imports a module that holds the service-role key", which is
+    the claim the finding makes.
+    """
+    holders: dict[str, tuple[str, int]] = {}
+    fileobj.seek(0)
+    with zipfile.ZipFile(fileobj) as zf:
+        root = archive_root(zf.namelist())
+        read = 0
+        for info in zf.infolist():
+            if info.is_dir() or read >= _MAX_MODULES_READ:
+                continue
+            rel = info.filename[len(root):] if root else info.filename
+            lowered = rel.lower()
+            if not lowered.endswith(_SOURCE_EXTS):
+                continue
+            if any(skip in f"/{lowered}" for skip in _SKIP_DIRS):
+                continue
+            if is_request_handler(rel) or is_request_handler(info.filename):
+                continue
+            if any(part in f"/{lowered}" for part in _TEST_DIR_PARTS):
+                continue
+            try:
+                text = zf.read(info).decode("utf-8", errors="replace")
+            except Exception:                                  # noqa: BLE001
+                continue
+            read += 1
+            reads = service_role_env_reads(text)
+            if reads:
+                stem = rel.rsplit("/", 1)[-1].rsplit(".", 1)[0].lower()
+                holders.setdefault(stem, reads[0])
+    return holders
+
+
+def _imported_key_holder(
+    text: str, helpers: dict[str, tuple[str, int]],
+) -> tuple[str, str, int] | None:
+    """(helper basename, env var, line-of-the-import) for the first key-holding
+    module this handler imports, or None.
+
+    The line is the IMPORT's, not the helper's: it is the line in this file
+    that puts the key on this route, and it is the line the owner can act on
+    without opening a second file.
+    """
+    for match in _IMPORT_SPECIFIER.finditer(text):
+        stem = match.group(1).rstrip("/").rsplit("/", 1)[-1]
+        stem = stem.rsplit(".", 1)[0].lower() if "." in stem else stem.lower()
+        if stem in helpers:
+            name, _helper_line = helpers[stem]
+            return stem, name, text.count("\n", 0, match.start()) + 1
+    return None
+
+
 def _policy_count(fileobj: BinaryIO) -> int:
     """How many RLS policies the committed schema declares.
 
@@ -211,6 +301,7 @@ def scan_service_role(fileobj: BinaryIO) -> list[CheckFinding]:
     a score on their own.
     """
     policies = _policy_count(fileobj)
+    helpers = _key_holding_modules(fileobj)
 
     hits: list[tuple[str, str, int]] = []
     fileobj.seek(0)
@@ -242,12 +333,26 @@ def scan_service_role(fileobj: BinaryIO) -> list[CheckFinding]:
             reads = service_role_env_reads(text)
             if reads:
                 name, line = reads[0]
-                hits.append((rel, name, line))
+                hits.append((rel, name, line, ""))
+                continue
+            # The key is not in this file. It may still be one import away,
+            # and that is the ORDINARY shape rather than an exotic one: on
+            # aiagent2046-coder/devtools-aggregator, 8 of 16 routes reach the
+            # admin client through `src/lib/supabase-admin.ts` and this rule
+            # said nothing about any of them. Factoring the admin client into
+            # a module is what a tidy codebase does; it must not be what makes
+            # the finding disappear.
+            through = _imported_key_holder(text, helpers)
+            if through is not None:
+                helper, name, line = through
+                hits.append((rel, name, line, helper))
 
-    return [_finding(rel, name, line, policies) for rel, name, line in sorted(hits)]
+    return [_finding(rel, name, line, policies, helper)
+            for rel, name, line, helper in sorted(hits)]
 
 
-def _finding(path: str, env_name: str, line: int, policies: int) -> CheckFinding:
+def _finding(path: str, env_name: str, line: int, policies: int,
+             helper: str = "") -> CheckFinding:
     bypassed = (
         f"Your migrations declare {policies} Row Level Security "
         f"{'policy' if policies == 1 else 'policies'}. This route goes around "
@@ -274,10 +379,16 @@ def _finding(path: str, env_name: str, line: int, policies: int) -> CheckFinding
         file=path,
         line=line,
         explanation=(
-            f"`{path}` is reachable over HTTP, and it reads `{env_name}` — the "
-            f"Supabase key that bypasses every Row Level Security policy in "
-            f"your project.\n\n"
-            f"{bypassed}"
+            (f"`{path}` is reachable over HTTP, and it imports `{helper}`, "
+             f"which reads `{env_name}` — the Supabase key that bypasses every "
+             f"Row Level Security policy in your project. The key is one "
+             f"import away rather than in this file, and it arrives on this "
+             f"route all the same.\n\n"
+             if helper else
+             f"`{path}` is reachable over HTTP, and it reads `{env_name}` — the "
+             f"Supabase key that bypasses every Row Level Security policy in "
+             f"your project.\n\n")
+            + f"{bypassed}"
             f"Whatever stops one user reading another user's rows on this "
             f"route is the filtering written in this file, by hand, on every "
             f"query. Row Level Security is not a second line of defence here; "

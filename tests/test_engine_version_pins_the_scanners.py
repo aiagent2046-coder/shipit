@@ -48,7 +48,7 @@ WIRED_SCANNERS = (
 
 # The version that was current when WIRED_SCANNERS last matched. Changing the
 # scanner set without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-08-20-1"
+ENGINE_VERSION_FOR_THAT_SET = "2026-08-20-2"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:
