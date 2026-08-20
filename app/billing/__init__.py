@@ -1,11 +1,16 @@
-"""Paywall Stage 2: payment providers, and the one step they share.
+"""The one step every way of paying shares.
 
-Two providers (app/billing/telegram_stars.py, app/billing/usdt_trc20.py)
-take completely different paths to the same outcome: a completed
-`payments` row plus an `accounts` row with tier='pro', and the account's
-opaque API key handed back to whoever paid. That converging step --
-"a confirmed payment becomes a pro account with a key" -- lives here,
-once, so neither provider reimplements it.
+Four providers were built -- Telegram Stars, USDT/TRC20, PayPal and a manually
+confirmed bank transfer -- and they took completely different paths to the same
+outcome: a completed `payments` row plus an `accounts` row with tier='pro', and
+the account's opaque API key handed back to whoever paid. That converging step
+-- "a confirmed payment becomes a pro account with a key" -- lives here, once,
+so no provider reimplements it.
+
+Three of the four were removed on 2026-08-20 and bank transfer is the rail
+left, with Robokassa to follow. This file barely changed, which is the point of
+its shape: a provider is a way of reaching the step below, and the step below
+never knew which one had called it.
 
 Everything stays anonymous by default (see app/accounts.py): paying is
 the only way to get a key, there is no email/password and no public
@@ -56,10 +61,12 @@ async def deliver_key_once(
     ask and no one after -- or None if it has already been delivered.
 
     This exists because the plaintext key is not stored anywhere (migration
-    0019). The USDT poller and the PayPal capture webhook both mint an account
-    while nobody is connected, so the key they receive is discarded; the payer's
-    browser then polls a separate endpoint for it. There is nothing to look up
-    at that point, so the key is *minted* here instead: winning migration
+    0019). A grant can happen while nobody is connected -- the operator
+    confirming a bank transfer from their phone, and, before they were removed,
+    the USDT poller and the PayPal capture webhook -- so the key that grant
+    receives is discarded; the payer's browser then polls a separate endpoint
+    for it. There is nothing to look up at that point, so the key is *minted*
+    here instead: winning migration
     0024's key_delivered_at claim earns one rotate_key, whose fresh plaintext is
     what gets handed back. Nothing is ever written to disk in plaintext.
 
@@ -102,26 +109,29 @@ async def grant_pro_tier(
     0019), so it is the caller's one chance to deliver it. On a replay of an
     already-granted charge the account is re-read from the database, which by
     design cannot produce the key text again, so `api_key` is absent. Read it
-    with `.get("api_key")` and handle None: for an in-handler delivery (Stars)
-    that means telling the payer the key already went out and pointing at
-    /rotatekey; for a later, separate poll (USDT, PayPal) it means going
+    with `.get("api_key")` and handle None: for an in-handler delivery (a
+    Stars charge that still arrives) that means telling the payer the key
+    already went out and pointing at /rotatekey; for a grant that happens while
+    nobody is connected (the operator confirming a transfer) it means going
     through deliver_key_once instead of this function's return value.
 
     `external_ref` is the provider's own charge/transaction id
-    (telegram_payment_charge_id for Stars, the TRC20 transaction_id for
-    USDT) and is the idempotency key: calling this twice with the same
-    one -- a retried Telegram webhook, a transfer seen on two polls --
+    (telegram_payment_charge_id for Stars, the reference for a bank
+    transfer) and is the idempotency key: calling this twice with the same
+    one -- a retried Telegram webhook, an operator tapping Confirm twice --
     returns the original account, mints no second key, and records no
     second payment. (Migration 0004's partial unique index is the
     database-level backstop for the check-then-write race here.)
 
-    `invoice_payment_id` distinguishes the two providers' bookkeeping,
-    which is the only thing that differs between them:
-      * USDT passes it -- a pending `payments` row already exists (the
-        invoice the payer was shown), so we transition that row to
-        completed and link the account.
-      * Telegram omits it -- there is no pre-existing row (the invoice
-        lived in Telegram, not our DB), so we insert a completed one.
+    `invoice_payment_id` distinguishes the two bookkeeping shapes, which is
+    the only thing that ever differed between the providers:
+      * An INVOICE flow passes it -- a pending `payments` row already exists
+        (the invoice the payer was shown), so we transition that row to
+        completed and link the account. Bank transfer works this way; USDT and
+        PayPal did.
+      * A charge with no invoice behind it omits it -- there is no
+        pre-existing row (a Stars invoice lived in Telegram, not our DB), so
+        we insert a completed one.
 
     Returns None only when DATABASE_URL isn't configured (account_repo
     can't create): callers surface that as "couldn't persist", not a
@@ -258,16 +268,16 @@ async def grant_fixpack(
     tiers -- a Fix Pack is a one-off per-audit product, not an account
     upgrade -- so it never calls grant_pro_tier and mints no API key.
 
-    Idempotency mirrors grant_pro_tier: `external_ref` (the Stars charge id
-    or the TRC20 transaction id) is the key. A retried Telegram webhook or
-    a transfer seen on two polls finds the already-completed payment and
-    returns without creating a second job (migration 0004's partial unique
+    Idempotency mirrors grant_pro_tier: `external_ref` (the Stars charge id,
+    or the reference on a bank transfer) is the key. A retried Telegram webhook
+    or an operator tapping Confirm twice finds the already-completed payment
+    and returns without creating a second job (migration 0004's partial unique
     index is the DB-level backstop for the check-then-write race).
 
-    `invoice_payment_id` distinguishes the two providers' bookkeeping, same
-    as in grant_pro_tier: USDT passes it (a pending invoice row already
-    exists -> transition it to completed), Telegram omits it (no pre-
-    existing row -> insert a completed one).
+    `invoice_payment_id` distinguishes the two bookkeeping shapes, same as in
+    grant_pro_tier: an invoice flow passes it (a pending row already exists ->
+    transition it to completed), a charge with no invoice behind it omits it
+    (no pre-existing row -> insert a completed one).
 
     THE JOB IS CREATED BEFORE THE PAYMENT IS COMPLETED, and the order is the
     whole point rather than an accident. There is no transaction around the two

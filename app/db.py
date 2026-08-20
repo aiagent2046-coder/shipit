@@ -110,20 +110,23 @@ async def close_pool() -> None:
 
 
 # Arbitrary but fixed keys for the processors' session advisory locks -- ascii
-# "FIXP", "MONI" and "USDT". Any value works as long as it is stable and not
-# shared with another advisory-lock user in this database; each processor uses a
-# distinct key so a Fix Pack run, a monitoring run and a USDT poll never
-# serialize against each other.
+# "FIXP", "MONI" and "BNKA". Any value works as long as it is stable and not
+# shared with another advisory-lock user in this database; each holder uses a
+# distinct key so a Fix Pack run, a monitoring run and a bank-transfer amount
+# reservation never serialize against each other.
+#
+# 0x55534454 ("USDT") was the USDT poller's and is deliberately NOT reused: a
+# host mid-deploy can run old and new code at once, and a recycled advisory-lock
+# key is a lock shared between two things that know nothing about each other.
 _FIXPACK_PROCESSOR_LOCK_KEY = 0x46495850
 _MONITORING_PROCESSOR_LOCK_KEY = 0x4D4F4E49
-_USDT_POLL_LOCK_KEY = 0x55534454
 _BANK_TRANSFER_AMOUNT_LOCK_KEY = 0x424E4B41  # "BNKA"
 
 
 class ProcessorLockBusy(Exception):
     """Another processor run already holds the advisory lock, so this run must
     not proceed -- returned to the caller as a benign skipped-because-locked
-    outcome, not an error. Shared by the Fix Pack, monitoring and USDT-poll
+    outcome, not an error. Shared by the Fix Pack and monitoring
     processors."""
 
 
@@ -1481,7 +1484,7 @@ class AccountRepository:
     async def get_by_id(self, account_id: str) -> dict[str, Any] | None:
         """Look up an account by its uuid. Used by the billing flow to
         re-fetch the just-granted account -- e.g. on a duplicate Telegram
-        webhook, or the USDT invoice-status endpoint. The plaintext key is
+        webhook, or the bank-transfer invoice-status endpoint. The plaintext key is
         never stored, so this cannot re-deliver the key text -- the key is
         shown once at creation; a lost key is replaced via rotate_key, not
         recovered. Only key_prefix is available here for identification."""
@@ -1816,9 +1819,10 @@ class PaymentRepository:
     async def list_pending(
         self, provider: str, *, created_after: datetime.datetime | None = None
     ) -> list[dict[str, Any]]:
-        """Open (unpaid) invoices for a provider, newest first. Used by the
-        USDT poller to match incoming on-chain transfers to invoices it
-        hasn't seen paid yet. Returns [] when DATABASE_URL isn't set, same
+        """Open (unpaid) invoices for a provider, newest first. Written for
+        the USDT poller, which matched incoming transfers against invoices it
+        had not seen paid; that rail is gone and bank_transfer is the caller
+        left. Returns [] when DATABASE_URL isn't set, same
         not-configured contract as create/get (an empty list, not None, so
         callers can iterate without a guard).
 
@@ -1859,8 +1863,8 @@ class PaymentRepository:
         self, payment_id: str, *, account_id: str, external_ref: str
     ) -> dict[str, Any] | None:
         """Transition a pending invoice to completed and link the account
-        it granted. The USDT flow's counterpart to Telegram creating a
-        completed row outright -- see app/billing/grant_pro_tier.
+        it granted. The invoice flow's counterpart to creating a completed row
+        outright -- see app/billing/grant_pro_tier.
 
         Compare-and-set, the same first-writer-wins shape as
         link_telegram_chat_id: the predicate is part of the UPDATE, so the

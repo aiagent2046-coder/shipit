@@ -208,7 +208,7 @@ async def create_fixpack_bank_transfer_invoice(
     reference-code flow and same polling endpoint as the Pro invoice above, at
     the Fix Pack price and scoped to this audit.
 
-    Same GitHub-URL-only gate as the USDT and PayPal Fix Pack routes: a zip
+    The GitHub-URL-only gate, which the removed Fix Pack routes also had: a zip
     audit has no repository to open a fix PR against, so 422 rather than sell
     something that can't be fulfilled. 404 if no such audit.
 

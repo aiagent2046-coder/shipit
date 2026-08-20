@@ -155,7 +155,9 @@ def get_rls_fetch():
 
 
 def get_subscription_repo() -> SubscriptionRepository:
-    """Same as get_audit_repo, for recurring Stars subscriptions."""
+    """Same as get_audit_repo, for the subscriptions table. Nothing sells a
+    subscription any more -- the rows are read, and a renewal Telegram is
+    still charging on a subscription sold before the withdrawal is recorded."""
     return _subscription_repo
 
 

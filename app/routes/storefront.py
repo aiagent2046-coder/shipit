@@ -31,9 +31,11 @@ async def get_pricing() -> dict:
     purchase routes stay reachable for the existing customer and the bot;
     they are simply no longer advertised.
 
-    USD only. Telegram Stars and USDT carry their own prices from their own
-    accessors, and quoting those here without the channel they belong to
-    would invite exactly the mismatch this endpoint exists to prevent.
+    USD only, which is now the whole story: the two channels that carried
+    their own prices in their own units -- Stars in XTR, USDT in micro-dollars
+    -- are gone. One rail, one currency, one accessor. Robokassa will settle in
+    roubles, and when it is connected the rouble figure must come from the same
+    place this one does rather than from a second accessor beside it.
 
     Deliberately separate from /v1/billing/details: that payload carries a
     card number for the footer, and a page that only needs a price should not

@@ -3,11 +3,13 @@
 Interim method for a deployment with no legal entity yet, and therefore no
 business acquiring: money arrives on a personal bank account and the
 operator confirms it by hand. A personal account has no API to poll, so
-unlike USDT/TRC20 (TronGrid) or PayPal (webhook) there is no automatic
-confirmation and there never will be for this provider -- a human looking at
-their banking app IS the oracle.
+there is no automatic confirmation and there never will be for this provider
+-- a human looking at their banking app IS the oracle. The rails that DID
+confirm themselves (USDT via TronGrid, PayPal via webhook) were removed on
+2026-08-20; this one, the only one that had actually taken money, is what is
+left until Robokassa is connected.
 
-Structurally, though, this is the SAME flow as usdt_trc20: a pending
+Structurally this is an INVOICE flow, the same one USDT used: a pending
 `payments` row is written up front (the invoice the payer is shown), and a
 later, separate event transitions it to completed via
 `grant_pro_tier`/`grant_fixpack` with `invoice_payment_id=`. That branch runs
@@ -15,7 +17,7 @@ through `mark_completed`/`mark_completed_fixpack`, whose compare-and-set
 predicate is what makes a repeated confirmation safe -- press the confirm
 button twice and the second press returns the same account/job, mints no
 second key, and creates no second Fix Pack. Going through the other branch of
-those functions (the INSERT path Telegram Stars uses) would NOT be safe here,
+those functions (the INSERT path a Stars charge takes) would NOT be safe here,
 because a human can and will press a button twice.
 
 Matching is by PAYER IDENTITY, corroborated by a KOPECK SUFFIX on the amount.
@@ -30,7 +32,8 @@ The suffix is a HINT, never a key, and the ordering matters:
 
   - It survives only a same-currency transfer. If the payer's bank converts,
     what lands is a converted figure and the kopecks are gone -- which is why
-    amount cannot be the primary key here the way it is for USDT.
+    amount cannot be the primary key here the way it was for an on-chain
+    transfer, where the payer's wallet sends exactly the figure quoted.
   - There are 99 slots. Under saturation the price is quoted bare and identity
     is all that is left.
 
@@ -70,7 +73,8 @@ PRODUCT_FIXPACK = "fixpack"
 _DEFAULT_PRO_PRICE_USD = "5.00"
 _DEFAULT_FIXPACK_PRICE_USD = "10.00"
 
-# Seven days, against usdt_trc20's thirty minutes. A SWIFT transfer takes one
+# Seven days, against the thirty minutes an on-chain invoice used. A SWIFT
+# transfer takes one
 # to three business days before it is even visible to the operator, and the
 # payer may well start the invoice on a Friday. Anything shorter would show
 # "expired" to a payer whose money is still legitimately in flight.
@@ -133,7 +137,7 @@ def bank_details_from_env() -> dict[str, str] | None:
 
 def _price_from_env(var: str, default: str) -> str:
     """A fiat amount as a fixed-2dp string. Same shape and same
-    unparseable-override-falls-back-to-default contract as paypal._price_from_env,
+    unparseable-override-falls-back-to-default contract the other providers used,
     because both quote a catalogue price in USD to a human."""
     raw = os.environ.get(var) or default
     try:
@@ -187,7 +191,8 @@ def _amount_lock():
 def amount_to_cents(amount: float) -> int:
     """A quoted amount as integer cents. round() not int(): 5.07 * 100 is
     506.9999... in binary float and int() would truncate it to 506. Same
-    reasoning and same fix as usdt_trc20.amount_to_micros."""
+    reasoning and same fix as the micro-dollar conversion the USDT rail used
+    for exactly this reason."""
     return int(round(amount * 100))
 
 
@@ -204,7 +209,7 @@ def generate_reference() -> str:
 async def _reserve_reference(payment_repo: Any) -> str | None:
     """A reference code no existing bank-transfer payment is already using.
 
-    Same re-roll-off-what-is-taken shape as usdt_trc20._reserve_unique_amount,
+    Same re-roll-off-what-is-taken shape the USDT invoice used,
     and with the same residual race: two concurrent creations could both clear
     the check and pick the same code. Migration 0004's partial unique index on
     (provider, external_ref) is the backstop -- the loser's INSERT fails and the
@@ -231,7 +236,7 @@ async def _reserve_reference(payment_repo: Any) -> str | None:
 def _created_at(row: dict[str, Any]) -> datetime.datetime:
     """created_at as an aware UTC datetime, whether psycopg handed back a
     datetime (real DB) or an ISO string (a fake in tests). Same helper and same
-    reason as usdt_trc20._created_at."""
+    reason the USDT invoice recorded its own."""
     ca = row["created_at"]
     if isinstance(ca, str):
         ca = datetime.datetime.fromisoformat(ca.replace("Z", "+00:00"))
@@ -271,7 +276,7 @@ async def create_invoice(
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for the Pro tier.
 
-    `account_id` is deliberately None, exactly as in usdt_trc20.create_invoice:
+    `account_id` is deliberately None, as in every invoice flow here:
     the account does not exist yet and is minted by grant_pro_tier at
     confirmation time, which overwrites this column anyway (see
     PaymentRepository.mark_completed). Setting it here would be a value nobody
@@ -358,7 +363,7 @@ async def invoice_status(
     there's no such invoice (endpoint -> 404).
 
     A completed Pro invoice mints and reveals the API key exactly once, via
-    deliver_key_once -- same one-shot contract as the USDT invoice poll, and it
+    deliver_key_once -- the one-shot contract every invoice poll shared, and it
     matters more here: confirmation arrives hours or days later, so the tab that
     started the purchase is usually long gone. /link with the reference code is
     the recovery door for that case.
@@ -527,7 +532,7 @@ async def confirm(
 ) -> dict[str, Any] | None:
     """The operator confirmed the money arrived: grant what was bought.
 
-    Dispatches on `product` exactly like usdt_trc20.poll_and_match, and always
+    Dispatches on `product` the way the USDT poller did, and always
     passes `invoice_payment_id` so the grant runs through the CAS-gated
     mark_completed / mark_completed_fixpack rather than inserting a second
     payment row. That is what makes pressing the button twice safe: the replay

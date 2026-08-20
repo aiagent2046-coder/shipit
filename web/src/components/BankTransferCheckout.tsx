@@ -22,13 +22,13 @@ interface CopyHelpers {
   copied: string | null;
 }
 
-// Slower than the USDT poll (8s): confirmation here is a human reading a bank
+// Slower than an on-chain poll would be: confirmation here is a human reading a bank
 // statement, which lands hours or days later, not seconds.
 const POLL_MS = 20_000;
 
 /**
  * The shared bank-transfer flow, the manual-confirmation counterpart to
- * UsdtCheckout: create an invoice, show the bank details plus the reference
+ * The invoice flow: create an invoice, show the bank details plus the reference
  * code to quote, offer an "I've paid" button that pages the operator, then
  * poll until they confirm.
  *
@@ -410,7 +410,7 @@ export function BankTransferCheckout({
   );
 }
 
-// The editable twin of UsdtCheckout's Field: same bordered row, same muted
+// The editable twin of Field: same bordered row, same muted
 // label on the left and right-aligned value, so the pre-payment inputs and the
 // post-payment bank details read as one list rather than two designs.
 function PayerInput({
@@ -450,7 +450,7 @@ function PayerInput({
 /**
  * The Pro-tier card-payment card used on /pricing. Once the operator confirms,
  * reveals + lets you save the returned API key — the same one-shot delivery as
- * the USDT card, and it matters more here: confirmation lands hours later, when
+ * an instant rail, and it matters more here: confirmation lands hours later, when
  * this tab is usually long gone. Telegram /link with the order number is the
  * recovery door for that case.
  */
