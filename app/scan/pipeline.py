@@ -16,6 +16,7 @@ import re
 import zipfile
 
 from app.llm.client import LLMClient, LLMError
+from app.fixpack.generate import mark_unfixable_findings
 from app.scan.collapse import collapse_repeats
 from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
@@ -356,6 +357,15 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             llm_summary = vars(stats)
 
     findings = collapse_repeats(findings)
+
+    # Here and nowhere else, because here is the last place the repository is
+    # in memory. Whether the Fix Pack's RLS generator can actually write a
+    # policy depends on the customer's schema, and every consumer of that
+    # answer -- the report, the purchase gate -- runs in a request handler
+    # with no bytes to read. A repo whose only eligible finding is one the
+    # generator will refuse was sold a Fix Pack twice before this call
+    # existed; see mark_unfixable_findings.
+    findings = mark_unfixable_findings(data, findings)
 
     # One expression, read twice: it decides the reported basis AND which
     # categories are allowed to vote on the total. Computing it once is what

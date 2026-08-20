@@ -570,10 +570,76 @@ def has_auto_fixable_findings(findings: list[dict]) -> bool:
     purpose. A second copy of "what counts as fixable" is exactly what drifted
     in #132, where the plan builder knew one non-production context and the
     report knew four.
+
+    THE RULE ID IS NOT ALWAYS THE WHOLE ANSWER, which is how it happened a
+    SECOND time. Audit bd970b2b (devtools-aggregator) carried one eligible
+    finding — `users` readable by the anon key — and was sold a Fix Pack that
+    produced nothing, because whether the RLS generator can write a policy
+    depends on the TABLE, not on the rule:
+
+        create table public.users (id uuid, github_id bigint, ...);  -- no FK
+        create policy "Users viewable by all" on public.users
+          for select using (true);
+
+    Nothing to narrow `using (true)` down to and nothing to scope by, so
+    propose_read_policy refuses — correctly. The rule was in the set and the
+    generator still had no move. mark_unfixable_findings answers that question
+    while the repository is in hand, and stamps the finding; this function
+    honours the stamp.
     """
     return any(
-        _is_fixable_rule(f) and _is_production_code(f) for f in findings
+        f.get("fixpack_eligible") is not False
+        and _is_fixable_rule(f) and _is_production_code(f)
+        for f in findings
     )
+
+
+def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict]:
+    """Stamp `fixpack_eligible: False` on findings the generator cannot act on.
+
+    Called once, at audit time, while the repository is still in memory. Every
+    other consumer of "is there anything to fix" runs in a request handler
+    with no repo bytes and no business fetching any, so the question has to be
+    answered here or answered wrong.
+
+    ONLY THE RLS READ RULE NEEDS THIS. For a secret, a committed .env or a
+    missing gitignore pattern, the rule id and the file's context settle it —
+    which is what _is_fixable_rule and _is_production_code already check.
+    propose_read_policy is the one decision that reads the schema, so it is
+    the one that can disagree with the rule id, and it did.
+
+    Stamped rather than filtered: the finding is REAL and stays in the report
+    in full. What changes is only whether we offer to sell a fix for it.
+
+    Absence of the key means "not asked", not "eligible" — audits stored
+    before this existed keep the old behaviour rather than silently becoming
+    unsellable.
+    """
+    if not any(f.get("rule_id") == RLS_RULE_ID for f in findings):
+        return findings
+
+    try:
+        sql, _paths = read_committed_sql(io.BytesIO(zip_bytes))
+        schema = parse_schema(sql) if sql.strip() else {}
+    except Exception:                                          # noqa: BLE001
+        # A schema we cannot read is not evidence that the generator would
+        # fail. Leave every finding unstamped and let the old behaviour hold:
+        # this function exists to refuse a sale we KNOW is empty, never to
+        # refuse one we merely cannot confirm.
+        return findings
+
+    marked: list[dict] = []
+    for finding in findings:
+        if finding.get("rule_id") != RLS_RULE_ID:
+            marked.append(finding)
+            continue
+        table = _table_from_finding(finding)
+        proposal = propose_read_policy(table, schema) if table else None
+        if isinstance(proposal, PolicyProposal):
+            marked.append(finding)
+        else:
+            marked.append({**finding, "fixpack_eligible": False})
+    return marked
 
 
 def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
