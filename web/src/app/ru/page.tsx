@@ -59,10 +59,16 @@ export default function RussianHomePage() {
           href="https://robokassa.com/"
           target="_blank"
           rel="noreferrer"
-          className="mt-5 inline-flex items-center gap-3 rounded-lg border border-border bg-elevated px-4 py-3 text-sm transition-colors hover:border-accent"
+          className="mt-5 inline-flex items-center gap-4 rounded-lg border border-border bg-white px-4 py-3 text-sm text-black transition-colors hover:border-accent"
           aria-label="Оплата через Robokassa — официальный сайт платёжной системы"
         >
-          <span className="rounded bg-text px-3 py-1 font-semibold tracking-wide text-bg">Robokassa</span>
+          <img
+            src="https://logo-teka.com/wp-content/uploads/2025/09/robokassa-logo.svg"
+            alt="Robokassa"
+            width="170"
+            height="40"
+            className="h-8 w-auto"
+          />
           <span>Оплата через платёжную систему Robokassa</span>
         </a>
         <p className="mt-3 text-sm text-muted">
