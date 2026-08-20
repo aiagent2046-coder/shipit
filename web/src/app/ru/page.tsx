@@ -3,7 +3,7 @@ import Link from "next/link";
 export const metadata = {
   title: "Drydock — аудит безопасности кода и Fix Pack",
   description:
-    "Русскоязычная информация о Drydock: аудит безопасности кода, Fix Pack, порядок оплаты и правовые документы.",
+    "Русскоязычная информация о Drydock: аудит безопасности кода, Fix Pack, стоимость, порядок оплаты и правовые документы.",
 };
 
 export default function RussianHomePage() {
@@ -30,8 +30,8 @@ export default function RussianHomePage() {
             Проверка репозитория на поддерживаемые проблемы без оплаты и без подписки.
           </p>
         </div>
-        <div className="rounded-xl border border-border bg-elevated p-5">
-          <h2 className="font-semibold">Fix Pack</h2>
+        <div className="rounded-xl border border-accent/40 bg-accent/5 p-5">
+          <h2 className="font-semibold">Fix Pack — 990 ₽</h2>
           <p className="mt-2 text-sm text-muted">
             Разовая платная услуга для одного конкретного аудита. Никаких автоматических повторных списаний.
           </p>
@@ -47,17 +47,20 @@ export default function RussianHomePage() {
       <section className="mt-10 rounded-xl border border-border bg-surface p-6">
         <h2 className="text-xl font-semibold">Стоимость и порядок оплаты</h2>
         <p className="mt-3 text-muted">
-          Fix Pack оплачивается один раз. Точная стоимость показывается на странице оформления заказа до оплаты. Для российского платёжного сценария оплата будет приниматься через Robokassa после завершения подключения магазина.
+          Стоимость одного Fix Pack для российского платёжного сценария — <strong>990 рублей</strong>. Оплата разовая, без подписки и автоматических повторных списаний.
+        </p>
+        <p className="mt-3 text-muted">
+          После завершения подключения магазина оплата будет приниматься через платёжную систему Robokassa. До перехода к оплате покупателю показываются наименование услуги и итоговая сумма заказа.
         </p>
         <p className="mt-3 text-sm text-muted">
-          До подтверждения подключения Robokassa на этой странице не публикуются неподтверждённые платёжные кнопки или реквизиты шлюза.
+          Подключение Robokassa ещё не завершено, поэтому активная кнопка оплаты через Robokassa появится только после получения и проверки рабочих параметров магазина.
         </p>
         <div className="mt-5 flex flex-wrap gap-3">
-          <Link href="/pricing" className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:border-accent hover:text-accent">
-            Текущая страница цен
-          </Link>
           <Link href="/ru/offer" className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:border-accent hover:text-accent">
             Публичная оферта
+          </Link>
+          <Link href="/ru/refund" className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:border-accent hover:text-accent">
+            Условия возврата
           </Link>
         </div>
       </section>
