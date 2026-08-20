@@ -319,40 +319,6 @@ export interface FixpackStatus {
   failure_kind?: "infrastructure" | null;
 }
 
-// POST /v1/paypal/orders — a one-time PayPal order (Pro or Fix Pack). The
-// browser's PayPal Buttons approve + capture against `order_id`; the capture
-// then arrives at our webhook and grants. Poll GET /v1/paypal/orders/{id}.
-export interface PaypalOrder {
-  order_id: string;
-  status: string;
-  amount: string;
-  currency: string;
-  product: "pro" | "fixpack";
-  audit_id?: string;
-}
-
-// GET /v1/paypal/orders/{id} — reveals the API key only once the webhook has
-// captured and granted (Pro). A pending order never carries a key.
-export type PaypalOrderStatus =
-  | { order_id: string; status: "pending" }
-  | {
-      order_id: string;
-      status: "completed";
-      tier: "pro";
-      // Same one-shot delivery as UsdtInvoiceStatus above.
-      api_key: string | null;
-      key_already_delivered?: boolean;
-    };
-
-// POST /v1/paypal/subscriptions — a recurring monitoring subscription. The
-// browser sends the buyer to `approve_url` (or approves via the SDK button);
-// PayPal then delivers the ACTIVATED / SALE webhooks.
-export interface PaypalSubscription {
-  subscription_id: string;
-  approve_url: string | null;
-  status: string;
-}
-
 // GET /v1/github/installation-status?owner=&repo=
 // A Fix Pack opens a real PR, which needs the GitHub App installed on the
 // target repo. `app_configured=false` means this deployment has no App at

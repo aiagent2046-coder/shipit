@@ -13,9 +13,6 @@ import type {
   FixpackStatus,
   FixpackUsdtInvoice,
   InstallationStatus,
-  PaypalOrder,
-  PaypalOrderStatus,
-  PaypalSubscription,
   PersistedAudit,
   Pricing,
   RlsCheckResult,
@@ -29,11 +26,6 @@ export const API_BASE_URL = (
 
 export const TELEGRAM_BOT_USERNAME =
   process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "";
-
-// PayPal JS SDK client id (public, client-side). Empty -> the PayPal buttons
-// render as an "unconfigured" note rather than loading the SDK, mirroring the
-// Telegram-username guard. The matching secret lives ONLY on the backend.
-export const PAYPAL_CLIENT_ID = process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || "";
 
 // A typed error carrying the backend's {reason, detail} envelope when present,
 // so the UI can show something honest instead of "something went wrong".
@@ -309,43 +301,6 @@ export async function getFixpackStatus(auditId: string): Promise<FixpackStatus> 
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack-status`,
   );
   return parse<FixpackStatus>(res);
-}
-
-// Open a one-time PayPal order for Pro (product="pro") or a Fix Pack
-// (product="fixpack", auditId required). Returns the order id the PayPal
-// Buttons approve + capture against; the capture grants via our webhook.
-export async function createPaypalOrder(
-  product: "pro" | "fixpack",
-  auditId?: string,
-): Promise<PaypalOrder> {
-  const res = await request(`${API_BASE_URL}/v1/paypal/orders`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ product, audit_id: auditId }),
-  });
-  return parse<PaypalOrder>(res);
-}
-
-// Poll one PayPal Pro order. Reveals the API key only once the webhook has
-// captured and granted, exactly like getUsdtInvoice for USDT.
-export async function getPaypalOrder(id: string): Promise<PaypalOrderStatus> {
-  const res = await request(
-    `${API_BASE_URL}/v1/paypal/orders/${encodeURIComponent(id)}`,
-  );
-  return parse<PaypalOrderStatus>(res);
-}
-
-// Open a recurring PayPal monitoring subscription for a repo. Returns the
-// subscription id (the PayPal Buttons approve against it) and an approve URL.
-export async function createPaypalSubscription(
-  repoUrl: string,
-): Promise<PaypalSubscription> {
-  const res = await request(`${API_BASE_URL}/v1/paypal/subscriptions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repo_url: repoUrl }),
-  });
-  return parse<PaypalSubscription>(res);
 }
 
 // Is the GitHub App installed on owner/repo? Checked before offering a Fix

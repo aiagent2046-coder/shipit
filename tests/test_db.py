@@ -773,11 +773,16 @@ class TestPaymentRepositoryWithFakePool:
         assert result["account_id"] == str(account_id)
         query, params = fake.calls[0]
         assert "insert into payments" in query
-        # The two trailing Nones after paypal_order_id are payer_name and
-        # payer_email: supplied only by bank_transfer, so every other provider
-        # writes the row exactly as it did before migration 0026.
+        # The two trailing Nones are payer_name and payer_email: supplied only
+        # by bank_transfer, so every other provider writes the row exactly as
+        # it did before migration 0026. The one before them is audit_id.
+        #
+        # paypal_order_id was the tenth parameter until PayPal was removed as a
+        # way to pay. The COLUMN is still there and still SELECTed -- the rows
+        # PayPal wrote are the books -- but nothing binds it any more, so an
+        # insert that still did would be writing a provider we no longer have.
         assert params == (account_id, "usdt_trc20", "0xabc", 9.99, "USD",
-                          "completed", "pro", "pro_tier", None, None,
+                          "completed", "pro", "pro_tier", None,
                           None, None)
 
     async def test_amount_numeric_is_cast_to_json_number_not_string(self, monkeypatch):

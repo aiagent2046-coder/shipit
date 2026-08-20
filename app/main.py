@@ -45,7 +45,6 @@ from app.routes.accounts import router as accounts_router
 from app.routes.bank_transfer import router as bank_transfer_router
 from app.routes.billing import router as billing_router
 from app.routes.operator import router as operator_router
-from app.routes.paypal import router as paypal_router
 from app.routes.reads import router as reads_router
 from app.routes.rls_check import router as rls_check_router
 from app.routes.session import router as session_router
@@ -318,7 +317,6 @@ from app.routes.dependencies import (  # noqa: E402
     get_llm_usage_repo,
     get_monitoring_repo,
     get_payment_repo,
-    get_paypal_transport,
     get_pr_opener,
     get_preview_reconciler,
     get_preview_registry,
@@ -344,7 +342,6 @@ __all__ = [
     "get_llm_usage_repo",
     "get_monitoring_repo",
     "get_payment_repo",
-    "get_paypal_transport",
     "get_pr_opener",
     "get_preview_reconciler",
     "get_preview_registry",
@@ -2339,7 +2336,6 @@ app.include_router(github_router)
 app.include_router(telegram_router)
 app.include_router(billing_router)
 app.include_router(operator_router)
-app.include_router(paypal_router)
 app.include_router(reads_router)
 app.include_router(rls_check_router)
 app.include_router(session_router)

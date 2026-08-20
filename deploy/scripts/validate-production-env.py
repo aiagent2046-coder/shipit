@@ -152,7 +152,7 @@ def main() -> int:
     )
     rails_configured = bank_configured or bool(
         values.get("USDT_TRC20_ADDRESS", "").strip()
-    ) or bool(values.get("PAYPAL_CLIENT_ID", "").strip())
+    )
 
     if rails_configured:
         for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_CHAT_ID",
@@ -171,18 +171,6 @@ def main() -> int:
         errors.append(
             "AITUNNEL_API_KEY and AITUNNEL_BASE_URL must be configured together"
         )
-
-    paypal_id = bool(values.get("PAYPAL_CLIENT_ID", "").strip())
-    paypal_secret = bool(values.get("PAYPAL_CLIENT_SECRET", "").strip())
-
-    if paypal_id != paypal_secret:
-        errors.append(
-            "PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET must be configured together"
-        )
-
-    if values.get("PAYPAL_ENV", "").strip().lower() == "live":
-        if not values.get("PAYPAL_WEBHOOK_ID", "").strip():
-            errors.append("PAYPAL_WEBHOOK_ID is required when PAYPAL_ENV=live")
 
     if values.get("USDT_TRC20_ADDRESS", "").strip():
         if not values.get("USDT_POLL_TOKEN", "").strip():

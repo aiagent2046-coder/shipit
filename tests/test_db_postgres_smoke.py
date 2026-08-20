@@ -273,28 +273,14 @@ async def test_all_repository_write_paths(real_db):
     linked = await payment_repo.link_telegram_chat_id(payment_id, f"chat-{run}")
     assert linked is not None and linked["telegram_chat_id"] == f"chat-{run}"
 
-    # PayPal one-time order (migration 0018's payments.paypal_order_id): create
-    # a pending row keyed by the order id, resolve it back by that id, then
-    # transition it to completed the way the capture webhook does. Proves the
-    # new column + partial unique index + get_by_paypal_order_id SELECT against
-    # real Postgres, not just the FakePool.
-    paypal_order_id = f"ORDER-{run}"
-    pp_payment = await payment_repo.create(
-        account_id=None, provider="paypal", external_ref=None,
-        amount=5.0, currency="USD", status="pending", tier_granted="pro",
-        product="pro_tier", paypal_order_id=paypal_order_id,
-    )
-    assert pp_payment is not None
-    assert pp_payment["paypal_order_id"] == paypal_order_id  # column round-trip
-    by_order = await payment_repo.get_by_paypal_order_id(paypal_order_id)
-    assert by_order is not None and by_order["id"] == pp_payment["id"]
-    await payment_repo.mark_completed(
-        pp_payment["id"], account_id=account_id,
-        external_ref=f"CAPTURE-{run}",
-    )
-    completed_pp = await payment_repo.get_by_paypal_order_id(paypal_order_id)
-    assert completed_pp["status"] == "completed"
-    assert completed_pp["external_ref"] == f"CAPTURE-{run}"
+    # migration 0018's payments.paypal_order_id is STILL SELECTED, and this is
+    # what checks it. PayPal was removed as a way to pay, so nothing writes the
+    # column any more -- but the rows it wrote are the books, and a SELECT list
+    # that quietly drops a column is how a historical payment stops being
+    # readable without anything failing. The write path that used to be
+    # exercised here is gone with the provider; the read path is not.
+    assert "paypal_order_id" in linked
+    assert linked["paypal_order_id"] is None
 
     # ---- SubscriptionRepository (THE prod bug's write path) -------------
     # expires_at is passed as a Unix int -- exactly the shape Telegram sends.
@@ -330,38 +316,14 @@ async def test_all_repository_write_paths(real_db):
     canceled = await sub_repo.set_status(sub_id, "canceled")
     assert canceled["status"] == "canceled"
 
-    # PayPal recurring subscription (migration 0018's subscriptions.
-    # payment_provider + paypal_subscription_id): the PayPal-keyed write path,
-    # distinct from the Stars (telegram_user_id, invoice_payload) key above.
-    # upsert_first_paypal (ACTIVATED) -> resolve by the 'I-XXXX' id -> renew_paypal
-    # (SALE) pushes expires_at out. expires_at is an aware datetime here (the
-    # shape the PayPal handlers pass), asserted to round-trip as a real
-    # timestamptz -- the type the FakePool can't prove.
-    pp_sub_id = f"I-{run}"
-    pp_repo_name = f"acme/paypal-smoke-{run}"
-    pp_expires = datetime.datetime(2026, 9, 19, 10, 0, tzinfo=datetime.timezone.utc)
-    pp_sub = await sub_repo.upsert_first_paypal(
-        paypal_subscription_id=pp_sub_id, tier="monitoring",
-        expires_at=pp_expires, repo_full_name=pp_repo_name,
-    )
-    assert pp_sub is not None
-    assert pp_sub["status"] == "active"
-    assert pp_sub["payment_provider"] == "paypal"
-
-    fetched_pp_sub = await sub_repo.get_by_paypal_subscription_id(pp_sub_id)
-    assert fetched_pp_sub is not None and fetched_pp_sub["id"] == pp_sub["id"]
-    assert fetched_pp_sub["repo_full_name"] == pp_repo_name
-    assert isinstance(fetched_pp_sub["expires_at"], datetime.datetime)
-    assert fetched_pp_sub["expires_at"].tzinfo is not None
-    assert fetched_pp_sub["expires_at"] == pp_expires
-
-    pp_renewed = await sub_repo.renew_paypal(
-        pp_sub["id"], expires_at=pp_expires + datetime.timedelta(days=30),
-    )
-    assert pp_renewed is not None
-    reread_pp_sub = await sub_repo.get_by_paypal_subscription_id(pp_sub_id)
-    assert reread_pp_sub["expires_at"] == pp_expires + datetime.timedelta(days=30)
-    assert reread_pp_sub["status"] == "active"
+    # Same rule one table over: migration 0018's subscriptions.
+    # paypal_subscription_id and payment_provider are still SELECTed, and the
+    # PayPal-keyed create/upsert/renew trio that wrote them is gone with the
+    # provider. A row written by the surviving (telegram_user_id,
+    # invoice_payload) key must still carry both columns back.
+    assert "paypal_subscription_id" in canceled
+    assert canceled["paypal_subscription_id"] is None
+    assert canceled["payment_provider"] == "telegram_stars"
 
     # ---- MonitoringRunRepository (async monitoring queue, migration 0017) ---
     # The push webhook's durable queue. Same real-Postgres write-path coverage
