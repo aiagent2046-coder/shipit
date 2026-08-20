@@ -46,6 +46,16 @@ export function Footer() {
               <li><Link href="/ru/offer" className="transition-colors hover:text-text">Публичная оферта</Link></li>
               <li><Link href="/ru/privacy" className="transition-colors hover:text-text">Политика обработки персональных данных</Link></li>
               <li><Link href="/ru/refund" className="transition-colors hover:text-text">Условия возврата денежных средств</Link></li>
+              <li>
+                <a
+                  href="https://robokassa.com/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="transition-colors hover:text-text"
+                >
+                  Оплата через Robokassa
+                </a>
+              </li>
             </ul>
           </section>
 
@@ -55,6 +65,7 @@ export function Footer() {
               <p className="text-text">ИП Морозевская Кристина Олеговна</p>
               <p>ИНН: 672215400765</p>
               <p>ОГРНИП: 326670000033868</p>
+              <p>Адрес: Смоленская область, Угранский район, село Угра, ул. Некрасова, дом 16</p>
               <p>
                 Телефон:{" "}
                 <a href="tel:+79998109500" className="transition-colors hover:text-text">
