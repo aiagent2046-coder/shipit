@@ -234,3 +234,22 @@ def test_the_sentence_reads_correctly_for_a_single_table():
                           "supabase.from('leads').select();"),
     }))[0].explanation
     assert "creates them" in many
+
+
+def test_a_table_the_repository_never_names_is_outside_this_detector() -> None:
+    """The boundary the module docstring now states, pinned so it cannot drift
+    back into the wider claim.
+
+    CHECKED 2026-08-20 on the repository that motivated this module: the string
+    `agent_projects` appears nowhere in its archive — not in the migrations,
+    not in a `.from()` call, not in a generated types file. It was created in
+    the Supabase dashboard and the code reaches it some other way. This
+    detector reports tables the repository NAMES, so the very table it was
+    written for is outside it by construction, and only the live probe can
+    reach that case.
+    """
+    assert scan_schema_drift(make_zip({
+        "repo/supabase/migrations/001.sql":
+            "create table public.notes (id uuid primary key);",
+        "repo/src/lib/db.ts": "supabase.from('notes').select('*');",
+    })) == []

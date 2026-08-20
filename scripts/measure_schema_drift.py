@@ -54,6 +54,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -235,6 +236,29 @@ def main() -> int:
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(record, indent=2))
+
+    # A TABLE OF ZEROS IS NOT A RATE, and it reads exactly like one.
+    #
+    # This happened: run from a session whose GitHub token was scoped to a
+    # single repository, all 270 candidates answered HTTP 403, and the script
+    # printed `POOLED 0/  0 (0.0, 0.0, 0.0)` and exited 0. Nothing in that
+    # output distinguishes "no repository drifts" from "no repository was
+    # read" -- and the first reading is the one a tidy table of zeros invites.
+    #
+    # The same guard is in scripts/measure_service_role_routes.py for the same
+    # reason. A measurement that cannot tell you it measured nothing is worse
+    # than one that crashes.
+    reachable = [r for r in record["repos"] if r["reachable"]]
+    if record["repos"] and not reachable:
+        errors = Counter(str(r.get("error") or "unknown") for r in record["repos"])
+        print("\n" + "=" * 60, file=sys.stderr)
+        print(f"read 0 of {len(record['repos'])} repositories — this is OUR "
+              f"bug or our credentials, not a drift rate.", file=sys.stderr)
+        for reason, count in errors.most_common(5):
+            print(f"  {count:4}  {reason[:90]}", file=sys.stderr)
+        print(f"\n(the record is still at {OUT} for inspection)",
+              file=sys.stderr)
+        return 2
 
     schema_all = [r for r in record["repos"]
                   if r["reachable"] and r["has_supabase_dep"]

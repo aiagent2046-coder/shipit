@@ -8,6 +8,19 @@ tables this repository talks about and its migrations do not, so that the gap
 is at least visible to the person who could close it, and so the live probe
 (app/proof/rls_probe.py) has names to ask about.
 
+AND IT WOULD NOT HAVE FOUND `agent_projects` EITHER. Checked, 2026-08-20: the
+string appears nowhere in that repository's archive -- not in the migrations,
+not in a `.from()` call, not in a generated types file. This detector reports
+tables the repository NAMES; a table nothing names is outside it by
+construction, and that is the very table that motivated the module.
+
+So the boundary is narrower than the paragraph above may read. What this
+closes is "the code talks about a table the schema does not", which is a real
+and common gap (61% below). What it does NOT close is "a table exists in the
+database and the repository is silent about it" -- only the live probe can
+reach that, and only with the owner's consent and their key. Saying which of
+the two a reader is getting is the whole reason this paragraph exists.
+
 MEASURED 2026-08-19 by scripts/measure_schema_drift.py, which runs THIS
 detector -- not a copy of its rules -- over 540 candidate repositories in three
 strata. 225 use Supabase, 152 of those commit a schema:
