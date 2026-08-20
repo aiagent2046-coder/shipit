@@ -175,8 +175,11 @@ async def _send(update, *, audits, payments, fixpacks, accounts, calls):
 # 1. Telegram /fixpack <audit_id>
 # =========================================================================
 
-async def test_fixpack_command_github_audit_sends_invoice(monkeypatch):
-    monkeypatch.delenv("FIXPACK_STARS_PRICE", raising=False)
+async def test_fixpack_command_points_at_the_report_instead_of_selling():
+    """"/fixpack <audit_id>" used to mint a Stars invoice for that audit. Stars
+    is no longer a way to pay, so it hands over the link to the report the Fix
+    Pack is bought from -- with the audit id in it, so the payer lands on the
+    right page rather than the storefront."""
     audits, payments = FakeAuditRepo(), FakePaymentRepo()
     fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
     audit = audits.add(repo_url=REPO_URL)
@@ -184,30 +187,12 @@ async def test_fixpack_command_github_audit_sends_invoice(monkeypatch):
     result = await _send(_text_update(f"/fixpack {audit['id']}"),
                          audits=audits, payments=payments,
                          fixpacks=fixpacks, accounts=accounts, calls=calls)
-    assert result == {"ok": True, "handled": "fixpack", "result": "invoice_sent"}
+    assert result == {"ok": True, "handled": "fixpack", "result": "not_for_sale"}
 
-    invoices = [c for c in calls if c[0] == "sendInvoice"]
-    assert len(invoices) == 1
-    body = invoices[0][1]
-    assert body["title"] == telegram_stars.FIXPACK_TITLE
-    assert body["currency"] == "XTR"
-    assert body["provider_token"] == ""
-    # Payload encodes which audit this purchase is for.
-    assert body["payload"] == f"fixpack:{audit['id']}"
-    # 600 Stars by default.
-    assert body["prices"] == [{"label": telegram_stars.FIXPACK_TITLE, "amount": 600}]
-
-
-async def test_fixpack_command_env_overrides_price(monkeypatch):
-    monkeypatch.setenv("FIXPACK_STARS_PRICE", "750")
-    audits, payments = FakeAuditRepo(), FakePaymentRepo()
-    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
-    audit = audits.add(repo_url=REPO_URL)
-    await _send(_text_update(f"/fixpack {audit['id']}"),
-               audits=audits, payments=payments,
-               fixpacks=fixpacks, accounts=accounts, calls=calls)
-    body = [c for c in calls if c[0] == "sendInvoice"][0][1]
-    assert body["prices"][0]["amount"] == 750
+    assert not [c for c in calls if c[0] == "sendInvoice"]
+    msg = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+    assert f"/audit/{audit['id']}" in msg
+    assert "no longer accepted" in msg
 
 
 async def test_fixpack_command_zip_audit_is_rejected_no_invoice():

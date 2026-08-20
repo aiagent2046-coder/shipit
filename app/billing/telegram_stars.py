@@ -1,51 +1,57 @@
-"""Telegram Stars payment provider (Bot API).
+"""The Telegram bot: what it still does, now that it does not sell.
 
-Stars is the only way bots may charge for digital goods, and it's a
-simpler flow than classic Telegram Payments: the invoice currency is the
-literal "XTR" and `provider_token` is an empty string -- there is no
-third-party payment provider to register or tokenize (confirmed at
-https://core.telegram.org/bots/payments-stars).
+STARS WAS THE REASON THIS FILE EXISTS, and Stars is no longer a way to pay
+here. What survives is everything the bot does that is not a sale, and the
+file keeps its name because the payment history it reads is still filed under
+provider='telegram_stars' -- renaming the module would not rename the rows.
 
-The flow this module covers:
-  1. sendInvoice(currency="XTR", prices=[LabeledPrice(...)]) -> the user
-     sees a Pay button.
-  2. Telegram POSTs a `pre_checkout_query` update to our webhook the
-     instant they tap Pay; we must answerPreCheckoutQuery within 10s or
-     the charge is cancelled. We approve (nothing to reserve/oversell --
-     one pro tier, always available).
-  3. On success Telegram POSTs a `message` carrying `successful_payment`
-     with `telegram_payment_charge_id`; that id is the idempotency key
-     (Telegram retries the webhook until it gets 200, so the same charge
-     can arrive more than once). We grant pro and DM the api_key back.
+WHAT IT STILL DOES:
 
-Authenticity is Telegram's own `secret_token` mechanism: setWebhook is
-called with a secret, and Telegram echoes it in the
-`X-Telegram-Bot-Api-Secret-Token` header on every delivery. The webhook
-endpoint (app/main.py) constant-time-compares it, same posture as the
-reap endpoint's bearer token. This module never trusts an update it
-wasn't handed after that check.
+  The operator's Confirm button. A bank transfer is confirmed by a human
+  looking at their banking app, and this is where the tap lands. Owner-only
+  and fail-closed (_is_operator): with TELEGRAM_ADMIN_CHAT_ID unset the answer
+  is False for everyone, because "no allowlist, so allow all" would turn one
+  missing environment variable into a stranger-operated grant button.
 
-Not exercised against a real bot: this sandbox has no TELEGRAM_BOT_TOKEN
-and can't receive a real Telegram webhook. Outbound calls are injectable
-(`transport=`) so tests fake them with httpx.MockTransport, and
-scripts/verify_telegram_stars_locally.py lets the operator prove the
-real sendInvoice call with their own token. See the README.
+  Key recovery. /mykey, /rotatekey and /link, for a payer who has already paid
+  and has nothing in their hands. /link reads payments under both the
+  bank-transfer and the retired usdt_trc20 provider: a completed invoice is
+  someone's money whatever rail took it.
+
+  Receiving a charge we can no longer prevent. Telegram, not this database,
+  holds an invoice once minted -- an exported deep link sits in a chat until
+  someone taps it, and a subscription sold before the withdrawal renews on
+  Telegram's schedule. See handle_update for why every one of those is still
+  honoured, and pages the operator.
+
+  Cancelling. /unsubscribe still calls editUserStarSubscription. It is the one
+  Stars API call left, and it stops money rather than taking it.
+
+WHAT IT CANNOT DO: mint an invoice. sendInvoice, createInvoiceLink,
+build_invoice_payload and all three price readers are gone, and
+tests/test_billing_telegram.py asserts their absence rather than trusting the
+diff that removed them.
+
+Authenticity of an inbound update is Telegram's own `secret_token` mechanism:
+setWebhook is called with a secret, and Telegram echoes it in the
+`X-Telegram-Bot-Api-Secret-Token` header on every delivery. The webhook route
+constant-time-compares it, same posture as the reap endpoint's bearer token.
+This module never trusts an update it wasn't handed after that check.
+
+Not exercised against a real bot: this sandbox has no TELEGRAM_BOT_TOKEN and
+can't receive a real Telegram webhook. Outbound calls are injectable
+(`transport=`) so tests fake them with httpx.MockTransport. The script that
+proved the live sendInvoice call went with sendInvoice.
 """
 
 from __future__ import annotations
 
 import hmac
 import logging
-import os
 from typing import Any
 
 import httpx
 
-# Module level, unlike this file's other app.monitor use (a local import inside
-# _handle_monitor): tests patch the name in the consuming module, and having
-# both call sites read one binding keeps the patch target the same everywhere.
-# app.monitor imports nothing from app, so there is no cycle.
-from app import monitor
 from app.notify import telegram as tg
 
 logger = logging.getLogger(__name__)
@@ -72,51 +78,16 @@ CURRENCY = "XTR"
 # made, and the key it bought is still theirs to collect.
 RETIRED_USDT_PROVIDER = "usdt_trc20"
 
-# Price of the pro tier, in Stars. Env-overridable so it can be tuned
-# without a code change; a plain constant default keeps it configured-out
-# of the box. Stars are whole units -- `amount` in a LabeledPrice is the
-# integer star count for XTR (no minor-unit multiplier, unlike fiat).
-_DEFAULT_PRO_STARS = 250
-
-# Invoice copy for the Pro tier. Kept as module constants so the /upgrade
-# command and scripts/verify_telegram_stars_locally.py mint the exact same
-# invoice the operator already verified against the live Bot API.
-PRO_TITLE = "Drydock Pro"
-PRO_DESCRIPTION = "Drydock pro tier — higher audit limits and more."
-PRO_PAYLOAD = "pro"
-
-# Price of a Fix Pack, in Stars. Same env-overridable-with-default pattern
-# as _DEFAULT_PRO_STARS above -- a Fix Pack is a separate product (one
-# generated fix PR for one audit), priced independently of the Pro tier.
-_DEFAULT_FIXPACK_STARS = 600
-
-# Invoice copy for a Fix Pack. Unlike the Pro invoice, a Fix Pack is tied
-# to a specific audit, so the payload encodes that audit_id (see
-# FIXPACK_PAYLOAD_PREFIX): the successful_payment handler reads it back to
-# know which audit the purchase is for.
-FIXPACK_TITLE = "Drydock Fix Pack"
+# THE INVOICE COPY AND THE PRICES ARE GONE, and with them every function
+# that could mint a Stars invoice: send_invoice, create_invoice_link,
+# build_invoice_payload, pro_stars_price, fixpack_stars_price,
+# subscription_stars_price. Stars is no longer a way to pay here.
+#
+# The PAYLOAD PREFIXES stay. Telegram, not this database, holds an invoice
+# once it is minted, so a link exported before the withdrawal can still be
+# tapped, and a recurring subscription still renews on Telegram's schedule.
+# When one of those arrives the payload is how we know what it was for.
 FIXPACK_PAYLOAD_PREFIX = "fixpack:"
-
-
-def pro_stars_price() -> int:
-    raw = os.environ.get("TELEGRAM_PRO_STARS")
-    if raw:
-        try:
-            return int(raw)
-        except ValueError:
-            pass
-    return _DEFAULT_PRO_STARS
-
-
-def fixpack_stars_price() -> int:
-    raw = os.environ.get("FIXPACK_STARS_PRICE")
-    if raw:
-        try:
-            return int(raw)
-        except ValueError:
-            pass
-    return _DEFAULT_FIXPACK_STARS
-
 
 def fixpack_payload(audit_id: str) -> str:
     """Invoice payload for a Fix Pack purchase: the prefix plus the audit
@@ -146,54 +117,20 @@ _FIXPACK_ZIP_ONLY_TEXT = (
 # -- it is a fixed protocol constant, not a tuning knob.
 SUBSCRIPTION_PERIOD_SECONDS = 2592000
 
-# Throwaway tier that exists only to prove the subscription plumbing end to
-# end (a real Stars charge that renews and can be canceled). It is NOT the
-# Phase C monitoring price; 1 Star keeps the live test cheap. The invoice
-# payload is prefixed "sub:" so the successful_payment handler routes it the
-# same way "fixpack:" routes a Fix Pack purchase.
 SUBSCRIPTION_PAYLOAD_PREFIX = "sub:"
 SUBSCRIPTION_TIER = "test-monitoring"
 SUBSCRIPTION_PAYLOAD = f"{SUBSCRIPTION_PAYLOAD_PREFIX}{SUBSCRIPTION_TIER}"
-SUBSCRIPTION_TITLE = "Drydock Monitoring (test)"
-SUBSCRIPTION_DESCRIPTION = (
-    "Test subscription for Drydock continuous monitoring — billing "
-    "verification only, not the final product price."
-)
-_DEFAULT_SUBSCRIPTION_STARS = 1
-
-
-def subscription_stars_price() -> int:
-    raw = os.environ.get("SUBSCRIPTION_STARS")
-    if raw:
-        try:
-            return int(raw)
-        except ValueError:
-            pass
-    return _DEFAULT_SUBSCRIPTION_STARS
-
 
 # --- Continuous Monitoring subscription (Phase C) ---
 # A recurring Stars subscription bound to a specific repository. Same "sub:"
 # family as the test tier -- so successful_payment still routes it through
 # _handle_subscription_payment -- but the payload carries the canonical
 # owner/repo after a second "monitor:" segment: "sub:monitor:<owner/repo>".
-# That makes the natural key (telegram_user_id, invoice_payload) distinct per
-# repo per user, so one user can monitor several repos without a schema change.
+# Nothing mints one of these any more; the prefix is here to READ a renewal
+# that Telegram is still charging on a subscription sold before the
+# withdrawal.
 MONITOR_PAYLOAD_PREFIX = f"{SUBSCRIPTION_PAYLOAD_PREFIX}monitor:"
 MONITOR_TIER = "monitoring"
-MONITOR_TITLE = "Drydock Continuous Monitoring"
-
-
-def monitor_payload(repo_full_name: str) -> str:
-    return f"{MONITOR_PAYLOAD_PREFIX}{repo_full_name}"
-
-
-def _monitor_description(repo_full_name: str) -> str:
-    return (
-        f"Continuous monitoring for {repo_full_name} — re-audits on each push "
-        "to the default branch and alerts you here on new critical/high "
-        "findings. Renews every 30 days; cancel any time with /unsubscribe."
-    )
 
 
 def _monitor_confirmation_text(repo_full_name: str, expires_at: Any) -> str:
@@ -209,66 +146,6 @@ def _monitor_confirmation_text(repo_full_name: str, expires_at: Any) -> str:
     )
 
 
-def build_invoice_payload(
-    *, chat_id: int | str, title: str, description: str,
-    payload: str, stars: int,
-) -> dict[str, Any]:
-    """The JSON body for sendInvoice, for Stars specifically. Pure and
-    separate from the HTTP call so the exact shape (XTR, empty
-    provider_token, LabeledPrice) is unit-testable without a network.
-
-    Deliberately has NO subscription_period: sendInvoice CANNOT create a
-    recurring subscription invoice. Telegram rejects that with
-    SUBSCRIPTION_EXPORT_MISSING -- a subscription invoice "may not be sent
-    using messages.sendMedia [= Bot API sendInvoice], only exported to
-    invoice deep links using payments.exportInvoice [= createInvoiceLink]"
-    (https://core.telegram.org/api/subscriptions). An earlier version passed
-    subscription_period through here, which shipped a 400-looping /subscribe
-    to prod; the parameter is removed so that footgun can't recur. Recurring
-    invoices go through create_invoice_link below."""
-    return {
-        "chat_id": chat_id,
-        "title": title,
-        "description": description,
-        "payload": payload,
-        # Empty provider_token + XTR currency is what makes this a Stars
-        # invoice rather than a classic fiat one.
-        "provider_token": "",
-        "currency": CURRENCY,
-        "prices": [{"label": title, "amount": stars}],
-    }
-
-
-async def create_invoice_link(
-    *, title: str, description: str, payload: str, stars: int,
-    subscription_period: int | None = None, token: str,
-    transport: httpx.BaseTransport | None = None,
-) -> dict[str, Any]:
-    """Create an invoice via createInvoiceLink and return the Bot API envelope
-    ({"ok": True, "result": "<url>"}); `result` is a shareable invoice link,
-    NOT tied to any chat (hence no chat_id, unlike build_invoice_payload).
-
-    This is the ONLY way to mint a recurring Stars subscription invoice:
-    subscription invoices cannot be sent with sendInvoice and must be exported
-    as a deep link (https://core.telegram.org/api/subscriptions). Pass
-    subscription_period=SUBSCRIPTION_PERIOD_SECONDS for a subscription; omit it
-    for an ordinary one-shot link. Body is the same Stars shape as
-    build_invoice_payload minus chat_id."""
-    body: dict[str, Any] = {
-        "title": title,
-        "description": description,
-        "payload": payload,
-        "provider_token": "",
-        "currency": CURRENCY,
-        "prices": [{"label": title, "amount": stars}],
-    }
-    if subscription_period is not None:
-        body["subscription_period"] = subscription_period
-    return await _call(
-        "createInvoiceLink", body, token=token, transport=transport,
-    )
-
-
 # Telegram cancels the charge if we don't answerPreCheckoutQuery within
 # ~10s of the Pay tap ("within 10 seconds",
 # https://core.telegram.org/bots/api#answerprecheckoutquery). Bound the
@@ -281,22 +158,6 @@ async def create_invoice_link(
 PRE_CHECKOUT_TIMEOUT_S = 8.0
 
 _call = tg.call
-
-
-async def send_invoice(
-    *, chat_id: int | str, title: str, description: str, payload: str,
-    stars: int, token: str, transport: httpx.BaseTransport | None = None,
-) -> dict[str, Any]:
-    # One-shot invoices only (/upgrade, /fixpack). Subscriptions must NOT use
-    # this -- see build_invoice_payload and create_invoice_link.
-    return await _call(
-        "sendInvoice",
-        build_invoice_payload(
-            chat_id=chat_id, title=title, description=description,
-            payload=payload, stars=stars,
-        ),
-        token=token, transport=transport,
-    )
 
 
 async def edit_user_star_subscription(
@@ -334,6 +195,13 @@ async def answer_pre_checkout_query(
     )
 
 
+# What a payer sees if they tap Pay on an invoice minted before the
+# withdrawal. Telegram shows this string verbatim and cancels the charge, so
+# it has to say why and where to go, in the ~255 characters the Bot API allows.
+PRE_CHECKOUT_WITHDRAWN = (
+    "Telegram Stars is no longer accepted here. You have not been charged. "
+    "Open your audit report at drydock.co and pay there instead."
+)
 
 
 def _delivery_text(api_key: str) -> str:
@@ -399,55 +267,74 @@ async def handle_update(
     verified the secret-token header, so this trusts the update is really
     from Telegram.
 
+    STARS IS NO LONGER A WAY TO PAY, and the asymmetry that follows is the
+    whole shape of this function. Nothing here can MINT an invoice. Everything
+    here can still RECEIVE one, because refusing an update does not refund
+    anybody -- by the time a successful_payment arrives, Telegram has already
+    moved the money, and the only thing declining to handle it accomplishes is
+    that the payer gets nothing for it.
+
+    The one place refusal is not merely rude is pre_checkout_query: that is
+    the last moment before the charge, so it is declined with a reason. The
+    invoices that can still reach it are ones minted before the withdrawal --
+    Telegram, not this database, holds an invoice once it exists, and an
+    exported deep link lives in a chat until someone taps it.
+
     Update types that matter; anything else is acknowledged and ignored
     (Telegram sends many kinds to the same webhook URL):
-      * pre_checkout_query -> approve it (10s deadline). Product-agnostic: a
-        subscription's first charge also emits one, approved unconditionally
-        like every other product.
-      * message.successful_payment -> for a Pro purchase, grant pro and DM
-        the key (idempotent on telegram_payment_charge_id via
+      * pre_checkout_query -> DECLINE, with PRE_CHECKOUT_WITHDRAWN as the
+        reason Telegram shows the payer. No charge is made.
+      * message.successful_payment -> honour it. For a Pro purchase, grant pro
+        and DM the key (idempotent on telegram_payment_charge_id via
         grant_pro_tier); for a Fix Pack purchase (payload prefixed
         "fixpack:"), create the paid fixpack_jobs row instead (via
         grant_fixpack) and DM a confirmation -- no tier change, no key; for a
         subscription (payload prefixed "sub:"), upsert/renew the subscriptions
-        row (via grant_subscription) -- no account, no key.
+        row (via grant_subscription) -- no account, no key. Every one of these
+        also pages the operator: a Stars charge arriving after the rail was
+        withdrawn is an anomaly a human should look at, even though the
+        software handled it correctly.
       * callback_query -> an inline button was tapped. Only the operator's
         bank-transfer Confirm button produces one; owner-only, fail-closed.
       * subscription (BotSubscriptionUpdated) -> a renewal state change
         (canceled/active/failed); update the subscriptions row's status. This
         is the field key the Bot API uses for BotSubscriptionUpdated.
-      * message.text "/upgrade" -> send a Stars invoice for the pro tier
-        (the Pay button that /pricing tells users to expect).
-      * message.text "/subscribe" -> send a recurring Stars invoice for the
-        test-monitoring subscription tier.
+      * message.text "/upgrade", "/subscribe", "/monitor", "/fixpack" -> say
+        where to pay instead. None of them mints anything.
       * message.text "/unsubscribe" -> cancel the caller's active
         subscription's auto-renewal (editUserStarSubscription); access
-        continues until the current period ends.
-      * message.text "/fixpack <audit_id>" -> send a Stars invoice for a
-        Fix Pack scoped to that audit (GitHub-URL audits only).
+        continues until the current period ends. KEPT, and it is the one
+        Stars API call that survived: it STOPS money rather than taking it,
+        and a subscriber left unable to cancel would keep being charged for a
+        product we withdrew.
       * message.text "/mykey" -> resend the delivery message for the
         account already linked to this chat_id (key recovery).
       * message.text "/link <reference>" -> a payer claims a credited
-        on-chain payment by its tx hash, linking it to this chat_id so
-        /mykey can recover it thereafter.
+        payment by its reference, linking it to this chat_id so /mykey can
+        recover it thereafter.
     """
     from app.billing import grant_pro_tier
 
     pcq = update.get("pre_checkout_query")
     if pcq is not None:
         # Answer FIRST, before any repo is consulted, and identically for
-        # every product (Pro and Fix Pack alike -- the payload is not even
-        # read here): there is nothing to reserve or oversell, so approving
-        # is unconditional. Doing a DB round-trip (e.g. re-checking the audit
-        # or an existing fixpack_job) before answering is exactly what would
-        # blow Telegram's ~10s deadline under Supabase latency and cancel the
-        # charge -- real state validation belongs in the successful_payment
-        # handlers below, never on this path. The short PRE_CHECKOUT_TIMEOUT_S
-        # bounds the one outbound call so even Bot API slowness fails fast.
+        # every product -- the payload is not even read. Doing a DB round-trip
+        # before answering is what would blow Telegram's ~10s deadline under
+        # Supabase latency; the short PRE_CHECKOUT_TIMEOUT_S bounds the one
+        # outbound call so even Bot API slowness fails fast.
+        #
+        # ok=False, where this used to approve unconditionally. This is the
+        # last moment before the charge and the only point in the whole flow
+        # where refusing actually spares the payer money rather than merely
+        # withholding what they bought. An invoice can only reach here if it
+        # was minted before the withdrawal, so the reason has to say that and
+        # point somewhere that still works.
         await answer_pre_checkout_query(
-            pcq["id"], ok=True, token=token, transport=transport
+            pcq["id"], ok=False, error_message=PRE_CHECKOUT_WITHDRAWN,
+            token=token, transport=transport,
         )
-        return {"ok": True, "handled": "pre_checkout_query"}
+        return {"ok": True, "handled": "pre_checkout_query",
+                "result": "declined_withdrawn"}
 
     # An inline button was tapped. Today the only one that produces a callback
     # is the operator's bank-transfer confirm button (every other keyboard in
@@ -475,6 +362,16 @@ async def handle_update(
     sp = message.get("successful_payment")
     if sp is not None:
         payload = sp.get("invoice_payload", "") or ""
+        # A Stars charge after the rail was withdrawn. The handlers below still
+        # do the right thing with it -- the money has already moved and the
+        # payer must get what they paid for -- but a human should know it
+        # happened, because it means an invoice minted before the withdrawal is
+        # still out there, or a subscription is still renewing.
+        #
+        # Best-effort and BEFORE the grant: notify_operator never raises and
+        # never blocks (app/alerts.py), and an alert that only fires on the
+        # success path would go missing in exactly the case worth hearing about.
+        await _alert_charge_on_a_withdrawn_rail(sp, payload)
         if payload.startswith(FIXPACK_PAYLOAD_PREFIX):
             return await _handle_fixpack_payment(
                 message, sp, payment_repo=payment_repo,
@@ -708,40 +605,57 @@ _NO_ACCOUNT_TEXT = (
 )
 
 
+# WHERE TO PAY NOW. One string, because four commands used to mint four
+# invoices and all four now have the same answer: the site. Naming the reason
+# matters more than it looks -- "not available" reads as an outage, and a payer
+# who thinks the bot is broken tries again instead of going where the money is
+# actually taken.
+_PAY_ON_THE_SITE = (
+    "Telegram Stars is no longer accepted here.\n\n"
+    "Payment moved to the site, where the price is shown in full before you "
+    "pay and the receipt has an address on it. Open your audit report at "
+    f"{SITE_URL} and buy from there.\n\n"
+    "Nothing you have already paid for is affected — /mykey still works, and "
+    "/link still claims a payment you have made."
+)
+
+
+async def _pay_on_the_site(
+    chat_id: int, handled: str, *, token: str,
+    transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    await send_message(
+        chat_id, _PAY_ON_THE_SITE, token=token, transport=transport,
+    )
+    return {"ok": True, "handled": handled, "result": "not_for_sale"}
+
+
 async def _handle_upgrade(
     message: dict[str, Any], *, token: str,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    # The /pricing page tells users to run /upgrade to pay with Stars; this
-    # sends the invoice that produces the Pay button. Reuses send_invoice and
-    # the same PRO_* copy / pro_stars_price() the verify script proved live.
-    chat_id = message["chat"]["id"]
-    await send_invoice(
-        chat_id=chat_id, title=PRO_TITLE, description=PRO_DESCRIPTION,
-        payload=PRO_PAYLOAD, stars=pro_stars_price(),
-        token=token, transport=transport,
-    )
-    return {"ok": True, "handled": "upgrade"}
-
-
-def _subscribe_prompt_text(url: str) -> str:
-    return (
-        "Drydock Monitoring (test) — a recurring Telegram Stars subscription "
-        "that renews every 30 days.\n\n"
-        f"Tap to subscribe:\n{url}\n\n"
-        "You can cancel auto-renewal any time with /unsubscribe."
+    """/pricing used to tell people to run this to get a Pay button. It mints
+    nothing now; it says where the Pay button lives."""
+    return await _pay_on_the_site(
+        message["chat"]["id"], "upgrade", token=token, transport=transport,
     )
 
 
-# What both subscription commands say instead of minting an invoice. States the
-# reason and that no money moved, because "unavailable" alone reads as a bug.
+# What the subscription commands say. Monitoring was withdrawn from sale before
+# Stars was (#184: the price was a placeholder and the audit spend was neither
+# capped nor attributed), so this text has to carry BOTH facts -- a reader who
+# is told only about the payment rail will reasonably ask to pay another way.
 _MONITORING_WITHDRAWN_TEXT = (
-    "Continuous monitoring isn't on sale right now.\n\n"
+    "Continuous monitoring isn't on sale.\n\n"
     "It was priced as a placeholder and its audit spend wasn't capped or "
     "attributed to the subscriber, so we withdrew it instead of charging for "
-    "something we hadn't finished costing. You haven't been charged.\n\n"
+    "something we hadn't finished costing. Telegram Stars, which is how it "
+    "used to be billed, is no longer accepted here either. You haven't been "
+    "charged.\n\n"
     "A Fix Pack is still available per audit \u2014 that one we can price "
-    "honestly."
+    "honestly. Buy it from your report at " + SITE_URL + ".\n\n"
+    "If you have a monitoring subscription from before this, send "
+    "/unsubscribe to stop it renewing."
 )
 
 
@@ -759,34 +673,17 @@ async def _handle_subscribe(
     message: dict[str, Any], *, token: str,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    # Withdrawn from sale -- see monitor.MONITORING_FOR_SALE. Checked before
-    # createInvoiceLink so no payable link is ever minted.
-    if not monitor.MONITORING_FOR_SALE:
-        return await _reject_monitoring_sale(
-            message["chat"]["id"], "subscribe",
-            token=token, transport=transport,
-        )
-    # A recurring Stars invoice CANNOT be sent with sendInvoice -- Telegram
-    # returns 400 SUBSCRIPTION_EXPORT_MISSING (see build_invoice_payload). A
-    # subscription invoice must be exported as a deep link via createInvoiceLink
-    # and then handed to the user, who taps it to open the Pay flow. So: mint
-    # the link, then DM it (with an inline URL button for one-tap UX).
-    chat_id = message["chat"]["id"]
-    resp = await create_invoice_link(
-        title=SUBSCRIPTION_TITLE, description=SUBSCRIPTION_DESCRIPTION,
-        payload=SUBSCRIPTION_PAYLOAD, stars=subscription_stars_price(),
-        subscription_period=SUBSCRIPTION_PERIOD_SECONDS,
-        token=token, transport=transport,
+    """Unconditional now, where it used to consult monitor.MONITORING_FOR_SALE.
+
+    The flag still gates the monitoring RUNNER, and turning it back on is the
+    right way to resume that work. What it can no longer do is put this
+    command back into business, because the code that minted a subscription
+    invoice is gone with the Stars rail. A branch that reads a flag it cannot
+    act on is worse than no branch: it claims a capability the module does not
+    have."""
+    return await _reject_monitoring_sale(
+        message["chat"]["id"], "subscribe", token=token, transport=transport,
     )
-    url = resp["result"]
-    reply_markup = {
-        "inline_keyboard": [[{"text": "Subscribe with Stars", "url": url}]]
-    }
-    await send_message(
-        chat_id, _subscribe_prompt_text(url),
-        token=token, transport=transport, reply_markup=reply_markup,
-    )
-    return {"ok": True, "handled": "subscribe"}
 
 
 def _subscription_confirmation_text(expires_at: Any) -> str:
@@ -798,6 +695,44 @@ def _subscription_confirmation_text(expires_at: Any) -> str:
         "It renews automatically every 30 days. Send /unsubscribe to stop "
         "auto-renewal; you keep access until the current period ends."
     )
+
+
+async def _alert_charge_on_a_withdrawn_rail(
+    sp: dict[str, Any], payload: str,
+) -> None:
+    """Page the operator that Telegram Stars took money we no longer sell for.
+
+    Deduped on the charge id, so a retried webhook -- which Telegram sends
+    until it gets a 200 -- pages once rather than once per retry.
+
+    NEVER RAISES, and the try/except is not redundant with
+    notify_operator's own promise never to. This runs after the payer has been
+    charged and before they are granted anything: if an exception could escape
+    here, an outage on OUR alert channel would turn a paid charge into a 5xx,
+    Telegram would retry it, and the payer would still have nothing. That
+    "notify_operator swallows everything" is true today is exactly the kind of
+    fact a caller on this path must not depend on another module keeping.
+    """
+    from app.alerts import notify_operator
+
+    charge = sp.get("telegram_payment_charge_id") or "unknown"
+    try:
+        await notify_operator(
+            "Telegram Stars charge on a WITHDRAWN rail.\n\n"
+            f"charge: {charge}\n"
+            f"payload: {payload or '(none)'}\n"
+            f"amount: {sp.get('total_amount')} {sp.get('currency', CURRENCY)}"
+            "\n\n"
+            "The payer has been granted what they bought. Someone still holds "
+            "an invoice minted before the withdrawal, or a subscription is "
+            "still renewing — check whether it should be refunded or "
+            "cancelled.",
+            dedupe_key=f"stars-withdrawn:{charge}",
+        )
+    except Exception:
+        logger.warning(
+            "withdrawn-rail alert failed for charge %s", charge, exc_info=True
+        )
 
 
 async def _handle_subscription_payment(
@@ -940,11 +875,13 @@ async def _handle_fixpack(
     message: dict[str, Any], text: str, *, audit_repo: Any,
     token: str, transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    # "/fixpack <audit_id>": send a Stars invoice for a Fix Pack scoped to
-    # that audit. Mirrors _handle_upgrade's shape (same send_invoice, same
-    # env-driven price), but the payload encodes the audit_id and the
-    # invoice is only offered for GitHub-URL audits (repo_url not null) --
-    # a zip-upload audit has no repo to open a fix PR against (V1 scope).
+    """"/fixpack <audit_id>" used to send a Stars invoice for that audit.
+
+    The audit lookup and the zip-upload gate are KEPT even though nothing is
+    sold here any more. Sending someone to the site to buy a Fix Pack for an
+    audit that does not exist, or for a zip upload that has no repository to
+    open a pull request against, wastes their time at the site instead of
+    here -- and the second refusal is the one they would not understand."""
     chat_id = message["chat"]["id"]
     parts = text.split(maxsplit=1)
     audit_id = parts[1].strip() if len(parts) > 1 else ""
@@ -973,99 +910,25 @@ async def _handle_fixpack(
         )
         return {"ok": True, "handled": "fixpack", "result": "not_github_audit"}
 
-    await send_invoice(
-        chat_id=chat_id, title=FIXPACK_TITLE,
-        description=_fixpack_description(audit_id),
-        payload=fixpack_payload(audit_id), stars=fixpack_stars_price(),
+    await send_message(
+        chat_id,
+        "Telegram Stars is no longer accepted here. Buy the Fix Pack for this "
+        f"audit from its report:\n{SITE_URL}/audit/{audit_id}",
         token=token, transport=transport,
     )
-    return {"ok": True, "handled": "fixpack", "result": "invoice_sent"}
-
-
-_MONITOR_ZIP_ONLY_TEXT = (
-    "Continuous monitoring watches a GitHub repository for new issues on each "
-    "push, so it only works for audits run from a public GitHub URL. This audit "
-    "was created from an uploaded zip (no repository to watch). Re-run the audit "
-    "with your public GitHub repo URL, then enable monitoring for that audit."
-)
-
-
-def _monitor_prompt_text(repo_full_name: str, url: str) -> str:
-    return (
-        f"Continuous monitoring for {repo_full_name} — a recurring Telegram "
-        "Stars subscription that renews every 30 days. We re-audit on each push "
-        "to the default branch (at most once a day) and alert you here on new "
-        "critical/high findings.\n\n"
-        f"Tap to enable:\n{url}\n\n"
-        "You can cancel auto-renewal any time with /unsubscribe."
-    )
+    return {"ok": True, "handled": "fixpack", "result": "not_for_sale"}
 
 
 async def _handle_monitor(
     message: dict[str, Any], text: str, *, audit_repo: Any,
     token: str, transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    # "/monitor <audit_id>": subscribe to continuous monitoring of the repo the
-    # audit ran against. Mirrors _handle_fixpack's audit lookup + repo_url gate,
-    # but sends a RECURRING subscription invoice (createInvoiceLink, like
-    # /subscribe -- a subscription invoice cannot be sent with sendInvoice, see
-    # build_invoice_payload) whose payload binds the repo:
-    # sub:monitor:<owner/repo>. _handle_subscription_payment records that repo on
-    # the subscriptions row.
-    from app.monitor import normalize_repo_full_name
-
-    chat_id = message["chat"]["id"]
-    # Withdrawn from sale -- see monitor.MONITORING_FOR_SALE. Before the audit
-    # lookup: there is nothing to validate for a product we will not sell.
-    if not monitor.MONITORING_FOR_SALE:
-        return await _reject_monitoring_sale(
-            chat_id, "monitor", token=token, transport=transport,
-        )
-    parts = text.split(maxsplit=1)
-    audit_id = parts[1].strip() if len(parts) > 1 else ""
-    if not audit_id:
-        await send_message(
-            chat_id,
-            "Usage: `/monitor <audit_id>` — the id of a completed audit you ran "
-            "from a public GitHub URL. Enables continuous monitoring of that "
-            "repository.",
-            token=token, transport=transport,
-        )
-        return {"ok": True, "handled": "monitor", "result": "missing_audit_id"}
-
-    audit = await audit_repo.get(audit_id) if audit_repo is not None else None
-    if audit is None:
-        await send_message(
-            chat_id,
-            "No audit with that id was found. Double-check the audit id from "
-            "your report.",
-            token=token, transport=transport,
-        )
-        return {"ok": True, "handled": "monitor", "result": "audit_not_found"}
-
-    repo_full_name = normalize_repo_full_name(audit.get("repo_url"))
-    if not repo_full_name:
-        await send_message(
-            chat_id, _MONITOR_ZIP_ONLY_TEXT, token=token, transport=transport
-        )
-        return {"ok": True, "handled": "monitor", "result": "not_github_audit"}
-
-    resp = await create_invoice_link(
-        title=MONITOR_TITLE, description=_monitor_description(repo_full_name),
-        payload=monitor_payload(repo_full_name), stars=subscription_stars_price(),
-        subscription_period=SUBSCRIPTION_PERIOD_SECONDS,
-        token=token, transport=transport,
+    """Refuses before the audit lookup, and unconditionally -- see
+    _handle_subscribe. There is nothing to validate for a product we will not
+    sell, and no rail left to sell it on."""
+    return await _reject_monitoring_sale(
+        message["chat"]["id"], "monitor", token=token, transport=transport,
     )
-    url = resp["result"]
-    reply_markup = {
-        "inline_keyboard": [[{"text": "Enable monitoring with Stars", "url": url}]]
-    }
-    await send_message(
-        chat_id, _monitor_prompt_text(repo_full_name, url),
-        token=token, transport=transport, reply_markup=reply_markup,
-    )
-    return {"ok": True, "handled": "monitor", "result": "invoice_sent",
-            "repo_full_name": repo_full_name}
 
 
 async def _handle_fixpack_payment(

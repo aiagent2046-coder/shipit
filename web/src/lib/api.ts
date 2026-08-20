@@ -21,9 +21,6 @@ export const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
 ).replace(/\/+$/, "");
 
-export const TELEGRAM_BOT_USERNAME =
-  process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "";
-
 // A typed error carrying the backend's {reason, detail} envelope when present,
 // so the UI can show something honest instead of "something went wrong".
 export class ApiError extends Error {

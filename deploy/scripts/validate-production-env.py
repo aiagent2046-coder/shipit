@@ -36,6 +36,12 @@ RETIRED_RAIL_VARIABLES = (
     "USDT_POLL_TOKEN",
     "USDT_TRC20_ADDRESS",
     "TRONGRID_API_KEY",
+    # Stars prices. TELEGRAM_BOT_TOKEN is NOT here and must not be: the bot
+    # survived the removal of the Stars sale, and it is both the operator's
+    # bank-transfer confirm button and the only notification channel there is.
+    "TELEGRAM_PRO_STARS",
+    "FIXPACK_STARS_PRICE",
+    "SUBSCRIPTION_STARS",
 )
 
 

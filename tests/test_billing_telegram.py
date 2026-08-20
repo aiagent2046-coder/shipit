@@ -113,23 +113,28 @@ def _successful_payment_update(charge_id: str, chat_id: int = 555):
     }
 
 
-# --- 1. invoice payload shape ---
+# --- 1. nothing mints an invoice ---
 
-def test_build_invoice_payload_is_a_stars_invoice():
-    body = telegram_stars.build_invoice_payload(
-        chat_id=42, title="Drydock Pro", description="pro tier",
-        payload="pro", stars=250,
-    )
-    assert body["currency"] == "XTR"
-    assert body["provider_token"] == ""          # empty => Stars, not fiat
-    assert body["prices"] == [{"label": "Drydock Pro", "amount": 250}]
-    assert body["chat_id"] == 42
-    assert body["payload"] == "pro"
+def test_no_function_here_can_mint_a_stars_invoice():
+    """Stars is no longer a way to pay. The test is on ABSENCE, because that
+    is the property a diff cannot show: any one of these names coming back
+    means something can charge a Star again."""
+    for name in ("build_invoice_payload", "create_invoice_link", "send_invoice",
+                 "pro_stars_price", "fixpack_stars_price",
+                 "subscription_stars_price"):
+        assert not hasattr(telegram_stars, name), (
+            f"telegram_stars.{name} is back, and with it the ability to mint "
+            "a Stars invoice"
+        )
 
 
-# --- 2. pre_checkout_query approval ---
+# --- 2. pre_checkout_query refusal ---
 
-async def test_pre_checkout_query_is_approved():
+async def test_pre_checkout_query_is_declined_with_a_reason():
+    """The last moment before the charge, and the ONLY point in the flow where
+    refusing spares the payer money instead of merely withholding what they
+    bought. An invoice can still reach here: Telegram holds it once minted, and
+    an exported deep link sits in a chat until someone taps it."""
     calls: list = []
     transport = _telegram_transport(calls)
     update = {"update_id": 1, "pre_checkout_query": {
@@ -141,8 +146,18 @@ async def test_pre_checkout_query_is_approved():
         token="t", transport=transport,
     )
     assert result["handled"] == "pre_checkout_query"
-    assert calls == [("answerPreCheckoutQuery",
-                      {"pre_checkout_query_id": "pcq_1", "ok": True})]
+    assert result["result"] == "declined_withdrawn"
+    assert len(calls) == 1
+    method, body = calls[0]
+    assert method == "answerPreCheckoutQuery"
+    assert body["ok"] is False
+    # Telegram shows this string to the payer verbatim, so it has to say they
+    # were not charged and where to go instead.
+    assert "not been charged" in body["error_message"]
+    assert "drydock.co" in body["error_message"]
+    # The Bot API caps error_message at 255 characters; a longer one is
+    # rejected and the payer sees Telegram's generic failure instead.
+    assert len(body["error_message"]) <= 255
 
 
 class _ExplodingRepo:
@@ -162,13 +177,15 @@ class _ExplodingRepo:
         return _boom
 
 
-async def test_fixpack_pre_checkout_is_approved_without_touching_db():
+async def test_pre_checkout_answers_without_touching_the_db():
     # The incident: a Fix Pack pre_checkout timed out (BOT_PRECHECKOUT_TIMEOUT)
-    # while the Pro one was fine. Guard the fix: a Fix Pack pre_checkout
-    # (payload "fixpack:<audit_id>") must be answered ok=True the same as Pro,
-    # WITHOUT consulting audit_repo/fixpack_repo -- validating fixpack state
-    # here is what a slow DB would stall on. Exploding repos prove no repo is
-    # touched on this path.
+    # while the Pro one was fine, because that path did a DB round trip first.
+    # The answer is now a refusal rather than an approval, and the deadline is
+    # unchanged: Telegram still cancels at ~10s, and a decline that arrives
+    # late is as bad as an approval that does -- the payer gets Telegram's
+    # generic failure instead of the sentence explaining where to pay.
+    #
+    # Exploding repos prove no repo is touched on this path.
     calls: list = []
     transport = _telegram_transport(calls)
     update = {"update_id": 1, "pre_checkout_query": {
@@ -181,8 +198,9 @@ async def test_fixpack_pre_checkout_is_approved_without_touching_db():
         token="t", transport=transport,
     )
     assert result["handled"] == "pre_checkout_query"
-    assert calls == [("answerPreCheckoutQuery",
-                      {"pre_checkout_query_id": "pcq_fp", "ok": True})]
+    assert calls[0][0] == "answerPreCheckoutQuery"
+    assert calls[0][1]["pre_checkout_query_id"] == "pcq_fp"
+    assert calls[0][1]["ok"] is False
 
 
 async def test_pre_checkout_answer_uses_timeout_under_telegram_deadline(monkeypatch):
@@ -557,27 +575,63 @@ async def test_link_without_hash_shows_usage():
     assert "Usage" in _last_text(calls)
 
 
-# --- 7. /upgrade sends a Stars invoice ---
+# --- 7. the commands that used to sell ---
 
-async def test_upgrade_sends_stars_invoice(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_PRO_STARS", raising=False)
+async def test_upgrade_mints_nothing_and_says_where_to_pay():
+    """/pricing told people to run /upgrade to get a Pay button. It now says
+    where the Pay button is. Saying WHY matters: "not available" reads as an
+    outage, and a payer who thinks the bot is broken retries here instead of
+    going to the site."""
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
     result = await _send(_text_update("/upgrade", 888), accounts, payments, calls)
-    assert result == {"ok": True, "handled": "upgrade"}
-    # Exactly one sendInvoice call, carrying the verified Pro invoice params.
-    invoices = [c for c in calls if c[0] == "sendInvoice"]
-    assert len(invoices) == 1
-    body = invoices[0][1]
-    assert body["chat_id"] == 888
-    assert body["title"] == telegram_stars.PRO_TITLE
-    assert body["description"] == telegram_stars.PRO_DESCRIPTION
-    assert body["payload"] == telegram_stars.PRO_PAYLOAD
-    assert body["currency"] == "XTR"
-    assert body["provider_token"] == ""
-    assert body["prices"] == [
-        {"label": telegram_stars.PRO_TITLE,
-         "amount": telegram_stars.pro_stars_price()}
-    ]
+
+    assert result == {"ok": True, "handled": "upgrade",
+                      "result": "not_for_sale"}
+    assert not any(c[0] in ("sendInvoice", "createInvoiceLink") for c in calls)
+    dm = _last_text(calls)
+    assert "no longer accepted" in dm
+    assert "drydock.co" in dm
+    # The two things that still work for someone who has already paid.
+    assert "/mykey" in dm and "/link" in dm
+
+
+async def test_fixpack_command_points_at_the_report_for_that_audit():
+    """The audit lookup is kept even though nothing is sold here: a deep link
+    to the wrong audit, or to a zip upload with no repository behind it, wastes
+    the payer's time at the site rather than here."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+
+    class Audits:
+        async def get(self, audit_id):
+            return {"id": audit_id, "repo_url": "https://github.com/acme/widget"}
+
+    result = await telegram_stars.handle_update(
+        _text_update("/fixpack aud_1234", 888),
+        account_repo=accounts, payment_repo=payments, audit_repo=Audits(),
+        token="t", transport=_telegram_transport(calls),
+    )
+    assert result["result"] == "not_for_sale"
+    assert not any(c[0] == "sendInvoice" for c in calls)
+    assert "/audit/aud_1234" in _last_text(calls)
+
+
+async def test_fixpack_command_still_refuses_a_zip_audit():
+    """The gate that would be confusing at the far end. A zip upload has no
+    repository to open a pull request against, and the site would refuse it --
+    but only after the payer had gone there expecting to buy."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+
+    class Audits:
+        async def get(self, audit_id):
+            return {"id": audit_id, "repo_url": None}
+
+    result = await telegram_stars.handle_update(
+        _text_update("/fixpack aud_zip", 888),
+        account_repo=accounts, payment_repo=payments, audit_repo=Audits(),
+        token="t", transport=_telegram_transport(calls),
+    )
+    assert result["result"] == "not_github_audit"
+    assert "/audit/aud_zip" not in _last_text(calls)
 
 
 # --- 8. recurring subscriptions (Telegram Stars) ---
@@ -678,44 +732,12 @@ def _sub_updated_update(state, *, user_id=555,
         "state": state}}
 
 
-def test_build_invoice_payload_never_carries_subscription_period():
-    # sendInvoice cannot create a subscription invoice (Telegram returns
-    # SUBSCRIPTION_EXPORT_MISSING), so build_invoice_payload must never emit a
-    # subscription_period -- the field is gone entirely from this one-shot path.
-    body = telegram_stars.build_invoice_payload(
-        chat_id=1, title="t", description="d", payload="p", stars=1)
-    assert "subscription_period" not in body
-
-
-async def test_create_invoice_link_builds_subscription_link():
-    # A subscription invoice is minted via createInvoiceLink (NOT sendInvoice):
-    # same Stars body, WITHOUT chat_id, WITH subscription_period. resp["result"]
-    # is the shareable link string.
-    calls: list = []
-    transport = _telegram_transport(calls)
-    resp = await telegram_stars.create_invoice_link(
-        title=telegram_stars.SUBSCRIPTION_TITLE,
-        description=telegram_stars.SUBSCRIPTION_DESCRIPTION,
-        payload=telegram_stars.SUBSCRIPTION_PAYLOAD, stars=1,
-        subscription_period=telegram_stars.SUBSCRIPTION_PERIOD_SECONDS,
-        token="t", transport=transport,
-    )
-    assert resp["result"] == "https://t.me/$test_invoice_link"
-    assert len(calls) == 1 and calls[0][0] == "createInvoiceLink"
-    body = calls[0][1]
-    assert "chat_id" not in body
-    assert body["subscription_period"] == 2592000
-    assert body["currency"] == "XTR"
-    assert body["provider_token"] == ""
-    assert body["payload"] == telegram_stars.SUBSCRIPTION_PAYLOAD
-    assert body["prices"] == [{"label": telegram_stars.SUBSCRIPTION_TITLE, "amount": 1}]
-
-
 async def test_subscribe_mints_no_invoice_while_monitoring_is_withdrawn():
-    """No enable_monitoring(): the shipped default. The refusal has to come
-    before createInvoiceLink, because a subscription link is a payable deep
-    link -- once minted it lives in a chat and can be tapped later, long after
-    we decided not to sell it."""
+    """The refusal used to come before createInvoiceLink, because a
+    subscription link is a payable deep link -- once minted it lives in a chat
+    and can be tapped later, long after we decided not to sell it. There is no
+    createInvoiceLink any more, so the property is now structural; the
+    assertions stay because what they check is the OUTCOME, not the branch."""
     calls: list = []
     result = await _send_sub(_text_update("/subscribe", 888), calls=calls)
 
@@ -741,39 +763,24 @@ async def test_monitor_command_mints_no_invoice_while_withdrawn():
     assert not any(c[0] == "createInvoiceLink" for c in calls)
 
 
-async def test_subscribe_exports_invoice_link_and_dms_it(monkeypatch):
+async def test_the_for_sale_flag_cannot_put_monitoring_back_on_the_bot(monkeypatch):
+    """monitor.MONITORING_FOR_SALE still gates the monitoring RUNNER, and
+    turning it back on is the right way to resume that work. What it can no
+    longer do is put /subscribe or /monitor back into business: the code that
+    minted a subscription invoice went with the Stars rail.
+
+    Asserted rather than assumed, because the flag reads like a kill switch
+    for the whole feature and the next person to flip it will expect a sale."""
     enable_monitoring(monkeypatch)
-    # /subscribe must NOT call sendInvoice (that 400-looped in prod). It exports
-    # a link via createInvoiceLink, then DMs the link to the user.
-    monkeypatch.delenv("SUBSCRIPTION_STARS", raising=False)
     calls: list = []
-    result = await _send_sub(_text_update("/subscribe", 888), calls=calls)
-    assert result == {"ok": True, "handled": "subscribe"}
 
-    # No sendInvoice on the subscription path -- ever.
-    assert not any(c[0] == "sendInvoice" for c in calls)
+    for command, handled in (("/subscribe", "subscribe"),
+                             ("/monitor some-audit-id", "monitor")):
+        result = await _send_sub(_text_update(command, 888), calls=calls)
+        assert result == {"ok": True, "handled": handled,
+                          "result": "not_for_sale"}
 
-    links = [c for c in calls if c[0] == "createInvoiceLink"]
-    assert len(links) == 1
-    body = links[0][1]
-    assert "chat_id" not in body
-    assert body["payload"] == telegram_stars.SUBSCRIPTION_PAYLOAD
-    assert body["subscription_period"] == 2592000
-    assert body["currency"] == "XTR"
-    assert body["provider_token"] == ""
-    assert body["prices"] == [
-        {"label": telegram_stars.SUBSCRIPTION_TITLE,
-         "amount": telegram_stars.subscription_stars_price()}]
-
-    # The user receives a message carrying the invoice URL, with an inline URL
-    # button pointing at the same link for one-tap payment.
-    sends = [c for c in calls if c[0] == "sendMessage"]
-    assert len(sends) == 1
-    msg = sends[0][1]
-    assert msg["chat_id"] == 888
-    assert "https://t.me/$test_invoice_link" in msg["text"]
-    button = msg["reply_markup"]["inline_keyboard"][0][0]
-    assert button["url"] == "https://t.me/$test_invoice_link"
+    assert not any(c[0] in ("sendInvoice", "createInvoiceLink") for c in calls)
 
 
 # (a) first payment -> creates one subscriptions row with the right expires_at
@@ -888,15 +895,20 @@ async def test_unsubscribe_without_active_subscription():
     assert not any(c[0] == "editUserStarSubscription" for c in calls)
 
 
-async def test_subscription_pre_checkout_is_approved():
+async def test_subscription_pre_checkout_is_declined_too():
+    """Product-agnostic, and deliberately so: the payload is not read on this
+    path. A subscription's FIRST charge emits a pre-checkout, so declining it
+    stops a subscription from starting on a rail we no longer accept. Renewals
+    of an existing subscription do not come through here -- they arrive as
+    successful_payment and are honoured."""
     calls: list = []
     update = {"update_id": 1, "pre_checkout_query": {
         "id": "pcq_sub", "from": {"id": 555}, "currency": "XTR",
         "total_amount": 1, "invoice_payload": telegram_stars.SUBSCRIPTION_PAYLOAD}}
     result = await _send_sub(update, calls=calls)
     assert result["handled"] == "pre_checkout_query"
-    assert calls == [("answerPreCheckoutQuery",
-                      {"pre_checkout_query_id": "pcq_sub", "ok": True})]
+    assert calls[0][0] == "answerPreCheckoutQuery"
+    assert calls[0][1]["ok"] is False
 
 
 async def test_subscription_payment_not_configured_reports_gracefully():
@@ -973,3 +985,65 @@ async def test_a_pro_link_is_untouched_by_the_new_check():
     assert result["result"] == "linked"
     assert row["telegram_chat_id"] == "777"
     assert _delivered_key(_last_text(calls)) is not None
+
+
+# --- 12. a charge that arrives after the rail was withdrawn -----------------
+
+async def test_a_stars_charge_is_still_honoured_after_the_withdrawal():
+    """The asymmetry that shapes handle_update. Nothing here can mint an
+    invoice, but by the time successful_payment arrives Telegram has already
+    moved the money -- refusing to handle it does not refund anybody, it only
+    means the payer gets nothing for what they paid."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+
+    result = await _send(_successful_payment_update("charge_after_withdrawal"),
+                         accounts, payments, calls)
+
+    assert result["handled"] == "successful_payment"
+    assert result["persisted"] is True
+    assert result["key_delivered"] is True
+    assert _delivered_key(_last_text(calls)) is not None
+
+
+async def test_that_charge_pages_the_operator(monkeypatch):
+    """Handled correctly is not the same as expected. A Stars charge landing
+    after the rail was withdrawn means an invoice minted before it is still
+    out there, or a subscription is still renewing -- either way a human has a
+    decision to make about a refund or a cancellation, and only they can make
+    it."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", "999")
+    seen: list = []
+
+    async def fake_notify(text, **kwargs):
+        seen.append((text, kwargs))
+        return True
+
+    monkeypatch.setattr("app.alerts.notify_operator", fake_notify)
+
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    await _send(_successful_payment_update("charge_paged"), accounts, payments, calls)
+
+    assert len(seen) == 1
+    text, kwargs = seen[0]
+    assert "WITHDRAWN" in text
+    assert "charge_paged" in text
+    # Deduped on the charge id: Telegram retries the webhook until it gets a
+    # 200, and one charge is one thing for the operator to look at.
+    assert kwargs["dedupe_key"] == "stars-withdrawn:charge_paged"
+
+
+async def test_the_alert_cannot_cost_the_payer_their_key(monkeypatch):
+    """The alert runs on a path where the money has already moved. If it could
+    raise, a Telegram outage on OUR alert channel would turn a paid charge into
+    a 5xx, Telegram would retry, and the payer would still have nothing."""
+    async def exploding_notify(text, **kwargs):
+        raise RuntimeError("alert channel down")
+
+    monkeypatch.setattr("app.alerts.notify_operator", exploding_notify)
+
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    result = await _send(_successful_payment_update("charge_alert_broken"),
+                         accounts, payments, calls)
+
+    assert result["key_delivered"] is True

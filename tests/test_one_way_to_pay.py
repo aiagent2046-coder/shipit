@@ -17,6 +17,13 @@ pedantic: a provider left routed but unconfigured can be switched on by an
 environment variable, which is exactly the state that lets money arrive on a
 rail nobody is watching.
 
+TELEGRAM IS THE EXCEPTION, AND NOT A HALF-MEASURE. The Stars rail is gone
+exactly as far as the others: nothing can mint an invoice, and a pre-checkout
+is declined. The BOT stays, because it is the operator's bank-transfer confirm
+button and the only notification channel this product has. Its endpoint is
+therefore still routed, and asserting a 404 on it would be asserting the wrong
+thing -- tests/test_billing_telegram.py checks that nothing there sells.
+
 WHAT IS DELIBERATELY NOT ASSERTED: that `payments` rows written by the removed
 providers are unreadable. They must stay readable -- they are the books, and
 several of them are refundable. tests/test_db_postgres_smoke.py checks that the
@@ -84,3 +91,17 @@ def test_nothing_in_the_application_imports_a_retired_provider() -> None:
             if name in text:
                 offenders.append(f"{path.relative_to(ROOT)}: {name}")
     assert not offenders, offenders
+
+
+# --- the one rail that keeps its endpoint -----------------------------------
+
+def test_the_telegram_webhook_is_still_routed() -> None:
+    """The boundary for the paragraph above. The bot survives the removal of
+    the Stars sale: it is where the operator taps Confirm on a bank transfer,
+    and it is the only way this product can tell anyone anything.
+
+    A 404 here would mean the operator cannot confirm a payment that has
+    already arrived -- the opposite of what retiring a rail is for."""
+    resp = client.post("/v1/webhooks/telegram", json={},
+                       headers={"x-telegram-bot-api-secret-token": "s"})
+    assert resp.status_code != 404
