@@ -46,15 +46,23 @@ import httpx
 # both call sites read one binding keeps the patch target the same everywhere.
 # app.monitor imports nothing from app, so there is no cycle.
 from app import monitor
+from app.notify import telegram as tg
 
 logger = logging.getLogger(__name__)
 
-TELEGRAM_API = "https://api.telegram.org"
-
-# Public site base. Audit reports live at {SITE_URL}/audit/{audit_id}
-# (web/src/app/audit/[id]/page.tsx); the bare site root is the "run an
-# audit" landing page.
-SITE_URL = "https://drydock.co"
+# The Bot API client lives in app/notify/telegram.py -- it is a way of reaching
+# a person, not a way of charging one, and it has to outlive this module. These
+# names are re-exported because the bot's own handlers below call them, and
+# because the test suite patches them on THIS module object.
+TELEGRAM_API = tg.TELEGRAM_API
+SITE_URL = tg.SITE_URL
+TelegramError = tg.TelegramError
+bot_token_from_env = tg.bot_token_from_env
+webhook_secret_from_env = tg.webhook_secret_from_env
+send_message = tg.send_message
+answer_callback_query = tg.answer_callback_query
+edit_message_reply_markup = tg.edit_message_reply_markup
+edit_message_text = tg.edit_message_text
 
 PROVIDER = "telegram_stars"
 CURRENCY = "XTR"
@@ -83,18 +91,6 @@ _DEFAULT_FIXPACK_STARS = 600
 # know which audit the purchase is for.
 FIXPACK_TITLE = "Drydock Fix Pack"
 FIXPACK_PAYLOAD_PREFIX = "fixpack:"
-
-
-def bot_token_from_env() -> str | None:
-    """Same env-var-or-None pattern as GITHUB_PR_TOKEN / PREVIEW_REAP_TOKEN.
-    Unset -> the webhook endpoint refuses (503) rather than half-working."""
-    return os.environ.get("TELEGRAM_BOT_TOKEN") or None
-
-
-def webhook_secret_from_env() -> str | None:
-    """The secret handed to setWebhook and echoed back in the
-    X-Telegram-Bot-Api-Secret-Token header. Unset -> endpoint refuses."""
-    return os.environ.get("TELEGRAM_WEBHOOK_SECRET") or None
 
 
 def pro_stars_price() -> int:
@@ -279,30 +275,7 @@ async def create_invoice_link(
 # keep its ceiling short.
 PRE_CHECKOUT_TIMEOUT_S = 8.0
 
-
-def _base_url(token: str) -> str:
-    return f"{TELEGRAM_API}/bot{token}"
-
-
-async def _call(
-    method: str, body: dict[str, Any], *, token: str,
-    transport: httpx.BaseTransport | None = None,
-    timeout: float = 30,
-) -> dict[str, Any]:
-    async with httpx.AsyncClient(
-        base_url=_base_url(token), timeout=timeout, transport=transport
-    ) as client:
-        resp = await client.post(f"/{method}", json=body)
-        data = resp.json()
-        if resp.status_code >= 300 or not data.get("ok", False):
-            raise TelegramError(
-                f"{method} failed: {resp.status_code} {str(data)[:300]}"
-            )
-        return data
-
-
-class TelegramError(Exception):
-    """A Bot API call returned a non-2xx or ok=false response."""
+_call = tg.call
 
 
 async def send_invoice(
@@ -356,86 +329,6 @@ async def answer_pre_checkout_query(
     )
 
 
-async def send_message(
-    chat_id: int | str, text: str, *, token: str,
-    transport: httpx.BaseTransport | None = None,
-    reply_markup: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    # reply_markup is optional and defaults to None, so every existing caller
-    # (key delivery, error notices, alerts) is unchanged. /subscribe uses it to
-    # attach an inline URL button that opens the createInvoiceLink invoice.
-    body: dict[str, Any] = {"chat_id": chat_id, "text": text}
-    if reply_markup is not None:
-        body["reply_markup"] = reply_markup
-    return await _call(
-        "sendMessage", body, token=token, transport=transport,
-    )
-
-
-async def answer_callback_query(
-    query_id: str, *, token: str, text: str | None = None,
-    transport: httpx.BaseTransport | None = None,
-) -> bool:
-    """Dismiss the spinner on a tapped inline button, optionally with a toast.
-
-    Best-effort, unlike answer_pre_checkout_query: that one MUST raise because
-    an unanswered pre-checkout makes Telegram cancel the charge. This one runs
-    AFTER the operator's confirmation has already been persisted and the money
-    already granted, so a Telegram hiccup here must not unwind a completed
-    grant. Returns whether the call went through."""
-    body: dict[str, Any] = {"callback_query_id": query_id}
-    if text:
-        body["text"] = text
-    return await _best_effort_call("answerCallbackQuery", body, token=token,
-                                   transport=transport)
-
-
-async def edit_message_reply_markup(
-    *, chat_id: int | str, message_id: int | str, token: str,
-    reply_markup: dict[str, Any] | None = None,
-    transport: httpx.BaseTransport | None = None,
-) -> bool:
-    """Replace (or, with reply_markup=None, strip) a message's inline keyboard.
-
-    Used to take the confirm button off an already-actioned notification. That
-    is a UI-level guard only -- pressing a stale button twice is already safe
-    at the database level via the CAS gate -- so like answer_callback_query it
-    is best-effort and never raises."""
-    body: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
-    if reply_markup is not None:
-        body["reply_markup"] = reply_markup
-    return await _best_effort_call("editMessageReplyMarkup", body, token=token,
-                                   transport=transport)
-
-
-async def edit_message_text(
-    *, chat_id: int | str, message_id: int | str, text: str, token: str,
-    transport: httpx.BaseTransport | None = None,
-) -> bool:
-    """Rewrite a message's text, dropping any inline keyboard with it. Same
-    best-effort contract as edit_message_reply_markup."""
-    return await _best_effort_call(
-        "editMessageText",
-        {"chat_id": chat_id, "message_id": message_id, "text": text},
-        token=token, transport=transport,
-    )
-
-
-async def _best_effort_call(
-    method: str, body: dict[str, Any], *, token: str,
-    transport: httpx.BaseTransport | None = None,
-) -> bool:
-    """_call with the exception swallowed, in the style of
-    app.alerts.notify_operator. For cosmetic post-grant calls only: every
-    caller has already committed the state change the user paid for, so the
-    only thing a raise could accomplish is to turn a successful payment into
-    a 5xx."""
-    try:
-        await _call(method, body, token=token, transport=transport)
-        return True
-    except Exception:
-        logger.warning("%s failed (best-effort)", method, exc_info=True)
-        return False
 
 
 def _delivery_text(api_key: str) -> str:
