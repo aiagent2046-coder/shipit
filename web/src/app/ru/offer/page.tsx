@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { CONVERSION_NOTE, FIXPACK_PRICE_USD, REFUND_DAYS } from "../price";
+
 export const metadata = {
   title: "Публичная оферта — Drydock",
   description: "Публичная оферта ИП Морозевской Кристины Олеговны на оказание цифровых услуг Drydock.",
@@ -38,7 +40,8 @@ export default function OfferPage() {
 
       <section className="mt-8">
         <h2 className="text-xl font-semibold">4. Стоимость и оплата</h2>
-        <p className="mt-3">Стоимость Fix Pack для российского платёжного сценария составляет <strong>990 рублей за один Fix Pack</strong>. Услуга оплачивается один раз и не является подпиской. Автоматические повторные списания не производятся.</p>
+        <p className="mt-3">Стоимость Fix Pack составляет <strong>${FIXPACK_PRICE_USD} USD за один Fix Pack</strong>. Услуга оплачивается один раз и не является подпиской. Автоматические повторные списания не производятся.</p>
+        <p className="mt-3">{CONVERSION_NOTE}</p>
         <p className="mt-3">Оплата через Robokassa становится доступна после подключения магазина к платёжной системе. До перехода к оплате Заказчик видит на сайте наименование услуги и итоговую сумму заказа.</p>
         <p className="mt-3">Условия оплаты через Robokassa и ссылка на официальный сайт платёжной системы размещены на русскоязычной странице Drydock до момента перехода к оплате.</p>
       </section>
@@ -63,6 +66,7 @@ export default function OfferPage() {
       <section className="mt-8">
         <h2 className="text-xl font-semibold">7. Возвраты и претензии</h2>
         <p className="mt-3">Порядок отказа от услуги и возврата денежных средств опубликован по адресу <Link className="text-accent underline underline-offset-2" href="/ru/refund">/ru/refund</Link>. Для обращения укажите идентификатор заказа, дату и сумму оплаты и направьте запрос на support@drydock.co.</p>
+        <p className="mt-3">Если оплата принята, а услуга не оказана — в том числе если для данного аудита автоматическое исправление оказалось невозможным, — Исполнитель рассматривает обращение и направляет возврат в платёжную систему в течение <strong>{REFUND_DAYS}</strong> с даты обращения.</p>
       </section>
 
       <section className="mt-8">

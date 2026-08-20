@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { CONVERSION_NOTE, FIXPACK_PRICE_USD } from "./price";
+
 export const metadata = {
   title: "Drydock — аудит безопасности кода и Fix Pack",
   description:
@@ -31,7 +33,7 @@ export default function RussianHomePage() {
           </p>
         </div>
         <div className="rounded-xl border border-accent/40 bg-accent/5 p-5">
-          <h2 className="font-semibold">Fix Pack — 990 ₽</h2>
+          <h2 className="font-semibold">Fix Pack — ${FIXPACK_PRICE_USD}</h2>
           <p className="mt-2 text-sm text-muted">
             Разовая платная услуга для одного конкретного аудита. Никаких автоматических повторных списаний.
           </p>
@@ -47,8 +49,9 @@ export default function RussianHomePage() {
       <section className="mt-10 rounded-xl border border-border bg-surface p-6">
         <h2 className="text-xl font-semibold">Стоимость и порядок оплаты</h2>
         <p className="mt-3 text-muted">
-          Стоимость одного Fix Pack для российского платёжного сценария — <strong>990 рублей</strong>. Оплата разовая, без подписки и автоматических повторных списаний.
+          Стоимость одного Fix Pack — <strong>${FIXPACK_PRICE_USD} USD</strong> за один аудит. Оплата разовая, без подписки и автоматических повторных списаний.
         </p>
+        <p className="mt-3 text-muted">{CONVERSION_NOTE}</p>
         <p className="mt-3 text-muted">
           Оплата будет приниматься через платёжную систему Robokassa после завершения подключения магазина. До перехода к оплате покупателю показываются наименование услуги и итоговая сумма заказа.
         </p>
