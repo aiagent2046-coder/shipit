@@ -43,7 +43,7 @@ import pytest
 
 import app.db as db_mod
 from app.accounts import api_key_prefix, generate_api_key
-from app.billing import bank_transfer, usdt_trc20
+from app.billing import bank_transfer
 from app.db import (
     AccountRepository,
     AuditRepository,
@@ -67,6 +67,18 @@ pytestmark = pytest.mark.skipif(
         "(CI does; local runs without it are skipped)"
     ),
 )
+
+
+# `confirm()` now tells the PAYER their transfer landed, and pages the operator
+# when it cannot reach them. Both go out over httpx, so a direct call to
+# confirm() in a test reaches api.telegram.org unless a transport is handed in
+# -- which it did, at 0.4s of DNS per call, until this was noticed. The suite's
+# rule is that nothing touches the network; this is how these call sites keep
+# it.
+def _no_network() -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+    return httpx.MockTransport(handler)
 
 
 @pytest.fixture
@@ -193,6 +205,29 @@ async def test_all_repository_write_paths(real_db):
     assert outcome is not None
     assert outcome["rule_ids"] == ["SEC001", "CFG002"]  # jsonb array round-trip
     assert outcome["pr_merged"] is None
+
+    # get_by_job: the first read of this table that DECIDES anything. From
+    # migration 0014 until 2026-08-20 nothing read fix_outcomes at all --
+    # "collection only, nothing reads it for decisions yet" is what its
+    # docstring said -- so this SELECT has never run against real Postgres
+    # before, jsonb round-trip of rule_ids included. app/fixpack/merit.py
+    # treats that column as a list, and a str would make every verdict wrong
+    # in the direction of "it fixed nothing".
+    by_job = await outcome_repo.get_by_job(job_id)
+    assert by_job is not None, "the outcome just recorded is not readable back"
+    assert isinstance(by_job["rule_ids"], list)
+    assert by_job["rule_ids"] == ["SEC001", "CFG002"]
+    assert by_job["is_regression"] is False
+
+    # The verdict an operator would see, computed from the real rows rather
+    # than from a dict a test wrote.
+    from app.fixpack.merit import DELIVERED, assess
+    verdict = assess(job=await fixpack_repo.get(job_id), outcome=by_job)
+    assert verdict.conclusion == DELIVERED
+    assert any("SEC001" in r.detail for r in verdict.reasons)
+
+    assert await outcome_repo.get_by_job(str(uuid.uuid4())) is None
+    assert await outcome_repo.get_by_job("not-a-uuid") is None
     updated = await outcome_repo.set_pr_merged_by_pr_url(pr_url, True)
     assert updated == 1  # rowcount of the matched delivered outcome
 
@@ -273,28 +308,14 @@ async def test_all_repository_write_paths(real_db):
     linked = await payment_repo.link_telegram_chat_id(payment_id, f"chat-{run}")
     assert linked is not None and linked["telegram_chat_id"] == f"chat-{run}"
 
-    # PayPal one-time order (migration 0018's payments.paypal_order_id): create
-    # a pending row keyed by the order id, resolve it back by that id, then
-    # transition it to completed the way the capture webhook does. Proves the
-    # new column + partial unique index + get_by_paypal_order_id SELECT against
-    # real Postgres, not just the FakePool.
-    paypal_order_id = f"ORDER-{run}"
-    pp_payment = await payment_repo.create(
-        account_id=None, provider="paypal", external_ref=None,
-        amount=5.0, currency="USD", status="pending", tier_granted="pro",
-        product="pro_tier", paypal_order_id=paypal_order_id,
-    )
-    assert pp_payment is not None
-    assert pp_payment["paypal_order_id"] == paypal_order_id  # column round-trip
-    by_order = await payment_repo.get_by_paypal_order_id(paypal_order_id)
-    assert by_order is not None and by_order["id"] == pp_payment["id"]
-    await payment_repo.mark_completed(
-        pp_payment["id"], account_id=account_id,
-        external_ref=f"CAPTURE-{run}",
-    )
-    completed_pp = await payment_repo.get_by_paypal_order_id(paypal_order_id)
-    assert completed_pp["status"] == "completed"
-    assert completed_pp["external_ref"] == f"CAPTURE-{run}"
+    # migration 0018's payments.paypal_order_id is STILL SELECTED, and this is
+    # what checks it. PayPal was removed as a way to pay, so nothing writes the
+    # column any more -- but the rows it wrote are the books, and a SELECT list
+    # that quietly drops a column is how a historical payment stops being
+    # readable without anything failing. The write path that used to be
+    # exercised here is gone with the provider; the read path is not.
+    assert "paypal_order_id" in linked
+    assert linked["paypal_order_id"] is None
 
     # ---- SubscriptionRepository (THE prod bug's write path) -------------
     # expires_at is passed as a Unix int -- exactly the shape Telegram sends.
@@ -330,38 +351,14 @@ async def test_all_repository_write_paths(real_db):
     canceled = await sub_repo.set_status(sub_id, "canceled")
     assert canceled["status"] == "canceled"
 
-    # PayPal recurring subscription (migration 0018's subscriptions.
-    # payment_provider + paypal_subscription_id): the PayPal-keyed write path,
-    # distinct from the Stars (telegram_user_id, invoice_payload) key above.
-    # upsert_first_paypal (ACTIVATED) -> resolve by the 'I-XXXX' id -> renew_paypal
-    # (SALE) pushes expires_at out. expires_at is an aware datetime here (the
-    # shape the PayPal handlers pass), asserted to round-trip as a real
-    # timestamptz -- the type the FakePool can't prove.
-    pp_sub_id = f"I-{run}"
-    pp_repo_name = f"acme/paypal-smoke-{run}"
-    pp_expires = datetime.datetime(2026, 9, 19, 10, 0, tzinfo=datetime.timezone.utc)
-    pp_sub = await sub_repo.upsert_first_paypal(
-        paypal_subscription_id=pp_sub_id, tier="monitoring",
-        expires_at=pp_expires, repo_full_name=pp_repo_name,
-    )
-    assert pp_sub is not None
-    assert pp_sub["status"] == "active"
-    assert pp_sub["payment_provider"] == "paypal"
-
-    fetched_pp_sub = await sub_repo.get_by_paypal_subscription_id(pp_sub_id)
-    assert fetched_pp_sub is not None and fetched_pp_sub["id"] == pp_sub["id"]
-    assert fetched_pp_sub["repo_full_name"] == pp_repo_name
-    assert isinstance(fetched_pp_sub["expires_at"], datetime.datetime)
-    assert fetched_pp_sub["expires_at"].tzinfo is not None
-    assert fetched_pp_sub["expires_at"] == pp_expires
-
-    pp_renewed = await sub_repo.renew_paypal(
-        pp_sub["id"], expires_at=pp_expires + datetime.timedelta(days=30),
-    )
-    assert pp_renewed is not None
-    reread_pp_sub = await sub_repo.get_by_paypal_subscription_id(pp_sub_id)
-    assert reread_pp_sub["expires_at"] == pp_expires + datetime.timedelta(days=30)
-    assert reread_pp_sub["status"] == "active"
+    # Same rule one table over: migration 0018's subscriptions.
+    # paypal_subscription_id and payment_provider are still SELECTed, and the
+    # PayPal-keyed create/upsert/renew trio that wrote them is gone with the
+    # provider. A row written by the surviving (telegram_user_id,
+    # invoice_payload) key must still carry both columns back.
+    assert "paypal_subscription_id" in canceled
+    assert canceled["paypal_subscription_id"] is None
+    assert canceled["payment_provider"] == "telegram_stars"
 
     # ---- MonitoringRunRepository (async monitoring queue, migration 0017) ---
     # The push webhook's durable queue. Same real-Postgres write-path coverage
@@ -435,36 +432,15 @@ async def test_all_repository_write_paths(real_db):
     async with db_mod.monitoring_processor_lock():
         pass
 
-    # usdt_poll_lock: same round-trip. Its mutual-exclusion behaviour under real
-    # concurrency is a separate test below.
-    async with db_mod.usdt_poll_lock():
+    # fixpack_processor_lock: same round-trip. Its mutual-exclusion behaviour
+    # under real concurrency is a separate test below.
+    async with db_mod.fixpack_processor_lock():
         pass
 
 
-ADDRESS = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"  # checksum-valid, as in test_billing_usdt.py
-USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
-
-
-def _matching_transport(transfer: dict) -> httpx.MockTransport:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"success": True, "data": [transfer]})
-    return httpx.MockTransport(handler)
-
-
-def _forbidden_transport() -> httpx.MockTransport:
-    """Fails loudly if it is ever reached. Given to the callers that must be
-    locked out: fetch_transfers is the first thing poll_and_match does, so a
-    request arriving here means a contender got past the lock."""
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise AssertionError(
-            "locked-out poll reached TronGrid -- usdt_poll_lock did not hold"
-        )
-    return httpx.MockTransport(handler)
-
-
-async def test_usdt_poll_lock_second_caller_skipped(real_db):
-    """Three overlapping USDT polls on REAL Postgres: one runs, two are refused
-    and do nothing, and the one paid invoice yields exactly one pro account.
+async def test_processor_lock_second_caller_skipped(real_db):
+    """Three overlapping processor runs on REAL Postgres: one holds the lock,
+    two are refused and do nothing.
 
     This is the assertion a FakePool cannot make. `pg_try_advisory_lock` is a
     SESSION lock, so mutual exclusion depends on the callers holding DIFFERENT
@@ -472,69 +448,29 @@ async def test_usdt_poll_lock_second_caller_skipped(real_db):
     fake returning a canned {"locked": ...} proves only that the wrapper reads
     the column it was handed.
 
-    It matters more here than for the other two processors: they claim each unit
-    of work atomically first (claim_one_paid / claim_one_pending), so their lock
-    is belt-and-suspenders. The USDT poller has no such claim -- it reads
-    get_by_external_ref, finds nothing, then creates an account and completes the
-    invoice -- and the partial unique index on payments(provider, external_ref)
-    can't catch a second run either, because completing a USDT invoice UPDATEs
-    the same already-existing pending row rather than INSERTing a competing one.
-    Without this lock both contenders grant, the last mark_completed overwrites
-    account_id, and the account whose key the payer was handed is orphaned.
-
-    THREE concurrent callers, not more, deliberately: the winner holds one of the
-    pool's max_size=5 connections for its whole run and each contender takes
-    another, so a wider fan-out would exhaust the pool and fail for a reason that
-    has nothing to do with the lock.
-
-    The winner is pinned open with an event rather than by hoping asyncio
-    interleaves the three calls favourably: a plain gather could let it finish
-    first, after which the contenders would each acquire the free lock in turn
-    and the test would pass while proving nothing."""
-    payment_repo = PaymentRepository()
-    account_repo = AccountRepository()
-    run = uuid.uuid4().hex[:12]
-
-    # A pending Pro invoice at an amount no other pending row shares:
-    # poll_and_match keys pending invoices by exact micro-USDT, so a duplicate
-    # amount left behind by an earlier test would shadow this one in that dict.
-    amount = 5.0 + (int(run[:6], 16) % 999_999 + 1) / 1_000_000
-    invoice = await payment_repo.create(
-        account_id=None, provider=usdt_trc20.PROVIDER, external_ref=None,
-        amount=amount, currency=usdt_trc20.CURRENCY, status="pending",
-        tier_granted="pro", product=usdt_trc20.PRODUCT_PRO,
-    )
-    assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
-    tx_id = f"0xsmoke-lock-{run}"
-    transfer = {
-        "transaction_id": tx_id, "type": "Transfer", "from": "TSenderXYZ",
-        "to": ADDRESS, "value": str(usdt_trc20.amount_to_micros(amount)),
-        "token_info": {"symbol": "USDT", "address": USDT_CONTRACT, "decimals": 6},
-    }
-
+    It was written against usdt_poll_lock, where the lock was the only thing
+    standing between two polls and a double grant. That rail is gone; the lock
+    machinery is not, and the Fix Pack processor still depends on it. Retargeted
+    rather than deleted: the wrapper is what is under test, and it would have
+    lost its only real-concurrency coverage.
+    """
     holding = asyncio.Event()   # winner: "I hold the lock"
     release = asyncio.Event()   # driver: "the contenders have had their turn"
 
     async def winner():
-        async with db_mod.usdt_poll_lock():
+        async with db_mod.fixpack_processor_lock():
             holding.set()
             await asyncio.wait_for(release.wait(), timeout=30)
-            return await usdt_trc20.poll_and_match(
-                payment_repo, account_repo, address=ADDRESS,
-                transport=_matching_transport(transfer),
-            )
+            return "ran"
 
     async def contender():
         await holding.wait()      # only race once the lock is genuinely held
         try:
-            async with db_mod.usdt_poll_lock():
-                await usdt_trc20.poll_and_match(
-                    payment_repo, account_repo, address=ADDRESS,
-                    transport=_forbidden_transport(),
-                )
+            async with db_mod.fixpack_processor_lock():
                 return "acquired"
         except ProcessorLockBusy:
-            # Exactly what app.main.poll_usdt turns into {"skipped_locked": True}.
+            # Exactly what the processor endpoint turns into
+            # {"skipped_locked": True}.
             return "busy"
 
     async def drive():
@@ -544,32 +480,15 @@ async def test_usdt_poll_lock_second_caller_skipped(real_db):
         finally:
             release.set()
 
-    matched, contended = await asyncio.gather(winner(), drive())
+    ran, contended = await asyncio.gather(winner(), drive())
 
-    # Neither overlapping poll got in.
+    assert ran == "ran"
+    # Neither overlapping run got in.
     assert contended == ["busy", "busy"]
 
-    # The one caller that did get in completed the whole job.
-    assert matched["matched"] == 1
-    completed = await payment_repo.get(invoice["id"])
-    assert completed["status"] == "completed"
-    assert completed["external_ref"] == tx_id
-    assert completed["account_id"] is not None
-
-    # And the grant happened exactly once: one payment row bears this tx, and the
-    # account it points at is the pro account that was created for it.
-    granted = await account_repo.get_by_id(completed["account_id"])
-    assert granted is not None and granted["tier"] == "pro"
-    pool = await db_mod.get_pool()
-    async with pool.connection() as conn:
-        cur = await conn.execute(
-            "select count(*) as n from payments where external_ref = %s", (tx_id,)
-        )
-        assert (await cur.fetchone())["n"] == 1
-
-    # The winner's `finally` really did pg_advisory_unlock: the next timer firing
-    # must not be locked out forever by a finished run.
-    async with db_mod.usdt_poll_lock():
+    # The winner's `finally` really did pg_advisory_unlock: the next timer
+    # firing must not be locked out forever by a finished run.
+    async with db_mod.fixpack_processor_lock():
         pass
 
 
@@ -905,17 +824,18 @@ async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db):
     await fixpack_repo.mark_status(job["id"], "failed", "smoke cleanup")
 
 
-async def test_usdt_poll_lock_does_not_serialize_against_other_processors(real_db):
-    """The distinct key is load-bearing, on REAL Postgres: holding the USDT lock
-    must not block a Fix Pack or monitoring run. A shared key would silently
-    couple three independent schedulers -- a 30s TronGrid call would stall the
-    Fix Pack backlog, and each would report the other's work as skipped_locked.
-    Only real Postgres can show this, since the keys are only ever compared by
-    its lock manager."""
-    async with db_mod.usdt_poll_lock():
-        async with db_mod.fixpack_processor_lock():
-            pass
+async def test_the_processor_locks_do_not_serialize_against_each_other(real_db):
+    """The distinct keys are load-bearing, on REAL Postgres: holding one
+    processor's lock must not block another's. A shared key would silently
+    couple independent schedulers -- a long run on one would stall the other's
+    backlog, and each would report the other's work as skipped_locked. Only
+    real Postgres can show this, since the keys are only ever compared by its
+    lock manager."""
+    async with db_mod.fixpack_processor_lock():
         async with db_mod.monitoring_processor_lock():
+            pass
+    async with db_mod.bank_transfer_amount_lock():
+        async with db_mod.fixpack_processor_lock():
             pass
 
 
@@ -952,7 +872,7 @@ async def test_bank_transfer_double_confirm_grants_pro_once(real_db):
 
     confirm_kwargs = {
         "payment_repo": payment_repo, "account_repo": account_repo,
-        "payment_id": invoice["payment_id"],
+        "payment_id": invoice["payment_id"], "transport": _no_network(),
     }
     first = await bank_transfer.confirm(**confirm_kwargs)
     second = await bank_transfer.confirm(**confirm_kwargs)
@@ -1041,7 +961,7 @@ async def test_bank_transfer_open_invoices_coexist(real_db):
 
     confirmed = await bank_transfer.confirm(
         payment_repo=payment_repo, account_repo=account_repo,
-        payment_id=invoices[1]["payment_id"],
+        payment_id=invoices[1]["payment_id"], transport=_no_network(),
     )
     assert confirmed["granted"] is True
 
@@ -1091,23 +1011,37 @@ async def test_bank_transfer_payer_contact_round_trips(real_db):
     """The columns exist, accept what the payer typed, and come back on every
     read path the operator's confirmation flow uses -- get() by id and
     get_by_external_ref() by reference code, which is what the Telegram
-    notification is built from."""
+    notification is built from.
+
+    payer_x (migration 0032) is checked on the same paths and not on its own,
+    because the failure worth catching is a SELECT list that gained the column
+    in one query and not another: Contact.from_payment reads whichever row it
+    is handed, so a column missing from one read path is a customer silently
+    losing a channel."""
     payment_repo = PaymentRepository()
     invoice = await bank_transfer.create_invoice(
         payment_repo, details=dict(BANK_DETAILS_SMOKE),
         payer_name=PAYER_NAME_SMOKE, payer_email=PAYER_EMAIL_SMOKE,
+        payer_x="smoketest_x",
     )
     assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
 
     by_id = await payment_repo.get(invoice["payment_id"])
     assert by_id["payer_name"] == PAYER_NAME_SMOKE
     assert by_id["payer_email"] == PAYER_EMAIL_SMOKE
+    assert by_id["payer_x"] == "smoketest_x"
 
     by_ref = await payment_repo.get_by_external_ref(
         bank_transfer.PROVIDER, invoice["reference"]
     )
     assert by_ref["payer_name"] == PAYER_NAME_SMOKE
     assert by_ref["payer_email"] == PAYER_EMAIL_SMOKE
+    assert by_ref["payer_x"] == "smoketest_x"
+
+    # And the whole point of the column: the row knows which channels this
+    # customer has, without app/notify/ needing to know what a payment is.
+    from app.notify.router import Contact
+    assert Contact.from_payment(by_ref).channels() == ("email", "x")
 
 
 async def test_payment_without_payer_contact_stores_nulls(real_db):

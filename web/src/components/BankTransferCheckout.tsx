@@ -11,7 +11,7 @@ import {
   reportBankTransferPaid,
 } from "@/lib/api";
 import { useApiKey } from "./providers";
-import { Field } from "./UsdtCheckout";
+import { Field } from "./Field";
 import { Spinner } from "./Spinner";
 import { SupportEmail } from "./SupportEmail";
 
@@ -22,13 +22,13 @@ interface CopyHelpers {
   copied: string | null;
 }
 
-// Slower than the USDT poll (8s): confirmation here is a human reading a bank
+// Slower than an on-chain poll would be: confirmation here is a human reading a bank
 // statement, which lands hours or days later, not seconds.
 const POLL_MS = 20_000;
 
 /**
  * The shared bank-transfer flow, the manual-confirmation counterpart to
- * UsdtCheckout: create an invoice, show the bank details plus the reference
+ * The invoice flow: create an invoice, show the bank details plus the reference
  * code to quote, offer an "I've paid" button that pages the operator, then
  * poll until they confirm.
  *
@@ -71,6 +71,11 @@ export function BankTransferCheckout({
   const [copied, setCopied] = useState<string | null>(null);
   const [payerName, setPayerName] = useState("");
   const [payerEmail, setPayerEmail] = useState("");
+  // Optional, and the only optional field here. Name and email are the
+  // matching key for a card transfer; an X handle is a second way to reach
+  // someone when their email bounces, which is a thing that happens and which
+  // we cannot detect from a form.
+  const [payerX, setPayerX] = useState("");
   // The backend rejects a blank name or an email with no "@" (422). Mirroring
   // exactly that here keeps the button honest rather than letting the payer
   // submit into a validation error.
@@ -96,6 +101,7 @@ export function BankTransferCheckout({
       const inv = await createInvoice({
         payer_name: payerName,
         payer_email: payerEmail,
+        payer_x: payerX,
       });
       setInvoice(inv);
       poll(inv.reference);
@@ -230,11 +236,25 @@ export function BankTransferCheckout({
               onChange={setPayerEmail}
               disabled={creating}
             />
+            <PayerInput
+              label="Your X handle (optional)"
+              type="text"
+              autoComplete="off"
+              placeholder="@yourhandle"
+              value={payerX}
+              onChange={setPayerX}
+              disabled={creating}
+            />
             <p className="text-xs text-muted">
               We match your payment by the order number you&apos;ll get on the
               next screen, and by your name if your bank doesn&apos;t let you
-              attach one. Use the name on the card you pay from. We don&apos;t
-              email you — this page is where your order updates.
+              attach one — so use the name on the card you pay from.
+            </p>
+            <p className="text-xs text-muted">
+              Your transfer is confirmed by a person, which can take a few
+              hours, so we email you when it lands and if anything is ever
+              refunded. Leave an X handle too if you&apos;d rather hear there
+              as well — we&apos;ll use both.
             </p>
           </div>
 
@@ -410,7 +430,7 @@ export function BankTransferCheckout({
   );
 }
 
-// The editable twin of UsdtCheckout's Field: same bordered row, same muted
+// The editable twin of Field: same bordered row, same muted
 // label on the left and right-aligned value, so the pre-payment inputs and the
 // post-payment bank details read as one list rather than two designs.
 function PayerInput({
@@ -450,7 +470,7 @@ function PayerInput({
 /**
  * The Pro-tier card-payment card used on /pricing. Once the operator confirms,
  * reveals + lets you save the returned API key — the same one-shot delivery as
- * the USDT card, and it matters more here: confirmation lands hours later, when
+ * an instant rail, and it matters more here: confirmation lands hours later, when
  * this tab is usually long gone. Telegram /link with the order number is the
  * recovery door for that case.
  */

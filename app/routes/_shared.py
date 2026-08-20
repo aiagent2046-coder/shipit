@@ -20,7 +20,6 @@ import hmac
 import os
 import re
 
-from app.billing import usdt_trc20
 from app.fixpack.generate import has_auto_fixable_findings
 from app.log_context import set_log_context
 
@@ -41,7 +40,7 @@ async def _json_object_body(request: Request) -> dict:
     422 rather than 400 to match every other body-shape refusal in this API,
     including the one place that already guarded this (the service-flags
     endpoint). Webhook senders retry on any non-2xx, so this does not stop
-    Telegram or PayPal re-delivering an unparseable payload -- but a retry that
+    Telegram re-delivering an unparseable payload -- but a retry that
     fails identically is cheap, while a 500 also wakes someone up.
     """
     try:
@@ -166,7 +165,7 @@ def _secret_equals(provided: str, expected: str) -> bool:
 def _require_bearer_token(request: Request, token: str) -> None:
     """Constant-time check of `Authorization: Bearer <token>`, raising 401
     on mismatch. The single implementation shared by every internal
-    operational endpoint (reaper, USDT poller, Fix Pack processor) so the
+    operational endpoint (reaper, Fix Pack processor) so the
     comparison stays constant-time in one place and can't drift."""
     provided = request.headers.get("authorization", "")
     if not _secret_equals(provided, f"Bearer {token}"):
@@ -212,20 +211,6 @@ def _bind_account(account: dict | None) -> None:
     """
     if account is not None:
         set_log_context(account_id=str(account["id"]))
-
-
-def _usdt_receiving_address() -> str | None:
-    """Configured receiving address as a base58check "T..." string, or None
-    if unset. A set-but-malformed USDT_TRC20_ADDRESS is a 503 (misconfig)
-    rather than a 500 or, far worse, a bad address handed to a payer."""
-    try:
-        return usdt_trc20.receiving_address_from_env()
-    except usdt_trc20.InvalidTronAddressError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "usdt_misconfigured",
-                    "detail": f"USDT_TRC20_ADDRESS is not a valid TRON address: {exc}"},
-        )
 
 
 # --- GitHub owner/repo parsing ------------------------------------------------

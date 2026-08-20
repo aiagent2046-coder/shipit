@@ -14,6 +14,7 @@ the two are not related and neither supersedes the other.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from decimal import Decimal
@@ -29,6 +30,7 @@ from app.db import (
     PaymentRepository,
 )
 from app.deploypack.preview import PreviewRegistry
+from app.fixpack.merit import UNDETERMINED, Reason, Verdict, assess
 from app.routes._shared import (
     _json_object_body,
     _require_bearer_token,
@@ -36,6 +38,7 @@ from app.routes._shared import (
 )
 from app.routes.dependencies import (
     get_audit_job_repo,
+    get_billing_transport,
     get_fix_outcome_repo,
     get_fixpack_repo,
     get_llm_usage_repo,
@@ -43,6 +46,8 @@ from app.routes.dependencies import (
     get_preview_reconciler,
     get_preview_registry,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -294,11 +299,80 @@ def _spend_view(spend: dict) -> dict:
 
 
 
+@router.get("/internal/payments/{payment_id}/fixpack-merit")
+async def fixpack_merit(
+    payment_id: str,
+    request: Request,
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
+) -> dict:
+    """Did the Fix Pack this payment bought do what it was sold as?
+
+    Requires `Authorization: Bearer <SERVICE_FLAGS_TOKEN>`, the same operator
+    credential the refund endpoint takes -- this reads a customer's purchase
+    history and belongs to the same audience.
+
+    READ THIS BEFORE USING THE ANSWER. It is not a "was the customer right to
+    complain" check, and app/fixpack/merit.py explains at length why that
+    distinction is the whole design. `owed` means OUR OWN RECORDS show the Fix
+    Pack did not deliver what it was sold as -- refund without argument.
+    `undetermined` is the common answer and stays a real one. Nothing here can
+    deny a refund; the mechanism exists to find the cases where we are at
+    fault, not to catch a customer lying.
+
+    Deliberately GET and deliberately side-effect free. The verdict is
+    something to consult BEFORE deciding, so it must be safe to ask twice, and
+    asking must not record anything about a refund that has not happened.
+
+    404 when there is no such payment.
+    """
+    token = _service_flags_token()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "not_configured",
+                    "detail": "SERVICE_FLAGS_TOKEN is not set on this deployment"},
+        )
+    _require_bearer_token(request, token)
+
+    try:
+        uuid.UUID(payment_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "bad_request", "detail": "payment_id must be a UUID"},
+        )
+
+    payment = await payment_repo.get(payment_id)
+    if payment is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "not_found", "detail": "no payment with that id"},
+        )
+
+    verdict = await assess_payment(
+        payment, fixpack_repo=fixpack_repo, outcome_repo=outcome_repo)
+    return {
+        "payment_id": str(payment["id"]),
+        "audit_id": payment.get("audit_id"),
+        "status": payment.get("status"),
+        "refunded_at": payment.get("refunded_at"),
+        **verdict.as_dict(),
+    }
+
+
 @router.post("/internal/payments/{payment_id}/refund")
 async def refund_payment(
     payment_id: str,
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
+    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
+    outcome_repo: FixOutcomeRepository = Depends(get_fix_outcome_repo),
+    # The same outbound seam the bot uses. Named for billing because that is
+    # where it started; what it is, is "the transport the tests replace", and
+    # telling a customer about their refund needs exactly that.
+    transport=Depends(get_billing_transport),
 ) -> dict:
     """Record that a completed payment was given back.
 
@@ -307,9 +381,10 @@ async def refund_payment(
 
     This endpoint moves no money, and no endpoint here could. A bank transfer
     lands on a private individual's account and goes back the same way, by
-    hand; Telegram Stars and USDT have no refund call this deployment holds a
-    credential for. The operator sends the money and then tells the system, in
-    that order.
+    hand. That was true of the rails that have since been removed too, and it
+    will be true of Robokassa until this deployment holds a credential that can
+    ask for a refund. The operator sends the money and then tells the system,
+    in that order.
 
     So the value is the record. Until now a refunded payment stayed
     `completed` for ever, and a month later nothing distinguished money kept
@@ -335,6 +410,17 @@ async def refund_payment(
     back what it paid for is a policy question with a different cost of being
     wrong, and mixing it into the record-keeping would mean neither could be
     changed alone.
+
+    IT DOES TELL THE CUSTOMER, on every channel they gave (app/notify/router.py).
+    The money went back by hand, days after they asked, and until now nothing
+    said so: they were left refreshing a bank statement, and the natural next
+    move for somebody who paid, complained and heard nothing is a chargeback.
+
+    The send is after the record and cannot undo it. A refund that failed to be
+    announced is still a refund; a refund that 500s because the mail server was
+    down would be recorded nowhere and sent again. When NOTHING reaches them,
+    the router pages the operator -- the customer still has to be told, and only
+    a person can find another way.
     """
     token = _service_flags_token()
     if not token:
@@ -369,4 +455,103 @@ async def refund_payment(
             detail={"reason": "not_refundable",
                     "detail": "no completed payment with that id"},
         )
-    return payment
+
+    delivery = await _tell_them_about_the_refund(payment, transport=transport)
+    # Wrapped HERE and deliberately not in the GET next door. The record of the
+    # refund is this endpoint's whole product, and it is already written by the
+    # time we get here; letting an unreachable analytics table raise would turn
+    # a completed refund into a 500 that gets retried. The GET is the opposite
+    # case -- the operator asked for the verdict and nothing else, so a failure
+    # there must surface rather than answer "undetermined" and be believed.
+    try:
+        verdict = await assess_payment(
+            payment, fixpack_repo=fixpack_repo, outcome_repo=outcome_repo)
+    except Exception:  # noqa: BLE001
+        logger.warning("could not assess the Fix Pack behind a refund",
+                       exc_info=True)
+        verdict = Verdict(UNDETERMINED, (Reason(
+            "assessment_unavailable",
+            "The Fix Pack records could not be read while recording this "
+            "refund. The refund itself is recorded; ask again on the "
+            "fixpack-merit endpoint.",
+        ),))
+    return {
+        **payment,
+        "notified": list(delivery.delivered),
+        "fixpack_merit": verdict.as_dict(),
+    }
+
+
+async def assess_payment(
+    payment: dict, *, fixpack_repo, outcome_repo,
+) -> Verdict:
+    """What our own records say about the Fix Pack this payment bought.
+
+    Returns UNDETERMINED with a reason for anything that is not a Fix Pack
+    purchase, rather than inventing a verdict about a Pro subscription. The
+    caller renders `reasons` next to the number, the same way the score does:
+    a conclusion with nothing attached is an authority nobody can check.
+    """
+    if (payment.get("product") or "") != "fixpack":
+        return Verdict(UNDETERMINED, (Reason(
+            "not_a_fixpack",
+            "This payment did not buy a Fix Pack, so there is no generated "
+            "work to judge.",
+        ),))
+
+    audit_id = payment.get("audit_id")
+    if not audit_id:
+        return Verdict(UNDETERMINED, (Reason(
+            "no_audit",
+            "This Fix Pack payment carries no audit id, so the job it paid "
+            "for cannot be found.",
+        ),))
+
+    job = await fixpack_repo.get_by_audit(str(audit_id))
+    outcome = None
+    if job is not None:
+        outcome = await outcome_repo.get_by_job(str(job["id"]))
+    return assess(job=job, outcome=outcome)
+
+
+def _refund_body(payment: dict) -> str:
+    """What the customer reads.
+
+    The REASON is not repeated back to them. It is the operator's note for the
+    books -- "customer says the Fix Pack was wrong", "duplicate charge" -- and
+    it is written to be true rather than to be read by the person it is about.
+    What they need is the amount, the order, and that it is on its way.
+    """
+    amount = payment.get("amount")
+    quoted = f"{float(amount):.2f}" if amount is not None else ""
+    currency = payment.get("currency") or ""
+    money = f"{quoted} {currency}".strip() or "your payment"
+    reference = payment.get("external_ref") or ""
+    return (
+        f"We have refunded {money}.\n\n"
+        "It was sent back the same way it arrived. How long it takes to appear "
+        "depends on your bank, not on us — for a card transfer that is usually "
+        "a few business days.\n\n"
+        + (f"Order reference: {reference}\n\n" if reference else "")
+        + "If it has not arrived within a week, reply to this message. A real "
+        "person reads it."
+    )
+
+
+async def _tell_them_about_the_refund(payment: dict, *, transport=None):
+    """Best-effort, and wrapped. The refund is already recorded; an exception
+    escaping here would report it as a failure and invite a second one."""
+    from app.notify.router import Contact, Delivery, notify_customer
+
+    try:
+        return await notify_customer(
+            contact=Contact.from_payment(payment),
+            subject="Your Drydock refund",
+            body=_refund_body(payment),
+            reference=str(payment.get("external_ref") or ""),
+            transport=transport,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("could not tell a customer about their refund",
+                       exc_info=True)
+        return Delivery()

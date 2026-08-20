@@ -213,152 +213,71 @@ Implemented:
   code is also unit-tested against the same `FakePool`/dependency-override
   patterns as the rest of `app/db.py`.
 - `app/billing/` + `migrations/0004_payments_external_ref_unique.sql` —
-  **paywall Stage 2 of 2: two payment providers.** Both take completely
-  different paths to the *same* outcome — a completed `payments` row plus
-  an `accounts` row with `tier='pro'`, and the account's API key handed
-  back to whoever paid. That converging step ("a confirmed payment
-  becomes a pro account with a key") is factored into one shared
-  `grant_pro_tier()` in `app/billing/__init__.py`, idempotent on the
-  provider's charge/transaction id, so neither provider reimplements it.
-  New repo methods back it: `AccountRepository.get_by_id`,
-  `PaymentRepository.{get_by_external_ref,list_pending,mark_completed}`.
-  Migration `0004` adds a partial unique index on `(provider,
-  external_ref)` (where `external_ref` is not null) — the DB-level
-  backstop for the check-then-write idempotency race; pending USDT
-  invoices carry a null `external_ref` so several may coexist.
-  - **Telegram Stars** (`app/billing/telegram_stars.py`,
-    `POST /v1/webhooks/telegram`). Stars is the simpler flow: invoice
-    currency is the literal `"XTR"` and `provider_token` is an **empty
-    string** (no third-party provider to register — confirmed at
-    [core.telegram.org/bots/payments-stars](https://core.telegram.org/bots/payments-stars)).
-    `sendInvoice` takes `prices=[{label, amount}]` where `amount` is the
-    integer star count. The webhook handles two update types: a
-    `pre_checkout_query` (approved within Telegram's 10s deadline via
-    `answerPreCheckoutQuery`) and a `message.successful_payment` (grants
-    pro, DMs the key via `sendMessage`). Idempotency key is
-    `telegram_payment_charge_id` (Telegram retries the webhook until it
-    gets 200, so the same charge can arrive twice — the retry re-delivers
-    the *same* key, mints no second account). Authenticity is Telegram's
-    own `secret_token`: `setWebhook` is called with a secret, echoed in
-    the `X-Telegram-Bot-Api-Secret-Token` header, constant-time compared
-    (`hmac.compare_digest`) exactly like the reap endpoint's bearer token.
-    Env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`,
-    `TELEGRAM_PRO_STARS` (default 250). **Not exercised live** — this
-    sandbox has no bot token and can't receive a real webhook; run
-    `scripts/verify_telegram_stars_locally.py` with your own token to
-    prove the real `sendInvoice` (it does `getMe` then sends a real
-    Pay-with-Stars button). The webhook half only truly closes on a real
-    payment.
-  - **Recurring subscriptions (Telegram Stars).** Stars is the *only*
-    provider that can auto-charge (crypto has no allowance-free auto-debit,
-    so USDT stays one-time). A subscription invoice **cannot** be sent with
-    `sendInvoice` — Telegram rejects that with `SUBSCRIPTION_EXPORT_MISSING`
-    ("subscription invoices may not be sent using `messages.sendMedia`, only
-    exported to invoice deep links using `payments.exportInvoice`",
-    https://core.telegram.org/api/subscriptions). It must instead be minted
-    with `createInvoiceLink` (adding `subscription_period`, which **must**
-    equal `SUBSCRIPTION_PERIOD_SECONDS = 2592000`, 30 days — the only value the
-    Bot API accepts). `/subscribe` exports that link and DMs it to the user
-    (with an inline URL button) to open the Pay flow. The webhook grows two
-    behaviours:
-    - `message.successful_payment` for a `sub:`-prefixed payload →
-      `grant_subscription` upserts/renews the `subscriptions` row
-      (migration 0015). `is_first_recurring` inserts the row; `is_recurring`
-      renews it — pushing `expires_at` (from `subscription_expiration_date`)
-      out and rotating `telegram_payment_charge_id` to the latest period.
-      Unlike Pro, this mints **no account and no API key** (the current
-      `test-monitoring` tier unlocks nothing yet; it exists only to prove the
-      billing).
-    - **`subscription`** — the new `BotSubscriptionUpdated` update type (this
-      is the exact Update field key per the Bot API). It carries `user`,
-      `invoice_payload`, and `state` (`canceled` / `active` / `failed`) but
-      **no charge id**, so it is matched to a row on the
-      `(telegram_user_id, invoice_payload)` natural key and updates only
-      `status`. It is the sole signal for a **failed renewal** — without it,
-      a failed charge is just silence at `expires_at`.
+  **the paywall.** Four providers were built; three were removed on 2026-08-20.
+  What remains is a manually confirmed **bank transfer** (`app/billing/
+  bank_transfer.py`), standing in until the Robokassa shop connection the
+  Russian-language pages describe is finished. Robokassa is the intended and
+  only future rail.
 
-    **Access rule:** access is `expires_at`-based, *not* status-based. A
-    `canceled` or `failed` subscription keeps the period it already paid for
-    (matches Telegram: cancelling never revokes access immediately). `status`
-    is the *renewal* state (will it charge again?); `expires_at` is the
-    *access* boundary. A `failed` renewal therefore does **not** revoke
-    access — the paid period is honoured to its end.
+  The converging step that made four providers tolerable is still here and
+  still the right shape: "a confirmed payment becomes a pro account with a
+  key" is one `grant_pro_tier()` in `app/billing/__init__.py`, idempotent on
+  the provider's charge id, so no provider reimplements it. Migration `0004`
+  adds a partial unique index on `(provider, external_ref)` (where
+  `external_ref` is not null) — the DB-level backstop for the
+  check-then-write idempotency race; a pending invoice carries a null
+  `external_ref` so several may coexist.
 
-    Bot commands: `/subscribe` sends the recurring invoice; `/unsubscribe`
-    calls `editUserStarSubscription(is_canceled=True)` with the stored charge
-    id and flips the row to `canceled` (access continues to `expires_at`).
-    Env: `SUBSCRIPTION_STARS` (default 1). **Not exercised live** here (same
-    reason as one-shot Stars) — proven end to end only by a real Stars
-    subscription: `/subscribe` → pay → confirm the row is `active`, then
-    `/unsubscribe` → confirm it flips to `canceled`.
-  - **USDT/TRC20, self-hosted** (`app/billing/usdt_trc20.py`,
-    `POST /v1/billing/usdt/invoice`, `GET /v1/billing/usdt/invoice/{id}`,
-    `POST /internal/billing/poll-usdt`). No third-party gateway: ONE
-    fixed receiving address (`USDT_TRC20_ADDRESS`, public, not a secret),
-    invoices disambiguated by a **unique amount** (base price + a random
-    sub-cent nonce — TRC20 USDT has 6 decimals, a million micro-slots per
-    dollar) rather than per-invoice addresses. Matching is on **exact
-    base units**, not a float tolerance: TronGrid returns the transfer
-    `value` as an integer string of micro-USDT and we derive each
-    invoice's expected micros from its stored amount, so `==` is both
-    simpler and stricter (can't match a neighbouring invoice a cent
-    away). Invoices expire after `INVOICE_TTL_SECONDS` (30 min); an
-    expired unpaid invoice is never auto-matched even if its exact amount
-    arrives later. The poll endpoint is bearer-protected (`USDT_POLL_TOKEN`,
-    `hmac.compare_digest`, same as the reaper) and meant for a scheduled
-    caller — **this repo ships no timer/cron unit**, same as the reaper
-    (see "Production deployment"); wire a `shipit-poll-usdt.timer` to it.
-    TronGrid REST: `GET /v1/accounts/{address}/transactions/trc20`; an API
-    key is **optional** (only raises rate limits — sent as the
-    `TRON-PRO-API-KEY` header when `TRONGRID_API_KEY` is set).
-    **Reachability confirmed for real from this sandbox**: an
-    unauthenticated `GET` to `api.trongrid.io` for the mainnet USDT
-    contract address returned HTTP 200 with the documented shape
-    (`data[].value` as an integer-string of base units,
-    `token_info.decimals: 6`, `block_timestamp` in ms). That was a raw
-    reachability probe, **not** the feature working end to end — no real
-    invoice was paid on-chain. Run `scripts/verify_usdt_trc20_locally.py`
-    to exercise the actual `fetch_transfers()` code against live TronGrid.
-  - **PayPal Checkout** (`app/billing/paypal.py`, `POST /v1/paypal/orders`,
-    `GET /v1/paypal/orders/{id}`, `POST /v1/paypal/subscriptions`,
-    `POST /v1/webhooks/paypal`). An ALTERNATIVE offered beside Stars/USDT for
-    all three products, entirely additive: with `PAYPAL_CLIENT_ID` /
-    `PAYPAL_CLIENT_SECRET` unset every PayPal endpoint 503s and the other
-    providers are byte-for-byte unchanged. One-time Pro and Fix Pack use the
-    **Orders API** (create → the browser JS SDK approves + captures → a
-    `PAYMENT.CAPTURE.COMPLETED` webhook grants); monitoring uses the
-    **Subscriptions API** against a billing plan (`PAYPAL_MONITOR_PLAN_ID`),
-    activated/renewed by `BILLING.SUBSCRIPTION.ACTIVATED` /
-    `PAYMENT.SALE.COMPLETED` webhooks and cancelled by the
-    `CANCELLED/SUSPENDED/EXPIRED` events. Routing context rides the order /
-    subscription `custom_id` (`pro` / `fixpack:<audit_id>` /
-    `monitor:<owner/repo>`), the PayPal equivalent of the Stars invoice
-    payload, so a webhook routes with **no DB round trip**. Idempotency reuses
-    the existing partial unique indexes — `(provider, external_ref)` keyed on
-    the capture/sale id for `payments`, and `paypal_subscription_id`
-    (migration 0018) for `subscriptions`. Unlike Stars/GitHub (local HMAC),
-    PayPal authenticity is verified by an **outbound** call to
-    `POST /v1/notifications/verify-webhook-signature` (needs the OAuth token +
-    `PAYPAL_WEBHOOK_ID`); an unverified event never grants. Pure `httpx`, no
-    PayPal SDK, with an injectable `transport=` seam so the whole surface is
-    faked in tests. **Not exercised against real PayPal** — this sandbox has no
-    credentials; run `scripts/verify_paypal_sandbox_locally.py` (with sandbox
-    keys in the environment) to drive a real sandbox order/subscription once
-    the founder wires them. Frontend: `web/src/components/PayPalButton.tsx`
-    loads the JS SDK with `NEXT_PUBLIC_PAYPAL_CLIENT_ID` (blank → the cards
-    show as unconfigured, exactly like the Stars button) and renders the
-    buttons beside the existing Stars/USDT cards on `/pricing` and the audit
-    results page.
-  Tests (`tests/test_billing_telegram.py`, `tests/test_billing_usdt.py`,
-  17 new): all outbound HTTP is faked with `httpx.MockTransport` (no real
-  network in the suite) — invoice payload shape, pre_checkout approval,
-  successful_payment → account + idempotent retry, webhook secret
-  rejection, USDT unique-amount pending invoice, poll matches a mocked
-  transfer + completes + reveals key, poll bearer auth, expired invoice
-  not matched. **Applied to Supabase 2026-07-14:** `migrations/0004`
-  was applied for real against the live `shipit` project via the
-  Supabase migration tool, right after `0003` — same session, same
-  method.
+  - **Bank transfer, manually confirmed** (`app/billing/bank_transfer.py`,
+    `POST /v1/billing/bank-transfer/pro`,
+    `POST /v1/audits/{id}/fixpack/bank-transfer`,
+    `GET /v1/billing/bank-transfer/{reference}`). Money arrives on a personal
+    account and a human looking at their banking app IS the oracle — there is
+    no API to poll and there never will be for this provider. The payer is
+    quoted a unique amount (5.07 rather than 5.00, a kopeck suffix from a pool
+    of 99) and gives their name and email at checkout, because a card-to-card
+    transfer carries no reference field for them to type a code into. The
+    operator confirms with an inline Telegram button, owner-only and
+    fail-closed. Confirming twice grants once: the CAS predicate lives inside
+    the UPDATE.
+
+  **THE THREE REMOVED RAILS**, and what is deliberately still true of each.
+
+  - **PayPal** — gone entirely. `payments.paypal_order_id` and
+    `subscriptions.paypal_subscription_id` keep their columns and every SELECT
+    that reads them: those rows are the books, and some are refundable.
+    Nothing writes them.
+  - **USDT/TRC20** — gone, along with its poller, the poller's systemd units
+    and the advisory lock that existed solely to stop two polls double-granting.
+    `/link` still LOOKS UP a `usdt_trc20` payment: a completed invoice from
+    before the removal is someone's money and a key they may not have
+    collected. Nothing can move an invoice to completed any more, so a pending
+    one is told to ask a human rather than wait for a poller.
+  - **Telegram Stars** — the sale is gone; the BOT is not. It is where the
+    operator taps Confirm on a bank transfer, how a payer recovers a lost key
+    (`/mykey`, `/rotatekey`, `/link`), and the only outward notification
+    channel this product has. Nothing can mint an invoice.
+    `pre_checkout_query` is DECLINED with a reason Telegram shows the payer —
+    the last moment before a charge, and the only point where refusing spares
+    them money. A `successful_payment` that still arrives IS honoured and
+    pages the operator: Telegram holds an invoice once minted, so a deep link
+    exported before the withdrawal can still be tapped, and by then the money
+    has moved. `/unsubscribe` keeps `editUserStarSubscription`, the one Stars
+    API call left, because it stops money rather than taking it.
+
+  The Bot API client itself moved to `app/notify/telegram.py`. It is a way of
+  reaching a person, not a way of charging one, and `app/alerts.py` — the
+  operator's alert channel — used to reach Telegram by importing a payment
+  provider. `tests/test_notify_transport_boundary.py` holds the dependency one
+  way: `app/billing` may import `app/notify`, never the reverse.
+
+  Tests: `tests/test_billing_bank_transfer.py` (the live rail, including every
+  sell-side refusal), `tests/test_billing_telegram.py` (that nothing there
+  sells), `tests/test_one_way_to_pay.py` (that the retired endpoints 404 rather
+  than 503 — a 503 says "configure me", and a rail left routed is one
+  environment variable away from taking money nobody watches). All outbound
+  HTTP is faked with `httpx.MockTransport`; the SQL half runs against real
+  Postgres 17 in `db-postgres-smoke`.
 
 ## Production deployment
 
@@ -414,13 +333,11 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   within a few minutes of a push. The push webhook only enqueues the run and
   ACKs immediately, so nothing gets audited until this timer fires (see
   `MONITORING_ASYNC_PLAN.md`).
-- `shipit-usdt-poller.timer` (systemd, 2 min) calls
-  `POST /internal/billing/poll-usdt` (bearer token `USDT_POLL_TOKEN`) to match
-  incoming TRC20 transfers against pending invoices. Unit files are
-  `deploy/systemd/shipit-usdt-poller.{service,timer}`. This endpoint 503s when
-  `USDT_TRC20_ADDRESS` is unparseable, which is a whole-feature outage that
-  looks like silence: no payment is ever confirmed, and nobody complains,
-  because a customer who paid just sees an invoice that stays `pending`.
+- `shipit-usdt-poller.timer` — REMOVED with the USDT rail (2026-08-20), unit
+  files and all. A host upgraded from an earlier release still has the units in
+  `/etc/systemd/system`: `systemctl disable --now shipit-usdt-poller.timer` and
+  delete them, or the timer keeps firing at an endpoint that now 404s and
+  `OnFailure=shipit-alert@%n` pages the operator every two minutes.
 
 ### Release tags (CalVer)
 
@@ -641,7 +558,7 @@ sudo cp /srv/shipit/current/deploy/systemd/*.service \
         /srv/shipit/current/deploy/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now shipit-fixpack.timer shipit-monitoring.timer \
-                          shipit-usdt-poller.timer shipit-reap.timer
+                          shipit-reap.timer
 systemctl list-timers --all | grep shipit
 
 # Prove that what systemd LOADED is what the release ships. `systemctl cat`
@@ -671,8 +588,8 @@ The shipped units avoid all of that: `call-internal-endpoint.sh` writes the
 header into a `curl` config file with mode `0600` so it never reaches `ps`,
 the token comes from `.env` in one place, and `OnFailure=shipit-alert@%n`
 means a failed run is reported. The missing alert is not academic — the USDT
-poller had been failing on every run since 2026-07-31 and nobody knew, because
-the hand-written unit had nothing to tell.
+poller (since removed) had been failing on every run since 2026-07-31 and
+nobody knew, because the hand-written unit had nothing to tell.
 
 ### GitHub webhook — two jobs (`pr_merged` + continuous monitoring)
 
@@ -871,7 +788,7 @@ Everything rides Postgres and the Telegram bot that already exist (see
 
 - **Log format** is configured in one place for every process
   (`app/logging_config.py`, called by both the API and the audit worker;
-  the fixpack/monitoring/reap/usdt timers are `curl` calls into the API, not
+  the fixpack/monitoring/reap timers are `curl` calls into the API, not
   Python processes of their own). `LOG_FORMAT=json` emits one JSON object per
   line for `journalctl -o cat | jq` — see the runbook below — and is what
   `.env.example` now ships and what production runs; `LOG_FORMAT=text` is the
@@ -934,7 +851,7 @@ Everything rides Postgres and the Telegram bot that already exist (see
   `python -m app.alerts "<msg>"` formats and sends the alert in Python (same
   bot, same `.env`, no direct `curl` to the Bot API), and exits `0` even if
   the send fails so it never turns a service failure into a failing
-  `OnFailure` unit. Matching the reaper/USDT/fixpack convention, **no unit
+  `OnFailure` unit. Matching the reaper/fixpack convention, **no unit
   file is committed** — the snippets above are the recipe.
 
   **Throttling this path is systemd's job, not the code's.** Each
@@ -1136,18 +1053,13 @@ allowed request headers are `Authorization` and `Content-Type`.
   alternative to a zip upload (see above). Still NOT supported by design:
   private repos, non-GitHub hosts (GitLab/Bitbucket/self-hosted), and any
   auth/OAuth flow — public github.com repos only.
-- Paywall Stage 2 (both payment providers) is now implemented in code
-  (see the implemented entry above), but **neither provider has been
-  exercised against a real payment**: Telegram Stars has no bot token and
-  no real webhook here (only `sendInvoice` is provable, via the verify
-  script), and USDT/TRC20 has no funded address or real on-chain transfer
-  (only the TronGrid *read* is provable). The matching/granting logic is
-  covered only by mocked tests. Closing this needs the operator to run
-  the two `scripts/verify_*_locally.py` scripts and then take one real
-  payment through each. `migrations/0003` and `0004` are both applied to
-  the live Supabase project already (see the entries above) — what's
-  still pending is exercising the two providers against a real bot token
-  and a real on-chain transfer, not schema. The
+- The paywall now has ONE rail, and it is the one that has actually taken
+  money: a manually confirmed bank transfer. The three that had never been
+  exercised against a real payment were removed rather than left half-proven
+  (2026-08-20). What is still unproven is the Robokassa connection the
+  Russian-language pages describe — the shop is not connected, so the site
+  says so rather than showing a button that cannot charge. `migrations/0003`
+  and `0004` are both applied to the live Supabase project already. The
   `private_repos_allowed` and `priority_queue` entitlements have been
   removed rather than left unenforced in the payload; only
   `daily_audit_limit` exists, and it is enforced. The underlying gaps are
@@ -1184,14 +1096,14 @@ allowed request headers are `Authorization` and `Content-Type`.
   crash between the two leaves the payment `pending` (retryable) instead of
   `completed` with no job. `mark_completed`/`mark_completed_fixpack` also picked
   up a compare-and-set gate (`WHERE status = 'pending' OR (status = 'completed'
-  AND external_ref = %s)`), so a retried webhook or a transfer seen on two USDT
-  polls is idempotent instead of silently overwriting `account_id`. Still open:
-  the USDT branch of `grant_pro_tier` has one narrower window left — a crash
-  between that CAS succeeding and the account being created leaves the payment
+  AND external_ref = %s)`), so a retried webhook or a repeated operator
+  confirmation is idempotent instead of silently overwriting `account_id`.
+  Still open: `grant_pro_tier` has one narrower window left — a crash between
+  that CAS succeeding and the account being created leaves the payment
   `completed` with no account and no key, and closing it needs an actual
   transaction (there isn't one anywhere in this codebase yet). The PayPal SALE
-  webhook replay (a redelivered charge extending a subscription for free) and
-  the Telegram `grant_pro_tier` branch aren't touched by this either — next up.
+  replay and the USDT double-poll this paragraph also used to name are gone
+  with those rails; the window above is the one that still applies.
 
 ## Dev
 

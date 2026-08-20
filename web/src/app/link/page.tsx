@@ -30,12 +30,12 @@ import { Spinner } from "@/components/Spinner";
  * which is a real gap and a separate change, not a reason to leave payers with
  * no door.
  *
- * Bank transfer only — the only rail on the storefront. USDT recovery keyed
- * off a transaction hash, which the
- * payer always has from their wallet, and only the bot accepts it; the HTTP
- * side is keyed by an invoice id that vanishes with the same tab. Adding a
- * tx-hash claim endpoint is its own change, so this page says so rather than
- * pretending to cover it.
+ * Bank transfer only — the only rail there is. USDT was withdrawn as a way to
+ * pay, but a completed USDT invoice from before that is still someone's money
+ * and still buys them a key; recovering it is keyed off the transaction hash,
+ * and only the Telegram bot's /link accepts one. This page is keyed by the
+ * reference code. Adding a tx-hash claim endpoint here is its own change, so
+ * the page says so rather than pretending to cover it.
  */
 
 const REFERENCE_PREFIX = "DRY-";

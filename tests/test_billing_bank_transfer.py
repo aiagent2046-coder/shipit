@@ -80,6 +80,19 @@ PAYER = {"payer_name": PAYER_NAME, "payer_email": PAYER_EMAIL}
 
 # --- in-memory repo fakes ---
 
+
+# `confirm()` now tells the PAYER their transfer landed, and pages the operator
+# when it cannot reach them. Both go out over httpx, so a direct call to
+# confirm() in a test reaches api.telegram.org unless a transport is handed in
+# -- which it did, at 0.4s of DNS per call, until this was noticed. The suite's
+# rule is that nothing touches the network; this is how these call sites keep
+# it. Tests that drive confirm through the webhook already pass one.
+def _no_network() -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+    return httpx.MockTransport(handler)
+
+
 class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
@@ -87,13 +100,14 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     async def create(self, *, account_id, provider, external_ref, amount,
                      currency, status, tier_granted, product="pro_tier",
                      audit_id=None, created_at=None,
-                     payer_name=None, payer_email=None):
+                     payer_name=None, payer_email=None, payer_x=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
             "audit_id": audit_id,
             "payer_name": payer_name, "payer_email": payer_email,
+            "payer_x": payer_x,
             "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows[row["id"]] = row
@@ -1108,10 +1122,12 @@ async def test_confirming_a_second_payment_warns_the_operator(monkeypatch):
 
     first = await bank_transfer.confirm(
         payment_repo=payments, account_repo=accounts, audit_repo=audits,
-        fixpack_repo=fixpacks, payment_id=first_invoice["payment_id"])
+        fixpack_repo=fixpacks, payment_id=first_invoice["payment_id"],
+        transport=_no_network())
     second = await bank_transfer.confirm(
         payment_repo=payments, account_repo=accounts, audit_repo=audits,
-        fixpack_repo=fixpacks, payment_id=second_invoice["payment_id"])
+        fixpack_repo=fixpacks, payment_id=second_invoice["payment_id"],
+        transport=_no_network())
 
     # Both payments went through and both report granted -- that part is
     # unchanged and correct, the Fix Pack IS queued.
@@ -1141,7 +1157,8 @@ async def test_a_pro_confirmation_never_carries_the_warning(monkeypatch):
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     result = await bank_transfer.confirm(
         payment_repo=payments, account_repo=accounts, audit_repo=audits,
-        fixpack_repo=fixpacks, payment_id=invoice["payment_id"])
+        fixpack_repo=fixpacks, payment_id=invoice["payment_id"],
+        transport=_no_network())
     assert result["joined_existing_job"] is False
     assert "WARNING" not in telegram_stars._confirmed_text(result)
 def test_invoice_creation_is_rate_limited(monkeypatch):
@@ -1200,7 +1217,13 @@ def test_pro_and_fixpack_share_one_invoice_budget(monkeypatch):
 def test_bank_transfer_refuses_when_nothing_is_auto_fixable(monkeypatch):
     """Same refusal on the card route. Three sell points grew independently
     and already duplicate the audit and repo_url gates, so the thing that
-    breaks is one of them being missed -- see #128."""
+    breaks is one of them being missed -- see #128.
+
+    THE OTHER TWO SELL POINTS ARE GONE. USDT and PayPal were removed as ways
+    to pay, and the four cases below came with the USDT route: they were the
+    only place each was checked. A gate is not tested because it is written
+    down three times; it is tested because some test exercises it. Moved here
+    rather than deleted with the endpoint that happened to host them."""
     _configure_bank(monkeypatch)
     payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
     audit = audits.add(findings=[
@@ -1215,5 +1238,78 @@ def test_bank_transfer_refuses_when_nothing_is_auto_fixable(monkeypatch):
         assert r.status_code == 409
         assert r.json()["detail"]["reason"] == "no_auto_fixable_findings"
         assert len(payments.rows) == 0
+    finally:
+        _clear()
+
+
+def test_fixpack_invoice_for_an_unknown_audit_is_404(monkeypatch):
+    """Nothing to sell against. A 404 rather than an invoice, because an
+    invoice opened against an audit that does not exist can be paid and can
+    never be fulfilled."""
+    _configure_bank(monkeypatch)
+    payments, audits = FakePaymentRepo(), FakeAuditRepo()
+    _override({get_payment_repo: payments, get_audit_repo: audits})
+    try:
+        r = client.post(
+            f"/v1/audits/{uuid.uuid4()}/fixpack/bank-transfer", json=PAYER)
+        assert r.status_code == 404
+        assert r.json()["detail"]["reason"] == "audit_not_found"
+        assert len(payments.rows) == 0
+    finally:
+        _clear()
+
+
+def test_a_finding_only_in_a_comment_is_not_something_to_sell(monkeypatch):
+    """The seam with #132. That change stopped the Fix Pack from rewriting
+    comments; this one stops us charging for the rewrite it will not do."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(findings=[
+        {"rule_id": "aws-access-key-id", "file": "app.py", "line": 3,
+         "title": "AWS Access Key ID", "context": "comment"},
+    ])
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        r = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer", json=PAYER)
+        assert r.status_code == 409
+        assert len(payments.rows) == 0
+    finally:
+        _clear()
+
+
+def test_an_audit_with_no_findings_at_all_is_refused(monkeypatch):
+    """A clean repository. Nothing was found, so there is nothing to fix --
+    and this is the state a customer is most likely to try to buy from,
+    because a good score reads as 'everything is fine, but let me tidy up'."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(findings=[])
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        assert client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer",
+            json=PAYER).status_code == 409
+        assert len(payments.rows) == 0
+    finally:
+        _clear()
+
+
+def test_a_real_secret_is_still_sellable(monkeypatch):
+    """The boundary, and the reason the three refusals above are safe. A check
+    that refused everything would be worse than the bug it guards: it would
+    stop the product selling at all, on the one rail that still sells."""
+    _configure_bank(monkeypatch)
+    payments, audits, fixpacks = FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add()     # default fixture: a real secret
+    _override({get_payment_repo: payments, get_audit_repo: audits,
+               get_fixpack_repo: fixpacks})
+    try:
+        r = client.post(
+            f"/v1/audits/{audit['id']}/fixpack/bank-transfer", json=PAYER)
+        assert r.status_code == 201
+        assert len(payments.rows) == 1
     finally:
         _clear()

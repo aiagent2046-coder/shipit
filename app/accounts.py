@@ -1,7 +1,7 @@
 """Account tiers and entitlements — the identity foundation for the
-paywall. Stage 1 of 2: the account/tier/entitlement layer that a
-follow-up task's payment providers (Telegram Stars, USDT/TRC20) plug
-into. No provider logic lives here.
+paywall: the account/tier/entitlement layer a payment provider plugs into.
+No provider logic lives here, which is why four providers could come and three
+could go without this file changing.
 
 This is the FIRST identity concept in the codebase. Everything stays
 anonymous by default: a request may optionally carry an opaque API key

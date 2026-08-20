@@ -3,11 +3,13 @@
 Interim method for a deployment with no legal entity yet, and therefore no
 business acquiring: money arrives on a personal bank account and the
 operator confirms it by hand. A personal account has no API to poll, so
-unlike USDT/TRC20 (TronGrid) or PayPal (webhook) there is no automatic
-confirmation and there never will be for this provider -- a human looking at
-their banking app IS the oracle.
+there is no automatic confirmation and there never will be for this provider
+-- a human looking at their banking app IS the oracle. The rails that DID
+confirm themselves (USDT via TronGrid, PayPal via webhook) were removed on
+2026-08-20; this one, the only one that had actually taken money, is what is
+left until Robokassa is connected.
 
-Structurally, though, this is the SAME flow as usdt_trc20: a pending
+Structurally this is an INVOICE flow, the same one USDT used: a pending
 `payments` row is written up front (the invoice the payer is shown), and a
 later, separate event transitions it to completed via
 `grant_pro_tier`/`grant_fixpack` with `invoice_payment_id=`. That branch runs
@@ -15,7 +17,7 @@ through `mark_completed`/`mark_completed_fixpack`, whose compare-and-set
 predicate is what makes a repeated confirmation safe -- press the confirm
 button twice and the second press returns the same account/job, mints no
 second key, and creates no second Fix Pack. Going through the other branch of
-those functions (the INSERT path Telegram Stars uses) would NOT be safe here,
+those functions (the INSERT path a Stars charge takes) would NOT be safe here,
 because a human can and will press a button twice.
 
 Matching is by PAYER IDENTITY, corroborated by a KOPECK SUFFIX on the amount.
@@ -30,7 +32,8 @@ The suffix is a HINT, never a key, and the ordering matters:
 
   - It survives only a same-currency transfer. If the payer's bank converts,
     what lands is a converted figure and the kopecks are gone -- which is why
-    amount cannot be the primary key here the way it is for USDT.
+    amount cannot be the primary key here the way it was for an on-chain
+    transfer, where the payer's wallet sends exactly the figure quoted.
   - There are 99 slots. Under saturation the price is quoted bare and identity
     is all that is left.
 
@@ -59,6 +62,8 @@ import re
 import secrets
 from typing import Any
 
+from app.notify import telegram as tg
+
 logger = logging.getLogger(__name__)
 
 PROVIDER = "bank_transfer"
@@ -70,7 +75,8 @@ PRODUCT_FIXPACK = "fixpack"
 _DEFAULT_PRO_PRICE_USD = "5.00"
 _DEFAULT_FIXPACK_PRICE_USD = "10.00"
 
-# Seven days, against usdt_trc20's thirty minutes. A SWIFT transfer takes one
+# Seven days, against the thirty minutes an on-chain invoice used. A SWIFT
+# transfer takes one
 # to three business days before it is even visible to the operator, and the
 # payer may well start the invoice on a Friday. Anything shorter would show
 # "expired" to a payer whose money is still legitimately in flight.
@@ -133,7 +139,7 @@ def bank_details_from_env() -> dict[str, str] | None:
 
 def _price_from_env(var: str, default: str) -> str:
     """A fiat amount as a fixed-2dp string. Same shape and same
-    unparseable-override-falls-back-to-default contract as paypal._price_from_env,
+    unparseable-override-falls-back-to-default contract the other providers used,
     because both quote a catalogue price in USD to a human."""
     raw = os.environ.get(var) or default
     try:
@@ -187,7 +193,8 @@ def _amount_lock():
 def amount_to_cents(amount: float) -> int:
     """A quoted amount as integer cents. round() not int(): 5.07 * 100 is
     506.9999... in binary float and int() would truncate it to 506. Same
-    reasoning and same fix as usdt_trc20.amount_to_micros."""
+    reasoning and same fix as the micro-dollar conversion the USDT rail used
+    for exactly this reason."""
     return int(round(amount * 100))
 
 
@@ -204,7 +211,7 @@ def generate_reference() -> str:
 async def _reserve_reference(payment_repo: Any) -> str | None:
     """A reference code no existing bank-transfer payment is already using.
 
-    Same re-roll-off-what-is-taken shape as usdt_trc20._reserve_unique_amount,
+    Same re-roll-off-what-is-taken shape the USDT invoice used,
     and with the same residual race: two concurrent creations could both clear
     the check and pick the same code. Migration 0004's partial unique index on
     (provider, external_ref) is the backstop -- the loser's INSERT fails and the
@@ -231,7 +238,7 @@ async def _reserve_reference(payment_repo: Any) -> str | None:
 def _created_at(row: dict[str, Any]) -> datetime.datetime:
     """created_at as an aware UTC datetime, whether psycopg handed back a
     datetime (real DB) or an ISO string (a fake in tests). Same helper and same
-    reason as usdt_trc20._created_at."""
+    reason the USDT invoice recorded its own."""
     ca = row["created_at"]
     if isinstance(ca, str):
         ca = datetime.datetime.fromisoformat(ca.replace("Z", "+00:00"))
@@ -268,10 +275,11 @@ def _invoice_view(
 async def create_invoice(
     payment_repo: Any, *, details: dict[str, str],
     payer_name: str | None = None, payer_email: str | None = None,
+    payer_x: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for the Pro tier.
 
-    `account_id` is deliberately None, exactly as in usdt_trc20.create_invoice:
+    `account_id` is deliberately None, as in every invoice flow here:
     the account does not exist yet and is minted by grant_pro_tier at
     confirmation time, which overwrites this column anyway (see
     PaymentRepository.mark_completed). Setting it here would be a value nobody
@@ -302,6 +310,7 @@ async def create_invoice(
             amount=float(amount), currency=CURRENCY, status="pending",
             tier_granted="pro", product=PRODUCT_PRO,
             payer_name=payer_name, payer_email=payer_email,
+            payer_x=payer_x,
         )
     if row is None:
         return None
@@ -311,6 +320,7 @@ async def create_invoice(
 async def create_fixpack_invoice(
     payment_repo: Any, *, details: dict[str, str], audit_id: str,
     payer_name: str | None = None, payer_email: str | None = None,
+    payer_x: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for a Fix Pack scoped to one audit. Same
     reference-code disambiguation as create_invoice, at the Fix Pack price and
@@ -330,6 +340,7 @@ async def create_fixpack_invoice(
             amount=float(amount), currency=CURRENCY, status="pending",
             tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
             payer_name=payer_name, payer_email=payer_email,
+            payer_x=payer_x,
         )
     if row is None:
         return None
@@ -358,7 +369,7 @@ async def invoice_status(
     there's no such invoice (endpoint -> 404).
 
     A completed Pro invoice mints and reveals the API key exactly once, via
-    deliver_key_once -- same one-shot contract as the USDT invoice poll, and it
+    deliver_key_once -- the one-shot contract every invoice poll shared, and it
     matters more here: confirmation arrives hours or days later, so the tab that
     started the purchase is usually long gone. /link with the reference code is
     the recovery door for that case.
@@ -524,10 +535,11 @@ async def mark_awaiting_confirmation(
 async def confirm(
     *, payment_repo: Any, account_repo: Any, payment_id: str,
     fixpack_repo: Any = None, audit_repo: Any = None,
+    notify: Any = None, transport: Any = None,
 ) -> dict[str, Any] | None:
     """The operator confirmed the money arrived: grant what was bought.
 
-    Dispatches on `product` exactly like usdt_trc20.poll_and_match, and always
+    Dispatches on `product` the way the USDT poller did, and always
     passes `invoice_payment_id` so the grant runs through the CAS-gated
     mark_completed / mark_completed_fixpack rather than inserting a second
     payment row. That is what makes pressing the button twice safe: the replay
@@ -544,6 +556,20 @@ async def confirm(
     Returns None when there's no such bank-transfer payment. Otherwise a dict
     with `granted` False only if persistence refused (no DATABASE_URL), which
     the caller reports rather than swallowing.
+
+    THE CUSTOMER IS TOLD HERE, not by the caller. This confirmation happens
+    hours after the payer closed their tab -- that is the whole shape of a
+    manually confirmed transfer -- so the moment the operator taps the button
+    is the moment somebody who is not watching a page needs to hear something.
+    Putting it in the caller would mean the next way to confirm a payment has
+    to remember, and the failure would be silent on the customer's side.
+
+    `notify` is the injection seam. The send is best-effort in the strongest
+    sense: `granted` is already true by then, and a notification that fails
+    must not turn a completed grant into a refusal. What DOES happen when
+    nothing reaches the customer is that app/notify/router.py pages the
+    operator, because a person who paid and was never told is the case that
+    ends in a dispute.
     """
     from app.billing import grant_fixpack, grant_pro_tier
 
@@ -586,6 +612,10 @@ async def confirm(
         and isinstance(granted, dict)
         and granted.get("inserted") is False
     )
+    if granted is not None:
+        await _tell_the_payer(
+            row, product=product, notify=notify, transport=transport)
+
     return {
         "payment_id": str(row["id"]),
         "reference": reference,
@@ -597,3 +627,61 @@ async def confirm(
         # know" must not read as "we double-charged".
         "joined_existing_job": joined_existing_job,
     }
+
+
+# --- telling the payer ------------------------------------------------------
+
+def _confirmation_subject(product: str) -> str:
+    what = "Fix Pack" if product == PRODUCT_FIXPACK else "Drydock Pro"
+    return f"Payment confirmed — your {what} is active"
+
+
+def _confirmation_body(row: dict[str, Any], *, product: str) -> str:
+    """What the payer is told. Says what happens NEXT, because "confirmed" on
+    its own leaves them waiting without knowing for what."""
+    reference = row.get("external_ref") or ""
+    if product == PRODUCT_FIXPACK:
+        what = (
+            "Your Fix Pack is now running. It opens a pull request against "
+            "your repository with the fixes it can make, and you will hear "
+            "again when it lands or if it cannot finish."
+        )
+    else:
+        what = (
+            "Your Drydock Pro access is active. Your API key is on the "
+            f"payment page for this order — open {tg.SITE_URL}/link and enter "
+            "the reference below to collect it."
+        )
+    return (
+        "We have confirmed your bank transfer. Thank you.\n\n"
+        f"{what}\n\n"
+        f"Order reference: {reference}\n\n"
+        "Reply to this message if anything looks wrong — a real person reads "
+        "it."
+    )
+
+
+async def _tell_the_payer(
+    row: dict[str, Any], *, product: str, notify: Any = None,
+    transport: Any = None,
+) -> None:
+    """Best-effort, and wrapped. The grant has already happened; an exception
+    escaping here would report a completed confirmation as a failure and
+    invite the operator to press the button again."""
+    if notify is None:
+        from app.notify.router import notify_customer as notify
+    from app.notify.router import Contact
+
+    try:
+        await notify(
+            contact=Contact.from_payment(row),
+            subject=_confirmation_subject(product),
+            body=_confirmation_body(row, product=product),
+            reference=str(row.get("external_ref") or ""),
+            transport=transport,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "could not tell the payer their transfer was confirmed",
+            exc_info=True,
+        )

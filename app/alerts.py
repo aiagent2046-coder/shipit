@@ -1,12 +1,15 @@
 """Best-effort operator alerts over the Telegram bot we already run.
 
 No new integration and no new dependency: this reuses
-`telegram_stars.send_message` (the same Bot API client the Stars payment
-flow uses) to push a short message to a single operator chat. The channel
-is opt-in via env — `TELEGRAM_BOT_TOKEN` (already used by the payment
-webhook) plus `TELEGRAM_ADMIN_CHAT_ID` for the operator's own chat. With
-either unset, alerting is a silent no-op, exactly like every other
+`app.notify.telegram.send_message` to push a short message to a single
+operator chat. The channel is opt-in via env — `TELEGRAM_BOT_TOKEN` (also
+read by the bot webhook) plus `TELEGRAM_ADMIN_CHAT_ID` for the operator's own
+chat. With either unset, alerting is a silent no-op, exactly like every other
 "unconfigured -> degrade quietly" contract in this codebase.
+
+It used to import the client out of `app.billing.telegram_stars`, which meant
+the operator's alert channel was a side effect of a payment provider. It is
+not one any more.
 
 Two invariants make this safe to sprinkle into failure paths:
 
@@ -44,7 +47,7 @@ import time
 
 import httpx
 
-from app.billing import telegram_stars
+from app.notify import telegram
 from app.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -62,7 +65,7 @@ _last_sent: dict[str, float] = {}
 
 def admin_chat_id_from_env() -> str | None:
     """Operator chat id for alerts, or None. Same env-or-None pattern as
-    telegram_stars.bot_token_from_env — unset means alerting is off."""
+    telegram.bot_token_from_env — unset means alerting is off."""
     return os.environ.get(ADMIN_CHAT_ID_ENV) or None
 
 
@@ -99,7 +102,7 @@ async def notify_operator(
     something the operator can act on in one tap (bank_transfer's confirm
     button). Still best-effort: a keyboard that fails to send is a lost
     notification, not a lost payment — the same invoice can be re-notified."""
-    token = telegram_stars.bot_token_from_env()
+    token = telegram.bot_token_from_env()
     chat_id = admin_chat_id_from_env()
     if not token or not chat_id:
         # Alerting isn't configured on this deployment — quiet no-op.
@@ -113,7 +116,7 @@ async def notify_operator(
         return False
 
     try:
-        await telegram_stars.send_message(
+        await telegram.send_message(
             chat_id, text, token=token, transport=transport,
             reply_markup=reply_markup,
         )

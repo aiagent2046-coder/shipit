@@ -14,6 +14,12 @@ pages the operator for. Eight of them, measured before the fix:
 A parameterized sweep rather than five near-identical tests: the failure this
 guards against is a NEW endpoint parsing a body and forgetting the helper, and
 a list at the top of a file is the thing someone extends.
+
+THREE OF THE FIVE MEASURED ENDPOINTS WERE PAYPAL'S, and PayPal is gone as a
+way to pay. The sweep is not smaller for it: it now covers every endpoint that
+still reaches `_json_object_body`, which is the list it should always have
+been. Losing coverage as an endpoint retires is how a sweep quietly becomes a
+sweep over two things.
 """
 
 from __future__ import annotations
@@ -31,11 +37,11 @@ client = TestClient(app, raise_server_exceptions=False)
 # (path, extra headers). Auth headers are supplied where the endpoint checks
 # them first -- the point is to reach the body parse, not to test auth.
 BODY_PARSING_ENDPOINTS = [
-    ("/v1/paypal/orders", {}),
-    ("/v1/paypal/subscriptions", {}),
-    ("/v1/webhooks/paypal", {}),
     ("/v1/webhooks/telegram", {"x-telegram-bot-api-secret-token": "s"}),
     ("/internal/service-flags/llm_paid_ops", {"authorization": "Bearer f"}),
+    ("/internal/payments/00000000-0000-0000-0000-000000000000/refund",
+     {"authorization": "Bearer f"}),
+    ("/v1/auth/login", {}),
 ]
 
 # Bodies that are not a JSON object. The first two do not parse; the rest
@@ -96,8 +102,8 @@ def test_a_valid_object_still_gets_past_the_guard():
     """The boundary. A guard that refused everything would be worse than the
     bug: this body is well-formed, so it must fail LATER, on its contents."""
     resp = client.post(
-        "/v1/paypal/orders", json={"product": "nonsense"},
-        headers={"content-type": "application/json"},
+        "/internal/service-flags/llm_paid_ops", json={"enabled": "nonsense"},
+        headers={"content-type": "application/json", "authorization": "Bearer f"},
     )
 
     assert resp.status_code != 422 or \

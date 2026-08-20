@@ -463,10 +463,6 @@ def _no_ambient_production_integrations(monkeypatch):
         # absence is itself a behaviour under test (an unset allowlist must
         # reject everyone, never allow everyone).
         "TELEGRAM_ADMIN_CHAT_ID",
-        "PAYPAL_CLIENT_ID",
-        "PAYPAL_CLIENT_SECRET",
-        "PAYPAL_WEBHOOK_ID",
-        "USDT_POLL_TOKEN",
         # A private individual's real banking details on the production host.
         "BANK_TRANSFER_CARD",
         "BANK_TRANSFER_BANK_NAME",
@@ -515,6 +511,8 @@ def enable_monitoring(monkeypatch):
     the flag off for its own reads -- which is exactly what happened when the
     PayPal handlers moved into their own module. Patching the definition site
     cannot drift that way, so no target needs adding when a caller relocates.
+    (The module that made the point has since been deleted with the PayPal
+    checkout; the lesson it taught is why this fixture is shaped this way.)
     """
     monkeypatch.setattr("app.monitor.MONITORING_FOR_SALE", True)
 

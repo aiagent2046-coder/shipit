@@ -110,20 +110,23 @@ async def close_pool() -> None:
 
 
 # Arbitrary but fixed keys for the processors' session advisory locks -- ascii
-# "FIXP", "MONI" and "USDT". Any value works as long as it is stable and not
-# shared with another advisory-lock user in this database; each processor uses a
-# distinct key so a Fix Pack run, a monitoring run and a USDT poll never
-# serialize against each other.
+# "FIXP", "MONI" and "BNKA". Any value works as long as it is stable and not
+# shared with another advisory-lock user in this database; each holder uses a
+# distinct key so a Fix Pack run, a monitoring run and a bank-transfer amount
+# reservation never serialize against each other.
+#
+# 0x55534454 ("USDT") was the USDT poller's and is deliberately NOT reused: a
+# host mid-deploy can run old and new code at once, and a recycled advisory-lock
+# key is a lock shared between two things that know nothing about each other.
 _FIXPACK_PROCESSOR_LOCK_KEY = 0x46495850
 _MONITORING_PROCESSOR_LOCK_KEY = 0x4D4F4E49
-_USDT_POLL_LOCK_KEY = 0x55534454
 _BANK_TRANSFER_AMOUNT_LOCK_KEY = 0x424E4B41  # "BNKA"
 
 
 class ProcessorLockBusy(Exception):
     """Another processor run already holds the advisory lock, so this run must
     not proceed -- returned to the caller as a benign skipped-because-locked
-    outcome, not an error. Shared by the Fix Pack, monitoring and USDT-poll
+    outcome, not an error. Shared by the Fix Pack and monitoring
     processors."""
 
 
@@ -316,35 +319,6 @@ async def bank_transfer_amount_lock():
         _AMOUNT_LOCK_ATTEMPTS * _AMOUNT_LOCK_DELAY_SECONDS,
     )
     yield
-
-
-def usdt_poll_lock():
-    """The USDT poller's advisory lock, on a distinct key so it never serializes
-    against a Fix Pack or monitoring run (see _advisory_processor_lock).
-
-    Unlike those two, here the lock is not belt-and-suspenders -- it is the only
-    thing stopping a double grant. Both of them claim each unit of work atomically
-    first (claim_one_paid / claim_one_pending), so their lock merely makes "one run
-    at a time" explicit. The USDT poller has no such claim: it reads
-    get_by_external_ref, finds nothing, and only then creates an account and marks
-    the invoice completed. Two overlapping runs both pass that check and both
-    grant. The partial unique index on payments(provider, external_ref) does not
-    catch it either, because completing a USDT invoice is an UPDATE of the same
-    already-existing pending row (invoice_payment_id is known up front), not a
-    competing INSERT. The result is two pro accounts for one payment, the second
-    mark_completed overwriting the first's account_id, so the key the payer was
-    handed points at an orphaned account.
-
-    Concurrency does not need an overlapping timer to happen: /internal/billing/
-    poll-usdt is plain authenticated HTTP, reachable by an operator curl during a
-    scheduled run, by two app instances mid-deploy, or from a second host.
-
-    Trade-off, the same one the other two processors already accept: the lock holds
-    one of the pool's max_size=5 connections for the whole poller run, including
-    the TronGrid HTTP call (30s timeout in fetch_transfers). A slow poll therefore
-    ties a connection up for that long. The alternative -- no lock -- is
-    double-granting a paid account, which is worse."""
-    return _advisory_processor_lock(_USDT_POLL_LOCK_KEY)
 
 
 def _json_field(value: Any) -> Any:
@@ -1255,11 +1229,18 @@ REAL_PR_URL = r"^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$"
 
 class FixOutcomeRepository:
     """The fix-outcome knowledge base (migration 0014). One row per terminal
-    Fix Pack job outcome; collection only, nothing reads it for decisions yet
-    (see PHASE_B_KNOWLEDGE_BASE_PLAN.md). Same real/fake split and
-    not-configured contract as the other repositories: when DATABASE_URL isn't
-    set, record()/set_pr_merged_by_pr_url() no-op instead of failing, so the
-    Fix Pack delivery path never breaks over a missing analytics store."""
+    Fix Pack job outcome.
+
+    It was collection-only from 0014 until 2026-08-20 -- the plan said so
+    explicitly, and PHASE_B_KNOWLEDGE_BASE_PLAN.md is where. `get_by_job` is
+    the first read that DECIDES anything: app/fixpack/merit.py asks it whether
+    a Fix Pack did what it was sold as, so a refund is a decision with a record
+    behind it rather than a matter of belief.
+
+    Same real/fake split and not-configured contract as the other
+    repositories: when DATABASE_URL isn't set, record()/
+    set_pr_merged_by_pr_url() no-op instead of failing, so the Fix Pack
+    delivery path never breaks over a missing analytics store."""
 
     async def record(
         self, *, fixpack_job_id: str | None, audit_id: str | None,
@@ -1293,6 +1274,43 @@ class FixOutcomeRepository:
             )
             row = await cur.fetchone()
         return _row_to_fix_outcome(row)
+
+    async def get_by_job(self, fixpack_job_id: str) -> dict[str, Any] | None:
+        """The terminal outcome recorded for one Fix Pack job, or None.
+
+        Written for app/fixpack/merit.py, which is the first thing to READ this
+        table for a decision. The class docstring above said "collection only,
+        nothing reads it for decisions yet" from migration 0014 until now; the
+        rows were always the evidence for "did this Fix Pack do what it was
+        sold as", and the only reason nobody asked was that asking meant
+        reading four tables by hand.
+
+        Newest first. A job has one terminal outcome, but `record` has no
+        uniqueness constraint behind it -- a retried worker could write two --
+        and in that case the later one is the one that describes how it ended.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        try:
+            parsed_id = uuid.UUID(fixpack_job_id)
+        except ValueError:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, fixpack_job_id, audit_id, rule_ids, stack,
+                       outcome, is_regression, pr_url, pr_merged,
+                       created_at, updated_at
+                from fix_outcomes where fixpack_job_id = %s
+                order by created_at desc
+                limit 1
+                """,
+                (parsed_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_fix_outcome(row) if row else None
 
     async def learning_readiness(
         self, *, min_labelled: int, min_audits: int,
@@ -1510,7 +1528,7 @@ class AccountRepository:
     async def get_by_id(self, account_id: str) -> dict[str, Any] | None:
         """Look up an account by its uuid. Used by the billing flow to
         re-fetch the just-granted account -- e.g. on a duplicate Telegram
-        webhook, or the USDT invoice-status endpoint. The plaintext key is
+        webhook, or the bank-transfer invoice-status endpoint. The plaintext key is
         never stored, so this cannot re-deliver the key text -- the key is
         shown once at creation; a lost key is replaced via rotate_key, not
         recovered. Only key_prefix is available here for identification."""
@@ -1757,13 +1775,19 @@ class PaymentRepository:
         external_ref: str | None, amount: float | None, currency: str | None,
         status: str, tier_granted: str | None,
         product: str = "pro_tier", audit_id: str | None = None,
-        paypal_order_id: str | None = None,
         payer_name: str | None = None, payer_email: str | None = None,
+        payer_x: str | None = None,
     ) -> dict[str, Any] | None:
-        """payer_name/payer_email (migration 0026) are what the payer said
-        about themselves before paying, kept for the operator's books. Only
-        bank_transfer supplies them; every other provider carries an identity
-        of its own and leaves both None."""
+        """payer_name/payer_email (migration 0026) and payer_x (0032) are what
+        the payer said about themselves before paying. The name is for the
+        operator's books; the other two are how the customer is told what
+        happened to their money -- see app/notify/router.py. Only bank_transfer
+        supplies them; a Stars charge carries an identity of its own.
+
+        `paypal_order_id` (migration 0018) is still SELECTed and still holds
+        the rows PayPal wrote, but nothing sets it any more: PayPal was removed
+        as a way to pay. Reading the books is not the same as keeping the till
+        open, and the column is the books."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1775,17 +1799,17 @@ class PaymentRepository:
                 """
                 insert into payments
                     (account_id, provider, external_ref, amount, currency,
-                     status, tier_granted, product, audit_id, paypal_order_id,
-                     payer_name, payer_email)
+                     status, tier_granted, product, audit_id,
+                     payer_name, payer_email, payer_x)
                 values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id, account_id, provider, external_ref, amount,
                           currency, status, tier_granted, telegram_chat_id,
                           product, audit_id, paypal_order_id, payer_name,
-                          payer_email, created_at
+                          payer_email, payer_x, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
                  status, tier_granted, product, parsed_audit_id,
-                 paypal_order_id, payer_name, payer_email),
+                 payer_name, payer_email, payer_x),
             )
             row = await cur.fetchone()
         return _row_to_payment(row)
@@ -1805,7 +1829,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, created_at
+                       payer_email, payer_x, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -1830,7 +1854,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, created_at
+                       payer_email, payer_x, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
@@ -1838,40 +1862,13 @@ class PaymentRepository:
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
 
-    async def get_by_paypal_order_id(
-        self, paypal_order_id: str
-    ) -> dict[str, Any] | None:
-        """The pending payment created at PayPal order time, keyed by the order
-        id (migration 0018's partial unique index). Backs both the webhook
-        (transition the pending row to completed via invoice_payment_id) and
-        GET /v1/paypal/orders/{id} (poll the granted key back). None when
-        DATABASE_URL isn't set or there's no such order."""
-        if not paypal_order_id:
-            return None
-        try:
-            pool = await get_pool()
-        except DatabaseNotConfigured:
-            return None
-        async with pool.connection() as conn:
-            cur = await conn.execute(
-                """
-                select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, payer_name,
-                       payer_email, created_at
-                from payments where paypal_order_id = %s
-                """,
-                (paypal_order_id,),
-            )
-            row = await cur.fetchone()
-        return _row_to_payment(row) if row else None
-
     async def list_pending(
         self, provider: str, *, created_after: datetime.datetime | None = None
     ) -> list[dict[str, Any]]:
-        """Open (unpaid) invoices for a provider, newest first. Used by the
-        USDT poller to match incoming on-chain transfers to invoices it
-        hasn't seen paid yet. Returns [] when DATABASE_URL isn't set, same
+        """Open (unpaid) invoices for a provider, newest first. Written for
+        the USDT poller, which matched incoming transfers against invoices it
+        had not seen paid; that rail is gone and bank_transfer is the caller
+        left. Returns [] when DATABASE_URL isn't set, same
         not-configured contract as create/get (an empty list, not None, so
         callers can iterate without a guard).
 
@@ -1897,7 +1894,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, created_at
+                       payer_email, payer_x, created_at
                 from payments
                 where provider = %s and status = 'pending'
                   and (%s::timestamptz is null or created_at >= %s)
@@ -1912,8 +1909,8 @@ class PaymentRepository:
         self, payment_id: str, *, account_id: str, external_ref: str
     ) -> dict[str, Any] | None:
         """Transition a pending invoice to completed and link the account
-        it granted. The USDT flow's counterpart to Telegram creating a
-        completed row outright -- see app/billing/grant_pro_tier.
+        it granted. The invoice flow's counterpart to creating a completed row
+        outright -- see app/billing/grant_pro_tier.
 
         Compare-and-set, the same first-writer-wins shape as
         link_telegram_chat_id: the predicate is part of the UPDATE, so the
@@ -2081,7 +2078,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, created_at
+                       payer_email, payer_x, created_at
                 from payments
                 where telegram_chat_id = %s and status = 'completed'
                   and account_id is not null
@@ -2123,7 +2120,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, created_at
+                       payer_email, payer_x, created_at
                 from payments where id = %s
                 """,
                 (pid,),
@@ -2418,152 +2415,11 @@ class SubscriptionRepository:
             row = await cur.fetchone()
         return _row_to_subscription(row) if row else None
 
-    # --- PayPal (migration 0018) ---
-    #
-    # PayPal monitoring subscriptions have neither a telegram_user_id nor an
-    # invoice_payload, so the Stars natural key can't identify them. These
-    # methods pivot on paypal_subscription_id instead (the 'I-XXXX' id), the
-    # PayPal-side natural key, and set payment_provider='paypal'. Exactly
-    # parallel to upsert_first / renew / get_by_user_and_payload above.
-
-    async def create_paypal(
-        self, *, paypal_subscription_id: str, tier: str,
-        repo_full_name: str | None,
-    ) -> dict[str, Any] | None:
-        """Pre-insert the subscriptions row at PayPal subscription-create time
-        (status 'approval_pending', repo bound), before the buyer approves. This
-        binds the repo while we still know it, so every later webhook just
-        updates by paypal_subscription_id. Idempotent on the partial unique
-        index: a retried create lands on the same row and leaves it untouched
-        (the webhooks own status/expires_at). None when DATABASE_URL isn't set."""
-        try:
-            pool = await get_pool()
-        except DatabaseNotConfigured:
-            return None
-        async with pool.connection() as conn:
-            cur = await conn.execute(
-                """
-                insert into subscriptions
-                    (payment_provider, paypal_subscription_id, tier,
-                     repo_full_name, status)
-                values ('paypal', %s, %s, %s, 'approval_pending')
-                on conflict (paypal_subscription_id)
-                    where paypal_subscription_id is not null do nothing
-                returning id, account_id, telegram_user_id, telegram_chat_id,
-                          tier, invoice_payload, telegram_payment_charge_id,
-                          status, expires_at, repo_full_name, last_monitored_at,
-                          payment_provider, paypal_subscription_id,
-                          created_at, updated_at
-                """,
-                (paypal_subscription_id, tier, repo_full_name),
-            )
-            row = await cur.fetchone()
-        if row is not None:
-            return _row_to_subscription(row)
-        # ON CONFLICT DO NOTHING returns no row on a retry -- re-fetch it so the
-        # caller always gets the current row rather than a spurious None.
-        return await self.get_by_paypal_subscription_id(paypal_subscription_id)
-
-    async def get_by_paypal_subscription_id(
-        self, paypal_subscription_id: str
-    ) -> dict[str, Any] | None:
-        """Resolve a PayPal webhook (ACTIVATED / SALE / CANCELLED) back to its
-        row by the 'I-XXXX' subscription id. None when DATABASE_URL isn't set or
-        there's no such subscription."""
-        if not paypal_subscription_id:
-            return None
-        try:
-            pool = await get_pool()
-        except DatabaseNotConfigured:
-            return None
-        async with pool.connection() as conn:
-            cur = await conn.execute(
-                """
-                select id, account_id, telegram_user_id, telegram_chat_id,
-                       tier, invoice_payload, telegram_payment_charge_id,
-                       status, expires_at, repo_full_name, last_monitored_at,
-                       payment_provider, paypal_subscription_id,
-                       created_at, updated_at
-                from subscriptions where paypal_subscription_id = %s
-                """,
-                (paypal_subscription_id,),
-            )
-            row = await cur.fetchone()
-        return _row_to_subscription(row) if row else None
-
-    async def upsert_first_paypal(
-        self, *, paypal_subscription_id: str, tier: str, expires_at: Any,
-        repo_full_name: str | None,
-    ) -> dict[str, Any] | None:
-        """First-period activation (BILLING.SUBSCRIPTION.ACTIVATED): move the
-        row to active with expires_at, creating it if the pre-insert was skipped
-        or a SALE renewal arrived first. Upsert on paypal_subscription_id so a
-        retried ACTIVATED lands on the same row (idempotent) -- the PayPal
-        counterpart to upsert_first. Preserves the already-bound repo_full_name
-        if this event lacks one. None when DATABASE_URL isn't set."""
-        try:
-            pool = await get_pool()
-        except DatabaseNotConfigured:
-            return None
-        expires_dt = _expires_at_to_timestamptz(expires_at)
-        async with pool.connection() as conn:
-            cur = await conn.execute(
-                """
-                insert into subscriptions
-                    (payment_provider, paypal_subscription_id, tier,
-                     repo_full_name, status, expires_at)
-                values ('paypal', %s, %s, %s, 'active', %s)
-                on conflict (paypal_subscription_id)
-                    where paypal_subscription_id is not null do update
-                   set tier = excluded.tier,
-                       status = 'active',
-                       expires_at = excluded.expires_at,
-                       repo_full_name =
-                           coalesce(excluded.repo_full_name,
-                                    subscriptions.repo_full_name),
-                       updated_at = now()
-                returning id, account_id, telegram_user_id, telegram_chat_id,
-                          tier, invoice_payload, telegram_payment_charge_id,
-                          status, expires_at, repo_full_name, last_monitored_at,
-                          payment_provider, paypal_subscription_id,
-                          created_at, updated_at
-                """,
-                (paypal_subscription_id, tier, repo_full_name, expires_dt),
-            )
-            row = await cur.fetchone()
-        return _row_to_subscription(row) if row else None
-
-    async def renew_paypal(
-        self, subscription_id: str, *, expires_at: Any,
-    ) -> dict[str, Any] | None:
-        """A recurring PayPal renewal (PAYMENT.SALE.COMPLETED): push expires_at
-        out and clear any canceled/suspended status back to active, since a
-        successful charge means it's charging again. Never creates a row -- the
-        caller falls back to upsert_first_paypal when the row is missing. The
-        PayPal counterpart to renew (no charge id to rotate: PayPal keys the
-        row on paypal_subscription_id, not the sale id). None when DATABASE_URL
-        isn't set."""
-        expires_dt = _expires_at_to_timestamptz(expires_at)
-        try:
-            pool = await get_pool()
-        except DatabaseNotConfigured:
-            return None
-        async with pool.connection() as conn:
-            cur = await conn.execute(
-                """
-                update subscriptions
-                   set expires_at = %s, status = 'active', updated_at = now()
-                 where id = %s
-                returning id, account_id, telegram_user_id, telegram_chat_id,
-                          tier, invoice_payload, telegram_payment_charge_id,
-                          status, expires_at, repo_full_name, last_monitored_at,
-                          payment_provider, paypal_subscription_id,
-                          created_at, updated_at
-                """,
-                (expires_dt, uuid.UUID(subscription_id)),
-            )
-            row = await cur.fetchone()
-        return _row_to_subscription(row) if row else None
+    # PayPal keyed its monitoring subscriptions on paypal_subscription_id
+    # (migration 0018) rather than the Stars natural key, and had its own
+    # create/upsert/renew trio here. It is no longer a way to pay, so those are
+    # gone. The COLUMN and its rows stay, and every read above still selects
+    # it: nothing may write it, and nothing may lose it.
 
 
 class MonitoringRunRepository:

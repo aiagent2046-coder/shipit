@@ -11,29 +11,15 @@ import type {
   BillingDetails,
   CreateAuditResponse,
   FixpackStatus,
-  FixpackUsdtInvoice,
   InstallationStatus,
-  PaypalOrder,
-  PaypalOrderStatus,
-  PaypalSubscription,
   PersistedAudit,
   Pricing,
   RlsCheckResult,
-  UsdtInvoice,
-  UsdtInvoiceStatus,
 } from "./types";
 
 export const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
 ).replace(/\/+$/, "");
-
-export const TELEGRAM_BOT_USERNAME =
-  process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || "";
-
-// PayPal JS SDK client id (public, client-side). Empty -> the PayPal buttons
-// render as an "unconfigured" note rather than loading the SDK, mirroring the
-// Telegram-username guard. The matching secret lives ONLY on the backend.
-export const PAYPAL_CLIENT_ID = process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || "";
 
 // A typed error carrying the backend's {reason, detail} envelope when present,
 // so the UI can show something honest instead of "something went wrong".
@@ -198,38 +184,15 @@ export function reportUrl(id: string, token?: string | null): string {
   return `${API_BASE_URL}/v1/audits/${encodeURIComponent(id)}/report${q}`;
 }
 
-export async function createUsdtInvoice(): Promise<UsdtInvoice> {
-  const res = await request(`${API_BASE_URL}/v1/billing/usdt/invoice`, {
-    method: "POST",
-  });
-  return parse<UsdtInvoice>(res);
-}
-
-export async function getUsdtInvoice(id: string): Promise<UsdtInvoiceStatus> {
-  const res = await request(
-    `${API_BASE_URL}/v1/billing/usdt/invoice/${encodeURIComponent(id)}`,
-  );
-  return parse<UsdtInvoiceStatus>(res);
-}
-
-// Open a USDT invoice to buy a Fix Pack for one specific audit. The returned
-// invoice is polled with getUsdtInvoice, exactly like the Pro invoice.
-export async function createFixpackUsdtInvoice(
-  auditId: string,
-): Promise<FixpackUsdtInvoice> {
-  const res = await request(
-    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/usdt-invoice`,
-    { method: "POST" },
-  );
-  return parse<FixpackUsdtInvoice>(res);
-}
-
 // Who the payer says they are. Both required by the backend: a card transfer
 // carries no reference field, so the payer's name and email are the only thing
 // the operator can match an incoming transfer against.
 export interface PayerContact {
   payer_name: string;
   payer_email: string;
+  // Optional. Blank is sent as null rather than "" so the backend and a SQL
+  // `is null` agree about what "no X handle" means.
+  payer_x?: string;
 }
 
 function payerBody(payer: PayerContact): RequestInit {
@@ -238,6 +201,7 @@ function payerBody(payer: PayerContact): RequestInit {
     body: JSON.stringify({
       payer_name: payer.payer_name.trim(),
       payer_email: payer.payer_email.trim(),
+      payer_x: payer.payer_x?.trim() || null,
     }),
   };
 }
@@ -309,43 +273,6 @@ export async function getFixpackStatus(auditId: string): Promise<FixpackStatus> 
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack-status`,
   );
   return parse<FixpackStatus>(res);
-}
-
-// Open a one-time PayPal order for Pro (product="pro") or a Fix Pack
-// (product="fixpack", auditId required). Returns the order id the PayPal
-// Buttons approve + capture against; the capture grants via our webhook.
-export async function createPaypalOrder(
-  product: "pro" | "fixpack",
-  auditId?: string,
-): Promise<PaypalOrder> {
-  const res = await request(`${API_BASE_URL}/v1/paypal/orders`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ product, audit_id: auditId }),
-  });
-  return parse<PaypalOrder>(res);
-}
-
-// Poll one PayPal Pro order. Reveals the API key only once the webhook has
-// captured and granted, exactly like getUsdtInvoice for USDT.
-export async function getPaypalOrder(id: string): Promise<PaypalOrderStatus> {
-  const res = await request(
-    `${API_BASE_URL}/v1/paypal/orders/${encodeURIComponent(id)}`,
-  );
-  return parse<PaypalOrderStatus>(res);
-}
-
-// Open a recurring PayPal monitoring subscription for a repo. Returns the
-// subscription id (the PayPal Buttons approve against it) and an approve URL.
-export async function createPaypalSubscription(
-  repoUrl: string,
-): Promise<PaypalSubscription> {
-  const res = await request(`${API_BASE_URL}/v1/paypal/subscriptions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repo_url: repoUrl }),
-  });
-  return parse<PaypalSubscription>(res);
 }
 
 // Is the GitHub App installed on owner/repo? Checked before offering a Fix

@@ -106,14 +106,6 @@ def get_billing_transport():
     return None
 
 
-def get_paypal_transport():
-    """Outbound HTTP transport for the PayPal REST calls (OAuth token, orders,
-    subscriptions, webhook-signature verify). None -> httpx's real transport in
-    production; overridden in tests with an httpx.MockTransport so the suite
-    never touches PayPal, same idea as get_billing_transport."""
-    return None
-
-
 def get_account_repo() -> AccountRepository:
     """FastAPI dependency indirection — overridable in tests. No-ops
     (returns None) when DATABASE_URL isn't set, so a request carrying an
@@ -163,7 +155,9 @@ def get_rls_fetch():
 
 
 def get_subscription_repo() -> SubscriptionRepository:
-    """Same as get_audit_repo, for recurring Stars subscriptions."""
+    """Same as get_audit_repo, for the subscriptions table. Nothing sells a
+    subscription any more -- the rows are read, and a renewal Telegram is
+    still charging on a subscription sold before the withdrawal is recorded."""
     return _subscription_repo
 
 

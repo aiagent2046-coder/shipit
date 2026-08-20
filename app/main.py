@@ -39,13 +39,12 @@ from app.accounts import (
     entitlements_for_tier,
     validate_api_key_pepper_configured,
 )
-from app.billing import telegram_stars, usdt_trc20
+from app.billing import telegram_stars
 from app.ops_endpoints import router as ops_router
 from app.routes.accounts import router as accounts_router
 from app.routes.bank_transfer import router as bank_transfer_router
 from app.routes.billing import router as billing_router
 from app.routes.operator import router as operator_router
-from app.routes.paypal import router as paypal_router
 from app.routes.reads import router as reads_router
 from app.routes.rls_check import router as rls_check_router
 from app.routes.session import router as session_router
@@ -58,14 +57,12 @@ from app.db import (
     FixpackJobRepository,
     LlmUsageRepository,
     MonitoringRunRepository,
-    PaymentRepository,
     ProcessorLockBusy,
     ServiceFlagsRepository,
     SubscriptionRepository,
     database_url_from_env,
     fixpack_processor_lock,
     monitoring_processor_lock,
-    usdt_poll_lock,
 )
 from app.deploypack import github_app
 from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
@@ -303,7 +300,6 @@ from app.routes._shared import (  # noqa: E402
     _client_key,
     _require_bearer_token,
     _secret_equals,
-    _usdt_receiving_address,
 )
 from app.routes.github import router as github_router  # noqa: E402
 from app.routes.telegram import router as telegram_router  # noqa: E402
@@ -318,7 +314,6 @@ from app.routes.dependencies import (  # noqa: E402
     get_llm_usage_repo,
     get_monitoring_repo,
     get_payment_repo,
-    get_paypal_transport,
     get_pr_opener,
     get_preview_reconciler,
     get_preview_registry,
@@ -344,7 +339,6 @@ __all__ = [
     "get_llm_usage_repo",
     "get_monitoring_repo",
     "get_payment_repo",
-    "get_paypal_transport",
     "get_pr_opener",
     "get_preview_reconciler",
     "get_preview_registry",
@@ -936,73 +930,6 @@ async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
 
 
 
-
-
-@app.post("/internal/billing/poll-usdt")
-async def poll_usdt(
-    request: Request,
-    payment_repo: PaymentRepository = Depends(get_payment_repo),
-    account_repo: AccountRepository = Depends(get_account_repo),
-    audit_repo: AuditRepository = Depends(get_audit_repo),
-    fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
-    transport=Depends(get_billing_transport),
-) -> dict:
-    """Operational endpoint: read incoming USDT transfers from TronGrid and
-    complete any pending invoice whose exact amount arrived. Meant for a
-    scheduled caller (a systemd timer like shipit-reap.timer — this repo
-    ships no unit file, same as the reaper; see the README). Not part of
-    the public API.
-
-    Requires `Authorization: Bearer <USDT_POLL_TOKEN>`, constant-time
-    compared, exactly like the reap endpoint. 503 if the token or the
-    receiving address isn't configured.
-
-    One poll at a time (advisory lock), like the Fix Pack and monitoring
-    processors -- but load-bearing here rather than belt-and-suspenders,
-    because matching a transfer is a read-then-write with no atomic claim
-    behind it. Two overlapping polls both see the same invoice unpaid and both
-    grant it, producing two pro accounts for one payment; see db.usdt_poll_lock
-    for why the unique index on payments(provider, external_ref) doesn't stop
-    that. If another poll holds the lock this returns {"skipped_locked": true},
-    matching the other two endpoints.
-
-    shipit-usdt-poller.timer alone won't overlap two runs on one host (oneshot
-    + OnUnitInactiveSec re-arms only after the previous run exits), but nothing
-    about this endpoint depends on that: it is plain authenticated HTTP, so an
-    operator curl during a scheduled run, two app instances mid-deploy, or a
-    second host all produce a concurrent poll. The lock, not the schedule, is
-    what makes the grant safe.
-
-    Cost of holding it: one of the pool's max_size=5 connections for the whole
-    run, including the TronGrid call (30s timeout in fetch_transfers) -- the
-    same trade-off the Fix Pack and monitoring processors already accept.
-    """
-    token = usdt_trc20.poll_token_from_env()
-    if not token:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "poll_not_configured",
-                    "detail": "USDT_POLL_TOKEN is not set on this deployment"},
-        )
-    _require_bearer_token(request, token)
-
-    address = _usdt_receiving_address()
-    if not address:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "usdt_not_configured",
-                    "detail": "USDT_TRC20_ADDRESS is not set on this deployment"},
-        )
-    try:
-        async with usdt_poll_lock():
-            return await usdt_trc20.poll_and_match(
-                payment_repo, account_repo, address=address,
-                api_key=usdt_trc20.trongrid_api_key_from_env(), transport=transport,
-                fixpack_repo=fixpack_repo, audit_repo=audit_repo,
-            )
-    except ProcessorLockBusy:
-        # Another poll holds the lock — benign. The scheduler logs and moves on.
-        return {"skipped_locked": True}
 
 
 async def _resolve_pr_token(owner: str, repo: str) -> str | None:
@@ -2339,7 +2266,6 @@ app.include_router(github_router)
 app.include_router(telegram_router)
 app.include_router(billing_router)
 app.include_router(operator_router)
-app.include_router(paypal_router)
 app.include_router(reads_router)
 app.include_router(rls_check_router)
 app.include_router(session_router)

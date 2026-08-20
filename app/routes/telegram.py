@@ -48,7 +48,9 @@ async def telegram_webhook(
     subscription_repo: SubscriptionRepository = Depends(get_subscription_repo),
     transport=Depends(get_billing_transport),
 ) -> dict:
-    """Telegram Bot API webhook for Stars payments. Handles the
+    """The Telegram bot webhook. Stars is no longer a way to pay; the bot is
+    still the operator's bank-transfer confirm button, the key-recovery
+    commands, and the only outward notification channel. Handles the
     pre_checkout_query (approve within 10s), successful_payment (grant pro /
     Fix Pack / subscription), subscription (BotSubscriptionUpdated renewal
     state changes) and callback_query (the operator's bank-transfer confirm
