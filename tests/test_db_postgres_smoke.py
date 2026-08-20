@@ -38,6 +38,7 @@ import os
 import time
 import uuid
 
+import httpx
 import pytest
 
 import app.db as db_mod
@@ -66,6 +67,18 @@ pytestmark = pytest.mark.skipif(
         "(CI does; local runs without it are skipped)"
     ),
 )
+
+
+# `confirm()` now tells the PAYER their transfer landed, and pages the operator
+# when it cannot reach them. Both go out over httpx, so a direct call to
+# confirm() in a test reaches api.telegram.org unless a transport is handed in
+# -- which it did, at 0.4s of DNS per call, until this was noticed. The suite's
+# rule is that nothing touches the network; this is how these call sites keep
+# it.
+def _no_network() -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+    return httpx.MockTransport(handler)
 
 
 @pytest.fixture
@@ -836,7 +849,7 @@ async def test_bank_transfer_double_confirm_grants_pro_once(real_db):
 
     confirm_kwargs = {
         "payment_repo": payment_repo, "account_repo": account_repo,
-        "payment_id": invoice["payment_id"],
+        "payment_id": invoice["payment_id"], "transport": _no_network(),
     }
     first = await bank_transfer.confirm(**confirm_kwargs)
     second = await bank_transfer.confirm(**confirm_kwargs)
@@ -925,7 +938,7 @@ async def test_bank_transfer_open_invoices_coexist(real_db):
 
     confirmed = await bank_transfer.confirm(
         payment_repo=payment_repo, account_repo=account_repo,
-        payment_id=invoices[1]["payment_id"],
+        payment_id=invoices[1]["payment_id"], transport=_no_network(),
     )
     assert confirmed["granted"] is True
 
@@ -975,23 +988,37 @@ async def test_bank_transfer_payer_contact_round_trips(real_db):
     """The columns exist, accept what the payer typed, and come back on every
     read path the operator's confirmation flow uses -- get() by id and
     get_by_external_ref() by reference code, which is what the Telegram
-    notification is built from."""
+    notification is built from.
+
+    payer_x (migration 0032) is checked on the same paths and not on its own,
+    because the failure worth catching is a SELECT list that gained the column
+    in one query and not another: Contact.from_payment reads whichever row it
+    is handed, so a column missing from one read path is a customer silently
+    losing a channel."""
     payment_repo = PaymentRepository()
     invoice = await bank_transfer.create_invoice(
         payment_repo, details=dict(BANK_DETAILS_SMOKE),
         payer_name=PAYER_NAME_SMOKE, payer_email=PAYER_EMAIL_SMOKE,
+        payer_x="smoketest_x",
     )
     assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
 
     by_id = await payment_repo.get(invoice["payment_id"])
     assert by_id["payer_name"] == PAYER_NAME_SMOKE
     assert by_id["payer_email"] == PAYER_EMAIL_SMOKE
+    assert by_id["payer_x"] == "smoketest_x"
 
     by_ref = await payment_repo.get_by_external_ref(
         bank_transfer.PROVIDER, invoice["reference"]
     )
     assert by_ref["payer_name"] == PAYER_NAME_SMOKE
     assert by_ref["payer_email"] == PAYER_EMAIL_SMOKE
+    assert by_ref["payer_x"] == "smoketest_x"
+
+    # And the whole point of the column: the row knows which channels this
+    # customer has, without app/notify/ needing to know what a payment is.
+    from app.notify.router import Contact
+    assert Contact.from_payment(by_ref).channels() == ("email", "x")
 
 
 async def test_payment_without_payer_contact_stores_nulls(real_db):

@@ -190,6 +190,9 @@ export function reportUrl(id: string, token?: string | null): string {
 export interface PayerContact {
   payer_name: string;
   payer_email: string;
+  // Optional. Blank is sent as null rather than "" so the backend and a SQL
+  // `is null` agree about what "no X handle" means.
+  payer_x?: string;
 }
 
 function payerBody(payer: PayerContact): RequestInit {
@@ -198,6 +201,7 @@ function payerBody(payer: PayerContact): RequestInit {
     body: JSON.stringify({
       payer_name: payer.payer_name.trim(),
       payer_email: payer.payer_email.trim(),
+      payer_x: payer.payer_x?.trim() || null,
     }),
   };
 }

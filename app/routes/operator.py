@@ -14,6 +14,7 @@ the two are not related and neither supersedes the other.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from decimal import Decimal
@@ -36,6 +37,7 @@ from app.routes._shared import (
 )
 from app.routes.dependencies import (
     get_audit_job_repo,
+    get_billing_transport,
     get_fix_outcome_repo,
     get_fixpack_repo,
     get_llm_usage_repo,
@@ -43,6 +45,8 @@ from app.routes.dependencies import (
     get_preview_reconciler,
     get_preview_registry,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -299,6 +303,10 @@ async def refund_payment(
     payment_id: str,
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
+    # The same outbound seam the bot uses. Named for billing because that is
+    # where it started; what it is, is "the transport the tests replace", and
+    # telling a customer about their refund needs exactly that.
+    transport=Depends(get_billing_transport),
 ) -> dict:
     """Record that a completed payment was given back.
 
@@ -336,6 +344,17 @@ async def refund_payment(
     back what it paid for is a policy question with a different cost of being
     wrong, and mixing it into the record-keeping would mean neither could be
     changed alone.
+
+    IT DOES TELL THE CUSTOMER, on every channel they gave (app/notify/router.py).
+    The money went back by hand, days after they asked, and until now nothing
+    said so: they were left refreshing a bank statement, and the natural next
+    move for somebody who paid, complained and heard nothing is a chargeback.
+
+    The send is after the record and cannot undo it. A refund that failed to be
+    announced is still a refund; a refund that 500s because the mail server was
+    down would be recorded nowhere and sent again. When NOTHING reaches them,
+    the router pages the operator -- the customer still has to be told, and only
+    a person can find another way.
     """
     token = _service_flags_token()
     if not token:
@@ -370,4 +389,49 @@ async def refund_payment(
             detail={"reason": "not_refundable",
                     "detail": "no completed payment with that id"},
         )
-    return payment
+
+    delivery = await _tell_them_about_the_refund(payment, transport=transport)
+    return {**payment, "notified": list(delivery.delivered)}
+
+
+def _refund_body(payment: dict) -> str:
+    """What the customer reads.
+
+    The REASON is not repeated back to them. It is the operator's note for the
+    books -- "customer says the Fix Pack was wrong", "duplicate charge" -- and
+    it is written to be true rather than to be read by the person it is about.
+    What they need is the amount, the order, and that it is on its way.
+    """
+    amount = payment.get("amount")
+    quoted = f"{float(amount):.2f}" if amount is not None else ""
+    currency = payment.get("currency") or ""
+    money = f"{quoted} {currency}".strip() or "your payment"
+    reference = payment.get("external_ref") or ""
+    return (
+        f"We have refunded {money}.\n\n"
+        "It was sent back the same way it arrived. How long it takes to appear "
+        "depends on your bank, not on us — for a card transfer that is usually "
+        "a few business days.\n\n"
+        + (f"Order reference: {reference}\n\n" if reference else "")
+        + "If it has not arrived within a week, reply to this message. A real "
+        "person reads it."
+    )
+
+
+async def _tell_them_about_the_refund(payment: dict, *, transport=None):
+    """Best-effort, and wrapped. The refund is already recorded; an exception
+    escaping here would report it as a failure and invite a second one."""
+    from app.notify.router import Contact, Delivery, notify_customer
+
+    try:
+        return await notify_customer(
+            contact=Contact.from_payment(payment),
+            subject="Your Drydock refund",
+            body=_refund_body(payment),
+            reference=str(payment.get("external_ref") or ""),
+            transport=transport,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("could not tell a customer about their refund",
+                       exc_info=True)
+        return Delivery()

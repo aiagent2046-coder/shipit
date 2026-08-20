@@ -119,13 +119,26 @@ class PayerContact(BaseModel):
 
     max_length is abuse protection, not validation -- it stops someone posting a
     megabyte into a text column. The email check is deliberately the weakest
-    thing that still rejects an obvious non-address: nothing is ever sent here,
-    so a work address with an unusual TLD must not cost a sale. See migration
-    0026.
+    thing that still rejects an obvious non-address: a work address with an
+    unusual TLD must not cost a sale. See migration 0026.
+
+    THE EMAIL IS NOW A DELIVERY CHANNEL, which it was not when 0026 was
+    written. That does NOT make the check stricter here -- the argument above
+    is unchanged, and app/notify/email.py validates at the boundary where it
+    matters, refusing what it will not put in a header. What it changes is the
+    consequence of a typo: a bounced address is a customer who never hears that
+    their transfer was confirmed. app/notify/router.py pages the operator when
+    nothing reaches them, which is the honest way to handle an address we
+    cannot verify without sending to it.
+
+    `payer_x` is optional, and it is the only optional field here. The name and
+    email are the matching key; an X handle is a courtesy channel some people
+    prefer, and demanding one would cost sales to gain a notification.
     """
 
     payer_name: str = Field(min_length=1, max_length=200)
     payer_email: str = Field(min_length=3, max_length=200)
+    payer_x: str | None = Field(default=None, max_length=100)
 
     @field_validator("payer_name", "payer_email")
     @classmethod
@@ -134,6 +147,19 @@ class PayerContact(BaseModel):
         if not v:
             raise ValueError("must not be blank")
         return v
+
+    @field_validator("payer_x")
+    @classmethod
+    def _blank_is_absent(cls, v: str | None) -> str | None:
+        """A form submits "" for a field the customer left alone. Stored as
+        NULL rather than an empty string so `Contact.channels()` and a SQL
+        `is null` agree about what "no X handle" means.
+
+        NOT validated as a handle here, and app/notify/x.py is why: a value
+        that is not a handle is simply not a channel there, and rejecting the
+        whole invoice over a typo in an optional courtesy field would lose the
+        payment to gain nothing."""
+        return v.strip() or None if v else None
 
     @field_validator("payer_email")
     @classmethod
@@ -187,6 +213,7 @@ async def create_bank_transfer_invoice(
         payment_repo, details=details,
         payer_name=payer.payer_name,
         payer_email=payer.payer_email,
+        payer_x=payer.payer_x,
     )
     if invoice is None:
         raise _bank_transfer_not_persisted_error()
@@ -252,6 +279,7 @@ async def create_fixpack_bank_transfer_invoice(
         payment_repo, details=details, audit_id=audit_id,
         payer_name=payer.payer_name,
         payer_email=payer.payer_email,
+        payer_x=payer.payer_x,
     )
     if invoice is None:
         raise _bank_transfer_not_persisted_error()

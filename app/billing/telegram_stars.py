@@ -532,6 +532,11 @@ async def _handle_callback_query(
     result = await bank_transfer.confirm(
         payment_repo=payment_repo, account_repo=account_repo,
         payment_id=payment_id, fixpack_repo=fixpack_repo, audit_repo=audit_repo,
+        # The same transport the operator's own reply goes out on. confirm()
+        # tells the PAYER their transfer landed, and that send has to be
+        # injectable for the same reason every other outbound call here is: a
+        # test must not reach api.telegram.org.
+        transport=transport,
     )
     if result is None:
         if query_id:

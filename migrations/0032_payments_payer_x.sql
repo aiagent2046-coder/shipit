@@ -1,0 +1,34 @@
+-- rollback-safe: yes
+--
+-- A nullable column nothing older reads or writes, so a release rolled back to
+-- the previous code leaves it untouched and every existing row stays valid.
+--
+-- The third way to reach a customer.
+--
+-- Migration 0026 added payer_name and payer_email and said of the second: "not
+-- an authentication or delivery channel -- nothing is ever sent to this
+-- address." That is no longer true. app/notify/ can now send email, and this
+-- column adds the channel some people prefer to either that or Telegram.
+--
+-- WHY A THIRD CHANNEL AT ALL. A bank transfer is confirmed by a human hours
+-- after the payer closed the tab, and a refund is decided days later. Both are
+-- things the customer has to be TOLD, and until now the only customers who
+-- could be told were the ones who happened to be on Telegram. Somebody
+-- unreachable who has paid is one bounced email away from filing a dispute,
+-- and from their side they would be right to.
+--
+-- Nullable, no default, no backfill, for the reason 0026 gave and it still
+-- holds: a NOT NULL with a default would invent an X handle for every
+-- historical payment that never had one.
+--
+-- NOT VALIDATED HERE, and not for the same reason as payer_email. The email
+-- column is unvalidated because refusing a sale over an unusual TLD costs more
+-- than it saves. This one is unvalidated in the DATABASE because the check
+-- belongs where the value is used: app/notify/x.py::normalize_handle decides
+-- whether a string is an X handle, and a string that is not one is simply not
+-- a channel. A CHECK constraint here would reject the row -- losing the
+-- payment over a typo in an optional courtesy field.
+--
+-- No index. The only read is "which channels does this payer have", with the
+-- row already in hand by id or by reference.
+alter table payments add column if not exists payer_x text;

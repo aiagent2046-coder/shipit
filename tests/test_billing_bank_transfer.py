@@ -80,6 +80,19 @@ PAYER = {"payer_name": PAYER_NAME, "payer_email": PAYER_EMAIL}
 
 # --- in-memory repo fakes ---
 
+
+# `confirm()` now tells the PAYER their transfer landed, and pages the operator
+# when it cannot reach them. Both go out over httpx, so a direct call to
+# confirm() in a test reaches api.telegram.org unless a transport is handed in
+# -- which it did, at 0.4s of DNS per call, until this was noticed. The suite's
+# rule is that nothing touches the network; this is how these call sites keep
+# it. Tests that drive confirm through the webhook already pass one.
+def _no_network() -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+    return httpx.MockTransport(handler)
+
+
 class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     def __init__(self):
         self.rows: dict[str, dict] = {}
@@ -87,13 +100,14 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     async def create(self, *, account_id, provider, external_ref, amount,
                      currency, status, tier_granted, product="pro_tier",
                      audit_id=None, created_at=None,
-                     payer_name=None, payer_email=None):
+                     payer_name=None, payer_email=None, payer_x=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
             "audit_id": audit_id,
             "payer_name": payer_name, "payer_email": payer_email,
+            "payer_x": payer_x,
             "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows[row["id"]] = row
@@ -1108,10 +1122,12 @@ async def test_confirming_a_second_payment_warns_the_operator(monkeypatch):
 
     first = await bank_transfer.confirm(
         payment_repo=payments, account_repo=accounts, audit_repo=audits,
-        fixpack_repo=fixpacks, payment_id=first_invoice["payment_id"])
+        fixpack_repo=fixpacks, payment_id=first_invoice["payment_id"],
+        transport=_no_network())
     second = await bank_transfer.confirm(
         payment_repo=payments, account_repo=accounts, audit_repo=audits,
-        fixpack_repo=fixpacks, payment_id=second_invoice["payment_id"])
+        fixpack_repo=fixpacks, payment_id=second_invoice["payment_id"],
+        transport=_no_network())
 
     # Both payments went through and both report granted -- that part is
     # unchanged and correct, the Fix Pack IS queued.
@@ -1141,7 +1157,8 @@ async def test_a_pro_confirmation_never_carries_the_warning(monkeypatch):
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     result = await bank_transfer.confirm(
         payment_repo=payments, account_repo=accounts, audit_repo=audits,
-        fixpack_repo=fixpacks, payment_id=invoice["payment_id"])
+        fixpack_repo=fixpacks, payment_id=invoice["payment_id"],
+        transport=_no_network())
     assert result["joined_existing_job"] is False
     assert "WARNING" not in telegram_stars._confirmed_text(result)
 def test_invoice_creation_is_rate_limited(monkeypatch):

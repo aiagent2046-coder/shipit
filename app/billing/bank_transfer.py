@@ -62,6 +62,8 @@ import re
 import secrets
 from typing import Any
 
+from app.notify import telegram as tg
+
 logger = logging.getLogger(__name__)
 
 PROVIDER = "bank_transfer"
@@ -273,6 +275,7 @@ def _invoice_view(
 async def create_invoice(
     payment_repo: Any, *, details: dict[str, str],
     payer_name: str | None = None, payer_email: str | None = None,
+    payer_x: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for the Pro tier.
 
@@ -307,6 +310,7 @@ async def create_invoice(
             amount=float(amount), currency=CURRENCY, status="pending",
             tier_granted="pro", product=PRODUCT_PRO,
             payer_name=payer_name, payer_email=payer_email,
+            payer_x=payer_x,
         )
     if row is None:
         return None
@@ -316,6 +320,7 @@ async def create_invoice(
 async def create_fixpack_invoice(
     payment_repo: Any, *, details: dict[str, str], audit_id: str,
     payer_name: str | None = None, payer_email: str | None = None,
+    payer_x: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for a Fix Pack scoped to one audit. Same
     reference-code disambiguation as create_invoice, at the Fix Pack price and
@@ -335,6 +340,7 @@ async def create_fixpack_invoice(
             amount=float(amount), currency=CURRENCY, status="pending",
             tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
             payer_name=payer_name, payer_email=payer_email,
+            payer_x=payer_x,
         )
     if row is None:
         return None
@@ -529,6 +535,7 @@ async def mark_awaiting_confirmation(
 async def confirm(
     *, payment_repo: Any, account_repo: Any, payment_id: str,
     fixpack_repo: Any = None, audit_repo: Any = None,
+    notify: Any = None, transport: Any = None,
 ) -> dict[str, Any] | None:
     """The operator confirmed the money arrived: grant what was bought.
 
@@ -549,6 +556,20 @@ async def confirm(
     Returns None when there's no such bank-transfer payment. Otherwise a dict
     with `granted` False only if persistence refused (no DATABASE_URL), which
     the caller reports rather than swallowing.
+
+    THE CUSTOMER IS TOLD HERE, not by the caller. This confirmation happens
+    hours after the payer closed their tab -- that is the whole shape of a
+    manually confirmed transfer -- so the moment the operator taps the button
+    is the moment somebody who is not watching a page needs to hear something.
+    Putting it in the caller would mean the next way to confirm a payment has
+    to remember, and the failure would be silent on the customer's side.
+
+    `notify` is the injection seam. The send is best-effort in the strongest
+    sense: `granted` is already true by then, and a notification that fails
+    must not turn a completed grant into a refusal. What DOES happen when
+    nothing reaches the customer is that app/notify/router.py pages the
+    operator, because a person who paid and was never told is the case that
+    ends in a dispute.
     """
     from app.billing import grant_fixpack, grant_pro_tier
 
@@ -591,6 +612,10 @@ async def confirm(
         and isinstance(granted, dict)
         and granted.get("inserted") is False
     )
+    if granted is not None:
+        await _tell_the_payer(
+            row, product=product, notify=notify, transport=transport)
+
     return {
         "payment_id": str(row["id"]),
         "reference": reference,
@@ -602,3 +627,61 @@ async def confirm(
         # know" must not read as "we double-charged".
         "joined_existing_job": joined_existing_job,
     }
+
+
+# --- telling the payer ------------------------------------------------------
+
+def _confirmation_subject(product: str) -> str:
+    what = "Fix Pack" if product == PRODUCT_FIXPACK else "Drydock Pro"
+    return f"Payment confirmed — your {what} is active"
+
+
+def _confirmation_body(row: dict[str, Any], *, product: str) -> str:
+    """What the payer is told. Says what happens NEXT, because "confirmed" on
+    its own leaves them waiting without knowing for what."""
+    reference = row.get("external_ref") or ""
+    if product == PRODUCT_FIXPACK:
+        what = (
+            "Your Fix Pack is now running. It opens a pull request against "
+            "your repository with the fixes it can make, and you will hear "
+            "again when it lands or if it cannot finish."
+        )
+    else:
+        what = (
+            "Your Drydock Pro access is active. Your API key is on the "
+            f"payment page for this order — open {tg.SITE_URL}/link and enter "
+            "the reference below to collect it."
+        )
+    return (
+        "We have confirmed your bank transfer. Thank you.\n\n"
+        f"{what}\n\n"
+        f"Order reference: {reference}\n\n"
+        "Reply to this message if anything looks wrong — a real person reads "
+        "it."
+    )
+
+
+async def _tell_the_payer(
+    row: dict[str, Any], *, product: str, notify: Any = None,
+    transport: Any = None,
+) -> None:
+    """Best-effort, and wrapped. The grant has already happened; an exception
+    escaping here would report a completed confirmation as a failure and
+    invite the operator to press the button again."""
+    if notify is None:
+        from app.notify.router import notify_customer as notify
+    from app.notify.router import Contact
+
+    try:
+        await notify(
+            contact=Contact.from_payment(row),
+            subject=_confirmation_subject(product),
+            body=_confirmation_body(row, product=product),
+            reference=str(row.get("external_ref") or ""),
+            transport=transport,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "could not tell the payer their transfer was confirmed",
+            exc_info=True,
+        )
