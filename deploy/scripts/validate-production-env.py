@@ -201,6 +201,39 @@ def main() -> int:
                 f"its own; both {name} and {glued.group(1)} are wrong"
             )
 
+    # HALF A DELIVERY CHANNEL, which is indistinguishable from none except
+    # that it looks configured.
+    #
+    # app/notify/email.py returns False and raises nothing when SMTP_HOST or
+    # SMTP_FROM is missing -- deliberately, so a deployment without mail does
+    # not fail a refund it could not announce. The cost of that contract is
+    # that a TYPO looks exactly like a decision: a customer is never told
+    # their money came back, and the only sign is an operator alert saying
+    # nobody could be reached.
+    #
+    # So the pair is checked the way USDT_POLL_TOKEN was, and for the reason
+    # that outage taught: a value that is required only because another one is
+    # set is the kind nobody notices is missing.
+    smtp_host = bool(values.get("SMTP_HOST", "").strip())
+    smtp_from = bool(values.get("SMTP_FROM", "").strip())
+    if smtp_host != smtp_from:
+        errors.append(
+            "SMTP_HOST and SMTP_FROM must be configured together; with only "
+            "one set, email is silently off and a customer who is not on "
+            "Telegram is never told their refund was sent"
+        )
+
+    # Same shape one level down. A username with no password authenticates as
+    # nobody: every send fails, and it fails inside a best-effort call whose
+    # whole contract is not to complain.
+    smtp_user = bool(values.get("SMTP_USERNAME", "").strip())
+    smtp_pass = bool(values.get("SMTP_PASSWORD", "").strip())
+    if smtp_user != smtp_pass:
+        errors.append(
+            "SMTP_USERNAME and SMTP_PASSWORD must be configured together "
+            "(set neither for a relay that authenticates by IP)"
+        )
+
     # A variable belonging to a rail that no longer exists. Not an error --
     # a leftover line hurts nothing and refusing to boot over it would be an
     # outage caused by tidiness -- but it must be SAID, because an operator who
