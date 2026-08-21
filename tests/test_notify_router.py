@@ -152,7 +152,12 @@ async def test_the_subject_is_not_repeated_into_the_direct_messages(
         transport=_http(handler), alert=Alerts(),
     )
 
-    assert bodies == ["We returned 10.79 USD."]
+    assert len(bodies) == 1
+    # Starts with the body it was given: nothing prepended, which is what this
+    # test is for. It no longer equals it, because a sign-off is appended -- see
+    # test_a_telegram_reader_is_not_told_to_reply_to_an_email below.
+    assert bodies[0].startswith("We returned 10.79 USD.")
+    assert "Refund issued" not in bodies[0]
 
 
 # --- a partial failure is not a success ------------------------------------
@@ -296,6 +301,80 @@ async def test_the_operator_page_goes_out_on_the_injected_transport(
 
     assert result.reached is False
     assert seen == ["/bott/sendMessage"]
+
+
+# --- how to reach a person, per channel ------------------------------------
+
+@pytest.mark.anyio
+async def test_a_telegram_reader_is_not_told_to_reply_to_an_email(
+    monkeypatch,
+) -> None:
+    """THE BUG THIS EXISTS FOR, found in the pre-launch run of 2026-08-21.
+
+    Both notices closed by telling somebody anxious about money how to reach a
+    human, and the Russian wording was "ответьте на это письмо" -- reply to
+    this EMAIL. One body went out on every channel, so it went to Telegram
+    unchanged.
+
+    What follows is why this is worse than a typo. The bot answers unknown text
+    with `{"ok": true, "handled": "ignored"}` and forwards nothing. A customer
+    doing exactly as instructed reached nobody, had no way to tell, and waited
+    -- which is the chargeback road the refund notice was written to close. The
+    one channel added so people would definitely be heard was the one that
+    definitely lost them.
+    """
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    bodies: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+        bodies.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    for locale in ("ru", "en"):
+        await notify_customer(
+            contact=Contact(telegram_chat_id="555"),
+            subject="s", body="b", locale=locale,
+            transport=_http(handler), alert=Alerts(),
+        )
+
+    for said in bodies:
+        assert "письмо" not in said, "told a Telegram reader to reply by email"
+        assert "email" not in said.lower() or "support@drydock.co" in said
+        assert "support@drydock.co" in said, "no way to reach a person at all"
+
+
+@pytest.mark.anyio
+async def test_an_email_reader_is_told_to_reply(monkeypatch) -> None:
+    """The other half, and the reason this is keyed on channel rather than
+    simply always naming the address: in an inbox, "reply to this" is the
+    lowest-effort door there is, and it threads. Sending someone to compose a
+    fresh mail to an address they must copy is worse, so the email branch keeps
+    the wording that was right all along."""
+    mail = Mail()
+    await notify_customer(
+        contact=Contact(email="b@example.invalid"),
+        subject="s", body="b", locale="ru", email_sender=mail,
+    )
+
+    said = mail.sent[0].get_content()
+    assert "ответьте на это письмо" in said.lower()
+    assert "support@drydock.co" not in said
+
+
+@pytest.mark.anyio
+async def test_an_unknown_channel_is_given_the_address_not_the_reply(
+    monkeypatch,
+) -> None:
+    """The default leans safe. "Reply to this" is true only where we know
+    replies arrive; a channel this code has not met is a channel where we do
+    not know that, so it gets the address. Stated as its own test because the
+    tempting default is the opposite -- reuse the email wording everywhere,
+    which is exactly the bug above."""
+    from app.notify import messages
+
+    said = messages.sign_off(channel="carrier-pigeon", locale="en")
+    assert "support@drydock.co" in said
 
 
 # --- the module boundary ---------------------------------------------------

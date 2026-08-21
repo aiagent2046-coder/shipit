@@ -496,11 +496,22 @@ function PayerInput({
 }
 
 /**
- * The Pro-tier card-payment card used on /pricing. Once the operator confirms,
- * reveals + lets you save the returned API key — the same one-shot delivery as
- * an instant rail, and it matters more here: confirmation lands hours later, when
- * this tab is usually long gone. Telegram /link with the order number is the
- * recovery door for that case.
+ * The Pro-tier card-payment card. Once the operator confirms, reveals + lets
+ * you save the returned API key — the same one-shot delivery as an instant
+ * rail, and it matters more here: confirmation lands hours later, when this tab
+ * is usually long gone. Telegram /link with the order number is the recovery
+ * door for that case.
+ *
+ * NOT MOUNTED ANYWHERE, and that is not an oversight. This said "used on
+ * /pricing" until 2026-08-21, by which time /pricing had been rewritten around
+ * the Fix Pack and had stopped offering Pro at all — see its own comment. Pro
+ * stays buyable through POST /v1/billing/bank-transfer/pro for the existing
+ * customer, and this component is the checkout that would be mounted if it were
+ * offered on a page again.
+ *
+ * Kept rather than deleted because /link imports ProCompleted from this file,
+ * and because "the Pro checkout" existing in one place is what stops a second
+ * one being written. If Pro is retired outright, this goes with it.
  */
 export function ProBankTransferCheckout() {
   return (

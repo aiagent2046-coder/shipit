@@ -500,6 +500,38 @@ async def assess_payment(
             "work to judge.",
         ),))
 
+    # MONEY WE NEVER RECEIVED CANNOT BE OWED BACK, and until this check existed
+    # it was: `assess` opens with "Judge one PAID Fix Pack", which was a
+    # precondition stated in a docstring and enforced nowhere.
+    #
+    # The pre-launch run of 2026-08-21 found two live rows where that mattered.
+    # Both were abandoned duplicate invoices -- a payer who opened a second
+    # invoice for an audit and paid the first -- and both came back `owed`,
+    # one of them `nothing_to_fix` on an audit whose real charge had ALREADY
+    # been refunded. The verdict was inherited rather than earned: the job is
+    # looked up by audit_id below, so every invoice against an audit is told
+    # what happened to that audit's one Fix Pack, paid or not.
+    #
+    # Why this is dangerous rather than untidy. A refund here is sent BY HAND
+    # and the system is told afterwards, so a wrong `owed` can move real money
+    # before anything checks it. mark_refunded's CAS gate refuses a pending
+    # row -- but it refuses after the transfer has left. That docstring already
+    # warns about this exact trap, and names DRY-XZCNTN and DRY-UPRQKH: the two
+    # rows this endpoint got wrong.
+    #
+    # `refunded` stays judgeable on purpose. It was owed, it was paid back, and
+    # the verdict is the record of why -- consulted six weeks later when
+    # somebody asks what happened. Only "no money arrived" is unjudgeable.
+    status = (payment.get("status") or "").strip()
+    if status not in ("completed", "refunded"):
+        return Verdict(UNDETERMINED, (Reason(
+            "not_paid",
+            f"This invoice is {status or 'in an unknown state'}, so no money "
+            "arrived for it and none can be owed back. If a Fix Pack ran for "
+            "this audit, it was bought by a different payment -- ask about "
+            "that one.",
+        ),))
+
     audit_id = payment.get("audit_id")
     if not audit_id:
         return Verdict(UNDETERMINED, (Reason(
@@ -548,6 +580,7 @@ async def _tell_them_about_the_refund(payment: dict, *, transport=None):
                 locale=payment.get("payer_locale")),
             body=_refund_body(payment),
             reference=str(payment.get("external_ref") or ""),
+            locale=payment.get("payer_locale"),
             transport=transport,
         )
     except Exception:  # noqa: BLE001

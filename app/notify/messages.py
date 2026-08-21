@@ -103,16 +103,12 @@ _CONFIRMED_BODY = {
     EN: (
         "We have confirmed your bank transfer. Thank you.\n\n"
         "{next}\n\n"
-        "Order reference: {reference}\n\n"
-        "Reply to this message if anything looks wrong — a real person reads "
-        "it."
+        "Order reference: {reference}"
     ),
     RU: (
         "Мы подтвердили ваш перевод. Спасибо.\n\n"
         "{next}\n\n"
-        "Номер заказа: {reference}\n\n"
-        "Если что-то не так — просто ответьте на это письмо. Его читает "
-        "живой человек."
+        "Номер заказа: {reference}"
     ),
 }
 
@@ -150,8 +146,7 @@ _REFUND_BODY = {
         "appear depends on your bank, not on us — for a card transfer that is "
         "usually a few business days.\n\n"
         "{reference}"
-        "If it has not arrived within a week, reply to this message. A real "
-        "person reads it."
+        "If it has not arrived within a week, tell us."
     ),
     RU: (
         "Мы вернули {money}.\n\n"
@@ -159,8 +154,7 @@ _REFUND_BODY = {
         "идти, зависит от вашего банка, а не от нас — для карточного перевода "
         "обычно несколько рабочих дней.\n\n"
         "{reference}"
-        "Если через неделю деньги не придут — ответьте на это письмо. Его "
-        "читает живой человек."
+        "Если через неделю деньги не придут — напишите нам."
     ),
 }
 
@@ -180,6 +174,60 @@ _THE_PAYMENT = {
 
 def refund_subject(*, locale: str | None) -> str:
     return _REFUND_SUBJECT[normalize(locale)]
+
+
+# --- how to reach a person, which depends on where they are reading ---------
+
+# The channel the "reply" instruction is true on. Anything else gets the
+# address, and that default is the safe direction: a channel this module has
+# never heard of is a channel where we do not know that replying works.
+_REPLYABLE = "email"
+
+SUPPORT_ADDRESS = "support@drydock.co"
+
+# THIS SENTENCE IS THE WHOLE POINT OF THE MESSAGE and it was wrong.
+#
+# Both notifications close by telling somebody anxious about money how to
+# reach a human. Until 2026-08-21 that sentence lived inside the body, one
+# text for every channel, and the Russian said "ответьте на это письмо" --
+# reply to this EMAIL. It went out over Telegram unchanged.
+#
+# What happened next is the part that matters. The bot answers unknown text
+# with {"ok": true, "handled": "ignored"} and forwards nothing, so a customer
+# who did as instructed reached nobody, believed they had contacted support,
+# and waited. That is precisely the road to a chargeback that the refund
+# notice exists to close.
+#
+# The English survived by luck: "reply to this message" is channel-neutral, so
+# nothing looked broken and no test could see it. Both languages carried the
+# same facts -- the amount, the reference, no operator reason -- which is all
+# test_notify_messages.py knew how to compare. What had drifted was whether
+# the sentence was TRUE where it was read, and that is not a property of a
+# translation pair.
+#
+# So it is keyed on channel first and language second, and it is not part of
+# the body: a body cannot know where it is going, and the router can.
+_SIGN_OFF = {
+    _REPLYABLE: {
+        EN: "Reply to this message — a real person reads it.",
+        RU: "Просто ответьте на это письмо. Его читает живой человек.",
+    },
+    "elsewhere": {
+        EN: f"Write to {SUPPORT_ADDRESS} — a real person reads it.",
+        RU: f"Напишите на {SUPPORT_ADDRESS} — там отвечает живой человек.",
+    },
+}
+
+
+def sign_off(*, channel: str, locale: str | None) -> str:
+    """How to reach a person, phrased for the channel this is being sent on.
+
+    `channel` is one of app/notify/router.py's channel names. It is compared
+    rather than imported to keep this module free of the router -- these are
+    words, and the router is machinery.
+    """
+    key = _REPLYABLE if channel == _REPLYABLE else "elsewhere"
+    return _SIGN_OFF[key][normalize(locale)]
 
 
 def refund_body(

@@ -123,6 +123,94 @@ def test_a_paid_fixpack_with_no_job_reads_as_owed() -> None:
     assert body["reasons"][0]["decisive"] is True
 
 
+# --- money that never arrived cannot be owed back ---------------------------
+
+@pytest.mark.parametrize("status", ["pending", "expired", "", None])
+def test_an_invoice_nobody_paid_gets_no_verdict(status) -> None:
+    """FOUND LIVE IN THE PRE-LAUNCH RUN OF 2026-08-21, on two rows.
+
+    A payer who opens a second invoice for an audit and pays the first leaves
+    an abandoned `pending` row behind. The job is looked up by audit_id, so
+    that abandoned row was told what happened to the audit's one Fix Pack and
+    inherited its verdict -- `owed`, in both real cases, on money that was
+    never received. One of them sat on an audit whose real charge had already
+    been refunded, so the endpoint was recommending the same refund twice.
+
+    Why this is dangerous and not merely untidy: a refund here is sent BY HAND
+    and the system is told afterwards. mark_refunded's CAS gate does refuse a
+    pending row -- but it refuses after the transfer has left. Its own
+    docstring warns about this exact case and names the two references this
+    endpoint got wrong.
+
+    `assess()` opens with "Judge one PAID Fix Pack". That was a precondition
+    written in a docstring and enforced nowhere; this is it enforced.
+    """
+    audit_id, payment_id, job_id = (str(uuid.uuid4()) for _ in range(3))
+    payment = {**_fixpack_payment(audit_id, payment_id), "status": status}
+    # A real, decisive, `owed`-shaped job sitting on the same audit -- bought
+    # and paid for by somebody else's invoice. Without the gate this row
+    # borrows that verdict.
+    jobs = Jobs({audit_id: {"id": job_id, "status": "delivered",
+                            "verified": True, "detail": None}})
+    outcomes = Outcomes({job_id: {
+        "outcome": "no_fix_needed", "rule_ids": [], "is_regression": False,
+    }})
+    _wire(Payments({payment_id: payment}), jobs, outcomes)
+
+    body = client.get(
+        f"/internal/payments/{payment_id}/fixpack-merit",
+        headers=AUTH).json()
+
+    assert body["conclusion"] == "undetermined"
+    assert [r["code"] for r in body["reasons"]] == ["not_paid"]
+    assert jobs.asked == [], "looked up work for an invoice nobody paid"
+
+
+def test_a_refunded_payment_is_still_judged() -> None:
+    """The other side of the gate, and it must not be collateral damage.
+
+    A refunded payment DID receive money, and the verdict is the record of why
+    it went back -- consulted six weeks later when somebody asks what happened.
+    Gating on `completed` alone would erase the reasoning behind every refund
+    already made, including the one this whole mechanism was built for.
+    """
+    audit_id, payment_id, job_id = (str(uuid.uuid4()) for _ in range(3))
+    payment = {**_fixpack_payment(audit_id, payment_id), "status": "refunded"}
+    jobs = Jobs({audit_id: {"id": job_id, "status": "delivered",
+                            "verified": True, "detail": None}})
+    outcomes = Outcomes({job_id: {
+        "outcome": "no_fix_needed", "rule_ids": [], "is_regression": False,
+    }})
+    _wire(Payments({payment_id: payment}), jobs, outcomes)
+
+    body = client.get(
+        f"/internal/payments/{payment_id}/fixpack-merit",
+        headers=AUTH).json()
+
+    assert body["conclusion"] == "owed"
+    assert body["reasons"][0]["code"] == "nothing_to_fix"
+
+
+def test_the_refund_date_is_reported_when_there_is_one() -> None:
+    """The endpoint renders `refunded_at`, and until 2026-08-21 it rendered
+    `null` for every payment in existence: PaymentRepository.get() did not
+    select the column. `status` said "refunded" in the same response, so two
+    fields contradicted each other and the wrong one was the one that looks
+    precise -- read by an operator deciding whether a refund is still owed.
+    """
+    audit_id, payment_id = str(uuid.uuid4()), str(uuid.uuid4())
+    payment = {**_fixpack_payment(audit_id, payment_id),
+               "status": "refunded",
+               "refunded_at": "2026-08-01T10:00:00+00:00"}
+    _wire(Payments({payment_id: payment}), Jobs({}), Outcomes())
+
+    body = client.get(
+        f"/internal/payments/{payment_id}/fixpack-merit",
+        headers=AUTH).json()
+
+    assert body["refunded_at"] == "2026-08-01T10:00:00+00:00"
+
+
 # --- it refuses to invent a verdict ----------------------------------------
 
 def test_a_pro_purchase_gets_no_verdict_about_generated_work() -> None:

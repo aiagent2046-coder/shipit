@@ -1056,6 +1056,53 @@ async def test_bank_transfer_payer_contact_round_trips(real_db):
         site_url="https://drydock.co", locale=by_ref["payer_locale"])
 
 
+async def test_a_refund_date_survives_the_round_trip(real_db):
+    """FOUND IN PRODUCTION, 2026-08-21. `refunded_at` was written by
+    mark_refunded and read back by nothing: it was absent from get()'s SELECT
+    list, so every payment ever refunded reported `refunded_at: null`.
+
+    THIS TEST NEEDS A REAL DATABASE and that is the entire point of it living
+    here. The endpoint that surfaces the field is covered by fakes in
+    tests/test_fixpack_merit_endpoint.py, and a fake repository hands back the
+    dict it was given -- so it answered correctly while the SQL underneath was
+    dropping the column. The only thing that can catch a missing column in a
+    SELECT list is a SELECT.
+
+    Why it mattered rather than merely being wrong: the field is rendered by
+    GET /internal/payments/{id}/fixpack-merit, which exists to be consulted
+    BEFORE an operator decides a refund. In the same response `status` said
+    "refunded" and `refunded_at` said null, and the one that was lying is the
+    one that looks like evidence.
+    """
+    payment_repo = PaymentRepository()
+    created = await payment_repo.create(
+        account_id=None, provider=bank_transfer.PROVIDER,
+        external_ref="DRY-REFDAT", amount=10.79, currency="USD",
+        status="completed", tier_granted=None, product="fixpack",
+    )
+    assert created is not None, "DATABASE_URL not reaching get_pool -- false green"
+
+    fresh = await payment_repo.get(created["id"])
+    assert "refunded_at" in fresh, "the column is not selected at all"
+    assert fresh["refunded_at"] is None, "a payment nobody refunded has no date"
+
+    refunded = await payment_repo.mark_refunded(
+        created["id"], reason="smoke test: it was not fixable")
+    assert refunded is not None and refunded["refunded_at"] is not None
+
+    reread = await payment_repo.get(created["id"])
+    assert reread["status"] == "refunded"
+    assert reread["refunded_at"] is not None, (
+        "status says refunded and the date says never -- the exact pair of "
+        "contradicting fields this test exists for")
+    assert reread["refunded_at"] == refunded["refunded_at"]
+
+    # The operator's note is deliberately NOT on this read path. It is written
+    # to be true rather than to be read by the person it is about, and this row
+    # travels further than mark_refunded's return value does.
+    assert "refund_reason" not in reread
+
+
 async def test_payment_without_payer_contact_stores_nulls(real_db):
     """Both columns are nullable and stay nullable: an invoice created without
     them is not an error, it is the ordinary case. A NOT NULL here would have
