@@ -212,6 +212,84 @@ async def test_a_notification_that_raises_outright_is_swallowed() -> None:
     assert result["granted"] is True
 
 
+# --- in the payer's language ------------------------------------------------
+
+@pytest.mark.anyio
+async def test_a_russian_payer_is_confirmed_in_russian() -> None:
+    """The whole point of migration 0033. The operator confirms hours after
+    the tab closed, so the language cannot be recovered then -- it has to come
+    off the row."""
+    payments, accounts = Payments(), FakeAccountRepo()
+    captured = Captured()
+    invoice = await payments.create(
+        provider=bank_transfer.PROVIDER, external_ref="DRY-RUSSIAN",
+        account_id=None, amount=5.0, currency="USD", tier_granted="pro",
+        product=bank_transfer.PRODUCT_PRO, telegram_chat_id="555",
+        payer_locale="ru-RU",
+    )
+
+    await bank_transfer.confirm(
+        payment_repo=payments, account_repo=accounts,
+        payment_id=invoice["id"], transport=captured.transport(),
+    )
+
+    told = [t for t in captured.texts if "DRY-RUSSIAN" in t]
+    assert told and "подтвердили ваш перевод" in told[0]
+    assert "We have confirmed" not in told[0]
+
+
+@pytest.mark.anyio
+async def test_a_payment_with_no_locale_is_confirmed_in_english() -> None:
+    """Every row written before 0033 arrives here with None, and there are
+    real ones. Silence about somebody's language is not a vote for Russian."""
+    payments, accounts = Payments(), FakeAccountRepo()
+    captured = Captured()
+    invoice = await payments.create(
+        provider=bank_transfer.PROVIDER, external_ref="DRY-NOLOCALE",
+        account_id=None, amount=5.0, currency="USD", tier_granted="pro",
+        product=bank_transfer.PRODUCT_PRO, telegram_chat_id="555",
+    )
+
+    await bank_transfer.confirm(
+        payment_repo=payments, account_repo=accounts,
+        payment_id=invoice["id"], transport=captured.transport(),
+    )
+
+    told = [t for t in captured.texts if "DRY-NOLOCALE" in t]
+    assert told and "confirmed your bank transfer" in told[0]
+
+
+def test_a_russian_payer_is_refunded_in_russian(monkeypatch) -> None:
+    """The more sensitive of the two messages: they asked for their money back
+    and are waiting to hear."""
+    monkeypatch.setenv("SERVICE_FLAGS_TOKEN", "flags")
+    payments = Payments()
+    captured = Captured()
+    payment_id = str(uuid.uuid4())
+    payments.rows[payment_id] = {
+        "id": payment_id, "provider": bank_transfer.PROVIDER,
+        "external_ref": "DRY-RUB", "status": "completed",
+        "amount": 10.79, "currency": "USD", "telegram_chat_id": "555",
+        "payer_locale": "ru",
+    }
+    app.dependency_overrides[get_payment_repo] = lambda: payments
+    app.dependency_overrides[get_billing_transport] = captured.transport
+    try:
+        resp = client.post(
+            f"/internal/payments/{payment_id}/refund",
+            json={"reason": "duplicate charge"},
+            headers={"authorization": "Bearer flags"},
+        )
+    finally:
+        _clear()
+
+    assert resp.status_code == 200
+    told = [t for t in captured.texts if "10.79" in t]
+    assert told and "Мы вернули" in told[0]
+    # And the operator's note stays out of it in Russian too.
+    assert "duplicate charge" not in told[0]
+
+
 # --- a refund --------------------------------------------------------------
 
 def test_a_refund_tells_the_customer_and_reports_which_channels_landed(

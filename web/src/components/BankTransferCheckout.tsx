@@ -76,6 +76,18 @@ export function BankTransferCheckout({
   // someone when their email bounces, which is a thing that happens and which
   // we cannot detect from a form.
   const [payerX, setPayerX] = useState("");
+  // What language we will write to them in, defaulted from their browser and
+  // SHOWN rather than assumed. A guess about somebody's language is wrong
+  // often enough to be worth putting in front of them — and this is recorded
+  // on the payment, because by the time a transfer is confirmed or a refund
+  // decided, this tab is long gone.
+  //
+  // Lazy initialiser: navigator does not exist during the server render, and
+  // reading it at module scope would break the build rather than the page.
+  const [payerLocale, setPayerLocale] = useState<"en" | "ru">(() => {
+    if (typeof navigator === "undefined") return "en";
+    return navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en";
+  });
   // The backend rejects a blank name or an email with no "@" (422). Mirroring
   // exactly that here keeps the button honest rather than letting the payer
   // submit into a validation error.
@@ -102,6 +114,7 @@ export function BankTransferCheckout({
         payer_name: payerName,
         payer_email: payerEmail,
         payer_x: payerX,
+        payer_locale: payerLocale,
       });
       setInvoice(inv);
       poll(inv.reference);
@@ -256,6 +269,21 @@ export function BankTransferCheckout({
               refunded. Leave an X handle too if you&apos;d rather hear there
               as well — we&apos;ll use both.
             </p>
+            <div className="flex items-center gap-2 text-xs text-muted">
+              <span>
+                {payerLocale === "ru"
+                  ? "Мы напишем вам по-русски."
+                  : "We'll write to you in English."}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPayerLocale(payerLocale === "ru" ? "en" : "ru")}
+                disabled={creating}
+                className="rounded border border-border px-2 py-0.5 text-xs hover:text-text disabled:opacity-60"
+              >
+                {payerLocale === "ru" ? "Switch to English" : "Писать по-русски"}
+              </button>
+            </div>
           </div>
 
           <button

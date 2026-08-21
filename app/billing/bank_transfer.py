@@ -62,6 +62,7 @@ import re
 import secrets
 from typing import Any
 
+from app.notify import messages
 from app.notify import telegram as tg
 
 logger = logging.getLogger(__name__)
@@ -275,7 +276,7 @@ def _invoice_view(
 async def create_invoice(
     payment_repo: Any, *, details: dict[str, str],
     payer_name: str | None = None, payer_email: str | None = None,
-    payer_x: str | None = None,
+    payer_x: str | None = None, payer_locale: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for the Pro tier.
 
@@ -310,7 +311,7 @@ async def create_invoice(
             amount=float(amount), currency=CURRENCY, status="pending",
             tier_granted="pro", product=PRODUCT_PRO,
             payer_name=payer_name, payer_email=payer_email,
-            payer_x=payer_x,
+            payer_x=payer_x, payer_locale=payer_locale,
         )
     if row is None:
         return None
@@ -320,7 +321,7 @@ async def create_invoice(
 async def create_fixpack_invoice(
     payment_repo: Any, *, details: dict[str, str], audit_id: str,
     payer_name: str | None = None, payer_email: str | None = None,
-    payer_x: str | None = None,
+    payer_x: str | None = None, payer_locale: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for a Fix Pack scoped to one audit. Same
     reference-code disambiguation as create_invoice, at the Fix Pack price and
@@ -340,7 +341,7 @@ async def create_fixpack_invoice(
             amount=float(amount), currency=CURRENCY, status="pending",
             tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
             payer_name=payer_name, payer_email=payer_email,
-            payer_x=payer_x,
+            payer_x=payer_x, payer_locale=payer_locale,
         )
     if row is None:
         return None
@@ -631,33 +632,26 @@ async def confirm(
 
 # --- telling the payer ------------------------------------------------------
 
-def _confirmation_subject(product: str) -> str:
-    what = "Fix Pack" if product == PRODUCT_FIXPACK else "Drydock Pro"
-    return f"Payment confirmed — your {what} is active"
+def _confirmation_subject(product: str, locale: str | None) -> str:
+    return messages.confirmation_subject(product=product, locale=locale)
 
 
-def _confirmation_body(row: dict[str, Any], *, product: str) -> str:
+def _confirmation_body(
+    row: dict[str, Any], *, product: str, locale: str | None,
+) -> str:
     """What the payer is told. Says what happens NEXT, because "confirmed" on
-    its own leaves them waiting without knowing for what."""
-    reference = row.get("external_ref") or ""
-    if product == PRODUCT_FIXPACK:
-        what = (
-            "Your Fix Pack is now running. It opens a pull request against "
-            "your repository with the fixes it can make, and you will hear "
-            "again when it lands or if it cannot finish."
-        )
-    else:
-        what = (
-            "Your Drydock Pro access is active. Your API key is on the "
-            f"payment page for this order — open {tg.SITE_URL}/link and enter "
-            "the reference below to collect it."
-        )
-    return (
-        "We have confirmed your bank transfer. Thank you.\n\n"
-        f"{what}\n\n"
-        f"Order reference: {reference}\n\n"
-        "Reply to this message if anything looks wrong — a real person reads "
-        "it."
+    its own leaves them waiting without knowing for what.
+
+    The words themselves live in app/notify/messages.py, in every language we
+    write them in. They were here, in English only, until the storefront's
+    Russian pages made that a customer translating our reassurance about their
+    own money.
+    """
+    return messages.confirmation_body(
+        product=product,
+        reference=str(row.get("external_ref") or ""),
+        site_url=tg.SITE_URL,
+        locale=locale,
     )
 
 
@@ -673,10 +667,11 @@ async def _tell_the_payer(
     from app.notify.router import Contact
 
     try:
+        locale = row.get("payer_locale")
         await notify(
             contact=Contact.from_payment(row),
-            subject=_confirmation_subject(product),
-            body=_confirmation_body(row, product=product),
+            subject=_confirmation_subject(product, locale),
+            body=_confirmation_body(row, product=product, locale=locale),
             reference=str(row.get("external_ref") or ""),
             transport=transport,
         )

@@ -1,0 +1,194 @@
+"""Every word a customer reads from us, in every language we write it in.
+
+WHY ONE FILE. These texts were spread across the modules that send them: the
+confirmation in app/billing/bank_transfer.py, the refund in
+app/routes/operator.py. That is fine for one language and stops being fine at
+two, because the failure mode of translations is DRIFT -- somebody improves
+the English refund notice, the Russian one keeps the old wording, and nobody
+finds out because nothing fails. Side by side in one file, a change that
+touches only one language is visible in the diff.
+
+WHY THESE TWO MESSAGES AND NO OTHERS. They are the moments where a person has
+already given us money and is waiting: the transfer has been confirmed, or the
+refund has been sent. Everything else the product says happens while they are
+looking at a page in the language they chose to browse in. These two arrive
+hours or days later, in an inbox, and a stranger who paid should not have to
+translate our reassurance.
+
+THE LANGUAGE IS THE PAYER'S, RECORDED AT PAYMENT TIME (migration 0033), not
+guessed at send time. A guess made days later has nothing to go on: the browser
+is gone, the session is gone, and the only thing left is a database row. So the
+row carries it.
+
+ENGLISH IS THE FALLBACK, and it is a real fallback rather than a default
+nobody meant. Every payment made before 0033 has no locale, and inventing
+Russian for them because the operator is Russian would write to English-speaking
+customers in a language they did not ask for. Unknown means English.
+
+TRANSLATIONS ARE NOT LITERAL, deliberately. The English refund notice says "a
+real person reads it" because that sentence does work in English: it tells
+somebody angry that they are not shouting into a queue. The Russian says the
+same thing the way it is said in Russian. A translation that preserves the
+words and loses the reassurance has translated nothing.
+"""
+
+from __future__ import annotations
+
+EN = "en"
+RU = "ru"
+
+# Every language this module can write. A locale outside this set is treated as
+# unknown -- see `normalize`. Kept as a tuple rather than derived from the
+# dictionaries below so that adding a language is a deliberate act: you have to
+# add it here AND write every message, and a missing message fails a test
+# rather than silently falling back for one string.
+SUPPORTED: tuple[str, ...] = (EN, RU)
+
+
+def normalize(value: str | None) -> str:
+    """The language to write in, from whatever was recorded on the payment.
+
+    Accepts the shapes a browser produces -- `ru`, `ru-RU`, `RU` -- because the
+    checkout defaults from `navigator.language` and that is what it gives.
+    Anything unrecognised, empty or None becomes English: an unknown language
+    is not a reason to withhold the message, and it is not a reason to guess.
+    """
+    if not value:
+        return EN
+    primary = value.strip().lower().replace("_", "-").split("-")[0]
+    return primary if primary in SUPPORTED else EN
+
+
+# --- a bank transfer the operator has confirmed -----------------------------
+
+_CONFIRMED_SUBJECT = {
+    EN: "Payment confirmed — your {product} is active",
+    RU: "Платёж подтверждён — {product} активен",
+}
+
+_PRODUCT_NAME = {
+    EN: {"fixpack": "Fix Pack", "pro_tier": "Drydock Pro"},
+    RU: {"fixpack": "Fix Pack", "pro_tier": "Drydock Pro"},
+}
+
+_WHAT_HAPPENS_NEXT = {
+    EN: {
+        "fixpack": (
+            "Your Fix Pack is now running. It opens a pull request against "
+            "your repository with the fixes it can make, and you will hear "
+            "again when it lands or if it cannot finish."
+        ),
+        "pro_tier": (
+            "Your Drydock Pro access is active. Your API key is on the "
+            "payment page for this order — open {site}/link and enter the "
+            "reference below to collect it."
+        ),
+    },
+    RU: {
+        "fixpack": (
+            "Fix Pack уже запущен. Он откроет пул-реквест в вашем "
+            "репозитории с теми правками, которые может сделать, и мы "
+            "напишем ещё раз — когда он будет готов или если не сможет "
+            "завершиться."
+        ),
+        "pro_tier": (
+            "Доступ Drydock Pro активен. Ваш API-ключ на странице оплаты "
+            "этого заказа — откройте {site}/link и введите номер заказа "
+            "ниже, чтобы забрать его."
+        ),
+    },
+}
+
+_CONFIRMED_BODY = {
+    EN: (
+        "We have confirmed your bank transfer. Thank you.\n\n"
+        "{next}\n\n"
+        "Order reference: {reference}\n\n"
+        "Reply to this message if anything looks wrong — a real person reads "
+        "it."
+    ),
+    RU: (
+        "Мы подтвердили ваш перевод. Спасибо.\n\n"
+        "{next}\n\n"
+        "Номер заказа: {reference}\n\n"
+        "Если что-то не так — просто ответьте на это письмо. Его читает "
+        "живой человек."
+    ),
+}
+
+
+def confirmation_subject(*, product: str, locale: str | None) -> str:
+    lang = normalize(locale)
+    name = _PRODUCT_NAME[lang].get(product, _PRODUCT_NAME[lang]["pro_tier"])
+    return _CONFIRMED_SUBJECT[lang].format(product=name)
+
+
+def confirmation_body(
+    *, product: str, reference: str, site_url: str, locale: str | None,
+) -> str:
+    lang = normalize(locale)
+    nexts = _WHAT_HAPPENS_NEXT[lang]
+    what = nexts.get(product, nexts["pro_tier"]).format(site=site_url)
+    return _CONFIRMED_BODY[lang].format(next=what, reference=reference)
+
+
+# --- a refund the operator has sent -----------------------------------------
+
+_REFUND_SUBJECT = {
+    EN: "Your Drydock refund",
+    RU: "Возврат средств Drydock",
+}
+
+# THE OPERATOR'S REASON IS NEVER IN HERE, in any language. It is a note for the
+# books -- "customer says the Fix Pack was wrong", "duplicate charge" -- written
+# to be true rather than to be read by the person it is about. Quoting it back
+# is at best clumsy and at worst an accusation.
+_REFUND_BODY = {
+    EN: (
+        "We have refunded {money}.\n\n"
+        "It was sent back the same way it arrived. How long it takes to "
+        "appear depends on your bank, not on us — for a card transfer that is "
+        "usually a few business days.\n\n"
+        "{reference}"
+        "If it has not arrived within a week, reply to this message. A real "
+        "person reads it."
+    ),
+    RU: (
+        "Мы вернули {money}.\n\n"
+        "Деньги отправлены тем же путём, которым пришли. Сколько они будут "
+        "идти, зависит от вашего банка, а не от нас — для карточного перевода "
+        "обычно несколько рабочих дней.\n\n"
+        "{reference}"
+        "Если через неделю деньги не придут — ответьте на это письмо. Его "
+        "читает живой человек."
+    ),
+}
+
+_REFUND_REFERENCE_LINE = {
+    EN: "Order reference: {reference}\n\n",
+    RU: "Номер заказа: {reference}\n\n",
+}
+
+# What stands in for the amount when the row carries none. Not "0.00": a
+# refund notice that names the wrong number is worse than one that names none,
+# and this text is read by somebody counting their money.
+_THE_PAYMENT = {
+    EN: "your payment",
+    RU: "ваш платёж",
+}
+
+
+def refund_subject(*, locale: str | None) -> str:
+    return _REFUND_SUBJECT[normalize(locale)]
+
+
+def refund_body(
+    *, amount: float | None, currency: str | None, reference: str,
+    locale: str | None,
+) -> str:
+    lang = normalize(locale)
+    quoted = f"{float(amount):.2f}" if amount is not None else ""
+    money = f"{quoted} {currency or ''}".strip() or _THE_PAYMENT[lang]
+    line = (_REFUND_REFERENCE_LINE[lang].format(reference=reference)
+            if reference else "")
+    return _REFUND_BODY[lang].format(money=money, reference=line)

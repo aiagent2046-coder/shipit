@@ -193,6 +193,10 @@ export interface PayerContact {
   // Optional. Blank is sent as null rather than "" so the backend and a SQL
   // `is null` agree about what "no X handle" means.
   payer_x?: string;
+  // What language to write to this payer in, recorded on the payment because
+  // it cannot be recovered later: the operator confirms hours after this tab
+  // closed. See migration 0033.
+  payer_locale?: string;
 }
 
 function payerBody(payer: PayerContact): RequestInit {
@@ -202,6 +206,7 @@ function payerBody(payer: PayerContact): RequestInit {
       payer_name: payer.payer_name.trim(),
       payer_email: payer.payer_email.trim(),
       payer_x: payer.payer_x?.trim() || null,
+      payer_locale: payer.payer_locale?.trim() || null,
     }),
   };
 }
