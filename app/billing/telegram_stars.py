@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -77,6 +78,21 @@ CURRENCY = "XTR"
 # reads the books under this name: a completed invoice is a payment someone
 # made, and the key it bought is still theirs to collect.
 RETIRED_USDT_PROVIDER = "usdt_trc20"
+
+# A TRC20 transaction hash: 32 bytes, hex, no 0x prefix.
+#
+# This exists because /link used to test only the ORDER REFERENCE shape and
+# treat every other string as a hash. The pre-launch run of 2026-08-21 hit it
+# on the first try: a mistyped `DRY=D22NFJ` (equals for hyphen) was answered
+# with a paragraph about USDT/TRC20 -- a rail that no longer exists and that
+# the person had never used. They had paid by card and were trying to collect
+# their key, which is the worst possible moment to be handed a wrong answer
+# about a payment method.
+#
+# Matching both shapes means the fallback belongs to neither, and the fallback
+# is the case that was silently mishandled: a claim that is not a reference and
+# not a hash gets told what a reference looks like.
+TRC20_HASH_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 # THE INVOICE COPY AND THE PRICES ARE GONE, and with them every function
 # that could mint a Stars invoice: send_invoice, create_invoice_link,
@@ -1098,6 +1114,7 @@ async def _handle_link(
     # reference is DRY- plus six characters, a TRC20 hash is 64 hex, so the
     # payer never has to say which method they used. Uppercased first because
     # the code is shown uppercase but typed by hand.
+    #
     if bank_transfer.REFERENCE_RE.match(claim.upper()):
         provider, claim = bank_transfer.PROVIDER, claim.upper()
         not_found_text = (
@@ -1117,11 +1134,38 @@ async def _handle_link(
         # completed any more, so a pending one will stay pending forever and
         # must be told to ask a human rather than to wait for a poller.
         provider = RETIRED_USDT_PROVIDER
-        not_found_text = (
-            "That transaction hash wasn't found. USDT (TRC20) is no longer a "
-            "way to pay here. If you paid before it was withdrawn and your "
-            "key never arrived, email support with the hash."
-        )
+        # WHAT WAS NOT FOUND depends on what they appear to have sent, and
+        # getting that wrong is how this went wrong before.
+        #
+        # The LOOKUP is deliberately still attempted for any non-reference,
+        # exactly as it always was. Narrowing it to strings matching
+        # TRC20_HASH_RE was the first fix written here and it was withdrawn: a
+        # historical row whose external_ref is shaped even slightly differently
+        # would have become impossible to link, taking a key away from somebody
+        # who paid for it. A lookup that finds nothing costs one query; a lookup
+        # never made costs a customer their purchase.
+        #
+        # What changes is only the sentence when nothing was found. On
+        # 2026-08-21 a mistyped `DRY=D22NFJ` -- equals instead of hyphen --
+        # was answered with a paragraph about USDT/TRC20: a rail that no longer
+        # exists, that the payer had never used, delivered at the moment they
+        # were trying to collect a key they had paid for by card. A typo is by
+        # far the likeliest reason to be standing here, so say what a reference
+        # looks like. The USDT text is kept for the people it is actually
+        # addressed to: the ones who really did send a hash.
+        if TRC20_HASH_RE.match(claim):
+            not_found_text = (
+                "That transaction hash wasn't found. USDT (TRC20) is no longer "
+                "a way to pay here. If you paid before it was withdrawn and "
+                "your key never arrived, email support with the hash."
+            )
+        else:
+            not_found_text = (
+                "That doesn't look like an order reference. It looks like "
+                "`DRY-XXXXXX` — six characters after the dash — and it is on "
+                "the payment page and in the email confirming your transfer. "
+                "Check the dash, and that there are no spaces."
+            )
         pending_text = (
             "That payment was never confirmed, and USDT (TRC20) has since "
             "been withdrawn — nothing will confirm it now. Email support with "

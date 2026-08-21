@@ -673,6 +673,7 @@ async def _tell_the_payer(
             subject=_confirmation_subject(product, locale),
             body=_confirmation_body(row, product=product, locale=locale),
             reference=str(row.get("external_ref") or ""),
+            locale=locale,
             transport=transport,
         )
     except Exception:  # noqa: BLE001

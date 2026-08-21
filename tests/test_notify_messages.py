@@ -134,6 +134,55 @@ def test_a_refund_with_no_reference_leaves_no_dangling_label(locale) -> None:
     assert "номер заказа" not in body.lower()
 
 
+# --- the sign-off is not part of the body -----------------------------------
+
+@pytest.mark.parametrize("locale", SUPPORTED)
+def test_no_body_carries_its_own_sign_off(locale) -> None:
+    """The bodies used to end with "reply to this message", and that sentence
+    has moved out — see app/notify/router.py, which appends the version that is
+    TRUE for the channel it is sending on.
+
+    This guards the move. Putting the sentence back into a body would not fail
+    anything obvious: the customer would simply be told twice, once correctly
+    and once not, which is worse than either alone because the wrong one still
+    sends them somewhere nobody is listening.
+    """
+    bodies = [
+        messages.confirmation_body(
+            product="fixpack", reference="R", site_url="https://drydock.co",
+            locale=locale),
+        messages.refund_body(
+            amount=1.0, currency="USD", reference="R", locale=locale),
+    ]
+    for body in bodies:
+        assert "ответьте на это письмо" not in body.lower()
+        assert "reply to this" not in body.lower()
+        assert messages.SUPPORT_ADDRESS not in body
+
+
+def test_the_two_sign_offs_say_different_things() -> None:
+    """The whole reason it is keyed on channel. If both branches produced the
+    same sentence the bug would be back and every test above would still pass:
+    each of them only asks whether SOME way to reach a person is named."""
+    for locale in SUPPORTED:
+        inbox = messages.sign_off(channel="email", locale=locale)
+        chat = messages.sign_off(channel="telegram", locale=locale)
+        assert inbox != chat
+        assert messages.SUPPORT_ADDRESS in chat
+        assert messages.SUPPORT_ADDRESS not in inbox
+
+
+def test_the_sign_off_is_translated_and_not_copied() -> None:
+    """Same boundary as test_the_two_languages_are_actually_different, applied
+    to the newest text. A copy-paste that left Russian as English would satisfy
+    every other assertion here."""
+    for channel in ("email", "telegram"):
+        ru = messages.sign_off(channel=channel, locale=RU)
+        en = messages.sign_off(channel=channel, locale=EN)
+        assert any("Ѐ" <= c <= "ӿ" for c in ru), "no Cyrillic in the Russian"
+        assert not any("Ѐ" <= c <= "ӿ" for c in en), "Cyrillic in the English"
+
+
 # --- what must be absent, in every language ---------------------------------
 
 @pytest.mark.parametrize("locale", SUPPORTED)
@@ -156,6 +205,8 @@ def test_every_supported_language_has_every_message() -> None:
     forgot — the drift this module exists to prevent, arriving through the
     front door."""
     for locale in SUPPORTED:
+        for channel in ("email", "telegram"):
+            assert messages.sign_off(channel=channel, locale=locale)
         assert messages.refund_subject(locale=locale)
         assert messages.refund_body(
             amount=1.0, currency="USD", reference="R", locale=locale)

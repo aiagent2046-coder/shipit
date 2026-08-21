@@ -1815,6 +1815,28 @@ class PaymentRepository:
         return _row_to_payment(row)
 
     async def get(self, payment_id: str) -> dict[str, Any] | None:
+        """One payment by id.
+
+        `refunded_at` is selected HERE and in none of the sibling queries
+        below, which is a deliberate asymmetry rather than an oversight. This
+        is the only read that can return a row in any status, so it is the only
+        one where "refunded" is news: the others are filtered to `pending` or
+        `completed`, or are looking a payment up in order to grant something.
+
+        It was missing until 2026-08-21, and the endpoint that noticed is the
+        one that most needed it. GET /internal/payments/{id}/fixpack-merit
+        exists to be consulted BEFORE an operator decides a refund, and it
+        renders `refunded_at` -- so it reported `null` for every payment ever
+        refunded, including one refunded three weeks earlier. `status` said
+        "refunded" in the same response. Of the two fields that contradicted
+        each other, the wrong one was the one that looks precise.
+
+        `refund_reason` is deliberately NOT here. It is the operator's own
+        note, written to be true rather than to be read by the person it is
+        about, and this row is passed around widely enough that adding it would
+        be a decision about disclosure taken by accident. mark_refunded returns
+        it to the caller that wrote it; that is the audience it has.
+        """
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1829,7 +1851,8 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, payer_locale, created_at
+                       payer_email, payer_x, payer_locale, refunded_at,
+                       created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),

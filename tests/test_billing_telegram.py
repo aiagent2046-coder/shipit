@@ -544,11 +544,53 @@ async def test_link_already_claimed_by_other_chat_is_rejected():
 
 
 async def test_link_unknown_hash_reports_not_found():
+    """A real TRC20 hash that matches nothing. The claim is 64 hex, which is
+    the actual shape, because the answer now depends on that shape."""
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
-    result = await _send(_text_update("/link 0xnope", 333),
+    result = await _send(_text_update(f"/link {'a1' * 32}", 333),
                          accounts, payments, calls)
     assert result["result"] == "not_found"
     assert "wasn't found" in _last_text(calls)
+    assert "USDT" in _last_text(calls)
+
+
+async def test_a_mistyped_order_reference_is_not_answered_with_usdt():
+    """THE REAL CASE, from the pre-launch run of 2026-08-21.
+
+    Somebody typed `DRY=D22NFJ` -- equals instead of hyphen -- while trying to
+    collect a key they had paid for by card. Because /link tested only the
+    reference shape and assumed everything else was a transaction hash, they
+    were handed a paragraph about USDT/TRC20: a rail that had been withdrawn,
+    that they had never used, at the exact moment they were stuck.
+
+    What makes this worth a test rather than a one-line fix is that the wrong
+    answer was CONFIDENT. It named a payment method, so the reader's next
+    thought is "did I pay the wrong way?" rather than "did I mistype?".
+    """
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    result = await _send(_text_update("/link DRY=D22NFJ", 333),
+                         accounts, payments, calls)
+    assert result["result"] == "not_found"
+    said = _last_text(calls)
+    assert "USDT" not in said and "TRC20" not in said
+    assert "DRY-XXXXXX" in said, "did not say what a reference looks like"
+
+
+async def test_a_claim_that_is_neither_shape_still_gets_looked_up():
+    """The lookup stays wide even though the message narrowed.
+
+    An earlier version of this fix refused to search for anything that was not
+    64 hex. That would have made a historical row with a differently shaped
+    external_ref impossible to link -- taking a key away from somebody who had
+    paid for it, in order to improve an error message. A search that finds
+    nothing costs a query; a search never made costs a customer their purchase.
+    """
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    acct, row = await _completed_usdt_payment(payments, accounts, "0xodd")
+
+    result = await _send(_text_update("/link 0xodd", 777),
+                         accounts, payments, calls)
+    assert result["result"] == "linked"
 
 
 async def test_link_pending_payment_reports_pending():

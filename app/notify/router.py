@@ -42,7 +42,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.notify import email as mail
-from app.notify import telegram, x
+from app.notify import messages, telegram, x
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,7 @@ async def notify_customer(
     subject: str,
     body: str,
     reference: str = "",
+    locale: str | None = None,
     email_sender=None,
     transport: httpx.BaseTransport | None = None,
     alert=None,
@@ -125,10 +126,28 @@ async def notify_customer(
     could be reached" alert names something the operator can look up. It is
     never shown to the customer.
 
+    `locale` is only used to pick the language of the sign-off this function
+    appends -- see `_body_for`. The body itself arrives already written in the
+    customer's language; the caller read it off the payment row.
+
     The injection points (`email_sender`, `transport`, `alert`) exist so the
     suite can prove the routing without a mail server, an X account or a
     Telegram bot.
     """
+    def _body_for(channel: str) -> str:
+        """The body plus the one sentence that has to differ per channel.
+
+        "Reply to this message" is true in an inbox and false in a bot chat --
+        the bot ignores unknown text and forwards nothing, so a customer who
+        replies there reaches nobody and thinks they have reached support.
+        This function is where that sentence gets decided, because it is the
+        only place that knows where the text is going.
+
+        A body with no sign-off (a caller that passed none of this through)
+        still sends: the sign-off is added, never required.
+        """
+        return f"{body}\n\n{messages.sign_off(channel=channel, locale=locale)}"
+
     channels = contact.channels()
     if not channels:
         await _page_operator(
@@ -146,8 +165,8 @@ async def notify_customer(
 
     if EMAIL in channels:
         if await mail.send_email(
-            to=(contact.email or "").strip(), subject=subject, body=body,
-            sender=email_sender,
+            to=(contact.email or "").strip(), subject=subject,
+            body=_body_for(EMAIL), sender=email_sender,
         ):
             delivered.append(EMAIL)
 
@@ -156,7 +175,7 @@ async def notify_customer(
         if token:
             try:
                 await telegram.send_message(
-                    str(contact.telegram_chat_id).strip(), body,
+                    str(contact.telegram_chat_id).strip(), _body_for(TELEGRAM),
                     token=token, transport=transport,
                 )
                 delivered.append(TELEGRAM)
@@ -168,7 +187,9 @@ async def notify_customer(
                     "customer telegram notice failed (%s)", type(exc).__name__)
 
     if X in channels:
-        if await x.send_dm(contact.x_handle or "", body, transport=transport):
+        if await x.send_dm(
+            contact.x_handle or "", _body_for(X), transport=transport,
+        ):
             delivered.append(X)
 
     if not delivered:
