@@ -16,6 +16,27 @@ export const metadata: Metadata = {
   title: "Drydock — Your AI Production Engineer",
   description:
     "Drydock is the AI production engineer for AI-generated repos. Paste a GitHub URL or upload a zip: it audits your app, scores production-readiness out of 10, and ships the fixes as a pull request.",
+  // Proof to enot.io that whoever controls this domain also controls the
+  // merchant account being opened against it. Their checker fetches the home
+  // page and looks for `<meta name="enot" content="...">`; Next renders this
+  // into the server HTML, so it is there before any JavaScript runs.
+  //
+  // NOT A SECRET. It is the first segment of the onboarding connection id,
+  // readable by anyone who views source -- which is the point, since the
+  // checker reads it unauthenticated. It proves control of the domain and
+  // grants nothing.
+  //
+  // WHY HERE AND NOT A FILE IN public/. enot.io also accepts an
+  // `enot_<token>.html` at the site root. A bare token file has nowhere to
+  // carry this explanation, so in six months it reads as debris and gets
+  // tidied away -- silently un-verifying the merchant account. In the layout
+  // it is a line of reviewed code with a reason attached.
+  //
+  // SAFE TO DELETE once enot.io is confirmed to be the payment provider and
+  // the account is live -- verification is checked at onboarding, not
+  // continuously. Delete it also if enot.io is NOT chosen: an unused claim
+  // pointing at a provider we never signed with is worse than nothing.
+  other: { enot: "5b5e6a26" },
 };
 
 // Set the theme class before hydration so there's no flash of the wrong
