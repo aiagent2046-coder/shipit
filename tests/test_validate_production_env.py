@@ -422,3 +422,76 @@ def test_a_deployment_selling_nothing_is_unaffected(tmp_path, monkeypatch):
     demanding a bot token from it would refuse to boot over an unused
     feature."""
     assert _run(tmp_path, monkeypatch, dict(COMPLETE_ENV)) == 0
+
+
+# --- half a delivery channel ------------------------------------------------
+
+def test_smtp_host_without_a_from_address_is_refused(
+    tmp_path, monkeypatch, capsys,
+):
+    """The same shape as the USDT_POLL_TOKEN outage: a value required only
+    because another one is set.
+
+    It matters more here than it looks. app/notify/email.py returns False and
+    raises nothing when either is missing -- deliberately, so a deployment
+    without mail does not fail a refund it could not announce. The cost of
+    that contract is that a TYPO looks exactly like a decision: the customer
+    is never told their money came back, nothing goes red, and the only trace
+    is an operator alert saying nobody could be reached."""
+    env = dict(COMPLETE_ENV)
+    env["SMTP_HOST"] = "smtp.example.invalid"
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+    err = capsys.readouterr().err
+    assert "SMTP_HOST and SMTP_FROM must be configured together" in err
+    # It says what the operator loses, not just which variable is missing.
+    assert "never told their refund was sent" in err
+
+
+def test_a_from_address_without_a_host_is_refused(tmp_path, monkeypatch, capsys):
+    """Both directions. Setting only SMTP_FROM is the likelier typo -- it is
+    the one an operator writes from memory."""
+    env = dict(COMPLETE_ENV)
+    env["SMTP_FROM"] = "support@drydock.co"
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+    assert "SMTP_HOST and SMTP_FROM" in capsys.readouterr().err
+
+
+def test_both_together_pass(tmp_path, monkeypatch):
+    """The boundary. A configured mail channel must not be an error."""
+    env = dict(COMPLETE_ENV)
+    env["SMTP_HOST"] = "smtp.example.invalid"
+    env["SMTP_FROM"] = "support@drydock.co"
+
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
+def test_neither_is_not_an_error_either(tmp_path, monkeypatch):
+    """Mail is optional. A deployment that has not set it up is not broken,
+    and refusing to boot over it would make the channel mandatory by
+    accident."""
+    assert _run(tmp_path, monkeypatch, dict(COMPLETE_ENV)) == 0
+
+
+def test_a_username_with_no_password_is_refused(tmp_path, monkeypatch, capsys):
+    """It authenticates as nobody: every send fails, inside a best-effort call
+    whose whole contract is not to complain."""
+    env = dict(COMPLETE_ENV)
+    env["SMTP_HOST"] = "smtp.example.invalid"
+    env["SMTP_FROM"] = "support@drydock.co"
+    env["SMTP_USERNAME"] = "support@drydock.co"
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+    assert "SMTP_USERNAME and SMTP_PASSWORD" in capsys.readouterr().err
+
+
+def test_neither_credential_is_fine(tmp_path, monkeypatch):
+    """A relay on localhost, or one that authenticates by IP, needs neither --
+    and app/notify/email.py skips the login for exactly that case. Demanding a
+    password would invent a requirement the code does not have."""
+    env = dict(COMPLETE_ENV)
+    env["SMTP_HOST"] = "localhost"
+    env["SMTP_FROM"] = "support@drydock.co"
+
+    assert _run(tmp_path, monkeypatch, env) == 0
