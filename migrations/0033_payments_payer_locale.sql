@@ -1,0 +1,41 @@
+-- rollback-safe: yes
+--
+-- A nullable column nothing older reads or writes. A release rolled back to
+-- the previous code ignores it, and every existing row stays valid.
+--
+-- What language to write to this payer in.
+--
+-- The product's customer-facing notifications -- "your transfer was
+-- confirmed", "we refunded you" -- were English only, while the storefront has
+-- Russian-language pages describing the offer and the refund terms. A buyer who
+-- read those pages in Russian, paid, and then got an English email about their
+-- own money is being asked to translate our reassurance. Those two messages are
+-- exactly the ones where somebody is anxious about money, which is the worst
+-- place to make them work for it.
+--
+-- RECORDED AT PAYMENT TIME, NOT GUESSED AT SEND TIME, and that is the whole
+-- reason this is a column rather than a lookup. The operator confirms a bank
+-- transfer hours after the payer closed their tab; a refund is decided days
+-- later. By then the browser is gone, the session is gone, and the only thing
+-- left is this row. Anything not written down here is not recoverable.
+--
+-- WHAT IT IS NOT. It is not a signal about which page the payment came from --
+-- there is only one checkout and it is English. It is what the PAYER'S BROWSER
+-- said, shown to them at checkout so they can correct it before paying. A
+-- guess about somebody's language is wrong often enough to be worth showing.
+--
+-- Nullable, no default, no backfill. Every payment before this migration has
+-- no locale, and app/notify/messages.py reads NULL as English. Defaulting to
+-- Russian because the operator is Russian would write to English-speaking
+-- customers in a language they never asked for; defaulting to English in the
+-- COLUMN would claim we know something about historical payers that we do not.
+--
+-- Not constrained, matching every other text column here (status, product,
+-- provider). The value is validated where it is used: messages.normalize()
+-- reduces `ru-RU`, `RU` and `ru` alike, and treats anything it does not
+-- recognise as English. A CHECK would reject the payment over an unexpected
+-- browser locale -- losing the sale to gain a tidier column.
+--
+-- No index. The only read is "what language is this one payer", with the row
+-- already in hand.
+alter table payments add column if not exists payer_locale text;

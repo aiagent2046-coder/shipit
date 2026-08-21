@@ -31,6 +31,7 @@ from app.db import (
 )
 from app.deploypack.preview import PreviewRegistry
 from app.fixpack.merit import UNDETERMINED, Reason, Verdict, assess
+from app.notify import messages
 from app.routes._shared import (
     _json_object_body,
     _require_bearer_token,
@@ -517,24 +518,21 @@ async def assess_payment(
 def _refund_body(payment: dict) -> str:
     """What the customer reads.
 
-    The REASON is not repeated back to them. It is the operator's note for the
-    books -- "customer says the Fix Pack was wrong", "duplicate charge" -- and
-    it is written to be true rather than to be read by the person it is about.
-    What they need is the amount, the order, and that it is on its way.
+    The REASON is not repeated back to them, in any language. It is the
+    operator's note for the books -- "customer says the Fix Pack was wrong",
+    "duplicate charge" -- written to be true rather than to be read by the
+    person it is about. What they need is the amount, the order, and that it
+    is on its way.
+
+    The words live in app/notify/messages.py, in the language recorded on the
+    payment (migration 0033). NULL reads as English, which is every row made
+    before that column existed.
     """
-    amount = payment.get("amount")
-    quoted = f"{float(amount):.2f}" if amount is not None else ""
-    currency = payment.get("currency") or ""
-    money = f"{quoted} {currency}".strip() or "your payment"
-    reference = payment.get("external_ref") or ""
-    return (
-        f"We have refunded {money}.\n\n"
-        "It was sent back the same way it arrived. How long it takes to appear "
-        "depends on your bank, not on us — for a card transfer that is usually "
-        "a few business days.\n\n"
-        + (f"Order reference: {reference}\n\n" if reference else "")
-        + "If it has not arrived within a week, reply to this message. A real "
-        "person reads it."
+    return messages.refund_body(
+        amount=payment.get("amount"),
+        currency=payment.get("currency"),
+        reference=str(payment.get("external_ref") or ""),
+        locale=payment.get("payer_locale"),
     )
 
 
@@ -546,7 +544,8 @@ async def _tell_them_about_the_refund(payment: dict, *, transport=None):
     try:
         return await notify_customer(
             contact=Contact.from_payment(payment),
-            subject="Your Drydock refund",
+            subject=messages.refund_subject(
+                locale=payment.get("payer_locale")),
             body=_refund_body(payment),
             reference=str(payment.get("external_ref") or ""),
             transport=transport,

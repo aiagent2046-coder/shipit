@@ -1022,7 +1022,7 @@ async def test_bank_transfer_payer_contact_round_trips(real_db):
     invoice = await bank_transfer.create_invoice(
         payment_repo, details=dict(BANK_DETAILS_SMOKE),
         payer_name=PAYER_NAME_SMOKE, payer_email=PAYER_EMAIL_SMOKE,
-        payer_x="smoketest_x",
+        payer_x="smoketest_x", payer_locale="ru-RU",
     )
     assert invoice is not None, "DATABASE_URL not reaching get_pool -- false green"
 
@@ -1037,11 +1037,23 @@ async def test_bank_transfer_payer_contact_round_trips(real_db):
     assert by_ref["payer_name"] == PAYER_NAME_SMOKE
     assert by_ref["payer_email"] == PAYER_EMAIL_SMOKE
     assert by_ref["payer_x"] == "smoketest_x"
+    assert by_id["payer_locale"] == "ru-RU"
+    assert by_ref["payer_locale"] == "ru-RU"
 
     # And the whole point of the column: the row knows which channels this
     # customer has, without app/notify/ needing to know what a payment is.
     from app.notify.router import Contact
     assert Contact.from_payment(by_ref).channels() == ("email", "x")
+
+    # And migration 0033: the language survives the round trip in the shape a
+    # browser sends it, and the message picks it up. A payer who was shown
+    # "мы напишем вам по-русски" at checkout must not get English hours later,
+    # which is the only moment this column is ever read.
+    from app.notify import messages
+    assert messages.normalize(by_ref["payer_locale"]) == "ru"
+    assert "Мы подтвердили" in messages.confirmation_body(
+        product="pro_tier", reference=by_ref["external_ref"],
+        site_url="https://drydock.co", locale=by_ref["payer_locale"])
 
 
 async def test_payment_without_payer_contact_stores_nulls(real_db):

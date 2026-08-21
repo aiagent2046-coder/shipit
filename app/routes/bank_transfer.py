@@ -134,11 +134,23 @@ class PayerContact(BaseModel):
     `payer_x` is optional, and it is the only optional field here. The name and
     email are the matching key; an X handle is a courtesy channel some people
     prefer, and demanding one would cost sales to gain a notification.
+
+    `payer_locale` is what LANGUAGE to write to this payer in, and it is
+    recorded now because it cannot be recovered later: the operator confirms
+    hours after the tab closed, and a refund is decided days after that. The
+    browser that knew the answer is long gone. See migration 0033.
+
+    Not validated to a known language here, deliberately. The checkout sends
+    whatever `navigator.language` gave it, which is `ru-RU` or `en-GB` as often
+    as `ru`, and app/notify/messages.py::normalize reduces those and treats
+    anything unrecognised as English. Rejecting the invoice over an unexpected
+    browser locale would lose the sale to gain a tidier column.
     """
 
     payer_name: str = Field(min_length=1, max_length=200)
     payer_email: str = Field(min_length=3, max_length=200)
     payer_x: str | None = Field(default=None, max_length=100)
+    payer_locale: str | None = Field(default=None, max_length=32)
 
     @field_validator("payer_name", "payer_email")
     @classmethod
@@ -148,7 +160,7 @@ class PayerContact(BaseModel):
             raise ValueError("must not be blank")
         return v
 
-    @field_validator("payer_x")
+    @field_validator("payer_x", "payer_locale")
     @classmethod
     def _blank_is_absent(cls, v: str | None) -> str | None:
         """A form submits "" for a field the customer left alone. Stored as
@@ -214,6 +226,7 @@ async def create_bank_transfer_invoice(
         payer_name=payer.payer_name,
         payer_email=payer.payer_email,
         payer_x=payer.payer_x,
+        payer_locale=payer.payer_locale,
     )
     if invoice is None:
         raise _bank_transfer_not_persisted_error()
@@ -280,6 +293,7 @@ async def create_fixpack_bank_transfer_invoice(
         payer_name=payer.payer_name,
         payer_email=payer.payer_email,
         payer_x=payer.payer_x,
+        payer_locale=payer.payer_locale,
     )
     if invoice is None:
         raise _bank_transfer_not_persisted_error()

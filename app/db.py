@@ -1776,7 +1776,7 @@ class PaymentRepository:
         status: str, tier_granted: str | None,
         product: str = "pro_tier", audit_id: str | None = None,
         payer_name: str | None = None, payer_email: str | None = None,
-        payer_x: str | None = None,
+        payer_x: str | None = None, payer_locale: str | None = None,
     ) -> dict[str, Any] | None:
         """payer_name/payer_email (migration 0026) and payer_x (0032) are what
         the payer said about themselves before paying. The name is for the
@@ -1800,16 +1800,16 @@ class PaymentRepository:
                 insert into payments
                     (account_id, provider, external_ref, amount, currency,
                      status, tier_granted, product, audit_id,
-                     payer_name, payer_email, payer_x)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     payer_name, payer_email, payer_x, payer_locale)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id, account_id, provider, external_ref, amount,
                           currency, status, tier_granted, telegram_chat_id,
                           product, audit_id, paypal_order_id, payer_name,
-                          payer_email, payer_x, created_at
+                          payer_email, payer_x, payer_locale, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
                  status, tier_granted, product, parsed_audit_id,
-                 payer_name, payer_email, payer_x),
+                 payer_name, payer_email, payer_x, payer_locale),
             )
             row = await cur.fetchone()
         return _row_to_payment(row)
@@ -1829,7 +1829,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, created_at
+                       payer_email, payer_x, payer_locale, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -1854,7 +1854,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, created_at
+                       payer_email, payer_x, payer_locale, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
@@ -1894,7 +1894,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, created_at
+                       payer_email, payer_x, payer_locale, created_at
                 from payments
                 where provider = %s and status = 'pending'
                   and (%s::timestamptz is null or created_at >= %s)
@@ -2078,7 +2078,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, created_at
+                       payer_email, payer_x, payer_locale, created_at
                 from payments
                 where telegram_chat_id = %s and status = 'completed'
                   and account_id is not null
@@ -2120,7 +2120,7 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, created_at
+                       payer_email, payer_x, payer_locale, created_at
                 from payments where id = %s
                 """,
                 (pid,),
