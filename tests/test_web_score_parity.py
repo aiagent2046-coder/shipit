@@ -16,10 +16,20 @@ people read.
 TypeScript cannot import GATE_THRESHOLD from app/scan/scoring.py, so
 web/src/lib/format.ts holds a second copy of the band rule. These tests are
 what makes that copy honest: they read the TypeScript as text and fail when
-the two stop agreeing. Text matching is brittle, and it is the only
-cross-language check available here -- web/ has no test runner, only
-`next build`. Each assertion below names one specific way the surfaces have
-drifted or could drift again.
+the two stop agreeing. Each assertion below names one specific way the
+surfaces have drifted or could drift again.
+
+WHAT IS LEFT HERE, now that web/ has a test runner. This file used to carry
+both jobs and said so -- "text matching is brittle, and it is the only
+cross-language check available here" -- because until 2026-08-22 the frontend
+had no way to run a test at all. web/src/lib/format.test.ts now CALLS these
+functions, which is the right way to assert what they do, and every behavioural
+claim belongs there.
+
+What cannot move is the comparison itself. Nothing running under Node can read
+GATE_THRESHOLD out of Python, so the one thing only this file can do is hold
+the two languages to the same numbers and the same words. That is a narrower
+job than it had, and matching source text is still the only way to do it.
 """
 
 import re

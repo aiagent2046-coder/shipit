@@ -86,8 +86,14 @@ gate "pytest"        "$PY" -m pytest -q
 # types.ts change reaches CI unbuilt.
 if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -q '^web/'; then
     if [ -d web/node_modules ]; then
+        # Before the build, and the cheap one of the pair: about a second
+        # against about twenty. It also fails on a different class -- the build
+        # rejects a component that cannot compile, this rejects one that
+        # compiles and behaves wrongly.
+        gate "vitest"     bash -c 'cd web && npx vitest run'
         gate "next build" bash -c 'cd web && npx next build'
     else
+        echo "vitest                      SKIPPED (web/node_modules missing; run: cd web && npm ci)"
         echo "next build                  SKIPPED (web/node_modules missing; run: cd web && npm ci)"
         echo "preflight: web/ changed but its build did not run -- CI will build it" >&2
     fi
