@@ -82,12 +82,26 @@ export function BankTransferCheckout({
   // on the payment, because by the time a transfer is confirmed or a refund
   // decided, this tab is long gone.
   //
-  // Lazy initialiser: navigator does not exist during the server render, and
-  // reading it at module scope would break the build rather than the page.
-  const [payerLocale, setPayerLocale] = useState<"en" | "ru">(() => {
-    if (typeof navigator === "undefined") return "en";
-    return navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en";
-  });
+  //
+  // READ AFTER MOUNT, not in a lazy initialiser, and the difference is not
+  // stylistic. `navigator` does not exist during the server render, so the
+  // server always produced "en"; a lazy initialiser then produced "ru" on a
+  // Russian browser during hydration, and the two disagreed. Measured in a
+  // real Chromium under `locale: ru-RU`: the control ends up correct, and
+  // React logs error #418 -- a hydration mismatch it recovers from by
+  // re-rendering. So it worked, loudly, by accident.
+  //
+  // Starting at "en" on both sides and correcting in an effect makes the two
+  // renders agree, and the correction is one extra render with no error. The
+  // visible cost is a frame where English is highlighted before the highlight
+  // moves -- which is why the control shows both languages side by side rather
+  // than one sentence replacing another: a highlight moving is a much smaller
+  // thing to see than the text changing under you.
+  const [payerLocale, setPayerLocale] = useState<"en" | "ru">("en");
+
+  useEffect(() => {
+    if (navigator.language?.toLowerCase().startsWith("ru")) setPayerLocale("ru");
+  }, []);
   // The backend rejects a blank name or an email with no "@" (422). Mirroring
   // exactly that here keeps the button honest rather than letting the payer
   // submit into a validation error.
@@ -263,27 +277,55 @@ export function BankTransferCheckout({
               next screen, and by your name if your bank doesn&apos;t let you
               attach one — so use the name on the card you pay from.
             </p>
+            {/*
+              A FIELD, NOT A FOOTNOTE. This was a toggle in `text-xs
+              text-muted` sitting third in a row of identically styled
+              small-print paragraphs, and the first person asked to find it
+              could not — which for a GUESS about somebody's language is nearly
+              the same as not showing it at all. The whole reason it is on the
+              screen is that the guess is wrong often enough to be worth
+              correcting, and a control nobody sees corrects nothing.
+
+              Two named options rather than a toggle. The toggle was labelled
+              with the state it would move TO ("Switch to English" while
+              Russian was selected), which is the standard toggle ambiguity:
+              the label reads equally well as the current setting. Two buttons
+              with `aria-pressed` say what is chosen and what is available at
+              the same time, and each is written in its own language, so
+              neither needs translating to be understood.
+            */}
+            <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 text-sm">
+              <span className="shrink-0 text-muted">
+                {payerLocale === "ru"
+                  ? "Язык писем о платеже"
+                  : "Language for payment emails"}
+              </span>
+              <div className="flex gap-1.5" role="group">
+                {(["en", "ru"] as const).map((code) => (
+                  <button
+                    key={code}
+                    type="button"
+                    aria-pressed={payerLocale === code}
+                    onClick={() => setPayerLocale(code)}
+                    disabled={creating}
+                    className={
+                      "rounded px-2.5 py-1 text-sm disabled:opacity-60 " +
+                      (payerLocale === code
+                        ? "bg-accent text-accent-fg"
+                        : "border border-border text-muted hover:text-text")
+                    }
+                  >
+                    {code === "ru" ? "Русский" : "English"}
+                  </button>
+                ))}
+              </div>
+            </div>
             <p className="text-xs text-muted">
               Your transfer is confirmed by a person, which can take a few
               hours, so we email you when it lands and if anything is ever
               refunded. Leave an X handle too if you&apos;d rather hear there
               as well — we&apos;ll use both.
             </p>
-            <div className="flex items-center gap-2 text-xs text-muted">
-              <span>
-                {payerLocale === "ru"
-                  ? "Мы напишем вам по-русски."
-                  : "We'll write to you in English."}
-              </span>
-              <button
-                type="button"
-                onClick={() => setPayerLocale(payerLocale === "ru" ? "en" : "ru")}
-                disabled={creating}
-                className="rounded border border-border px-2 py-0.5 text-xs hover:text-text disabled:opacity-60"
-              >
-                {payerLocale === "ru" ? "Switch to English" : "Писать по-русски"}
-              </button>
-            </div>
           </div>
 
           <button
