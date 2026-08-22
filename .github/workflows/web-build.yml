@@ -69,6 +69,17 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # Before the build for the same reason the typecheck is: it fails in a
+      # couple of seconds and says something specific, where a build failure
+      # says the build failed.
+      #
+      # This step is why the workflow exists in more than name. `next build`
+      # catches a component that cannot COMPILE and nothing whatsoever about
+      # one that compiles and behaves wrongly -- and every frontend defect this
+      # repository has actually shipped was of the second kind.
+      - name: Test
+        run: npm test
+
       # No NEXT_PUBLIC_* values are set on purpose. The build must succeed
       # without them -- they are read at runtime in the browser, and a build
       # that needs a production API URL to compile would be a defect. Vercel
