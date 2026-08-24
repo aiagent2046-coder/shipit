@@ -116,7 +116,7 @@ export default function RussianHomePage() {
           <p><strong className="text-text">Индивидуальный предприниматель Морозевская Кристина Олеговна</strong></p>
           <p>ИНН: 672215400765</p>
           <p>ОГРНИП: 326670000033868</p>
-          <p>Адрес: Смоленская область, Угранский район, село Угра, ул. Некрасова, дом 16</p>
+          <p>Адрес: 214030, г. Смоленск, ул. Некрасова, д. 16</p>
           <p>Телефон: <a className="text-accent underline underline-offset-2" href="tel:+79998109500">+7 (999) 810-95-00</a></p>
           <p>Email: <a className="text-accent underline underline-offset-2" href="mailto:support@drydock.co">support@drydock.co</a></p>
         </div>
