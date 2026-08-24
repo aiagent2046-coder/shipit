@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getPricing } from "@/lib/api";
+import { FIXPACK_PRICE_RUB } from "@/app/ru/price";
 import type { Pricing } from "@/lib/types";
 
 /**
@@ -21,8 +22,17 @@ import type { Pricing } from "@/lib/types";
  * The Pro purchase routes stay reachable for the existing customer and through
  * the bot, they are just not advertised.
  *
- * The price is fetched, never hardcoded — see getPricing. A number typed into
- * this file is exactly how a page starts lying about what checkout charges.
+ * The price is fetched from the backend that charges it — see getPricing — so
+ * an env override on the deployment is reflected here without a rebuild. What
+ * it no longer does is render NOTHING when that request is slow or fails. A
+ * page whose price can be absent is a page with no price, which is the same
+ * defect a payment aggregator rejects a "from 100 ₽" for, and the buyer who
+ * came here for one number is the person it fails.
+ *
+ * The fallback is FIXPACK_PRICE_RUB, the constant the Russian legal pages are
+ * built from, which tests/test_ru_legal_pages.py pins against the backend's own
+ * default. So it is not "a number typed into this file" -- it is the same
+ * number, held to the same source, by a test that fails when they part.
  */
 
 // What the free static scan actually detects today, from app/scan/checks.py
@@ -153,12 +163,21 @@ export default function PricingPage() {
         <div className="rounded-xl border border-accent/40 bg-accent/5 p-5">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-lg font-semibold">Fix Pack</h2>
+            {/* A PRICE MUST NOT BE ABLE TO VANISH. This rendered "…" while the
+                request was in flight and "—" if it failed, so the one number a
+                buyer came for was the one thing on the page that could be
+                missing -- and a payment aggregator reviewing the site sees
+                exactly the same absence they reject a "от 100 ₽" for.
+
+                The fetched value still wins, so an env override is reflected
+                within a request. What changed is the floor: FIXPACK_PRICE_RUB
+                is compiled in and pinned by tests/test_ru_legal_pages.py
+                against the backend's own default, so the fallback cannot drift
+                into advertising a figure the checkout will not charge. */}
             <p className="font-mono text-2xl font-semibold" aria-live="polite">
               {pricing
-                ? `$${pricing.fixpack.amount}`
-                : failed
-                  ? "—"
-                  : "…"}
+                ? `${pricing.fixpack.amount} ${pricing.fixpack.currency === "RUB" ? "₽" : pricing.fixpack.currency}`
+                : `${FIXPACK_PRICE_RUB} ₽`}
             </p>
           </div>
           <p className="mt-1 text-sm text-muted">
@@ -167,14 +186,16 @@ export default function PricingPage() {
           </p>
           {failed && (
             <p className="mt-2 text-xs text-critical">
-              The current price couldn&apos;t be loaded. Email{" "}
+              We couldn&apos;t reach the server to re-check this price just now,
+              so the standard one is shown. It is what the checkout charges; if
+              you would rather have it confirmed first, email{" "}
               <a
                 href="mailto:support@drydock.co"
                 className="underline underline-offset-2"
               >
                 support@drydock.co
               </a>{" "}
-              and we&apos;ll confirm it before you pay anything.
+              before you pay anything.
             </p>
           )}
 

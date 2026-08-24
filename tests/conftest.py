@@ -470,8 +470,8 @@ def _no_ambient_production_integrations(monkeypatch):
         "BANK_TRANSFER_BENEFICIARY",
         "BANK_TRANSFER_ACCOUNT",
         "BANK_TRANSFER_ADDRESS",
-        "BANK_TRANSFER_PRO_PRICE_USD",
-        "BANK_TRANSFER_FIXPACK_PRICE_USD",
+        "BANK_TRANSFER_PRO_PRICE_RUB",
+        "BANK_TRANSFER_FIXPACK_PRICE_RUB",
     )
 
     for variable in variables:

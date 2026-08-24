@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { PAYMENT_PROVIDER } from "@/app/ru/price";
+
 const SUPPORT_EMAILS: { address: string; label: string }[] = [
   { address: "support@drydock.co", label: "technical support, orders, refunds" },
   { address: "info@drydock.co", label: "advertising and partnerships" },
@@ -46,16 +48,18 @@ export function Footer() {
               <li><Link href="/ru/offer" className="transition-colors hover:text-text">Публичная оферта</Link></li>
               <li><Link href="/ru/privacy" className="transition-colors hover:text-text">Политика обработки персональных данных</Link></li>
               <li><Link href="/ru/refund" className="transition-colors hover:text-text">Условия возврата денежных средств</Link></li>
-              <li>
-                <a
-                  href="https://robokassa.com/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="transition-colors hover:text-text"
-                >
-                  Оплата через Robokassa
-                </a>
-              </li>
+              {/* Named from the same constant the offer, the refund terms and
+                  the privacy policy read, so the footer cannot go on
+                  advertising last month's payment system after the documents
+                  have moved on. It did: the site carried a Robokassa badge
+                  while an application to ЮMoney was under review, which is
+                  what a ЮMoney reviewer saw when they opened the offer.
+
+                  Text, not a logo. Using a payment system's mark is a
+                  permission granted with a live merchant account, and we do
+                  not have one yet -- a badge for a system that has not
+                  approved us claims a relationship that does not exist. */}
+              <li>Приём платежей: {PAYMENT_PROVIDER}</li>
             </ul>
           </section>
 

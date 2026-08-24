@@ -8,7 +8,7 @@ the account's opaque API key handed back to whoever paid. That converging step
 so no provider reimplements it.
 
 Three of the four were removed on 2026-08-20 and bank transfer is the rail
-left, with Robokassa to follow. This file barely changed, which is the point of
+left, with an aggregator to follow. This file barely changed, which is the point of
 its shape: a provider is a way of reaching the step below, and the step below
 never knew which one had called it.
 

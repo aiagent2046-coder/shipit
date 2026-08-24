@@ -42,6 +42,17 @@ RETIRED_RAIL_VARIABLES = (
     "TELEGRAM_PRO_STARS",
     "FIXPACK_STARS_PRICE",
     "SUBSCRIPTION_STARS",
+    # Dollar prices, from before the product was repriced in roubles on
+    # 2026-08-23. These are the most dangerous names on this list: unlike the
+    # rest, which configure rails that no longer exist, these configure a rail
+    # that DOES -- and the code no longer reads them. A host that still carries
+    # BANK_TRANSFER_FIXPACK_PRICE_USD=10.00 does not fail, does not warn, and
+    # quietly charges the rouble default while its operator believes the .env
+    # is in charge of the price. The reverse would be worse still: had the new
+    # accessors kept the old names, "10.00" would have been read as ten
+    # ROUBLES for a 990-rouble product.
+    "BANK_TRANSFER_PRO_PRICE_USD",
+    "BANK_TRANSFER_FIXPACK_PRICE_USD",
 )
 
 

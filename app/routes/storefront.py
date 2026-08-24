@@ -19,7 +19,7 @@ async def get_pricing() -> dict:
     """What is on sale and what it costs, for the storefront.
 
     Read from the same accessor the invoice creator calls
-    (bank_transfer.fixpack_price_usd) so the advertised figure cannot drift
+    (bank_transfer.fixpack_price_rub) so the advertised figure cannot drift
     from the charged one. That is the whole reason this exists as an endpoint
     instead of a number typed into the page: /pricing previously showed no
     price at all, and the comparison table it did show had been stale since
@@ -33,9 +33,15 @@ async def get_pricing() -> dict:
 
     USD only, which is now the whole story: the two channels that carried
     their own prices in their own units -- Stars in XTR, USDT in micro-dollars
-    -- are gone. One rail, one currency, one accessor. Robokassa will settle in
-    roubles, and when it is connected the rouble figure must come from the same
-    place this one does rather than from a second accessor beside it.
+    -- are gone. One rail, one currency, one accessor.
+
+    ROUBLES SINCE 2026-08-23. This used to return USD beside a page that
+    explained the buyer would be charged some rouble figure at the payment
+    system's rate. ЮMoney rejected the site for it, and rightly: a price the
+    buyer cannot know before the payment page is not a price. The aggregator
+    settles in roubles, so the product is quoted in roubles, and there is
+    nothing left to convert. When one is finally connected its figure must
+    come from this accessor and not from a second one beside it.
 
     Deliberately separate from /v1/billing/details: that payload carries a
     card number for the footer, and a page that only needs a price should not
@@ -43,7 +49,7 @@ async def get_pricing() -> dict:
     """
     return {
         "fixpack": {
-            "amount": bank_transfer.fixpack_price_usd(),
+            "amount": bank_transfer.fixpack_price_rub(),
             "currency": bank_transfer.CURRENCY,
         },
     }
