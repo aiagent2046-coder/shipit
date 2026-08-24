@@ -153,10 +153,43 @@ def test_the_refund_terms_cover_a_paid_fix_pack_that_could_not_be_generated() ->
     assert "не предоставил Заказчику результат услуги" in body
 
 
+SELLER_ADDRESS = "214030, г. Смоленск, ул. Некрасова, д. 16"
+
+FOOTER = (
+    Path(__file__).resolve().parent.parent
+    / "web" / "src" / "components" / "Footer.tsx"
+)
+
+
 def test_the_seller_details_agree_across_every_page() -> None:
     """An aggregator checks these against the registry, and one stale copy is
     a rejection. They are duplicated for legal reasons rather than technical
-    ones, so the duplication gets a test instead of a refactor."""
-    for field in ("672215400765", "326670000033868", "support@drydock.co"):
+    ones, so the duplication gets a test instead of a refactor.
+
+    THE ADDRESS IS ON THIS LIST NOW, and it is the field that went wrong. The
+    pages said «Смоленская область, Угранский район, село Угра» while the ИП's
+    bank details said «214030 г. Смоленск» — same street and house number,
+    different town. The other three fields were pinned here and stayed right;
+    the address was not and did not. A reviewer comparing the offer against the
+    bank requisites is looking at exactly this."""
+    for field in ("672215400765", "326670000033868", "support@drydock.co",
+                  SELLER_ADDRESS):
         present = [name for name in PAGES if field in read(name)]
         assert len(present) >= 3, (field, present)
+
+
+def test_the_footer_carries_the_same_address_as_the_documents() -> None:
+    """The footer renders on every page including the English ones, so it is
+    the copy an aggregator meets first and the one most easily forgotten. It
+    was: the address was updated in four documents and the footer read on."""
+    footer = FOOTER.read_text(encoding="utf-8")
+    assert SELLER_ADDRESS in footer
+    assert "672215400765" in footer
+
+
+def test_no_page_still_carries_the_previous_address() -> None:
+    """Stated separately from the agreement check above, because agreement is
+    satisfied by every copy being wrong together — which is how a stale address
+    survives a rename."""
+    for path in [RU / name for name in PAGES] + [FOOTER]:
+        assert "Угра" not in path.read_text(encoding="utf-8"), path.name
