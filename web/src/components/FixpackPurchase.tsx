@@ -10,6 +10,7 @@ import {
   getPricing,
 } from "@/lib/api";
 import { BankTransferCheckout } from "./BankTransferCheckout";
+import { formatMoney } from "@/lib/format";
 import { Spinner } from "./Spinner";
 import { SupportEmail } from "./SupportEmail";
 
@@ -138,11 +139,9 @@ export function FixpackPurchase({
           {price ? (
             <>
               <span className="font-mono text-2xl font-semibold">
-                ${price.fixpack.amount}
+                {formatMoney(price.fixpack.amount, price.fixpack.currency)}
               </span>
-              <span className="ml-2 text-muted">
-                {price.fixpack.currency}, per audit
-              </span>
+              <span className="ml-2 text-muted">per audit</span>
             </>
           ) : priceFailed ? (
             <span className="text-muted">
