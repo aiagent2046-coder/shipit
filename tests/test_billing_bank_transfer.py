@@ -340,17 +340,17 @@ def test_pricing_publishes_the_fixpack_price(monkeypatch):
     """The storefront's only source for what anything costs. /pricing showed no
     price at all before this endpoint existed, so the figure was unknowable
     until a buyer had already started a checkout."""
-    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_USD", raising=False)
+    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_RUB", raising=False)
     r = client.get("/v1/pricing")
     assert r.status_code == 200
-    assert r.json() == {"fixpack": {"amount": "10.00", "currency": "USD"}}
+    assert r.json() == {"fixpack": {"amount": "990.00", "currency": "RUB"}}
 
 
 def test_pricing_follows_the_configured_price(monkeypatch):
     """Read through the same accessor the invoice creator uses, so the page
     cannot advertise one figure while checkout charges another. A number typed
     into the frontend would drift the first time this env var moved."""
-    monkeypatch.setenv("BANK_TRANSFER_FIXPACK_PRICE_USD", "14")
+    monkeypatch.setenv("BANK_TRANSFER_FIXPACK_PRICE_RUB", "14")
     assert client.get("/v1/pricing").json()["fixpack"]["amount"] == "14.00"
 
 
@@ -359,7 +359,7 @@ async def test_advertised_price_is_what_the_invoice_charges(monkeypatch):
     amount actually demanded must agree to the dollar. They differ in kopecks
     by design -- the suffix is the per-order matching key -- so compare the
     whole-dollar part and require the surcharge to stay under one unit."""
-    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_USD", raising=False)
+    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_RUB", raising=False)
     advertised = client.get("/v1/pricing").json()["fixpack"]
 
     payments = FakePaymentRepo()
@@ -402,11 +402,11 @@ def test_pro_invoice_returns_details_and_reference(monkeypatch):
         _clear()
 
     assert bank_transfer.REFERENCE_RE.match(body["reference"])
-    assert body["currency"] == "USD"
+    assert body["currency"] == "RUB"
     # 5.00 plus a kopeck suffix, never the bare price and never a discount.
     # The quoted amount is the price exactly -- no kopeck nonce. The storefront
     # advertising one figure while checkout demanded another is what removed it.
-    assert body["amount"] == bank_transfer.pro_price_usd()
+    assert body["amount"] == bank_transfer.pro_price_rub()
     # The card is what the checkout page renders and the payer copies; the rest
     # ride along for the footer, and none of it is ever NEXT_PUBLIC_* config.
     assert body["bank"]["card"] == BANK_ENV["BANK_TRANSFER_CARD"]
@@ -429,7 +429,7 @@ async def test_saturation_falls_back_to_the_bare_price(monkeypatch):
         await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     saturated = await bank_transfer.create_invoice(
         payments, details=dict(BANK_DETAILS))
-    assert saturated["amount"] == "5.00"
+    assert saturated["amount"] == "490.00"
 
 
 def test_two_open_invoices_get_distinct_references(monkeypatch):
@@ -787,8 +787,8 @@ async def test_pending_status_carries_what_the_page_needs(monkeypatch):
     assert status["amount"] == f"{float(invoice['amount']):.2f}"
     # The quoted amount is the price exactly -- no kopeck nonce. The storefront
     # advertising one figure while checkout demanded another is what removed it.
-    assert status["amount"] == bank_transfer.pro_price_usd()
-    assert status["currency"] == "USD"
+    assert status["amount"] == bank_transfer.pro_price_rub()
+    assert status["currency"] == "RUB"
     assert status["bank"]["bank_name"] == BANK_ENV["BANK_TRANSFER_BANK_NAME"]
     assert "api_key" not in status
 

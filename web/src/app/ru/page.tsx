@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { CONVERSION_NOTE, FIXPACK_PRICE_USD } from "./price";
+import { FIXPACK_PRICE_RUB, PAYMENT_PROVIDER } from "./price";
 
 export const metadata = {
   title: "Drydock — аудит безопасности кода и Fix Pack",
@@ -33,7 +33,7 @@ export default function RussianHomePage() {
           </p>
         </div>
         <div className="rounded-xl border border-accent/40 bg-accent/5 p-5">
-          <h2 className="font-semibold">Fix Pack — ${FIXPACK_PRICE_USD}</h2>
+          <h2 className="font-semibold">Fix Pack — {FIXPACK_PRICE_RUB} ₽</h2>
           <p className="mt-2 text-sm text-muted">
             Разовая платная услуга для одного конкретного аудита. Никаких автоматических повторных списаний.
           </p>
@@ -49,38 +49,58 @@ export default function RussianHomePage() {
       <section className="mt-10 rounded-xl border border-border bg-surface p-6">
         <h2 className="text-xl font-semibold">Стоимость и порядок оплаты</h2>
         <p className="mt-3 text-muted">
-          Стоимость одного Fix Pack — <strong>${FIXPACK_PRICE_USD} USD</strong> за один аудит. Оплата разовая, без подписки и автоматических повторных списаний.
-        </p>
-        <p className="mt-3 text-muted">{CONVERSION_NOTE}</p>
-        <p className="mt-3 text-muted">
-          Оплата будет приниматься через платёжную систему Robokassa после завершения подключения магазина. До перехода к оплате покупателю показываются наименование услуги и итоговая сумма заказа.
+          Стоимость одного Fix Pack — <strong>{FIXPACK_PRICE_RUB} ₽</strong> за один аудит. Цена фиксированная: она не зависит от размера репозитория, от количества найденных проблем и от курса валют. Оплата разовая, без подписки и автоматических повторных списаний.
         </p>
         <p className="mt-3 text-muted">
-          После подтверждения оплаты Robokassa Drydock автоматически запускает оказание услуги. Результат предоставляется сразу после успешного выполнения Fix Pack, но не позднее <strong>24 часов с момента подтверждения платежа</strong>.
+          Аудит репозитория — бесплатный. Платным является только Fix Pack: подготовка pull request с исправлениями для одного конкретного аудита.
         </p>
-        <a
-          href="https://robokassa.com/"
-          target="_blank"
-          rel="noreferrer"
-          className="mt-5 inline-flex items-center gap-4 rounded-lg border border-border bg-white px-4 py-3 text-sm text-black transition-colors hover:border-accent"
-          aria-label="Оплата через Robokassa — официальный сайт платёжной системы"
-        >
-          <img
-            src="/robokassa-badge.svg"
-            alt="Robokassa"
-            width="74"
-            height="42"
-            className="h-10 w-auto"
-          />
-          <span>Оплата через платёжную систему Robokassa</span>
-        </a>
-        <p className="mt-3 text-sm text-muted">
-          Платёжные данные банковской карты вводятся на защищённой стороне Robokassa и её платёжных партнёров. Drydock не запрашивает полный номер карты, срок действия или CVC/CVV-код для платежа через Robokassa.
+
+        <h3 className="mt-6 font-semibold">Как оформить и оплатить заказ</h3>
+        <ol className="mt-3 list-decimal space-y-2 pl-5 text-muted">
+          <li>
+            Запустите бесплатный аудит: укажите ссылку на публичный
+            GitHub-репозиторий на{" "}
+            <Link href="/" className="text-accent underline underline-offset-2">
+              главной странице
+            </Link>
+            . Оплата на этом шаге не требуется.
+          </li>
+          <li>
+            На странице готового аудита нажмите «Buy Fix Pack». Откроется форма
+            заказа: наименование услуги, номер заказа и итоговая сумма —{" "}
+            <strong>{FIXPACK_PRICE_RUB} ₽</strong>.
+          </li>
+          <li>
+            Укажите имя и адрес электронной почты — они нужны, чтобы сопоставить
+            поступивший платёж с вашим заказом и написать вам о его состоянии.
+          </li>
+          <li>
+            Подтвердите заказ и оплатите его. Сумма к оплате показывается до
+            подтверждения платежа и совпадает с ценой, указанной на этой
+            странице.
+          </li>
+        </ol>
+        <p className="mt-3 text-muted">
+          Fix Pack привязан к конкретному аудиту, поэтому заказ оформляется на
+          странице этого аудита, а не отдельной корзиной: услуга не существует
+          в отрыве от репозитория, для которого она оказывается.
         </p>
-        <p className="mt-3 text-sm text-muted">
-          Подключение Robokassa ещё не завершено, поэтому активная кнопка оплаты появится только после получения и проверки рабочих параметров магазина.
+        <p className="mt-3 text-muted">
+          После подтверждения оплаты Drydock запускает оказание услуги. Результат
+          предоставляется сразу после успешного выполнения Fix Pack, но не позднее{" "}
+          <strong>24 часов с момента подтверждения платежа</strong>. О подтверждении
+          оплаты и о возврате средств мы уведомляем покупателя по электронной почте.
+        </p>
+        <p className="mt-5 text-sm text-muted">
+          Приём платежей осуществляется через платёжную систему {PAYMENT_PROVIDER}.
+          Платёжные данные банковской карты вводятся на защищённой стороне
+          {" "}{PAYMENT_PROVIDER} и её платёжных партнёров: Drydock не запрашивает и не
+          хранит полный номер карты, срок действия и CVC/CVV-код.
         </p>
         <div className="mt-5 flex flex-wrap gap-3">
+          <Link href="/" className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-fg hover:opacity-90">
+            Запустить бесплатный аудит
+          </Link>
           <Link href="/ru/offer" className="rounded-lg border border-border px-4 py-2 text-sm font-medium hover:border-accent hover:text-accent">
             Публичная оферта
           </Link>

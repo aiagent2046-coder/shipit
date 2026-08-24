@@ -383,7 +383,7 @@ async def refund_payment(
     This endpoint moves no money, and no endpoint here could. A bank transfer
     lands on a private individual's account and goes back the same way, by
     hand. That was true of the rails that have since been removed too, and it
-    will be true of Robokassa until this deployment holds a credential that can
+    will be true of any aggregator until this deployment holds a credential that can
     ask for a refund. The operator sends the money and then tells the system,
     in that order.
 
