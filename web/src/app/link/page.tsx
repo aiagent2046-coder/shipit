@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { formatMoney } from "@/lib/format";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, getBankTransferInvoice } from "@/lib/api";
 import type { BankTransferStatus } from "@/lib/types";
@@ -248,7 +249,7 @@ function Found({
         <p className="mt-3 text-sm text-muted">
           Expecting{" "}
           <span className="font-mono text-text">
-            {status.amount} {status.currency}
+            {formatMoney(status.amount, status.currency)}
           </span>
           . The exact kopecks are what identify your order, so the amount has to
           match to the cent.

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BankTransferInvoice, BankTransferStatus } from "@/lib/types";
 import type { PayerContact } from "@/lib/api";
+import { formatMoney } from "@/lib/format";
 import {
   ApiError,
   createBankTransferInvoice,
@@ -360,7 +361,7 @@ export function BankTransferCheckout({
               Everything else here is context, not something to act on. */}
           <div className="rounded-md border border-accent/40 bg-accent/10 p-3">
             <p className="text-xs font-medium text-accent">
-              Send exactly {invoice.amount} {invoice.currency} to this card
+              Send exactly {formatMoney(invoice.amount, invoice.currency)} to this card
               {invoice.bank.bank_name ? ` — ${invoice.bank.bank_name}` : ""}
             </p>
             <div className="mt-1 flex items-center justify-between gap-3">
@@ -404,7 +405,7 @@ export function BankTransferCheckout({
               </button>
             </p>
             <p className="mt-2 text-xs text-muted">
-              Send exactly {invoice.amount} {invoice.currency}, and put your order
+              Send exactly {formatMoney(invoice.amount, invoice.currency)}, and put your order
               number in the transfer&apos;s comment field if your bank offers one —
               that is how we recognise your payment. Many banks don&apos;t offer that
               field for a card-to-card transfer, so pay from a card in the name you
@@ -414,7 +415,7 @@ export function BankTransferCheckout({
 
           <Field
             label="Exact amount"
-            value={`${invoice.amount} ${invoice.currency}`}
+            value={formatMoney(invoice.amount, invoice.currency)}
             mono
             onCopy={() => copy(invoice.amount, "amount")}
             copied={copied === "amount"}

@@ -210,9 +210,14 @@ export interface BillingDetails {
 
 // GET /v1/pricing — what is on sale and what it costs. Read from the same
 // accessor the invoice creator uses, so a price shown here cannot drift from
-// the one charged at checkout. Fix Pack only and USD only, by product
-// decision: the free tier is static-only and costs nothing to run, so the Pro
-// tier's higher audit limit is not something we charge for.
+// the one charged at checkout. Fix Pack only, by product decision: the free
+// tier is static-only and costs nothing to run, so the Pro tier's higher audit
+// limit is not something we charge for.
+//
+// `currency` is an ISO code the backend sends -- roubles since 2026-08-23 --
+// and it is never assumed at the point of display. Render it through
+// formatMoney: this field once said "USD only", and a page that had internalised
+// that printed "$990.00 RUB" for four days after the switch.
 export interface Pricing {
   fixpack: { amount: string; currency: string };
 }

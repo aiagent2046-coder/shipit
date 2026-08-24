@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getPricing } from "@/lib/api";
+import { formatMoney } from "@/lib/format";
 import { FIXPACK_PRICE_RUB } from "@/app/ru/price";
 import type { Pricing } from "@/lib/types";
 
@@ -176,8 +177,8 @@ export default function PricingPage() {
                 into advertising a figure the checkout will not charge. */}
             <p className="font-mono text-2xl font-semibold" aria-live="polite">
               {pricing
-                ? `${pricing.fixpack.amount} ${pricing.fixpack.currency === "RUB" ? "₽" : pricing.fixpack.currency}`
-                : `${FIXPACK_PRICE_RUB} ₽`}
+                ? formatMoney(pricing.fixpack.amount, pricing.fixpack.currency)
+                : formatMoney(FIXPACK_PRICE_RUB, "RUB")}
             </p>
           </div>
           <p className="mt-1 text-sm text-muted">
