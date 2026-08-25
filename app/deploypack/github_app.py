@@ -279,6 +279,18 @@ def installation_token_for_repo(
             raise GitHubAppError(
                 f"resolve installation failed: {resp.status_code} {resp.text[:300]}"
             )
+        # Checked BEFORE spending a token request, because GitHub's own answer
+        # for a suspended installation is a bare 403 whose body says nothing
+        # about who can fix it. The operator alert on a failed Fix Pack quotes
+        # this message, and "the repo owner must unsuspend it" is the only
+        # sentence that turns that alert into an action.
+        if _state_from_installation(resp) == INSTALLATION_SUSPENDED:
+            raise GitHubAppError(
+                f"the Drydock GitHub App's installation on {owner}/{repo} is "
+                "suspended — no pull request can be opened until the repo "
+                "owner unsuspends it under Settings → Applications → "
+                "Installed GitHub Apps"
+            )
         installation_id = resp.json()["id"]
 
         token_resp = client.post(f"/app/installations/{installation_id}/access_tokens")
@@ -298,25 +310,46 @@ def installation_token_for_repo(
         return token_resp.json()["token"]
 
 
-def installation_exists_for_repo(
+# The three answers GET /repos/{owner}/{repo}/installation can give about
+# whether we could open a pull request there. Named rather than booleans
+# because the middle one is the whole point: a suspended installation is
+# neither absent nor usable, and every bug this trio exists to prevent came
+# from squeezing it into one of the other two.
+INSTALLATION_ABSENT = "absent"
+INSTALLATION_SUSPENDED = "suspended"
+INSTALLATION_ACTIVE = "active"
+
+
+def installation_state_for_repo(
     owner: str,
     repo: str,
     *,
     app_id: str,
     private_key: str,
     transport: httpx.BaseTransport | None = None,
-) -> bool:
-    """Does the App have an installation covering owner/repo?
+) -> str:
+    """Can the App open a pull request on owner/repo right now?
 
     The same per-repo lookup installation_token_for_repo does (GET
     /repos/{owner}/{repo}/installation with an App JWT), minus the token
     mint — a status check has no reason to spend an installation token.
-    Returns False for GitHub's 404 (the App simply isn't installed on that
-    repo, the one answer a "should we show the install button?" caller
-    needs) and True for a 200. Any other non-2xx is a real fault (bad App
-    JWT, GitHub down) and raises GitHubAppError, so the caller can tell
-    "not installed" apart from "could not check" instead of conflating
-    both into a misleading False.
+
+    THREE ANSWERS, NOT TWO, and the third is why this function exists.
+    GitHub answers 200 for a SUSPENDED installation exactly as it does for a
+    healthy one; the only difference is a `suspended_at` timestamp in the
+    body. Reading the status code alone therefore reports a suspended
+    installation as fine, and the failure lands later, at delivery: on
+    2026-08-25 this deployment answered
+
+        installation on aiagent2046-coder/shipit: True
+        403 This installation has been suspended
+
+    within one second of itself. On the money path that reads as "yes, buy a
+    Fix Pack" followed by a PR that never opens.
+
+    Any non-2xx other than 404 is a real fault (bad App JWT, GitHub down) and
+    raises, so the caller can tell "cannot open a PR" apart from "could not
+    check" instead of conflating both into a misleading answer.
     """
     app_jwt = mint_app_jwt(app_id, private_key)
     headers = {**_HEADERS_BASE, "Authorization": f"Bearer {app_jwt}"}
@@ -324,7 +357,7 @@ def installation_exists_for_repo(
                       transport=transport) as client:
         resp = client.get(f"/repos/{owner}/{repo}/installation")
         if resp.status_code == 404:
-            return False
+            return INSTALLATION_ABSENT
         if resp.status_code == 401:
             raise GitHubAppAuthError(
                 f"resolve installation failed: {resp.status_code} "
@@ -334,7 +367,45 @@ def installation_exists_for_repo(
             raise GitHubAppError(
                 f"resolve installation failed: {resp.status_code} {resp.text[:300]}"
             )
-        return True
+        return _state_from_installation(resp)
+
+
+def _state_from_installation(resp: httpx.Response) -> str:
+    """ACTIVE unless the body says otherwise, and a body we cannot read is
+    not a promise. A 200 whose JSON will not parse tells us nothing about
+    suspension, and answering ACTIVE there would restore exactly the bug this
+    module is fixing -- so an unreadable body is reported as suspended, the
+    conservative direction: it blocks a sale rather than taking money for a
+    delivery that may be impossible."""
+    try:
+        payload = resp.json()
+    except ValueError:
+        return INSTALLATION_SUSPENDED
+    if not isinstance(payload, dict):
+        return INSTALLATION_SUSPENDED
+    return (INSTALLATION_SUSPENDED if payload.get("suspended_at")
+            else INSTALLATION_ACTIVE)
+
+
+def installation_exists_for_repo(
+    owner: str,
+    repo: str,
+    *,
+    app_id: str,
+    private_key: str,
+    transport: httpx.BaseTransport | None = None,
+) -> bool:
+    """Whether a pull request can be opened on owner/repo — True only for a
+    live installation.
+
+    Kept as the boolean face of installation_state_for_repo for callers that
+    only need the yes/no. A SUSPENDED installation answers False here: it
+    exists, but nothing it exists for can happen, and a caller asking this
+    question is always about to act rather than to describe."""
+    return installation_state_for_repo(
+        owner, repo, app_id=app_id, private_key=private_key,
+        transport=transport,
+    ) == INSTALLATION_ACTIVE
 
 
 # Cached result of app_auth_ok, as (checked_at, verdict). /health is public

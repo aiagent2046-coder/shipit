@@ -304,7 +304,7 @@ function TransferCheckout({ auditId }: { auditId: string }) {
 // the pay cards, so no one pays for a Fix Pack that can't be delivered. When
 // the App isn't configured on this deployment at all (app_configured=false),
 // or the check can't complete, we don't strand the user — the pay cards show.
-function InstallGate({
+export function InstallGate({
   repoUrl,
   children,
 }: {
@@ -367,6 +367,30 @@ function InstallGate({
     } catch {
       /* sessionStorage unavailable — /github/installed falls back to home */
     }
+  }
+
+  // Installed AND suspended is a different problem with a different fix, and
+  // telling this person to "install the GitHub App" would be telling them to
+  // do something they have already done. The purchase is blocked either way;
+  // only the sentence changes.
+  if (status!.suspended) {
+    return (
+      <div className="mt-5 rounded-xl border border-high/40 bg-high/10 p-5">
+        <h3 className="text-base font-semibold text-high">
+          The GitHub App is suspended on this repository
+        </h3>
+        <p className="mt-2 max-w-2xl text-sm text-muted">
+          Our GitHub App is installed on{" "}
+          <span className="font-mono text-text">
+            {status!.owner}/{status!.repo}
+          </span>{" "}
+          but suspended, so it cannot open a pull request — and a Fix Pack is
+          delivered as one. Whoever owns the repository can lift it under
+          Settings → Applications → Installed GitHub Apps → Configure, then
+          reload this page.
+        </p>
+      </div>
+    );
   }
 
   return (
