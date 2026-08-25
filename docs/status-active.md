@@ -559,6 +559,12 @@ sudo cp /srv/shipit/current/deploy/systemd/*.service \
 sudo systemctl daemon-reload
 sudo systemctl enable --now shipit-fixpack.timer shipit-monitoring.timer \
                           shipit-reap.timer shipit-notify-check.timer
+
+# The bot's command menu is state Telegram holds, not state a deploy carries,
+# so it is set once by hand. Also prints the bot's @name, which is what
+# TELEGRAM_BOT_USERNAME has to say for the site to build a deep link.
+/srv/shipit/current/.venv/bin/python \
+    /srv/shipit/current/scripts/set_telegram_commands.py --apply
 systemctl list-timers --all | grep shipit
 
 # Prove that what systemd LOADED is what the release ships. `systemctl cat`

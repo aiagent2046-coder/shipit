@@ -11,6 +11,7 @@ import { FindingsList, SeveritySummary } from "@/components/FindingsList";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
 import { RlsCheck } from "@/components/RlsCheck";
+import { orderFromQuery, PaymentReturn } from "@/components/PaymentReturn";
 
 interface View {
   id: string;
@@ -62,6 +63,7 @@ function AuditPageInner() {
   // below is conditional -- it has to stay true for someone who added the
   // parameter by hand.
   const returnedFromPayment = searchParams.get("paid") === "1";
+  const paidOrder = orderFromQuery(searchParams.get("order"));
   const [view, setView] = useState<View | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -299,19 +301,7 @@ function AuditPageInner() {
             </div>
           </div>
 
-          {returnedFromPayment && (
-            <div className="mt-8 rounded-xl border border-accent/40 bg-accent/10 p-4">
-              <p className="font-semibold text-accent">
-                You&apos;ve come back from the payment page.
-              </p>
-              <p className="mt-1 text-sm text-muted">
-                If the payment went through, your Fix Pack starts on its own —
-                usually within a few seconds — and its progress appears below.
-                You don&apos;t need to pay again or keep this tab open; we email
-                you either way.
-              </p>
-            </div>
-          )}
+          {returnedFromPayment && <PaymentReturn order={paidOrder} />}
 
           <FixpackPurchase
             auditId={view.id}

@@ -190,6 +190,21 @@ def main() -> int:
                     "nothing reports the failure"
                 )
 
+    # A WARNING, NOT AN ERROR, and the difference is what it costs to be
+    # missing: the bot still delivers keys and still receives /link, it just
+    # cannot be OFFERED. Without a username the site can build no deep link, so
+    # the "get updates in Telegram" button never renders and a buyer who would
+    # have taken that channel is silently given only email. Refusing to boot
+    # over a convenience channel would be worse than the gap it closes.
+    if values.get("TELEGRAM_BOT_TOKEN", "").strip() and not values.get(
+        "TELEGRAM_BOT_USERNAME", ""
+    ).strip():
+        warnings.append(
+            "TELEGRAM_BOT_USERNAME is not set: the bot works, but the site "
+            "cannot build t.me/<bot>?start=… so no customer is ever offered "
+            "Telegram. scripts/set_telegram_commands.py prints the name"
+        )
+
     aitunnel_key = bool(values.get("AITUNNEL_API_KEY", "").strip())
     aitunnel_url = bool(values.get("AITUNNEL_BASE_URL", "").strip())
 

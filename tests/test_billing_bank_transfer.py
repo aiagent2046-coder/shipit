@@ -436,7 +436,24 @@ def test_billing_details_is_200_with_null_when_unconfigured():
     a footer without a requisites block, not an error on every page."""
     r = client.get("/v1/billing/details")
     assert r.status_code == 200
-    assert r.json() == {"bank": None}
+    assert r.json()["bank"] is None
+
+
+def test_billing_details_publishes_the_bot_a_deep_link_would_open(monkeypatch):
+    """The site builds `t.me/<bot>?start=DRY-XXXXXX` from this. It is the only
+    way a Telegram chat can be established -- the Bot API cannot message
+    somebody who has never written to the bot -- so a username field in the
+    checkout form would collect something unusable."""
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "@SyndiAI_bot")
+    assert client.get("/v1/billing/details").json()["telegram_bot"] == (
+        "SyndiAI_bot")
+
+
+def test_a_bot_name_that_is_not_one_is_the_same_as_none(monkeypatch):
+    """This value goes straight into an href a customer is invited to tap, so
+    a typo has to remove the button rather than produce a link to nowhere."""
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "https://evil.example/steal")
+    assert client.get("/v1/billing/details").json()["telegram_bot"] is None
 
 
 def test_pro_invoice_returns_details_and_reference(monkeypatch):

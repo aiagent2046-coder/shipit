@@ -147,7 +147,7 @@ class CardPayer(PayerContact):
         return v if _ACCESS_TOKEN_RE.match(v) else None
 
 
-def _return_url(audit_id: str, token: str | None) -> str:
+def _return_url(audit_id: str, token: str | None, reference: str) -> str:
     """Where ЮKassa sends the payer when they are done.
 
     `paid=1` MARKS A RETURN, NOT A PAYMENT. The grant is decided by the
@@ -167,8 +167,9 @@ def _return_url(audit_id: str, token: str | None) -> str:
     needed escaping here would mean the validator above had stopped working,
     which is a thing to fix rather than to paper over.
     """
-    base = f"{SITE_URL}/audit/{audit_id}"
-    return f"{base}?token={token}&paid=1" if token else f"{base}?paid=1"
+    query = [f"token={token}"] if token else []
+    query += ["paid=1", f"order={reference}"]
+    return f"{SITE_URL}/audit/{audit_id}?" + "&".join(query)
 
 
 @router.post("/v1/audits/{audit_id}/fixpack/yookassa", status_code=201)
@@ -273,7 +274,8 @@ async def create_fixpack_payment(
     try:
         payment = await yookassa.create_payment(
             credentials=credentials, amount=amount, description=DESCRIPTION,
-            return_url=_return_url(audit_id, payer.return_token),
+            return_url=_return_url(
+                audit_id, payer.return_token, reference),
             idempotence_key=reference,
             metadata={"reference": reference},
             receipt=receipt, transport=transport,

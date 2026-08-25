@@ -64,10 +64,16 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
         return None
 
     async def get_completed_by_telegram_chat_id(self, telegram_chat_id: str):
+        # `account_id is not null` MIRRORS THE SQL, and the mirror was missing.
+        # app/db.py has carried that predicate since the Fix-Pack-shadows-Pro
+        # fix, with a docstring calling it load-bearing; this double did not,
+        # so the suite could neither catch that regression nor tell the truth
+        # about a change that stamps a chat onto an account-less payment.
         found = [
             r for r in self.rows.values()
             if r["status"] == "completed"
             and r.get("telegram_chat_id") == telegram_chat_id
+            and r.get("account_id") is not None
         ]
         return found[-1] if found else None
 
@@ -975,18 +981,115 @@ async def test_subscription_payment_not_configured_reports_gracefully():
 # the half of this that needs a real database.
 
 
-async def _completed_fixpack_payment(payments, reference: str):
+async def _completed_fixpack_payment(payments, reference: str,
+                                     provider: str = "bank_transfer"):
     row = await payments.create(
-        account_id=None, provider="bank_transfer", external_ref=reference,
-        amount=29.07, currency="USD", status="completed",
+        account_id=None, provider=provider, external_ref=reference,
+        amount=990.07, currency="RUB", status="completed",
         tier_granted=None, product="fixpack",
     )
     return row
 
 
-async def test_link_with_a_fixpack_reference_claims_nothing():
-    """The order is the fix. The chat must not end up on a payment that has no
-    key to give -- once stamped, nothing ever removes it."""
+# --- the reference does not say which rail issued it -------------------------
+
+async def test_link_finds_an_order_paid_by_card():
+    """THE ANSWER A PAYING CUSTOMER GOT. Card orders and transfer orders carry
+    the same DRY- shape, and the lookup hardcoded the transfer provider -- so
+    from the day ЮKassa went live, somebody who had genuinely just paid was
+    told "That reference code wasn't found" and sent to support over an order
+    that existed."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    await _completed_fixpack_payment(payments, "DRY-CARD23", provider="yookassa")
+
+    result = await _send(_text_update("/link DRY-CARD23", 777),
+                         accounts, payments, calls)
+
+    assert result["result"] != "not_found"
+    assert "wasn't found" not in _last_text(calls)
+
+
+async def test_link_still_finds_an_order_paid_by_transfer():
+    """The rail that was already working must not be traded for the new one."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    await _completed_fixpack_payment(payments, "DRY-BANK24")
+
+    result = await _send(_text_update("/link DRY-BANK24", 777),
+                         accounts, payments, calls)
+
+    assert result["result"] != "not_found"
+
+
+async def test_an_unknown_reference_is_still_unknown():
+    """Searching more rails must not turn "no such order" into a match."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+
+    result = await _send(_text_update("/link DRY-NPQR25", 777),
+                         accounts, payments, calls)
+
+    assert result["result"] == "not_found"
+    assert "DRY-XXXXXX" in _last_text(calls)
+
+
+# --- /start ------------------------------------------------------------------
+
+async def test_the_bot_answers_hello():
+    """`/start` is the button Telegram shows when anyone opens a bot for the
+    first time, and every one of them used to land in the dispatcher's
+    `ignored` branch. A product whose bot is silent on hello does not look
+    like a product with a bot."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+
+    result = await _send(_text_update("/start", 777), accounts, payments, calls)
+
+    assert result["handled"] == "start"
+    text = _last_text(calls)
+    assert "Drydock" in text
+    # The commands it actually has, so the answer is usable and not a slogan.
+    assert "/mykey" in text and "/link" in text
+
+
+async def test_a_deep_link_subscribes_the_chat_to_that_order():
+    """The whole reason the payload exists. A Telegram username cannot be
+    typed into a checkout form -- the Bot API cannot message someone who has
+    never written to the bot -- so one tap on t.me/<bot>?start=DRY-XXXXXX is
+    the only way to establish the chat, and the payload says which order it
+    belongs to."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    row = await _completed_fixpack_payment(payments, "DRY-DEEP26",
+                                           provider="yookassa")
+
+    result = await _send(_text_update("/start DRY-DEEP26", 777),
+                         accounts, payments, calls)
+
+    assert result["handled"] == "start"
+    assert str(row.get("telegram_chat_id")) == "777"
+
+
+async def test_a_deep_link_cannot_steal_an_order_already_claimed():
+    """/start delegates to /link rather than reimplementing the claim, so the
+    anti-hijack rule -- first successful link wins, then permanently locked --
+    holds across both doors or across neither."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    row = await _completed_fixpack_payment(payments, "DRY-DEEP27")
+    await _send(_text_update("/start DRY-DEEP27", 111), accounts, payments, calls)
+
+    await _send(_text_update("/start DRY-DEEP27", 222), accounts, payments, calls)
+
+    assert str(row.get("telegram_chat_id")) == "111"
+    assert "already been linked" in _last_text(calls)
+
+
+async def test_link_with_a_fixpack_reference_subscribes_this_chat_to_it():
+    """The message this path sends has always ended "you'll get a message here
+    when it's opened" -- and the code returned before stamping anything, so
+    nothing ever did. A payer following the bot's own instructions got a
+    promise and then silence.
+
+    Claiming the chat is safe now for the reason app/db.py spells out and this
+    file's fake repo did not mirror until today: the read side skips
+    account-less payments, so this row cannot shadow a Pro purchase. The test
+    below holds that end of it."""
     accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
     row = await _completed_fixpack_payment(payments, "DRY-FXPK23")
 
@@ -994,7 +1097,27 @@ async def test_link_with_a_fixpack_reference_claims_nothing():
                          accounts, payments, calls)
 
     assert result["result"] == "no_account"
-    assert row.get("telegram_chat_id") is None, "the chat was stamped anyway"
+    assert str(row.get("telegram_chat_id")) == "777"
+
+
+async def test_a_fix_pack_on_this_chat_does_not_hide_a_pro_key():
+    """THE HARM THE OLD BEHAVIOUR WAS AVOIDING, now guarded where it belongs.
+
+    A Fix Pack row is completed, carries the chat, and is the NEWEST row for
+    it. Reading "the newest completed payment for this chat" would hand /mykey
+    a payment with no account, permanently, because nothing unlinks a chat.
+    The predicate on the read is what makes stamping the write side safe."""
+    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    _acct, pro = await _completed_usdt_payment(payments, accounts, "0xprokey")
+    await _send(_text_update("/link 0xprokey", 777), accounts, payments, calls)
+
+    fixpack = await _completed_fixpack_payment(payments, "DRY-FXPK99")
+    await _send(_text_update("/link DRY-FXPK99", 777), accounts, payments, calls)
+
+    assert str(fixpack.get("telegram_chat_id")) == "777"
+    newest = await payments.get_completed_by_telegram_chat_id("777")
+    assert newest is not None and newest["id"] == pro["id"], (
+        "the Fix Pack shadowed the Pro payment /mykey has to find")
 
 
 async def test_link_with_a_fixpack_reference_explains_instead_of_alarming():
