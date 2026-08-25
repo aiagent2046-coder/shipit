@@ -24,7 +24,13 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Request,
+)
 
 from app.billing import bank_transfer, grant_fixpack, yookassa
 from app.db import (
@@ -250,9 +256,41 @@ async def create_fixpack_payment(
     }
 
 
+async def _tell_the_payer_after_answering(
+    payment_repo: PaymentRepository, *, payment_id: str, transport=None,
+) -> None:
+    """Send the confirmation once the notification has already been answered.
+
+    Runs as a background task, and that is the point rather than tidiness. On
+    2026-08-25 a live notification took eleven seconds to answer, nine of them
+    inside this send: an outbound SMTP conversation, on the request path of a
+    payment provider that RETRIES anything it does not get a 2xx for. The mail
+    timeout alone is 20 seconds and the Telegram fallback's is 30, so a mail
+    server that is merely slow -- not down, slow -- turns one payment into a
+    retry loop at ЮKassa's pace.
+
+    Re-reads the row rather than taking the caller's copy, because the grant
+    has just rewritten it and the confirmation quotes what is now stored.
+
+    Best-effort by inheritance: _tell_the_payer swallows its own failures and
+    pages the operator when nothing reached the customer, which is the right
+    contract here too -- an exception escaping a background task is logged by
+    starlette and changes nothing about a payment that is already granted.
+    """
+    from app.billing.bank_transfer import _tell_the_payer
+
+    row = await payment_repo.get(payment_id)
+    if row is None:
+        logger.warning("could not re-read a confirmed payment to announce it")
+        return
+    await _tell_the_payer(
+        row, product=bank_transfer.PRODUCT_FIXPACK, transport=transport)
+
+
 @router.post("/v1/billing/yookassa/notifications")
 async def receive_notification(
     request: Request,
+    background: BackgroundTasks,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
@@ -276,7 +314,15 @@ async def receive_notification(
     notification that does not get a 2xx, so a 500 here becomes a retry storm
     on a problem retrying cannot fix. And a distinguishable response is a probe:
     a stranger POSTing payment ids would learn which ones exist from the status
-    code alone. Everything is logged; nothing is explained to the caller.
+    code alone. Everything is logged; nothing is explained to the caller. That
+    goes for the BODY as well as the status -- it is `{"ok": true}` on every
+    path, including the one that granted something.
+
+    ANSWERED BEFORE THE CUSTOMER IS TOLD. The only work between the request
+    arriving and the 200 is verifying the payment with ЮKassa and recording the
+    grant; the confirmation to the payer is a background task. Announcing it
+    inline held a live notification for eleven seconds -- nine of them in an
+    SMTP conversation -- on a path whose failure mode is a retry.
     """
     source = request.headers.get("x-forwarded-for") or (
         request.client.host if request.client else None)
@@ -348,6 +394,16 @@ async def receive_notification(
         logger.warning("a ЮKassa payment for %s did not pay for it", reference)
         return {"ok": True}
 
+    # Read BEFORE the grant, which is what rewrites it. ЮKassa retries a
+    # notification it did not get a 2xx for, the operator can confirm the same
+    # payment by hand, and grant_fixpack is idempotent through all of that --
+    # but _tell_the_payer is not. It simply sends, so without this a retry is a
+    # second "your payment is confirmed" to someone who already read the first.
+    # A duplicate has no recovery; a send that failed pages the operator and
+    # can be repeated by hand, so the guard errs towards saying it once.
+    already_confirmed = (
+        str(row.get("status") or "").strip().lower() == "completed")
+
     granted = await grant_fixpack(
         fixpack_repo=fixpack_repo, payment_repo=payment_repo,
         audit_repo=audit_repo, provider=yookassa.PROVIDER,
@@ -355,12 +411,24 @@ async def receive_notification(
         currency=row.get("currency") or yookassa.CURRENCY,
         audit_id=row.get("audit_id"), invoice_payment_id=str(row["id"]),
     )
+
+    if not granted:
+        # The money is real and the Fix Pack was not recorded. Announcing it
+        # would promise a pull request nothing is going to open, so this stays
+        # silent to the payer and loud in the log.
+        logger.error("ЮKassa payment %s was paid but granted no Fix Pack",
+                     reference)
+        return {"ok": True}
+
     logger.info("ЮKassa payment confirmed for %s", reference)
 
-    from app.billing.bank_transfer import _tell_the_payer
+    if not already_confirmed:
+        background.add_task(
+            _tell_the_payer_after_answering, payment_repo,
+            payment_id=str(row["id"]), transport=transport)
 
-    fresh = await payment_repo.get(str(row["id"])) or row
-    await _tell_the_payer(
-        fresh, product=bank_transfer.PRODUCT_FIXPACK, transport=transport)
-
-    return {"ok": True, "granted": bool(granted)}
+    # THE SAME ANSWER TO EVERY CALLER, which the docstring above has always
+    # claimed and this used to break by returning `granted`. The body was the
+    # one thing that told a stranger apart from ЮKassa: a payment id that
+    # bought something answered differently from one that did not.
+    return {"ok": True}
