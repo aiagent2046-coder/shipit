@@ -1777,6 +1777,7 @@ class PaymentRepository:
         product: str = "pro_tier", audit_id: str | None = None,
         payer_name: str | None = None, payer_email: str | None = None,
         payer_x: str | None = None, payer_locale: str | None = None,
+        provider_payment_id: str | None = None,
     ) -> dict[str, Any] | None:
         """payer_name/payer_email (migration 0026) and payer_x (0032) are what
         the payer said about themselves before paying. The name is for the
@@ -1800,16 +1801,19 @@ class PaymentRepository:
                 insert into payments
                     (account_id, provider, external_ref, amount, currency,
                      status, tier_granted, product, audit_id,
-                     payer_name, payer_email, payer_x, payer_locale)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     payer_name, payer_email, payer_x, payer_locale,
+                     provider_payment_id)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 returning id, account_id, provider, external_ref, amount,
                           currency, status, tier_granted, telegram_chat_id,
                           product, audit_id, paypal_order_id, payer_name,
-                          payer_email, payer_x, payer_locale, created_at
+                          payer_email, payer_x, payer_locale,
+                          provider_payment_id, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
                  status, tier_granted, product, parsed_audit_id,
-                 payer_name, payer_email, payer_x, payer_locale),
+                 payer_name, payer_email, payer_x, payer_locale,
+                 provider_payment_id),
             )
             row = await cur.fetchone()
         return _row_to_payment(row)
@@ -1852,7 +1856,7 @@ class PaymentRepository:
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
                        payer_email, payer_x, payer_locale, refunded_at,
-                       created_at
+                       provider_payment_id, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -1877,7 +1881,8 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, payer_locale, created_at
+                       payer_email, payer_x, payer_locale,
+                       provider_payment_id, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
@@ -1917,7 +1922,8 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, payer_locale, created_at
+                       payer_email, payer_x, payer_locale,
+                       provider_payment_id, created_at
                 from payments
                 where provider = %s and status = 'pending'
                   and (%s::timestamptz is null or created_at >= %s)
@@ -2101,7 +2107,8 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, payer_locale, created_at
+                       payer_email, payer_x, payer_locale,
+                       provider_payment_id, created_at
                 from payments
                 where telegram_chat_id = %s and status = 'completed'
                   and account_id is not null
@@ -2112,6 +2119,47 @@ class PaymentRepository:
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
+
+    async def set_provider_payment_id(
+        self, payment_id: str, provider_payment_id: str
+    ) -> bool:
+        """Record the payment's identity in the system that took the money.
+
+        Written AFTER the payment exists at the provider, which is the only
+        order available: we cannot know their id before asking them to make
+        one. So the window is real -- an order can be recorded here with the
+        column still null if this update fails -- and it is survivable, because
+        nothing in the confirmation path reads this column. The notification
+        finds our row through the metadata we set on the payment; this is for
+        the refund that has to address ЮKassa by their id, and for an operator
+        reconciling two sets of books.
+
+        `where provider_payment_id is null` so a second call cannot overwrite
+        an id already recorded. Migration 0034's unique index stops one charge
+        completing two orders; this stops one order claiming two charges.
+
+        Returns whether the row was updated. False is not an error worth
+        raising on a path where a customer is mid-payment.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        try:
+            parsed_id = uuid.UUID(payment_id)
+        except ValueError:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update payments
+                   set provider_payment_id = %s
+                 where id = %s
+                   and provider_payment_id is null
+                """,
+                (provider_payment_id, parsed_id),
+            )
+            return cur.rowcount > 0
 
     async def link_telegram_chat_id(
         self, payment_id: str, telegram_chat_id: str
@@ -2143,7 +2191,8 @@ class PaymentRepository:
                 select id, account_id, provider, external_ref, amount,
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, payer_locale, created_at
+                       payer_email, payer_x, payer_locale,
+                       provider_payment_id, created_at
                 from payments where id = %s
                 """,
                 (pid,),

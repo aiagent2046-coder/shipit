@@ -243,8 +243,22 @@ def generate_reference() -> str:
     return f"{REFERENCE_PREFIX}{body}"
 
 
-async def _reserve_reference(payment_repo: Any) -> str | None:
-    """A reference code no existing bank-transfer payment is already using.
+async def reserve_reference(
+    payment_repo: Any, *, provider: str | None = None,
+) -> str | None:
+    """A reference code no existing payment on `provider` is already using.
+
+    PUBLIC, AND PARAMETERISED BY PROVIDER, because the DRY-XXXXXX code is the
+    ORDER's identity and not a bank-transfer artefact: it is what the buyer
+    quotes to support and types into the Telegram bot, and every rail this
+    product grows needs one. It lives in this module because this is where it
+    was born, not because it belongs only here.
+
+    Uniqueness is per provider, which is what migration 0004's partial unique
+    index on (provider, external_ref) enforces. Two rails could in principle
+    mint the same code for different orders; they are told apart the same way
+    the index tells them apart, and no lookup in this codebase searches for a
+    reference without knowing which rail it belongs to.
 
     Same re-roll-off-what-is-taken shape the USDT invoice used,
     and with the same residual race: two concurrent creations could both clear
@@ -259,9 +273,10 @@ async def _reserve_reference(payment_repo: Any) -> str | None:
     with a sane number of open invoices and is surfaced as 503 rather than
     looping forever.
     """
+    scope = provider or PROVIDER
     for _ in range(_REFERENCE_ATTEMPTS):
         candidate = generate_reference()
-        if await payment_repo.get_by_external_ref(PROVIDER, candidate) is None:
+        if await payment_repo.get_by_external_ref(scope, candidate) is None:
             return candidate
     logger.error(
         "could not reserve a free bank-transfer reference in %d attempts",
@@ -333,7 +348,7 @@ async def create_invoice(
     free reference code -- so the endpoint can 503 instead of showing a payer
     an invoice that was never recorded and can therefore never be confirmed.
     """
-    reference = await _reserve_reference(payment_repo)
+    reference = await reserve_reference(payment_repo)
     if reference is None:
         return None
     # Reservation and insert under one lock: a suffix picked but not yet
@@ -362,7 +377,7 @@ async def create_fixpack_invoice(
     tagged product='fixpack' + audit_id so confirm() knows to create a
     fixpack_jobs row rather than grant a tier. Payer contact is recorded the
     same way and for the same reason as in create_invoice."""
-    reference = await _reserve_reference(payment_repo)
+    reference = await reserve_reference(payment_repo)
     if reference is None:
         return None
     # Same lock as create_invoice, and the same lock KEY: Pro and Fix Pack draw
