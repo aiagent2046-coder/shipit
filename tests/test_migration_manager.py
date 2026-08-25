@@ -689,3 +689,120 @@ def test_a_missing_pg_dump_names_the_way_out(
 ])
 def test_redact_dsn(text: str, expected: str) -> None:
     assert migration_manager.redact_dsn(text) == expected
+
+
+# --- where the database comes from -----------------------------------------
+#
+# Until 2026-08-25 this read the environment and nothing else, so the release
+# sequence in the runbook -- apply_migrations.sh, then deploy-production.sh,
+# run back to back in the same directory -- failed on the FIRST command from a
+# fresh shell while the second read the same env file happily. The workaround
+# an operator reaches for is `set -a; . /opt/shipit/.env`, and on this
+# deployment that silently truncated an SMTP password at a `$` and cost an
+# afternoon. A step that needs a dangerous incantation to work is a step that
+# will get one.
+
+
+def write_env_file(path: Path, body: str) -> Path:
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_the_environment_wins_over_the_env_file(monkeypatch, tmp_path) -> None:
+    """THE SAFETY PROPERTY, and deliberately the opposite of
+    deploy/scripts/check_release_migrations.py, which lets the file win.
+
+    That gate runs only on the production host, invoked by the deploy script,
+    and there the file IS the authority. This runs anywhere. If the file won,
+    an engineer with DATABASE_URL pointing at a local Postgres would apply
+    migrations to PRODUCTION because a file they never looked at existed on the
+    box -- and would find out from the ledger afterwards.
+    """
+    env_file = write_env_file(
+        tmp_path / ".env", "DATABASE_URL=postgresql://prod/live\n")
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(env_file))
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/dev")
+
+    assert migration_manager.database_url() == "postgresql://localhost/dev"
+
+
+def test_the_env_file_is_used_when_the_environment_has_nothing(
+    monkeypatch, tmp_path,
+) -> None:
+    env_file = write_env_file(
+        tmp_path / ".env", "DATABASE_URL=postgresql://prod/live\n")
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(env_file))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert migration_manager.database_url() == "postgresql://prod/live"
+
+
+@pytest.mark.parametrize("line", [
+    "DATABASE_URL='postgresql://u:p@h/db'",  # scan-allow: fixture DSN, not a credential
+    'DATABASE_URL="postgresql://u:p@h/db"',  # scan-allow: fixture DSN, not a credential
+    "DATABASE_URL=postgresql://u:p@h/db",  # scan-allow: fixture DSN, not a credential
+])
+def test_a_quoted_value_arrives_whole(monkeypatch, tmp_path, line) -> None:
+    """The file quotes values because other entries in it need to -- a bank
+    name contains «» and an address contains spaces. A DSN read through a
+    parser that does not strip those quotes is a DSN with a quote character in
+    the password."""
+    env_file = write_env_file(tmp_path / ".env", line + "\n")
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(env_file))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert migration_manager.database_url() == "postgresql://u:p@h/db"  # scan-allow: fixture DSN
+
+
+def test_a_dollar_sign_in_the_password_survives(monkeypatch, tmp_path) -> None:
+    """THE FAILURE THIS WHOLE THING EXISTS TO AVOID. `set -a; . .env` in bash
+    expands `$...` inside an unquoted value, which is how a 14-character SMTP
+    password became 6 on this deployment. The file is read as text here, so a
+    `$` is a `$`."""
+    env_file = write_env_file(
+        tmp_path / ".env",
+        "DATABASE_URL='postgresql://u:pa$$word@h/db'\n")  # scan-allow: fixture DSN
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(env_file))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert migration_manager.database_url() == "postgresql://u:pa$$word@h/db"  # scan-allow: fixture DSN
+
+
+def test_a_missing_env_file_is_the_ordinary_case(monkeypatch, tmp_path) -> None:
+    """A developer's laptop has no /opt/shipit/.env. That must raise the
+    manager's own error naming both places, not an exception about a path."""
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(tmp_path / "absent.env"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(migration_manager.MigrationError) as caught:
+        migration_manager.database_url()
+
+    assert "DATABASE_URL is required" in str(caught.value)
+    assert "absent.env" in str(caught.value)
+
+
+def test_an_env_file_without_the_variable_is_not_silently_empty(
+    monkeypatch, tmp_path,
+) -> None:
+    env_file = write_env_file(tmp_path / ".env", "SMTP_HOST=smtp.example\n")
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(env_file))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(migration_manager.MigrationError):
+        migration_manager.database_url()
+
+
+def test_the_error_never_quotes_the_file(monkeypatch, tmp_path) -> None:
+    """Everything this script prints lands in a deploy log. An env file is the
+    single worst thing to echo, and the parse failure is exactly the moment a
+    naive implementation would include the offending line."""
+    env_file = write_env_file(
+        tmp_path / ".env",
+        "SMTP_PASSWORD=hunter2-not-a-real-secret\nDATABASE_URL\n")
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(env_file))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(migration_manager.MigrationError) as caught:
+        migration_manager.database_url()
+
+    assert "hunter2" not in str(caught.value)
