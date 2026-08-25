@@ -15,6 +15,7 @@ import json
 import sys
 from pathlib import Path
 
+from app.logging_config import configure_logging
 from app.ingest.stack_detect import detect_stack
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient
@@ -22,6 +23,13 @@ from app.scan.pipeline import run_scan
 
 
 def main() -> int:
+    # Every `python -m` entry point configures logging through here, and the
+    # rule is one rule because the exception is what bites: without it records
+    # ride the root logger's lastResort handler, which applies no
+    # RedactionFilter. Nothing has leaked from this CLI only because
+    # lastResort also drops anything under WARNING -- one WARNING carrying a
+    # token is all that stands between "safe by accident" and the journal.
+    configure_logging()
     if len(sys.argv) not in (2, 3):
         print("usage: python -m app.audit_cli <archive.zip> [report.html]",
               file=sys.stderr)
