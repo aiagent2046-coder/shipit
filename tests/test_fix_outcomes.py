@@ -494,23 +494,30 @@ def test_webhook_non_closed_action_ignored(monkeypatch):
 
 # --- somebody paid for the outcome that found nothing ------------------------
 
-class FakePaymentRepoForAudit:
-    """The one lookup the processor needs: job -> audit -> who paid."""
+class FakePaymentRepoForJob:
+    """The one lookup the processor needs: job -> the order that bought it.
 
-    def __init__(self, by_audit=None, explode=False):
-        self.by_audit = by_audit or {}
+    KEYED BY JOB, not by audit, because that is the distinction the real
+    defect turned on: several jobs and several orders can share one audit, and
+    a by-audit lookup hands them all the same buyer.
+    """
+
+    def __init__(self, by_job=None, explode=False):
+        self.by_job = by_job or {}
         self.explode = explode
 
-    async def get_completed_fixpack_by_audit(self, audit_id):
+    async def get_completed_fixpack_for_job(self, fixpack_job_id):
         if self.explode:
             raise RuntimeError("database is down")
-        return self.by_audit.get(audit_id)
+        return self.by_job.get(fixpack_job_id)
 
 
-def _paid_by(email="ada@example.invalid", locale="ru", reference="DRY-ZLZCQ3"):
-    return {"id": "p1", "external_ref": reference, "product": "fixpack",
+def _paid_by(email="ada@example.invalid", locale="ru", reference="DRY-ZLZCQ3",
+             payment_id="p1", job_id="j1"):
+    return {"id": payment_id, "external_ref": reference, "product": "fixpack",
             "status": "completed", "payer_email": email,
-            "payer_locale": locale, "amount": 990.0, "currency": "RUB"}
+            "payer_locale": locale, "amount": 990.0, "currency": "RUB",
+            "fixpack_job_id": job_id}
 
 
 def _nothing_to_fix_run(monkeypatch, *, payments, told, paged):
@@ -551,7 +558,7 @@ def test_the_payer_is_told_when_their_fix_pack_changed_nothing(monkeypatch):
     2026-08-25, twenty minutes after a confirmation email promising "you will
     hear again when it lands or if it cannot finish"."""
     told, paged = [], []
-    payments = FakePaymentRepoForAudit({"a1": _paid_by()})
+    payments = FakePaymentRepoForJob({"j1": _paid_by()})
 
     resp = _nothing_to_fix_run(monkeypatch, payments=payments,
                                told=told, paged=paged)
@@ -568,7 +575,7 @@ def test_the_operator_is_paged_because_only_a_person_can_refund(monkeypatch):
     """There is no automated refund. The alert is the only thing that starts
     one, so it is what turns "the money stayed" into "the money went back"."""
     told, paged = [], []
-    payments = FakePaymentRepoForAudit({"a1": _paid_by()})
+    payments = FakePaymentRepoForJob({"j1": _paid_by()})
 
     _nothing_to_fix_run(monkeypatch, payments=payments, told=told, paged=paged)
 
@@ -583,11 +590,91 @@ def test_the_operator_is_paged_even_when_the_payer_cannot_be_found(monkeypatch):
     way -- and this is the case where somebody's money is hardest to trace."""
     told, paged = [], []
 
-    _nothing_to_fix_run(monkeypatch, payments=FakePaymentRepoForAudit(),
+    _nothing_to_fix_run(monkeypatch, payments=FakePaymentRepoForJob(),
                         told=told, paged=paged)
 
     assert len(paged) == 1
     assert told == []
+
+
+def test_an_unlinked_job_says_so_instead_of_naming_some_other_order(monkeypatch):
+    """A job whose order cannot be identified (rows written before migration
+    0035, where the pairing was ambiguous) must not have an order number
+    guessed for it. The alert has to say the buyer has NOT been told, because
+    the operator's next move depends on it: with an order number they refund,
+    without one they first have to find out whose money it is."""
+    told, paged = [], []
+
+    _nothing_to_fix_run(monkeypatch, payments=FakePaymentRepoForJob(),
+                        told=told, paged=paged)
+
+    assert len(paged) == 1
+    assert "not" in paged[0].lower() and "told" in paged[0].lower()
+    assert "a1" in paged[0]           # the audit, to search by
+    assert "DRY-" not in paged[0]     # never an invented order number
+
+
+def test_two_jobs_on_one_audit_each_tell_their_own_buyer(monkeypatch):
+    """THE REGRESSION THIS COLUMN EXISTS FOR. One audit can hold several jobs
+    and several orders: migration 0025 allows one LIVE job per audit, and
+    create_paid inserts a fresh row once the previous one is terminal, because
+    re-buying is supported. On 2026-08-25 one audit ended the day with four
+    jobs and five orders.
+
+    The first version of this looked the payer up by audit and took the newest
+    order, which would have written to one buyer twice and to the other not at
+    all, and paged the operator twice with a single order number -- leaving the
+    second refund unsent."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
+    told, paged = [], []
+
+    async def fake_notify(**kwargs):
+        told.append(kwargs)
+
+    async def fake_alert(text, **kwargs):
+        paged.append(text)
+        return True
+
+    monkeypatch.setattr("app.notify.router.notify_customer", fake_notify)
+    monkeypatch.setattr(main_mod.alerts, "notify_operator", fake_alert)
+
+    zip_bytes = make_zip({"README.md": "# hi\n"})
+    audits = {"a1": {"repo_url": "https://github.com/acme/app",
+                     "findings_json": []}}
+    jobs = [{"id": "j1", "audit_id": "a1", "stack": "vite-react",
+             "status": "paid"},
+            {"id": "j2", "audit_id": "a1", "stack": "vite-react",
+             "status": "paid"}]
+    payments = FakePaymentRepoForJob({
+        "j1": _paid_by(email="ada@example.invalid", reference="DRY-ZLZCQ3",
+                       payment_id="p1", job_id="j1"),
+        "j2": _paid_by(email="grace@example.invalid", reference="DRY-9PVC4E",
+                       payment_id="p2", job_id="j2"),
+    })
+
+    override(audit_repo=FakeAuditRepo(audits), fixpack_repo=FakeFixpackRepo(jobs),
+             fix_outcome_repo=FakeFixOutcomeRepo(),
+             repo_fetcher=fake_fetcher_returning(zip_bytes),
+             pr_opener=lambda *a, **k: PullRequestResult("x", "y"),
+             payment_repo=payments)
+    try:
+        # FIXPACK_JOBS_PER_RUN is 1, so two timer ticks -- which is how the
+        # two real jobs on one audit were processed on 2026-08-25.
+        _run_processor()
+        _run_processor()
+    finally:
+        clear_overrides()
+
+    assert sorted(t["reference"] for t in told) == ["DRY-9PVC4E", "DRY-ZLZCQ3"]
+    assert sorted(t["contact"].email for t in told) == [
+        "ada@example.invalid", "grace@example.invalid"]
+    # And one alert per order, so the operator sends two refunds rather than
+    # reading the same one twice.
+    assert len(paged) == 2
+    assert {"DRY-ZLZCQ3", "DRY-9PVC4E"} == {
+        ref for ref in ("DRY-ZLZCQ3", "DRY-9PVC4E")
+        if any(ref in text for text in paged)}
 
 
 def test_a_broken_payment_lookup_still_pages_and_still_completes(monkeypatch):
@@ -597,7 +684,7 @@ def test_a_broken_payment_lookup_still_pages_and_still_completes(monkeypatch):
     told, paged = [], []
 
     resp = _nothing_to_fix_run(
-        monkeypatch, payments=FakePaymentRepoForAudit(explode=True),
+        monkeypatch, payments=FakePaymentRepoForJob(explode=True),
         told=told, paged=paged)
 
     assert resp.status_code == 200
@@ -628,7 +715,7 @@ def test_a_delivered_fix_pack_pages_nobody_about_a_refund(monkeypatch):
              fix_outcome_repo=FakeFixOutcomeRepo(),
              repo_fetcher=fake_fetcher_returning(zip_bytes),
              pr_opener=lambda *a, **k: PullRequestResult("http://pr", "sha"),
-             payment_repo=FakePaymentRepoForAudit({"a1": _paid_by()}))
+             payment_repo=FakePaymentRepoForJob({"j1": _paid_by()}))
     try:
         _run_processor()
     finally:

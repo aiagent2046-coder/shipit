@@ -309,11 +309,16 @@ class FakeCompletionCasMixin:
             status="completed", account_id=account_id, external_ref=external_ref)
         return row
 
-    async def mark_completed_fixpack(self, payment_id, *, external_ref):
+    async def mark_completed_fixpack(self, payment_id, *, external_ref,
+                                     fixpack_job_id=None):
         row = self._cas_complete(payment_id, external_ref)
         if row is None:
             return None
         row.update(status="completed", external_ref=external_ref)
+        # coalesce, mirroring the SQL: a retry arriving without a job id must
+        # not blank the link an earlier attempt already wrote.
+        if fixpack_job_id is not None:
+            row["fixpack_job_id"] = fixpack_job_id
         return row
 
 

@@ -101,12 +101,13 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
                      currency, status, tier_granted, product="pro_tier",
                      audit_id=None, created_at=None,
                      payer_name=None, payer_email=None, payer_x=None,
-                     payer_locale=None, provider_payment_id=None):
+                     payer_locale=None, provider_payment_id=None,
+                     fixpack_job_id=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
-            "audit_id": audit_id,
+            "audit_id": audit_id, "fixpack_job_id": fixpack_job_id,
             "payer_name": payer_name, "payer_email": payer_email,
             "payer_x": payer_x, "payer_locale": payer_locale,
             "provider_payment_id": provider_payment_id,
