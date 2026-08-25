@@ -245,6 +245,40 @@ def main() -> int:
             "(set neither for a relay that authenticates by IP)"
         )
 
+    # ЮKassa, same shape again and the highest stakes of the three. A shop id
+    # with no secret key cannot sign a request, so every attempt to open a
+    # payment 503s -- at the checkout, in front of a buyer who was ready to pay.
+    shop_id = bool(values.get("YOOKASSA_SHOP_ID", "").strip())
+    secret_key = bool(values.get("YOOKASSA_SECRET_KEY", "").strip())
+    if shop_id != secret_key:
+        errors.append(
+            "YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be configured "
+            "together; with only one set the card checkout answers 503 to "
+            "every buyer"
+        )
+
+    # A live shop holding a test key takes no money at all, and the symptom is
+    # "nobody is buying" rather than anything that looks like a misconfiguration
+    # -- so it is worth saying out loud on a production host. A warning, not an
+    # error: a deployment deliberately running against the test shop is a
+    # legitimate state, and refusing to boot would make testing impossible.
+    if secret_key and values.get("YOOKASSA_SECRET_KEY", "").strip().startswith(
+        "test_"
+    ):
+        warnings.append(
+            "YOOKASSA_SECRET_KEY is a test key (test_…): payments opened on "
+            "this host are not real and no money will arrive"
+        )
+
+    # Receipts are a legal position rather than a technical one, and the code
+    # sends none without this. Saying so is the difference between a decision
+    # and an omission nobody remembers making.
+    if not values.get("YOOKASSA_VAT_CODE", "").strip():
+        warnings.append(
+            "YOOKASSA_VAT_CODE is not set: payments are opened without a "
+            "54-ФЗ receipt. Correct if this merchant does not issue them"
+        )
+
     # A variable belonging to a rail that no longer exists. Not an error --
     # a leftover line hurts nothing and refusing to boot over it would be an
     # outage caused by tidiness -- but it must be SAID, because an operator who

@@ -49,6 +49,7 @@ from app.routes.reads import router as reads_router
 from app.routes.rls_check import router as rls_check_router
 from app.routes.session import router as session_router
 from app.routes.storefront import router as storefront_router
+from app.routes.yookassa import router as yookassa_router
 from app.db import (
     AccountRepository,
     AuditJobRepository,
@@ -2270,3 +2271,4 @@ app.include_router(reads_router)
 app.include_router(rls_check_router)
 app.include_router(session_router)
 app.include_router(storefront_router)
+app.include_router(yookassa_router)

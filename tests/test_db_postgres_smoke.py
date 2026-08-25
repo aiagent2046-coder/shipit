@@ -1075,9 +1075,16 @@ async def test_a_refund_date_survives_the_round_trip(real_db):
     one that looks like evidence.
     """
     payment_repo = PaymentRepository()
+    # A fresh reference per run. The first version of this test used a fixed
+    # one and passed in CI, where the database is new every time, while failing
+    # on any second run against a developer's own -- migration 0004's unique
+    # index on (provider, external_ref) is doing exactly its job. A test that
+    # only works on a database nobody has used is a test that will be believed
+    # right up until somebody runs it twice.
     created = await payment_repo.create(
         account_id=None, provider=bank_transfer.PROVIDER,
-        external_ref="DRY-REFDAT", amount=10.79, currency="USD",
+        external_ref=bank_transfer.generate_reference(),
+        amount=10.79, currency="USD",
         status="completed", tier_granted=None, product="fixpack",
     )
     assert created is not None, "DATABASE_URL not reaching get_pool -- false green"

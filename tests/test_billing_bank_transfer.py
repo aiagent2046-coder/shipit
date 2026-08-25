@@ -101,7 +101,7 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
                      currency, status, tier_granted, product="pro_tier",
                      audit_id=None, created_at=None,
                      payer_name=None, payer_email=None, payer_x=None,
-                     payer_locale=None):
+                     payer_locale=None, provider_payment_id=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
@@ -109,6 +109,7 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
             "audit_id": audit_id,
             "payer_name": payer_name, "payer_email": payer_email,
             "payer_x": payer_x, "payer_locale": payer_locale,
+            "provider_payment_id": provider_payment_id,
             "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows[row["id"]] = row
@@ -133,6 +134,15 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
             if r["provider"] == provider and r["status"] == "pending"
             and (created_after is None or r["created_at"] >= created_after)
         ]
+
+    async def set_provider_payment_id(self, payment_id, provider_payment_id):
+        # First-wins, mirroring the real method's WHERE clause: one order
+        # must not be able to claim two charges.
+        row = self.rows.get(payment_id)
+        if row is None or row.get('provider_payment_id') is not None:
+            return False
+        row['provider_payment_id'] = provider_payment_id
+        return True
 
     async def link_telegram_chat_id(self, payment_id, telegram_chat_id):
         # First-wins, mirroring the real method's WHERE clause.
