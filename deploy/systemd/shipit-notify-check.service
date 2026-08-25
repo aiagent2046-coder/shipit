@@ -1,0 +1,37 @@
+[Unit]
+Description=ShipIt notification channel health check
+After=network-online.target
+Wants=network-online.target
+OnFailure=shipit-alert@%n.service
+
+[Service]
+Type=oneshot
+User=shipit-ops
+# The release, not /opt/shipit: this runs application code (app.notify) rather
+# than calling the API over HTTP, the same way shipit-alert@.service does.
+WorkingDirectory=/srv/shipit/current
+EnvironmentFile=/opt/shipit/.env
+EnvironmentFile=-/opt/shipit/.release-env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SHIPIT_SERVICE=shipit-notify-check
+ExecStartPre=/usr/bin/test -x /srv/shipit/current/.venv/bin/python
+ExecStart=/srv/shipit/current/.venv/bin/python -m app.notify.selfcheck
+# Deliberately NOT Requires=shipit.service, and this is the one place that
+# matters. The check exists to notice a broken channel while everything else
+# looks fine, so binding it to the API would mean an API outage silences the
+# thing whose job is to speak up. It needs no API: it reads .env and opens its
+# own connections.
+#
+# A non-zero exit is the point rather than an accident -- it puts the unit in
+# `failed`, where `systemctl status` shows it long after the alert has scrolled
+# out of a chat, and it is what a Telegram outage leaves behind when the alert
+# itself cannot be delivered.
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+StandardOutput=journal
+StandardError=journal

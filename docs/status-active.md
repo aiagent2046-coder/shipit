@@ -558,7 +558,7 @@ sudo cp /srv/shipit/current/deploy/systemd/*.service \
         /srv/shipit/current/deploy/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now shipit-fixpack.timer shipit-monitoring.timer \
-                          shipit-reap.timer
+                          shipit-reap.timer shipit-notify-check.timer
 systemctl list-timers --all | grep shipit
 
 # Prove that what systemd LOADED is what the release ships. `systemctl cat`

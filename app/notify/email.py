@@ -125,8 +125,17 @@ def is_sendable_address(address: str) -> bool:
     return bool(local) and bool(domain) and "@" not in domain
 
 
-def _deliver(settings: SmtpSettings, message: EmailMessage) -> None:
-    """The blocking half. Replaced wholesale in tests -- see `sender=`."""
+def _open(settings: SmtpSettings) -> smtplib.SMTP:
+    """Connect, upgrade and authenticate: everything up to the message.
+
+    Separate so that a health check can do exactly this and stop, and so that
+    it CANNOT drift from what a real send does. A probe that connects on its
+    own terms proves its own terms work.
+
+    Closes the socket before letting the exception out. A caller that never
+    receives the client cannot close it, and a leaked connection is one the
+    server holds open to its per-account limit.
+    """
     if settings.implicit_tls:
         client: smtplib.SMTP = smtplib.SMTP_SSL(
             settings.host, settings.port, timeout=_TIMEOUT_S)
@@ -141,6 +150,37 @@ def _deliver(settings: SmtpSettings, message: EmailMessage) -> None:
             client.starttls()
         if settings.username:
             client.login(settings.username, settings.password)
+    except Exception:
+        client.close()
+        raise
+    return client
+
+
+def _close(client: smtplib.SMTP) -> None:
+    try:
+        client.quit()
+    except Exception:  # noqa: BLE001
+        # QUIT failing after the message was accepted is not a failed send,
+        # and letting it raise here would report one.
+        client.close()
+
+
+def _verify(settings: SmtpSettings) -> None:
+    """Prove the account still works, and send nobody anything.
+
+    Raises what smtplib raises -- the caller wants the type, and an
+    SMTPAuthenticationError here is the whole point of the exercise.
+
+    No message, no recipient: this runs on a timer, and a probe that delivered
+    mail would be a probe nobody leaves switched on.
+    """
+    _close(_open(settings))
+
+
+def _deliver(settings: SmtpSettings, message: EmailMessage) -> None:
+    """The blocking half. Replaced wholesale in tests -- see `sender=`."""
+    client = _open(settings)
+    try:
         # The envelope is given explicitly, from the raw strings, rather than
         # letting send_message re-parse the headers. A non-ASCII local part is
         # RFC 2047 encoded in a header -- `=?utf-8?b?...?=@example.invalid` --
@@ -155,12 +195,7 @@ def _deliver(settings: SmtpSettings, message: EmailMessage) -> None:
             to_addrs=[message["To"]],
         )
     finally:
-        try:
-            client.quit()
-        except Exception:  # noqa: BLE001
-            # QUIT failing after the message was accepted is not a failed send,
-            # and letting it raise here would report one.
-            client.close()
+        _close(client)
 
 
 def build_message(
