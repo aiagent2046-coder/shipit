@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
-import importlib.util
 import os
 import re
 import shutil
@@ -39,6 +38,14 @@ from typing import NoReturn, Sequence
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
+
+# This module is also loaded by path (tests/test_migration_manager.py does, and
+# so does anything running scripts/ from elsewhere), and then its own directory
+# is not on sys.path. Put it there before importing the sibling.
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import env_file  # noqa: E402
 
 LEDGER_TABLE = "public.shipit_schema_migrations"
 ADVISORY_LOCK_NAME = "shipit-schema-migrations"
@@ -403,57 +410,19 @@ def env_file_path() -> Path:
     """Where a deployment keeps its environment. Same default and same override
     as deploy/scripts/deploy-production.sh, so the two agree about which file
     is in charge on a host that has one."""
-    return Path(os.environ.get("SHIPIT_ENV_FILE", "/opt/shipit/.env"))
+    return env_file.env_file_path()
 
 
 def database_url_from_env_file(path: Path) -> str:
     """DATABASE_URL out of an env file, or "" when there is nothing to read.
 
-    THE READER IS BORROWED, NOT REWRITTEN. read_env_file lives in
-    deploy/scripts/validate-production-env.py and already handles the quoting
-    this file uses -- values wrapped in single or double quotes, which
-    /opt/shipit/.env needs because a bank name contains «» and an address
-    contains spaces. A second parser here would be a second set of quoting
-    rules to keep in step, and the failure mode of getting that wrong is a DSN
-    silently truncated at the first special character. That has already
-    happened once on this deployment, to an SMTP password, through `set -a; .
-    .env` in bash -- which is exactly the incantation this function exists to
-    stop anybody needing.
-
-    Returns "" rather than raising for anything unreadable: a missing env file
-    is the ordinary case on a developer's machine, and the caller's error
-    message is more useful than this one's.
+    The reading is scripts/env_file.py's, which borrows the parser from
+    deploy/scripts/validate-production-env.py rather than writing a second set
+    of quoting rules; see that module for why. Nothing from the file reaches
+    an exception or a log line here either -- unreadable is "", and the
+    caller's own message stands.
     """
-    if not path.is_file():
-        return ""
-
-    validator = (
-        Path(__file__).resolve().parent.parent
-        / "deploy" / "scripts" / "validate-production-env.py"
-    )
-    if not validator.is_file():
-        return ""
-
-    spec = importlib.util.spec_from_file_location(
-        "shipit_migration_env_reader", validator)
-    if spec is None or spec.loader is None:
-        return ""
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-        reader = getattr(module, "read_env_file", None)
-        if not callable(reader):
-            return ""
-        values = reader(path)
-    except Exception:  # noqa: BLE001
-        # Never explain: an exception raised while parsing an env file has a
-        # good chance of quoting a line of it.
-        return ""
-
-    if not isinstance(values, dict):
-        return ""
-    return str(values.get("DATABASE_URL", "")).strip()
+    return str(env_file.read_values(path).get("DATABASE_URL", "")).strip()
 
 
 def database_url() -> str:
