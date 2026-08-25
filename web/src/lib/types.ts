@@ -206,6 +206,12 @@ export interface BankTransferInvoice {
 // bank transfer configured, and the footer then omits the block.
 export interface BillingDetails {
   bank: BankDetails | null;
+  // The bot a deep link opens: `t.me/<telegram_bot>?start=DRY-XXXXXX`. Null
+  // when this deployment has no bot configured, or when the configured name is
+  // not a usable Telegram username -- the backend validates before publishing
+  // it, because this value ends up in an href a customer is invited to tap.
+  // Optional so an older API simply reads as "no bot".
+  telegram_bot?: string | null;
 }
 
 // GET /v1/pricing — what is on sale and what it costs. Read from the same

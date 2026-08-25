@@ -228,8 +228,9 @@ def test_the_payer_is_returned_to_a_page_they_can_actually_read() -> None:
     client.post(f"/v1/audits/{audit_id}/fixpack/yookassa",
                 json={**PAYER, "return_token": TOKEN})
 
-    assert _return_url_sent(seen) == (
-        f"https://drydock.co/audit/{audit_id}?token={TOKEN}&paid=1")
+    sent = _return_url_sent(seen)
+    assert sent.startswith(f"https://drydock.co/audit/{audit_id}?token={TOKEN}")
+    assert "paid=1" in sent
 
 
 def test_a_return_address_is_never_taken_from_the_caller() -> None:
@@ -260,8 +261,30 @@ def test_a_missing_token_still_sells_a_fix_pack() -> None:
     resp = client.post(f"/v1/audits/{audit_id}/fixpack/yookassa", json=PAYER)
 
     assert resp.status_code == 201
-    assert _return_url_sent(seen) == (
-        f"https://drydock.co/audit/{audit_id}?paid=1")
+    sent = _return_url_sent(seen)
+    assert sent.startswith(f"https://drydock.co/audit/{audit_id}?paid=1")
+    assert "token=" not in sent
+
+
+def test_the_return_url_names_the_order_so_the_page_can_offer_telegram() -> None:
+    """The page a payer comes back to has to be able to build
+    `t.me/<bot>?start=DRY-XXXXXX`, and it has no other way to learn which order
+    was just paid -- the notification lands seconds later, server-side.
+
+    The reference is an order number, not a secret: it is printed on the
+    payment page, on the receipt and in the confirmation email. What it can be
+    used for -- claiming this order's Telegram updates -- is protected by the
+    same first-successful-link-wins rule /link has always had, and the buyer
+    who is holding the page wins it."""
+    payments, (audits, audit_id) = FakePaymentRepo(), _audit_with_findings()
+    seen: list[httpx.Request] = []
+    _wire(payments, audits, transport=_created(seen))
+
+    reference = client.post(
+        f"/v1/audits/{audit_id}/fixpack/yookassa",
+        json={**PAYER, "return_token": TOKEN}).json()["reference"]
+
+    assert f"order={reference}" in _return_url_sent(seen)
 
 
 # --- the notification is a rumour -------------------------------------------

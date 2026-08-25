@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.billing import bank_transfer, yookassa
+from app.notify import telegram
 
 router = APIRouter()
 
@@ -86,5 +87,16 @@ async def get_billing_details() -> dict:
     Returns 200 with `bank: null` rather than 503 when bank transfer isn't
     configured. A footer is not a checkout: an unconfigured deployment should
     render a footer without a requisites block, not an error.
+
+    `telegram_bot` IS NOT A REQUISITE, and sits here anyway because it answers
+    the same question: how a customer reaches their order after paying. The
+    site needs it to build `t.me/<bot>?start=DRY-XXXXXX`, which is the only way
+    a Telegram chat can be established -- the Bot API cannot message somebody
+    who has never written to the bot, so a username typed into a checkout form
+    would buy nothing. Null when unset or malformed, and the page then shows no
+    button rather than a link to a bot that does not exist.
     """
-    return {"bank": bank_transfer.bank_details_from_env()}
+    return {
+        "bank": bank_transfer.bank_details_from_env(),
+        "telegram_bot": telegram.bot_username_from_env(),
+    }

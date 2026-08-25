@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -53,6 +54,26 @@ def bot_token_from_env() -> str | None:
     """Same env-var-or-None pattern as GITHUB_PR_TOKEN / PREVIEW_REAP_TOKEN.
     Unset -> the webhook endpoint refuses (503) rather than half-working."""
     return os.environ.get("TELEGRAM_BOT_TOKEN") or None
+
+
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{5,32}$")
+
+
+def bot_username_from_env() -> str | None:
+    """The bot's @name, for building a deep link, or None if unusable.
+
+    NOT read from the token, and not fetched with getMe. A page needs this to
+    render an href, and neither an outbound API call per request nor a second
+    literal typed into the frontend is the right way to get one. Telegram's own
+    username rules are the validation, because this value ends up inside a URL
+    a customer is invited to tap: anything not matching is treated as absent, so
+    a typo removes the button rather than producing a link to nowhere.
+
+    A leading @ is accepted and stripped -- it is how the name is written
+    everywhere else, and rejecting the natural form would be a trap.
+    """
+    raw = (os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
+    return raw if _USERNAME_RE.match(raw) else None
 
 
 def webhook_secret_from_env() -> str | None:
