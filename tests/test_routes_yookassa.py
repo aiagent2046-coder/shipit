@@ -22,8 +22,11 @@ import uuid
 
 import httpx
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+from app.billing import bank_transfer
 from app.main import (
     app,
     get_audit_repo,
@@ -33,6 +36,7 @@ from app.main import (
     get_rate_limiter,
 )
 from app.ratelimit import RateLimiter
+from app.routes.yookassa import receive_notification
 from tests.test_billing_bank_transfer import (
     FakeAuditRepo,
     FakeFixpackRepo,
@@ -212,6 +216,45 @@ def _notify(body: dict, *, source: str = TRUSTED):
     )
 
 
+def _record_told(into: list):
+    """Stand in for _tell_the_payer and write down that it happened.
+
+    Patched onto app.billing.bank_transfer because the handler imports the name
+    at call time; the injectable `notify=` on the real function is one layer
+    lower than what these tests are about, which is whether the customer is
+    written to at all and when.
+    """
+    async def telling(row, *, product, notify=None, transport=None) -> None:
+        into.append(row)
+    return telling
+
+
+def _request(body: dict, *, source: str = TRUSTED):
+    """A Request good enough to call the handler directly, off the TestClient.
+
+    Needed because starlette's TestClient runs background tasks before handing
+    the response back, so through it "sent inline" and "sent afterwards" look
+    identical -- and that difference is the whole point of one of the tests
+    below.
+    """
+    payload = json.dumps(body).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/billing/yookassa/notifications",
+            "headers": [(b"x-forwarded-for", source.encode())],
+            "query_string": b"",
+            "client": ("10.0.0.1", 0),
+        },
+        receive,
+    )
+
+
 async def _seed(payments, audit_id, reference="DRY-ABC123", amount=990.0):
     return await payments.create(
         account_id=None, provider="yookassa", external_ref=reference,
@@ -328,6 +371,32 @@ async def test_every_answer_is_the_same_two_hundred(anyio_backend) -> None:
     assert {_notify(b).status_code for b in bodies} == {200}
 
 
+@pytest.mark.anyio
+async def test_the_body_is_the_same_too_even_when_something_was_granted(
+    anyio_backend, monkeypatch,
+) -> None:
+    """The status code was never the only thing a prober could read.
+
+    Until this test the handler answered `{"ok": true, "granted": true}` on the
+    one path that bought something and `{"ok": true}` on all six that did not,
+    which is the distinction its own docstring says must not exist. A payment
+    id is not guessable, so this was never mass-enumerable -- but the response
+    confirmed, to anyone holding one, whether it was known here and paid for.
+    """
+    payments, jobs = FakePaymentRepo(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    await _seed(payments, audit_id)
+    _wire(payments, audits, jobs, transport=_succeeded())
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told([]))
+
+    granted = _notify({"event": "payment.succeeded",
+                       "object": {"id": PAYMENT_ID}})
+    ignored = _notify({"event": "payment.canceled",
+                       "object": {"id": PAYMENT_ID}})
+
+    assert granted.json() == ignored.json() == {"ok": True}
+
+
 def test_a_body_that_is_not_json_is_ignored_quietly() -> None:
     _wire(FakePaymentRepo(), FakeAuditRepo(), FakeFixpackRepo(),
           transport=_succeeded())
@@ -371,6 +440,102 @@ async def test_the_same_notification_twice_creates_one_job(anyio_backend) -> Non
     _notify(body)
 
     assert len(jobs.rows) <= 1, "a retried notification bought a second Fix Pack"
+
+
+@pytest.mark.anyio
+async def test_a_retried_notification_writes_to_the_payer_once(
+    anyio_backend, monkeypatch,
+) -> None:
+    """The job was already guarded against a retry; the letter was not.
+
+    grant_fixpack is idempotent, so the test above passes on a rail that sends
+    the same "your payment is confirmed" twice -- and a duplicate has no
+    recovery, unlike a send that failed, which pages the operator and can be
+    repeated by hand. The guard reads the row's status BEFORE the grant, which
+    is the write that changes it.
+    """
+    told: list = []
+    payments, jobs = FakePaymentRepo(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    await _seed(payments, audit_id)
+    _wire(payments, audits, jobs, transport=_succeeded())
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+
+    body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
+    _notify(body)
+    _notify(body)
+    _notify(body)
+
+    assert len(told) == 1, f"the payer was written to {len(told)} times"
+
+
+@pytest.mark.anyio
+async def test_a_grant_that_did_not_happen_is_not_announced(
+    anyio_backend, monkeypatch,
+) -> None:
+    """The money is real and the Fix Pack was not recorded.
+
+    Writing to the payer here would promise a pull request nothing is going to
+    open, and the message is unrecallable once sent. So this path is silent to
+    the customer and loud in the log, which is the pair an operator can act on:
+    the payment is `completed`, the job is missing, and both are visible.
+    """
+    told: list = []
+    payments, jobs = FakePaymentRepo(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    await _seed(payments, audit_id)
+    _wire(payments, audits, jobs, transport=_succeeded())
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+
+    async def granted_nothing(**kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.routes.yookassa.grant_fixpack", granted_nothing)
+
+    resp = _notify({"event": "payment.succeeded",
+                    "object": {"id": PAYMENT_ID}})
+
+    assert resp.json() == {"ok": True}, "still indistinguishable to the caller"
+    assert told == []
+
+
+@pytest.mark.anyio
+async def test_the_payer_is_told_after_the_notification_is_answered(
+    anyio_backend, monkeypatch,
+) -> None:
+    """WHAT HOLDS ЮKASSA IS WHAT MAKES IT RETRY.
+
+    On 2026-08-25 a live notification was answered eleven seconds after it
+    arrived, nine of them inside this send. The mail timeout alone is 20
+    seconds and the Telegram fallback's is 30, so a mail server that is merely
+    slow puts the handler past any provider's patience -- and ЮKassa answers
+    silence with another notification.
+
+    Called directly rather than through the TestClient, which runs background
+    tasks before returning and would make this pass either way.
+    """
+    told: list = []
+    payments, jobs = FakePaymentRepo(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    row = await _seed(payments, audit_id)
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+
+    background = BackgroundTasks()
+    answer = await receive_notification(
+        _request({"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}),
+        background,
+        payment_repo=payments, fixpack_repo=jobs, audit_repo=audits,
+        transport=_succeeded(),
+    )
+
+    assert answer == {"ok": True}
+    assert (await payments.get(str(row["id"])))["status"] == "completed", (
+        "the grant must be durable before the notification is answered")
+    assert told == [], "the payer was written to before ЮKassa got its answer"
+
+    await background()
+    assert len(told) == 1
 
 
 # --- the receipt ------------------------------------------------------------
