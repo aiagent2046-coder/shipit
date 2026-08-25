@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import smtplib
 from dataclasses import dataclass
 
 import httpx
@@ -87,35 +88,86 @@ class Result:
         return self.configured and not self.ok
 
 
-async def check_email(*, verify=None) -> Result:
+# One blip must not condemn a channel. Two hours after this file first ran on
+# production, the Telegram probe timed out once -- four minutes after an
+# identical probe had answered 200, and with the link measurably healthy either
+# side of it. From a host in Russia, reaching api.telegram.org is routinely
+# uneven. A check that calls a channel dead on a single timeout is the alert
+# that cries wolf, which is the failure this file goes out of its way to avoid
+# for an unconfigured channel and did not avoid here.
+ATTEMPTS = 3
+BACKOFF_S = (3.0, 8.0)
+
+# A refused credential is NOT retried, and the reason is not politeness. It
+# will refuse again -- nothing about a password changes in three seconds -- and
+# providers count failed logins towards locking the account. Turning one
+# report into three attempts would be a check that causes the outage it is
+# watching for.
+_FINAL = (smtplib.SMTPAuthenticationError, smtplib.SMTPSenderRefused)
+
+
+def _worth_retrying(exc: BaseException) -> bool:
+    return not isinstance(exc, _FINAL)
+
+
+async def _probe(channel: str, attempt_once, *, sleep=None) -> Result:
+    """Run `attempt_once` until it stops failing transiently, then judge.
+
+    The detail reported is the LAST failure. An earlier attempt that failed
+    differently is in the log; the alert carries the one that stood.
+    """
+    sleep = asyncio.sleep if sleep is None else sleep
+    last = ""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            await attempt_once()
+        except Exception as exc:  # noqa: BLE001
+            last = f"{type(exc).__name__}: {str(exc)[:200]}"
+            if not _worth_retrying(exc) or attempt == ATTEMPTS:
+                break
+            # Worth a line even though it recovered: a link that needs a retry
+            # every hour is a link on its way to needing more than three.
+            logger.warning("%s probe failed (attempt %d/%d: %s), retrying",
+                           channel, attempt, ATTEMPTS, last)
+            await sleep(BACKOFF_S[min(attempt - 1, len(BACKOFF_S) - 1)])
+        else:
+            if attempt > 1:
+                logger.info("%s probe recovered on attempt %d", channel, attempt)
+            return Result(channel, configured=True, ok=True)
+    return Result(channel, configured=True, ok=False, detail=last)
+
+
+async def check_email(*, verify=None, sleep=None) -> Result:
     """`verify` is the injection point: the suite must not open a socket."""
     settings = mail.settings_from_env()
     if settings is None:
         return Result(EMAIL, configured=False, ok=True)
 
     verify = mail._verify if verify is None else verify
-    try:
+
+    async def attempt() -> None:
         await asyncio.to_thread(verify, settings)
-    except Exception as exc:  # noqa: BLE001
-        return Result(EMAIL, configured=True, ok=False,
-                      detail=f"{type(exc).__name__}: {str(exc)[:200]}")
-    return Result(EMAIL, configured=True, ok=True)
+
+    return await _probe(EMAIL, attempt, sleep=sleep)
 
 
 async def check_telegram(
-    *, transport: httpx.BaseTransport | None = None, call=None,
+    *, transport: httpx.BaseTransport | None = None, call=None, sleep=None,
 ) -> Result:
     token = telegram.bot_token_from_env()
     if not token:
         return Result(TELEGRAM, configured=False, ok=True)
 
     call = telegram.call if call is None else call
-    try:
-        await call("getMe", {}, token=token, transport=transport)
-    except Exception as exc:  # noqa: BLE001
-        return Result(TELEGRAM, configured=True, ok=False,
-                      detail=f"{type(exc).__name__}: {str(exc)[:200]}")
-    return Result(TELEGRAM, configured=True, ok=True)
+
+    async def attempt() -> None:
+        # Ten seconds rather than the transport's default thirty. Three
+        # attempts at thirty plus the backoff outlives the unit's own
+        # TimeoutStartSec, and a getMe that has not answered in ten seconds is
+        # not going to be useful on this run anyway.
+        await call("getMe", {}, token=token, transport=transport, timeout=10)
+
+    return await _probe(TELEGRAM, attempt, sleep=sleep)
 
 
 def describe(results: list[Result]) -> str:
@@ -131,7 +183,8 @@ def describe(results: list[Result]) -> str:
     return "\n".join(line for line in lines if line is not None).strip()
 
 
-async def run(*, alert=None, transport=None, verify=None, call=None) -> list:
+async def run(*, alert=None, transport=None, verify=None, call=None,
+              sleep=None) -> list:
     """Check everything, page the operator about what is broken, return it all.
 
     The alert is deduplicated on the CHANNEL, not on the text, so an outage
@@ -139,8 +192,8 @@ async def run(*, alert=None, transport=None, verify=None, call=None) -> list:
     -- and a second channel failing is still its own message.
     """
     results = [
-        await check_email(verify=verify),
-        await check_telegram(transport=transport, call=call),
+        await check_email(verify=verify, sleep=sleep),
+        await check_telegram(transport=transport, call=call, sleep=sleep),
     ]
 
     broken = [r for r in results if r.failed]
