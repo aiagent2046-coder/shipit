@@ -206,6 +206,60 @@ def refund_subject(*, locale: str | None) -> str:
     return _REFUND_SUBJECT[normalize(locale)]
 
 
+# --- a Fix Pack that had nothing to change ----------------------------------
+
+# THE PROMISE THIS KEEPS. The confirmation sent minutes earlier ends "and you
+# will hear again when it lands or if it cannot finish" -- and the branch that
+# ends a job with nothing to fix wrote a status, recorded an outcome and told
+# nobody. Two real payments ended there on 2026-08-25, in silence.
+#
+# WRITTEN AS A REFUND, NOT AS A RESULT. app/fixpack/merit.py already calls this
+# outcome decisively ours: "the audit's findings should have been checked
+# before the sale, not after -- this is our mistake, not a disappointing
+# result." From where the buyer sits they paid and received nothing, so the
+# thing that belongs at the top is their money, not our diagnostics.
+#
+# It does not claim the refund is done, because a person still has to send it.
+# An automated message promising a completed refund is how the next silent gap
+# gets made.
+_NOTHING_TO_FIX_SUBJECT = {
+    EN: "Your Fix Pack found nothing to change — refund on the way",
+    RU: "Fix Pack не нашёл, что изменить — возвращаем деньги",
+}
+
+_NOTHING_TO_FIX_BODY = {
+    EN: (
+        "Your Fix Pack ran and found nothing it could change in your "
+        "repository, so no pull request was opened.\n\n"
+        "That is our mistake rather than a result: the findings should have "
+        "been re-checked against your code before we took the money. Usually "
+        "it means they were already fixed between the audit and the "
+        "purchase.\n\n"
+        "We are refunding you in full. It goes back the same way it arrived, "
+        "and you do not need to ask.\n\n"
+        "Order reference: {reference}"
+    ),
+    RU: (
+        "Fix Pack отработал и не нашёл, что изменить в вашем репозитории, "
+        "поэтому пул-реквест не открывался.\n\n"
+        "Это наша ошибка, а не результат: находки надо было сверить с вашим "
+        "кодом до того, как брать деньги. Обычно это значит, что их успели "
+        "исправить между аудитом и покупкой.\n\n"
+        "Мы возвращаем всю сумму. Она вернётся тем же способом, которым "
+        "пришла, просить об этом не нужно.\n\n"
+        "Номер заказа: {reference}"
+    ),
+}
+
+
+def nothing_to_fix_subject(*, locale: str | None) -> str:
+    return _NOTHING_TO_FIX_SUBJECT[normalize(locale)]
+
+
+def nothing_to_fix_body(*, reference: str, locale: str | None) -> str:
+    return _NOTHING_TO_FIX_BODY[normalize(locale)].format(reference=reference)
+
+
 # --- how to reach a person, which depends on where they are reading ---------
 
 # The channel the "reply" instruction is true on. Anything else gets the

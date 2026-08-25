@@ -29,6 +29,7 @@ from app.main import (
     get_audit_repo,
     get_fix_outcome_repo,
     get_fixpack_repo,
+    get_payment_repo,
     get_pr_opener,
     get_repo_fetcher,
 )
@@ -141,7 +142,7 @@ def fake_fetcher_returning(zip_bytes: bytes):
 
 
 def override(*, audit_repo=None, fixpack_repo=None, fix_outcome_repo=None,
-             repo_fetcher=None, pr_opener=None):
+             repo_fetcher=None, pr_opener=None, payment_repo=None):
     if audit_repo is not None:
         app.dependency_overrides[get_audit_repo] = lambda: audit_repo
     if fixpack_repo is not None:
@@ -152,11 +153,13 @@ def override(*, audit_repo=None, fixpack_repo=None, fix_outcome_repo=None,
         app.dependency_overrides[get_repo_fetcher] = lambda: repo_fetcher
     if pr_opener is not None:
         app.dependency_overrides[get_pr_opener] = lambda: pr_opener
+    if payment_repo is not None:
+        app.dependency_overrides[get_payment_repo] = lambda: payment_repo
 
 
 def clear_overrides():
     for dep in (get_audit_repo, get_fixpack_repo, get_fix_outcome_repo,
-                get_repo_fetcher, get_pr_opener):
+                get_repo_fetcher, get_pr_opener, get_payment_repo):
         app.dependency_overrides.pop(dep, None)
 
 
@@ -487,3 +490,148 @@ def test_webhook_non_closed_action_ignored(monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["ignored"] is True
     assert outcomes.merged_updates == []
+
+
+# --- somebody paid for the outcome that found nothing ------------------------
+
+class FakePaymentRepoForAudit:
+    """The one lookup the processor needs: job -> audit -> who paid."""
+
+    def __init__(self, by_audit=None, explode=False):
+        self.by_audit = by_audit or {}
+        self.explode = explode
+
+    async def get_completed_fixpack_by_audit(self, audit_id):
+        if self.explode:
+            raise RuntimeError("database is down")
+        return self.by_audit.get(audit_id)
+
+
+def _paid_by(email="ada@example.invalid", locale="ru", reference="DRY-ZLZCQ3"):
+    return {"id": "p1", "external_ref": reference, "product": "fixpack",
+            "status": "completed", "payer_email": email,
+            "payer_locale": locale, "amount": 990.0, "currency": "RUB"}
+
+
+def _nothing_to_fix_run(monkeypatch, *, payments, told, paged):
+    """Drive one paid job whose plan comes out empty."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
+
+    async def fake_notify(**kwargs):
+        told.append(kwargs)
+
+    async def fake_alert(text, **kwargs):
+        paged.append(text)
+        return True
+
+    monkeypatch.setattr("app.notify.router.notify_customer", fake_notify)
+    monkeypatch.setattr(main_mod.alerts, "notify_operator", fake_alert)
+
+    zip_bytes = make_zip({"README.md": "# hi\n"})
+    audits = {"a1": {"repo_url": "https://github.com/acme/app",
+                     "findings_json": []}}
+    jobs = [{"id": "j1", "audit_id": "a1", "stack": "vite-react",
+             "status": "paid"}]
+
+    override(audit_repo=FakeAuditRepo(audits), fixpack_repo=FakeFixpackRepo(jobs),
+             fix_outcome_repo=FakeFixOutcomeRepo(),
+             repo_fetcher=fake_fetcher_returning(zip_bytes),
+             pr_opener=lambda *a, **k: PullRequestResult("x", "y"),
+             payment_repo=payments)
+    try:
+        return _run_processor()
+    finally:
+        clear_overrides()
+
+
+def test_the_payer_is_told_when_their_fix_pack_changed_nothing(monkeypatch):
+    """THIS BRANCH WAS SILENT. It wrote a status, recorded an outcome and
+    returned; the buyer heard nothing. Two real payments ended here on
+    2026-08-25, twenty minutes after a confirmation email promising "you will
+    hear again when it lands or if it cannot finish"."""
+    told, paged = [], []
+    payments = FakePaymentRepoForAudit({"a1": _paid_by()})
+
+    resp = _nothing_to_fix_run(monkeypatch, payments=payments,
+                               told=told, paged=paged)
+
+    assert resp.json()["skipped"] == 1
+    assert len(told) == 1
+    assert told[0]["reference"] == "DRY-ZLZCQ3"
+    # In their language, from the payment, because the tab that knew it is gone.
+    assert "возвращаем" in told[0]["subject"].lower()
+    assert "DRY-ZLZCQ3" in told[0]["body"]
+
+
+def test_the_operator_is_paged_because_only_a_person_can_refund(monkeypatch):
+    """There is no automated refund. The alert is the only thing that starts
+    one, so it is what turns "the money stayed" into "the money went back"."""
+    told, paged = [], []
+    payments = FakePaymentRepoForAudit({"a1": _paid_by()})
+
+    _nothing_to_fix_run(monkeypatch, payments=payments, told=told, paged=paged)
+
+    assert len(paged) == 1
+    assert "DRY-ZLZCQ3" in paged[0]
+    assert "refund" in paged[0].lower()
+
+
+def test_the_operator_is_paged_even_when_the_payer_cannot_be_found(monkeypatch):
+    """The ordering is the point. Writing to the customer first and letting a
+    failure there skip the alert would reproduce the silence in a smaller
+    way -- and this is the case where somebody's money is hardest to trace."""
+    told, paged = [], []
+
+    _nothing_to_fix_run(monkeypatch, payments=FakePaymentRepoForAudit(),
+                        told=told, paged=paged)
+
+    assert len(paged) == 1
+    assert told == []
+
+
+def test_a_broken_payment_lookup_still_pages_and_still_completes(monkeypatch):
+    """The job has already finished. An exception escaping here would turn a
+    completed run into a failed one and re-queue work that correctly found
+    nothing to do."""
+    told, paged = [], []
+
+    resp = _nothing_to_fix_run(
+        monkeypatch, payments=FakePaymentRepoForAudit(explode=True),
+        told=told, paged=paged)
+
+    assert resp.status_code == 200
+    assert resp.json()["skipped"] == 1
+    assert len(paged) == 1
+
+
+def test_a_delivered_fix_pack_pages_nobody_about_a_refund(monkeypatch):
+    """The alert must belong to the outcome that owes money, not to every
+    outcome. An alert that fires on success is an alert that gets muted."""
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
+    paged: list = []
+
+    async def fake_alert(text, **kwargs):
+        paged.append(text)
+        return True
+
+    monkeypatch.setattr(main_mod.alerts, "notify_operator", fake_alert)
+
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    audits = {"a1": {"repo_url": "https://github.com/acme/app",
+                     "findings_json": [_secret_finding()]}}
+    jobs = [{"id": "j1", "audit_id": "a1", "stack": "vite-react",
+             "status": "paid"}]
+
+    override(audit_repo=FakeAuditRepo(audits), fixpack_repo=FakeFixpackRepo(jobs),
+             fix_outcome_repo=FakeFixOutcomeRepo(),
+             repo_fetcher=fake_fetcher_returning(zip_bytes),
+             pr_opener=lambda *a, **k: PullRequestResult("http://pr", "sha"),
+             payment_repo=FakePaymentRepoForAudit({"a1": _paid_by()}))
+    try:
+        _run_processor()
+    finally:
+        clear_overrides()
+
+    assert not any("refund" in text.lower() for text in paged)
