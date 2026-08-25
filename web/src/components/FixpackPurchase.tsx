@@ -10,6 +10,7 @@ import {
   getPricing,
 } from "@/lib/api";
 import { BankTransferCheckout } from "./BankTransferCheckout";
+import { CardCheckout } from "./CardCheckout";
 import { formatMoney } from "@/lib/format";
 import { Spinner } from "./Spinner";
 import { SupportEmail } from "./SupportEmail";
@@ -44,9 +45,16 @@ export function FixpackPurchase({
   auditId,
   repoUrl,
   autoFixable,
+  accessToken,
 }: {
   auditId: string;
   repoUrl: string | null;
+  /**
+   * The audit's access token, read off this page's own URL. Passed through to
+   * the card checkout so ЮKassa can send the buyer back to a page they can
+   * read -- `/audit/{id}` without it renders "No audit found for this link".
+   */
+  accessToken?: string | null;
   /**
    * Whether a Fix Pack could produce anything for this audit, decided by the
    * API (`fixpack_auto_fixable`). Not recomputed here: the answer depends on
@@ -156,38 +164,138 @@ export function FixpackPurchase({
       </header>
 
       <InstallGate repoUrl={repoUrl}>
-        {/* Card payment is the only method on the storefront; the other
-            providers still work for existing customers through the Telegram
-            bot and their direct links, they are just not advertised. */}
         <div className="mx-auto mt-5 max-w-md">
-          <BankTransferCheckout
-            description={
-              <>
-                Copy the card number and pay from your banking app. Your Fix
-                Pack starts once we&apos;ve seen the money — usually within a
-                business day.
-              </>
-            }
-            createInvoice={(payer) =>
-              createFixpackBankTransferInvoice(auditId, payer)
-            }
-            renderCompleted={() => (
-              <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
-                <p className="font-semibold text-accent">
-                  Transfer confirmed — generating your Fix Pack.
-                </p>
-                <p className="mt-2 text-sm text-muted">
-                  No further action needed. The fix PR is opened automatically —
-                  its status appears below.
-                </p>
-              </div>
-            )}
+          <PaymentMethods
+            auditId={auditId}
+            accessToken={accessToken ?? null}
+            price={price}
+            priceFailed={priceFailed}
           />
         </div>
       </InstallGate>
 
       <FixpackStatusArea auditId={auditId} />
     </section>
+  );
+}
+
+/**
+ * Which ways to pay this deployment actually has, and in which order.
+ *
+ * THE ORDER IS THE PRODUCT DECISION. A card through ЮKassa finishes in
+ * seconds; the manual transfer needs a person to read a bank statement, which
+ * is measured in hours. Offering them side by side would let a buyer pick the
+ * slow one without knowing it is the slow one, so the card is the visible
+ * checkout and the transfer is a disclosure underneath it.
+ *
+ * THE TRANSFER IS NOT DELETED, and that is not sentiment. It is the fallback
+ * for a card that a Russian bank declines, and it is what this deployment ran
+ * on for its whole life before ЮKassa; deleting it the day the new rail
+ * shipped would put every such buyer at a dead end.
+ *
+ * WHAT IS LIVE COMES FROM THE API. `methods` is read from /v1/pricing rather
+ * than assumed, because the alternative is rendering a button, taking a click
+ * and answering 503 -- which reads to a buyer as "this is broken", not as "pay
+ * the other way". An older API sends no `methods` at all, which is read as the
+ * state every deployment was in before this rail existed: transfer only.
+ */
+export function PaymentMethods({
+  auditId,
+  accessToken,
+  price,
+  priceFailed,
+}: {
+  auditId: string;
+  accessToken: string | null;
+  price: Pricing | null;
+  /** Distinguishes "still loading" from "we asked and could not find out". */
+  priceFailed?: boolean;
+}) {
+  const [showTransfer, setShowTransfer] = useState(false);
+
+  // Nothing at all while the answer is still in flight. Which rails exist is
+  // part of that answer, so rendering a checkout first means rendering a
+  // GUESS — and a guess visibly swapping under someone who has started typing
+  // into it is worse than a moment of nothing.
+  if (!price && !priceFailed) return null;
+
+  // A price we could not load is a card rail we cannot offer: the checkout has
+  // to name the figure it is about to charge, and a pay button naming no
+  // figure is the bait-price shape this section was rewritten to remove. That
+  // falls out rather than being enforced -- `methods` arrives in the same
+  // response as the amount, so no price means no methods either, and the two
+  // cannot disagree. An explicit `&& price !== null` here would read as a
+  // guard while being unreachable.
+  const methods = price?.methods;
+  const card = methods?.card ?? false;
+  const transfer = methods?.bank_transfer ?? true;
+
+  if (!card && !transfer) {
+    return (
+      <p className="text-sm text-muted">
+        Card payment is being set up on this deployment. Email{" "}
+        <SupportEmail /> and we&apos;ll take payment another way and start your
+        Fix Pack by hand.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {card && price && (
+        <CardCheckout
+          auditId={auditId}
+          returnToken={accessToken}
+          amount={price.fixpack.amount}
+          currency={price.fixpack.currency}
+        />
+      )}
+
+      {card && transfer && !showTransfer && (
+        <button
+          type="button"
+          onClick={() => setShowTransfer(true)}
+          className="mt-3 w-full text-center text-sm text-muted underline underline-offset-2 hover:text-text"
+        >
+          Card declined? Pay by bank transfer instead
+        </button>
+      )}
+
+      {transfer && (!card || showTransfer) && (
+        <div className={card ? "mt-4" : undefined}>
+          <TransferCheckout auditId={auditId} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function TransferCheckout({ auditId }: { auditId: string }) {
+  return (
+    <BankTransferCheckout
+      title="Pay by bank transfer"
+      description={
+        <>
+          Copy the card number and pay from your banking app. Your Fix Pack
+          starts once we&apos;ve seen the money — usually within a business
+          day.
+        </>
+      }
+      createInvoice={(payer) =>
+        createFixpackBankTransferInvoice(auditId, payer)
+      }
+      renderCompleted={() => (
+        <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
+          <p className="font-semibold text-accent">
+            Transfer confirmed — generating your Fix Pack.
+          </p>
+          <p className="mt-2 text-sm text-muted">
+            No further action needed. The fix PR is opened automatically — its
+            status appears below.
+          </p>
+        </div>
+      )}
+    />
   );
 }
 

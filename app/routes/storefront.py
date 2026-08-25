@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.billing import bank_transfer
+from app.billing import bank_transfer, yookassa
 
 router = APIRouter()
 
@@ -46,11 +46,28 @@ async def get_pricing() -> dict:
     Deliberately separate from /v1/billing/details: that payload carries a
     card number for the footer, and a page that only needs a price should not
     have to fetch a payment instrument to get one.
+
+    `methods` SAYS WHICH RAILS ARE LIVE, and it belongs here rather than in
+    /v1/billing/details for the same reason: it is not an instrument, it is
+    part of what is on offer. Without it the storefront learns that card
+    payment is unconfigured by rendering a button, taking a click, and showing
+    a 503 -- which reads to a buyer as "this is broken", not as "pay the other
+    way". Neither flag carries a credential; each is the same all-or-nothing
+    accessor the invoice creators call, so the storefront cannot offer a rail
+    that would then refuse it.
+
+    A deployment with both false still gets a price. Saying what something
+    costs is not an offer to take money for it today, and the audit itself is
+    free.
     """
     return {
         "fixpack": {
             "amount": bank_transfer.fixpack_price_rub(),
             "currency": bank_transfer.CURRENCY,
+        },
+        "methods": {
+            "card": yookassa.credentials_from_env() is not None,
+            "bank_transfer": bank_transfer.bank_details_from_env() is not None,
         },
     }
 

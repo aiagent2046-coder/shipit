@@ -6,6 +6,7 @@ import type {
   AuditJobStatus,
   AuditResult,
   BankTransferInvoice,
+  CardPayment,
   BankTransferPaidResult,
   BankTransferStatus,
   BillingDetails,
@@ -250,6 +251,34 @@ export async function createFixpackBankTransferInvoice(
     { method: "POST", ...payerBody(payer) },
   );
   return parse<BankTransferInvoice>(res);
+}
+
+/**
+ * Open a card payment for one audit's Fix Pack and get the URL to send the
+ * buyer to. Nothing is charged here: ЮKassa's own page takes the card.
+ *
+ * `returnToken` is the audit's access token, passed so the payer comes back to
+ * a page they can actually read. It is sent as a token rather than as a return
+ * URL on purpose -- see CardPayer in app/routes/yookassa.py.
+ */
+export async function createFixpackCardPayment(
+  auditId: string,
+  payer: PayerContact,
+  returnToken: string | null,
+): Promise<CardPayment> {
+  const body = payerBody(payer);
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/yookassa`,
+    {
+      method: "POST",
+      headers: body.headers,
+      body: JSON.stringify({
+        ...JSON.parse(body.body as string),
+        return_token: returnToken,
+      }),
+    },
+  );
+  return parse<CardPayment>(res);
 }
 
 export async function getBankTransferInvoice(

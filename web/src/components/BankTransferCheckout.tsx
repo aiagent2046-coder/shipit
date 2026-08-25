@@ -13,6 +13,12 @@ import {
 } from "@/lib/api";
 import { useApiKey } from "./providers";
 import { Field } from "./Field";
+import {
+  contactGiven,
+  LocaleField,
+  PayerInput,
+  usePayerLocale,
+} from "./PayerFields";
 import { Spinner } from "./Spinner";
 import { SupportEmail } from "./SupportEmail";
 
@@ -77,37 +83,16 @@ export function BankTransferCheckout({
   // someone when their email bounces, which is a thing that happens and which
   // we cannot detect from a form.
   const [payerX, setPayerX] = useState("");
-  // What language we will write to them in, defaulted from their browser and
-  // SHOWN rather than assumed. A guess about somebody's language is wrong
-  // often enough to be worth putting in front of them — and this is recorded
-  // on the payment, because by the time a transfer is confirmed or a refund
-  // decided, this tab is long gone.
-  //
-  //
-  // READ AFTER MOUNT, not in a lazy initialiser, and the difference is not
-  // stylistic. `navigator` does not exist during the server render, so the
-  // server always produced "en"; a lazy initialiser then produced "ru" on a
-  // Russian browser during hydration, and the two disagreed. Measured in a
-  // real Chromium under `locale: ru-RU`: the control ends up correct, and
-  // React logs error #418 -- a hydration mismatch it recovers from by
-  // re-rendering. So it worked, loudly, by accident.
-  //
-  // Starting at "en" on both sides and correcting in an effect makes the two
-  // renders agree, and the correction is one extra render with no error. The
-  // visible cost is a frame where English is highlighted before the highlight
-  // moves -- which is why the control shows both languages side by side rather
-  // than one sentence replacing another: a highlight moving is a much smaller
-  // thing to see than the text changing under you.
-  const [payerLocale, setPayerLocale] = useState<"en" | "ru">("en");
+  // See usePayerLocale in ./PayerFields: guessed from the browser, shown
+  // rather than assumed, and read after mount so the server and client renders
+  // agree. Recorded on the payment, because by the time a transfer is
+  // confirmed or a refund decided, this tab is long gone.
+  const [payerLocale, setPayerLocale] = usePayerLocale();
 
-  useEffect(() => {
-    if (navigator.language?.toLowerCase().startsWith("ru")) setPayerLocale("ru");
-  }, []);
   // The backend rejects a blank name or an email with no "@" (422). Mirroring
   // exactly that here keeps the button honest rather than letting the payer
   // submit into a validation error.
-  const contactReady =
-    payerName.trim().length > 0 && payerEmail.trim().includes("@");
+  const contactReady = contactGiven(payerName, payerEmail);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -223,12 +208,17 @@ export function BankTransferCheckout({
               </a>{" "}
               page.
             </p>
+            {/* This said "there is no card processor yet" until one was
+                connected. The sentence was true when written and became a
+                false claim about the product the moment the ЮKassa checkout
+                went live above this one — which is the shape of copy that
+                explains a limitation: it outlives the limitation. */}
             <p className="mt-2">
-              <span className="font-medium text-text">Drydock is in beta.</span> There
-              is no card processor yet, so payment is a plain transfer and a person
-              checks each one by hand before releasing your order — expect a wait,
-              usually well under a day. That also means no card details reach us,
-              nothing is stored, and nothing can recur: every payment is a one-off.
+              This is the slower way to pay, and it is here as a fallback for a
+              card that will not go through. A person checks each transfer
+              against the bank statement by hand before your order starts, so
+              expect a wait — usually well under a day, against seconds for the
+              card. Nothing recurs either way: every payment is a one-off.
             </p>
             <p className="mt-2">
               If anything goes wrong, email{" "}
@@ -278,49 +268,11 @@ export function BankTransferCheckout({
               next screen, and by your name if your bank doesn&apos;t let you
               attach one — so use the name on the card you pay from.
             </p>
-            {/*
-              A FIELD, NOT A FOOTNOTE. This was a toggle in `text-xs
-              text-muted` sitting third in a row of identically styled
-              small-print paragraphs, and the first person asked to find it
-              could not — which for a GUESS about somebody's language is nearly
-              the same as not showing it at all. The whole reason it is on the
-              screen is that the guess is wrong often enough to be worth
-              correcting, and a control nobody sees corrects nothing.
-
-              Two named options rather than a toggle. The toggle was labelled
-              with the state it would move TO ("Switch to English" while
-              Russian was selected), which is the standard toggle ambiguity:
-              the label reads equally well as the current setting. Two buttons
-              with `aria-pressed` say what is chosen and what is available at
-              the same time, and each is written in its own language, so
-              neither needs translating to be understood.
-            */}
-            <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 text-sm">
-              <span className="shrink-0 text-muted">
-                {payerLocale === "ru"
-                  ? "Язык писем о платеже"
-                  : "Language for payment emails"}
-              </span>
-              <div className="flex gap-1.5" role="group">
-                {(["en", "ru"] as const).map((code) => (
-                  <button
-                    key={code}
-                    type="button"
-                    aria-pressed={payerLocale === code}
-                    onClick={() => setPayerLocale(code)}
-                    disabled={creating}
-                    className={
-                      "rounded px-2.5 py-1 text-sm disabled:opacity-60 " +
-                      (payerLocale === code
-                        ? "bg-accent text-accent-fg"
-                        : "border border-border text-muted hover:text-text")
-                    }
-                  >
-                    {code === "ru" ? "Русский" : "English"}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <LocaleField
+              value={payerLocale}
+              onChange={setPayerLocale}
+              disabled={creating}
+            />
             <p className="text-xs text-muted">
               Your transfer is confirmed by a person, which can take a few
               hours, so we email you when it lands and if anything is ever
@@ -504,40 +456,6 @@ export function BankTransferCheckout({
 // The editable twin of Field: same bordered row, same muted
 // label on the left and right-aligned value, so the pre-payment inputs and the
 // post-payment bank details read as one list rather than two designs.
-function PayerInput({
-  label,
-  type,
-  autoComplete,
-  placeholder,
-  value,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  type: "text" | "email";
-  autoComplete: string;
-  placeholder: string;
-  value: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <label className="flex items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2 text-sm focus-within:border-accent">
-      <span className="shrink-0 text-muted">{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete={autoComplete}
-        disabled={disabled}
-        maxLength={200}
-        className="w-full min-w-0 bg-transparent text-right outline-hidden disabled:opacity-60"
-      />
-    </label>
-  );
-}
-
 /**
  * The Pro-tier card-payment card. Once the operator confirms, reveals + lets
  * you save the returned API key — the same one-shot delivery as an instant

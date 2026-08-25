@@ -353,7 +353,44 @@ def test_pricing_publishes_the_fixpack_price(monkeypatch):
     monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_RUB", raising=False)
     r = client.get("/v1/pricing")
     assert r.status_code == 200
-    assert r.json() == {"fixpack": {"amount": "990.00", "currency": "RUB"}}
+    assert r.json()["fixpack"] == {"amount": "990.00", "currency": "RUB"}
+
+
+def test_pricing_says_which_ways_to_pay_are_live(monkeypatch):
+    """So the storefront does not learn it by rendering a button, taking a
+    click and answering 503 -- which reads to a buyer as "this is broken",
+    not as "pay the other way"."""
+    monkeypatch.setenv("YOOKASSA_SHOP_ID", "1446255")
+    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "test_x")  # scan-allow: fixture
+    for key, var in bank_transfer._BANK_ENV_FIELDS:
+        monkeypatch.setenv(var, "set")
+
+    assert client.get("/v1/pricing").json()["methods"] == {
+        "card": True, "bank_transfer": True}
+
+
+def test_an_unconfigured_rail_is_not_offered(monkeypatch):
+    monkeypatch.delenv("YOOKASSA_SHOP_ID", raising=False)
+    monkeypatch.delenv("YOOKASSA_SECRET_KEY", raising=False)
+    for key, var in bank_transfer._BANK_ENV_FIELDS:
+        monkeypatch.delenv(var, raising=False)
+
+    body = client.get("/v1/pricing").json()
+
+    assert body["methods"] == {"card": False, "bank_transfer": False}
+    # Still quotes a price. Saying what something costs is not an offer to
+    # take money for it today, and the audit itself is free.
+    assert body["fixpack"]["amount"]
+
+
+def test_half_a_card_credential_is_not_a_way_to_pay(monkeypatch):
+    """Mirrors credentials_from_env: a shop id with no key cannot sign a
+    request, so offering the rail would put a 503 in front of a buyer who was
+    ready to pay."""
+    monkeypatch.setenv("YOOKASSA_SHOP_ID", "1446255")
+    monkeypatch.delenv("YOOKASSA_SECRET_KEY", raising=False)
+
+    assert client.get("/v1/pricing").json()["methods"]["card"] is False
 
 
 def test_pricing_follows_the_configured_price(monkeypatch):

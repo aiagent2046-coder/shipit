@@ -44,8 +44,15 @@ export const REFUND_DAYS = "5 рабочих дней";
  *  policy — the answer to "who is holding my money and where do I complain".
  *
  *  Kept here rather than typed into four documents because it has already
- *  changed twice: the pages named Robokassa while an application to ЮMoney was
- *  under review, so a ЮMoney reviewer opening the offer read that a competitor
- *  processed the payments. One constant means the next switch is one edit and
- *  a test, not a search. */
-export const PAYMENT_PROVIDER = "ЮMoney";
+ *  changed twice, and the second time for a subtler reason than the first.
+ *
+ *  The pages named Robokassa while an application to ЮMoney was under review,
+ *  so a ЮMoney reviewer opening the offer read that a competitor processed the
+ *  payments. Then they named ЮMoney while the connected shop was ЮKassa —
+ *  related brands, and not interchangeable in a document that answers "who is
+ *  holding my money and where do I complain". ЮKassa is the acquiring service
+ *  the payment actually goes through; that is the name on the payment page a
+ *  buyer sees and the one that can act on a complaint.
+ *
+ *  One constant means the next switch is one edit and a test, not a search. */
+export const PAYMENT_PROVIDER = "ЮKassa";
