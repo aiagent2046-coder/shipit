@@ -220,6 +220,22 @@ export interface BillingDetails {
 // that printed "$990.00 RUB" for four days after the switch.
 export interface Pricing {
   fixpack: { amount: string; currency: string };
+  // Which rails are live on this deployment. Absent on an older API, which
+  // the storefront reads as "card off, transfer on" -- the state every
+  // deployment was in before ЮKassa existed.
+  methods?: { card: boolean; bank_transfer: boolean };
+}
+
+// POST /v1/audits/{id}/fixpack/yookassa. Everything needed to send the buyer
+// to the payment page and to name their order afterwards.
+export interface CardPayment {
+  reference: string;
+  amount: string;
+  currency: string;
+  // Always https, and checked as such by the backend before it is returned
+  // (app/billing/yookassa.py::confirmation_url) -- this value navigates a
+  // browser, so it is not somewhere to trust a provider's response shape.
+  confirmation_url: string;
 }
 
 // GET /v1/billing/bank-transfer/{reference}. "expired" is cosmetic: the quote

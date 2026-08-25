@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from fastapi import (
     APIRouter,
@@ -31,6 +32,7 @@ from fastapi import (
     HTTPException,
     Request,
 )
+from pydantic import Field, field_validator
 
 from app.billing import bank_transfer, grant_fixpack, yookassa
 from app.db import (
@@ -111,10 +113,68 @@ def _receipt_settings() -> tuple[int, int | None] | None:
     return vat_code, tax_system_code
 
 
+_ACCESS_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+class CardPayer(PayerContact):
+    """The manual rail's payer, plus where to send them back to.
+
+    `return_token` is the audit's access token, and it exists because the
+    buyer has to be able to READ the page they are returned to. An audit is a
+    per-row capability: `/audit/{id}` without `?token=` renders "No audit found
+    for this link". Until this field existed the return URL was built without
+    one, so a real card buyer would have paid and landed on a page that could
+    not show them what they had bought.
+
+    It is a TOKEN, not a URL, and that is the security of it. Accepting a
+    caller-supplied return address would make this an open redirect with a
+    payment page in front of it: ЮKassa sends the payer wherever we said, and
+    "wherever we said" would be whatever a stranger posted. Here the host and
+    the path are ours and only this one query value varies.
+
+    Anything that is not exactly a 32-character hex token is dropped rather
+    than rejected. It is the shape migration 0010 mints, the buyer did not type
+    it, and losing the order over a mangled query parameter would cost a sale
+    to protect a link.
+    """
+
+    return_token: str | None = Field(default=None, max_length=64)
+
+    @field_validator("return_token")
+    @classmethod
+    def _hex_or_nothing(cls, v: str | None) -> str | None:
+        v = (v or "").strip().lower()
+        return v if _ACCESS_TOKEN_RE.match(v) else None
+
+
+def _return_url(audit_id: str, token: str | None) -> str:
+    """Where ЮKassa sends the payer when they are done.
+
+    `paid=1` MARKS A RETURN, NOT A PAYMENT. The grant is decided by the
+    notification handler below, from an answer ЮKassa gives to a request we
+    make; this flag reaches the page in the payer's own browser and anyone can
+    type it. So it may change what the page SAYS and never what it does -- and
+    what it says has to stay true for someone who typed it, which is why the
+    page's wording is conditional ("if your payment went through") rather than
+    congratulatory.
+
+    Without it the payer lands back on a page that still shows the checkout
+    form, because the notification has not arrived yet, and has no way to tell
+    whether anything happened.
+
+    No quoting: `token` has already been validated to 32 hex characters, and
+    `audit_id` is the path segment this handler was routed on. A value that
+    needed escaping here would mean the validator above had stopped working,
+    which is a thing to fix rather than to paper over.
+    """
+    base = f"{SITE_URL}/audit/{audit_id}"
+    return f"{base}?token={token}&paid=1" if token else f"{base}?paid=1"
+
+
 @router.post("/v1/audits/{audit_id}/fixpack/yookassa", status_code=201)
 async def create_fixpack_payment(
     audit_id: str,
-    payer: PayerContact,
+    payer: CardPayer,
     request: Request,
     payment_repo: PaymentRepository = Depends(get_payment_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
@@ -213,7 +273,7 @@ async def create_fixpack_payment(
     try:
         payment = await yookassa.create_payment(
             credentials=credentials, amount=amount, description=DESCRIPTION,
-            return_url=f"{SITE_URL}/audit/{audit_id}",
+            return_url=_return_url(audit_id, payer.return_token),
             idempotence_key=reference,
             metadata={"reference": reference},
             receipt=receipt, transport=transport,

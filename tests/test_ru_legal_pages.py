@@ -111,13 +111,22 @@ def test_the_pages_take_the_price_from_one_place() -> None:
         assert "./price" in read(name) or "../price" in read(name), name
 
 
-def test_no_page_still_names_the_previous_payment_provider() -> None:
-    """A ЮMoney reviewer opening the offer read that Robokassa processed the
+def test_no_page_still_names_a_previous_payment_provider() -> None:
+    """This has now been wrong twice, in two different ways.
+
+    A ЮMoney reviewer opening the offer read that Robokassa processed the
     payments, because the pages named the aggregator whose application was
-    under review LAST time. One constant now, so the next switch is one edit."""
+    under review LAST time. Then they named ЮMoney while the connected shop was
+    ЮKassa -- related brands, and not interchangeable in a document that
+    answers "who is holding my money and where do I complain".
+
+    Bare "ЮMoney" is the check, so ЮKassa passes and the old name does not.
+    """
     for name in PAGES:
-        assert "Robokassa" not in read(name), name
-    assert _const("PAYMENT_PROVIDER")
+        body = read(name)
+        assert "Robokassa" not in body, name
+        assert "ЮMoney" not in body.replace("ЮMoneyKassa", ""), name
+    assert _const("PAYMENT_PROVIDER") == "ЮKassa"
 
 
 def test_the_provider_is_named_where_money_and_data_change_hands() -> None:

@@ -56,6 +56,12 @@ function AuditPageInner() {
   const id = params.id;
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
+  // Set by the return URL ЮKassa sends the payer back to. A MARKER, NOT A
+  // FACT: it arrives in the buyer's own browser and anybody can type it, so it
+  // may change what this page says and never what it does. Hence the wording
+  // below is conditional -- it has to stay true for someone who added the
+  // parameter by hand.
+  const returnedFromPayment = searchParams.get("paid") === "1";
   const [view, setView] = useState<View | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -293,10 +299,25 @@ function AuditPageInner() {
             </div>
           </div>
 
+          {returnedFromPayment && (
+            <div className="mt-8 rounded-xl border border-accent/40 bg-accent/10 p-4">
+              <p className="font-semibold text-accent">
+                You&apos;ve come back from the payment page.
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                If the payment went through, your Fix Pack starts on its own —
+                usually within a few seconds — and its progress appears below.
+                You don&apos;t need to pay again or keep this tab open; we email
+                you either way.
+              </p>
+            </div>
+          )}
+
           <FixpackPurchase
             auditId={view.id}
             repoUrl={view.repoUrl}
             autoFixable={view.autoFixable}
+            accessToken={token}
           />
 
           <RlsCheck auditId={view.id} token={token} repoUrl={view.repoUrl} />

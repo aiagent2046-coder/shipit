@@ -207,6 +207,63 @@ def test_an_unknown_audit_is_not_sold_a_fix_pack() -> None:
     assert resp.status_code == 404
 
 
+# --- coming back afterwards -------------------------------------------------
+
+TOKEN = "81a43fa1e47aacf98be92f2953abfc36"  # scan-allow: fixture audit token
+
+
+def _return_url_sent(seen: list[httpx.Request]) -> str:
+    return json.loads(seen[0].content)["confirmation"]["return_url"]
+
+
+def test_the_payer_is_returned_to_a_page_they_can_actually_read() -> None:
+    """An audit is a per-row capability (migration 0010): `/audit/{id}` with no
+    `?token=` renders "No audit found for this link". The return URL was built
+    without one until this test existed, so a real card buyer would have paid
+    and landed on a page that could not show them what they had bought."""
+    payments, (audits, audit_id) = FakePaymentRepo(), _audit_with_findings()
+    seen: list[httpx.Request] = []
+    _wire(payments, audits, transport=_created(seen))
+
+    client.post(f"/v1/audits/{audit_id}/fixpack/yookassa",
+                json={**PAYER, "return_token": TOKEN})
+
+    assert _return_url_sent(seen) == (
+        f"https://drydock.co/audit/{audit_id}?token={TOKEN}&paid=1")
+
+
+def test_a_return_address_is_never_taken_from_the_caller() -> None:
+    """The field is a TOKEN, not a URL, and this is why. ЮKassa sends the payer
+    wherever we say; accepting an address would make that "wherever a stranger
+    posted", which is an open redirect with a payment page in front of it."""
+    payments, (audits, audit_id) = FakePaymentRepo(), _audit_with_findings()
+    seen: list[httpx.Request] = []
+    _wire(payments, audits, transport=_created(seen))
+
+    resp = client.post(
+        f"/v1/audits/{audit_id}/fixpack/yookassa",
+        json={**PAYER, "return_token": "https://phishing.example/steal"})
+
+    assert resp.status_code == 201
+    assert _return_url_sent(seen).startswith(
+        f"https://drydock.co/audit/{audit_id}")
+    assert "phishing.example" not in _return_url_sent(seen)
+
+
+def test_a_missing_token_still_sells_a_fix_pack() -> None:
+    """Dropped, not rejected: the buyer did not type it, and losing the order
+    over a mangled query parameter would cost a sale to protect a link."""
+    payments, (audits, audit_id) = FakePaymentRepo(), _audit_with_findings()
+    seen: list[httpx.Request] = []
+    _wire(payments, audits, transport=_created(seen))
+
+    resp = client.post(f"/v1/audits/{audit_id}/fixpack/yookassa", json=PAYER)
+
+    assert resp.status_code == 201
+    assert _return_url_sent(seen) == (
+        f"https://drydock.co/audit/{audit_id}?paid=1")
+
+
 # --- the notification is a rumour -------------------------------------------
 
 def _notify(body: dict, *, source: str = TRUSTED):
