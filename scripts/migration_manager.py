@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import os
 import re
 import shutil
@@ -398,15 +399,97 @@ def require_command(command: str) -> None:
         )
 
 
+def env_file_path() -> Path:
+    """Where a deployment keeps its environment. Same default and same override
+    as deploy/scripts/deploy-production.sh, so the two agree about which file
+    is in charge on a host that has one."""
+    return Path(os.environ.get("SHIPIT_ENV_FILE", "/opt/shipit/.env"))
+
+
+def database_url_from_env_file(path: Path) -> str:
+    """DATABASE_URL out of an env file, or "" when there is nothing to read.
+
+    THE READER IS BORROWED, NOT REWRITTEN. read_env_file lives in
+    deploy/scripts/validate-production-env.py and already handles the quoting
+    this file uses -- values wrapped in single or double quotes, which
+    /opt/shipit/.env needs because a bank name contains «» and an address
+    contains spaces. A second parser here would be a second set of quoting
+    rules to keep in step, and the failure mode of getting that wrong is a DSN
+    silently truncated at the first special character. That has already
+    happened once on this deployment, to an SMTP password, through `set -a; .
+    .env` in bash -- which is exactly the incantation this function exists to
+    stop anybody needing.
+
+    Returns "" rather than raising for anything unreadable: a missing env file
+    is the ordinary case on a developer's machine, and the caller's error
+    message is more useful than this one's.
+    """
+    if not path.is_file():
+        return ""
+
+    validator = (
+        Path(__file__).resolve().parent.parent
+        / "deploy" / "scripts" / "validate-production-env.py"
+    )
+    if not validator.is_file():
+        return ""
+
+    spec = importlib.util.spec_from_file_location(
+        "shipit_migration_env_reader", validator)
+    if spec is None or spec.loader is None:
+        return ""
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        reader = getattr(module, "read_env_file", None)
+        if not callable(reader):
+            return ""
+        values = reader(path)
+    except Exception:  # noqa: BLE001
+        # Never explain: an exception raised while parsing an env file has a
+        # good chance of quoting a line of it.
+        return ""
+
+    if not isinstance(values, dict):
+        return ""
+    return str(values.get("DATABASE_URL", "")).strip()
+
+
 def database_url() -> str:
+    """The database to act on: the environment first, the env file second.
+
+    THAT ORDER IS THE SAFETY PROPERTY, and it is deliberately the opposite of
+    deploy/scripts/check_release_migrations.py, which lets the file win. That
+    gate runs only on the production host, invoked by the deploy script, and
+    there the file IS the authority. This runs anywhere -- a developer's
+    laptop, CI against a service container, a production shell -- and if the
+    file won, an engineer with DATABASE_URL pointing at a local Postgres would
+    apply migrations to production because a file they never looked at existed
+    on the box.
+
+    Reading the file at all is new. Until 2026-08-25 this took the environment
+    and nothing else, so the documented release sequence -- apply_migrations.sh
+    then deploy-production.sh, run back to back in the same directory -- failed
+    on the first command from a fresh shell, while the second read the same
+    file happily. The workaround people reach for is `set -a; . /opt/shipit/.env`,
+    and on this deployment that silently truncated an SMTP password at a `$` and
+    cost an afternoon. A step that needs a dangerous incantation to work is a
+    step that will get one.
+    """
     value = os.environ.get("DATABASE_URL", "").strip()
+    if value:
+        return value
 
-    if not value:
-        raise MigrationError(
-            "DATABASE_URL is required"
-        )
+    path = env_file_path()
+    value = database_url_from_env_file(path)
+    if value:
+        return value
 
-    return value
+    raise MigrationError(
+        "DATABASE_URL is required: set it in the environment, or put it in "
+        f"{path} (override with SHIPIT_ENV_FILE)"
+    )
 
 
 def redact_dsn(text: str) -> str:
