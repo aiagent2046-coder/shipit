@@ -1051,9 +1051,14 @@ async def test_bank_transfer_payer_contact_round_trips(real_db):
     # which is the only moment this column is ever read.
     from app.notify import messages
     assert messages.normalize(by_ref["payer_locale"]) == "ru"
+    # confirmed_by_hand=True because this row IS a bank transfer -- the one
+    # rail a person confirms by reading a statement. The flag has no default
+    # on purpose: the other value produces "your payment went through", which
+    # would be a true sentence about the wrong payment.
     assert "Мы подтвердили" in messages.confirmation_body(
         product="pro_tier", reference=by_ref["external_ref"],
-        site_url="https://drydock.co", locale=by_ref["payer_locale"])
+        site_url="https://drydock.co", locale=by_ref["payer_locale"],
+        confirmed_by_hand=True)
 
 
 async def test_a_refund_date_survives_the_round_trip(real_db):

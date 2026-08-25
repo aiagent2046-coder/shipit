@@ -695,12 +695,18 @@ def _confirmation_body(
     write them in. They were here, in English only, until the storefront's
     Russian pages made that a customer translating our reassurance about their
     own money.
+
+    WHICH RAIL TOOK THE MONEY DECIDES THE FIRST SENTENCE. This module's own
+    provider is the only one a person confirms by hand; every other rail
+    confirms itself, and telling a card payer we have "confirmed your bank
+    transfer" describes a payment they never made.
     """
     return messages.confirmation_body(
         product=product,
         reference=str(row.get("external_ref") or ""),
         site_url=tg.SITE_URL,
         locale=locale,
+        confirmed_by_hand=row.get("provider") == PROVIDER,
     )
 
 

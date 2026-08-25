@@ -80,6 +80,23 @@ gate "added secrets" "$PY" .github/scripts/scan-added-secrets.py "$BASE_SHA" "$H
 gate "ruff"          "$RUFF" check .
 gate "pytest"        "$PY" -m pytest -q
 
+# The Postgres smoke suite is collected by the gate above and SKIPS itself
+# without a database, so a green pytest here can mean "everything passed" or
+# "everything runnable passed" -- and those look identical.
+#
+# On 2026-08-25 a keyword argument gained a required parameter, every call site
+# in tests/ was updated except the one in test_db_postgres_smoke.py, preflight
+# said all gates passed, and CI failed on a TypeError. The suite was not run;
+# it was skipped, silently, in the middle of a count of passes.
+#
+# Not a gate, because a laptop without Postgres is a normal place to work and
+# refusing to finish there would teach people to stop running this. A line
+# instead, in the same spirit as the web block below: skipping is fine, and
+# skipping without saying so is not.
+if [ -z "${DATABASE_URL:-}" ]; then
+    echo "postgres smoke              SKIPPED (no DATABASE_URL; CI runs it)"
+fi
+
 # The web build is the slowest gate and the only one that needs node_modules,
 # so it runs only when the diff can affect it. Skipping it silently when web/
 # is untouched is correct; skipping it silently when web/ IS touched is how a
