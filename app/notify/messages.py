@@ -59,7 +59,7 @@ def normalize(value: str | None) -> str:
     return primary if primary in SUPPORTED else EN
 
 
-# --- a bank transfer the operator has confirmed -----------------------------
+# --- a payment that has landed ----------------------------------------------
 
 _CONFIRMED_SUBJECT = {
     EN: "Payment confirmed — your {product} is active",
@@ -99,14 +99,36 @@ _WHAT_HAPPENS_NEXT = {
     },
 }
 
+# HOW IT LANDED, not which provider took it.
+#
+# This was one sentence -- "We have confirmed your bank transfer" -- written
+# when a bank transfer was the only way to pay. The first person to buy with a
+# card was then told we had confirmed a transfer they never made, which reads
+# as a message about somebody else's payment.
+#
+# Keyed on whether a human confirmed it rather than on the provider's name, so
+# a rail added later needs no new sentence: what the payer cares about is
+# whether somebody had to look, and the manual line is doing real work when
+# they did -- it says the wait is over.
+_CONFIRMED_OPENING = {
+    EN: {
+        True: "We have confirmed your bank transfer. Thank you.",
+        False: "Your payment went through. Thank you.",
+    },
+    RU: {
+        True: "Мы подтвердили ваш перевод. Спасибо.",
+        False: "Ваш платёж прошёл. Спасибо.",
+    },
+}
+
 _CONFIRMED_BODY = {
     EN: (
-        "We have confirmed your bank transfer. Thank you.\n\n"
+        "{opening}\n\n"
         "{next}\n\n"
         "Order reference: {reference}"
     ),
     RU: (
-        "Мы подтвердили ваш перевод. Спасибо.\n\n"
+        "{opening}\n\n"
         "{next}\n\n"
         "Номер заказа: {reference}"
     ),
@@ -121,11 +143,19 @@ def confirmation_subject(*, product: str, locale: str | None) -> str:
 
 def confirmation_body(
     *, product: str, reference: str, site_url: str, locale: str | None,
+    confirmed_by_hand: bool,
 ) -> str:
+    """`confirmed_by_hand` has no default, deliberately. A caller that forgets
+    it is a caller that would have picked one of these two sentences by
+    accident, and the wrong one is a message about a payment the reader never
+    made."""
     lang = normalize(locale)
     nexts = _WHAT_HAPPENS_NEXT[lang]
     what = nexts.get(product, nexts["pro_tier"]).format(site=site_url)
-    return _CONFIRMED_BODY[lang].format(next=what, reference=reference)
+    return _CONFIRMED_BODY[lang].format(
+        opening=_CONFIRMED_OPENING[lang][bool(confirmed_by_hand)],
+        next=what, reference=reference,
+    )
 
 
 # --- a refund the operator has sent -----------------------------------------

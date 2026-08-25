@@ -1378,3 +1378,19 @@ def test_a_real_secret_is_still_sellable(monkeypatch):
         assert len(payments.rows) == 1
     finally:
         _clear()
+
+
+def test_the_opening_sentence_follows_the_rail_that_took_the_money():
+    """The join between the row and the wording, which is where this went
+    wrong: both rails share _tell_the_payer, so the sentence has to be chosen
+    from the payment rather than from which module the function lives in."""
+    card = bank_transfer._confirmation_body(
+        {"provider": "yookassa", "external_ref": "DRY-J2SRUB"},
+        product="fixpack", locale="ru")
+    transfer = bank_transfer._confirmation_body(
+        {"provider": bank_transfer.PROVIDER, "external_ref": "DRY-BANK24"},
+        product="fixpack", locale="ru")
+
+    assert "перевод" not in card.lower(), (
+        "a card payer was told we confirmed a transfer they never made")
+    assert "перевод" in transfer.lower()

@@ -60,7 +60,7 @@ def test_a_confirmation_carries_the_reference_in_every_language(
     helped."""
     body = messages.confirmation_body(
         product=product, reference="DRY-ABC123",
-        site_url="https://drydock.co", locale=locale,
+        site_url="https://drydock.co", locale=locale, confirmed_by_hand=True
     )
     assert "DRY-ABC123" in body
     # And no unfilled placeholder survived into what the customer reads.
@@ -74,7 +74,7 @@ def test_a_fix_pack_confirmation_says_a_pull_request_is_coming(locale) -> None:
     exactly what drift looks like."""
     body = messages.confirmation_body(
         product="fixpack", reference="DRY-1", site_url="https://drydock.co",
-        locale=locale,
+        locale=locale, confirmed_by_hand=True
     )
     assert ("pull request" in body) or ("пул-реквест" in body)
     assert "/link" not in body
@@ -84,7 +84,7 @@ def test_a_fix_pack_confirmation_says_a_pull_request_is_coming(locale) -> None:
 def test_a_pro_confirmation_points_at_where_the_key_is(locale) -> None:
     body = messages.confirmation_body(
         product="pro_tier", reference="DRY-1", site_url="https://drydock.co",
-        locale=locale,
+        locale=locale, confirmed_by_hand=True
     )
     assert "https://drydock.co/link" in body
 
@@ -96,7 +96,7 @@ def test_an_unknown_product_still_produces_a_message(locale) -> None:
     where the money has already moved."""
     body = messages.confirmation_body(
         product="something-new", reference="DRY-1",
-        site_url="https://drydock.co", locale=locale,
+        site_url="https://drydock.co", locale=locale, confirmed_by_hand=True
     )
     assert body and "DRY-1" in body
     assert messages.confirmation_subject(product="something-new", locale=locale)
@@ -150,7 +150,7 @@ def test_no_body_carries_its_own_sign_off(locale) -> None:
     bodies = [
         messages.confirmation_body(
             product="fixpack", reference="R", site_url="https://drydock.co",
-            locale=locale),
+            locale=locale, confirmed_by_hand=True),
         messages.refund_body(
             amount=1.0, currency="USD", reference="R", locale=locale),
     ]
@@ -213,9 +213,11 @@ def test_every_supported_language_has_every_message() -> None:
         for product in ("fixpack", "pro_tier"):
             assert messages.confirmation_subject(
                 product=product, locale=locale)
-            assert messages.confirmation_body(
-                product=product, reference="R",
-                site_url="https://drydock.co", locale=locale)
+            for by_hand in (True, False):
+                assert messages.confirmation_body(
+                    product=product, reference="R",
+                    site_url="https://drydock.co", locale=locale,
+                    confirmed_by_hand=by_hand)
 
 
 def test_the_two_languages_are_actually_different() -> None:
@@ -229,3 +231,43 @@ def test_the_two_languages_are_actually_different() -> None:
     assert en != ru
     assert any("Ѐ" <= c <= "ӿ" for c in ru), "no Cyrillic in the Russian"
     assert not any("Ѐ" <= c <= "ӿ" for c in en), "Cyrillic in the English"
+
+
+# --- which rail took the money ----------------------------------------------
+
+def test_a_card_payer_is_not_told_we_confirmed_a_transfer() -> None:
+    """WHAT THE FIRST REAL CARD BUYER READ. The opening sentence was written
+    when a bank transfer was the only way to pay and said so outright, so the
+    first person to buy with a card was told we had confirmed a transfer they
+    never made -- which reads as a message about somebody else's payment."""
+    for locale in SUPPORTED:
+        body = messages.confirmation_body(
+            product="fixpack", reference="DRY-J2SRUB",
+            site_url="https://drydock.co", locale=locale,
+            confirmed_by_hand=False,
+        )
+        assert "transfer" not in body.lower()
+        assert "перевод" not in body.lower()
+
+
+def test_a_transfer_payer_is_still_told_a_person_confirmed_it() -> None:
+    """That sentence is doing real work where it belongs: a transfer waits on
+    somebody reading a bank statement, and this is how the payer learns the
+    wait is over."""
+    assert "bank transfer" in messages.confirmation_body(
+        product="fixpack", reference="DRY-BANK24",
+        site_url="https://drydock.co", locale="en", confirmed_by_hand=True)
+    assert "перевод" in messages.confirmation_body(
+        product="fixpack", reference="DRY-BANK24",
+        site_url="https://drydock.co", locale="ru", confirmed_by_hand=True)
+
+
+def test_both_openings_still_say_what_happens_next() -> None:
+    """The opening changes; the part the payer actually needs must not."""
+    for by_hand in (True, False):
+        body = messages.confirmation_body(
+            product="fixpack", reference="DRY-BANK24",
+            site_url="https://drydock.co", locale="ru",
+            confirmed_by_hand=by_hand)
+        assert "пул-реквест" in body
+        assert "DRY-BANK24" in body
