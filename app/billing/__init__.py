@@ -318,7 +318,8 @@ async def grant_fixpack(
 
     if invoice_payment_id is not None:
         completed = await payment_repo.mark_completed_fixpack(
-            invoice_payment_id, external_ref=external_ref
+            invoice_payment_id, external_ref=external_ref,
+            fixpack_job_id=str(job["id"]),
         )
         if completed is None:
             # The CAS gate refused: the invoice is already completed under a
@@ -339,6 +340,7 @@ async def grant_fixpack(
             account_id=None, provider=provider, external_ref=external_ref,
             amount=amount, currency=currency, status="completed",
             tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
+            fixpack_job_id=str(job["id"]),
         )
         if created is None:
             return None  # DATABASE_URL not configured -- nothing persisted.

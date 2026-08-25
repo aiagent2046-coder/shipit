@@ -424,6 +424,8 @@ def _row_to_payment(row: dict[str, Any]) -> dict[str, Any]:
     d["account_id"] = str(d["account_id"]) if d["account_id"] else None
     if d.get("audit_id"):
         d["audit_id"] = str(d["audit_id"])
+    if d.get("fixpack_job_id"):
+        d["fixpack_job_id"] = str(d["fixpack_job_id"])
     # amount is a Postgres `numeric` -> decimal.Decimal -> a JSON *string*
     # under the default encoder; cast to float so it serializes as a number,
     # same fix as score_total in _row_to_audit.
@@ -1778,6 +1780,7 @@ class PaymentRepository:
         payer_name: str | None = None, payer_email: str | None = None,
         payer_x: str | None = None, payer_locale: str | None = None,
         provider_payment_id: str | None = None,
+        fixpack_job_id: str | None = None,
     ) -> dict[str, Any] | None:
         """payer_name/payer_email (migration 0026) and payer_x (0032) are what
         the payer said about themselves before paying. The name is for the
@@ -1788,13 +1791,21 @@ class PaymentRepository:
         `paypal_order_id` (migration 0018) is still SELECTed and still holds
         the rows PayPal wrote, but nothing sets it any more: PayPal was removed
         as a way to pay. Reading the books is not the same as keeping the till
-        open, and the column is the books."""
+        open, and the column is the books.
+
+        `fixpack_job_id` (migration 0035) is which job this order paid for, and
+        it goes in with this INSERT rather than in a later UPDATE because
+        grant_fixpack already holds the job by the time it gets here. audit_id
+        cannot stand in for it: one audit can hold several jobs and several
+        orders, and picking among them by time misdirects the message that
+        tells a buyer what happened to their money."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return None
         parsed_account_id = uuid.UUID(account_id) if account_id else None
         parsed_audit_id = uuid.UUID(audit_id) if audit_id else None
+        parsed_job_id = uuid.UUID(fixpack_job_id) if fixpack_job_id else None
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
@@ -1802,18 +1813,19 @@ class PaymentRepository:
                     (account_id, provider, external_ref, amount, currency,
                      status, tier_granted, product, audit_id,
                      payer_name, payer_email, payer_x, payer_locale,
-                     provider_payment_id)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     provider_payment_id, fixpack_job_id)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s)
                 returning id, account_id, provider, external_ref, amount,
                           currency, status, tier_granted, telegram_chat_id,
                           product, audit_id, paypal_order_id, payer_name,
                           payer_email, payer_x, payer_locale,
-                          provider_payment_id, created_at
+                          provider_payment_id, fixpack_job_id, created_at
                 """,
                 (parsed_account_id, provider, external_ref, amount, currency,
                  status, tier_granted, product, parsed_audit_id,
                  payer_name, payer_email, payer_x, payer_locale,
-                 provider_payment_id),
+                 provider_payment_id, parsed_job_id),
             )
             row = await cur.fetchone()
         return _row_to_payment(row)
@@ -1890,24 +1902,34 @@ class PaymentRepository:
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
 
-    async def get_completed_fixpack_by_audit(
-        self, audit_id: str
+    async def get_completed_fixpack_for_job(
+        self, fixpack_job_id: str
     ) -> dict[str, Any] | None:
-        """The paid Fix Pack order for one audit, newest first.
+        """The order that paid for one Fix Pack job, or None.
 
-        THE JOB KNOWS ITS AUDIT AND NOTHING ELSE. app/main.py's processor is
+        THE ONE LINK FROM A JOB BACK TO ITS BUYER. app/main.py's processor is
         handed a fixpack_jobs row, and when a job ends with nothing to fix the
         person who paid has to be told -- but their name, address, language and
-        order number all live on the payment. This is the one link from a job
-        back to its buyer, and it did not exist while that outcome was silent.
+        order number all live on the payment.
 
-        `product = 'fixpack'` is not decoration. An audit can carry both a Pro
-        purchase and a Fix Pack order under the same account; writing to the
-        wrong one would quote an order number that buys something else.
+        AN EARLIER VERSION OF THIS LOOKED THE PAYER UP BY AUDIT and took the
+        newest order, and that was wrong in a way worth naming. One audit can
+        hold several jobs and several orders: migration 0025 allows one LIVE
+        job per audit, but re-buying after a terminal one is supported and
+        inserts a fresh row. On 2026-08-25 a single audit ended the day with
+        four jobs and five orders, and the by-audit lookup would have told one
+        buyer twice, told the other not at all, and paged the operator twice
+        with one order number -- leaving the second refund unsent.
 
-        Newest first because re-buying after a delivered Fix Pack is a
-        supported flow (see _reject_if_fixpack_already_live): the job that just
-        ran belongs to the most recent order, not the first.
+        Migration 0035 records the pairing instead of inferring it. Rows
+        written before it are linked only where the pairing was unambiguous, so
+        None here means "this cannot be known", not "there was no payment", and
+        callers must not fall back to guessing by audit -- the rows where a
+        guess is possible are exactly the rows where it is wrong.
+
+        `product = 'fixpack'` remains, though the join now implies it: a
+        defensive predicate on a column that decides whose money is discussed
+        costs nothing and refuses a mislinked row rather than describing it.
         """
         try:
             pool = await get_pool()
@@ -1920,14 +1942,14 @@ class PaymentRepository:
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
                        payer_email, payer_x, payer_locale,
-                       provider_payment_id, created_at
+                       provider_payment_id, fixpack_job_id, created_at
                 from payments
-                where audit_id = %s and product = 'fixpack'
+                where fixpack_job_id = %s and product = 'fixpack'
                   and status = 'completed'
                 order by created_at desc
                 limit 1
                 """,
-                (audit_id,),
+                (fixpack_job_id,),
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
@@ -2088,7 +2110,8 @@ class PaymentRepository:
         return _row_to_payment(row) if row else None
 
     async def mark_completed_fixpack(
-        self, payment_id: str, *, external_ref: str
+        self, payment_id: str, *, external_ref: str,
+        fixpack_job_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Transition a pending Fix Pack invoice to completed, stamping the
         provider's charge id as its external_ref. The Fix Pack counterpart to
@@ -2097,22 +2120,37 @@ class PaymentRepository:
 
         Identical compare-and-set gate, same three outcomes, same obligation on
         the caller to tell a returned row from None: see mark_completed. None
-        when DATABASE_URL isn't set."""
+        when DATABASE_URL isn't set.
+
+        `fixpack_job_id` (migration 0035) rides along on the same UPDATE that
+        completes the order, so the link between an order and the job it bought
+        is written by the statement that makes the order real -- never by a
+        later write that a crash could skip. This is the branch a card payment
+        takes: the pending row exists from checkout, and grant_fixpack has the
+        job in hand when it calls this.
+
+        COALESCE, so a retry cannot blank a link an earlier attempt already
+        wrote. The CAS gate lets a second call through when it carries the same
+        external_ref -- that is what makes the grant retry-safe -- and a retry
+        that reached here with no job id would otherwise erase the pairing."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return None
+        parsed_job_id = uuid.UUID(fixpack_job_id) if fixpack_job_id else None
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
                 update payments
-                set status = 'completed', external_ref = %s
+                set status = 'completed', external_ref = %s,
+                    fixpack_job_id = coalesce(%s, fixpack_job_id)
                 where id = %s and (status = 'pending'
                                    or (status = 'completed'
                                        and external_ref = %s))
-                returning id, status, account_id, external_ref
+                returning id, status, account_id, external_ref, fixpack_job_id
                 """,
-                (external_ref, uuid.UUID(payment_id), external_ref),
+                (external_ref, parsed_job_id, uuid.UUID(payment_id),
+                 external_ref),
             )
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None

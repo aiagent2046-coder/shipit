@@ -824,6 +824,151 @@ async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db):
     await fixpack_repo.mark_status(job["id"], "failed", "smoke cleanup")
 
 
+async def test_two_orders_on_one_audit_each_find_their_own_buyer(real_db):
+    """Migration 0035, against the real schema: which order bought which job.
+
+    ONE AUDIT CAN HOLD SEVERAL JOBS AND SEVERAL ORDERS. Migration 0025's
+    partial unique index allows one LIVE job per audit, so re-buying is refused
+    while one runs -- but create_paid deliberately inserts a fresh row once the
+    previous job is terminal, because re-buying after a delivered or failed Fix
+    Pack is supported. On 2026-08-25 audit 2031a34d ended the day with four
+    jobs and five orders.
+
+    Looking the buyer up by audit therefore answers with whichever order is
+    newest, for every job on that audit. The code that tells a buyer their Fix
+    Pack found nothing to change would have written to one of them twice and to
+    the other not at all, and paged the operator twice with a single order
+    number -- leaving the second refund unsent.
+
+    Only real Postgres shows this: the pairing is a foreign key and a WHERE
+    clause, and an in-memory fake keyed by job id agrees with itself no matter
+    what the SQL does."""
+    from app.billing import grant_fixpack
+
+    audit_repo = AuditRepository()
+    payment_repo = PaymentRepository()
+    fixpack_repo = FixpackJobRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _fixpack_audit(audit_repo, run)
+
+    bought = []
+    for nth in ("first", "second"):
+        invoice = await payment_repo.create(
+            account_id=None, provider="yookassa", external_ref=None,
+            amount=990.0, currency="RUB", status="pending", tier_granted=None,
+            product="fixpack", audit_id=audit_id,
+            payer_email=f"{nth}-{run}@example.invalid", payer_locale="ru",
+        )
+        assert invoice is not None, "DATABASE_URL not reaching get_pool"
+        job = await grant_fixpack(
+            fixpack_repo=fixpack_repo, payment_repo=payment_repo,
+            audit_repo=audit_repo, provider="yookassa",
+            external_ref=f"DRY-{nth.upper()[:3]}{run[:3].upper()}",
+            amount=990.0, currency="RUB", audit_id=audit_id,
+            invoice_payment_id=invoice["id"],
+        )
+        assert job is not None
+        bought.append((job["id"], invoice["id"]))
+        # Terminal, so the next purchase inserts a fresh job rather than
+        # joining this one -- the flow that creates the ambiguity.
+        await fixpack_repo.mark_status(job["id"], "no_fix_needed")
+
+    (job_one, payment_one), (job_two, payment_two) = bought
+    assert job_one != job_two, (
+        "the second purchase joined the first job -- this test proves nothing "
+        "unless the audit really holds two jobs"
+    )
+
+    found_one = await payment_repo.get_completed_fixpack_for_job(job_one)
+    found_two = await payment_repo.get_completed_fixpack_for_job(job_two)
+
+    assert found_one is not None and found_two is not None
+    assert found_one["id"] == payment_one
+    assert found_two["id"] == payment_two
+    # The failure this replaces: both jobs answering with the newest order.
+    assert found_one["id"] != found_two["id"]
+    assert found_one["payer_email"] != found_two["payer_email"]
+
+
+async def test_a_retried_completion_does_not_blank_the_job_it_already_linked(
+    real_db,
+):
+    """The CAS gate in mark_completed_fixpack admits a SECOND call carrying the
+    same external_ref -- that is what makes the grant retry-safe. A retry that
+    arrives without a job id must therefore leave the link alone rather than
+    overwrite it with NULL, which is what a bare assignment would do and what
+    the COALESCE in the SQL prevents.
+
+    Without this the link would be present or absent depending on how many
+    times a webhook fired, and the outcome of that is a buyer who is told
+    nothing because a retry erased the only pointer to their order."""
+    audit_repo = AuditRepository()
+    payment_repo = PaymentRepository()
+    fixpack_repo = FixpackJobRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _fixpack_audit(audit_repo, run)
+
+    job = await fixpack_repo.create_paid(audit_id=audit_id, stack="fastapi")
+    assert job is not None
+    invoice = await payment_repo.create(
+        account_id=None, provider="yookassa", external_ref=None,
+        amount=990.0, currency="RUB", status="pending", tier_granted=None,
+        product="fixpack", audit_id=audit_id,
+    )
+    assert invoice is not None, "DATABASE_URL not reaching get_pool"
+    charge = f"DRY-RTRY{run[:2].upper()}"
+
+    first = await payment_repo.mark_completed_fixpack(
+        invoice["id"], external_ref=charge, fixpack_job_id=job["id"])
+    assert first is not None
+    assert first["fixpack_job_id"] == job["id"]
+
+    # The retry: same charge, no job id passed.
+    again = await payment_repo.mark_completed_fixpack(
+        invoice["id"], external_ref=charge)
+    assert again is not None, "the CAS gate refused a replay of the same charge"
+    assert again["fixpack_job_id"] == job["id"], (
+        "the retry blanked the link -- the buyer of this order can no longer "
+        "be found from their job"
+    )
+
+    found = await payment_repo.get_completed_fixpack_for_job(job["id"])
+    assert found is not None and found["id"] == invoice["id"]
+
+    await fixpack_repo.mark_status(job["id"], "failed", "smoke cleanup")
+
+
+async def test_a_job_nobody_paid_for_is_not_matched_to_someone_elses_order(
+    real_db,
+):
+    """None means "this cannot be known", and callers rely on that: on None the
+    processor pages the operator without an order number and writes to no
+    customer. A lookup that fell back to the audit would hand this job the
+    other buyer's order and put "we are refunding you" in front of somebody who
+    is owed nothing."""
+    audit_repo = AuditRepository()
+    payment_repo = PaymentRepository()
+    fixpack_repo = FixpackJobRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _fixpack_audit(audit_repo, run)
+
+    paid = await payment_repo.create(
+        account_id=None, provider="yookassa", external_ref=f"DRY-PAID{run[:2]}",
+        amount=990.0, currency="RUB", status="completed", tier_granted=None,
+        product="fixpack", audit_id=audit_id,
+    )
+    assert paid is not None, "DATABASE_URL not reaching get_pool"
+
+    # A job on the same audit that no order points at.
+    orphan = await fixpack_repo.create_paid(audit_id=audit_id, stack="fastapi")
+    assert orphan is not None
+
+    assert await payment_repo.get_completed_fixpack_for_job(
+        orphan["id"]) is None
+
+    await fixpack_repo.mark_status(orphan["id"], "failed", "smoke cleanup")
+
+
 async def test_the_processor_locks_do_not_serialize_against_each_other(real_db):
     """The distinct keys are load-bearing, on REAL Postgres: holding one
     processor's lock must not block another's. A shared key would silently
@@ -1146,7 +1291,8 @@ async def test_payer_contact_is_not_format_checked_by_the_database(real_db):
 
 
 # Every foreign key in the schema, with the delete action it is meant to have.
-# Ten are NO ACTION, reviewed 2026-08-02 -- see "Known gaps" in
+# Eleven are NO ACTION -- ten reviewed 2026-08-02 and payments.fixpack_job_id
+# added 2026-08-25 with migration 0035 -- see "Known gaps" in
 # docs/status-active.md for the reasoning. The short version: NO ACTION cannot
 # orphan a row, it refuses the delete that would; nothing in the application
 # deletes a parent; and four of these keys reach money, where a cascade would
@@ -1178,6 +1324,7 @@ EXPECTED_DELETE_ACTIONS = {
     "llm_usage_audit_job_id_fkey": "NO ACTION",
     "payments_account_id_fkey": "NO ACTION",
     "payments_audit_id_fkey": "NO ACTION",
+    "payments_fixpack_job_id_fkey": "NO ACTION",
     "rls_live_checks_audit_id_fkey": "SET NULL",
     "subscriptions_account_id_fkey": "NO ACTION",
 }

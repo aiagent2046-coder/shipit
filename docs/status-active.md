@@ -1016,7 +1016,14 @@ allowed request headers are `Authorization` and `Content-Type`.
   deliberate.** Reviewed 2026-08-02 across ten of them: `audit_jobs.{audit_id,
   account_id}`, `fixpack_jobs.audit_id`, `fix_outcomes.{audit_id,
   fixpack_job_id}`, `llm_usage.{account_id,audit_job_id}`,
-  `payments.{account_id,audit_id}`, `subscriptions.account_id`.
+  `payments.{account_id,audit_id}`, `subscriptions.account_id`. An eleventh,
+  `payments.fixpack_job_id`, joined them on 2026-08-25 with migration 0035 and
+  gets `NO ACTION` for a reason of its own: that column records which order
+  paid for which Fix Pack job, and it exists precisely because inferring the
+  pairing from `audit_id` told the wrong buyer their money was coming back.
+  `SET NULL` would erase the fact this column was added to keep, at exactly
+  the moment somebody is deleting things; `CASCADE` would delete a payment
+  record along with a job, which is money history.
 
   `NO ACTION` does not produce orphans — a foreign key makes orphans
   impossible by definition. It refuses a delete that would create one, which

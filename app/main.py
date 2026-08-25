@@ -1001,29 +1001,49 @@ async def _announce_nothing_to_fix(
     only thing that starts one. Writing to the customer first and letting a
     failure there skip the alert would reproduce the silence in a smaller way.
 
+    THE BUYER IS FOUND THROUGH THE JOB, NEVER THROUGH THE AUDIT. The first
+    version of this looked up the newest Fix Pack order on the audit, which is
+    the same audit several jobs and several orders can share -- so on an audit
+    bought twice it would have written to one buyer twice and to the other not
+    at all. Migration 0035 records which order bought which job.
+
+    When that link is missing the operator is paged WITHOUT an order number and
+    the customer is not written to at all. A refund still gets started, by a
+    person who can read the books; guessing which of several orders to name
+    would put "we are refunding you" in front of somebody who is owed nothing,
+    which is worse than the silence this function exists to end.
+
     Best-effort throughout. The job has already finished; an exception escaping
     here would turn a completed run into a 'failed' one and re-queue work that
     correctly found nothing to do.
     """
+    job_id = job.get("id")
     reference = None
     payment = None
     try:
-        payment = await payment_repo.get_completed_fixpack_by_audit(audit_id)
+        payment = await payment_repo.get_completed_fixpack_for_job(str(job_id))
         reference = (payment or {}).get("external_ref")
     except Exception:  # noqa: BLE001
         logger.warning("could not look up the payer for job %s",
-                       job.get("id"), exc_info=True)
-
-    await alerts.notify_operator(
-        f"Drydock: Fix Pack {job.get('id')} found nothing to change, and the "
-        f"buyer paid for it. Order {reference or '(payment not found)'} — "
-        "send the refund. The audit's findings were probably fixed between "
-        "the audit and the purchase.",
-        dedupe_key=f"fixpack-nothing-to-fix:{job.get('id')}",
-    )
+                       job_id, exc_info=True)
 
     if payment is None:
+        await alerts.notify_operator(
+            f"Drydock: Fix Pack {job_id} found nothing to change, and it was "
+            f"paid for — but its order could not be identified, so nobody has "
+            f"been told. Find the order on audit {audit_id} and refund it by "
+            "hand. The buyer has NOT heard from us.",
+            dedupe_key=f"fixpack-nothing-to-fix:{job_id}",
+        )
         return
+
+    await alerts.notify_operator(
+        f"Drydock: Fix Pack {job_id} found nothing to change, and the "
+        f"buyer paid for it. Order {reference} — "
+        "send the refund. The audit's findings were probably fixed between "
+        "the audit and the purchase.",
+        dedupe_key=f"fixpack-nothing-to-fix:{job_id}",
+    )
 
     from app.notify import messages
     from app.notify.router import Contact, notify_customer

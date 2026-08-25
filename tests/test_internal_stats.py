@@ -156,6 +156,13 @@ async def real_db(monkeypatch):
         await conn.execute("delete from audit_jobs")
         await conn.execute("delete from llm_usage")
         await conn.execute("delete from fix_outcomes")
+        # payments.fixpack_job_id (migration 0035) made payments a child of
+        # fixpack_jobs, and the key is ON DELETE NO ACTION -- so a payment
+        # written by another test file refuses this wipe rather than being
+        # orphaned by it. Release the reference instead of deleting the
+        # payments: this fixture measures queues and outcomes, and money rows
+        # are not its to remove.
+        await conn.execute("update payments set fixpack_job_id = null")
         await conn.execute("delete from fixpack_jobs")
     yield pool
     await db_mod.close_pool()
