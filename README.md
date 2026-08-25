@@ -7,7 +7,8 @@ production-readiness risks in product language, builds a narrowly-scoped
 **Fix Pack**, verifies it where possible, and delivers the result as a
 **GitHub pull request** — never a push to `main`.
 
-Product site: [drydock.co](https://drydock.co)  
+Product site: [drydock.co](https://drydock.co).
+
 This repository is the corresponding source for the hosted service (AGPL-3.0).
 
 It is built for the moment after a Lovable, Bolt, Cursor, or hand-built
@@ -72,8 +73,8 @@ public repo or ZIP
   → GitHub App opens PR → customer notification
 ```
 
-Design and security boundaries: [`docs/shipit-architecture.md`](docs/shipit-architecture.md).  
-Payment rail note: [`docs/PAYMENT_RAIL.md`](docs/PAYMENT_RAIL.md).  
+Design and security boundaries: [`docs/shipit-architecture.md`](docs/shipit-architecture.md).
+Payment rail note: [`docs/PAYMENT_RAIL.md`](docs/PAYMENT_RAIL.md).
 Longer operational history: [`docs/status-active.md`](docs/status-active.md)
 (may lag; prefer this README and `PAYMENT_RAIL.md` for current rails).
 
