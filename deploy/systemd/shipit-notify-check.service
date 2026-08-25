@@ -26,7 +26,18 @@ ExecStart=/srv/shipit/current/.venv/bin/python -m app.notify.selfcheck
 # `failed`, where `systemctl status` shows it long after the alert has scrolled
 # out of a chat, and it is what a Telegram outage leaves behind when the alert
 # itself cannot be delivered.
-TimeoutStartSec=120
+# Budgeted against the worst case rather than the usual one, because being
+# killed mid-probe would report a failure systemd invented rather than one the
+# check measured -- and that failure looks exactly like a real one.
+#
+#   email     3 attempts x 20s (_TIMEOUT_S) + 11s backoff  =  71s
+#   telegram  3 attempts x 10s               + 11s backoff  =  41s
+#   the alert about it, over a link that may be the problem =  30s
+#                                                             ----
+#                                                             142s
+#
+# A healthy run finishes in about two seconds.
+TimeoutStartSec=300
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
