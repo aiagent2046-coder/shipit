@@ -39,6 +39,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.logging_config import configure_logging
 from app.notify import email as mail
 from app.notify import telegram
 
@@ -174,7 +175,14 @@ def main(argv: list[str] | None = None) -> int:
     afterwards. So a dead channel is visible in `systemctl status` even when
     the channel that carries alerts is the dead one.
     """
-    logging.basicConfig(level=logging.INFO)
+    # NOT logging.basicConfig. This is the fourth process entry point, and the
+    # first run of it on production wrote the Telegram bot token into the
+    # journal in full: httpx logs the request URL at INFO, a bot token IS the
+    # URL, and RedactionFilter -- which app/main.py, app/worker/main.py and
+    # app/alerts.py all install through here -- was not attached. The comment
+    # in app/alerts.py::_main says exactly this about the entry point before
+    # this one. Anything that runs `python -m` calls configure_logging().
+    configure_logging()
     results = asyncio.run(run())
     for result in results:
         state = ("not configured" if not result.configured
