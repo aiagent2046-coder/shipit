@@ -23,12 +23,16 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 import app.deploypack.github_app as github_app
 from app.deploypack.github_app import (
     GITHUB_APP_SLUG_DEFAULT,
+    INSTALLATION_ABSENT,
+    INSTALLATION_ACTIVE,
+    INSTALLATION_SUSPENDED,
     GitHubAppError,
     _public_key_fingerprint,
     app_credentials_from_env,
     app_slug_from_env,
     build_install_url,
     installation_exists_for_repo,
+    installation_state_for_repo,
     installation_token_for_repo,
     mint_app_jwt,
 )
@@ -415,6 +419,116 @@ def test_installation_exists_raises_on_other_error(keypair):
             "acme", "app", app_id="999", private_key=private_pem,
             transport=httpx.MockTransport(handler),
         )
+
+
+def test_a_suspended_installation_is_not_reported_as_installed(keypair):
+    """THE DEFECT THIS REPLACES. GitHub answers 200 for a suspended
+    installation exactly as for a healthy one; only `suspended_at` in the body
+    differs. Reading the status code alone reported it as installed, and on
+    2026-08-25 this deployment printed
+
+        installation on aiagent2046-coder/shipit: True
+        403 This installation has been suspended
+
+    one second apart. On the money path that is a Fix Pack sold and never
+    delivered."""
+    private_pem, _ = keypair
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "id": 4242,
+            "suspended_at": "2026-08-25T21:00:00Z",
+            "suspended_by": {"login": "someone"},
+        })
+
+    transport = httpx.MockTransport(handler)
+    assert installation_state_for_repo(
+        "acme", "app", app_id="999", private_key=private_pem,
+        transport=transport,
+    ) == INSTALLATION_SUSPENDED
+    assert installation_exists_for_repo(
+        "acme", "app", app_id="999", private_key=private_pem,
+        transport=httpx.MockTransport(handler),
+    ) is False
+
+
+def test_a_null_suspended_at_is_a_live_installation(keypair):
+    """GitHub sends the key with a null value on a healthy installation. If
+    the check were `"suspended_at" in payload` rather than a truth test, every
+    installation would read as suspended and no Fix Pack could ever be sold —
+    the same defect with the sign flipped."""
+    private_pem, _ = keypair
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 4242, "suspended_at": None,
+                                         "suspended_by": None})
+
+    assert installation_state_for_repo(
+        "acme", "app", app_id="999", private_key=private_pem,
+        transport=httpx.MockTransport(handler),
+    ) == INSTALLATION_ACTIVE
+
+
+def test_a_200_we_cannot_parse_is_not_taken_as_healthy(keypair):
+    """An unreadable body says nothing about suspension, and answering ACTIVE
+    there would restore the bug. Conservative direction: block a sale rather
+    than take money for a delivery that may be impossible."""
+    private_pem, _ = keypair
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not json at all")
+
+    assert installation_state_for_repo(
+        "acme", "app", app_id="999", private_key=private_pem,
+        transport=httpx.MockTransport(handler),
+    ) == INSTALLATION_SUSPENDED
+
+
+def test_absent_and_active_states(keypair):
+    private_pem, _ = keypair
+
+    def missing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    def live(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 4242})
+
+    assert installation_state_for_repo(
+        "acme", "app", app_id="999", private_key=private_pem,
+        transport=httpx.MockTransport(missing),
+    ) == INSTALLATION_ABSENT
+    assert installation_state_for_repo(
+        "acme", "app", app_id="999", private_key=private_pem,
+        transport=httpx.MockTransport(live),
+    ) == INSTALLATION_ACTIVE
+
+
+def test_delivery_names_the_suspension_instead_of_relaying_a_bare_403(keypair):
+    """GitHub's own answer is `403 This installation has been suspended`,
+    which says nothing about who can fix it. The operator alert on a failed
+    Fix Pack quotes this message, so it has to carry the action — and it must
+    be raised BEFORE spending a token request that is certain to fail."""
+    private_pem, _ = keypair
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(200, json={
+            "id": 4242, "suspended_at": "2026-08-25T21:00:00Z"})
+
+    with pytest.raises(GitHubAppError) as excinfo:
+        installation_token_for_repo(
+            "acme", "app", app_id="999", private_key=private_pem,
+            transport=httpx.MockTransport(handler),
+        )
+
+    message = str(excinfo.value)
+    assert "suspended" in message
+    assert "unsuspend" in message.lower()
+    assert "acme/app" in message
+    # The token request is never made: it could only produce the 403 whose
+    # unhelpfulness this message exists to replace.
+    assert calls == ["/repos/acme/app/installation"]
 
 
 def test_app_slug_default_and_env_override(monkeypatch):

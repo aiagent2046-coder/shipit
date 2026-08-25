@@ -318,6 +318,12 @@ export interface InstallationStatus {
   repo: string;
   app_configured: boolean;
   installed: boolean | null;
+  // Installed, and suspended: no pull request can be opened until the repo
+  // owner unsuspends it. `installed` is false in that case, so the purchase
+  // is blocked either way -- this field exists so the page can say which of
+  // the two it is, because "install it" is wrong advice for somebody who
+  // already has. install_url is null here for the same reason.
+  suspended: boolean | null;
   install_url: string | null;
 }
 
