@@ -58,6 +58,7 @@ from app.db import (
     FixpackJobRepository,
     LlmUsageRepository,
     MonitoringRunRepository,
+    PaymentRepository,
     ProcessorLockBusy,
     ServiceFlagsRepository,
     SubscriptionRepository,
@@ -984,6 +985,64 @@ def _failure_detail(exc: BaseException, *, limit: int = 300) -> str:
     return detail[:limit]
 
 
+async def _announce_nothing_to_fix(
+    payment_repo, *, job: dict, audit_id: str,
+) -> None:
+    """Tell the buyer, and the operator, that a paid Fix Pack changed nothing.
+
+    THIS BRANCH USED TO BE SILENT. It wrote a status, recorded an outcome and
+    returned; the payer heard nothing and neither did the operator, so the
+    money simply stayed. Two real payments ended here on 2026-08-25, twenty
+    minutes after a confirmation email promising "you will hear again when it
+    lands or if it cannot finish".
+
+    THE OPERATOR IS PAGED EVEN IF THE CUSTOMER CANNOT BE REACHED, and that
+    ordering is the point: a refund is sent by a person, and the alert is the
+    only thing that starts one. Writing to the customer first and letting a
+    failure there skip the alert would reproduce the silence in a smaller way.
+
+    Best-effort throughout. The job has already finished; an exception escaping
+    here would turn a completed run into a 'failed' one and re-queue work that
+    correctly found nothing to do.
+    """
+    reference = None
+    payment = None
+    try:
+        payment = await payment_repo.get_completed_fixpack_by_audit(audit_id)
+        reference = (payment or {}).get("external_ref")
+    except Exception:  # noqa: BLE001
+        logger.warning("could not look up the payer for job %s",
+                       job.get("id"), exc_info=True)
+
+    await alerts.notify_operator(
+        f"Drydock: Fix Pack {job.get('id')} found nothing to change, and the "
+        f"buyer paid for it. Order {reference or '(payment not found)'} — "
+        "send the refund. The audit's findings were probably fixed between "
+        "the audit and the purchase.",
+        dedupe_key=f"fixpack-nothing-to-fix:{job.get('id')}",
+    )
+
+    if payment is None:
+        return
+
+    from app.notify import messages
+    from app.notify.router import Contact, notify_customer
+
+    locale = payment.get("payer_locale")
+    try:
+        await notify_customer(
+            contact=Contact.from_payment(payment),
+            subject=messages.nothing_to_fix_subject(locale=locale),
+            body=messages.nothing_to_fix_body(
+                reference=str(reference or ""), locale=locale),
+            reference=str(reference or ""),
+            locale=locale,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("could not tell the payer their Fix Pack changed "
+                       "nothing", exc_info=True)
+
+
 async def _alert_fixpack_failed(job_id, detail: str) -> None:
     """Push one best-effort operator alert for a Fix Pack job that landed on
     'failed' (a paying customer's PR silently not opening is exactly the
@@ -1170,6 +1229,7 @@ async def _process_one_paid_job(
     fixpack_repo: FixpackJobRepository, fix_outcome_repo: FixOutcomeRepository,
     repo_fetcher, pr_opener, llm_client: LLMClient,
     llm_usage_repo: LlmUsageRepository | None = None,
+    payment_repo: PaymentRepository | None = None,
 ) -> str:
     """Generate + deliver one paid Fix Pack job. Returns the outcome:
     'delivered', 'no_fix_needed', 'blocked', 'deferred', or 'failed'. Advances
@@ -1238,6 +1298,14 @@ async def _process_one_paid_job(
                 fix_outcome_repo, job=job, outcome="no_fix_needed",
                 rule_ids=[], is_regression=False, pr_url=None,
             )
+            # AND SAY SO. Recording the outcome is bookkeeping; somebody paid
+            # for this. app/fixpack/merit.py already calls the outcome
+            # decisively ours -- "this is our mistake, not a disappointing
+            # result" -- so the money is owed back, and until this line existed
+            # nothing told the one person who can send it.
+            if payment_repo is not None:
+                await _announce_nothing_to_fix(
+                    payment_repo, job=job, audit_id=str(job["audit_id"]))
             return "no_fix_needed"
 
         # Semantic safety net: run the client's own tests against the patched
@@ -1445,6 +1513,9 @@ async def process_paid_fixpacks(
     pr_opener=Depends(get_pr_opener),
     llm_client: LLMClient = Depends(get_llm_client),
     llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+    # Only for the outcome that owes somebody their money back: a job knows
+    # its audit and nothing else, and the buyer's contact lives on the payment.
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
 ) -> dict:
     """Operational endpoint: process a bounded paid Fix Pack batch and turn each
     claimed job into a real fix PR — re-fetch the audited
@@ -1539,6 +1610,7 @@ async def process_paid_fixpacks(
                     fix_outcome_repo=fix_outcome_repo,
                     repo_fetcher=repo_fetcher, pr_opener=pr_opener,
                     llm_client=llm_client, llm_usage_repo=llm_usage_repo,
+                    payment_repo=payment_repo,
                 )
                 if outcome == "delivered":
                     summary["delivered"] += 1

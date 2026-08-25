@@ -1890,6 +1890,48 @@ class PaymentRepository:
             row = await cur.fetchone()
         return _row_to_payment(row) if row else None
 
+    async def get_completed_fixpack_by_audit(
+        self, audit_id: str
+    ) -> dict[str, Any] | None:
+        """The paid Fix Pack order for one audit, newest first.
+
+        THE JOB KNOWS ITS AUDIT AND NOTHING ELSE. app/main.py's processor is
+        handed a fixpack_jobs row, and when a job ends with nothing to fix the
+        person who paid has to be told -- but their name, address, language and
+        order number all live on the payment. This is the one link from a job
+        back to its buyer, and it did not exist while that outcome was silent.
+
+        `product = 'fixpack'` is not decoration. An audit can carry both a Pro
+        purchase and a Fix Pack order under the same account; writing to the
+        wrong one would quote an order number that buys something else.
+
+        Newest first because re-buying after a delivered Fix Pack is a
+        supported flow (see _reject_if_fixpack_already_live): the job that just
+        ran belongs to the most recent order, not the first.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, account_id, provider, external_ref, amount,
+                       currency, status, tier_granted, telegram_chat_id,
+                       product, audit_id, paypal_order_id, payer_name,
+                       payer_email, payer_x, payer_locale,
+                       provider_payment_id, created_at
+                from payments
+                where audit_id = %s and product = 'fixpack'
+                  and status = 'completed'
+                order by created_at desc
+                limit 1
+                """,
+                (audit_id,),
+            )
+            row = await cur.fetchone()
+        return _row_to_payment(row) if row else None
+
     async def list_pending(
         self, provider: str, *, created_after: datetime.datetime | None = None
     ) -> list[dict[str, Any]]:
