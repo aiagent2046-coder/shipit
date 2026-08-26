@@ -58,6 +58,17 @@ from app.mcp.keys import (  # noqa: E402
 
 NEEDED = ("DATABASE_URL", "API_KEY_PEPPER")
 
+# THE API HOST, NOT THE SITE. `drydock.co` is the Next.js frontend on Vercel;
+# the backend answers on `api.drydock.co`, which is the first name in
+# deploy/caddy/Caddyfile's reverse-proxy block.
+#
+# This line was wrong once, and it printed a working-looking URL that 404s from
+# the frontend's own router -- the failure looks identical to "MCP is switched
+# off", so the holder would have gone looking at the flag. Every key handed out
+# carries this line, so it is worth the test that pins it
+# (tests/test_mint_mcp_key.py reads the Caddyfile).
+MCP_URL = "https://api.drydock.co/mcp"
+
 
 def load_environment() -> None:
     """Fill in whichever of NEEDED the process does not already have."""
@@ -112,7 +123,7 @@ def main() -> int:
     print(f"  label   {row.get('label') or '(none)'}")
     print()
     print("  The holder configures their editor with:")
-    print("      url     https://drydock.co/mcp")
+    print(f"      url     {MCP_URL}")
     print("      header  Authorization: Bearer <the key above>")
     print()
     print("  The endpoint answers 404 unless MCP_ENABLED is set on the box.")
