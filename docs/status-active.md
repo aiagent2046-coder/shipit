@@ -649,12 +649,46 @@ normalization (`app/monitor.normalize_repo_full_name`) to a canonical lowercased
 silent mismatch that would bury the diff.
 
 **Manual, one-time GitHub-UI setup (not code-configurable, done by the
-operator):** in the GitHub App's settings, set the **Webhook URL** to
-`https://<host>/v1/webhooks/github`, set the **Webhook secret** to the same value
-as `GITHUB_APP_WEBHOOK_SECRET` in `.env`, and subscribe the App to **both** the
+operator).** These live in the GitHub App's settings (App ID 4278482), not in
+this repository, which means a deploy cannot change them and nothing here fails
+when they drift. So the values are written down:
+
+| Field in the App's settings | Value |
+| --- | --- |
+| Webhook URL | `https://api.drydock.co/v1/webhooks/github` |
+| Setup URL | `https://drydock.co/github/installed` |
+| Homepage URL | `https://drydock.co` |
+| User authorization callback URL | `https://drydock.co/` |
+
+**The Setup URL is the one that is easy to get wrong**: it is the *frontend*,
+not the API. GitHub sends the installer's browser there after an install, with
+`installation_id` and our echoed `state` (`owner/repo`), and
+`web/src/app/github/installed/page.tsx` is what answers — a confirmation plus
+the way back into the interrupted Fix Pack flow. Pointing it at the API returns
+JSON, or a 404, to a person.
+
+**The callback URL is inert.** No OAuth user-authorization flow exists in this
+codebase — no client secret, no callback route — so nothing reads it. It is
+listed anyway because a field left pointing at a host we intend to retire is a
+field nobody will remember when the host goes.
+
+Also set the **Webhook secret** to the same value as
+`GITHUB_APP_WEBHOOK_SECRET` in `.env`, and subscribe the App to **both** the
 **Pull request** and **Push** events. Until the App is subscribed to an event, no
 deliveries of that kind arrive — `pr_merged` stays `null` and monitoring never
 fires — while the rest of each flow is unaffected.
+
+The values above were **read off the App's settings page on 2026-08-26** rather
+than proposed. Issue #173 reported them still pointing at
+`45-10-40-169.sslip.io`; by the time anyone went to change them they had
+already been moved, and nobody had a way to notice, because the only record of
+what they should be was the placeholder this table replaces.
+
+That is the whole point of writing them down. Nothing was ever broken by the
+old values — `deploy/caddy/Caddyfile` serves both names deliberately, so the
+sslip host kept answering — but "is this still right?" was a question only
+answerable by opening a settings page, and "was this ever wrong?" was not
+answerable at all.
 
 Deployment gotchas found the hard way (all encoded in `.env.example`):
 
