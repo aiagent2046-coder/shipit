@@ -1291,9 +1291,9 @@ async def test_payer_contact_is_not_format_checked_by_the_database(real_db):
 
 
 # Every foreign key in the schema, with the delete action it is meant to have.
-# Eleven are NO ACTION -- ten reviewed 2026-08-02 and payments.fixpack_job_id
-# added 2026-08-25 with migration 0035 -- see "Known gaps" in
-# docs/status-active.md for the reasoning. The short version: NO ACTION cannot
+# Thirteen are NO ACTION -- ten reviewed 2026-08-02, payments.fixpack_job_id
+# added 2026-08-25 with migration 0035, and mcp_key_audits' two added
+# 2026-08-26 with migration 0036 -- see "Known gaps" in docs/status-active.md. The short version: NO ACTION cannot
 # orphan a row, it refuses the delete that would; nothing in the application
 # deletes a parent; and four of these keys reach money, where a cascade would
 # quietly take a payment history with an account instead of making a human stop.
@@ -1321,6 +1321,8 @@ EXPECTED_DELETE_ACTIONS = {
     "fix_outcomes_fixpack_job_id_fkey": "NO ACTION",
     "fixpack_jobs_audit_id_fkey": "NO ACTION",
     "llm_usage_account_id_fkey": "NO ACTION",
+    "mcp_key_audits_audit_id_fkey": "NO ACTION",
+    "mcp_key_audits_mcp_key_id_fkey": "NO ACTION",
     "llm_usage_audit_job_id_fkey": "NO ACTION",
     "payments_account_id_fkey": "NO ACTION",
     "payments_audit_id_fkey": "NO ACTION",
@@ -1363,3 +1365,161 @@ async def test_foreign_key_delete_actions_are_what_we_decided(real_db):
         "intentional, update EXPECTED_DELETE_ACTIONS and the 'Known gaps' "
         "entry in README.md that explains why"
     )
+
+
+# --- the MCP credential, against the real predicate (migration 0036) -------
+#
+# tests/test_mcp_keys.py holds the same properties against a fake, and says in
+# its own docstring why that is not enough: a membership test is SQL, and an
+# in-memory set agrees with itself no matter what the query does. These run
+# the actual WHERE clause.
+
+async def _mcp_audit(audit_repo: AuditRepository, run: str) -> str:
+    audit = await audit_repo.create(
+        stack="vite-react", file_count=1, score_total=7.0,
+        score_json={"total": 7.0, "categories": {}}, findings_json=[],
+        repo_url="https://github.com/acme/app",
+        content_hash=f"mcp-{run}", engine_version="smoke-engine-1",
+    )
+    assert audit is not None, "DATABASE_URL not reaching get_pool -- false green"
+    return audit["id"]
+
+
+async def test_a_second_mcp_key_cannot_read_the_first_keys_audit(real_db):
+    """docs/MCP.md §2, against the real WHERE clause.
+
+    Holding a valid key and a real audit_id must not be enough. audits.
+    access_token is a per-row capability precisely so that knowing an id is
+    not enough, and a key that read any audit by id would step around it --
+    what it returns is a list of somebody's unfixed vulnerabilities.
+    """
+    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+
+    audit_repo = AuditRepository()
+    keys = db_mod.McpKeyRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _mcp_audit(audit_repo, run)
+
+    made = []
+    for _ in range(2):
+        key = generate_mcp_key()
+        row = await keys.create(key_hash=hash_mcp_key(key),
+                                key_prefix=mcp_key_prefix(key))
+        assert row is not None
+        made.append(row["id"])
+    first, second = made
+
+    await keys.link_audit(first, audit_id)
+
+    # THE SECOND KEY GETS AUDITS OF ITS OWN, and that is what makes this test
+    # able to fail. With `second` linked to nothing, a predicate weakened to
+    # "does this key have ANY audits" still answers False for it, and the
+    # weakening goes unnoticed -- measured: that mutant passed the first
+    # version of this file. The question is "does this key have THIS audit",
+    # and only a key with other audits can tell the two apart.
+    for n in range(2):
+        await keys.link_audit(second, await _mcp_audit(audit_repo, f"{run}-o{n}"))
+
+    assert await keys.may_read_audit(first, audit_id) is True
+    assert await keys.may_read_audit(second, audit_id) is False
+
+
+async def test_two_mcp_keys_share_one_audit_without_taking_it(real_db):
+    """The content-hash cache hands a previously created audit row to whoever
+    audits identical content next, so two keys land on one audit legitimately.
+    A single-owner column would deny the second the audit it just asked for,
+    or take it from the first -- which is why this is a join table."""
+    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+
+    audit_repo = AuditRepository()
+    keys = db_mod.McpKeyRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _mcp_audit(audit_repo, run)
+
+    ids = []
+    for _ in range(2):
+        key = generate_mcp_key()
+        row = await keys.create(key_hash=hash_mcp_key(key),
+                                key_prefix=mcp_key_prefix(key))
+        ids.append(row["id"])
+
+    for key_id in ids:
+        await keys.link_audit(key_id, audit_id)
+    # And again, because a cache hit can repeat the link mid-answer.
+    await keys.link_audit(ids[0], audit_id)
+
+    for key_id in ids:
+        assert await keys.may_read_audit(key_id, audit_id) is True
+
+
+async def test_a_revoked_mcp_key_stops_resolving(real_db):
+    """Revocation is decided inside the lookup rather than returned as a field
+    each caller must remember to test -- one forgetful call site is a revoked
+    credential that still works."""
+    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+
+    keys = db_mod.McpKeyRepository()
+    key = generate_mcp_key()
+    digest = hash_mcp_key(key)
+    row = await keys.create(key_hash=digest, key_prefix=mcp_key_prefix(key))
+    assert row is not None
+
+    assert await keys.get_by_key_hash(digest) is not None
+    assert await keys.revoke(row["id"]) is True
+    assert await keys.get_by_key_hash(digest) is None
+    assert await keys.revoke(row["id"]) is False
+
+
+async def test_the_plaintext_mcp_key_is_never_stored(real_db):
+    """The posture accounts reached in migration 0019: a database leak alone
+    must not hand over working credentials. Asserted by searching the row for
+    the key rather than by trusting the INSERT's column list."""
+    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+
+    keys = db_mod.McpKeyRepository()
+    key = generate_mcp_key()
+    row = await keys.create(key_hash=hash_mcp_key(key),
+                            key_prefix=mcp_key_prefix(key))
+
+    pool = await db_mod.get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "select * from mcp_api_keys where id = %s",
+            (uuid.UUID(row["id"]),))
+        stored = dict(await cur.fetchone())
+
+    body = key[len(mcp_key_prefix(key)):]
+    for column, value in stored.items():
+        assert key != str(value), f"the whole key is in {column}"
+        assert body not in str(value), f"the key's body is in {column}"
+
+
+async def test_list_audits_returns_only_this_keys_audits(real_db):
+    """What drydock_list_recent shows. The same membership rule as
+    may_read_audit, and it has to be, or the list becomes the leak the
+    per-audit check prevents."""
+    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+
+    audit_repo = AuditRepository()
+    keys = db_mod.McpKeyRepository()
+    run = uuid.uuid4().hex[:12]
+
+    mine, theirs = [], []
+    for n in range(2):
+        mine.append(await _mcp_audit(audit_repo, f"{run}-mine-{n}"))
+    theirs.append(await _mcp_audit(audit_repo, f"{run}-theirs"))
+
+    ids = []
+    for _ in range(2):
+        key = generate_mcp_key()
+        row = await keys.create(key_hash=hash_mcp_key(key),
+                                key_prefix=mcp_key_prefix(key))
+        ids.append(row["id"])
+
+    for audit_id in mine:
+        await keys.link_audit(ids[0], audit_id)
+    await keys.link_audit(ids[1], theirs[0])
+
+    listed = {row["id"] for row in await keys.list_audits(ids[0])}
+    assert listed == set(mine)
+    assert theirs[0] not in listed

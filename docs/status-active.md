@@ -1059,6 +1059,13 @@ allowed request headers are `Authorization` and `Content-Type`.
   the moment somebody is deleting things; `CASCADE` would delete a payment
   record along with a job, which is money history.
 
+  Two more joined on 2026-08-26 with migration 0036 —
+  `mcp_key_audits.{mcp_key_id,audit_id}` — and take `NO ACTION` for the same
+  reason as everything above, plus one of their own: an MCP key is never
+  deleted, it is **revoked**, and the migration keeps the row precisely so the
+  audits it reached still trace back to it. A `CASCADE` would make that record
+  vanish on the one operation the design is built to survive.
+
   `NO ACTION` does not produce orphans — a foreign key makes orphans
   impossible by definition. It refuses a delete that would create one, which
   is the fail-safe direction. Nothing in the application deletes a parent row:

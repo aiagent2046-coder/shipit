@@ -3550,3 +3550,181 @@ class RlsLiveCheckRepository:
             )
             row = await cur.fetchone()
         return dict(row) if row else None
+
+
+def _row_to_mcp_key(row: dict[str, Any]) -> dict[str, Any]:
+    d = dict(row)
+    d["id"] = str(d["id"])
+    return d
+
+
+class McpKeyRepository:
+    """The MCP credential and what it may read (migration 0036).
+
+    Separate from AccountRepository on purpose, and the migration header says
+    why at length: an MCP key carries no tier, buys nothing, and must not
+    start meaning something different the day somebody buys Pro again.
+    """
+
+    async def create(self, *, key_hash: str, key_prefix: str,
+                     label: str | None = None) -> dict[str, Any] | None:
+        """Record a freshly minted key. The plaintext is the caller's to hand
+        over and is never passed in here -- only its hash and visible head."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into mcp_api_keys (key_hash, key_prefix, label)
+                values (%s, %s, %s)
+                returning id, key_prefix, label, created_at, last_used_at,
+                          revoked_at
+                """,
+                (key_hash, key_prefix, label),
+            )
+            row = await cur.fetchone()
+        return _row_to_mcp_key(row) if row else None
+
+    async def get_by_key_hash(self, key_hash: str) -> dict[str, Any] | None:
+        """The one authenticated lookup, run on every MCP request.
+
+        A REVOKED KEY RESOLVES TO None, not to a row the caller must remember
+        to check. Returning the row and leaving `revoked_at` for each caller
+        to test is how one call site eventually forgets, and that call site is
+        then a revoked credential that still works. The cost of deciding here
+        is that "revoked" and "never existed" are indistinguishable to the
+        holder -- which is the right answer to give either way.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, key_prefix, label, created_at, last_used_at,
+                       revoked_at
+                from mcp_api_keys
+                where key_hash = %s and revoked_at is null
+                """,
+                (key_hash,),
+            )
+            row = await cur.fetchone()
+        return _row_to_mcp_key(row) if row else None
+
+    async def touch(self, key_id: str) -> None:
+        """Record that the key was used, for the expiry policy docs/MCP.md
+        deliberately leaves open: recorded from the first day so the decision
+        can later be made from data rather than guessed now.
+
+        Best-effort and swallowing nothing -- it is a plain UPDATE -- but the
+        caller is expected to run it after answering, never before, so a slow
+        write cannot delay a reply.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                "update mcp_api_keys set last_used_at = now() where id = %s",
+                (uuid.UUID(str(key_id)),),
+            )
+
+    async def revoke(self, key_id: str) -> bool:
+        """Stop a key working, keeping its row so the audits it reached still
+        trace back to it. Returns whether a live key was revoked, so a second
+        call is visibly a no-op rather than a silent success."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update mcp_api_keys set revoked_at = now()
+                where id = %s and revoked_at is null
+                returning id
+                """,
+                (uuid.UUID(str(key_id)),),
+            )
+            row = await cur.fetchone()
+        return row is not None
+
+    async def link_audit(self, key_id: str, audit_id: str) -> None:
+        """Record that this key asked for this audit and may read it.
+
+        IDEMPOTENT, AND THE REASON IS THE CACHE. get_by_content_hash returns a
+        previously created audit row whenever byte-identical content was
+        audited before, by anyone (app/main.py). So two keys legitimately land
+        on one audit, and one key can land on the same audit twice. A join row
+        says the true thing in both cases -- this key may read this audit --
+        and ON CONFLICT DO NOTHING makes the repeat harmless rather than a
+        500 in the middle of an answer.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return
+        async with pool.connection() as conn:
+            await conn.execute(
+                """
+                insert into mcp_key_audits (mcp_key_id, audit_id)
+                values (%s, %s)
+                on conflict (mcp_key_id, audit_id) do nothing
+                """,
+                (uuid.UUID(str(key_id)), uuid.UUID(str(audit_id))),
+            )
+
+    async def may_read_audit(self, key_id: str, audit_id: str) -> bool:
+        """docs/MCP.md §2, as one question with one answer.
+
+        Every MCP tool that returns audit content asks this first. It is a
+        membership test and nothing else: no fallback to "well, the audit
+        exists", no widening for a key that happens to have many audits. The
+        caller's 'not found' and 'not yours' must be the same reply, so this
+        returning False is all the information a handler needs.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select 1 from mcp_key_audits
+                where mcp_key_id = %s and audit_id = %s
+                """,
+                (uuid.UUID(str(key_id)), uuid.UUID(str(audit_id))),
+            )
+            row = await cur.fetchone()
+        return row is not None
+
+    async def list_audits(self, key_id: str, *,
+                          limit: int = 20) -> list[dict[str, Any]]:
+        """This key's audits, newest first -- what drydock_list_recent shows.
+
+        Joined rather than selected by id list so the answer cannot include an
+        audit that was deleted out from under the link, and bounded because an
+        MCP response goes into a context window somebody is paying for.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return []
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select a.id, a.repo_url, a.stack, a.score_total, a.created_at
+                from mcp_key_audits k
+                join audits a on a.id = k.audit_id
+                where k.mcp_key_id = %s
+                order by k.created_at desc
+                limit %s
+                """,
+                (uuid.UUID(str(key_id)), int(limit)),
+            )
+            rows = await cur.fetchall()
+        return [{**dict(r), "id": str(r["id"])} for r in rows]
