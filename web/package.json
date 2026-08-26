@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.22.2"
   },
   "dependencies": {
     "next": "16.3.1",
@@ -26,13 +26,13 @@
     "@types/node": "26.2.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
-    "@vitejs/plugin-react": "^5.1.0",
+    "@vitejs/plugin-react": "^6.1.0",
     "autoprefixer": "10.5.4",
-    "jsdom": "^27.0.0",
+    "jsdom": "^30.0.1",
     "postcss": "8.5.26",
     "tailwindcss": "^4.3.3",
     "typescript": "6.0.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "sharp": "^0.35.3",
