@@ -1,0 +1,197 @@
+# MCP for Cursor — Phase 0, the contract
+
+What Drydock exposes to an agent inside an editor, and what it refuses to.
+This document is the decisions; the code comes after. Nothing here is
+implemented yet.
+
+Written 2026-08-26. Every number in it is read out of the tree, not chosen
+here, and the file paths are given so a later reader can check rather than
+trust.
+
+---
+
+## 1. Who gets a key, and why that was the first question
+
+The original plan said the key would be "the account/email from the existing
+model (or a new `mcp_tokens` table)", and that it would be handed out "in the
+dashboard / after an audit". All three of those are empty:
+
+- **There is no dashboard.**
+- **After an audit there is no account.** An audit is anonymous; what
+  authorises reading it is a per-row `access_token` (migration 0010), not an
+  identity.
+- **After a Fix Pack purchase there is no account either.** `grant_fixpack`
+  mints none, deliberately — "a Fix Pack is a one-off per-audit product, not
+  an account upgrade" (`app/billing/__init__.py`).
+- **Pro is not sold.** `app/routes/storefront.py` records the decision:
+  "FIX PACK ONLY, by product decision… Pro's single live benefit — a higher
+  daily audit limit — is not something we are willing to take money for. The
+  Pro purchase routes stay reachable for the existing customer and the bot;
+  they are simply no longer advertised."
+
+So "MCP is a Pro feature" would have meant "MCP is for one existing customer".
+
+### The decision
+
+**A free, self-service key, rate-limited like an anonymous caller.**
+
+MCP is the funnel into the paid Fix Pack, not a thing sold on its own. A
+developer tries an audit from inside Cursor, sees the findings against their
+own code, and buys the fix in the same place. The thing being protected is
+not revenue from the key — it is the LLM budget behind it.
+
+New table `mcp_api_keys`, not a reuse of `accounts`:
+
+| column | why |
+| --- | --- |
+| `key_hash`, `key_prefix` | same posture as `accounts` after migration 0019 — the plaintext exists once, in memory, and is never stored. A lost key is rotated, not recovered. |
+| `created_at`, `last_used_at` | a key nobody has used in months is a key to expire. |
+| `revoked_at` | revocation without deleting the row, so the audits it created still trace back. |
+| `label` | what the holder called it, for their own list. |
+
+Deliberately **no `account_id`**. Tying MCP keys to a table that exists to
+carry a tier would reintroduce the coupling this decision removes, and the
+first person to buy Pro again would silently change what their MCP key can do.
+
+---
+
+## 2. What a key may read, and the answer that is not "anything"
+
+**A key may read only the audits it created.** Not "any audit whose id you
+know", and not "any audit at all".
+
+This is not caution for its own sake. `access_token` (migration 0010) is a
+per-row capability precisely so that knowing an `audit_id` is not enough — a
+leaked UUID reads nothing. An MCP key that could fetch any audit by id would
+step around that, and the thing it would expose is a map of somebody else's
+vulnerabilities.
+
+The product's own pitch is finding broken object-level authorisation. Shipping
+one in the tool that reports it is not a trade worth making for a smaller
+schema.
+
+Two consequences:
+
+- every audit created through MCP records the key that created it;
+- `drydock_get_audit` takes an `audit_id` **and** either that ownership or an
+  explicit `access_token` argument — the same capability the web report uses,
+  so a developer can hand an audit they already own to their editor.
+
+---
+
+## 3. Rate limiting is Phase 1, not Phase 2
+
+The original plan put `drydock_start_audit` in the read-first MVP and rate
+limiting one phase later. That is backwards: `start_audit` is the one tool
+that **spends money**, and it would ship before the thing that bounds it.
+
+What already exists, and what MCP must reuse rather than duplicate:
+
+- **`RateLimiter`** (`app/ratelimit.py`) — fixed window, per key, with a
+  per-call limit override; that override is exactly how tier-aware limits are
+  enforced today without a second limiter. Default: **3 calls per 24 h**.
+- **The anonymous LLM spend cap** (`app/main.py`) — `$20.00/day` by default,
+  summed over rows with `account_id IS NULL` since UTC midnight. Crossing it
+  **soft-degrades new anonymous audits to static-only**, never a 402 or 429,
+  because an anonymous caller has nothing to pay. An operator alert fires at
+  80 %.
+
+An MCP key is anonymous traffic by construction, so it lands under the same
+cap. Which produces the one behaviour this document most wants a reader to
+notice:
+
+> **When the budget is spent, an audit comes back `static_only` and looks
+> fine.** No error, no warning — a thinner report that reads like a clean one.
+> Issue #174 was opened because four external audits were run on a spent
+> budget and nobody could tell.
+
+So `drydock_start_audit` **must return `basis` in its result**, and the tool
+description must say what `static_only` means. An agent that cannot tell a
+full review from a degraded one will summarise the degraded one as good news.
+
+---
+
+## 4. Tool output is data, not instructions
+
+The risk specific to this product, and absent from the original plan.
+
+MCP output lands in the context of an agent that can write files and run
+commands. Part of a finding is **controlled by the repository being audited**:
+file paths, the LLM-authored `title` and `fix_hint`, and sometimes a snippet
+(`app/scan/llm_scan.py`). So the chain is:
+
+> someone commits a file whose content reads as instructions → a developer
+> audits that repository → the findings travel through MCP into their editor.
+
+Drydock would be the delivery channel for text an attacker wrote, into a tool
+with filesystem and shell access.
+
+Mitigations, in descending order of usefulness:
+
+1. **Every tool description states that finding content is untrusted data from
+   a third-party repository, never instructions.** This is the mitigation that
+   works, because it addresses the reader.
+2. **No raw file content is ever returned** — paths and normalised fields
+   only. The MVP has no tool that returns source, and that is a rule rather
+   than an omission.
+3. **Repository-derived free text is length-capped** before it goes out.
+4. **Repository-derived text is wrapped in an explicit data marker** so the
+   boundary is visible in the transcript.
+
+**Secrets are already safe here** and need no new work: `app/scan/secrets.py`
+stores `AKIA****(20 chars)` and says so in the field's own comment — "value
+itself is never stored". The plan listed "masked secrets" as a requirement; it
+is already a property.
+
+---
+
+## 5. The MVP surface
+
+Transport: **remote HTTP**, `Authorization: Bearer <key>`. Not stdio: the
+audit runs on our infrastructure either way, and a local process would be a
+second thing to install for no gain.
+
+| Tool | Reads or spends | Notes |
+| --- | --- | --- |
+| `drydock_get_version` | neither | sanity check; the same commit `GET /version` reports |
+| `drydock_start_audit` | **spends** | rate-limited; returns `audit_id`, `access_token`, **and `basis`** |
+| `drydock_get_audit` | reads | findings and score, own audits only, secrets already masked |
+| `drydock_fixpack_status` | reads | status and `pr_url` |
+| `drydock_list_recent` | reads | audits belonging to this key |
+
+**Not in the MVP:** card payment, refunds, operator actions, private
+repositories, anything that writes to a user's filesystem, and any tool that
+returns file contents.
+
+Buying stays in a browser. A `create_payment_session` tool returning a ЮKassa
+URL is a Phase 3 question, and a card number never touches MCP under any
+phase.
+
+Feature flag `MCP_ENABLED`, off by default, in the same spirit as every other
+rail this deployment can turn off without a code change.
+
+---
+
+## 6. What Phase 1 must prove before it is called done
+
+- Cursor lists the tools.
+- `start_audit` then `get_audit` on a public repository, end to end.
+- A **second key cannot read the first key's audit** — the check that keeps
+  §2 honest, and the one worth writing first.
+- An invalid key gets 401, and an unknown `audit_id` is indistinguishable from
+  one belonging to somebody else.
+- `basis` is present in the `start_audit` result and the tool description
+  explains `static_only`.
+- A CI check pins the tool schema, so a rename is a diff rather than a silent
+  break in somebody's editor.
+
+---
+
+## Open, and deliberately not decided here
+
+- **Key issuance UI.** Self-service implies a page; there is no dashboard, and
+  building one is larger than this document.
+- **Expiry.** `last_used_at` is recorded from the start so the policy can be
+  chosen from data instead of guessed now.
+- **Marketplace and OAuth.** Cursor's submission process is a separate
+  exercise and blocks nothing: docs plus a key are enough for the first users.
