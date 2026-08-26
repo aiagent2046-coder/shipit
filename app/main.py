@@ -49,6 +49,7 @@ from app.routes.reads import router as reads_router
 from app.routes.rls_check import router as rls_check_router
 from app.routes.session import router as session_router
 from app.routes.storefront import router as storefront_router
+from app.routes.yookassa import router as yookassa_router
 from app.db import (
     AccountRepository,
     AuditJobRepository,
@@ -57,6 +58,7 @@ from app.db import (
     FixpackJobRepository,
     LlmUsageRepository,
     MonitoringRunRepository,
+    PaymentRepository,
     ProcessorLockBusy,
     ServiceFlagsRepository,
     SubscriptionRepository,
@@ -602,6 +604,13 @@ async def run_repo_audit(
 # lands in 'failed' rather than looping forever. See PHASE3_QUEUE_PLAN.md.
 STALE_LEASE_MINUTES = 15
 MAX_JOB_ATTEMPTS = 3
+# Operator page when a paid job has been waiting longer than this.
+# Above the 2-minute fixpack timer and the 15-minute stale lease so
+# a healthy backlog that is merely working its way down does not page;
+# a silent processor (timer stopped, lock stuck, runner always down)
+# does. Throttle is longer than the check interval — see the helper.
+PAID_BACKLOG_ALERT_SECONDS = 20 * 60
+PAID_BACKLOG_ALERT_THROTTLE_SECONDS = 30 * 60
 
 
 def _fixpack_process_token() -> str | None:
@@ -983,6 +992,84 @@ def _failure_detail(exc: BaseException, *, limit: int = 300) -> str:
     return detail[:limit]
 
 
+async def _announce_nothing_to_fix(
+    payment_repo, *, job: dict, audit_id: str,
+) -> None:
+    """Tell the buyer, and the operator, that a paid Fix Pack changed nothing.
+
+    THIS BRANCH USED TO BE SILENT. It wrote a status, recorded an outcome and
+    returned; the payer heard nothing and neither did the operator, so the
+    money simply stayed. Two real payments ended here on 2026-08-25, twenty
+    minutes after a confirmation email promising "you will hear again when it
+    lands or if it cannot finish".
+
+    THE OPERATOR IS PAGED EVEN IF THE CUSTOMER CANNOT BE REACHED, and that
+    ordering is the point: a refund is sent by a person, and the alert is the
+    only thing that starts one. Writing to the customer first and letting a
+    failure there skip the alert would reproduce the silence in a smaller way.
+
+    THE BUYER IS FOUND THROUGH THE JOB, NEVER THROUGH THE AUDIT. The first
+    version of this looked up the newest Fix Pack order on the audit, which is
+    the same audit several jobs and several orders can share -- so on an audit
+    bought twice it would have written to one buyer twice and to the other not
+    at all. Migration 0035 records which order bought which job.
+
+    When that link is missing the operator is paged WITHOUT an order number and
+    the customer is not written to at all. A refund still gets started, by a
+    person who can read the books; guessing which of several orders to name
+    would put "we are refunding you" in front of somebody who is owed nothing,
+    which is worse than the silence this function exists to end.
+
+    Best-effort throughout. The job has already finished; an exception escaping
+    here would turn a completed run into a 'failed' one and re-queue work that
+    correctly found nothing to do.
+    """
+    job_id = job.get("id")
+    reference = None
+    payment = None
+    try:
+        payment = await payment_repo.get_completed_fixpack_for_job(str(job_id))
+        reference = (payment or {}).get("external_ref")
+    except Exception:  # noqa: BLE001
+        logger.warning("could not look up the payer for job %s",
+                       job_id, exc_info=True)
+
+    if payment is None:
+        await alerts.notify_operator(
+            f"Drydock: Fix Pack {job_id} found nothing to change, and it was "
+            f"paid for — but its order could not be identified, so nobody has "
+            f"been told. Find the order on audit {audit_id} and refund it by "
+            "hand. The buyer has NOT heard from us.",
+            dedupe_key=f"fixpack-nothing-to-fix:{job_id}",
+        )
+        return
+
+    await alerts.notify_operator(
+        f"Drydock: Fix Pack {job_id} found nothing to change, and the "
+        f"buyer paid for it. Order {reference} — "
+        "send the refund. The audit's findings were probably fixed between "
+        "the audit and the purchase.",
+        dedupe_key=f"fixpack-nothing-to-fix:{job_id}",
+    )
+
+    from app.notify import messages
+    from app.notify.router import Contact, notify_customer
+
+    locale = payment.get("payer_locale")
+    try:
+        await notify_customer(
+            contact=Contact.from_payment(payment),
+            subject=messages.nothing_to_fix_subject(locale=locale),
+            body=messages.nothing_to_fix_body(
+                reference=str(reference or ""), locale=locale),
+            reference=str(reference or ""),
+            locale=locale,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("could not tell the payer their Fix Pack changed "
+                       "nothing", exc_info=True)
+
+
 async def _alert_fixpack_failed(job_id, detail: str) -> None:
     """Push one best-effort operator alert for a Fix Pack job that landed on
     'failed' (a paying customer's PR silently not opening is exactly the
@@ -1169,6 +1256,7 @@ async def _process_one_paid_job(
     fixpack_repo: FixpackJobRepository, fix_outcome_repo: FixOutcomeRepository,
     repo_fetcher, pr_opener, llm_client: LLMClient,
     llm_usage_repo: LlmUsageRepository | None = None,
+    payment_repo: PaymentRepository | None = None,
 ) -> str:
     """Generate + deliver one paid Fix Pack job. Returns the outcome:
     'delivered', 'no_fix_needed', 'blocked', 'deferred', or 'failed'. Advances
@@ -1237,6 +1325,14 @@ async def _process_one_paid_job(
                 fix_outcome_repo, job=job, outcome="no_fix_needed",
                 rule_ids=[], is_regression=False, pr_url=None,
             )
+            # AND SAY SO. Recording the outcome is bookkeeping; somebody paid
+            # for this. app/fixpack/merit.py already calls the outcome
+            # decisively ours -- "this is our mistake, not a disappointing
+            # result" -- so the money is owed back, and until this line existed
+            # nothing told the one person who can send it.
+            if payment_repo is not None:
+                await _announce_nothing_to_fix(
+                    payment_repo, job=job, audit_id=str(job["audit_id"]))
             return "no_fix_needed"
 
         # Semantic safety net: run the client's own tests against the patched
@@ -1434,6 +1530,32 @@ async def _process_one_paid_job(
 FIXPACK_JOBS_PER_RUN = 1
 
 
+async def _alert_paid_backlog_stale(
+    *,
+    backlog: int,
+    oldest_paid_seconds: float | None,
+) -> None:
+    """Page the operator when a paid Fix Pack has been waiting too long.
+
+    Metrics already expose oldest_paid_seconds on /internal/stats; this is the
+    active half — a human gets a Telegram when the queue is not moving. Deduped
+    on the deployment (not per job): one stuck processor is one cause.
+    """
+    if backlog <= 0 or oldest_paid_seconds is None:
+        return
+    if oldest_paid_seconds < PAID_BACKLOG_ALERT_SECONDS:
+        return
+    minutes = int(oldest_paid_seconds // 60)
+    await alerts.notify_operator(
+        "Drydock: paid Fix Pack backlog is not draining — "
+        f"{backlog} job(s) waiting, oldest ~{minutes} min. "
+        "Check shipit-fixpack.timer/service, sandbox runner health, and "
+        "GET /internal/stats. Customers have paid; PRs are not opening.",
+        dedupe_key="fixpack-paid-backlog-stale",
+        throttle_seconds=PAID_BACKLOG_ALERT_THROTTLE_SECONDS,
+    )
+
+
 @app.post("/internal/fixpack/process-paid")
 async def process_paid_fixpacks(
     request: Request,
@@ -1444,6 +1566,9 @@ async def process_paid_fixpacks(
     pr_opener=Depends(get_pr_opener),
     llm_client: LLMClient = Depends(get_llm_client),
     llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
+    # Only for the outcome that owes somebody their money back: a job knows
+    # its audit and nothing else, and the buyer's contact lives on the payment.
+    payment_repo: PaymentRepository = Depends(get_payment_repo),
 ) -> dict:
     """Operational endpoint: process a bounded paid Fix Pack batch and turn each
     claimed job into a real fix PR — re-fetch the audited
@@ -1510,6 +1635,24 @@ async def process_paid_fixpacks(
                     f"crashed worker)",
                 )
 
+            # Active page when money is waiting and the queue is not moving.
+            # Stats endpoints already expose the numbers; without this the
+            # only observer is whoever happens to open /internal/stats.
+            try:
+                stats = await fixpack_repo.backlog_stats()
+            except Exception:  # noqa: BLE001 — alert path must not kill the run
+                stats = None
+            if stats is not None:
+                await _alert_paid_backlog_stale(
+                    backlog=int(stats.get("backlog") or 0),
+                    oldest_paid_seconds=stats.get("oldest_paid_seconds"),
+                )
+                if stats.get("backlog"):
+                    summary["paid_backlog"] = stats["backlog"]
+                    summary["oldest_paid_seconds"] = stats.get(
+                        "oldest_paid_seconds"
+                    )
+
             # Don't claim anything while the sandbox runner is down: the
             # semantic check would be unable to run, every claim would burn one
             # of the job's MAX_JOB_ATTEMPTS, and a few minutes of runner
@@ -1538,6 +1681,7 @@ async def process_paid_fixpacks(
                     fix_outcome_repo=fix_outcome_repo,
                     repo_fetcher=repo_fetcher, pr_opener=pr_opener,
                     llm_client=llm_client, llm_usage_repo=llm_usage_repo,
+                    payment_repo=payment_repo,
                 )
                 if outcome == "delivered":
                     summary["delivered"] += 1
@@ -2270,3 +2414,4 @@ app.include_router(reads_router)
 app.include_router(rls_check_router)
 app.include_router(session_router)
 app.include_router(storefront_router)
+app.include_router(yookassa_router)

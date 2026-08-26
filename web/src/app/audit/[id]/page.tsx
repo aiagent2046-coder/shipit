@@ -11,6 +11,7 @@ import { FindingsList, SeveritySummary } from "@/components/FindingsList";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
 import { RlsCheck } from "@/components/RlsCheck";
+import { orderFromQuery, PaymentReturn } from "@/components/PaymentReturn";
 
 interface View {
   id: string;
@@ -56,6 +57,13 @@ function AuditPageInner() {
   const id = params.id;
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
+  // Set by the return URL ЮKassa sends the payer back to. A MARKER, NOT A
+  // FACT: it arrives in the buyer's own browser and anybody can type it, so it
+  // may change what this page says and never what it does. Hence the wording
+  // below is conditional -- it has to stay true for someone who added the
+  // parameter by hand.
+  const returnedFromPayment = searchParams.get("paid") === "1";
+  const paidOrder = orderFromQuery(searchParams.get("order"));
   const [view, setView] = useState<View | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -293,10 +301,13 @@ function AuditPageInner() {
             </div>
           </div>
 
+          {returnedFromPayment && <PaymentReturn order={paidOrder} />}
+
           <FixpackPurchase
             auditId={view.id}
             repoUrl={view.repoUrl}
             autoFixable={view.autoFixable}
+            accessToken={token}
           />
 
           <RlsCheck auditId={view.id} token={token} repoUrl={view.repoUrl} />

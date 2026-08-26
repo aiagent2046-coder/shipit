@@ -101,14 +101,16 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
                      currency, status, tier_granted, product="pro_tier",
                      audit_id=None, created_at=None,
                      payer_name=None, payer_email=None, payer_x=None,
-                     payer_locale=None):
+                     payer_locale=None, provider_payment_id=None,
+                     fixpack_job_id=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
-            "audit_id": audit_id,
+            "audit_id": audit_id, "fixpack_job_id": fixpack_job_id,
             "payer_name": payer_name, "payer_email": payer_email,
             "payer_x": payer_x, "payer_locale": payer_locale,
+            "provider_payment_id": provider_payment_id,
             "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows[row["id"]] = row
@@ -133,6 +135,15 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
             if r["provider"] == provider and r["status"] == "pending"
             and (created_after is None or r["created_at"] >= created_after)
         ]
+
+    async def set_provider_payment_id(self, payment_id, provider_payment_id):
+        # First-wins, mirroring the real method's WHERE clause: one order
+        # must not be able to claim two charges.
+        row = self.rows.get(payment_id)
+        if row is None or row.get('provider_payment_id') is not None:
+            return False
+        row['provider_payment_id'] = provider_payment_id
+        return True
 
     async def link_telegram_chat_id(self, payment_id, telegram_chat_id):
         # First-wins, mirroring the real method's WHERE clause.
@@ -340,17 +351,54 @@ def test_pricing_publishes_the_fixpack_price(monkeypatch):
     """The storefront's only source for what anything costs. /pricing showed no
     price at all before this endpoint existed, so the figure was unknowable
     until a buyer had already started a checkout."""
-    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_USD", raising=False)
+    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_RUB", raising=False)
     r = client.get("/v1/pricing")
     assert r.status_code == 200
-    assert r.json() == {"fixpack": {"amount": "10.00", "currency": "USD"}}
+    assert r.json()["fixpack"] == {"amount": "990.00", "currency": "RUB"}
+
+
+def test_pricing_says_which_ways_to_pay_are_live(monkeypatch):
+    """So the storefront does not learn it by rendering a button, taking a
+    click and answering 503 -- which reads to a buyer as "this is broken",
+    not as "pay the other way"."""
+    monkeypatch.setenv("YOOKASSA_SHOP_ID", "1446255")
+    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "test_x")  # scan-allow: fixture
+    for key, var in bank_transfer._BANK_ENV_FIELDS:
+        monkeypatch.setenv(var, "set")
+
+    assert client.get("/v1/pricing").json()["methods"] == {
+        "card": True, "bank_transfer": True}
+
+
+def test_an_unconfigured_rail_is_not_offered(monkeypatch):
+    monkeypatch.delenv("YOOKASSA_SHOP_ID", raising=False)
+    monkeypatch.delenv("YOOKASSA_SECRET_KEY", raising=False)
+    for key, var in bank_transfer._BANK_ENV_FIELDS:
+        monkeypatch.delenv(var, raising=False)
+
+    body = client.get("/v1/pricing").json()
+
+    assert body["methods"] == {"card": False, "bank_transfer": False}
+    # Still quotes a price. Saying what something costs is not an offer to
+    # take money for it today, and the audit itself is free.
+    assert body["fixpack"]["amount"]
+
+
+def test_half_a_card_credential_is_not_a_way_to_pay(monkeypatch):
+    """Mirrors credentials_from_env: a shop id with no key cannot sign a
+    request, so offering the rail would put a 503 in front of a buyer who was
+    ready to pay."""
+    monkeypatch.setenv("YOOKASSA_SHOP_ID", "1446255")
+    monkeypatch.delenv("YOOKASSA_SECRET_KEY", raising=False)
+
+    assert client.get("/v1/pricing").json()["methods"]["card"] is False
 
 
 def test_pricing_follows_the_configured_price(monkeypatch):
     """Read through the same accessor the invoice creator uses, so the page
     cannot advertise one figure while checkout charges another. A number typed
     into the frontend would drift the first time this env var moved."""
-    monkeypatch.setenv("BANK_TRANSFER_FIXPACK_PRICE_USD", "14")
+    monkeypatch.setenv("BANK_TRANSFER_FIXPACK_PRICE_RUB", "14")
     assert client.get("/v1/pricing").json()["fixpack"]["amount"] == "14.00"
 
 
@@ -359,7 +407,7 @@ async def test_advertised_price_is_what_the_invoice_charges(monkeypatch):
     amount actually demanded must agree to the dollar. They differ in kopecks
     by design -- the suffix is the per-order matching key -- so compare the
     whole-dollar part and require the surcharge to stay under one unit."""
-    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_USD", raising=False)
+    monkeypatch.delenv("BANK_TRANSFER_FIXPACK_PRICE_RUB", raising=False)
     advertised = client.get("/v1/pricing").json()["fixpack"]
 
     payments = FakePaymentRepo()
@@ -389,7 +437,24 @@ def test_billing_details_is_200_with_null_when_unconfigured():
     a footer without a requisites block, not an error on every page."""
     r = client.get("/v1/billing/details")
     assert r.status_code == 200
-    assert r.json() == {"bank": None}
+    assert r.json()["bank"] is None
+
+
+def test_billing_details_publishes_the_bot_a_deep_link_would_open(monkeypatch):
+    """The site builds `t.me/<bot>?start=DRY-XXXXXX` from this. It is the only
+    way a Telegram chat can be established -- the Bot API cannot message
+    somebody who has never written to the bot -- so a username field in the
+    checkout form would collect something unusable."""
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "@SyndiAI_bot")
+    assert client.get("/v1/billing/details").json()["telegram_bot"] == (
+        "SyndiAI_bot")
+
+
+def test_a_bot_name_that_is_not_one_is_the_same_as_none(monkeypatch):
+    """This value goes straight into an href a customer is invited to tap, so
+    a typo has to remove the button rather than produce a link to nowhere."""
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "https://evil.example/steal")
+    assert client.get("/v1/billing/details").json()["telegram_bot"] is None
 
 
 def test_pro_invoice_returns_details_and_reference(monkeypatch):
@@ -402,11 +467,11 @@ def test_pro_invoice_returns_details_and_reference(monkeypatch):
         _clear()
 
     assert bank_transfer.REFERENCE_RE.match(body["reference"])
-    assert body["currency"] == "USD"
+    assert body["currency"] == "RUB"
     # 5.00 plus a kopeck suffix, never the bare price and never a discount.
     # The quoted amount is the price exactly -- no kopeck nonce. The storefront
     # advertising one figure while checkout demanded another is what removed it.
-    assert body["amount"] == bank_transfer.pro_price_usd()
+    assert body["amount"] == bank_transfer.pro_price_rub()
     # The card is what the checkout page renders and the payer copies; the rest
     # ride along for the footer, and none of it is ever NEXT_PUBLIC_* config.
     assert body["bank"]["card"] == BANK_ENV["BANK_TRANSFER_CARD"]
@@ -429,7 +494,7 @@ async def test_saturation_falls_back_to_the_bare_price(monkeypatch):
         await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     saturated = await bank_transfer.create_invoice(
         payments, details=dict(BANK_DETAILS))
-    assert saturated["amount"] == "5.00"
+    assert saturated["amount"] == "490.00"
 
 
 def test_two_open_invoices_get_distinct_references(monkeypatch):
@@ -787,8 +852,8 @@ async def test_pending_status_carries_what_the_page_needs(monkeypatch):
     assert status["amount"] == f"{float(invoice['amount']):.2f}"
     # The quoted amount is the price exactly -- no kopeck nonce. The storefront
     # advertising one figure while checkout demanded another is what removed it.
-    assert status["amount"] == bank_transfer.pro_price_usd()
-    assert status["currency"] == "USD"
+    assert status["amount"] == bank_transfer.pro_price_rub()
+    assert status["currency"] == "RUB"
     assert status["bank"]["bank_name"] == BANK_ENV["BANK_TRANSFER_BANK_NAME"]
     assert "api_key" not in status
 
@@ -1314,3 +1379,19 @@ def test_a_real_secret_is_still_sellable(monkeypatch):
         assert len(payments.rows) == 1
     finally:
         _clear()
+
+
+def test_the_opening_sentence_follows_the_rail_that_took_the_money():
+    """The join between the row and the wording, which is where this went
+    wrong: both rails share _tell_the_payer, so the sentence has to be chosen
+    from the payment rather than from which module the function lives in."""
+    card = bank_transfer._confirmation_body(
+        {"provider": "yookassa", "external_ref": "DRY-J2SRUB"},
+        product="fixpack", locale="ru")
+    transfer = bank_transfer._confirmation_body(
+        {"provider": bank_transfer.PROVIDER, "external_ref": "DRY-BANK24"},
+        product="fixpack", locale="ru")
+
+    assert "перевод" not in card.lower(), (
+        "a card payer was told we confirmed a transfer they never made")
+    assert "перевод" in transfer.lower()

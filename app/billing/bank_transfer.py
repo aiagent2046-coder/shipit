@@ -7,7 +7,10 @@ there is no automatic confirmation and there never will be for this provider
 -- a human looking at their banking app IS the oracle. The rails that DID
 confirm themselves (USDT via TronGrid, PayPal via webhook) were removed on
 2026-08-20; this one, the only one that had actually taken money, is what is
-left until Robokassa is connected.
+left until a payment aggregator is connected. Which aggregator is not settled:
+Robokassa and enot.io were applied to and ЮMoney is in review, so this module
+names none of them -- the storefront reads the name from one constant
+(web/src/app/ru/price.ts) precisely because it has already changed twice.
 
 Structurally this is an INVOICE flow, the same one USDT used: a pending
 `payments` row is written up front (the invoice the payer is shown), and a
@@ -68,13 +71,35 @@ from app.notify import telegram as tg
 logger = logging.getLogger(__name__)
 
 PROVIDER = "bank_transfer"
-CURRENCY = "USD"
+
+# ROUBLES, AND THE REASON IS THAT A PRICE HAS TO BE A NUMBER THE BUYER KNOWS
+# BEFORE THEY PAY.
+#
+# This was USD, and the Russian pages quoted "$10.00 USD" followed by a note
+# saying the rouble sum would be whatever the payment system's rate made it at
+# the moment of payment. To a Russian payment aggregator that is a floating
+# price -- worse than the "от 100 ₽" their rejection template names, because
+# the buyer cannot learn the rouble figure at all until the payment page. It
+# was rejected on exactly that ground on 2026-08-23.
+#
+# The seller is a Russian sole trader, the aggregator settles in roubles, and
+# the buyer is quoted in roubles. One currency end to end leaves nothing to
+# convert, which is why CONVERSION_NOTE no longer exists on the storefront: a
+# sentence explaining the exchange rate was only ever needed because the price
+# was in the wrong unit.
+CURRENCY = "RUB"
 
 PRODUCT_PRO = "pro_tier"
 PRODUCT_FIXPACK = "fixpack"
 
-_DEFAULT_PRO_PRICE_USD = "5.00"
-_DEFAULT_FIXPACK_PRICE_USD = "10.00"
+# 990 for the Fix Pack is the operator's figure, and near where the dollar
+# price stood. Pro's 490 is the dollar price carried across at the same rate --
+# it is not advertised anywhere (see app/routes/storefront.py) and exists for
+# the one existing customer, but it must not be left at "5.00" while the
+# currency underneath changes, which would silently reprice Pro at five
+# roubles.
+_DEFAULT_PRO_PRICE_RUB = "490.00"
+_DEFAULT_FIXPACK_PRICE_RUB = "990.00"
 
 # Seven days, against the thirty minutes an on-chain invoice used. A SWIFT
 # transfer takes one
@@ -141,7 +166,7 @@ def bank_details_from_env() -> dict[str, str] | None:
 def _price_from_env(var: str, default: str) -> str:
     """A fiat amount as a fixed-2dp string. Same shape and same
     unparseable-override-falls-back-to-default contract the other providers used,
-    because both quote a catalogue price in USD to a human."""
+    because both quote a catalogue price to a human."""
     raw = os.environ.get(var) or default
     try:
         return f"{float(raw):.2f}"
@@ -149,13 +174,22 @@ def _price_from_env(var: str, default: str) -> str:
         return f"{float(default):.2f}"
 
 
-def pro_price_usd() -> str:
-    return _price_from_env("BANK_TRANSFER_PRO_PRICE_USD", _DEFAULT_PRO_PRICE_USD)
+# NAMED _rub, AND THE OLD _usd NAMES ARE GONE RATHER THAN ALIASED.
+#
+# A deployment's .env is not rewritten by a deploy, so BANK_TRANSFER_*_USD
+# survives the switch to roubles on every running host. Keeping the old names
+# working would read a dollar figure as a rouble one and charge 10 roubles for
+# a 990-rouble product -- silently, and in the direction that loses money
+# without anybody noticing for a month. The new names simply do not see them,
+# and deploy/scripts/validate-production-env.py refuses a host that still
+# carries the old ones.
+def pro_price_rub() -> str:
+    return _price_from_env("BANK_TRANSFER_PRO_PRICE_RUB", _DEFAULT_PRO_PRICE_RUB)
 
 
-def fixpack_price_usd() -> str:
+def fixpack_price_rub() -> str:
     return _price_from_env(
-        "BANK_TRANSFER_FIXPACK_PRICE_USD", _DEFAULT_FIXPACK_PRICE_USD
+        "BANK_TRANSFER_FIXPACK_PRICE_RUB", _DEFAULT_FIXPACK_PRICE_RUB
     )
 
 
@@ -209,8 +243,22 @@ def generate_reference() -> str:
     return f"{REFERENCE_PREFIX}{body}"
 
 
-async def _reserve_reference(payment_repo: Any) -> str | None:
-    """A reference code no existing bank-transfer payment is already using.
+async def reserve_reference(
+    payment_repo: Any, *, provider: str | None = None,
+) -> str | None:
+    """A reference code no existing payment on `provider` is already using.
+
+    PUBLIC, AND PARAMETERISED BY PROVIDER, because the DRY-XXXXXX code is the
+    ORDER's identity and not a bank-transfer artefact: it is what the buyer
+    quotes to support and types into the Telegram bot, and every rail this
+    product grows needs one. It lives in this module because this is where it
+    was born, not because it belongs only here.
+
+    Uniqueness is per provider, which is what migration 0004's partial unique
+    index on (provider, external_ref) enforces. Two rails could in principle
+    mint the same code for different orders; they are told apart the same way
+    the index tells them apart, and no lookup in this codebase searches for a
+    reference without knowing which rail it belongs to.
 
     Same re-roll-off-what-is-taken shape the USDT invoice used,
     and with the same residual race: two concurrent creations could both clear
@@ -225,9 +273,10 @@ async def _reserve_reference(payment_repo: Any) -> str | None:
     with a sane number of open invoices and is surfaced as 503 rather than
     looping forever.
     """
+    scope = provider or PROVIDER
     for _ in range(_REFERENCE_ATTEMPTS):
         candidate = generate_reference()
-        if await payment_repo.get_by_external_ref(PROVIDER, candidate) is None:
+        if await payment_repo.get_by_external_ref(scope, candidate) is None:
             return candidate
     logger.error(
         "could not reserve a free bank-transfer reference in %d attempts",
@@ -299,13 +348,13 @@ async def create_invoice(
     free reference code -- so the endpoint can 503 instead of showing a payer
     an invoice that was never recorded and can therefore never be confirmed.
     """
-    reference = await _reserve_reference(payment_repo)
+    reference = await reserve_reference(payment_repo)
     if reference is None:
         return None
     # Reservation and insert under one lock: a suffix picked but not yet
     # written is invisible to the next reader, and that gap is the race.
     async with _amount_lock():
-        amount = pro_price_usd()
+        amount = pro_price_rub()
         row = await payment_repo.create(
             account_id=None, provider=PROVIDER, external_ref=reference,
             amount=float(amount), currency=CURRENCY, status="pending",
@@ -328,14 +377,14 @@ async def create_fixpack_invoice(
     tagged product='fixpack' + audit_id so confirm() knows to create a
     fixpack_jobs row rather than grant a tier. Payer contact is recorded the
     same way and for the same reason as in create_invoice."""
-    reference = await _reserve_reference(payment_repo)
+    reference = await reserve_reference(payment_repo)
     if reference is None:
         return None
     # Same lock as create_invoice, and the same lock KEY: Pro and Fix Pack draw
     # suffixes from one pending set, so serializing them separately would let
     # them collide with each other.
     async with _amount_lock():
-        amount = fixpack_price_usd()
+        amount = fixpack_price_rub()
         row = await payment_repo.create(
             account_id=None, provider=PROVIDER, external_ref=reference,
             amount=float(amount), currency=CURRENCY, status="pending",
@@ -646,12 +695,18 @@ def _confirmation_body(
     write them in. They were here, in English only, until the storefront's
     Russian pages made that a customer translating our reassurance about their
     own money.
+
+    WHICH RAIL TOOK THE MONEY DECIDES THE FIRST SENTENCE. This module's own
+    provider is the only one a person confirms by hand; every other rail
+    confirms itself, and telling a card payer we have "confirmed your bank
+    transfer" describes a payment they never made.
     """
     return messages.confirmation_body(
         product=product,
         reference=str(row.get("external_ref") or ""),
         site_url=tg.SITE_URL,
         locale=locale,
+        confirmed_by_hand=row.get("provider") == PROVIDER,
     )
 
 

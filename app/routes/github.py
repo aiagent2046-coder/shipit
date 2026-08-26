@@ -207,8 +207,20 @@ async def github_installation_status(owner: str, repo: str) -> dict:
         (PR delivery falls back to the operator PAT), so `installed` is null
         and the frontend should not gate on it.
       - app_configured=true, installed=true: good to go, install_url null.
-      - app_configured=true, installed=false: install_url points the repo
-        owner at the App's public install page, carrying state=owner/repo.
+      - app_configured=true, installed=false, suspended=false: install_url
+        points the repo owner at the App's public install page, carrying
+        state=owner/repo.
+      - app_configured=true, installed=false, suspended=true: the App IS
+        installed and has been suspended, so no pull request can be opened.
+        install_url is null ON PURPOSE — the install page is the wrong
+        destination for somebody who has already installed it, and a button
+        that does not fix the problem is worse than a sentence that names it.
+        The page tells them to unsuspend it instead.
+
+    `installed` is false in the suspended case, and that is the point rather
+    than a rounding: on 2026-08-25 this endpoint's lookup answered True for a
+    suspended installation one second before delivery got a 403, which on the
+    money path means selling a Fix Pack that cannot be delivered.
     """
     if not (_VALID_OWNER_REPO_SEGMENT.match(owner)
             and _VALID_OWNER_REPO_SEGMENT.match(repo)):
@@ -221,14 +233,14 @@ async def github_installation_status(owner: str, repo: str) -> dict:
     app_creds = github_app.app_credentials_from_env()
     if app_creds is None:
         return {"owner": owner, "repo": repo, "app_configured": False,
-                "installed": None, "install_url": None}
+                "installed": None, "suspended": None, "install_url": None}
 
     app_id, private_key = app_creds
     try:
-        # Off the event loop: github_app.installation_exists_for_repo does blocking
-        # network I/O, same as the token resolution the delivery path runs.
-        installed = await run_in_threadpool(
-            github_app.installation_exists_for_repo, owner, repo,
+        # Off the event loop: the lookup does blocking network I/O, same as
+        # the token resolution the delivery path runs.
+        state = await run_in_threadpool(
+            github_app.installation_state_for_repo, owner, repo,
             app_id=app_id, private_key=private_key,
         )
     except GitHubAppError as exc:
@@ -240,6 +252,10 @@ async def github_installation_status(owner: str, repo: str) -> dict:
             detail={"reason": "installation_check_failed", "detail": str(exc)},
         ) from exc
 
-    install_url = None if installed else github_app.build_install_url(f"{owner}/{repo}")
+    installed = state == github_app.INSTALLATION_ACTIVE
+    suspended = state == github_app.INSTALLATION_SUSPENDED
+    install_url = (None if installed or suspended
+                   else github_app.build_install_url(f"{owner}/{repo}"))
     return {"owner": owner, "repo": repo, "app_configured": True,
-            "installed": installed, "install_url": install_url}
+            "installed": installed, "suspended": suspended,
+            "install_url": install_url}

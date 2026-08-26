@@ -773,10 +773,18 @@ class TestPaymentRepositoryWithFakePool:
         assert result["account_id"] == str(account_id)
         query, params = fake.calls[0]
         assert "insert into payments" in query
-        # The four trailing Nones are payer_name, payer_email (migration
-        # 0026), payer_x (0032) and payer_locale (0033): supplied only by
-        # bank_transfer, so every other provider writes the row exactly as it
-        # did before those columns existed. The one before them is audit_id.
+        # The six trailing Nones are payer_name, payer_email (migration
+        # 0026), payer_x (0032), payer_locale (0033), provider_payment_id
+        # (0034) and fixpack_job_id (0035): each is supplied by one rail and
+        # left alone by the others, so every provider writes the row exactly as
+        # it did before those columns existed. The one before them is audit_id.
+        #
+        # provider_payment_id is the payment's identity in the system that took
+        # the money -- ЮKassa's id, not ours. fixpack_job_id is which Fix Pack
+        # job the order bought, which audit_id cannot say because one audit
+        # holds several of each. Both are appended rather than slotted in: a
+        # column inserted into the middle of this list renames every parameter
+        # after it, and this assertion is the only thing that would notice.
         #
         # paypal_order_id was the tenth parameter until PayPal was removed as a
         # way to pay. The COLUMN is still there and still SELECTed -- the rows
@@ -784,7 +792,7 @@ class TestPaymentRepositoryWithFakePool:
         # insert that still did would be writing a provider we no longer have.
         assert params == (account_id, "usdt_trc20", "0xabc", 9.99, "USD",
                           "completed", "pro", "pro_tier", None,
-                          None, None, None, None)
+                          None, None, None, None, None, None)
 
     async def test_amount_numeric_is_cast_to_json_number_not_string(self, monkeypatch):
         """Postgres `numeric` -> decimal.Decimal renders as a JSON *string*

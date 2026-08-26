@@ -21,12 +21,47 @@ import { describe, expect, it } from "vitest";
 
 import {
   categoryBand,
+  formatMoney,
   scoreColor,
   scoreVerdict,
   seriousCategories,
   severityCounts,
   sortFindings,
 } from "./format";
+
+describe("formatMoney", () => {
+  it("writes roubles with the rouble sign", () => {
+    expect(formatMoney("990.00", "RUB")).toBe("990.00 ₽");
+  });
+
+  it("never puts a dollar sign in front of a rouble amount", () => {
+    // THE DEFECT, FOUND ON PRODUCTION 2026-08-24. The audit page — the screen a
+    // buyer actually pays from, and the one a payment aggregator's reviewer
+    // reaches — rendered "$990.00 RUB". A literal "$" had been typed beside a
+    // value that carries its own currency code, so when the product was
+    // repriced from dollars to roubles the two could disagree with nothing to
+    // notice. Four days after the site was rejected for not stating its price
+    // properly.
+    for (const currency of ["RUB", "USD", "EUR", "XYZ"]) {
+      expect(formatMoney("990.00", currency)).not.toContain("$");
+    }
+  });
+
+  it("falls back to the ISO code rather than guessing a symbol", () => {
+    // An unfamiliar currency should look unfamiliar. Reaching for "$" as a
+    // default is how a rouble price came to be advertised in dollars.
+    expect(formatMoney("10", "USD")).toBe("10 USD");
+    expect(formatMoney("10", "XYZ")).toBe("10 XYZ");
+  });
+
+  it("shows the number alone when there is no currency to show", () => {
+    // An older API response, or a row from before the column existed. A bare
+    // number is honest; "990.00 undefined" is a bug the buyer reads.
+    expect(formatMoney("990.00", null)).toBe("990.00");
+    expect(formatMoney("990.00", undefined)).toBe("990.00");
+    expect(formatMoney("990.00", "  ")).toBe("990.00");
+  });
+});
 
 describe("categoryBand", () => {
   it("puts a value at the gate in the top band", () => {

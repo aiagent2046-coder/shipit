@@ -23,10 +23,15 @@ operator alert saying nobody could be reached.
 
     python3 scripts/verify_smtp_locally.py you@example.com
 
-Reads the same SMTP_* variables the application reads, through the same
-`settings_from_env`, and sends through the same `send_email`. Nothing here is
-a reimplementation: if this script delivers, the product delivers, and if it
-does not, the product would not have either.
+No preparation, and deliberately none: the settings come from the environment
+if they are there, and otherwise from /opt/shipit/.env, which the script reads
+itself. Sourcing that file into a shell first is what this replaces -- see
+scripts/env_file.py for what that habit cost here.
+
+Everything after that is the application's own: the same SMTP_* variables
+through the same `settings_from_env`, sent through the same `send_email`.
+Nothing here is a reimplementation: if this script delivers, the product
+delivers, and if it does not, the product would not have either.
 
 THE PASSWORD IS NEVER PRINTED. Neither is the message body. The failure output
 names the exception type and what to check, which is what tells a wrong
@@ -42,8 +47,12 @@ import ssl
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(SCRIPT_DIR))
+
+import env_file  # noqa: E402
 
 from app.notify import email as mail  # noqa: E402
 
@@ -93,22 +102,34 @@ def _fail(message: str) -> int:
 
 
 async def _run(recipient: str) -> int:
+    # The environment first, this deployment's env file second. Until
+    # 2026-08-25 it was the environment and nothing else, and the advice
+    # printed right here told the operator to run `set -a; . /opt/shipit/.env`
+    # -- the incantation that truncated this deployment's SMTP password at a
+    # `$` and produced the very SMTPAuthenticationError this script exists to
+    # diagnose. A diagnostic that manufactures the fault it reports is worse
+    # than no diagnostic: it sends someone to change a password that was right.
+    source = env_file.fill_environment("SMTP_")
+
     settings = mail.settings_from_env()
     if settings is None:
+        found = "is not there" if not source.is_file() else "does not set them"
         return _fail(
             "SMTP is not configured on this deployment.\n\n"
             "  SMTP_HOST and SMTP_FROM must BOTH be set. With either missing, "
             "app/notify/email.py is a deliberate no-op: it returns False and "
             "raises nothing, so a refund is still recorded and the customer is "
             "simply never told.\n\n"
-            "  Reading /opt/shipit/.env? This script reads the ENVIRONMENT, "
-            "not that file. Run it as:\n"
-            "    set -a; . /opt/shipit/.env; set +a; "
-            "python3 scripts/verify_smtp_locally.py <address>"
+            f"  Neither is in the environment, and {source} {found}. "
+            "Point SHIPIT_ENV_FILE at another file to read that one instead."
         )
 
     # Everything except the password, which is never printed and is repr=False
-    # on the settings object for the same reason.
+    # on the settings object for the same reason. The source is named because
+    # an operator reading settings they did not expect needs to know which file
+    # they came from before anything else.
+    print(f"env file : {source}"
+          f"{'' if source.is_file() else ' (absent — environment only)'}")
     print(f"host     : {settings.host}:{settings.port}"
           f" ({'implicit TLS' if settings.implicit_tls else 'STARTTLS'})")
     print(f"from     : {settings.sender}")

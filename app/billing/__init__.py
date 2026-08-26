@@ -8,7 +8,7 @@ the account's opaque API key handed back to whoever paid. That converging step
 so no provider reimplements it.
 
 Three of the four were removed on 2026-08-20 and bank transfer is the rail
-left, with Robokassa to follow. This file barely changed, which is the point of
+left, with an aggregator to follow. This file barely changed, which is the point of
 its shape: a provider is a way of reaching the step below, and the step below
 never knew which one had called it.
 
@@ -318,7 +318,8 @@ async def grant_fixpack(
 
     if invoice_payment_id is not None:
         completed = await payment_repo.mark_completed_fixpack(
-            invoice_payment_id, external_ref=external_ref
+            invoice_payment_id, external_ref=external_ref,
+            fixpack_job_id=str(job["id"]),
         )
         if completed is None:
             # The CAS gate refused: the invoice is already completed under a
@@ -339,6 +340,7 @@ async def grant_fixpack(
             account_id=None, provider=provider, external_ref=external_ref,
             amount=amount, currency=currency, status="completed",
             tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
+            fixpack_job_id=str(job["id"]),
         )
         if created is None:
             return None  # DATABASE_URL not configured -- nothing persisted.
