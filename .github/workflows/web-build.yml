@@ -48,10 +48,17 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          # package.json says >=20.9.0; pin the major rather than track
-          # 'latest', so a Node release cannot break the build on a day
-          # nobody touched the frontend.
-          node-version: "20"
+          # package.json's engines field is the source of this number; pin the
+          # major rather than track 'latest', so a Node release cannot break
+          # the build on a day nobody touched the frontend.
+          #
+          # 20 -> 22 on 2026-08-26, and not as a preference. jsdom 30 declares
+          # `node ^22.22.2 || ^24.15.0 || >=26.0.0` -- it does not run on 20 at
+          # all, and the whole test suite failed to load here with "no tests, 6
+          # errors" while passing on a developer machine running 22. Node 20
+          # also left maintenance in April 2026, so this pin was already
+          # tracking an unsupported runtime.
+          node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
 

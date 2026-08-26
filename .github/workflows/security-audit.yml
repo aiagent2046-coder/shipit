@@ -68,7 +68,10 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          # Kept in step with web-build.yml and package.json's engines: jsdom
+          # 30 does not run on Node 20. A second pin drifting from the first is
+          # how one workflow starts testing a runtime nothing else uses.
+          node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
