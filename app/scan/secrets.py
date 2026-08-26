@@ -38,7 +38,15 @@ _DOC_SEGMENTS = frozenset((
     "blog", "docs", "doc", "content", "posts", "articles",
     "examples", "example", "fixtures", "__fixtures__", "samples",
 ))
-_DOC_SUFFIXES = (".md", ".mdx")
+# Storybook files are demonstration code by definition -- a component rendered
+# with made-up props so a human can look at it -- so they belong with the
+# examples rather than with the tests. Same treatment either way (capped at
+# medium, never dropped); listed here because .stories.tsx is common in the
+# React exports this product audits and matched neither predicate.
+_DOC_SUFFIXES = (
+    ".md", ".mdx",
+    ".stories.ts", ".stories.tsx", ".stories.js", ".stories.jsx", ".stories.mdx",
+)
 _DOC_CONFIDENCE_FACTOR = 0.35
 _DOC_SEVERITY_CAP = {"critical": "medium", "high": "medium"}
 
@@ -71,9 +79,46 @@ _MIGRATION_MIN_CONFIDENCE = 0.9
 # signals pointing the same way, so that combination damps further, to low.
 # Neither strength drops the finding -- a reader who wants to check their
 # fixtures still finds them in the report.
-_TEST_PATH_SEGMENTS = frozenset(("__tests__", "__mocks__", "test", "tests"))
+# WRITTEN FROM ONE REPOSITORY, WHICH IS WHY THIS LIST GREW.
+#
+# The first version of these predicates was calibrated on this codebase and
+# pinned by a test whose eleven paths were .py, .js, .rb, .md, .sql and .json.
+# Issue #174 asked the right question about that -- "fixtures in a Python test
+# suite look nothing like fixtures in a Lovable export" -- and the answer,
+# measured on 2026-08-26, was worse than expected:
+#
+#     src/lib/format.test.ts    -> damped
+#     src/lib/format.test.tsx   -> NOT damped
+#
+# The same test, renamed for a React component, stopped being recognised. This
+# repository's own web/ has six such files, and .tsx is the dominant convention
+# in exactly the ecosystem this product audits: Lovable, Bolt and Cursor
+# exports are React. An LLM finding in one of them came through critical at
+# full weight -- 2.0 * confidence against a category budget of 10, so seven
+# fixtures zero out Security, which is the failure #167 fixed for .ts and left
+# standing for .tsx.
+#
+# Segments and suffixes below now cover the conventions those ecosystems
+# actually use. Nothing here DROPS a finding -- the cap is medium and the
+# confidence is scaled -- so the cost of a wrong entry is a real key shown as
+# medium rather than critical, and the cost of a missing one is a wall of red
+# that makes the reader stop believing the report.
+_TEST_PATH_SEGMENTS = frozenset((
+    "__tests__", "__mocks__", "__snapshots__", "test", "tests",
+    # spec/ is the Ruby and Jasmine convention; e2e/, cypress/ and
+    # playwright/ are where browser tests live in a JS project.
+    "spec", "e2e", "cypress", "playwright",
+    # msw and hand-rolled fakes; __mocks__ was already here, these are the
+    # same thing without the jest-specific underscores.
+    "mock", "mocks",
+))
 _TEST_SETUP_FILENAMES = frozenset(("jest.setup.ts", "jest.setup.js"))
-_TEST_FILE_SUFFIXES = (".test.ts", ".test.js", ".spec.ts", ".spec.js")
+_TEST_FILE_SUFFIXES = (
+    ".test.ts", ".test.tsx", ".test.js", ".test.jsx",
+    ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
+    # Cypress names its specs <thing>.cy.<ext> rather than .spec.<ext>.
+    ".cy.ts", ".cy.tsx", ".cy.js", ".cy.jsx",
+)
 _PLACEHOLDER_MARKERS = (
     "placeholder",
     "not-real",
