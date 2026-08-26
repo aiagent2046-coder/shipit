@@ -19,6 +19,7 @@ from app.llm import client as client_mod
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan import llm_scan
 from app.scan import pipeline as pipeline_mod
+from app.scan.secrets import damp_for_non_production_path
 from app.scan.llm_scan import (
     RUBRICS,
     SYSTEM_PROMPT,
@@ -756,10 +757,76 @@ def test_damping_agrees_with_path_predicate():
         "tests/test_x.py", "src/app.py", "docs/guide.md", "migrations/0001.sql",
         "examples/demo.js", "__tests__/a.js", "app/main.py", "README.md",
         "test/helper.rb", "supabase/migrations/0002.sql", "fixtures/data.json",
+        # Every path above is .py/.js/.rb/.md/.sql/.json, which is how a .tsx
+        # gap survived here for weeks -- see the next test.
+        "src/components/Login.test.tsx", "src/App.spec.jsx",
+        "cypress/e2e/login.cy.ts", "src/components/Button.stories.tsx",
     ]
     for p in paths:
         _, _, context = damp_for_non_production_path(p, "critical", 1.0)
         assert (context is not None) == is_non_production_path(p), p
+
+
+# The audience this product audits writes React, and this list is what its
+# test files are actually called. Issue #174 asked whether the damping
+# calibrated on THIS repository transfers to a Lovable or Bolt export; the
+# measured answer on 2026-08-26 was that `format.test.ts` was damped and
+# `format.test.tsx` was not -- the same file, renamed for a component.
+#
+# Undamped, an LLM finding on one of these arrives critical at full weight:
+# 2.0 * confidence against a category budget of 10, so seven fixtures zero out
+# Security. That is the exact failure #167 fixed for .ts and left standing for
+# every extension a frontend actually uses.
+FOREIGN_FIXTURE_PATHS = [
+    "web/src/components/InstallGate.test.tsx",   # exists in this repo's web/
+    "src/components/Login.test.tsx",
+    "src/lib/format.test.ts",
+    "src/App.spec.jsx",
+    "cypress/e2e/login.cy.ts",
+    "playwright/auth.setup.ts",
+    "spec/models/user_spec.rb",
+    "src/mocks/handlers.ts",
+    "src/components/Button.stories.tsx",
+    "__snapshots__/App.test.tsx.snap",
+]
+
+# The other direction, and the half that matters more: damping must not creep
+# into code that ships. A capped severity on one of these is a real leak read
+# as a minor one.
+PRODUCTION_PATHS = [
+    "src/app/api/route.ts",
+    "src/lib/latest.ts",
+    "app/main.py",
+    "supabase/migrations/0001_init.sql",   # applied state, never damped
+    "src/components/Login.tsx",            # the component, not its test
+    # THE TWO THAT EARN THIS LIST. Removing the migration guard from the
+    # damper left the four paths above passing, because "migrations" matches
+    # no test or doc segment on its own -- so the guard looked redundant and a
+    # mutation removing it went unnoticed. These are the paths it exists for:
+    # a migration nested under a directory that WOULD otherwise damp, where
+    # migration context has to win. The module says so ("a path like
+    # examples/migrations/ is still a migration") and now a test says it too.
+    "examples/migrations/0001_init.sql",
+    "tests/migrations/0002_add_column.sql",
+]
+
+
+@pytest.mark.parametrize("path", FOREIGN_FIXTURE_PATHS)
+def test_a_frontend_fixture_is_damped_whatever_it_is_called(path):
+    severity, confidence, context = damp_for_non_production_path(
+        path, "critical", 1.0)
+    assert context is not None, f"{path} was not recognised as non-production"
+    assert severity == "medium", path
+    assert confidence < 1.0, path
+
+
+@pytest.mark.parametrize("path", PRODUCTION_PATHS)
+def test_production_code_keeps_full_severity(path):
+    severity, confidence, context = damp_for_non_production_path(
+        path, "critical", 1.0)
+    assert context is None, f"{path} was damped and should not be"
+    assert severity == "critical"
+    assert confidence == 1.0
 
 
 def test_fixtures_alone_no_longer_zero_the_security_score():
