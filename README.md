@@ -2,48 +2,83 @@
 
 **Autonomous rescue for production-bound, AI-generated applications.**
 
-Drydock audits a public GitHub repository or ZIP export, identifies concrete
-production-readiness risks, builds a narrowly-scoped Fix Pack, verifies it in
-an isolated sandbox, and delivers the result as a pull request.
+Drydock audits a public GitHub repository or ZIP export, explains concrete
+production-readiness risks in product language, builds a narrowly-scoped
+**Fix Pack**, verifies it where possible, and delivers the result as a
+**GitHub pull request** — never a push to `main`.
 
-It is designed for the moment after a Lovable, Bolt, or hand-built prototype
-starts handling real users, credentials, payments, or deployments.
+Product site: [drydock.co](https://drydock.co).
+
+This repository is the corresponding source for the hosted service (AGPL-3.0).
+
+It is built for the moment after a Lovable, Bolt, Cursor, or hand-built
+prototype starts handling real users, credentials, payments, or deployments.
 
 ## Why Drydock
 
-Most code scanners stop at a list of warnings. Drydock is built around a more
-useful outcome:
+Most scanners stop at a list of warnings. Drydock is built around a usable
+outcome:
 
-1. inspect the application;
-2. explain the risk in product language and point to the relevant code;
-3. generate the smallest safe change for supported problems;
-4. compare the original and patched versions in a sandbox; and
-5. open a reviewable GitHub pull request — never push to `main`.
+1. Inspect the application (static checks + LLM-assisted review).
+2. Explain the risk in product language and point at the relevant files.
+3. Generate the smallest safe change for **supported** problem classes.
+4. Verify in an isolated sandbox where the pipeline allows it.
+5. Open a reviewable pull request; optionally attach **Proof-of-Exploit /
+   Proof-of-Fix** evidence for selected finding types (informational / gated
+   by configuration, never a silent push).
 
-## What works today
+You pay for the **fix**, not for a PDF of findings.
 
-- Intake from a public GitHub repository or ZIP archive, with hostile-archive
-  validation and strict SSRF protection.
-- Stack detection for Next.js, Vite + React, and FastAPI.
-- Deterministic checks plus LLM-assisted security, auth, payment, data, and
-  web-risk reviews; findings are anchored back to real files and lines.
-- Fix Packs for safe, deterministic secret and configuration remediation.
-- Docker-based build/run verification with resource limits and no network for
-  execution stages.
-- GitHub App delivery of a verified fix as a pull request.
-- Postgres-backed job processing, idempotent billing primitives, structured
-  logs, health checks, and production deployment tooling.
+## Production today
+
+Live on [drydock.co](https://drydock.co) with:
+
+| Area | Status |
+|------|--------|
+| Public GitHub + ZIP intake | Live (SSRF-safe, hostile-archive checks) |
+| Stacks | Next.js, Vite + React, FastAPI |
+| Audit | Deterministic rules + LLM review; scores and findings |
+| Fix Pack | Secrets / config / selected static security rewrites → PR via GitHub App |
+| Card payments | **ЮKassa** (webhook is a hint; status/amount confirmed by server-side API) |
+| Manual payments | Bank transfer (operator-confirmed oracle) |
+| Customer notify | Email + Telegram (`app/notify/`), channel self-check on a timer |
+| Ops | Postgres queues, leases, `/internal/stats`, operator Telegram alerts (including paid backlog not draining) |
+| Proof | Registry + templates (e.g. secrets); soft/hard gate modes available |
+
+Release identity for a running host: `GET /version` (commit + `source` tree URL + CalVer tag).
 
 ## What Drydock deliberately does not claim
 
-- A source-supported finding is not automatically a runtime reproduction.
-- A Fix Pack is withheld if verification is unavailable or finds a regression.
-- Private repositories and non-GitHub hosts are not supported by public intake
-  yet.
-- Every payment-provider flow must be proven by a real payment before it is
-  presented as production-verified.
+Read this before you pay — same boundaries the product enforces in code:
 
-## Quick start
+- **Not a penetration test.** A source-supported finding is not automatically a
+  runtime reproduction. Proof stages cover selected classes only.
+- **Not every finding is auto-fixed.** Unsupported or unsafe changes stay in the
+  report; a Fix Pack is withheld or marked `no_fix_needed` when there is
+  nothing safe to ship.
+- **Public GitHub (or ZIP) only** on public intake. Private repositories and
+  non-GitHub hosts are out of scope for self-serve.
+- **Verification can block delivery.** If the sandbox is down or a patch looks
+  like a regression, Drydock prefers not to open a PR over shipping an
+  unverified change.
+- **Payment rails are explicit.** Card = ЮKassa. Bank transfer is manual.
+  Historical mentions of other aggregators in old docs are not the live rail.
+
+## Architecture (short)
+
+```text
+public repo or ZIP
+  → audit queue → static + LLM scan → findings + score
+  → (optional) paid Fix Pack → generate plan → sandbox / proof
+  → GitHub App opens PR → customer notification
+```
+
+Design and security boundaries: [`docs/shipit-architecture.md`](docs/shipit-architecture.md).
+Payment rail note: [`docs/PAYMENT_RAIL.md`](docs/PAYMENT_RAIL.md).
+Longer operational history: [`docs/status-active.md`](docs/status-active.md)
+(may lag; prefer this README and `PAYMENT_RAIL.md` for current rails).
+
+## Quick start (developers)
 
 ```bash
 git clone https://github.com/aiagent2046-coder/shipit.git
@@ -54,70 +89,59 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
-The test suite is the part that runs with no configuration at all, and it is
-the honest starting point.
+The test suite needs no cloud credentials. That is the honest local baseline.
 
-**Running an audit needs a database.** `uvicorn app.main:app --reload` will
-start without `DATABASE_URL`, but requesting an audit then fails with
-`503 {"reason": "queue_unavailable"}`: an audit is a queued job, and with no
-database there is no queue to accept it and no worker to run it. The server
-says so rather than handing back a job id for a job that does not exist. Set
-`DATABASE_URL` (see [`.env.example`](.env.example)) before expecting
-`POST /v1/audits` to work.
+**Audits need a database.** Without `DATABASE_URL`, the API can start, but
+`POST /v1/audits` returns `503 {"reason": "queue_unavailable"}` — audits are
+queued jobs. Copy [`.env.example`](.env.example), set at least `DATABASE_URL`,
+then run migrations as documented in deploy docs.
 
-A static-only audit needs nothing further. LLM providers, GitHub delivery,
-sandbox execution and payments each need their own variables from
-[`.env.example`](.env.example); without provider keys the scan degrades to
-static-only and reports `basis: static_only` instead of pretending it looked.
+Optional: LLM keys, GitHub App, sandbox runner, `YOOKASSA_*`, SMTP / Telegram.
+Without LLM keys the scan degrades to static-only (`basis: static_only`) rather
+than inventing coverage.
 
-## Architecture
+## Ownership of results
 
-The technical design, security model, and boundaries are in
-[`docs/shipit-architecture.md`](docs/shipit-architecture.md).
+- Audit report: `GET /v1/audits/{id}?token=…` (per-row `access_token`).
+- Fix Pack job: `GET /v1/fixpacks/{id}?token=…` (same model).
+- Lightweight poll after purchase: `GET /v1/audits/{id}/fixpack-status`
+  (status + `pr_url` only).
 
-```text
-repository or ZIP
-  -> audit queue -> static + LLM scan -> findings
-  -> Fix Pack -> isolated verification -> GitHub pull request
-```
+A leaked UUID alone is not enough to read a report or job detail.
 
-## Status: active
+## Deploy / ops (summary)
 
-The project is actively deployed and developed. The current implementation,
-production validation notes, operational runbooks, known gaps, and release
-history live in [the active technical status record](docs/status-active.md).
+- CalVer tags: `vYYYY.MM.DD-N` via `deploy/scripts/tag-release.sh`.
+- Production deploy is deliberate (`workflow_dispatch` or
+  `deploy/scripts/deploy-production.sh`), not every push to `main`.
+- Timers: audit worker, Fix Pack processor, notify channel check, reapers.
+- Operator alerts: Telegram (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_ADMIN_CHAT_ID`),
+  including failed Fix Packs and a stale **paid** backlog.
 
 ## Contributing
 
-Issues and pull requests are welcome. Please keep changes small, add a focused
-test for changed behaviour, and do not include credentials, customer archives,
-or generated secrets in a contribution.
+Issues and pull requests are welcome. Keep changes small, add a focused test,
+and do not include credentials, customer archives, or live secrets.
 
-Commits need a sign-off (`git commit -s`) certifying you have the right to
-submit the work under AGPL-3.0. There is no contributor licence agreement and
-no copyright assignment — you keep the copyright in your work, and the project
-gives up the ability to relicense it without asking you. See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Commits need a sign-off (`git commit -s`). There is no CLA and no copyright
+assignment. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Drydock is licensed under the [GNU Affero General Public License v3.0](LICENSE).
-If you run a modified public network service, AGPL-3.0 requires offering its
-corresponding source to the users of that service.
+GNU Affero General Public License v3.0 — see [LICENSE](LICENSE).
 
-That obligation binds the hosted service at drydock.co as much as anyone
-else's fork, so here is how it is met. The footer of every page links to this
-repository. That is the offer, but it cannot be specific — it is rendered
-without knowing which commit is live, so following it a week after a deploy
-gives you `main` rather than the code that served you. `GET /version` closes
-that gap: it reports the running release's commit and a `source` URL pointing
-at exactly that tree.
+The hosted service at drydock.co meets the network-copyleft obligation by
+linking this repository from the product UI and by exposing the exact running
+tree through `GET /version`:
 
 ```json
-{ "release": "d6b84bc…", "source": "https://github.com/…/tree/d6b84bc…",
-  "version": "v2026.08.12-3" }
+{
+  "release": "cdf27bc…",
+  "source": "https://github.com/aiagent2046-coder/shipit/tree/cdf27bc…",
+  "version": "v2026.08.25-14",
+  "environment": "production"
+}
 ```
 
-Releases are tagged, so a running version stays reachable after `main` moves
-on. If you are ever served a version whose source you cannot obtain from that
-URL, that is a licence violation and a bug — please report it.
+If you are served a build whose source is not obtainable from that URL, that is
+both a licence problem and a bug — please report it.

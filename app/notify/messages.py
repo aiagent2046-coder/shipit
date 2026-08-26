@@ -59,7 +59,7 @@ def normalize(value: str | None) -> str:
     return primary if primary in SUPPORTED else EN
 
 
-# --- a bank transfer the operator has confirmed -----------------------------
+# --- a payment that has landed ----------------------------------------------
 
 _CONFIRMED_SUBJECT = {
     EN: "Payment confirmed — your {product} is active",
@@ -99,14 +99,36 @@ _WHAT_HAPPENS_NEXT = {
     },
 }
 
+# HOW IT LANDED, not which provider took it.
+#
+# This was one sentence -- "We have confirmed your bank transfer" -- written
+# when a bank transfer was the only way to pay. The first person to buy with a
+# card was then told we had confirmed a transfer they never made, which reads
+# as a message about somebody else's payment.
+#
+# Keyed on whether a human confirmed it rather than on the provider's name, so
+# a rail added later needs no new sentence: what the payer cares about is
+# whether somebody had to look, and the manual line is doing real work when
+# they did -- it says the wait is over.
+_CONFIRMED_OPENING = {
+    EN: {
+        True: "We have confirmed your bank transfer. Thank you.",
+        False: "Your payment went through. Thank you.",
+    },
+    RU: {
+        True: "Мы подтвердили ваш перевод. Спасибо.",
+        False: "Ваш платёж прошёл. Спасибо.",
+    },
+}
+
 _CONFIRMED_BODY = {
     EN: (
-        "We have confirmed your bank transfer. Thank you.\n\n"
+        "{opening}\n\n"
         "{next}\n\n"
         "Order reference: {reference}"
     ),
     RU: (
-        "Мы подтвердили ваш перевод. Спасибо.\n\n"
+        "{opening}\n\n"
         "{next}\n\n"
         "Номер заказа: {reference}"
     ),
@@ -121,11 +143,19 @@ def confirmation_subject(*, product: str, locale: str | None) -> str:
 
 def confirmation_body(
     *, product: str, reference: str, site_url: str, locale: str | None,
+    confirmed_by_hand: bool,
 ) -> str:
+    """`confirmed_by_hand` has no default, deliberately. A caller that forgets
+    it is a caller that would have picked one of these two sentences by
+    accident, and the wrong one is a message about a payment the reader never
+    made."""
     lang = normalize(locale)
     nexts = _WHAT_HAPPENS_NEXT[lang]
     what = nexts.get(product, nexts["pro_tier"]).format(site=site_url)
-    return _CONFIRMED_BODY[lang].format(next=what, reference=reference)
+    return _CONFIRMED_BODY[lang].format(
+        opening=_CONFIRMED_OPENING[lang][bool(confirmed_by_hand)],
+        next=what, reference=reference,
+    )
 
 
 # --- a refund the operator has sent -----------------------------------------
@@ -174,6 +204,60 @@ _THE_PAYMENT = {
 
 def refund_subject(*, locale: str | None) -> str:
     return _REFUND_SUBJECT[normalize(locale)]
+
+
+# --- a Fix Pack that had nothing to change ----------------------------------
+
+# THE PROMISE THIS KEEPS. The confirmation sent minutes earlier ends "and you
+# will hear again when it lands or if it cannot finish" -- and the branch that
+# ends a job with nothing to fix wrote a status, recorded an outcome and told
+# nobody. Two real payments ended there on 2026-08-25, in silence.
+#
+# WRITTEN AS A REFUND, NOT AS A RESULT. app/fixpack/merit.py already calls this
+# outcome decisively ours: "the audit's findings should have been checked
+# before the sale, not after -- this is our mistake, not a disappointing
+# result." From where the buyer sits they paid and received nothing, so the
+# thing that belongs at the top is their money, not our diagnostics.
+#
+# It does not claim the refund is done, because a person still has to send it.
+# An automated message promising a completed refund is how the next silent gap
+# gets made.
+_NOTHING_TO_FIX_SUBJECT = {
+    EN: "Your Fix Pack found nothing to change — refund on the way",
+    RU: "Fix Pack не нашёл, что изменить — возвращаем деньги",
+}
+
+_NOTHING_TO_FIX_BODY = {
+    EN: (
+        "Your Fix Pack ran and found nothing it could change in your "
+        "repository, so no pull request was opened.\n\n"
+        "That is our mistake rather than a result: the findings should have "
+        "been re-checked against your code before we took the money. Usually "
+        "it means they were already fixed between the audit and the "
+        "purchase.\n\n"
+        "We are refunding you in full. It goes back the same way it arrived, "
+        "and you do not need to ask.\n\n"
+        "Order reference: {reference}"
+    ),
+    RU: (
+        "Fix Pack отработал и не нашёл, что изменить в вашем репозитории, "
+        "поэтому пул-реквест не открывался.\n\n"
+        "Это наша ошибка, а не результат: находки надо было сверить с вашим "
+        "кодом до того, как брать деньги. Обычно это значит, что их успели "
+        "исправить между аудитом и покупкой.\n\n"
+        "Мы возвращаем всю сумму. Она вернётся тем же способом, которым "
+        "пришла, просить об этом не нужно.\n\n"
+        "Номер заказа: {reference}"
+    ),
+}
+
+
+def nothing_to_fix_subject(*, locale: str | None) -> str:
+    return _NOTHING_TO_FIX_SUBJECT[normalize(locale)]
+
+
+def nothing_to_fix_body(*, reference: str, locale: str | None) -> str:
+    return _NOTHING_TO_FIX_BODY[normalize(locale)].format(reference=reference)
 
 
 # --- how to reach a person, which depends on where they are reading ---------

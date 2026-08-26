@@ -42,6 +42,17 @@ RETIRED_RAIL_VARIABLES = (
     "TELEGRAM_PRO_STARS",
     "FIXPACK_STARS_PRICE",
     "SUBSCRIPTION_STARS",
+    # Dollar prices, from before the product was repriced in roubles on
+    # 2026-08-23. These are the most dangerous names on this list: unlike the
+    # rest, which configure rails that no longer exist, these configure a rail
+    # that DOES -- and the code no longer reads them. A host that still carries
+    # BANK_TRANSFER_FIXPACK_PRICE_USD=10.00 does not fail, does not warn, and
+    # quietly charges the rouble default while its operator believes the .env
+    # is in charge of the price. The reverse would be worse still: had the new
+    # accessors kept the old names, "10.00" would have been read as ten
+    # ROUBLES for a 990-rouble product.
+    "BANK_TRANSFER_PRO_PRICE_USD",
+    "BANK_TRANSFER_FIXPACK_PRICE_USD",
 )
 
 
@@ -179,6 +190,21 @@ def main() -> int:
                     "nothing reports the failure"
                 )
 
+    # A WARNING, NOT AN ERROR, and the difference is what it costs to be
+    # missing: the bot still delivers keys and still receives /link, it just
+    # cannot be OFFERED. Without a username the site can build no deep link, so
+    # the "get updates in Telegram" button never renders and a buyer who would
+    # have taken that channel is silently given only email. Refusing to boot
+    # over a convenience channel would be worse than the gap it closes.
+    if values.get("TELEGRAM_BOT_TOKEN", "").strip() and not values.get(
+        "TELEGRAM_BOT_USERNAME", ""
+    ).strip():
+        warnings.append(
+            "TELEGRAM_BOT_USERNAME is not set: the bot works, but the site "
+            "cannot build t.me/<bot>?start=… so no customer is ever offered "
+            "Telegram. scripts/set_telegram_commands.py prints the name"
+        )
+
     aitunnel_key = bool(values.get("AITUNNEL_API_KEY", "").strip())
     aitunnel_url = bool(values.get("AITUNNEL_BASE_URL", "").strip())
 
@@ -232,6 +258,40 @@ def main() -> int:
         errors.append(
             "SMTP_USERNAME and SMTP_PASSWORD must be configured together "
             "(set neither for a relay that authenticates by IP)"
+        )
+
+    # ЮKassa, same shape again and the highest stakes of the three. A shop id
+    # with no secret key cannot sign a request, so every attempt to open a
+    # payment 503s -- at the checkout, in front of a buyer who was ready to pay.
+    shop_id = bool(values.get("YOOKASSA_SHOP_ID", "").strip())
+    secret_key = bool(values.get("YOOKASSA_SECRET_KEY", "").strip())
+    if shop_id != secret_key:
+        errors.append(
+            "YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be configured "
+            "together; with only one set the card checkout answers 503 to "
+            "every buyer"
+        )
+
+    # A live shop holding a test key takes no money at all, and the symptom is
+    # "nobody is buying" rather than anything that looks like a misconfiguration
+    # -- so it is worth saying out loud on a production host. A warning, not an
+    # error: a deployment deliberately running against the test shop is a
+    # legitimate state, and refusing to boot would make testing impossible.
+    if secret_key and values.get("YOOKASSA_SECRET_KEY", "").strip().startswith(
+        "test_"
+    ):
+        warnings.append(
+            "YOOKASSA_SECRET_KEY is a test key (test_…): payments opened on "
+            "this host are not real and no money will arrive"
+        )
+
+    # Receipts are a legal position rather than a technical one, and the code
+    # sends none without this. Saying so is the difference between a decision
+    # and an omission nobody remembers making.
+    if not values.get("YOOKASSA_VAT_CODE", "").strip():
+        warnings.append(
+            "YOOKASSA_VAT_CODE is not set: payments are opened without a "
+            "54-ФЗ receipt. Correct if this merchant does not issue them"
         )
 
     # A variable belonging to a rail that no longer exists. Not an error --

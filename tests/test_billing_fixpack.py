@@ -121,12 +121,12 @@ class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
 
     async def create(self, *, account_id, provider, external_ref, amount,
                      currency, status, tier_granted, product="pro_tier",
-                     audit_id=None, created_at=None):
+                     audit_id=None, created_at=None, fixpack_job_id=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
             "status": status, "tier_granted": tier_granted, "product": product,
-            "audit_id": audit_id,
+            "audit_id": audit_id, "fixpack_job_id": fixpack_job_id,
             "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows[row["id"]] = row
@@ -270,6 +270,11 @@ async def test_fixpack_payment_creates_job_and_not_a_pro_account():
     assert pay["product"] == "fixpack"
     assert pay["audit_id"] == audit["id"]
     assert pay["status"] == "completed"
+
+    # And the order says WHICH job it bought (migration 0035), because the
+    # audit cannot: one audit can hold several jobs and several orders, and
+    # picking among them by time tells the wrong buyer about their money.
+    assert pay["fixpack_job_id"] == job["id"]
 
     # Crucially: NO account/tier was granted (that's grant_pro_tier's job).
     assert accounts.by_id == {}

@@ -1,0 +1,21 @@
+[Unit]
+Description=Schedule ShipIt notification channel health check
+
+[Timer]
+# Ten minutes after boot rather than one: a deploy restarts things, and a check
+# that runs while the release is still settling reports a failure nobody caused.
+OnBootSec=10min
+# Hourly. The trade-off is between how long a dead channel stays unnoticed and
+# how often we present credentials to somebody else's server -- a mail host
+# that sees a LOGIN every minute is a mail host that starts rate-limiting the
+# account, which would turn the check into the outage. An hour was chosen
+# against the failure it is for: a credential that changed elsewhere, which
+# nobody notices in minutes anyway.
+OnUnitInactiveSec=1h
+# Spread across the hour rather than every host firing on the minute.
+RandomizedDelaySec=5min
+AccuracySec=1min
+Unit=shipit-notify-check.service
+
+[Install]
+WantedBy=timers.target

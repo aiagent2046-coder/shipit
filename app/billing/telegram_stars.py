@@ -79,6 +79,41 @@ CURRENCY = "XTR"
 # made, and the key it bought is still theirs to collect.
 RETIRED_USDT_PROVIDER = "usdt_trc20"
 
+def _order_providers() -> tuple[str, ...]:
+    """Every rail that issues a DRY- order reference.
+
+    THE REFERENCE DOES NOT SAY WHICH RAIL ISSUED IT. This used to be
+    `bank_transfer.PROVIDER` alone, and the day ЮKassa started taking cards
+    that became a lie told to a paying customer: DRY-SWU5M4 and DRY-FYA2XX are
+    the same shape, so somebody who had genuinely just paid by card was
+    answered "That reference code wasn't found" -- and sent to support over an
+    order that existed.
+
+    Read from each rail's own constant rather than written out here, so a
+    renamed provider cannot leave a stale copy behind; a rail added later has
+    to be added to this one function.
+
+    Imported inside, like every other app.billing import in this module, to
+    keep the package's import graph acyclic.
+    """
+    from app.billing import bank_transfer, yookassa
+
+    return (bank_transfer.PROVIDER, yookassa.PROVIDER)
+
+
+async def _find_order(payment_repo: Any, providers, claim: str):
+    """The payment carrying `claim`, under whichever of `providers` has it.
+
+    References are minted from one sequence shared by every rail, so a claim
+    matches under at most one provider and the order of the search does not
+    change the answer.
+    """
+    for provider in providers:
+        row = await payment_repo.get_by_external_ref(provider, claim)
+        if row is not None:
+            return row
+    return None
+
 # A TRC20 transaction hash: 32 bytes, hex, no 0x prefix.
 #
 # This exists because /link used to test only the ORDER REFERENCE shape and
@@ -480,6 +515,11 @@ async def handle_update(
         )
     if text.split(maxsplit=1)[:1] == ["/link"]:
         return await _handle_link(
+            message, text, account_repo=account_repo, payment_repo=payment_repo,
+            token=token, transport=transport,
+        )
+    if text.split(maxsplit=1)[:1] in (["/start"], ["/help"]):
+        return await _handle_start(
             message, text, account_repo=account_repo, payment_repo=payment_repo,
             token=token, transport=transport,
         )
@@ -1081,6 +1121,62 @@ async def _handle_rotatekey(
     return {"ok": True, "handled": "rotatekey", "found": True}
 
 
+_WHAT_THE_BOT_IS_FOR = (
+    "This is the Drydock bot.\n\n"
+    "Drydock audits a repository and can open a pull request that fixes what "
+    "it found. You buy that on the site — this bot is where your order reaches "
+    "you afterwards.\n\n"
+    "/start `DRY-XXXXXX` — get this order's updates here\n"
+    "/mykey — your API key, if your purchase came with one\n"
+    "/rotatekey — replace that key\n"
+    "/link `DRY-XXXXXX` — collect the key an order bought\n"
+    "/unsubscribe — stop a monitoring subscription renewing\n\n"
+    f"Your orders and reports live at {SITE_URL}."
+)
+
+
+async def _handle_start(
+    message: dict[str, Any], text: str, *, account_repo: Any, payment_repo: Any,
+    token: str, transport: httpx.BaseTransport | None = None,
+) -> dict[str, Any]:
+    """`/start`, with or without an order reference.
+
+    THE BOT ANSWERED NOTHING AT ALL until this existed. `/start` is the first
+    thing Telegram sends when anybody opens a bot for the first time -- it is
+    the button in the chat window -- and every one of those landed in the
+    dispatcher's `ignored` branch. A product whose bot is silent on hello does
+    not look like a product with a bot.
+
+    WITH A PAYLOAD it is the deep link the site hands a buyer after payment:
+    `t.me/<bot>?start=DRY-XXXXXX` arrives here as `/start DRY-XXXXXX`. That is
+    the whole point of the parameter -- a Telegram username cannot be typed
+    into a form, because the Bot API cannot message a person who has never
+    written to the bot. One tap is the only way to establish the chat, and the
+    payload is what tells us which order it belongs to.
+
+    It delegates to /link rather than reimplementing the claim. The two are the
+    same act on the same row, and the anti-hijack rule (first successful link
+    wins, then permanently locked) has to hold across both doors or it holds
+    across neither.
+    """
+    chat_id = (message.get("chat") or {}).get("id")
+    if chat_id is None:
+        return {"ok": True, "handled": "start", "result": "no_chat"}
+
+    payload = text.split(maxsplit=1)[1].strip() if " " in text.strip() else ""
+    if not payload:
+        await send_message(
+            chat_id, _WHAT_THE_BOT_IS_FOR, token=token, transport=transport,
+        )
+        return {"ok": True, "handled": "start", "result": "greeted"}
+
+    result = await _handle_link(
+        message, f"/link {payload}", account_repo=account_repo,
+        payment_repo=payment_repo, token=token, transport=transport,
+    )
+    return {**result, "handled": "start"}
+
+
 async def _handle_link(
     message: dict[str, Any], text: str, *, account_repo: Any, payment_repo: Any,
     token: str, transport: httpx.BaseTransport | None = None,
@@ -1116,15 +1212,15 @@ async def _handle_link(
     # the code is shown uppercase but typed by hand.
     #
     if bank_transfer.REFERENCE_RE.match(claim.upper()):
-        provider, claim = bank_transfer.PROVIDER, claim.upper()
+        provider, claim = _order_providers(), claim.upper()
         not_found_text = (
             "That reference code wasn't found. Check it against the one shown "
             "on the payment page — it looks like `DRY-XXXXXX`."
         )
         pending_text = (
-            "That transfer hasn't been confirmed yet. Bank transfers are "
-            "checked by hand and can take a few business days to arrive — "
-            "please retry `/link` later."
+            "That payment hasn't been confirmed yet. A card payment confirms "
+            "in seconds; a bank transfer is checked by hand and can take a few "
+            "business days to arrive — please retry `/link` later."
         )
     else:
         # USDT/TRC20 was removed as a way to pay, and its poller with it. A
@@ -1133,7 +1229,7 @@ async def _handle_link(
         # LOOKUP stays. What changes is that nothing can move an invoice to
         # completed any more, so a pending one will stay pending forever and
         # must be told to ask a human rather than to wait for a poller.
-        provider = RETIRED_USDT_PROVIDER
+        provider = (RETIRED_USDT_PROVIDER,)
         # WHAT WAS NOT FOUND depends on what they appear to have sent, and
         # getting that wrong is how this went wrong before.
         #
@@ -1172,7 +1268,7 @@ async def _handle_link(
             "the transaction hash and we will sort it out by hand."
         )
 
-    row = await payment_repo.get_by_external_ref(provider, claim)
+    row = await _find_order(payment_repo, provider, claim)
     if row is None:
         await send_message(
             chat_id, not_found_text, token=token, transport=transport,
@@ -1215,6 +1311,17 @@ async def _handle_link(
     # being done in the first place -- and lets us say something true instead
     # of sending the payer to support over a failure that never happened.
     if not row.get("account_id"):
+        # THE CHAT IS STILL CLAIMED, and that is a fix rather than a tidy-up.
+        # The message below has always ended "you'll get a message here when
+        # it's opened" -- and this branch returned before anything was
+        # stamped, so nothing ever arrived here. A Fix Pack payer following
+        # the bot's own instructions got a promise and then silence.
+        #
+        # Safe to stamp now for the reason app/db.py spells out:
+        # get_completed_by_telegram_chat_id skips account-less payments, so a
+        # Fix Pack row carrying this chat cannot shadow a Pro purchase from
+        # /mykey the way it once did.
+        await payment_repo.link_telegram_chat_id(row["id"], str(chat_id))
         await send_message(
             chat_id, _no_key_for_this_payment_text(row),
             token=token, transport=transport,

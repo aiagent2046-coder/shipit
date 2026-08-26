@@ -39,6 +39,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
 
+# This module is also loaded by path (tests/test_migration_manager.py does, and
+# so does anything running scripts/ from elsewhere), and then its own directory
+# is not on sys.path. Put it there before importing the sibling.
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import env_file  # noqa: E402
+
 LEDGER_TABLE = "public.shipit_schema_migrations"
 ADVISORY_LOCK_NAME = "shipit-schema-migrations"
 LOCAL_LOCK_PATH = Path(
@@ -398,15 +406,59 @@ def require_command(command: str) -> None:
         )
 
 
+def env_file_path() -> Path:
+    """Where a deployment keeps its environment. Same default and same override
+    as deploy/scripts/deploy-production.sh, so the two agree about which file
+    is in charge on a host that has one."""
+    return env_file.env_file_path()
+
+
+def database_url_from_env_file(path: Path) -> str:
+    """DATABASE_URL out of an env file, or "" when there is nothing to read.
+
+    The reading is scripts/env_file.py's, which borrows the parser from
+    deploy/scripts/validate-production-env.py rather than writing a second set
+    of quoting rules; see that module for why. Nothing from the file reaches
+    an exception or a log line here either -- unreadable is "", and the
+    caller's own message stands.
+    """
+    return str(env_file.read_values(path).get("DATABASE_URL", "")).strip()
+
+
 def database_url() -> str:
+    """The database to act on: the environment first, the env file second.
+
+    THAT ORDER IS THE SAFETY PROPERTY, and it is deliberately the opposite of
+    deploy/scripts/check_release_migrations.py, which lets the file win. That
+    gate runs only on the production host, invoked by the deploy script, and
+    there the file IS the authority. This runs anywhere -- a developer's
+    laptop, CI against a service container, a production shell -- and if the
+    file won, an engineer with DATABASE_URL pointing at a local Postgres would
+    apply migrations to production because a file they never looked at existed
+    on the box.
+
+    Reading the file at all is new. Until 2026-08-25 this took the environment
+    and nothing else, so the documented release sequence -- apply_migrations.sh
+    then deploy-production.sh, run back to back in the same directory -- failed
+    on the first command from a fresh shell, while the second read the same
+    file happily. The workaround people reach for is `set -a; . /opt/shipit/.env`,
+    and on this deployment that silently truncated an SMTP password at a `$` and
+    cost an afternoon. A step that needs a dangerous incantation to work is a
+    step that will get one.
+    """
     value = os.environ.get("DATABASE_URL", "").strip()
+    if value:
+        return value
 
-    if not value:
-        raise MigrationError(
-            "DATABASE_URL is required"
-        )
+    path = env_file_path()
+    value = database_url_from_env_file(path)
+    if value:
+        return value
 
-    return value
+    raise MigrationError(
+        "DATABASE_URL is required: set it in the environment, or put it in "
+        f"{path} (override with SHIPIT_ENV_FILE)"
+    )
 
 
 def redact_dsn(text: str) -> str:

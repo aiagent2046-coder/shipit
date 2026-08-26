@@ -39,6 +39,39 @@ const SEVERITY_ORDER: Record<Severity, number> = {
   low: 3,
 };
 
+// ONE PLACE THAT PUTS A CURRENCY NEXT TO A NUMBER.
+//
+// There were five, each writing its own. When the product was repriced from
+// dollars to roubles on 2026-08-23, /pricing was updated and the others were
+// not — so the audit page, which is the page a buyer actually pays from,
+// rendered "$990.00 RUB". A dollar sign in front of a rouble amount, on the
+// screen a payment aggregator's reviewer reaches, four days after they
+// rejected the site for not stating a price properly.
+//
+// The defect was not the missed edit. It was that a currency symbol could be
+// typed as a literal beside a value that carries its own currency code —
+// nothing connected the two, so nothing could notice they disagreed.
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  RUB: "₽",
+};
+
+/**
+ * An amount with its currency, the way a reader should see it.
+ *
+ * The symbol follows the number, which is the convention for the rouble and
+ * reads acceptably for a bare code. A currency with no symbol here renders as
+ * its ISO code rather than a guess: an unknown currency should look unfamiliar,
+ * not look like dollars.
+ */
+export function formatMoney(
+  amount: string | number,
+  currency: string | null | undefined,
+): string {
+  const code = (currency ?? "").trim();
+  if (!code) return String(amount);
+  return `${amount} ${CURRENCY_SYMBOLS[code] ?? code}`;
+}
+
 export function sortFindings<T extends { severity: Severity; confidence?: number }>(
   findings: T[],
 ): T[] {

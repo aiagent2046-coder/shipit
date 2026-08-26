@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.billing import bank_transfer
+from app.billing import bank_transfer, yookassa
+from app.notify import telegram
 
 router = APIRouter()
 
@@ -19,7 +20,7 @@ async def get_pricing() -> dict:
     """What is on sale and what it costs, for the storefront.
 
     Read from the same accessor the invoice creator calls
-    (bank_transfer.fixpack_price_usd) so the advertised figure cannot drift
+    (bank_transfer.fixpack_price_rub) so the advertised figure cannot drift
     from the charged one. That is the whole reason this exists as an endpoint
     instead of a number typed into the page: /pricing previously showed no
     price at all, and the comparison table it did show had been stale since
@@ -33,18 +34,41 @@ async def get_pricing() -> dict:
 
     USD only, which is now the whole story: the two channels that carried
     their own prices in their own units -- Stars in XTR, USDT in micro-dollars
-    -- are gone. One rail, one currency, one accessor. Robokassa will settle in
-    roubles, and when it is connected the rouble figure must come from the same
-    place this one does rather than from a second accessor beside it.
+    -- are gone. One rail, one currency, one accessor.
+
+    ROUBLES SINCE 2026-08-23. This used to return USD beside a page that
+    explained the buyer would be charged some rouble figure at the payment
+    system's rate. ЮMoney rejected the site for it, and rightly: a price the
+    buyer cannot know before the payment page is not a price. The aggregator
+    settles in roubles, so the product is quoted in roubles, and there is
+    nothing left to convert. When one is finally connected its figure must
+    come from this accessor and not from a second one beside it.
 
     Deliberately separate from /v1/billing/details: that payload carries a
     card number for the footer, and a page that only needs a price should not
     have to fetch a payment instrument to get one.
+
+    `methods` SAYS WHICH RAILS ARE LIVE, and it belongs here rather than in
+    /v1/billing/details for the same reason: it is not an instrument, it is
+    part of what is on offer. Without it the storefront learns that card
+    payment is unconfigured by rendering a button, taking a click, and showing
+    a 503 -- which reads to a buyer as "this is broken", not as "pay the other
+    way". Neither flag carries a credential; each is the same all-or-nothing
+    accessor the invoice creators call, so the storefront cannot offer a rail
+    that would then refuse it.
+
+    A deployment with both false still gets a price. Saying what something
+    costs is not an offer to take money for it today, and the audit itself is
+    free.
     """
     return {
         "fixpack": {
-            "amount": bank_transfer.fixpack_price_usd(),
+            "amount": bank_transfer.fixpack_price_rub(),
             "currency": bank_transfer.CURRENCY,
+        },
+        "methods": {
+            "card": yookassa.credentials_from_env() is not None,
+            "bank_transfer": bank_transfer.bank_details_from_env() is not None,
         },
     }
 
@@ -63,5 +87,16 @@ async def get_billing_details() -> dict:
     Returns 200 with `bank: null` rather than 503 when bank transfer isn't
     configured. A footer is not a checkout: an unconfigured deployment should
     render a footer without a requisites block, not an error.
+
+    `telegram_bot` IS NOT A REQUISITE, and sits here anyway because it answers
+    the same question: how a customer reaches their order after paying. The
+    site needs it to build `t.me/<bot>?start=DRY-XXXXXX`, which is the only way
+    a Telegram chat can be established -- the Bot API cannot message somebody
+    who has never written to the bot, so a username typed into a checkout form
+    would buy nothing. Null when unset or malformed, and the page then shows no
+    button rather than a link to a bot that does not exist.
     """
-    return {"bank": bank_transfer.bank_details_from_env()}
+    return {
+        "bank": bank_transfer.bank_details_from_env(),
+        "telegram_bot": telegram.bot_username_from_env(),
+    }
