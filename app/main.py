@@ -305,6 +305,7 @@ from app.routes._shared import (  # noqa: E402
 )
 from app.routes.github import router as github_router  # noqa: E402
 from app.routes.telegram import router as telegram_router  # noqa: E402
+from app.mcp.server import router as mcp_router  # noqa: E402
 from app.routes.dependencies import (  # noqa: E402
     get_account_repo,
     get_audit_job_repo,
@@ -2415,3 +2416,9 @@ app.include_router(rls_check_router)
 app.include_router(session_router)
 app.include_router(storefront_router)
 app.include_router(yookassa_router)
+# Off unless MCP_ENABLED is set: the router is always mounted, and the
+# endpoint itself answers 404 when the flag is unset. Mounting
+# conditionally would make the flag a restart-time decision that an
+# operator cannot see in the route table, and would leave the tests for
+# the disabled case with nothing to call.
+app.include_router(mcp_router)

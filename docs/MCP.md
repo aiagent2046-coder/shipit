@@ -1,12 +1,15 @@
-# MCP for Cursor — Phase 0, the contract
+# MCP for Cursor — the contract, and what Phase 1 built
 
 What Drydock exposes to an agent inside an editor, and what it refuses to.
-This document is the decisions; the code comes after. Nothing here is
-implemented yet.
 
-Written 2026-08-26. Every number in it is read out of the tree, not chosen
-here, and the file paths are given so a later reader can check rather than
-trust.
+Written 2026-08-26 as Phase 0, when nothing was implemented. Phase 1 landed
+the same day; §7 at the end records what exists now, what the code corrected
+about this document, and what is still open. Sections 1–6 are left as they
+were written, because a decision record that is edited to match the code
+stops being able to say the code went somewhere else.
+
+Every number in it is read out of the tree, not chosen here, and the file
+paths are given so a later reader can check rather than trust.
 
 ---
 
@@ -195,3 +198,72 @@ rail this deployment can turn off without a code change.
   chosen from data instead of guessed now.
 - **Marketplace and OAuth.** Cursor's submission process is a separate
   exercise and blocks nothing: docs plus a key are enough for the first users.
+
+---
+
+## 7. What Phase 1 built, and what it corrected
+
+Landed 2026-08-26 in two pull requests: the credential (#347) and the endpoint.
+
+### The shape
+
+| what | where |
+| --- | --- |
+| the tables | `migrations/0036_mcp_api_keys.sql` — `mcp_api_keys`, `mcp_key_audits` |
+| the credential | `app/mcp/keys.py`, `McpKeyRepository` in `app/db.py` |
+| the fence | `app/mcp/untrusted.py` |
+| the endpoint and the five tools | `app/mcp/server.py`, `POST /mcp` |
+| minting a key | `scripts/mint_mcp_key.py`, run on the box |
+| the flag | `MCP_ENABLED`, off by default — unset means the endpoint **404s** |
+
+### Three things the code corrected about §1–§6
+
+**`basis` for an MCP key is `static+preview`, not `static+llm`.** §3 says
+`start_audit` must return `basis` and warns that a spent budget degrades an
+audit to `static_only`. Both are right. What §5's table implies and the code
+disproves is the good case: `basis_for_account(None)` returns `BASIS_PREVIEW`
+(`app/scan/pipeline.py`), so a free key's healthy result is `static+preview` —
+static rules, secret scanning, and one rubric on a small model. `static+llm`
+is the paid depth and no MCP key receives it today. There is also a fourth
+value, `static+partial`, for an audit that started at full depth and lost a
+rubric. All four are named in the tool description, because an agent that
+cannot tell them apart will summarise the degraded one as good news.
+
+**At enqueue time there is no `basis` to report, only a forecast.** A queued
+audit has no audit row yet and its depth is decided by the worker. Reporting
+the entitled basis there would be exactly the false reassurance §3 is about,
+so `drydock_start_audit` returns `basis` only on a cache hit — where the row
+exists and the value is real — and otherwise returns `basis_expected` with a
+note saying it is the budget as it stands and not a promise. The real value is
+read back through `drydock_get_audit`.
+
+**The rate limit is charged per key *and* per IP, and the shape check comes
+first.** §3 says reuse `RateLimiter` rather than duplicating it, and that is
+what happens: the MCP tool charges `mcp:<key_id>` and the delegated
+`create_audit` still charges the client IP. Both windows apply on purpose — an
+MCP key is anonymous traffic under the same cap. The one addition is that the
+repository URL is shape-checked **before** the charge, so a typo in an editor
+costs nothing; the SSRF guard inside `create_audit` still runs and is not
+replaced by it.
+
+### What §6 asked for, and where it is proved
+
+| §6 | proved by |
+| --- | --- |
+| a second key cannot read the first key's audit | `tests/test_mcp_server.py`, and against real SQL in `tests/test_db_postgres_smoke.py` |
+| an unknown `audit_id` is indistinguishable from somebody else's | `test_a_stranger_audit_and_a_nonexistent_one_read_identically` |
+| an invalid key gets 401 | `test_every_bad_credential_gets_the_same_401` — one answer for no key, a wrong-shaped key, an unminted key and a revoked one |
+| `basis` is returned and `static_only` is explained | `test_the_two_tools_that_report_findings_explain_static_only` |
+| a CI check pins the tool schema | `tests/test_mcp_tool_schema.py` against `tests/data/mcp_tools.json` |
+| Cursor lists the tools | **not yet** — needs a running deployment with the flag on |
+
+### Still open
+
+- **Cursor itself.** Everything above is proved against `TestClient`. Listing
+  the tools in a real editor needs `MCP_ENABLED=1` on the box and a minted
+  key, and is the one item on §6's list that cannot be tested from here.
+- **Key issuance UI.** Unchanged from §"Open": there is no dashboard, and
+  `scripts/mint_mcp_key.py` is an operator running a command, not
+  self-service.
+- **Expiry.** `last_used_at` is written on every authenticated call from the
+  first day, so the policy can be chosen from data.
