@@ -77,6 +77,28 @@ fi
 
 gate "whitespace"    git diff --check "$BASE_SHA" "$HEAD_SHA"
 gate "added secrets" "$PY" .github/scripts/scan-added-secrets.py "$BASE_SHA" "$HEAD_SHA"
+
+# CI lints with the ruff pinned in requirements-dev.txt; this script lints with
+# whatever ruff is on the machine. When those differ, a green line here says
+# nothing about the remote one -- a newer ruff carries rules the local one has
+# never heard of, and the whole point of this script is that its verdict
+# transfers.
+#
+# Found on 2026-08-26 with the local ruff at 0.15.8 against a pin of 0.16.3:
+# two minor versions of rules had never run locally, and nobody knew.
+#
+# A line, not a gate, for the same reason as the postgres notice below: a
+# laptop with a slightly different ruff is a normal place to work, and refusing
+# to lint there would teach people to stop running this. Skipping is fine;
+# skipping without saying so is not.
+PINNED_RUFF="$(sed -n 's/^ruff==\([0-9][0-9.]*\).*/\1/p' requirements-dev.txt | head -1)"
+LOCAL_RUFF="$("$RUFF" --version 2>/dev/null | awk '{print $2}')"
+if [ -n "$PINNED_RUFF" ] && [ -n "$LOCAL_RUFF" ] && [ "$PINNED_RUFF" != "$LOCAL_RUFF" ]; then
+    printf '%-28s%s\n' "ruff version" \
+        "LOCAL $LOCAL_RUFF, CI PINS $PINNED_RUFF — a green lint here may be red there"
+    echo "preflight: to match CI: $PY -m pip install 'ruff==$PINNED_RUFF'" >&2
+fi
+
 gate "ruff"          "$RUFF" check .
 gate "pytest"        "$PY" -m pytest -q
 
@@ -102,6 +124,26 @@ fi
 # is untouched is correct; skipping it silently when web/ IS touched is how a
 # types.ts change reaches CI unbuilt.
 if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -q '^web/'; then
+    # A DEPENDENCY CHANGE MAKES node_modules A LIE, and the tests do not
+    # notice. On 2026-08-26 a Dependabot branch bumped @vitejs/plugin-react to
+    # a version whose peer range demands vite 8 while the lockfile still
+    # pinned vite 7. `npm ci` refused the tree -- in CI and locally -- but the
+    # node_modules left over from main's install was still on disk, so vitest
+    # ran happily against the OLD dependencies and reported 60 passing tests
+    # for a branch that could not install at all.
+    #
+    # So when the manifest or the lockfile moves, install exactly what they
+    # say before believing anything. This is `npm ci` for the same reason CI
+    # uses it: it deletes node_modules and builds from the lockfile, which is
+    # the only way the run is about the branch in front of you.
+    #
+    # A GATE, not a notice, unlike the ruff and postgres cases above. Those
+    # are "this machine cannot check that"; this one is "the check ran and was
+    # about something else", which is worse than not running it.
+    if git diff --name-only "$BASE_SHA" "$HEAD_SHA" \
+        | grep -qE '^web/(package\.json|package-lock\.json)$'; then
+        gate "npm ci"     bash -c 'cd web && npm ci'
+    fi
     if [ -d web/node_modules ]; then
         # Before the build, and the cheap one of the pair: about a second
         # against about twenty. It also fails on a different class -- the build
