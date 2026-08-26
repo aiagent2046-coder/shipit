@@ -1523,3 +1523,68 @@ async def test_list_audits_returns_only_this_keys_audits(real_db):
     listed = {row["id"] for row in await keys.list_audits(ids[0])}
     assert listed == set(mine)
     assert theirs[0] not in listed
+
+
+async def test_the_mcp_endpoint_refuses_a_stranger_audit_over_real_sql(
+        real_db, monkeypatch):
+    """docs/MCP.md §6, end to end: HTTP in, the real WHERE clause underneath.
+
+    tests/test_mcp_server.py proves the handler asks the right question, and
+    it asks it of a fake. This proves the whole path -- bearer token, HMAC
+    against the stored hash, the membership row -- against the database that
+    will actually answer in production.
+
+    Worth its own test rather than trusting the two halves: the fake repo and
+    the real one are two implementations of one contract, and the handler is
+    wired to whichever the dependency returns. A wiring mistake there is
+    invisible to every test that overrides the dependency, which is all of
+    them in the other file.
+    """
+    from fastapi.testclient import TestClient
+
+    import app.main as main_mod
+    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+
+    monkeypatch.setenv("MCP_ENABLED", "1")
+
+    audit_repo = AuditRepository()
+    keys = db_mod.McpKeyRepository()
+    run = uuid.uuid4().hex[:12]
+
+    audit_id = await _mcp_audit(audit_repo, f"{run}-http")
+
+    minted = []
+    for _ in range(2):
+        key = generate_mcp_key()
+        row = await keys.create(key_hash=hash_mcp_key(key),
+                                key_prefix=mcp_key_prefix(key))
+        minted.append((key, row["id"]))
+    (owner_key, owner_id), (other_key, other_id) = minted
+
+    await keys.link_audit(owner_id, audit_id)
+    # The stranger holds audits of its own, so a predicate weakened to "does
+    # this key have any audits" cannot pass this by accident.
+    for n in range(2):
+        await keys.link_audit(other_id, await _mcp_audit(audit_repo, f"{run}-o{n}"))
+
+    def _call(bearer: str) -> dict:
+        with TestClient(main_mod.app) as client:
+            response = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "drydock_get_audit",
+                                 "arguments": {"audit_id": audit_id}}},
+                headers={"Authorization": f"Bearer {bearer}"})
+        assert response.status_code == 200, response.text
+        return response.json()["result"]["structuredContent"]
+
+    assert _call(owner_key)["audit_id"] == audit_id
+    assert "error" in _call(other_key)
+
+    # An unminted key of the right shape is refused before any lookup can
+    # succeed -- the hash is real, the row is not.
+    with TestClient(main_mod.app) as client:
+        refused = client.post(
+            "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={"Authorization": f"Bearer {generate_mcp_key()}"})
+    assert refused.status_code == 401

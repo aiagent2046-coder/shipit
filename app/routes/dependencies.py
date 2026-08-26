@@ -22,6 +22,7 @@ from app.db import (
     FixOutcomeRepository,
     FixpackJobRepository,
     LlmUsageRepository,
+    McpKeyRepository,
     MonitoringRunRepository,
     PaymentRepository,
     RlsLiveCheckRepository,
@@ -90,6 +91,7 @@ _subscription_repo = SubscriptionRepository()
 _monitoring_repo = MonitoringRunRepository()
 _llm_usage_repo = LlmUsageRepository()
 _service_flags_repo = ServiceFlagsRepository()
+_mcp_key_repo = McpKeyRepository()
 
 
 def get_payment_repo() -> PaymentRepository:
@@ -174,3 +176,8 @@ def get_llm_usage_repo() -> LlmUsageRepository:
 def get_service_flags_repo() -> ServiceFlagsRepository:
     """Same as get_audit_repo, for the service_flags kill switches."""
     return _service_flags_repo
+
+
+def get_mcp_key_repo() -> McpKeyRepository:
+    """Same as get_audit_repo, for the MCP credential (migration 0036)."""
+    return _mcp_key_repo

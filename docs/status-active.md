@@ -271,6 +271,34 @@ Implemented:
   provider. `tests/test_notify_transport_boundary.py` holds the dependency one
   way: `app/billing` may import `app/notify`, never the reverse.
 
+- **MCP for editors (`POST /mcp`), behind `MCP_ENABLED`, off in production.**
+  Five tools — `drydock_get_version`, `drydock_start_audit`,
+  `drydock_get_audit`, `drydock_fixpack_status`, `drydock_list_recent` — over
+  JSON-RPC with `Authorization: Bearer dk_mcp_…`. The contract and what Phase
+  1 corrected about it are in `docs/MCP.md`. Three properties worth knowing
+  from here:
+  - **A key reads only its own audits.** `mcp_key_audits` (migration 0036) is
+    a join table rather than an owner column on `audits`, because the
+    content-hash cache legitimately lands two keys on one row. "Not yours" and
+    "does not exist" are the same answer, so the endpoint is not an oracle for
+    which audit ids are real.
+  - **`start_audit` delegates to the same `create_audit` the public API
+    uses** — one emergency stop, one SSRF guard, one cache, one quota. What
+    the tool adds is a per-key rate-limit window and a URL shape check that
+    runs *before* the charge, so a typo costs nothing.
+  - **Finding text is fenced.** Titles, fix hints and paths are written by an
+    LLM reading a third party's repository and travel into an editor with
+    shell access, so they go out inside `[UNTRUSTED_REPO_DATA]` markers that
+    are stripped from the payload first — a fence the payload can close is not
+    a fence (`app/mcp/untrusted.py`). No tool returns file contents, and that
+    is a rule rather than an omission.
+
+  Keys are minted on the box with `scripts/mint_mcp_key.py` and shown once;
+  revocation is `update mcp_api_keys set revoked_at = now()`, which keeps the
+  row so the audits the key reached still trace back to it. With the flag
+  unset the endpoint 404s — checked before authentication, so a disabled
+  deployment does not grade credentials.
+
   Tests: `tests/test_billing_bank_transfer.py` (the live rail, including every
   sell-side refusal), `tests/test_billing_telegram.py` (that nothing there
   sells), `tests/test_one_way_to_pay.py` (that the retired endpoints 404 rather
@@ -1034,6 +1062,12 @@ allowed request headers are `Authorization` and `Content-Type`.
     `a90b860`, and the deploy health gate passed.
 
 ## Known gaps (honest list, post-deploy)
+
+- **Nobody has listed the MCP tools in a real editor.** Every §6 item in
+  `docs/MCP.md` is proved except that one, and it cannot be proved from a
+  development sandbox: it needs `MCP_ENABLED=1` on the box, a minted key, and
+  Cursor pointed at `https://drydock.co/mcp`. Until then the honest claim is
+  "the protocol is implemented and tested", not "it works in Cursor".
 
 - **A monitoring re-audit's one-pass row can be reused by a paid job.** Paid
   audits are two passes; the preview and continuous-monitoring re-audits stay
