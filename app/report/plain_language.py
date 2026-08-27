@@ -126,6 +126,20 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Remove it from the repository, add .env to .gitignore, and "
         "rotate every secret that was inside.",
     ),
+    "connection-string-local-host": (
+        "A connection string in your code points at a database on the "
+        "machine running the code, with a password in it.",
+        "The address is localhost (or a docker-compose service name), so "
+        "this is almost certainly your development database and not "
+        "something anyone can reach from outside. What is worth a moment is "
+        "the password itself: unlike the tutorial defaults, this one looks "
+        "chosen — and if it is a password you also use somewhere real, it "
+        "is now published wherever this code is.",
+        "There is no provider dashboard to change this in — nothing is "
+        "hosting it. If that password is used anywhere that matters, change "
+        "it there. Then move the connection string into an environment "
+        "variable so the next one does not follow it into the repository.",
+    ),
     "supabase-demo-key": (
         "This is Supabase's local-development demo key, which ships with "
         "every project.",

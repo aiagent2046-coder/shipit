@@ -17,12 +17,33 @@ def _all_static_rule_ids():
         # matches any adjacent pair of short string literals, and picked up
         # "--" from the comment-prefix tuple in secrets.py as a rule id.
         ids |= set(re.findall(r'"([a-z][a-z0-9-]{2,})", "', src))
+        # Ids that no rule declares: _classify_match re-routes a match to a
+        # DIFFERENT id once it knows what the value is (an anon key, a demo
+        # key, a tutorial password, a localhost DSN). Four such ids existed
+        # and this function saw none of them -- so any of the four could have
+        # reached the report with no translation at all, which does not fail
+        # loudly: plain_fields falls back to the technical title, and static
+        # secret findings carry no explanation or fix_hint of their own, so
+        # the reader gets a finding with an EMPTY "what to do".
+        ids |= set(re.findall(r'effective_rule_id = "([a-z][a-z0-9-]+)"', src))
     return {i for i in ids if "-" in i}
 
 
 def test_every_static_rule_has_a_translation():
     missing = _all_static_rule_ids() - set(PLAIN)
     assert not missing, f"rules without plain-language entries: {missing}"
+
+
+def test_the_re_routed_ids_are_in_what_this_guard_checks():
+    """Guards the guard. The check above is only as good as the ids it
+    collects, and the ids most likely to be forgotten are exactly the ones no
+    rule declares -- they are written at the point a match is reclassified,
+    far from any SecretRule constructor."""
+    ids = _all_static_rule_ids()
+
+    assert {"supabase-anon-key", "supabase-demo-key",
+            "connection-string-dev-password",
+            "connection-string-local-host"} <= ids
 
 
 def test_translations_are_jargon_light_and_complete():
