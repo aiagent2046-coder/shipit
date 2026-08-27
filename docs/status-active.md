@@ -14,7 +14,8 @@ findings, all grep-verified), hourly preview reaper via systemd timer.
 
 Implemented:
 - `app/ingest/validators.py` — hostile-archive validation (size, file
-  count, symlinks, path traversal, zip bombs by ratio and by total size)
+  count, symlinks, path traversal, zip bombs by per-entry expansion and by
+  total size — expansion, never compression ratio: see `v2026.08.27-5` below)
 - `app/ingest/stack_detect.py` — Next.js / Vite+React / FastAPI
   detection, honest `unsupported` otherwise
 - `app/ratelimit.py` — in-memory fixed-window rate limit per client IP
@@ -1028,6 +1029,57 @@ allowed request headers are `Authorization` and `Content-Type`.
 
 ## Release notes
 
+- **`v2026.08.27-5` (`017c5f4`), deployed 2026-08-27.** Three defects found by
+  reading real audits of other people's repositories rather than by searching
+  the code. No migration; `GET /version` confirms the tag, and both
+  `shipit.service` and `shipit-audit-worker.service` came back healthy.
+
+  - **A connection string to `localhost` was handed the advice for a live
+    leak.** `_dsn_severity` grades on two independent signals — is the password
+    a tutorial default, is the host the developer's own machine — but only the
+    first routed the `rule_id`, so the third outcome kept the id of a real leak
+    and rendered the dictionary entry written about a hosted database:
+    "Change that user's password at your database provider" over a row titled
+    "to a local/development host". There is no provider. Now
+    `connection-string-local-host`, with text that says what is actually true
+    (nothing to rotate at a provider; the password is published, so change it
+    wherever it was reused).
+  - **`.env.example` and `.github/workflows/**` were not damped.** Measured on
+    `dubinc/dub` (audit `a5fcb681`): one repository, one rule, three files, and
+    the difference between damped and not was whether the word "playwright"
+    landed in a directory name or a file name. The template family is now
+    example context, capped at medium and **never dropped** — a live key pasted
+    into a template still appears. CI workflows damp only the local-host
+    variant (new context `ci_service`): a workflow can carry a real cloud
+    connection string exactly as a migration can, and that one stays critical.
+    Re-scanned `dubinc/dub` before and after: exactly those two rows changed,
+    the other five untouched, static score 9.7 → 9.8.
+  - **A paid Fix Pack would have deleted the customer's `.env` template.**
+    `find_committed_env_files` excluded exactly `.env.example`, so
+    `.env.local.example`, `.env.sample` and `.env.template` counted as files
+    that should not be tracked — and that function feeds `plan.deletions`.
+    Measured on `mckaywrigley/chatbot-ui` (audit `f444873f`), in a finding
+    whose own advice tells the reader to keep one.
+
+  Shipped in the same release:
+  - **An archive entry is judged by what it expands to, not by how well it
+    compressed** (`MAX_UNCOMPRESSED_ENTRY_BYTES`, 100 MB). The ratio rule
+    refused `payloadcms/payload` outright over `test/uploads/2mb.jpg`, a 2 MB
+    fixture that compresses 605× — a file-upload library needs one, and the
+    owner cannot delete it to buy an audit. Ratio was a proxy for expansion and
+    poor in both directions: it fired on that fixture and stayed silent on a
+    400 MB entry at 99×.
+  - **The plain-language coverage guard now sees re-routed rule ids.** It read
+    `SecretRule(...)`/`CheckFinding(...)` constructors only, so all four ids
+    `_classify_match` re-routes to were invisible to it and could have shipped
+    with no translation — which fails quietly, since `plain_fields` falls back
+    to the technical title and a static secret finding carries no `fix_hint`:
+    the reader gets an empty "what to do".
+  - **The worker heartbeat's tests wait for the heartbeat, not for the clock.**
+    A wall-clock budget under an assertion about iterations went red once on a
+    docs-only diff, reading exactly like a regression in the heartbeat's error
+    handling.
+
 - **`v2026.08.17-7` (`a90b860`), deployed 2026-08-17.** Paid audits now run
   **two LLM passes** (union-of-N; `PAID_AUDIT_PASSES`, `app/scan/pipeline.py`).
   The reason is measured, not assumed: repeated same-engine runs of unchanged
@@ -1064,10 +1116,18 @@ allowed request headers are `Authorization` and `Content-Type`.
 ## Known gaps (honest list, post-deploy)
 
 - **Nobody has listed the MCP tools in a real editor.** Every §6 item in
-  `docs/MCP.md` is proved except that one, and it cannot be proved from a
-  development sandbox: it needs `MCP_ENABLED=1` on the box, a minted key, and
-  Cursor pointed at `https://drydock.co/mcp`. Until then the honest claim is
-  "the protocol is implemented and tested", not "it works in Cursor".
+  `docs/MCP.md` is proved except that one. `MCP_ENABLED=1` is set on the box
+  and a key has been minted, so the remaining step is a real editor pointed at
+  `https://api.drydock.co/mcp` and asked to list the tools. Until then the
+  honest claim is "the protocol is implemented, tested and reachable", not
+  "it works in Cursor".
+
+  The host in that URL is load-bearing and used to be wrong here.
+  `drydock.co` is the Vercel frontend; only `api.drydock.co` is reverse-proxied
+  to the API (`deploy/caddy/Caddyfile`). A check against the frontend returns
+  404 for `/mcp` — the answer that was expected — so it looked like a passing
+  test of a path that was never served. `tests/test_mint_mcp_key.py` now reads
+  the Caddyfile and asserts the minted URL's host is actually proxied.
 
 - **A monitoring re-audit's one-pass row can be reused by a paid job.** Paid
   audits are two passes; the preview and continuous-monitoring re-audits stay
