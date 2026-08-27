@@ -11,6 +11,9 @@ Design rules:
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import re
 import stat
@@ -391,11 +394,73 @@ def _iter_text_files(zf: zipfile.ZipFile) -> Iterator[tuple[str, str]]:
         yield name, data.decode("utf-8", errors="ignore")
 
 
+# The Supabase CLI's local stack signs its tokens with the SAME secret for
+# every developer on earth: `supabase start` prints it, the documentation
+# publishes it, and every project scaffolded from the template carries tokens
+# signed with it.
+#
+# That is what makes such a token informational, and the reasoning is not "it
+# looks like a demo". It is that the SECRET IS PUBLIC, so anyone can mint an
+# identical token -- and a credential everybody can forge opens nothing. Same
+# argument as _DSN_DEV_PASSWORDS below: finding `postgres:postgres` tells you
+# the author followed a tutorial, not that a credential leaked.
+#
+# Measured on mckaywrigley/chatbot-ui, audit f444873f:
+# supabase/migrations/20240108234540_setup.sql carries a token whose claims
+# are iss=supabase-demo, role=service_role, exp=1983812996, and whose
+# signature verifies against this secret. (Written without JSON quoting on
+# purpose: tests/test_plain_language.py scrapes this file for rule ids with a
+# deliberately loose regex, and a quoted `id", "` pair in a COMMENT is enough
+# to make it demand a translation for a rule that does not exist.) It was reported as a CRITICAL
+# "full RLS bypass", which capped that repository's score at 6.9 and stood
+# beside a genuine critical (SSRF via a user-controlled tool URL) claiming
+# equal weight. Every Supabase project that commits its scaffolding got the
+# same finding.
+_SUPABASE_DEMO_JWT_SECRETS = (
+    "super-secret-jwt-token-with-at-least-32-characters-long",
+)
+
+
+def _is_demo_jwt(token: str) -> bool:
+    """Whether this JWT is signed with a publicly known development secret.
+
+    THE SIGNATURE, AND DELIBERATELY NOT THE `iss` CLAIM. `iss` is unsigned
+    data that the holder controls: a self-hosted deployment that kept the
+    demo issuer while setting a real secret would carry `iss: supabase-demo`
+    on tokens that ARE live credentials, and damping those is the expensive
+    direction of this mistake. A signature that verifies against a published
+    secret proves the opposite and proves it outright.
+
+    Robust to the token being reissued, too. The CLI has changed the demo
+    `exp` before; matching known token strings would go stale on the next
+    bump, while the secret is what the whole local stack is built around.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    signing_input = f"{parts[0]}.{parts[1]}".encode()
+    for secret in _SUPABASE_DEMO_JWT_SECRETS:
+        want = base64.urlsafe_b64encode(
+            hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+        ).rstrip(b"=").decode()
+        if hmac.compare_digest(want, parts[2]):
+            return True
+    return False
+
+
 def _jwt_severity(token: str) -> tuple[str, float, str]:
     """Supabase keys are JWTs with a `role` claim: anon is public by
     design (every Lovable app ships it client-side), service_role is a
-    full RLS bypass. Decode the payload to tell them apart."""
-    import base64
+    full RLS bypass. Decode the payload to tell them apart.
+
+    The demo check comes first because it outranks the role: a service_role
+    token signed with a public secret is not a service_role credential, it is
+    a fixture that happens to say service_role.
+    """
+    if _is_demo_jwt(token):
+        return ("low", 0.2,
+                "Supabase local-development demo key "
+                "(public by design, informational)")
     try:
         payload = token.split(".")[1]
         payload += "=" * (-len(payload) % 4)
@@ -497,6 +562,11 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     # login" rows in a real report). Tag it with its own rule_id so the
     # report can collapse and translate it correctly.
     is_anon = title.startswith("Supabase anon key")
+    # The third member of the same family, and it joins for the same reason:
+    # a token anyone can mint must not be escalated by migration context, must
+    # not collapse together with a live credential, and must not be offered to
+    # the Fix Pack as something to rewrite. See _SUPABASE_DEMO_JWT_SECRETS.
+    is_demo_jwt = title.startswith("Supabase local-development demo key")
     # A tutorial-default connection password gets its own id for the same
     # reason the anon key does: the report must not collapse it together
     # with a live credential, and the Fix Pack must not offer to rewrite a
@@ -505,6 +575,8 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
                   and dsn_password_is_conventional(matched))
     if is_anon:
         effective_rule_id = "supabase-anon-key"
+    elif is_demo_jwt:
+        effective_rule_id = "supabase-demo-key"
     elif is_dev_dsn:
         effective_rule_id = "connection-string-dev-password"
     else:
@@ -514,10 +586,11 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     # strongest signal first: a self-labelled placeholder on a test path is
     # two signals, a test path is one, a comment or doc path is one.
     context: str | None = None
-    if _is_migration_context(name) and not is_anon and not is_dev_dsn:
+    if (_is_migration_context(name)
+            and not is_anon and not is_dev_dsn and not is_demo_jwt):
         confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
         title = f"{title} (committed database migration)"
-    elif is_anon or is_dev_dsn:
+    elif is_anon or is_dev_dsn or is_demo_jwt:
         pass
     elif _is_test_fixture_path(name) and value_has_placeholder_marker(matched):
         severity = _TEST_PLACEHOLDER_SEVERITY
