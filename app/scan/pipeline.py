@@ -62,7 +62,17 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # The comment above already said to bump it. Saying so is evidently not
 # enough — see tests/test_engine_version_pins_the_scanners.py, which fails
 # when the set of wired scanners changes and this string does not.
-AUDIT_ENGINE_VERSION = "2026-08-20-2"
+#
+# AND IT HAPPENED AGAIN, one gap to the left. #358 changed no scanner's
+# presence, so that test stayed green, but it changed what an existing scanner
+# EMITS: a new rule_id (connection-string-local-host) and a new damping context
+# (ci_service). A cached row therefore disagreed with the running engine about
+# the same bytes -- carrying the very advice the release was shipped to stop
+# printing -- and the first re-audit after the deploy would have returned it,
+# byte for byte, looking exactly like a fix that did not work.
+#
+# So the pin now covers the emitted vocabulary too, not just the scanner set.
+AUDIT_ENGINE_VERSION = "2026-08-27-1"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

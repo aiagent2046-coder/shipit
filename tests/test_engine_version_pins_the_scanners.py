@@ -15,14 +15,23 @@ The constant's own comment has said "bump when the static rules change" since
 it was written. Three consecutive pull requests read past it, mine included.
 So the instruction is now a test.
 
-WHAT IT PINS is the set of scanners `run_static_scan` calls, not the rules
-inside them — a rule's internals change constantly and a test that noticed
-would be noise nobody keeps. Adding or removing a SCANNER is the coarse event
-that reliably means "the engine now sees something it did not see before", and
-it is exactly the event that happened four times.
+WHAT IT PINS is the set of scanners `run_static_scan` calls and the VOCABULARY
+they emit — rule ids and damping contexts — not the rules inside them. A rule's
+internals (a threshold, a pattern, the wording of an explanation) change
+constantly and a test that noticed would be noise nobody keeps.
+
+The vocabulary half was added after the same defect recurred one gap to the
+left. #358 added no scanner, so the set below stayed correct and this file
+stayed green, but it added a rule id (`connection-string-local-host`) and a
+context (`ci_service`) — so a cached row disagreed with the running engine
+about the same bytes, still carrying the advice the release existed to stop
+printing. Adding or removing a scanner, a rule id or a context is a coarse,
+rare event that reliably means "the engine would now answer differently"; those
+are exactly the events that have happened five times.
 
 WHEN THIS FAILS, do both halves:
-  1. update WIRED_SCANNERS to match reality, and
+  1. update the pinned set (WIRED_SCANNERS / EMITTED_RULE_IDS / DAMPING_
+     CONTEXTS) to match reality, and
   2. bump AUDIT_ENGINE_VERSION in app/scan/pipeline.py.
 Doing only the first reproduces the defect this file exists to prevent.
 """
@@ -46,9 +55,45 @@ WIRED_SCANNERS = (
     "scan_service_role",
 )
 
-# The version that was current when WIRED_SCANNERS last matched. Changing the
-# scanner set without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-08-20-2"
+# Every rule id a static finding can reach the reader under. Taken from the
+# plain-language dictionary rather than from the rules themselves, and that is
+# deliberate: tests/test_plain_language.py already fails if a rule id exists
+# without an entry here, so this key set is a faithful stand-in for "what the
+# static engine can say" — and unlike the rules, it is a plain runtime value
+# with no source-text parsing between it and the truth.
+EMITTED_RULE_IDS = (
+    "anthropic-api-key",
+    "aws-access-key-id",
+    "connection-string-dev-password",
+    "connection-string-local-host",
+    "connection-string-password",
+    "dependency-dir-committed",
+    "env-file-committed",
+    "generic-assignment",
+    "github-pat",
+    "gitignore-missing-secrets",
+    "jwt-in-code",
+    "no-ci",
+    "no-dockerfile",
+    "no-tests",
+    "private-key-block",
+    "sql-secret-assignment",
+    "stripe-live-key",
+    "supabase-anon-key",
+    "supabase-demo-key",
+    "telegram-bot-token",
+)
+
+# The damping vocabulary. A context decides which section of the report a
+# finding lands in and whether the Fix Pack will touch it, so a new one changes
+# what a reader sees for unchanged bytes exactly as a new rule id does.
+DAMPING_CONTEXTS = (
+    "ci_service", "comment", "doc_example", "test_file", "test_fixture",
+)
+
+# The version that was current when all three sets above last matched.
+# Changing any of them without changing this is the whole defect.
+ENGINE_VERSION_FOR_THAT_SET = "2026-08-27-1"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:
@@ -94,11 +139,38 @@ def test_the_wired_scanners_are_the_ones_this_version_was_stamped_for(
     )
 
 
+def test_the_emitted_rule_ids_are_the_ones_this_version_was_stamped_for() -> None:
+    """The gap #358 fell through. It added no scanner -- the test above stayed
+    green -- but it added a rule id, so a cached audit and the running engine
+    disagreed about the same bytes while the cache went on serving the old one.
+    """
+    from app.report.plain_language import PLAIN
+
+    assert tuple(sorted(PLAIN)) == EMITTED_RULE_IDS, (
+        "the static engine's rule ids changed. Update EMITTED_RULE_IDS *and* "
+        "bump AUDIT_ENGINE_VERSION in app/scan/pipeline.py — without the bump, "
+        "every repository already in the audit cache keeps being served a "
+        "result the current engine would no longer produce."
+    )
+
+
+def test_the_damping_contexts_are_the_ones_this_version_was_stamped_for() -> None:
+    """Same argument as the rule ids: a context decides which section of the
+    report a finding lands in, so a new one changes the page for unchanged
+    bytes."""
+    from app.scan.secrets import NON_PRODUCTION_CONTEXTS
+
+    assert tuple(sorted(NON_PRODUCTION_CONTEXTS)) == DAMPING_CONTEXTS, (
+        "the damping vocabulary changed. Update DAMPING_CONTEXTS *and* bump "
+        "AUDIT_ENGINE_VERSION in app/scan/pipeline.py."
+    )
+
+
 def test_the_engine_version_moved_with_them() -> None:
     assert pipeline.AUDIT_ENGINE_VERSION == ENGINE_VERSION_FOR_THAT_SET, (
         "AUDIT_ENGINE_VERSION changed. If that was deliberate, update "
-        "ENGINE_VERSION_FOR_THAT_SET here too — this pair is the record of "
-        "which engine the current scanner set was cached under."
+        "ENGINE_VERSION_FOR_THAT_SET here too — this is the record of which "
+        "engine the current scanners, rule ids and contexts were cached under."
     )
 
 
