@@ -29,6 +29,7 @@ import datetime
 import json
 import logging
 import os
+import time
 import uuid
 
 import pytest
@@ -457,15 +458,48 @@ def _job():
     }
 
 
-async def _run_heartbeat(jobs, *, for_seconds: float, monkeypatch,
+async def _wait_until(predicate, *, what: str, timeout: float = 5.0) -> None:
+    """Wait for something to have HAPPENED, not for time to pass.
+
+    Every wait around the heartbeat used to be a wall-clock budget -- sleep
+    0.1 s, which at a 0.02 s interval "should" fit five passes -- under an
+    assertion about how many passes there had been. That makes a green result
+    depend on how busy the machine is: on a loaded runner one pass can consume
+    the whole window, and the test then reports that a failed stats read killed
+    the heartbeat, which is not what happened. It failed exactly once, on a
+    diff that touched only `docs/MCP.md` (#351), and reads precisely like a
+    real regression in the heartbeat's error handling -- so the first hour goes
+    into code that is fine.
+
+    Here the timeout is the failsafe rather than the measurement: the loop
+    stops the instant the thing under test has occurred, and 5 s is long
+    enough that reaching it means it never will.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"timed out after {timeout}s waiting for {what}")
+        await asyncio.sleep(0.001)
+
+
+async def _run_heartbeat(jobs, *, until, what: str, monkeypatch,
                          interval: float = 0.02):
+    """Run the heartbeat until `until()` is true, then shut it down cleanly.
+
+    No `for_seconds`: no caller wanted a duration -- all four passed one to
+    buy a number of passes -- and leaving the parameter in place is leaving
+    the door open for the same flake to walk back in.
+    """
     monkeypatch.setattr(worker, "AUDIT_WORKER_STATS_INTERVAL_SECONDS", interval)
     shutting_down = asyncio.Event()
     task = asyncio.create_task(
         worker._stats_heartbeat(jobs=jobs, shutting_down=shutting_down))
-    await asyncio.sleep(for_seconds)
-    shutting_down.set()
-    await asyncio.wait_for(task, timeout=5)
+    try:
+        await _wait_until(until, what=what)
+    finally:
+        shutting_down.set()
+        await asyncio.wait_for(task, timeout=5)
 
 
 async def test_the_heartbeat_writes_the_queue_depth_as_a_log_event(
@@ -473,7 +507,9 @@ async def test_the_heartbeat_writes_the_queue_depth_as_a_log_event(
 ):
     """The record is the metric. Every field asserted here is one a
     `journalctl | jq` query would select or plot."""
-    await _run_heartbeat(FakeQueue(), for_seconds=0.05, monkeypatch=monkeypatch)
+    await _run_heartbeat(FakeQueue(), monkeypatch=monkeypatch,
+                         until=lambda: collector.heartbeats(),
+                         what="the first heartbeat record")
 
     beats = collector.heartbeats()
     assert beats, "the heartbeat must emit unconditionally, not only when busy"
@@ -491,7 +527,9 @@ async def test_heartbeat_fields_survive_the_json_allowlist(
     # JsonFormatter drops anything not in ALLOWED_FIELDS, so a field added to
     # the log call and forgotten in the allowlist is invisible in production
     # and only here. Asserting on the serialised line is the whole point.
-    await _run_heartbeat(FakeQueue(), for_seconds=0.05, monkeypatch=monkeypatch)
+    await _run_heartbeat(FakeQueue(), monkeypatch=monkeypatch,
+                         until=lambda: collector.heartbeats(),
+                         what="the first heartbeat record")
 
     line = collector.heartbeats()[0]
     for field in ("event", "queue_depth", "oldest_queued_seconds",
@@ -500,8 +538,9 @@ async def test_heartbeat_fields_survive_the_json_allowlist(
 
 
 async def test_the_heartbeat_repeats_on_its_interval(collector, monkeypatch):
-    await _run_heartbeat(FakeQueue(), for_seconds=0.12, monkeypatch=monkeypatch,
-                         interval=0.02)
+    await _run_heartbeat(FakeQueue(), monkeypatch=monkeypatch, interval=0.02,
+                         until=lambda: len(collector.heartbeats()) >= 3,
+                         what="three heartbeat records")
 
     # A time series needs more than one point; this is what makes the interval
     # env var mean anything.
@@ -523,7 +562,9 @@ async def test_a_failing_stats_read_does_not_kill_the_heartbeat(
 
     jobs.backlog_stats = flaky_stats
 
-    await _run_heartbeat(jobs, for_seconds=0.1, monkeypatch=monkeypatch)
+    await _run_heartbeat(jobs, monkeypatch=monkeypatch,
+                         until=lambda: calls["n"] >= 2,
+                         what="a second stats read after the first one raised")
 
     assert calls["n"] >= 2, "one failed pass must not end the reporting"
     # The failure is itself reported, so a gap in the series has a cause in the
@@ -563,7 +604,8 @@ async def test_the_heartbeat_reports_slots_that_are_inside_a_job(
     await asyncio.wait_for(scan_started.wait(), timeout=5)
     beat_task = asyncio.create_task(
         worker._stats_heartbeat(jobs=jobs, shutting_down=shutting_down))
-    await asyncio.sleep(0.05)
+    await _wait_until(lambda: collector.heartbeats(),
+                      what="a heartbeat record while the slot is inside a job")
     shutting_down.set()
     slot_task.cancel()
     beat_task.cancel()
@@ -606,7 +648,12 @@ async def test_a_slow_heartbeat_does_not_delay_the_claim_loop(monkeypatch):
         llm_usage_repo=object(), flags_repo=object(),
         shutting_down=shutting_down,
     ))
-    await asyncio.sleep(0.1)
+    # The assertion below is the wait: the claim loop draining all three jobs
+    # while the stats read hangs IS the property. Sleeping a fixed 0.1 s
+    # instead made a slow machine look like a blocked claim loop; the 5 s
+    # failsafe inside _wait_until is what a genuinely blocked one hits.
+    await _wait_until(lambda: len(jobs.succeeded) == 3,
+                      what="the claim loop to drain the queue")
     shutting_down.set()
     beat_task.cancel()
     await asyncio.wait_for(slot_task, timeout=5)
