@@ -88,20 +88,44 @@ def test_path_traversal_rejected(bad_name):
     assert exc.value.reason == "unsafe_path"
 
 
-def test_zip_bomb_by_ratio_rejected():
-    # 200 MB of zeros compresses ~1000x: > 1 MB entry, ratio >> 100.
+def test_one_entry_that_expands_past_the_per_entry_cap_is_rejected():
+    # 200 MB of zeros: tiny in the archive, twice the per-entry ceiling once
+    # expanded, and well under the 500 MB total -- so this entry is caught by
+    # the per-entry bound or by nothing.
     bomb = b"\x00" * (200 * 1024 * 1024)
     buf = make_zip({"bomb.bin": bomb})
     assert size_of(buf) < MAX_ARCHIVE_BYTES  # passes the size gate...
     with pytest.raises(ArchiveValidationError) as exc:
         validate_zip(buf, size_bytes=size_of(buf))
-    assert exc.value.reason == "zip_bomb"  # ...but not the ratio gate
+    assert exc.value.reason == "zip_bomb"  # ...but not the per-entry gate
+
+
+def test_a_small_highly_compressible_test_fixture_is_not_a_bomb():
+    """Measured on payloadcms/payload, which this refused outright.
+
+    `test/uploads/2mb.jpg` is a synthetic 2 MB upload fixture that compresses
+    to roughly 3.5 KB -- 605x, far past the 100x the old ratio rule allowed --
+    and a file-upload library needs one. Refusing the repository told the
+    owner their project looked like an attack over a file they were never
+    going to delete.
+
+    Expanded, it is 2 MB. Nothing about that costs anything, which is exactly
+    why the bound is on expansion and not on ratio.
+    """
+    fixture = b"\x00" * (2 * 1024 * 1024)
+    buf = make_zip({"src/app.ts": b"export const x = 1\n",
+                    "test/uploads/2mb.jpg": fixture})
+
+    report = validate_zip(buf, size_bytes=size_of(buf))
+
+    assert report.file_count == 2
 
 
 def test_zip_bomb_by_total_uncompressed_rejected():
-    # Many entries, each individually under the ratio floor (1 MB),
-    # but summing to > 500 MB uncompressed.
-    entry = b"\x00" * (1024 * 1024 - 1)  # just under the per-entry floor
+    # Many entries, each individually far under the per-entry cap, but
+    # summing to > 500 MB uncompressed. The per-entry bound cannot see this
+    # one; the total is what catches it, and both are needed.
+    entry = b"\x00" * (1024 * 1024 - 1)
     entries = {f"part{i}.bin": entry for i in range(520)}
     buf = make_zip(entries)
     with pytest.raises(ArchiveValidationError) as exc:
@@ -110,8 +134,14 @@ def test_zip_bomb_by_total_uncompressed_rejected():
 
 
 def test_normal_compressible_source_not_flagged_as_bomb():
-    # Realistic case: a big lockfile compresses well but stays far
-    # below 100x because integrity hashes are unique per entry.
+    # A realistic large source file: a lockfile of 30,000 dependency lines.
+    #
+    # This used to say "stays far below 100x because integrity hashes are
+    # unique per entry" -- true of this file, and it was the whole reassurance
+    # behind the ratio rule that has since been removed. The fixture above,
+    # from payloadcms/payload, is the counter-example: legitimate content that
+    # compresses 605x. Kept as the ordinary-case control, no longer as
+    # evidence that real files compress modestly, because some do not.
     import hashlib
     lines = [
         b'{"name":"pkg%d","integrity":"sha512-%s"}\n'

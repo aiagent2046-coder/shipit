@@ -32,11 +32,28 @@ MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024  # 500 MB total after extraction
 # case near 25 s of CPU, well inside the worker's 300 s lease (renewed by a
 # heartbeat every 100 s), while admitting every real repository measured.
 MAX_FILE_COUNT = 50_000
-# Per-entry compression ratio above this, for entries larger than the
-# floor, is treated as a zip bomb. Legitimate source code stays well
-# below 100x; crafted bombs reach 1000x+.
-MAX_COMPRESSION_RATIO = 100
-RATIO_CHECK_FLOOR_BYTES = 1 * 1024 * 1024   # only check ratio for entries > 1 MB
+# The largest a SINGLE entry may expand to. Bounds the same harm the total
+# below bounds, one file at a time: what costs memory and disk is expanded
+# bytes, and nothing else about an entry matters here.
+#
+# THIS REPLACED A COMPRESSION-RATIO CHECK, and the reason is worth keeping.
+# That check refused any entry over 1 MB whose ratio exceeded 100x, with a
+# comment asserting "legitimate source code stays well below 100x".
+# payloadcms/payload disproves it: test/uploads/2mb.jpg is a synthetic 2 MB
+# upload fixture that compresses to about 3.5 KB -- 605x -- and the whole
+# repository was refused as a zip bomb over it. A file-upload library needs
+# such a fixture; the customer cannot delete it to buy an audit.
+#
+# Ratio was a proxy for expansion and a poor one in both directions: it fired
+# on a harmless 2 MB fixture and stayed silent on a 400 MB entry at 99x, which
+# is the one that actually hurts. Bounding the expansion directly fires on the
+# second and not the first.
+#
+# 100 MB because the total permits 500 MB across every entry: one file taking
+# a fifth of that is not source, and it is fifty times the largest legitimate
+# entry measured (that 2 MB fixture). Raising it is safe while the total holds;
+# what must not happen is going back to judging an entry by its ratio.
+MAX_UNCOMPRESSED_ENTRY_BYTES = 100 * 1024 * 1024
 
 
 class ArchiveValidationError(Exception):
@@ -194,15 +211,11 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
 
             total_uncompressed += info.file_size
 
-            if (
-                info.file_size > RATIO_CHECK_FLOOR_BYTES
-                and info.compress_size > 0
-                and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO
-            ):
+            if info.file_size > MAX_UNCOMPRESSED_ENTRY_BYTES:
                 raise ArchiveValidationError(
                     "zip_bomb",
-                    f"{info.filename}: ratio "
-                    f"{info.file_size // max(info.compress_size, 1)}x",
+                    f"{info.filename}: {info.file_size} bytes uncompressed "
+                    f"> {MAX_UNCOMPRESSED_ENTRY_BYTES}",
                 )
 
         if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
