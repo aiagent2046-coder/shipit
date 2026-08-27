@@ -198,6 +198,9 @@ rail this deployment can turn off without a code change.
   chosen from data instead of guessed now.
 - **Marketplace and OAuth.** Cursor's submission process is a separate
   exercise and blocks nothing: docs plus a key are enough for the first users.
+  *(Written in Phase 0. §8 records what was found when a marketplace was
+  actually opened, and "blocks nothing" is the part that held — for a
+  different reason than assumed.)*
 
 ---
 
@@ -255,15 +258,95 @@ replaced by it.
 | an invalid key gets 401 | `test_every_bad_credential_gets_the_same_401` — one answer for no key, a wrong-shaped key, an unminted key and a revoked one |
 | `basis` is returned and `static_only` is explained | `test_the_two_tools_that_report_findings_explain_static_only` |
 | a CI check pins the tool schema | `tests/test_mcp_tool_schema.py` against `tests/data/mcp_tools.json` |
-| Cursor lists the tools | **not yet** — needs a running deployment with the flag on |
+| Cursor lists the tools | **partly.** `tools/list` was answered over the live deployment on 2026-08-27 with a minted key, and an unminted key of the right shape got 401 — so the protocol works against production, not only `TestClient`. What has still not happened is an editor doing it. |
 
 ### Still open
 
-- **Cursor itself.** Everything above is proved against `TestClient`. Listing
-  the tools in a real editor needs `MCP_ENABLED=1` on the box and a minted
-  key, and is the one item on §6's list that cannot be tested from here.
+- **An editor, specifically.** `MCP_ENABLED=1` is set in production and a key
+  is minted; `tools/list` over HTTPS returns the five tools and a bad key gets
+  401. What remains is a real client — Cursor or another — doing the same
+  thing, which proves the parts a `curl` cannot: that the tool descriptions
+  read usefully to a model, and that the transport suits a client that speaks
+  MCP rather than one that speaks JSON-RPC by hand.
 - **Key issuance UI.** Unchanged from §"Open": there is no dashboard, and
   `scripts/mint_mcp_key.py` is an operator running a command, not
   self-service.
 - **Expiry.** `last_used_at` is written on every authenticated call from the
   first day, so the policy can be chosen from data.
+
+---
+
+## 8. What a marketplace can carry, and what it cannot
+
+Written 2026-08-27, after opening MCPMarket Hub with the intention of selling
+the scanner there. The answer is no, for three separate reasons, and each one
+would have been enough on its own. Recorded so the next person does not spend
+an afternoon rediscovering them.
+
+### It sells Skills, not services
+
+The seller area is "Sell your skills": listings are Skills, which the product
+defines as "instructions and assets your agent loads on demand", authored or
+synced from a GitHub repository. MCP servers are a different section — they
+are **added to your org**, not sold.
+
+Drydock is not a bundle of instructions. The scan runs on our infrastructure
+and costs money per run. A Skill saying "call api.drydock.co" carries none of
+the value and still leaves the buyer needing a key, so there is nothing there
+to charge for.
+
+### It cannot host what we have
+
+"Deploy custom MCP" takes a **source to build from** — GitHub, npm, PyPI or
+Docker — and nothing else. There is no field for an existing HTTPS endpoint
+and no field for an authorization header: the platform runs the server itself,
+which is why the form warns that "MCP servers can access your data and execute
+arbitrary code".
+
+Our MCP is an endpoint inside the FastAPI application, backed by Postgres, the
+audit worker and the payment rails. Handed the repository, a third party would
+run code that does nothing without our database and our provider keys. This is
+not a packaging gap to close later; a hosted-service MCP is a different shape
+from the one this form accepts.
+
+### The money has nowhere to land
+
+"Sales settle to your Stripe balance", at a flat 20% commission. The seller of
+record here is an individual entrepreneur in Russia and the rail is ЮKassa;
+Stripe does not open accounts there. That is a missing rail, not a paperwork
+problem, and no amount of engineering on our side reaches it.
+
+*(Cursor's own marketplace was looked at separately and reportedly pays
+publishers nothing at all — plugins are free to install. Not verified here:
+`cursor.com` is unreachable from the development sandbox. If it holds, that
+marketplace is a distribution channel and not a revenue one, which changes
+nothing below.)*
+
+### So the Phase 0 decision stands, and for a better reason
+
+§1 already said it: **MCP is the funnel into the paid Fix Pack, not a thing
+sold on its own**, and buying stays in a browser (§5). That was written as a
+product judgement. It now also happens to be the only arrangement the rails
+permit: a marketplace can send people to Drydock, and the money comes back
+through ЮKassa on drydock.co either way.
+
+"Marketplace and OAuth blocks nothing" in the Open section above turns out to
+be true — not because submission is easy, but because there is nothing on the
+other side of it worth blocking on.
+
+### What actually blocks distribution
+
+Not the marketplaces. **Key issuance.** Every channel — a registry entry, a
+blog post, an editor's docs — ends with a stranger needing a key, and today a
+key exists only when an operator runs `scripts/mint_mcp_key.py` on the box.
+Until that is self-service, any listing is a shopfront nobody can enter.
+
+And self-service is not one endpoint. A free key spends the shared anonymous
+LLM budget (`DEFAULT_DAILY_SPEND_CAP_USD`, $20/day), the per-key limit is 3
+audits per 24h, and nothing stops one person from minting many keys. When the
+budget is gone, audits do not fail — they **silently degrade to
+`static_only`**, for everybody, including the visitor who arrived intending to
+buy. Opening issuance without bounding that turns the funnel into a way to
+switch the product off for free. Whatever it becomes, it needs at minimum a
+per-IP mint limit, a bound on MCP traffic separate from the site's own, and an
+operator alert when it is approached.
