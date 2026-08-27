@@ -394,10 +394,18 @@ def test_a_tutorial_default_gets_its_own_rule_id_and_stays_low():
 
 
 def test_a_real_password_on_a_local_host_is_reported_but_not_critical():
+    """Its own id, for the same reason the tutorial default has one.
+
+    This used to assert `connection-string-password` -- the id of a live
+    leak -- on a finding _dsn_severity had just titled "to a local/
+    development host". The report reads the id, so the reader was told to
+    "change that user's password at your database provider" about a database
+    on their own laptop. See tests/test_local_dsn_advice.py.
+    """
     body = f'DB = "{_dsn("postgres", "app", "zQ8vT2mK", "localhost", ":5432/app")}"\n'
     finding = _dsn_findings(body)[0]
 
-    assert finding.rule_id == "connection-string-password"
+    assert finding.rule_id == "connection-string-local-host"
     assert finding.severity == "medium"
 
 

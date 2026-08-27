@@ -11,7 +11,11 @@ import zipfile
 from dataclasses import dataclass
 from typing import BinaryIO
 
-from app.scan.secrets import RULES, value_has_placeholder_marker
+from app.scan.secrets import (
+    RULES,
+    is_env_template_name,
+    value_has_placeholder_marker,
+)
 
 
 @dataclass(frozen=True)
@@ -106,14 +110,30 @@ def _committed_dependency_dirs(files: list[str]) -> list[tuple[str, int]]:
 
 def find_committed_env_files(files: list[str]) -> list[str]:
     """The committed env files a repo should never track: `.env` itself
-    and any `.env.<something>` except `.env.example`. Shared by run_checks
+    and any `.env.<something>` that is not a template. Shared by run_checks
     (to fire env-file-committed) and the Fix Pack generator (to know which
-    files to untrack), so both agree on exactly what counts."""
+    files to untrack), so both agree on exactly what counts.
+
+    The template exclusion used to be `not n.endswith(".env.example")`, an
+    exact match, and `.env.local.example` slipped past it. Measured on
+    mckaywrigley/chatbot-ui (audit f444873f): that file was reported as an
+    environment file that should not be tracked, in a finding whose own advice
+    reads "values the build genuinely needs can live in a committed
+    .env.example with the secrets left blank" -- the reader told to do the
+    thing they had already done.
+
+    THE REPORT IS THE SMALLER HALF. This function also feeds
+    app/fixpack/generate.py, where the result goes straight into
+    `plan.deletions`. A paid Fix Pack would have opened a pull request
+    DELETING the customer's `.env.local.example`, `.env.sample` or
+    `.env.template`: removing the file that tells every new contributor what
+    to configure, and selling that as a fix.
+    """
     return [
         n for n in files
         if n == ".env" or n.endswith("/.env")
         or (n.rsplit("/", 1)[-1].startswith(".env.")
-            and not n.endswith(".env.example"))
+            and not is_env_template_name(n))
     ]
 
 

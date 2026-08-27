@@ -108,8 +108,16 @@ _TS_SUFFIXES = (".ts", ".tsx")
 
 # Full secret-file pattern set for the gitignore-missing-secrets fix,
 # mirroring what the scan rule and env-file detection care about (.env and
-# .env.<x> except .env.example, plus key material). "!.env.example" keeps
-# the safe template committed.
+# .env.<x>, plus key material). "!.env.example" keeps the safe template
+# committed.
+#
+# Not a perfect mirror of find_committed_env_files, which excludes a family
+# of template names (.env.sample, .env.local.example, ...) and not just this
+# one. It does not need to be: .gitignore has no effect on a file git is
+# already tracking, so a template already in the repository stays in it. The
+# cost is that a template ADDED later needs `git add -f` or a negation of its
+# own -- worth fixing if anyone hits it, not worth five more lines in every
+# customer's .gitignore today.
 _GITIGNORE_SECRET_PATTERNS = (".env", ".env.*", "!.env.example", "*.pem", "*.key")
 
 _PEM_BLOCK_RE = re.compile(

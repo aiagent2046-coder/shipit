@@ -183,16 +183,71 @@ def _is_comment_line(line_text: str) -> bool:
     return line_text.lstrip().startswith(_COMMENT_PREFIXES)
 
 
+# The words that mark a dotenv file as a TEMPLATE -- a file that exists to be
+# committed, because it is how a project documents which variables it needs.
+#
+# Matched as whole dot-separated parts rather than as a tail, so both
+# `.env.local.example` and `.env.example.local` are recognised: the two
+# orderings are equally common and neither is a secret-bearing file.
+_ENV_TEMPLATE_MARKERS = frozenset(("example", "sample", "template", "dist"))
+
+
+def is_env_template_name(path: str) -> bool:
+    """Whether a path names a dotenv TEMPLATE rather than a real env file.
+
+    By NAME, deliberately, and public because two callers must agree on it:
+    app/scan/checks.py decides from it whether a file should be tracked at all
+    (and hence whether the Fix Pack offers to delete it), and _is_doc_context
+    below decides how loudly to report a value found INSIDE one.
+
+    The two questions stay separate. A template is still read and still
+    reported on if it holds something that looks like a credential -- damped
+    to the same level as a README, never dropped.
+    """
+    base = path.rsplit("/", 1)[-1]
+    if not base.startswith(".env."):
+        return False
+    return bool(_ENV_TEMPLATE_MARKERS & set(base.split(".")[2:]))
+
+
 def _is_doc_context(name: str) -> bool:
     if name.lower().endswith(_DOC_SUFFIXES):
+        return True
+    # `.env.example` and its family are the canonical "here is the shape, not
+    # the value" file -- the one thing in a repository whose entire purpose is
+    # to show which variables exist without their contents. It matched neither
+    # predicate: not a doc suffix, and `apps/web/` is not a doc segment. So a
+    # DSN in `apps/web/.env.example` was reported at full weight beside real
+    # code (measured on dubinc/dub, audit a5fcb681).
+    #
+    # Damped, not dropped, exactly like `README.md`: people do paste a live key
+    # into a template by mistake, and that is still reported -- capped at
+    # medium and shown in the non-production section rather than silently lost.
+    if is_env_template_name(name):
         return True
     return any(seg.lower() in _DOC_SEGMENTS for seg in name.split("/")[:-1])
 
 
+# `.github/workflows/*.yml` -- and nothing else under `.github/`, which also
+# holds issue templates and CODEOWNERS. Used for ONE narrow purpose (see
+# _classify_match): a connection string to a service container.
+_CI_WORKFLOW_DIR = ".github/workflows/"
+
+
+def _is_ci_workflow_path(name: str) -> bool:
+    return _CI_WORKFLOW_DIR in name.lower()
+
+
 # Contexts that mean "this file is not what the app runs in production".
 # Kept next to the predicates that produce them so the two cannot drift.
+# "ci_service" is the odd one out: a CI workflow is production-grade
+# infrastructure and a real credential in one is a real finding, so
+# is_non_production_path below deliberately does NOT claim workflow paths.
+# The context is set only where the value itself is already known to be a
+# throwaway (a service container's local connection string), which is a fact
+# about the value and not about the path.
 NON_PRODUCTION_CONTEXTS = frozenset(("test_fixture", "test_file", "comment",
-                                     "doc_example"))
+                                     "doc_example", "ci_service"))
 
 
 def is_non_production_path(name: str) -> bool:
@@ -514,6 +569,26 @@ def dsn_password_is_conventional(matched: str) -> bool:
     return pw in _DSN_DEV_PASSWORDS
 
 
+def dsn_host_is_local(matched: str) -> bool:
+    """Whether a connection string points at the developer's own machine.
+
+    Public for the same reason dsn_password_is_conventional is: the finding
+    gets its own rule_id when this is true, so the advice can say what is
+    actually true of a localhost DSN instead of sending the reader to a
+    provider that does not exist.
+
+    Deliberately a SECOND, independent question from the password. A DSN can
+    be local with a real-looking password (a developer's own postgres, whose
+    password may well be reused elsewhere) or remote with `postgres` (a
+    tutorial default pointed at something real). The two say different things
+    and get different advice.
+    """
+    m = _DSN_SPLIT_RE.search(matched)
+    if m is None:
+        return False
+    return m.group("host").lower() in _DSN_LOCAL_HOSTS
+
+
 def _dsn_severity(matched: str) -> tuple[str, float, str]:
     """Grade one connection string by what its password and host actually are.
 
@@ -573,12 +648,24 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     # docker-compose default into an environment variable.
     is_dev_dsn = (rule.id == "connection-string-password"
                   and dsn_password_is_conventional(matched))
+    # The third outcome of _dsn_severity, and it had no id of its own. That
+    # function grades on TWO signals -- a conventional password, then a local
+    # host -- while only the first one routed the rule_id, so a real-looking
+    # password against localhost produced a finding titled "to a local/
+    # development host" carrying the advice for a live leak: "change that
+    # user's password at your database provider". There is no provider.
+    # Measured on dubinc/dub, audit a5fcb681, twice in one report.
+    is_local_dsn = (rule.id == "connection-string-password"
+                    and not is_dev_dsn
+                    and dsn_host_is_local(matched))
     if is_anon:
         effective_rule_id = "supabase-anon-key"
     elif is_demo_jwt:
         effective_rule_id = "supabase-demo-key"
     elif is_dev_dsn:
         effective_rule_id = "connection-string-dev-password"
+    elif is_local_dsn:
+        effective_rule_id = "connection-string-local-host"
     else:
         effective_rule_id = rule.id
     # Order matters. Migration escalation wins outright -- it is the one
@@ -587,11 +674,28 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     # two signals, a test path is one, a comment or doc path is one.
     context: str | None = None
     if (_is_migration_context(name)
-            and not is_anon and not is_dev_dsn and not is_demo_jwt):
+            and not is_anon and not is_dev_dsn and not is_demo_jwt
+            and not is_local_dsn):
         confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
         title = f"{title} (committed database migration)"
     elif is_anon or is_dev_dsn or is_demo_jwt:
         pass
+    elif is_local_dsn and _is_ci_workflow_path(name):
+        # A connection string to localhost inside a CI workflow is the
+        # password of a service container that exists for the length of one
+        # job. Measured on dubinc/dub (audit a5fcb681):
+        # `.github/workflows/playwright.yaml` was reported at full weight
+        # while `apps/web/playwright/assert-local-database.ts` in the same
+        # repository was damped -- the same value, and the only difference was
+        # whether "playwright" landed in a directory name or a file name.
+        #
+        # Narrow on purpose, and only for the local-host variant. A workflow
+        # can carry a real cloud connection string exactly the way a migration
+        # can, and that one must stay critical: see the test.
+        severity = _DOC_SEVERITY_CAP.get(severity, severity)
+        confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
+        title = f"{title} (CI service container)"
+        context = "ci_service"
     elif _is_test_fixture_path(name) and value_has_placeholder_marker(matched):
         severity = _TEST_PLACEHOLDER_SEVERITY
         confidence = round(confidence * _TEST_PLACEHOLDER_CONFIDENCE_FACTOR, 2)
