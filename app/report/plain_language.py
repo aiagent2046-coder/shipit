@@ -126,6 +126,21 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Remove it from the repository, add .env to .gitignore, and "
         "rotate every secret that was inside.",
     ),
+    "supabase-demo-key": (
+        "This is Supabase's local-development demo key, which ships with "
+        "every project.",
+        "It is not a key to your database. `supabase start` prints this "
+        "same token for every developer, and the secret it is signed with "
+        "is published in Supabase's own documentation — so anyone can "
+        "produce an identical one, which is what makes it open nothing. "
+        "The keys that must stay secret are the service_role key and the "
+        "database password from your real project's dashboard, and those "
+        "look the same to the eye.",
+        "Nothing to rotate — there is no account behind this token. Do "
+        "check that the key your deployed app actually uses comes from an "
+        "environment variable and not from a committed file, because that "
+        "one would matter.",
+    ),
     "supabase-anon-key": (
         "Your Supabase anon (public) key appears in the code.",
         "This particular key is meant to be public — it ships in every "
