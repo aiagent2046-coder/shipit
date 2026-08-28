@@ -495,3 +495,143 @@ def test_neither_credential_is_fine(tmp_path, monkeypatch):
     env["SMTP_FROM"] = "support@drydock.co"
 
     assert _run(tmp_path, monkeypatch, env) == 0
+
+
+def _run_raw(tmp_path: Path, monkeypatch, text: str) -> int:
+    """Same, but from raw file text -- a dict cannot express a name assigned
+    twice, which is exactly what the tests below are about."""
+    env_file = tmp_path / "raw.env"
+    env_file.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["validate", "--env-file", str(env_file)])
+    return validator.main()
+
+
+def _complete_text(extra: str = "") -> str:
+    return "".join(f"{k}={v}\n" for k, v in COMPLETE_ENV.items()) + extra
+
+
+# --- a name assigned twice -------------------------------------------------
+#
+# Both of these were in /opt/shipit/.env at the same moment on 2026-08-28,
+# after one hand edit, and the script printed "Production configuration is
+# valid" over them:
+#
+#     5:  FREE_TIER_LLM_MODEL=glm-5.3-flash
+#     59: FREE_TIER_LLM_MODEL=claude-haiku-4.5
+#     40: SANDBOX_RUNNER_TOKEN=<x>
+#     41: SANDBOX_RUNNER_TOKEN=<the same x>
+#
+# read_env_file returns a dict, so the repeat collapses to whichever line came
+# last -- and the collapse is the danger, because systemd parses this file too
+# and nothing guarantees the two agree about which assignment wins.
+
+
+def test_the_same_name_with_different_values_refuses_to_start(
+    tmp_path, monkeypatch, capsys,
+):
+    """The real one. Two models on two lines is the difference between a free
+    preview costing $0.008 and $0.12, decided by a tie-break nobody chose."""
+    code = _run_raw(tmp_path, monkeypatch, _complete_text(
+        "FREE_TIER_LLM_MODEL=glm-5.3-flash\n"
+        "FREE_TIER_LLM_MODEL=claude-haiku-4.5\n"
+    ))
+
+    assert code != 0
+    err = capsys.readouterr().err
+    assert "FREE_TIER_LLM_MODEL" in err
+    assert "DIFFERENT" in err
+    # The line numbers are the whole point: the operator has to find them.
+    first = len(COMPLETE_ENV) + 1
+    assert f"lines {first}, {first + 1}" in err
+
+
+def test_the_same_name_with_the_same_value_warns_but_still_starts(
+    tmp_path, monkeypatch, capsys,
+):
+    """A redundant repeat is an editing slip and worth saying, but the service
+    gets the same value whichever line wins. Erroring would refuse to start a
+    host that is running correctly -- a worse failure than the one prevented,
+    and the boundary this file exists to hold."""
+    code = _run_raw(tmp_path, monkeypatch, _complete_text(
+        "SANDBOX_RUNNER_TOKEN=fake-runner-token\n"
+        "SANDBOX_RUNNER_TOKEN=fake-runner-token\n"
+    ))
+
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "SANDBOX_RUNNER_TOKEN" in err
+    assert "same value" in err
+    assert "Invalid production configuration" not in err
+
+
+def test_a_name_assigned_once_is_not_reported(tmp_path, monkeypatch, capsys):
+    """The control: the ordinary file must stay silent."""
+    assert _run_raw(tmp_path, monkeypatch, _complete_text()) == 0
+    assert "assigned" not in capsys.readouterr().err
+
+
+def test_a_commented_out_line_is_not_a_duplicate(tmp_path, monkeypatch, capsys):
+    """Commenting the old line out is how an operator changes a value safely.
+    Calling that a duplicate would punish the careful edit and teach people to
+    delete history instead."""
+    assert _run_raw(tmp_path, monkeypatch, _complete_text(
+        "# FREE_TIER_LLM_MODEL=glm-5.3-flash\n"
+        "FREE_TIER_LLM_MODEL=claude-haiku-4.5\n"
+    )) == 0
+    assert "assigned" not in capsys.readouterr().err
+
+
+# --- a provider with no model name pinned ----------------------------------
+
+
+def test_an_openai_provider_without_a_model_refuses_to_start(
+    tmp_path, monkeypatch, capsys,
+):
+    """MEASURED on 2026-08-28. A hand edit removed the LLM_MODEL line; the next
+    restart picked up app/llm/client.py's DEFAULT_MODEL, which is Anthropic's
+    dashed spelling, and AITunnel answered every call with
+
+        400  Указанная модель (claude-sonnet-4-6) не найдена
+
+    Nothing crashed. The API served, the queue drained, the job finished
+    `succeeded` with no error_code -- and the paid audit came back static-only
+    under a paid basis, because the LLM stage degraded exactly as designed.
+    The only visible trace was a `basis` field inside score_json.
+
+    An error, not a warning: this is not lost visibility, it is the paid path
+    returning the free tier's output.
+    """
+    # BOTH provider variables: there is a separate check that they must be
+    # configured together, and leaving the key out would fail this test on
+    # that one instead -- green for a reason that has nothing to do with the
+    # model name.
+    env = dict(COMPLETE_ENV,
+               AITUNNEL_BASE_URL="https://api.aitunnel.ru/v1",
+               AITUNNEL_API_KEY="fake-aitunnel-key")
+
+    assert _run(tmp_path, monkeypatch, env) != 0
+
+    err = capsys.readouterr().err
+    assert "AITUNNEL_BASE_URL" in err
+    assert "LLM_MODEL" in err
+    assert "configured together" not in err, (
+        "this must fail on the missing model, not on the pairing check")
+
+
+@pytest.mark.parametrize("pinned", ["LLM_MODEL", "AITUNNEL_LLM_MODEL"])
+def test_either_model_variable_satisfies_it(tmp_path, monkeypatch, pinned):
+    """Two ways to pin it and both are legitimate: the shared name for a
+    one-provider chain, the per-kind name for an operator running two."""
+    env = dict(COMPLETE_ENV,
+               AITUNNEL_BASE_URL="https://api.aitunnel.ru/v1",
+               AITUNNEL_API_KEY="fake-aitunnel-key")
+    env[pinned] = "claude-sonnet-4.6"
+
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
+def test_no_provider_configured_is_not_an_error(tmp_path, monkeypatch):
+    """A deployment with no LLM provider at all is a real state -- static-only
+    by configuration -- and must not be told to pin a model for a provider it
+    does not have."""
+    assert _run(tmp_path, monkeypatch, COMPLETE_ENV) == 0
