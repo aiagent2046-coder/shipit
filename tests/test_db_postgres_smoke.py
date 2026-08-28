@@ -54,6 +54,7 @@ from app.db import (
     ProcessorLockBusy,
     SubscriptionRepository,
 )
+from app.monitor import MONITORING_INTERVAL_HOURS
 
 # Captured at import time, before conftest's autouse _no_ambient_database_url
 # deletes it. skipif is evaluated at collection time too, so both see the
@@ -1588,3 +1589,65 @@ async def test_the_mcp_endpoint_refuses_a_stranger_audit_over_real_sql(
             "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
             headers={"Authorization": f"Bearer {generate_mcp_key()}"})
     assert refused.status_code == 401
+
+
+async def test_claim_for_monitoring_holds_the_interval_in_real_sql(real_db):
+    """The monitoring cost cap, measured against Postgres rather than a fake.
+
+    This claim is the single place a push turns into an audit, and a monitoring
+    audit is not cheap: app/main.py's _process_one_monitoring_run runs
+    run_repo_audit -> run_scan with its defaults, one pass over all four
+    rubrics of the WHOLE repository (median $0.96 across the 21 measured
+    production runs of the four-call era). The interval is what bounds how
+    often that happens.
+
+    Until now nothing checked the SQL. tests/test_monitoring.py drives a fake
+    that reimplements the rule in Python, and tests/test_db.py's FakePool
+    records query text without sending it anywhere -- so `interval '24 hours'`
+    in app/db.py and `timedelta(hours=24)` in the fake agreed only because
+    somebody typed 24 twice. Widening one would have left the whole suite
+    green while production kept the old cap.
+
+    Three claims at chosen times, all through the real conditional
+    UPDATE ... RETURNING:
+
+      * a never-monitored row is claimable (the `is null` arm),
+      * a claim one hour short of the interval is refused -- under the old
+        24-hour literal this is the call that WAS allowed, and it is the entire
+        cost saving,
+      * a claim one hour past it is allowed again, which is what makes this a
+        delay rather than an off switch.
+    """
+    sub_repo = SubscriptionRepository()
+    run = uuid.uuid4().hex[:12]
+    repo = f"acme/interval-smoke-{run}"
+
+    t0 = datetime.datetime.now(datetime.timezone.utc)
+    # Relative to now, not the fixed 1787133600 the write-path test uses: the
+    # read-back below goes through list_active_for_repo, which requires
+    # expires_at > now(). A literal date is a test that passes until it
+    # doesn't -- that one is already in the past.
+    expires_at = int((t0 + datetime.timedelta(days=30)).timestamp())
+
+    await sub_repo.upsert_first(
+        telegram_user_id=f"user-{run}", invoice_payload=f"sub-{run}",
+        tier="test-monitoring", telegram_chat_id=f"chat-{run}",
+        telegram_payment_charge_id="ch_1", expires_at=expires_at,
+        repo_full_name=repo,
+    )
+
+    assert await sub_repo.claim_for_monitoring(repo, t0) is True
+
+    just_inside = t0 + datetime.timedelta(hours=MONITORING_INTERVAL_HOURS - 1)
+    assert await sub_repo.claim_for_monitoring(repo, just_inside) is False, (
+        "a claim inside the interval was granted: the cap is not being applied")
+
+    just_past = t0 + datetime.timedelta(hours=MONITORING_INTERVAL_HOURS + 1)
+    assert await sub_repo.claim_for_monitoring(repo, just_past) is True, (
+        "a claim past the interval was refused: the gate stops runs instead "
+        "of spacing them")
+
+    # The winning claim stamped the row, so the next window starts from it and
+    # not from t0 -- otherwise the cap would drift open under steady pushes.
+    stamped = await sub_repo.list_active_for_repo(repo)
+    assert stamped and stamped[0]["last_monitored_at"] == just_past

@@ -78,9 +78,10 @@ async def _handle_monitoring_push(
     branch isn't what ships, and re-auditing every branch push would burn the LLM
     budget for noise.
 
-    The 24h cost cap and the enqueue-dedup are one and the same atomic write:
+    The cost cap and the enqueue-dedup are one and the same atomic write:
     claim_for_monitoring stamps last_monitored_at up front, iff the repo hasn't
-    been monitored in the last 24h, and reports whether THIS call won the claim.
+    been monitored within MONITORING_INTERVAL_HOURS, and reports whether THIS
+    call won the claim.
     Two near-simultaneous default-branch pushes race on that single UPDATE;
     exactly one wins and enqueues a run, the other is a no-op -- so a subscriber
     is neither double-audited nor double-notified. Stamping at enqueue (not after
@@ -110,7 +111,8 @@ async def _handle_monitoring_push(
 
     now = datetime.datetime.now(datetime.timezone.utc)
     if not await subscription_repo.claim_for_monitoring(repo_full_name, now):
-        # Within 24h of the last run, or lost the race to a concurrent push.
+        # Inside MONITORING_INTERVAL_HOURS of the last run, or lost the race
+        # to a concurrent push.
         return {"ignored": True, "reason": "within_interval"}
 
     # Won the claim: enqueue a durable 'pending' run and ACK immediately. The
@@ -135,7 +137,8 @@ async def github_webhook(
         merged (fix_outcomes.pr_merged) -- the real-world signal for whether
         our fix shipped. Collection only (see PHASE_B_KNOWLEDGE_BASE_PLAN.md).
       * push: continuous monitoring (Phase C). A push to a repo's default
-        branch ENQUEUES a monitoring run (at most once per 24h per repo) and
+        branch ENQUEUES a monitoring run (at most once per repo per
+        MONITORING_INTERVAL_HOURS) and
         ACKs immediately; the re-audit + diff + DM run later on the
         /internal/monitoring/process-pending processor (see
         MONITORING_ASYNC_PLAN.md).

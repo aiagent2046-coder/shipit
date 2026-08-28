@@ -791,7 +791,8 @@ async def _process_one_monitoring_run(
             )
         except RepoFetchError:
             # Repo went private/was deleted (404, indistinguishable by design).
-            # Benign terminal state; the 24h claim already stopped re-enqueues.
+            # Benign terminal state; the interval claim already stopped
+            # re-enqueues.
             await monitoring_repo.mark_done(run_id)
             return "unfetchable"
 

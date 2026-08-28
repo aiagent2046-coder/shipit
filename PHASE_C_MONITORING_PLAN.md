@@ -8,6 +8,13 @@ notification.
 
 This is **Step 1 (recon + plan)**. No code yet — awaiting approval.
 
+> **Later note (2026-08-28).** Every "24h" below is the number this plan was
+> written with. The gate is now `MONITORING_INTERVAL_HOURS` in `app/monitor`,
+> set to **72** — a monitoring run is a full one-pass audit of the whole
+> repository (median $0.96 measured), and each run audits HEAD rather than the
+> push that triggered it, so widening the window costs latency and not
+> coverage. Read the constant, not this document, for the current value.
+
 ---
 
 ## 0. Reconnaissance findings (what the code actually does)
