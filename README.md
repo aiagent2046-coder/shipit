@@ -143,16 +143,21 @@ tree through `GET /version`:
 
 ```json
 {
-  "release": "5c3efb8…",
+  "release": "<the commit answering this request>",
   "environment": "production",
-  "source": "https://github.com/aiagent2046-coder/shipit/tree/5c3efb8…",
-  "version": "v2026.08.28-9"
+  "source": "https://github.com/aiagent2046-coder/shipit/tree/<that commit>",
+  "version": "<CalVer tag, e.g. v2026.08.28-10>",
+  "built_at": "<ISO-8601 build timestamp>"
 }
 ```
 
-The live response also carries `built_at`, the release's build timestamp.
+The shape is the point, not the values: the offer names the exact tree that
+served your request. Ask the endpoint for the current ones — a literal release
+written here would be wrong by construction, since the commit that updates it
+becomes the release after the one it names.
+
 `version` and `built_at` are null on a source checkout rather than guessed —
-that is a truthful "this is not a built release", not an error.
+a truthful "this is not a built release", not an error.
 
 If you are served a build whose source is not obtainable from that URL, that is
 both a licence problem and a bug — please report it.
