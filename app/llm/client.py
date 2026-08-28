@@ -70,6 +70,15 @@ MODELS_WITHOUT_SAMPLING_PARAMS = frozenset({
 MODELS_WITH_SAMPLING_PARAMS = frozenset({
     "claude-sonnet-4.6", "claude-sonnet-4-6",
     "claude-haiku-4.5", "claude-haiku-4-5",
+    # Not a Claude model, and the reason it belongs on this side is measured
+    # rather than assumed: AITunnel served it a `temperature: 0` request and
+    # answered 200. It IS a reasoning model -- 2,067 of 2,981 completion
+    # tokens on the probe were reasoning -- which is a different axis from
+    # the sampling parameters, and one the OpenAI-compatible payload has no
+    # key for anyway: `thinking` is not part of that wire format, so the
+    # provider decides. Watched rather than configured; see MODEL_INPUT_TOKENS
+    # below for why it is deliberately not listed there.
+    "glm-5.3-flash",
 })
 
 # How many input tokens we are willing to build a prompt up to, per model.
@@ -116,6 +125,15 @@ MODEL_INPUT_TOKENS = {
 # lands here. That is a real reduction for anyone who switches to it, and it
 # is the right default until someone runs scripts/prompt_sizes.py --compare
 # against it. Measuring is one $4 audit.
+#
+# glm-5.3-flash is priced and likewise unlisted, for the same reason and one
+# more: nobody here has measured its window, and a number copied from a model
+# card would be a guess wearing a measurement's clothes. 200K is what the free
+# preview already sends to Haiku, so listing nothing costs the preview nothing
+# today. Note also that CHARS_PER_TOKEN is one global constant measured on
+# Claude (3.0), while GLM tokenised the same committed JavaScript at 3.94
+# chars/token -- so a prompt built for it is about 24% smaller than its budget
+# allows. Wasteful, not dangerous, and the safe direction of the two.
 DEFAULT_INPUT_TOKENS = 200_000
 
 # Characters per token on the code this scanner sends: 3,777,616 / 1,256,000

@@ -253,6 +253,54 @@ def test_sonnet_5_is_priced_from_its_own_row_at_list_not_promo():
     assert pricing.cost_usd("claude-sonnet-5", 1_000_000, 1_000_000) == Decimal("18.00")
 
 
+def test_glm_flash_is_priced_from_its_own_row_not_the_default():
+    """The preview candidate, and the failure this row exists to prevent.
+
+    Unpriced, it falls through to DEFAULT_PRICE -- the most expensive rate in
+    the table, $3/$15 per MTok. Measured against AITunnel, this model bills
+    about $0.08/$0.25, so the default over-counts it by roughly forty times.
+    That direction is the safe one for a spend cap, which is why the module
+    chose it, but a cap that trips forty times early is a cap that stops the
+    free preview for no reason and reports a spend that never happened.
+    """
+    from decimal import Decimal
+
+    assert "glm-5.3-flash" in pricing.PRICE_TABLE
+    row = pricing.price_for("glm-5.3-flash")
+    assert row is pricing.PRICE_TABLE["glm-5.3-flash"]
+    assert row is not pricing.DEFAULT_PRICE
+    # 1M in + 1M out. At DEFAULT_PRICE this would be $18.00.
+    assert pricing.cost_usd("glm-5.3-flash", 1_000_000, 1_000_000) == Decimal("0.33")
+
+
+def test_the_measured_glm_rates_reproduce_the_calls_they_were_taken_from():
+    """The row is a measurement, so it is checked against the measurement.
+
+    Three real AITunnel calls on 2026-08-28, at the 200.3 RUB per table-USD
+    the same provider implies for Haiku 4.5 (135 in / 622 out billed 0.65 RUB
+    against this table's $1.00/$5.00). The third call was NOT used to fit the
+    rates -- two equations that also explain a call they were not fitted to
+    are a measurement; two that only fit themselves are arithmetic.
+
+    Tolerance is a kopeck because `cost_rub` is rounded to one, and the row
+    itself is rounded UP from the fit, so a prediction sits at or just above
+    what was billed.
+    """
+    rub_per_table_usd = Decimal("200.3")
+    for input_tokens, output_tokens, billed_rub in (
+        (20_423, 16, "0.31"),
+        (27, 2_611, "0.13"),
+        (119, 2_981, "0.15"),     # the held-out one
+    ):
+        predicted = (pricing.cost_usd("glm-5.3-flash", input_tokens, output_tokens)
+                     * rub_per_table_usd)
+        billed = Decimal(billed_rub)
+        assert billed <= predicted <= billed + Decimal("0.03"), (
+            f"{input_tokens} in / {output_tokens} out: predicted {predicted:.4f} "
+            f"RUB against {billed} billed"
+        )
+
+
 def test_a_model_without_sampling_params_gets_no_temperature():
     """`temperature: 0` is a 400 on Claude 5, not a quality knob.
 

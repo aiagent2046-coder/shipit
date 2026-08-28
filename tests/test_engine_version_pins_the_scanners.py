@@ -93,7 +93,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-08-27-1"
+ENGINE_VERSION_FOR_THAT_SET = "2026-08-28-1"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:
