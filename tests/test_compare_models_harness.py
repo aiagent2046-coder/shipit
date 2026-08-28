@@ -81,3 +81,27 @@ def test_every_priced_model_has_a_dry_run_estimate(compare) -> None:
     assert missing == [], (
         f"priced but not estimated: {missing}. Add a row to "
         "_ROUGH_COST_PER_AUDIT in scripts/compare_models.py.")
+
+
+def test_the_estimate_and_the_harness_agree_on_how_many_passes(compare) -> None:
+    """_ROUGH_COST_PER_AUDIT is measured at ONE pass, because that is what
+    this script runs: it calls run_scan without llm_passes and takes the
+    default.
+
+    Production paid audits run PAID_AUDIT_PASSES=2 and cost about twice as
+    much -- median $3.42 against $0.96, maximum $9.18 against $4.60, measured
+    over llm_usage on 2026-08-28. Comparing across that line is easy and was
+    done: a $7.61 production audit was read as "above the documented spread"
+    when it was an ordinary two-pass run held against a one-pass yardstick.
+
+    If the default ever moves, every number in that table silently doubles
+    wrong and --dry-run under-quotes by half. This is the coupling, pinned.
+    """
+    import inspect
+
+    from app.scan.pipeline import run_scan
+
+    assert inspect.signature(run_scan).parameters["llm_passes"].default == 1, (
+        "run_scan's default pass count changed. Either pass llm_passes=1 "
+        "explicitly in this script, or re-measure _ROUGH_COST_PER_AUDIT -- "
+        "the estimates there are one-pass figures.")
