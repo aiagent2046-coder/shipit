@@ -11,6 +11,7 @@ password that was correct.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -214,3 +215,99 @@ def test_the_smtp_check_never_prints_the_incantation_that_breaks_it() -> None:
         "SMTPAuthenticationError it is being run to diagnose: "
         + "; ".join(repr(text[:120]) for text in offenders)
     )
+
+
+def test_the_model_comparison_never_prints_the_incantation_either() -> None:
+    """The scoping argument above, applied where it stopped holding.
+
+    The test on verify_smtp_locally.py is deliberately not a repo-wide sweep:
+    a developer script saying `set -a; . ./.env` means the developer's own
+    file, and a value mangled there surfaces in their next local run.
+
+    scripts/compare_models.py said the same thing and was in that category
+    until it was run on the production host to price a model -- against
+    /opt/shipit/.env, which holds the SMTP password, the payment provider's
+    secret key and the API key pepper. The instruction did not change; the file
+    it points at did. So this script joins the rule, and it now reads the
+    values itself rather than asking anyone to source anything.
+    """
+    import ast
+
+    path = REPO_ROOT / "scripts" / "compare_models.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    printable = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    assert printable, "nothing was parsed; the test is not looking at the file"
+
+    # FUNCTION docstrings are exempt, and only those: load_provider_credentials
+    # EXPLAINS why sourcing is forbidden, and that explanation is the thing
+    # worth keeping next to the code that replaced it.
+    #
+    # The MODULE docstring is not exempt, for the same reason it is not exempt
+    # in the SMTP script: argparse is constructed with description=__doc__, so
+    # the program prints it on bad usage.
+    exempt = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)) or not body:
+            continue
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            exempt.add(id(first.value))
+
+    offenders = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        and "set -a" in node.value and id(node) not in exempt
+    ]
+    assert offenders == [], (
+        "this script can print advice to source the production env file, which "
+        "truncates values at `$` and `#`: "
+        + "; ".join(repr(t[:120]) for t in offenders))
+
+
+def test_the_model_comparison_reads_the_env_file_itself(monkeypatch, tmp_path):
+    """...and the replacement works, which is the half a string check cannot
+    see. An allowlist, not the whole file: the secrets this script has no
+    business loading must stay out of its environment."""
+    import importlib
+
+    path = write_env(
+        tmp_path,
+        "AITUNNEL_API_KEY=sk-not-a-real-key\n"
+        "AITUNNEL_BASE_URL=https://api.example.test/v1\n"
+        "SMTP_PASSWORD=hunter2#notacomment\n",
+    )
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(path))
+    for name in ("AITUNNEL_API_KEY", "AITUNNEL_BASE_URL", "SMTP_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+
+    compare = importlib.import_module("scripts.compare_models")
+    compare.load_provider_credentials()
+
+    assert os.environ["AITUNNEL_API_KEY"] == "sk-not-a-real-key"
+    assert os.environ["AITUNNEL_BASE_URL"] == "https://api.example.test/v1"
+    assert "SMTP_PASSWORD" not in os.environ, (
+        "only the provider variables belong in this script's environment")
+
+
+def test_an_exported_key_beats_the_file(monkeypatch, tmp_path):
+    """A developer running this against their own provider must not have the
+    production file quietly win."""
+    import importlib
+
+    path = write_env(tmp_path, "AITUNNEL_API_KEY=from-the-file\n")
+    monkeypatch.setenv("SHIPIT_ENV_FILE", str(path))
+    monkeypatch.setenv("AITUNNEL_API_KEY", "from-my-shell")
+
+    compare = importlib.import_module("scripts.compare_models")
+    compare.load_provider_credentials()
+
+    assert os.environ["AITUNNEL_API_KEY"] == "from-my-shell"

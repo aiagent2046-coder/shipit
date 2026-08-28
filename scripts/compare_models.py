@@ -34,6 +34,8 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
+import re
 import sys
 import time
 import urllib.request
@@ -44,6 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import scripts.env_file as env_file  # noqa: E402
 from app.llm.client import LLMClient  # noqa: E402
 from app.llm.pricing import PRICE_TABLE, cost_usd  # noqa: E402
 from app.scan.pipeline import run_scan  # noqa: E402
@@ -52,7 +55,20 @@ from app.scan.pipeline import run_scan  # noqa: E402
 # selected once, deliberately, for stack/size/hygiene spread with a clean
 # control and a mature-OSS control. A second list here would drift from it and
 # nobody would notice which run used which.
-from scripts.batch_audit import REPOS  # noqa: E402
+#
+# THE IMPORT WAS `REPOS` AND BROKE SILENTLY. batch_audit.py grew into pinned
+# series -- `SERIES`, each with a full commit SHA -- and this line kept naming
+# a symbol that no longer existed, so the script could not even be imported.
+# Nothing noticed, because nothing imports it: it is a hand-run tool, and its
+# only reader is an operator typing it at the moment they need an answer. The
+# comment above worried about the two lists drifting apart; they did worse
+# than drift.
+#
+# Following the rename is also the better harness. A branch head moves, so two
+# comparisons a week apart could be of two different repositories while
+# reporting the same slug; a pinned SHA is the same argument the docstring
+# already makes for fetching the archive once per run, extended across runs.
+from scripts.batch_audit import SERIES  # noqa: E402
 
 # Per-audit averages for the --dry-run estimate only; real cost comes from
 # each run's own usage block.
@@ -75,9 +91,16 @@ from scripts.batch_audit import REPOS  # noqa: E402
 # cost about twice as much. Quoting the invoiced number here would understate
 # the next run by 2x -- the same shape of error as the $12.30-against-$31.11
 # estimate two paragraphs up, from the opposite direction.
+#
+# glm-5.3-flash is DERIVED, not measured on this sample: Haiku's $0.80 scaled
+# by the per-token ratio between the two rows in app/llm/pricing.py. It is a
+# reasoning model, so its output share is larger than Haiku's and the real
+# figure will land above this one -- the estimate is a floor, and the run's own
+# usage block is what counts.
 _ROUGH_COST_PER_AUDIT = {"claude-sonnet-4.6": 3.50, "claude-sonnet-4-6": 3.50,
                          "claude-sonnet-5": 4.55,   # +30% tokenizer, measured
-                         "claude-haiku-4.5": 0.80, "claude-haiku-4-5": 0.80}
+                         "claude-haiku-4.5": 0.80, "claude-haiku-4-5": 0.80,
+                         "glm-5.3-flash": 0.06}
 
 # How far apart two findings may sit and still be "the same place". Models
 # disagree about which line of a handler to point at. Three, because that is
@@ -88,9 +111,52 @@ _ROUGH_COST_PER_AUDIT = {"claude-sonnet-4.6": 3.50, "claude-sonnet-4-6": 3.50,
 # different findings.
 _SAME_PLACE_LINES = 3
 
+# Exactly the variables that name a provider and prove we may call it. An
+# allowlist and not the whole file: splatting every value into the environment
+# is the over-reach of `set -a` minus only its quoting bug, and this file holds
+# the SMTP password, the payment provider's secret key and the API key pepper,
+# none of which this script has any business loading.
+_PROVIDER_VARS = (
+    "AITUNNEL_API_KEY", "AITUNNEL_BASE_URL", "AITUNNEL_LLM_MODEL",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_LLM_MODEL",
+    "LLM_MODEL",
+)
 
-def fetch(slug: str, branch: str) -> bytes:
-    url = f"https://codeload.github.com/{slug}/zip/refs/heads/{branch}"
+
+def load_provider_credentials() -> None:
+    """Fill the provider variables from the deployment's own env file.
+
+    THIS SCRIPT USED TO TELL THE OPERATOR TO RUN `set -a; . ./.env; set +a`,
+    and that instruction is fine for a laptop's own file -- which is what it
+    was written for. It stopped being fine the day this script was run on the
+    production host: bash expands `$` and truncates at `#` inside an unquoted
+    value, and /opt/shipit/.env holds values that contain both. The same
+    advice, printed by scripts/verify_smtp_locally.py, cost an afternoon spent
+    debugging a mail server that was working correctly.
+
+    So the script reads the file itself, the way migration_manager.py and
+    mint_mcp_key.py already do, through the parser that owns this file's
+    quoting rules. Nothing is printed from it, and an existing environment
+    variable always wins: a developer who exported their own key gets theirs.
+    """
+    values = env_file.read_values(env_file.env_file_path())
+    for name in _PROVIDER_VARS:
+        if not os.environ.get(name) and values.get(name):
+            os.environ[name] = str(values[name])
+
+
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def fetch(slug: str, ref: str) -> bytes:
+    """One repository at one ref, which may be a branch name or a commit SHA.
+
+    Both spellings are needed and neither is guessable from the other:
+    codeload wants `zip/<sha>` for a commit and `zip/refs/heads/<name>` for a
+    branch, and asking for a branch under the first spelling 404s.
+    """
+    path = ref if _SHA_RE.match(ref) else f"refs/heads/{ref}"
+    url = f"https://codeload.github.com/{slug}/zip/{path}"
     with urllib.request.urlopen(url, timeout=120) as resp:
         return resp.read()
 
@@ -166,7 +232,7 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     repos = ([(r.split("@")[0], (r.split("@") + ["main"])[1]) for r in args.repos]
-             if args.repos else list(REPOS))
+             if args.repos else [(s.slug, s.sha) for s in SERIES])
 
     unpriced = [m for m in args.models if m not in PRICE_TABLE]
     if unpriced:
@@ -183,10 +249,13 @@ def main(argv: list[str]) -> int:
         print("--dry-run: nothing called.")
         return 0
 
+    load_provider_credentials()
     base = LLMClient()
     if not base.providers:
-        print("no LLM providers configured -- export .env first "
-              "(set -a; . ./.env; set +a)", file=sys.stderr)
+        print(f"no LLM providers configured: nothing in the environment and "
+              f"nothing readable in {env_file.env_file_path()}. Set "
+              "AITUNNEL_API_KEY + AITUNNEL_BASE_URL (or ANTHROPIC_API_KEY) in "
+              "one of the two.", file=sys.stderr)
         return 2
 
     results: dict[str, dict[str, dict]] = {}
@@ -204,7 +273,7 @@ def main(argv: list[str]) -> int:
             print(f"\n{slug}: not a zip -- skipped", file=sys.stderr)
             continue
 
-        print(f"\n{slug}@{branch}  {files} files  {len(raw)/1e6:.1f} MB")
+        print(f"\n{slug}@{branch[:12]}  {files} files  {len(raw)/1e6:.1f} MB")
         results[slug] = {}
         for model in args.models:
             t0 = time.time()
