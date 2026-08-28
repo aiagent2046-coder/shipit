@@ -170,6 +170,25 @@ def load_provider_credentials() -> None:
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
+def save(path: Path, results: dict) -> None:
+    """Write what has been measured so far, atomically.
+
+    CALLED AFTER EVERY AUDIT, not once at the end, and the difference is
+    twenty minutes of provider calls. On 2026-08-28 a run of three
+    repositories died on the last one and left no file at all: everything the
+    first two had measured -- real money, already spent -- went with it, and
+    the question it was run to answer had to be asked again from scratch.
+
+    Through a temporary file and a rename, because the failure this guards
+    against is an interrupted run: a half-written JSON is worse than a missing
+    one, since it looks like a result. os.replace is atomic within a
+    filesystem, and the temporary sits beside the target so it is one.
+    """
+    tmp = path.with_name(path.name + ".partial")
+    tmp.write_text(json.dumps(results, indent=2, sort_keys=True))
+    tmp.replace(path)
+
+
 def fetch(slug: str, ref: str) -> bytes:
     """One repository at one ref, which may be a branch name or a commit SHA.
 
@@ -299,7 +318,24 @@ def main(argv: list[str]) -> int:
         results[slug] = {}
         for model in args.models:
             t0 = time.time()
-            scan = run_scan(raw, base.with_model(model))
+            try:
+                scan = run_scan(raw, base.with_model(model))
+            except Exception as exc:   # noqa: BLE001 - record and carry on
+                # Same posture as the fetch and zip failures above, extended to
+                # the scan itself: one model blowing up on one repository must
+                # not throw away every audit already paid for. Recorded rather
+                # than skipped -- "this pair was attempted and raised" is a
+                # result, and `findings` stays a list so the summary below and
+                # the overlap maths keep working.
+                elapsed = time.time() - t0
+                results[slug][model] = {
+                    "raised": f"{type(exc).__name__}: {str(exc)[:300]}",
+                    "seconds": round(elapsed, 1), "findings": [],
+                }
+                print(f"    {model:20s} RAISED after {elapsed:.0f}s: "
+                      f"{type(exc).__name__}: {str(exc)[:120]}")
+                save(Path(args.json), results)
+                continue
             elapsed = time.time() - t0
             usage = scan.get("llm_usage") or {}
             served = usage.get("model") or model
@@ -340,6 +376,7 @@ def main(argv: list[str]) -> int:
                   f"{len(findings):>3} findings  {severities(findings):>12}  "
                   f"{(usage.get('input_tokens') or 0)/1000:>7.0f}K in  "
                   f"${float(cost):.3f}  {elapsed:.0f}s{note}")
+            save(Path(args.json), results)
 
     if len(args.models) == 2 and results:
         a, b = args.models
@@ -353,7 +390,7 @@ def main(argv: list[str]) -> int:
             print(f"{slug[:33]:34s}{both:>6}{only_a:>16}{only_b:>16}"
                   f"{repeats(fa):>6}/{repeats(fb):<5}")
 
-    Path(args.json).write_text(json.dumps(results, indent=2, sort_keys=True))
+    save(Path(args.json), results)
     to_check = sum(len(m["findings"]) for per in results.values()
                    for m in per.values())
     print(f"\nspent ${float(spent):.2f}  ->  {args.json}")
