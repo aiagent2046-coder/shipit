@@ -2,13 +2,36 @@
 
 Controls whether a non-verified proof blocks Fix Pack delivery.
 
-Mode is read from ``PROOF_GATE_MODE`` (default ``soft``):
+Mode is read from ``PROOF_GATE_MODE`` (default ``hard``):
 
 * ``off``  — record + render only; never influence delivery (original MVP).
 * ``soft`` — still deliver, but the PR and job detail carry a clear warning
   when the exploit still succeeds after the proposed fix.
 * ``hard`` — same condition becomes a ``blocked`` outcome (withheld PR),
   identical in shape to a semantic-check regression.
+
+WHY THE DEFAULT IS ``hard`` (changed 2026-08-28, a product decision). The
+thing being sold is a repair, and this is the only place that can tell a
+repair from a plausible-looking patch. Under ``soft`` a Fix Pack whose own
+proof showed the exploit still working was delivered with a warning attached
+-- charging for work we had just measured as not working, and asking the
+customer to read a caveat to find that out.
+
+WHAT THAT DOES AND DOES NOT COVER, because the distinction is the whole
+design. This gate blocks exactly one state: the exploit reproduced BEFORE the
+patch, the same check ran AFTER it, and it still succeeded. That is "we proved
+we did not fix it". It is not "we could not prove anything" -- no template
+routed, a probe that errored, an exploit that never reproduced -- and those
+still deliver, in every mode. Refusing delivery on absent evidence is a
+separate and much larger decision (see app/proof/routing.py: a template is
+selected only when the plan touches secrets or a changed path matches the sqli
+/ cors patterns, so "no evidence" is the common case, not the exception).
+Making that call needs a measurement of how many jobs it would stop, which
+does not exist yet.
+
+An unrecognised value falls back to ``hard`` rather than ``soft``. A typo
+means the operator does not know which mode is in force, and shipping unproven
+repairs from that state is precisely what this default exists to stop.
 
 Infrastructure failures and skipped templates never block (fail-open).
 A report is only actionable when the original workspace actually
@@ -31,11 +54,14 @@ GateDecision = Literal["pass", "soft_fail", "hard_fail"]
 _VALID_MODES: frozenset[str] = frozenset({"off", "soft", "hard"})
 
 
+DEFAULT_MODE: GateMode = "hard"
+
+
 def proof_gate_mode() -> GateMode:
-    """Current gate mode. Unknown / empty values fall back to soft."""
-    raw = (os.environ.get("PROOF_GATE_MODE") or "soft").strip().lower()
+    """Current gate mode. Unknown / empty values fall back to DEFAULT_MODE."""
+    raw = (os.environ.get("PROOF_GATE_MODE") or DEFAULT_MODE).strip().lower()
     if raw not in _VALID_MODES:
-        return "soft"
+        return DEFAULT_MODE
     return raw  # type: ignore[return-value]
 
 

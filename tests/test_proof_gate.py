@@ -53,9 +53,12 @@ def _report(
     )
 
 
-def test_mode_defaults_to_soft(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mode_defaults_to_hard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deployment that sets nothing withholds a Fix Pack its own proof
+    showed to be broken. That is the product decision (2026-08-28): we do not
+    charge for a repair we measured as not working."""
     monkeypatch.delenv("PROOF_GATE_MODE", raising=False)
-    assert proof_gate_mode() == "soft"
+    assert proof_gate_mode() == "hard"
 
 
 def test_mode_accepts_valid_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,9 +67,41 @@ def test_mode_accepts_valid_values(monkeypatch: pytest.MonkeyPatch) -> None:
         assert proof_gate_mode() == mode
 
 
-def test_mode_unknown_falls_back_to_soft(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mode_unknown_falls_back_to_hard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail closed on a typo. An operator who mistyped the mode does not know
+    which one is in force, and delivering unproven repairs from that state is
+    what the default exists to prevent."""
     monkeypatch.setenv("PROOF_GATE_MODE", "aggressive")
-    assert proof_gate_mode() == "soft"
+    assert proof_gate_mode() == "hard"
+
+
+def test_an_unproven_fix_pack_still_delivers_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE LINE THE DEFAULT DRAWS, and the reason it is safe to flip.
+
+    `hard` withholds one state: reproduced before, same check after, still
+    succeeding. Absence of evidence is a different state and must still
+    deliver -- app/proof/routing.py selects a template only when the plan
+    touches secrets or a changed path matches the sqli / cors patterns, so a
+    Fix Pack with no proof at all is the common case. A default that blocked
+    those would have stopped most deliveries the moment it shipped.
+    """
+    monkeypatch.delenv("PROOF_GATE_MODE", raising=False)
+
+    # Nothing routed: no reports at all.
+    assert decide_proof_gate(None) == "pass"
+
+    # The exploit never reproduced, so there is nothing the patch failed at.
+    assert decide_proof_gate(
+        _report(before_success=False, after_success=False, verified=False)
+    ) == "pass"
+
+    # The after-half could not run. We did not check; that is not a verdict.
+    assert decide_proof_gate(
+        _report(before_success=True, after_success=False, verified=False,
+                after_status="error")
+    ) == "pass"
 
 
 def test_none_report_is_pass() -> None:
