@@ -262,6 +262,25 @@ def _finding_row(f: dict) -> str:
     )
 
 
+# The heading and note over the damped findings. Constants, not literals in
+# the middle of an f-string, because eight tests use the heading as a MARKER
+# for where the section starts -- `html.index(heading) < html.index(path)` --
+# and pinning placement should not pin the wording. Copy that eight
+# assertions have to agree with is copy nobody corrects.
+#
+# "scaffolding", not "documentation", and "isn't part of your running app"
+# rather than "doesn't run in production", because `ci_service` joined this
+# section and a CI workflow is neither a test nor documentation, and it DOES
+# run. What is true of every row here is that none of it serves the reader's
+# users -- which is the claim the reassurance underneath actually rests on.
+NON_PRODUCTION_HEADING = "In tests, examples and scaffolding"
+NON_PRODUCTION_NOTE = (
+    "These files aren't part of your running app. Usually the credentials "
+    "here are deliberate fakes — worth a glance to confirm, not worth "
+    "blocking a launch."
+)
+
+
 def _is_non_production(f: dict) -> bool:
     """Whether a finding is about test, example or documentation material.
 
@@ -540,10 +559,8 @@ def render_report(result: dict, project_name: str = "your app") -> str:
 
     if non_production:
         body += (
-            '<h2 class="sechead">In tests, examples and documentation</h2>'
-            '<p class="secnote">These files don\'t run in production. Usually '
-            'the credentials here are deliberate fakes — worth a glance to '
-            'confirm, not worth blocking a launch.</p>'
+            f'<h2 class="sechead">{NON_PRODUCTION_HEADING}</h2>'
+            f'<p class="secnote">{NON_PRODUCTION_NOTE}</p>'
             + _findings_table(non_production)
         )
 
