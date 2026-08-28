@@ -63,6 +63,12 @@ Read this before you pay — same boundaries the product enforces in code:
   unverified change.
 - **Payment rails are explicit.** Card = ЮKassa. Bank transfer is manual.
   Historical mentions of other aggregators in old docs are not the live rail.
+- **Continuous monitoring is built but not sold.** The GitHub push webhook, the
+  durable run queue and the findings diff all exist and are tested;
+  `MONITORING_FOR_SALE` is `False`, and the webhook checks it before it looks
+  up a subscription, so no push drives spend. Pricing, spend attribution and
+  the cap are three decisions that have not been made — code in the tree is
+  not a live offer.
 
 ## Architecture (short)
 
@@ -114,7 +120,8 @@ A leaked UUID alone is not enough to read a report or job detail.
 - CalVer tags: `vYYYY.MM.DD-N` via `deploy/scripts/tag-release.sh`.
 - Production deploy is deliberate (`workflow_dispatch` or
   `deploy/scripts/deploy-production.sh`), not every push to `main`.
-- Timers: audit worker, Fix Pack processor, notify channel check, reapers.
+- Timers: audit worker, Fix Pack processor, monitoring processor, notify
+  channel check, reapers.
 - Operator alerts: Telegram (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_ADMIN_CHAT_ID`),
   including failed Fix Packs and a stale **paid** backlog.
 
@@ -136,12 +143,16 @@ tree through `GET /version`:
 
 ```json
 {
-  "release": "cdf27bc…",
-  "source": "https://github.com/aiagent2046-coder/shipit/tree/cdf27bc…",
-  "version": "v2026.08.25-14",
-  "environment": "production"
+  "release": "5c3efb8…",
+  "environment": "production",
+  "source": "https://github.com/aiagent2046-coder/shipit/tree/5c3efb8…",
+  "version": "v2026.08.28-9"
 }
 ```
+
+The live response also carries `built_at`, the release's build timestamp.
+`version` and `built_at` are null on a source checkout rather than guessed —
+that is a truthful "this is not a built release", not an error.
 
 If you are served a build whose source is not obtainable from that URL, that is
 both a licence problem and a bug — please report it.

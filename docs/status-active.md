@@ -1044,6 +1044,61 @@ allowed request headers are `Authorization` and `Content-Type`.
 
 ## Release notes
 
+- **`v2026.08.28-9` (`5c3efb8`), deployed 2026-08-28.** Nine releases were
+  tagged that day; this is the one production is running. `GET /version`
+  confirms the tag, and the health gate passed with both `shipit.service` and
+  `shipit-audit-worker.service` back up. No migration.
+
+  The day started with an incident and the rest of it is that incident's tail.
+
+  - **Every paid audit had been coming back static-only under a paid basis.**
+    A hand edit to `/opt/shipit/.env` replaced the `LLM_MODEL` line with a
+    different variable, so the client fell back to `DEFAULT_MODEL` —
+    `claude-sonnet-4-6`, dashed — which AITunnel answers with a 400. Nothing
+    upstream noticed: the API served, the queue drained, jobs finished
+    `succeeded` with no `error_code`. The only visible trace was `basis`
+    inside `score_json`. Verified fixed with a real paid audit (`4e738001`:
+    `static+llm`, 70 findings, score 5.0, against the broken run's 48 and
+    5.6).
+
+    Three separate guards came out of it, because one edit broke in three
+    ways nothing could see:
+    - `validate-production-env.py` now fails on a duplicated key with
+      different values (warns when identical), and fails when a provider base
+      URL is set with no model pinned.
+    - `scripts/env_keys.py` records the NAMES a `.env` defines before an edit
+      and reports what is gone after. Names only, never values — that is what
+      lets the snapshot live beside the file instead of a backup of every live
+      credential, which is what actually caught this one and is its own
+      problem.
+    - The deploy gate now prints *which* file made the control checkout dirty.
+      A stray `dub_after.json` blocked three deploys while reporting only that
+      something was wrong.
+  - **A provider that answers with no text crashed the scan.** Measured on
+    `glm-5.3-flash`, which returns an empty `content` with a `finish_reason`
+    rather than an error. The client now raises a message naming the model,
+    the finish reason and the token counts, instead of a `TypeError` three
+    frames away.
+  - **Monitoring re-audits are now spaced 72 hours apart, not 24.** A
+    monitoring run is `run_repo_audit` → `run_scan` with its defaults: one
+    pass, all four rubrics, the whole repository — median $0.96 measured. The
+    interval is `MONITORING_INTERVAL_HOURS` in `app/monitor`, and the real SQL
+    that enforces it has real-Postgres coverage for the first time; it was
+    `interval '24 hours'` in `app/db.py` and `24` again in a test fake that
+    never touched the database. `MONITORING_FOR_SALE` is still `False`, so
+    this changes no live behaviour.
+  - **The engine version guard was extended to the emitted vocabulary.**
+    `AUDIT_ENGINE_VERSION` is now `2026-08-28-1`. A scanner change shipped
+    without bumping it — the fifth occurrence of that class — so the guard now
+    pins the rule ids and damping contexts a release emits, not only the
+    scanner list.
+
+  Also shipped: `glm-5.3-flash` priced from measurement (measured, then not
+  adopted — Haiku stays the free preview); `scripts/compare_models.py` made
+  importable and crash-tolerant, saving after every audit rather than losing a
+  twenty-minute run to its last step; two cost comments describing an engine
+  we no longer run, corrected.
+
 - **`v2026.08.27-5` (`017c5f4`), deployed 2026-08-27.** Three defects found by
   reading real audits of other people's repositories rather than by searching
   the code. No migration; `GET /version` confirms the tag, and both
