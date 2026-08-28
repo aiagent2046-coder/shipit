@@ -81,6 +81,38 @@ def read_env_file(path: Path) -> dict[str, str]:
     return result
 
 
+def duplicate_assignments(path: Path) -> dict[str, list[tuple[int, str]]]:
+    """Names assigned more than once, with each line number and value.
+
+    read_env_file returns a dict, so a repeated name is silently collapsed to
+    whichever line came last -- and the collapse is the danger, because
+    SYSTEMD PARSES THIS FILE TOO and nothing here guarantees the two agree
+    about which assignment wins.
+
+    Both halves of this happened on 2026-08-28, in one hand edit:
+
+        5:  FREE_TIER_LLM_MODEL=glm-5.3-flash
+        59: FREE_TIER_LLM_MODEL=claude-haiku-4.5
+        40: SANDBOX_RUNNER_TOKEN=<x>
+        41: SANDBOX_RUNNER_TOKEN=<the same x>
+
+    and this script printed "Production configuration is valid" over both.
+
+    A duplicate is never intentional -- an env file has no use for saying the
+    same name twice -- so it is always worth reporting. What it costs depends
+    on whether the values differ; see main().
+    """
+    seen: dict[str, list[tuple[int, str]]] = {}
+    for number, raw_line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        seen.setdefault(name.strip(), []).append((number, value.strip()))
+    return {name: hits for name, hits in seen.items() if len(hits) > 1}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-file", type=Path)
@@ -141,6 +173,67 @@ def main() -> int:
     for name in required:
         if not values.get(name, "").strip():
             errors.append(f"{name} is required in production")
+
+    # Split by whether the two assignments actually disagree, because the two
+    # cases cost different amounts and only one of them is worth refusing a
+    # boot over.
+    #
+    # DIFFERENT values are an error: the config is ambiguous, and which one
+    # takes effect depends on a parser nobody here chose. On 2026-08-28
+    # FREE_TIER_LLM_MODEL was glm-5.3-flash on line 5 and claude-haiku-4.5 on
+    # line 59, which is the difference between the free preview costing $0.008
+    # and $0.12 -- decided by tie-break.
+    #
+    # IDENTICAL values are a warning: redundant, certainly an editing slip,
+    # but the service gets the same value whichever line wins. Erroring here
+    # would refuse to start a host that is running correctly, which is a worse
+    # failure than the one being prevented.
+    if args.env_file:
+        for name, hits in sorted(duplicate_assignments(args.env_file).items()):
+            lines = ", ".join(str(number) for number, _ in hits)
+            if len({value for _, value in hits}) > 1:
+                errors.append(
+                    f"{name} is assigned {len(hits)} times with DIFFERENT "
+                    f"values (lines {lines}); which one takes effect depends "
+                    "on the parser -- keep exactly one"
+                )
+            else:
+                warnings.append(
+                    f"{name} is assigned {len(hits)} times with the same "
+                    f"value (lines {lines}); harmless, but it is an editing "
+                    "slip -- keep exactly one"
+                )
+
+    # An OpenAI-compatible provider with no model name pinned.
+    #
+    # app/llm/client.py falls back to DEFAULT_MODEL, which is Anthropic's
+    # canonical DASHED spelling (claude-sonnet-4-6). AITunnel wants the dotted
+    # one and answers 400 to the other:
+    #
+    #     Указанная модель (claude-sonnet-4-6) не найдена
+    #
+    # Nothing crashes. The API serves, the queue drains, jobs finish
+    # `succeeded` with no error_code -- and every paid audit comes back
+    # static-only under a paid basis, because the LLM stage failed and
+    # degraded exactly as designed. Measured on 2026-08-28, when a hand edit
+    # replaced the LLM_MODEL line and the next restart picked the code default
+    # up. The only visible trace was a `basis` field inside score_json.
+    #
+    # An error rather than a warning: this is not lost visibility, it is the
+    # product's paid path returning the free tier's output. It can only fire
+    # on a deployment that configured this provider and pinned no model, which
+    # is the broken state itself -- a host that is working has one of these
+    # set, so this cannot refuse a boot that would have succeeded.
+    if values.get("AITUNNEL_BASE_URL", "").strip() and not (
+        values.get("LLM_MODEL", "").strip()
+        or values.get("AITUNNEL_LLM_MODEL", "").strip()
+    ):
+        errors.append(
+            "AITUNNEL_BASE_URL is set but neither LLM_MODEL nor "
+            "AITUNNEL_LLM_MODEL is: the code falls back to its default model "
+            "name, which this provider rejects with a 400 -- every paid audit "
+            "would silently return static-only"
+        )
 
     # A warning, not a requirement: every token above gates a side-effecting
     # /internal endpoint that a systemd timer drives, so a missing one silently
