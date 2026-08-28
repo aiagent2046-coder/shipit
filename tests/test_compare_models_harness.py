@@ -15,8 +15,36 @@ comparison concludes, which is a judgement no test can make.
 from __future__ import annotations
 
 import importlib
+import json
+from pathlib import Path
 
 import pytest
+
+
+def _stub_run(compare, monkeypatch, fake_scan, *, repos: int, models: int):
+    """Neutralise everything a comparison does except the part under test:
+    no network, no provider, no real scan."""
+    monkeypatch.setattr(compare, "fetch", lambda slug, ref: _ONE_FILE_ZIP)
+    monkeypatch.setattr(compare, "run_scan", fake_scan)
+    monkeypatch.setattr(compare, "load_provider_credentials", lambda: None)
+    monkeypatch.setattr(
+        compare, "LLMClient",
+        lambda *a, **k: type("C", (), {
+            "providers": [object()],
+            "with_model": lambda self, m: self,
+        })())
+
+
+def _make_one_file_zip() -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("r/README.md", "# hi")
+    return buf.getvalue()
+
+
+_ONE_FILE_ZIP = _make_one_file_zip()
 
 
 @pytest.fixture(scope="module")
@@ -105,3 +133,86 @@ def test_the_estimate_and_the_harness_agree_on_how_many_passes(compare) -> None:
         "run_scan's default pass count changed. Either pass llm_passes=1 "
         "explicitly in this script, or re-measure _ROUGH_COST_PER_AUDIT -- "
         "the estimates there are one-pass figures.")
+
+
+# --- a long run must not lose what it has already paid for -----------------
+#
+# On 2026-08-28 a run of three repositories died on the last one and left no
+# file at all: two repositories' worth of provider calls -- real money, already
+# spent -- went with it, and the question had to be asked again from scratch.
+
+
+def test_results_are_written_after_every_audit(compare, tmp_path, monkeypatch):
+    """Not once at the end. Asserted by looking at the file DURING the run,
+    which is the only moment the difference exists."""
+    out = tmp_path / "cmp.json"
+    seen: list[dict] = []
+
+    def fake_scan(raw, client, **kwargs):
+        # Read the file as it stands before this audit's row is added.
+        seen.append(json.loads(out.read_text()) if out.exists() else {})
+        return {"score": {"total": 5.0, "basis": "static+llm", "categories": {}},
+                "findings": [], "llm": {}, "llm_usage": {"model": "m"}}
+
+    _stub_run(compare, monkeypatch, fake_scan, repos=2, models=1)
+
+    assert compare.main(["--models", "claude-haiku-4.5",
+                         "--repos", "acme/one", "acme/two",
+                         "--json", str(out)]) == 0
+
+    # Before the first audit: nothing. Before the second: the first is already
+    # on disk -- which is exactly what an interrupted run keeps.
+    assert seen[0] == {}
+    assert list(seen[1]) == ["acme/one"]
+
+
+def test_a_scan_that_raises_does_not_discard_the_run(compare, tmp_path,
+                                                     monkeypatch):
+    """Same posture the fetch and zip failures already have, extended to the
+    scan itself. The failure is recorded rather than skipped -- "this pair was
+    attempted and raised" is a result -- and `findings` stays a list so the
+    pairwise summary and the overlap maths keep working."""
+    out = tmp_path / "cmp.json"
+    calls = {"n": 0}
+
+    def fake_scan(raw, client, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("provider exploded")
+        return {"score": {"total": 5.0, "basis": "static+llm", "categories": {}},
+                "findings": [], "llm": {}, "llm_usage": {"model": "m"}}
+
+    _stub_run(compare, monkeypatch, fake_scan, repos=2, models=1)
+
+    assert compare.main(["--models", "claude-haiku-4.5",
+                         "--repos", "acme/one", "acme/two",
+                         "--json", str(out)]) == 0
+
+    saved = json.loads(out.read_text())
+    assert "provider exploded" in saved["acme/one"]["claude-haiku-4.5"]["raised"]
+    assert saved["acme/one"]["claude-haiku-4.5"]["findings"] == []
+    # ...and the second repository was still measured.
+    assert saved["acme/two"]["claude-haiku-4.5"]["total"] == 5.0
+
+
+def test_the_file_is_never_left_half_written(compare, tmp_path, monkeypatch):
+    """A truncated JSON is worse than a missing one: it looks like a result.
+    The write goes through a temporary and a rename, so the reader sees either
+    the previous complete file or the new complete one."""
+    out = tmp_path / "cmp.json"
+    compare.save(out, {"first": 1})
+
+    seen_during: list[str] = []
+    real_replace = Path.replace
+
+    def watching_replace(self, target):
+        # Mid-write: the target still holds the PREVIOUS complete document.
+        seen_during.append(Path(target).read_text())
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", watching_replace)
+    compare.save(out, {"second": 2})
+
+    assert json.loads(seen_during[0]) == {"first": 1}
+    assert json.loads(out.read_text()) == {"second": 2}
+    assert not list(tmp_path.glob("*.partial")), "the temporary must not linger"
