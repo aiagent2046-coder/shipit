@@ -72,7 +72,14 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # byte for byte, looking exactly like a fix that did not work.
 #
 # So the pin now covers the emitted vocabulary too, not just the scanner set.
-AUDIT_ENGINE_VERSION = "2026-08-27-1"
+#
+# 2026-08-28-1 is a THIRD kind of change again: no scanner, no rule id, no
+# context -- a different LLM behind the free preview (FREE_TIER_LLM_MODEL,
+# below). No test can catch that one, because the model is not in the code:
+# it is an environment variable read at process start, which is exactly what
+# this constant's opening comment warns about. It is bumped here by hand, in
+# the same change that prices the model, so the two travel together.
+AUDIT_ENGINE_VERSION = "2026-08-28-1"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
