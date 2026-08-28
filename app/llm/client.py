@@ -250,6 +250,47 @@ def providers_from_env() -> list[Provider]:
     return chain
 
 
+def _answer_or_raise(text: object, p: Provider, choice: dict,
+                     usage: object) -> str:
+    """The completion text, or a ValueError naming why there is none.
+
+    MEASURED, on glm-5.3-flash against a real security rubric: the provider
+    answered 200 with `choices[0].message.content` set to null. That reached
+    parse_findings as None and the whole scan died on
+    `AttributeError: 'NoneType' object has no attribute 'strip'` -- an
+    unhandled crash in the worker, not a degraded audit.
+
+    Two ways it can happen and neither is exotic. A reasoning model spends
+    `max_tokens` on reasoning and has nothing left for the answer (the rubric
+    path asks for 8192, and this model has been seen using 2,067 of 2,981
+    completion tokens on thinking alone). A filter or a truncation can also
+    return an empty string. Any provider can do this.
+
+    RAISED, not returned as "": an empty answer parses to zero findings, and
+    zero findings is the report saying it looked and saw nothing. This scan
+    did not look. ValueError is already in complete()'s except clause and is
+    NOT treated as transient, which is right -- a model that spent its budget
+    thinking will spend it again -- so the chain moves on and the audit ends
+    as an honest `failed: ...` rather than a clean bill of health.
+
+    The message carries finish_reason and the token counts and nothing else:
+    those diagnose it, and the response body holds the customer's code.
+    """
+    if isinstance(text, str) and text.strip():
+        return text
+    counts = usage if isinstance(usage, dict) else {}
+    detail = ", ".join(
+        f"{k}={counts[k]}" for k in
+        ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens")
+        if k in counts
+    )
+    raise ValueError(
+        f"{p.model} returned no answer text "
+        f"(finish_reason={choice.get('finish_reason') or choice.get('stop_reason')!r}"
+        + (f", {detail}" if detail else "") + ")"
+    )
+
+
 class LLMClient:
     def __init__(self, providers: list[Provider] | None = None,
                  transport: httpx.BaseTransport | None = None):
@@ -409,7 +450,8 @@ class LLMClient:
                 text = "".join(
                     b["text"] for b in data["content"] if b.get("type") == "text"
                 )
-                return text, _usage_anthropic(data, p.model)
+                return (_answer_or_raise(text, p, data, data.get("usage")),
+                        _usage_anthropic(data, p.model))
 
             # openai_compat
             resp = client.post(
@@ -420,7 +462,9 @@ class LLMClient:
             )
             resp.raise_for_status()
             data = resp.json()
-            text = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            text = _answer_or_raise(choice["message"].get("content"),
+                                    p, choice, data.get("usage"))
             return text, _usage_openai(data, p.model)
 
 

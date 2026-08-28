@@ -16,10 +16,12 @@ import uuid
 import zipfile
 from decimal import Decimal
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.llm import pricing
-from app.llm.client import (LLMClient, LLMUsage, Provider,
+from app.llm.client import (LLMClient, LLMError, LLMUsage, Provider,
                              supports_sampling_params)
 from app.main import app, get_audit_repo
 from app.scan.pipeline import PAID_AUDIT_PASSES
@@ -413,3 +415,117 @@ def test_with_model_on_an_empty_chain_stays_empty():
     like on a deployment with no keys), and it must not become a crash inside
     the tier that is given away."""
     assert LLMClient(providers=[]).with_model("claude-haiku-4-5").providers == []
+
+
+def _one_response_transport(body: dict) -> httpx.MockTransport:
+    return httpx.MockTransport(lambda request: httpx.Response(200, json=body))
+
+
+def test_a_provider_that_returns_no_text_fails_instead_of_crashing():
+    """MEASURED on glm-5.3-flash against a real security rubric.
+
+    The provider answered 200 with `choices[0].message.content` set to null.
+    That reached parse_findings as None and killed the scan with
+    `AttributeError: 'NoneType' object has no attribute 'strip'` -- an
+    unhandled crash inside the worker, on the path a paying customer's audit
+    runs through.
+
+    A reasoning model spending its whole `max_tokens` on reasoning is one way
+    to get here and not an exotic one; any provider can also return an empty
+    string. What must not happen is a traceback, and what must not happen even
+    more is silence: see the test below.
+    """
+    client = LLMClient(
+        providers=[Provider(kind="openai_compat", base_url="https://x/v1",
+                            api_key="k", model="glm-5.3-flash")],
+        transport=_one_response_transport({
+            "model": "glm-5.3-flash",
+            "choices": [{"finish_reason": "length",
+                         "message": {"role": "assistant", "content": None}}],
+            "usage": {"prompt_tokens": 155941, "completion_tokens": 8192},
+        }),
+    )
+
+    with pytest.raises(LLMError) as exc:
+        client.complete("system", "user", max_tokens=8192)
+
+    # The message has to diagnose it: which model, why it stopped, and how
+    # many tokens went where. Nothing from the response body, which holds the
+    # customer's code.
+    message = str(exc.value)
+    assert "glm-5.3-flash" in message
+    assert "no answer text" in message
+    assert "length" in message
+    assert "completion_tokens=8192" in message
+
+
+def test_an_empty_answer_is_not_reported_as_nothing_found():
+    """The dangerous direction, and the reason this raises rather than
+    returning "".
+
+    An empty string parses to zero findings, and zero findings is the report
+    saying it looked and saw nothing. This scan did not look. Returning "" here
+    would turn a provider failure into a clean bill of health on a repository
+    nobody read -- the same defect as a provider silently truncating a prompt,
+    reached from the other side.
+    """
+    client = LLMClient(
+        providers=[Provider(kind="openai_compat", base_url="https://x/v1",
+                            api_key="k", model="glm-5.3-flash")],
+        transport=_one_response_transport({
+            "model": "glm-5.3-flash",
+            "choices": [{"finish_reason": "stop",
+                         "message": {"role": "assistant", "content": "   "}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 0},
+        }),
+    )
+
+    with pytest.raises(LLMError):
+        client.complete("system", "user")
+
+
+def test_a_null_answer_is_not_retried():
+    """`complete` retries 5xx and transport errors. A model that spent its
+    budget thinking will spend it again, and the rubric path costs a real
+    prompt per attempt -- so this is classified with the 4xx family: report it
+    and move to the next provider, do not spend the prompt twice more."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={
+            "model": "glm-5.3-flash",
+            "choices": [{"finish_reason": "length",
+                         "message": {"content": None}}],
+            "usage": {},
+        })
+
+    client = LLMClient(
+        providers=[Provider(kind="openai_compat", base_url="https://x/v1",
+                            api_key="k", model="glm-5.3-flash")],
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMError):
+        client.complete("system", "user")
+
+    assert calls["n"] == 1, "an empty answer must not be retried"
+
+
+def test_a_real_answer_still_comes_back():
+    """The control: the guard must not reject an ordinary response."""
+    client = LLMClient(
+        providers=[Provider(kind="openai_compat", base_url="https://x/v1",
+                            api_key="k", model="glm-5.3-flash")],
+        transport=_one_response_transport({
+            "model": "glm-5.3-flash",
+            "choices": [{"finish_reason": "stop",
+                         "message": {"content": '[{"title": "x"}]'}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }),
+    )
+
+    text, usage = client.complete("system", "user")
+
+    assert text == '[{"title": "x"}]'
+    assert usage.input_tokens == 10 and usage.output_tokens == 5
