@@ -7,10 +7,14 @@ succeeded before and failed after.
 Delivery gate is controlled by ``PROOF_GATE_MODE`` (see ``app.proof.gate``):
 
 * ``off``  — informational only (record + PR section, never blocks)
-* ``soft`` — default; still delivers, but surfaces a strong warning when
-  the exploit still succeeds after the proposed fix
-* ``hard`` — non-verified reproducible exploit becomes ``blocked``
+* ``soft`` — still delivers, but surfaces a strong warning when the exploit
+  still succeeds after the proposed fix
+* ``hard`` — default; a non-verified reproducible exploit becomes ``blocked``
   (same shape as a semantic-check regression)
+
+The default blocks one state only: reproduced before, same check after, still
+succeeding. "We could not prove anything" is a different state and still
+delivers — see ``app.proof.gate`` for why that line is drawn there.
 
 Templates live in ``app.proof.templates``. Stage routing (``app.proof.routing``)
 picks which templates to run based on the Fix Pack plan and whether
