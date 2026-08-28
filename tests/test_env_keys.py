@@ -157,3 +157,18 @@ def test_the_snapshot_path_is_git_ignored():
     assert result.returncode == 0, (
         f"{name} is not git-ignored: a snapshot written into the control "
         "checkout would block the next deploy")
+
+
+def test_the_script_is_executable():
+    """Its own docstring documents `scripts/env_keys.py snapshot`, and that
+    is the form an operator will type at the moment they need it.
+
+    Committed 644, it answers "Permission denied" -- documentation that does
+    not work, discovered on the box rather than here. migration_manager.py,
+    the closest thing to it (an operator-run tool with subcommands), is 755.
+    """
+    import os
+
+    assert os.access(MODULE_PATH, os.X_OK), (
+        "scripts/env_keys.py must be executable: its documented usage invokes "
+        "it directly. `git update-index --chmod=+x scripts/env_keys.py`")
