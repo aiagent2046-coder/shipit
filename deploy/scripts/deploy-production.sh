@@ -82,8 +82,26 @@ fi
 
 cd "$CONTROL_ROOT"
 
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "ERROR: control repository has uncommitted changes" >&2
+# Captured once and PRINTED, not just tested. This refused a deploy three
+# times in a row saying only "uncommitted changes", and finding out that the
+# offender was a single stray `dub_after.json` -- an audit result curled into
+# the control checkout by an operator who never left the directory -- took
+# three round trips and a false conclusion in between.
+#
+# The output is what makes the fix obvious: `??` is a stray file to move
+# aside, ` M` is somebody's edit to read before touching. A gate that refuses
+# without naming what it saw sends the reader to guess, and the first guess
+# on a `??` line is `git reset --hard`, which is precisely the command this
+# gate exists to stand in front of.
+#
+# Same lesson as tag-release.sh's header, one script over: under `set -e`, a
+# step that cannot name its own failure reads as arbitrary.
+dirty="$(git status --porcelain)"
+if [[ -n "$dirty" ]]; then
+  echo "ERROR: control repository has uncommitted changes:" >&2
+  printf '%s\n' "$dirty" >&2
+  echo "  '??' is an untracked stray -- move it out of $CONTROL_ROOT." >&2
+  echo "  ' M' is an edit to somebody's file -- read it before removing it." >&2
   exit 1
 fi
 

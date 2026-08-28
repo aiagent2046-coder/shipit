@@ -298,6 +298,47 @@ def test_uncommitted_changes_still_block_the_deploy(host: dict) -> None:
     ).read_text(encoding="utf-8") == "local edit"
 
 
+# --- and it has to say WHAT it refused over --------------------------------
+#
+# Measured on the production host: this gate refused three deploys in a row
+# saying only "uncommitted changes", and identifying the offender -- one stray
+# `dub_after.json`, an audit result curled into the control checkout by an
+# operator who never left the directory -- took three round trips and a wrong
+# conclusion on the way.
+#
+# The path is what makes the fix obvious, and which kind of fix it is: a `??`
+# line is a stray to move aside, a ` M` line is somebody's edit to read first.
+# Refusing without naming it sends the reader to guess, and the first guess on
+# an unnamed dirty tree is `git reset --hard` -- the exact command this gate
+# stands in front of.
+
+
+def test_the_refusal_names_the_untracked_file(host: dict) -> None:
+    (host["control"] / "dub_after.json").write_text("{}", encoding="utf-8")
+
+    result = run_deploy(host, "--revision", "v2026.08.07-1")
+
+    assert result.returncode != 0
+    assert "dub_after.json" in result.stderr, (
+        "the refusal must name what it refused over -- an operator who is not "
+        "told cannot tell a stray file from somebody's edit"
+    )
+
+
+def test_the_refusal_names_the_modified_file(host: dict) -> None:
+    """The other kind, and the one where guessing is expensive: a tracked file
+    somebody edited on the box. `git reset --hard` on this line deploys a
+    release that silently undoes a hotfix."""
+    (host["control"] / "deploy" / "scripts" / "health_gate.py").write_text(
+        "local edit", encoding="utf-8"
+    )
+
+    result = run_deploy(host, "--revision", "v2026.08.07-1")
+
+    assert result.returncode != 0
+    assert "health_gate.py" in result.stderr
+
+
 def test_a_commit_not_on_main_is_still_refused(host: dict) -> None:
     """The ancestor gate runs BEFORE the sync, so an unreviewed commit can
     never be checked out into the control tree."""
