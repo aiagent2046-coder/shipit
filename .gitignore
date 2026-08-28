@@ -13,6 +13,13 @@ batch_reports/
 # Local environment backups containing secrets
 .env.bak*
 
+# scripts/env_keys.py writes the NAMES of an env file's variables here
+# (never values) so a hand edit that drops one is visible afterwards.
+# Ignored not because it is secret -- it is not -- but because it lands
+# in /opt/shipit, which is a git checkout, and deploy-production.sh
+# refuses to deploy with any untracked file present.
+.env.keys
+
 # Private key material. GitHub App keys download as
 # <app-slug>.<date>.private-key.pem and land in whatever directory the browser
 # was pointed at -- on 2026-08-03 the live App key was sitting untracked in the
