@@ -105,9 +105,27 @@ MAX_TOTAL_CHARS = 900_000
 # the paying tier, whose whole point is fuller coverage, a partial second
 # pass. 13.00 keeps the same shape as before: above the intended cost
 # (~$7.86 measured, $6.38 formula-worst-case per two passes) with backstop
-# room, not on top of it. THE PRODUCTION .env SETS ITS OWN VALUE and was
-# 6.00 when this landed -- deploys must raise it there too, or this default
-# never applies.
+# room, not on top of it.
+#
+# MEASURED SINCE, from llm_usage rather than from a sample: 23 two-pass paid
+# audits between 2026-08-18 and 2026-08-28 ran a median of $3.42, p90 $7.87
+# and a maximum of $9.18. The p90 lands within a cent of the $7.86 predicted
+# above, which is a better confirmation than it looks; the maximum exceeds it
+# by 17% and sits at 71% of this cap. So the cap is doing its job with real
+# but not generous headroom, and "a scan that is behaving never hits it" is
+# still true today.
+#
+# TWO THINGS WOULD CHANGE THAT, and both are one edit away:
+#   * claude-sonnet-5. app/llm/pricing.py records it turning the same
+#     repository into ~30% more tokens on the same list price, so today's
+#     $9.18 worst case becomes about $11.9 -- 92% of this cap, with the
+#     second pass cut short on anything larger.
+#   * a lower value in the deployment's own .env. That warning used to read
+#     "THE PRODUCTION .env SETS ITS OWN VALUE and was 6.00 when this landed";
+#     it no longer sets the key at all (checked 2026-08-28), so this default
+#     applies -- and had 6.00 still been there, the $9.18 audit would have
+#     been truncated mid-second-pass with nothing but a `cost_cap_exceeded`
+#     flag to say so.
 #
 # Worst case is not the bill. It assumes all four rubrics fill the entire
 # 900_000 budget on both passes; the web rubric measured $1.56 across three

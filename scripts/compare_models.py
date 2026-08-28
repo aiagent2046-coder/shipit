@@ -80,9 +80,31 @@ from scripts.batch_audit import SERIES  # noqa: E402
 # size spread, where a 2447-file repository fills the whole per-rubric budget
 # and costs four times as much.
 #
-# Cost per audit is dominated by repository size, so any single number here is
-# an average over a specific sample and not a per-repo prediction. The spread
-# behind these means is wide: Sonnet ran $1.03 to $4.63.
+# Cost per audit is dominated by repository size UP TO A POINT, and the point
+# matters. select_files fills a fixed per-rubric character budget, so once a
+# repository is big enough to saturate it, a bigger one costs the same.
+# Measured across production audits on 2026-08-28: 306 files sent 2,478K input
+# tokens and 4,444 files sent 2,986K -- fourteen times the repository for
+# twenty percent the tokens. Below saturation size drives cost; above it,
+# nothing does.
+#
+# So any single number here is an average over a specific sample and not a
+# per-repo prediction. The spread behind these means is wide: Sonnet ran $1.03
+# to $4.63.
+#
+# AND THEY ARE ONE-PASS NUMBERS. This script calls run_scan without
+# llm_passes, so it takes the default of 1 -- four provider calls, one per
+# rubric. A PAID audit in production runs PAID_AUDIT_PASSES=2 and therefore
+# eight, and costs about twice as much: 23 of them between 2026-08-18 and
+# 2026-08-28 ran a median of $3.42 against a maximum of $9.18, while the
+# one-pass rows over the same table sit at $0.96 median and $4.60 maximum --
+# which is the $1.03-$4.63 spread above, and confirms these figures rather
+# than contradicting them.
+#
+# The two are easy to compare by mistake. It was done on 2026-08-28: a $7.61
+# production audit was read as "above the documented spread" and taken for an
+# anomaly, when it was an ordinary two-pass run being measured against a
+# one-pass yardstick.
 #
 # Haiku's figure is DOUBLE what the last run invoiced. That run measured a
 # provider silently truncating the input to fit a 200K window, so $0.39 was
