@@ -358,8 +358,8 @@ Runs on a Timeweb VPS (`45.10.40.169`) as of 2026-07-12. Layout:
   `deploy/systemd/shipit-monitoring.{service,timer}` — install them, do not
   write your own (see "Installing the timers" below). A
   **longer interval than Fix Pack** is right (~5 min, `OnUnitActiveSec=5min`): a
-  repo is re-audited at most once per 24h and a pending run only needs to drain
-  within a few minutes of a push. The push webhook only enqueues the run and
+  repo is re-audited at most once per `MONITORING_INTERVAL_HOURS` (72) and a
+  pending run only needs to drain within a few minutes of a push. The push webhook only enqueues the run and
   ACKs immediately, so nothing gets audited until this timer fires (see
   `MONITORING_ASYNC_PLAN.md`).
 - `shipit-usdt-poller.timer` — REMOVED with the USDT rail (2026-08-20), unit
@@ -664,10 +664,25 @@ costs no LLM call — and DMs every active subscriber the **new** critical/high
 findings. "New" means a `(rule_id, file)` key absent from the previous audit of
 the same repo (line numbers are excluded, so incidental line drift isn't a false
 alarm; a medium→high re-score of the same key isn't flagged either — that's a
-deliberate non-goal). Cost is capped at **one enqueue per repo per 24h**
+deliberate non-goal). Cost is capped at **one enqueue per repo per
+`MONITORING_INTERVAL_HOURS`** — 72 since 2026-08-28, 24 before that
 (`subscriptions.last_monitored_at`, migration 0016), stamped at enqueue time even
 when the later re-audit finds nothing or the repo can't be fetched, so a burst of
-pushes can't bypass the cap. Pushes to non-default branches, and repos with no
+pushes can't bypass the cap.
+
+**What one run costs, since that is what the cap is for.** A monitoring run is
+not an incremental check: `_process_one_monitoring_run` calls `run_repo_audit`,
+which calls `run_scan` with its defaults — one pass, all four rubrics, the whole
+repository. Nothing about the push reaches the prompt (`build_prompt` takes
+rubric instructions, a repo map and whole files); the diff is applied to the
+findings afterwards. So a run costs what a one-pass paid audit costs: median
+$0.96, p90 $3.82, max $4.60 across the 21 production runs of the four-call era.
+Widening the interval costs latency and not coverage, because each run audits
+HEAD rather than the push that triggered it — the next eligible run sees the
+accumulated changes. The one `llm_usage` row tagged `monitoring` ($0.021,
+2026-08-04) is a 12-file fixture and is not evidence of a cheaper shape.
+
+Pushes to non-default branches, and repos with no
 active subscription, are 200 no-ops that enqueue nothing. Monitoring is
 public-repo-only (the fetcher uses no auth); a repo that goes private simply
 stops producing findings.
