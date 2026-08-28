@@ -1,5 +1,10 @@
 # Async Continuous Monitoring — move the push audit off the HTTP hot path
 
+> **Later note (2026-08-28).** Every "24h" below is the number this plan was
+> written with; the cap is now `MONITORING_INTERVAL_HOURS` in `app/monitor`,
+> set to **72**. Nothing else about the claim changed — it is still one atomic
+> conditional UPDATE doing both the cost cap and the enqueue dedup.
+
 ## Problem (from the live incident)
 
 Phase C's GitHub `push` webhook (`/v1/webhooks/github`) currently does the whole

@@ -54,6 +54,10 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.accounts import api_key_prefix, generate_api_key, hash_api_key
+# app.monitor is pure (re + typing) and imports nothing from here, so this
+# does not close a cycle. The interval lives there because it is a monitoring
+# policy decision, not a database one -- this module only enforces it.
+from app.monitor import MONITORING_INTERVAL_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -624,7 +628,8 @@ class AuditRepository:
         engine_version is deliberately not filtered: an old engine's sighting
         of (rule_id, file) still proves the finding predates this push, which
         is the only question the baseline answers. `limit` bounds a pathological
-        history (audits are capped at one per repo per 24h, so 50 spans weeks);
+        history (monitoring audits are capped at one per repo per
+        MONITORING_INTERVAL_HOURS, so 50 spans months);
         past it the oldest sightings age out, which can resurface an ancient
         finding as new -- preferred over an unbounded read."""
         try:
@@ -2474,8 +2479,15 @@ class SubscriptionRepository:
     ) -> bool:
         """Atomically claim this repo for a monitoring run and report whether the
         claim was won. In one write it stamps last_monitored_at = `at` on the
-        repo's subscription rows IFF none has been monitored within the last 24h
-        -- so this is BOTH the 24h-per-repo cost cap AND the concurrency guard.
+        repo's subscription rows IFF none has been monitored within
+        MONITORING_INTERVAL_HOURS -- so this is BOTH the per-repo cost cap AND
+        the concurrency guard.
+
+        The interval is a parameter read from app/monitor, not a literal in this
+        SQL. It was `interval '24 hours'` here and 24 again in the test fake, so
+        the two agreed only by coincidence and a change to one would have left
+        the other passing. See MONITORING_INTERVAL_HOURS for what a run costs
+        and why the number is what it is.
 
         Two near-simultaneous default-branch pushes race on this UPDATE: the
         first commits and stamps the rows; the second, under READ COMMITTED,
@@ -2498,10 +2510,11 @@ class SubscriptionRepository:
                    set last_monitored_at = %s, updated_at = now()
                  where repo_full_name = %s
                    and (last_monitored_at is null
-                        or last_monitored_at < %s - interval '24 hours')
+                        or last_monitored_at
+                           < %s - make_interval(hours => %s))
                 returning id
                 """,
-                (at, repo_full_name, at),
+                (at, repo_full_name, at, MONITORING_INTERVAL_HOURS),
             )
             rows = await cur.fetchall()
         return len(rows) > 0

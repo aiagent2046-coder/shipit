@@ -12,7 +12,8 @@ Three layers, all in-memory (no DB, no network):
      trailing slash, or the whole diff is silently buried.
   3. POST /v1/webhooks/github `push` event -- now the FAST half only (see
      MONITORING_ASYNC_PLAN.md): (a) no active subscription -> no enqueue;
-     (b) within 24h -> no enqueue; (c) eligible -> claim + enqueue one 'pending'
+     (b) inside the monitoring interval -> no enqueue; (c) eligible -> claim
+     + enqueue one 'pending'
      run + ACK 200, with run_repo_audit booby-trapped to prove the audit never
      runs on the HTTP path. The slow half (audit + diff + notify) is covered in
      tests/test_monitoring_process_endpoint.py. Re-uses the same TestClient +
@@ -27,7 +28,11 @@ import json
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app.monitor import normalize_repo_full_name, repo_url_from_full_name
+from app.monitor import (
+    MONITORING_INTERVAL_HOURS,
+    normalize_repo_full_name,
+    repo_url_from_full_name,
+)
 from app.monitor.diff import new_high_severity_findings
 from app.main import (
     app,
@@ -152,11 +157,18 @@ class FakeSubscriptionRepo:
         return [s for s in self._subs if s.get("repo_full_name") == repo_full_name]
 
     async def claim_for_monitoring(self, repo_full_name, at):
-        # Mirrors the real conditional UPDATE...RETURNING: eligible iff no row for
-        # this repo was monitored within the last 24h. On success stamps all the
-        # repo's rows and reports the win; otherwise no-op and reports the loss.
+        # Mirrors the real conditional UPDATE...RETURNING: eligible iff no row
+        # for this repo was monitored within MONITORING_INTERVAL_HOURS. On
+        # success stamps all the repo's rows and reports the win; otherwise
+        # no-op and reports the loss.
+        #
+        # The interval is READ from the constant, not written out again. This
+        # fake used to hardcode 24 beside a `interval '24 hours'` literal in
+        # app/db.py, so the two agreed only by coincidence -- widening one
+        # would have left this whole file green while production kept the old
+        # cap. tests/test_db_postgres_smoke.py checks the SQL itself.
         rows = [s for s in self._subs if s.get("repo_full_name") == repo_full_name]
-        cutoff = at - datetime.timedelta(hours=24)
+        cutoff = at - datetime.timedelta(hours=MONITORING_INTERVAL_HOURS)
         recent = any(
             s.get("last_monitored_at") is not None and s["last_monitored_at"] >= cutoff
             for s in rows
@@ -222,15 +234,19 @@ def test_push_scenario_a_no_subscription_no_enqueue(monkeypatch):
     assert subs.claims == []          # nothing claimed/stamped
 
 
-def test_push_scenario_b_within_24h_no_enqueue(monkeypatch):
+def _push_with_last_monitored(monkeypatch, hours_ago: float):
+    """One push against a subscription last monitored `hours_ago`. Returns
+    (response json, FakeMonitoringRepo) so a caller can assert both the reason
+    and whether anything was actually queued."""
     enable_monitoring(monkeypatch)
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
-    recent = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
+    then = (datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(hours=hours_ago))
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
-         "telegram_user_id": "111", "last_monitored_at": recent},
+         "telegram_user_id": "111", "last_monitored_at": then},
     ])
     runs = FakeMonitoringRepo()
     _override(subscription_repo=subs, monitoring_repo=runs)
@@ -238,9 +254,47 @@ def test_push_scenario_b_within_24h_no_enqueue(monkeypatch):
         resp = _post_push(_push_payload())
     finally:
         _clear()
+    return resp.json(), runs
 
-    assert resp.json()["reason"] == "within_interval"
-    assert runs.enqueued == []    # the 24h gate blocked the enqueue
+
+def test_push_scenario_b_inside_the_interval_no_enqueue(monkeypatch):
+    body, runs = _push_with_last_monitored(monkeypatch, hours_ago=1)
+
+    assert body["reason"] == "within_interval"
+    assert runs.enqueued == []    # the interval gate blocked the enqueue
+
+
+def test_a_push_two_days_after_the_last_run_is_still_blocked(monkeypatch):
+    """The behaviour the widening to 72h actually buys, stated as a number.
+
+    Under the old `interval '24 hours'` a push 48 hours after the last run was
+    eligible and cost another full-repository audit -- a monitoring run is
+    run_repo_audit with run_scan's defaults, one pass over all four rubrics,
+    median $0.96 across the 21 measured production runs of the four-call era.
+    This is the case that now costs nothing.
+
+    Written against the constant rather than a bare 48 so it keeps testing the
+    boundary if the interval moves again -- a hardcoded 48 would silently stop
+    meaning "inside the window" the moment somebody set 24 back.
+    """
+    inside = MONITORING_INTERVAL_HOURS - 24
+    assert inside > 24, (
+        "this test only says something while the interval is wider than a day")
+
+    body, runs = _push_with_last_monitored(monkeypatch, hours_ago=inside)
+
+    assert body["reason"] == "within_interval"
+    assert runs.enqueued == []
+
+
+def test_a_push_past_the_interval_is_eligible_again(monkeypatch):
+    """The other side of the same boundary: the gate delays runs, it does not
+    stop them. Without this, setting the interval to a century would pass."""
+    body, runs = _push_with_last_monitored(
+        monkeypatch, hours_ago=MONITORING_INTERVAL_HOURS + 1)
+
+    assert body["queued"] is True
+    assert runs.enqueued == ["acme/app"]
 
 
 def test_push_eligible_enqueues_and_acks_fast(monkeypatch):
@@ -252,7 +306,11 @@ def test_push_eligible_enqueues_and_acks_fast(monkeypatch):
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
-    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+    # Past the interval, derived rather than written out: this fixture was a
+    # bare `days=2`, which stopped meaning "eligible" the moment the interval
+    # went past 48 hours.
+    old = (datetime.datetime.now(datetime.timezone.utc)
+           - datetime.timedelta(hours=MONITORING_INTERVAL_HOURS + 1))
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": old},
@@ -274,18 +332,20 @@ def test_push_eligible_enqueues_and_acks_fast(monkeypatch):
 
 def test_push_does_not_enqueue_while_monitoring_is_withdrawn(monkeypatch):
     """The test that makes #184 actually closed. Note what this fixture is: an
-    ACTIVE subscription, last monitored two days ago, on a default-branch push
-    -- the exact shape that enqueues in test_push_eligible_enqueues_and_acks_fast
-    above. Gating only the sale surfaces would leave this row auditing on every
-    push, at full LLM cost, attributed to the anonymous bucket. So the check
-    sits before the subscription lookup and nothing is queued or claimed.
+    ACTIVE subscription, last monitored past the interval, on a default-branch
+    push -- the exact shape that enqueues in
+    test_push_eligible_enqueues_and_acks_fast above. Gating only the sale
+    surfaces would leave this row auditing on every push, at full LLM cost,
+    attributed to the anonymous bucket. So the check sits before the
+    subscription lookup and nothing is queued or claimed.
 
     Deliberately no enable_monitoring(): this test asserts the shipped default.
     """
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")
     _fail_if_audited(monkeypatch)
 
-    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+    old = (datetime.datetime.now(datetime.timezone.utc)
+           - datetime.timedelta(hours=MONITORING_INTERVAL_HOURS + 1))
     subs = FakeSubscriptionRepo([
         {"repo_full_name": "acme/app", "telegram_chat_id": "111",
          "telegram_user_id": "111", "last_monitored_at": old},
@@ -351,11 +411,12 @@ def test_push_repo_matched_case_insensitively(monkeypatch):
     assert runs.enqueued == ["acme/app"]         # canonical, not "Acme/App"
 
 
-def test_push_second_push_within_24h_is_claimed_out(monkeypatch):
+def test_push_second_push_inside_the_interval_is_claimed_out(monkeypatch):
     """The atomic-claim guard, end-to-end: two back-to-back pushes (no time
     passes between them, as with two near-simultaneous pushes racing on the same
     UPDATE). The first wins the claim and enqueues one run; the second finds the
-    row already stamped and no-ops -- exactly one queued run per repo per 24h, no
+    row already stamped and no-ops -- exactly one queued run per repo per
+    interval, no
     double-audit and no double-notify downstream."""
     enable_monitoring(monkeypatch)
     monkeypatch.setenv("GITHUB_APP_WEBHOOK_SECRET", "whsecret")

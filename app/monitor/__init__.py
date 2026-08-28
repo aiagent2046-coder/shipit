@@ -35,6 +35,36 @@ import re
 # one-line revert and no paid row is destroyed in the meantime.
 MONITORING_FOR_SALE = False
 
+# How long a repo is ineligible after a monitoring run: the cost cap, the
+# enqueue-dedup and the concurrency guard, all expressed as one interval in
+# SubscriptionRepository.claim_for_monitoring's conditional UPDATE.
+#
+# WHAT A RUN COSTS, since that is what this number buys. A monitoring run is
+# not a cheap incremental check: app/main.py's _process_one_monitoring_run
+# calls run_repo_audit, which calls run_scan with its defaults -- one pass,
+# all four rubrics, the whole repository. Nothing about the push reaches the
+# prompt (build_prompt takes rubric instructions, a repo map and whole files);
+# the diff is applied to the FINDINGS afterwards. So a run costs what a
+# one-pass paid audit costs: measured across 21 production runs of the
+# four-call era, median $0.96, p90 $3.82, max $4.60.
+#
+# At 24 hours that is up to ~30 runs a month on an actively developed repo,
+# ~$29 at the median. At 72 it is ~10, ~$10. The one measurement in llm_usage
+# (2026-08-04) is a 12-file fixture at $0.02 and says nothing about a real
+# repository -- it is not evidence for a lower number.
+#
+# WHAT WIDENING IT COSTS, which is only latency. Each run audits HEAD, not the
+# push that triggered it, so a skipped push is not skipped coverage: the next
+# eligible run sees the accumulated changes and the union baseline still marks
+# anything genuinely new. A finding introduced and removed inside the window
+# goes unreported, and it is also gone. The subscriber learns about a real new
+# finding up to two days later than before; nothing else changes.
+#
+# Not env-overridable on purpose. It is a spend decision, and this deployment
+# has already had one silent env edit turn every paid audit static-only
+# (2026-08-28); a cost cap that a hand edit can widen to zero is not a cap.
+MONITORING_INTERVAL_HOURS = 72
+
 # owner/repo are the two path segments of a github.com URL. Case-insensitive
 # host match (a stored repo_url always has a lowercase host from intake, but a
 # push payload's repository.html_url may not); owner/repo casing is captured as
