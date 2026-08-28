@@ -4,7 +4,7 @@ names and titles come from a hostile archive and from the LLM.
 
 import re
 
-from app.report.html import render_report
+from app.report.html import NON_PRODUCTION_HEADING, render_report
 
 
 def result(findings: list[dict]) -> dict:
@@ -172,18 +172,60 @@ _TEST_FILE = {
 }
 
 
+_CI_SERVICE = {
+    "severity": "medium", "confidence": 0.18,
+    "title": "Password in a connection string to a local/development host "
+             "(CI service container)",
+    "file": ".github/workflows/playwright.yaml", "line": 27,
+    "masked": "post****(45 chars)", "context": "ci_service",
+}
+
+
+def test_every_damping_context_reaches_the_same_section():
+    """The section is defined by NON_PRODUCTION_CONTEXTS, so a context added
+    to that set and not to the renderer's understanding would leave a damped
+    finding sitting in the main table -- damped where nobody looks and loud
+    where everybody does."""
+    from app.scan.secrets import NON_PRODUCTION_CONTEXTS
+
+    for context in NON_PRODUCTION_CONTEXTS:
+        html = render_report(result([dict(_TEST_FILE, context=context)]))
+        head, _, section = html.partition(NON_PRODUCTION_HEADING)
+        assert section, context
+        assert "tests/test_secrets.py" in section, context
+
+
+def test_the_section_does_not_tell_the_reader_these_files_never_run():
+    """A CI workflow runs. Measured on dubinc/dub (audit `caa1b36b`):
+    `.github/workflows/playwright.yaml` landed under a note reading "These
+    files don't run in production", which is simply untrue of a workflow --
+    the same defect as the advice this context was introduced to fix, one
+    level up. What is true of every row here, and what the reassurance
+    underneath actually rests on, is that none of it serves the reader's
+    users."""
+    from app.report.html import NON_PRODUCTION_NOTE
+
+    html = render_report(result([_PROD, _CI_SERVICE]))
+    _, _, section = html.partition(NON_PRODUCTION_HEADING)
+
+    assert ".github/workflows/playwright.yaml" in section
+    assert "run in production" not in NON_PRODUCTION_NOTE
+    # ...and the reassurance the section exists to give is still given.
+    assert "not worth blocking a launch" in NON_PRODUCTION_NOTE
+
+
 def test_test_findings_go_under_their_own_heading():
     html = render_report(result([_PROD, _TEST_FILE]))
-    assert "In tests, examples and documentation" in html
+    assert NON_PRODUCTION_HEADING in html
     # Both are present; the production one comes first.
     assert html.index("src/config.ts") < html.index("tests/test_secrets.py")
-    assert html.index("In tests, examples and documentation") < html.index(
+    assert html.index(NON_PRODUCTION_HEADING) < html.index(
         "tests/test_secrets.py")
 
 
 def test_no_heading_when_everything_is_production_code():
     html = render_report(result([_PROD]))
-    assert "In tests, examples and documentation" not in html
+    assert NON_PRODUCTION_HEADING not in html
 
 
 def test_clean_production_code_is_said_out_loud():
@@ -192,7 +234,7 @@ def test_clean_production_code_is_said_out_loud():
     when the truth is the opposite."""
     html = render_report(result([_TEST_FILE]))
     assert "Nothing found in the code your app runs." in html
-    assert "In tests, examples and documentation" in html
+    assert NON_PRODUCTION_HEADING in html
     assert "tests/test_secrets.py" in html
 
 
@@ -206,7 +248,7 @@ def test_llm_findings_without_context_are_split_by_path():
         "file": "tests/fixtures/unauthenticated_webhook.ts", "line": 11,
     }]))
     assert "Nothing found in the code your app runs." in html
-    assert "In tests, examples and documentation" in html
+    assert NON_PRODUCTION_HEADING in html
 
 
 def test_migration_findings_stay_in_the_production_section():
@@ -217,7 +259,7 @@ def test_migration_findings_stay_in_the_production_section():
         "title": "Hardcoded secret in SQL/PLpgSQL assignment (committed database migration)",
         "file": "examples/migrations/0007_seed.sql", "line": 4,
     }]))
-    assert "In tests, examples and documentation" not in html
+    assert NON_PRODUCTION_HEADING not in html
 
 
 def test_free_scan_publishes_no_mark_out_of_ten():

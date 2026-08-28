@@ -48,7 +48,7 @@ import zipfile
 import pytest
 
 from app.llm.client import LLMClient, LLMUsage, Provider
-from app.report.html import render_report
+from app.report.html import NON_PRODUCTION_HEADING, render_report
 from app.scan.pipeline import run_scan
 
 PRODUCTION = "src/components/CardCheckout.tsx"
@@ -190,10 +190,10 @@ def test_the_page_puts_the_fixtures_under_their_own_heading(scan):
     main table is damped where nobody looks and loud where everybody does."""
     html = render_report(scan)
 
-    assert "In tests, examples and documentation" in html
+    assert NON_PRODUCTION_HEADING in html
 
     head, _, damped_section = html.partition(
-        "In tests, examples and documentation")
+        NON_PRODUCTION_HEADING)
 
     assert "CardCheckout.test.tsx" in damped_section
     assert "CardCheckout.stories.tsx" in damped_section
