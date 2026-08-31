@@ -3613,6 +3613,44 @@ class ServedBundleCheckRepository:
             row = await cur.fetchone()
         return dict(row) if row else None
 
+    async def latest_completed_for(
+        self, *, audit_id: str, deployment_url: str,
+    ) -> dict[str, Any] | None:
+        """The most recent FINISHED check of this deployment, or None.
+
+        The baseline a rotation verdict compares against. Two filters carry the
+        meaning:
+
+        * `completed_at is not null` — an open row is a check that started and
+          may never have read anything. Comparing against one would produce
+          "the credential is gone" from a run that simply crashed, which is the
+          worst possible direction for this verdict to be wrong in.
+        * the SAME deployment_url — a customer with a staging and a production
+          URL under one audit gets two independent baselines, because they are
+          two different exposures.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, audit_id, client_key, deployment_url,
+                       consent_phrase, assets_read, outcome, result_json,
+                       created_at, completed_at
+                from served_bundle_checks
+                where audit_id = %s
+                  and deployment_url = %s
+                  and completed_at is not null
+                order by completed_at desc
+                limit 1
+                """,
+                (uuid.UUID(audit_id), deployment_url),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
     async def complete(
         self, check_id: str, *, deployment_url: str, outcome: str,
         assets_read: list[str], result: dict[str, Any],
