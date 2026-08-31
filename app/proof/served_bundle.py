@@ -382,11 +382,19 @@ def fetch_served_bundle(
     truncated = False
     fetched = 0
 
+    # WHY A URL WAS DISCOVERED AND NOT READ. Without this the only account of
+    # the gap is subtraction: drydock.co reported `assets_found: 12`,
+    # `assets_read: 9`, `truncated: false`, and the four missing files were
+    # four 404s from a resolver bug — a walk that looked like it worked
+    # because the count went up. A number has to answer for itself.
+    unread: list[dict[str, str]] = []
+
     while queue:
         if fetched >= MAX_ASSETS:
             # Stopped early: whatever is still queued was never looked at, and
             # the caller has to be told that rather than shown a clean answer.
             truncated = True
+            unread.extend({"url": u, "reason": "budget_exhausted"} for u in queue)
             break
         asset_url = queue.pop(0)
         try:
@@ -394,15 +402,21 @@ def fetch_served_bundle(
                                                allow_loopback=allow_loopback)
             resolve_and_vet(a_target.host, a_target.port,
                             allow_loopback=allow_loopback, resolver=resolver)
-        except UnsafeDeploymentUrl:
-            continue  # a script pointing off-origin or at a private address
+        except UnsafeDeploymentUrl as exc:
+            # Refused on purpose, and recorded so a refusal is never mistaken
+            # for a file that was read and found clean.
+            unread.append({"url": asset_url, "reason": f"refused: {exc}"})
+            continue
         try:
             a_status, a_text = fetch(a_target.url, a_target.host,
                                      a_target.port, MAX_ASSET_BYTES)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            unread.append({"url": a_target.url,
+                           "reason": f"fetch_failed: {type(exc).__name__}"})
             continue
         fetched += 1
         if a_status != 200:
+            unread.append({"url": a_target.url, "reason": f"http_{a_status}"})
             continue
         ingest(a_text, a_target.url)
 
@@ -461,6 +475,7 @@ def fetch_served_bundle(
                       "ownership": ownership, "assets": assets_read,
                       "assets_found": discovered,
                       "assets_truncated": truncated,
+                      "assets_unread": unread,
                       "disclosures": [d.evidence() for d in disclosures]})
 
     return done(
@@ -472,6 +487,7 @@ def fetch_served_bundle(
                   # here", so it has to say how much was looked at.
                   "assets_found": discovered,
                   "assets_truncated": truncated,
+                  "assets_unread": unread,
                   "publishable": sorted({bf.finding.pattern_id
                                          for bf in publishable_found})})
 
@@ -525,6 +541,51 @@ def _same_origin_assets(html: str, target: _Target) -> list[str]:
     return out
 
 
+def _resolve_asset_ref(base_url: str, raw: str) -> str:
+    """Turn a reference found inside a chunk into the URL that actually serves it.
+
+    Plain `urljoin` is wrong for a bundler manifest, and the failure is silent.
+    Measured on drydock.co (2026-08-31): the turbopack runtime, itself served
+    from `/_next/static/immutable/chunks/`, names its chunks
+
+        "static/immutable/chunks/3oze-rblz-767.js"
+
+    — relative to `/_next/`, the build's base, not to the directory the runtime
+    happens to live in. Joining against the referrer produced
+
+        /_next/static/immutable/chunks/static/immutable/chunks/3oze-...js
+
+    and four discovered chunks became four 404s. The walk LOOKED like it was
+    working: names were found, the count went up, and nothing was read.
+
+    So when the referrer's directory ENDS WITH a path the reference BEGINS
+    WITH, the overlap is the build base repeated and it is collapsed. That is
+    the bundler pattern — assets named relative to a base that is an ancestor
+    of the chunk directory — and collapsing costs nothing when it does not
+    apply.
+
+    THE TRADE, NAMED: a genuinely nested path (a `chunks/` directory that
+    really does contain another `chunks/`) would be collapsed wrongly and
+    missed. That is a miss, not a false finding, and it is rarer than the
+    manifest case that is currently failing on every Next.js build. Only ONE
+    candidate is emitted rather than trying both forms, because the alternative
+    is a second request to somebody else's server for every reference, and 404
+    noise is a cost we would be putting on them.
+    """
+    if raw.startswith(("http://", "https://", "/")):
+        return urljoin(base_url, raw)
+
+    base_dir = urlsplit(base_url).path.rsplit("/", 1)[0].strip("/")
+    ref_head = raw.lstrip("./")
+
+    base_parts = base_dir.split("/") if base_dir else []
+    ref_parts = ref_head.split("/")
+    for take in range(min(len(base_parts), len(ref_parts) - 1), 0, -1):
+        if base_parts[-take:] == ref_parts[:take]:
+            return urljoin(base_url, "/".join(ref_parts[take:]))
+    return urljoin(base_url, raw)
+
+
 def _asset_refs_in_js(text: str, base_url: str, target: _Target) -> list[str]:
     """Same-origin `.js` URLs named inside a fetched chunk.
 
@@ -552,7 +613,7 @@ def _asset_refs_in_js(text: str, base_url: str, target: _Target) -> list[str]:
             # other two are not fetchable addresses.
             continue
         try:
-            candidate = urljoin(base_url, raw)
+            candidate = _resolve_asset_ref(base_url, raw)
         except ValueError:
             continue
         parts = urlsplit(candidate)
