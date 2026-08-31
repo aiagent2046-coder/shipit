@@ -414,3 +414,76 @@ def test_an_uncapped_page_is_not_reported_as_truncated(monkeypatch):
 
     assert body["evidence"]["assets_found"] == 1
     assert body["evidence"]["assets_truncated"] is False
+
+
+def test_a_chunk_named_twice_is_fetched_once(monkeypatch):
+    """Observed on our own deployment (2026-08-31): Next.js names the same
+    chunk as a `<script src>` AND a preload `href`, both match the pattern, and
+    it was fetched twice.
+
+    `_RecordingFetch.requested` is the assertion: a second request for the
+    same URL is what this test is about, so it is counted directly rather than
+    inferred from the response body.
+    """
+    html = (
+        '<html>'
+        '<link rel="modulepreload" href="/_next/chunks/a.js">'
+        '<script src="/_next/chunks/a.js"></script>'
+        '<script src="/_next/chunks/b.js"></script>'
+        '</html>'
+    )
+    fetch = _RecordingFetch({
+        "https://app.example/": html,
+        "https://app.example:443/_next/chunks/a.js": "const a = 1;",
+        "https://app.example:443/_next/chunks/b.js": "const b = 2;",
+    })
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=fetch)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert fetch.requested.count(
+        "https://app.example:443/_next/chunks/a.js") == 1, (
+        "the same chunk was fetched more than once")
+    assert body["evidence"]["assets_found"] == 2, (
+        "the duplicate must not be counted as a second asset")
+    assert body["assets_read"] == [
+        "(served html)",
+        "https://app.example:443/_next/chunks/a.js",
+        "https://app.example:443/_next/chunks/b.js"]
+
+
+def test_duplicates_do_not_spend_the_asset_budget(monkeypatch):
+    """The cost that matters. A page naming a handful of chunks many times
+    would otherwise exhaust MAX_ASSETS on repeats, read only the handful, and
+    still report `assets_truncated: false` -- the cap spent invisibly while the
+    evidence claims full coverage."""
+    from app.proof.served_bundle import MAX_ASSETS
+
+    distinct = 3
+    html = "<html>" + "".join(
+        f'<script src="/c{i % distinct}.js"></script>'
+        for i in range(MAX_ASSETS * 2)
+    ) + "</html>"
+    pages = {"https://app.example/": html}
+    for i in range(distinct):
+        pages[f"https://app.example:443/c{i}.js"] = "const x = 1;"
+
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger,
+              fetch=_RecordingFetch(pages))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["evidence"]["assets_found"] == distinct
+    assert body["evidence"]["assets_truncated"] is False, (
+        "40 references to 3 files is not a truncated page")
+    assert len(body["assets_read"]) == distinct + 1  # + the html
