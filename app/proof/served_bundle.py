@@ -432,8 +432,34 @@ def _same_origin_assets(html: str, target: _Target) -> list[str]:
     A relative `/assets/x.js` becomes the deployment's own URL; an absolute
     `https://cdn.other/x.js` is dropped — following it would be a second SSRF
     surface and is not where the app's own key would be.
+
+    DE-DUPLICATED, IN FIRST-SEEN ORDER, and that is not tidiness. Observed on
+    our own deployment (2026-08-31): Next.js names the same chunk twice, once
+    as `<script src>` and once as a preload `href`, and both match the pattern,
+    so the file was fetched twice. Two costs, and the second is the real one:
+
+      * a second request to somebody else's server, when the whole posture of
+        this module is that it reads the minimum;
+      * duplicates spend the MAX_ASSETS budget. A page naming five distinct
+        chunks twenty times would read five, report twenty, and say
+        `assets_truncated: false` — the cap silently exhausted on repeats while
+        the evidence claims full coverage. That is the same gap between "what
+        we looked at" and "what we said" that the empty `assets_read` was, one
+        step along.
+
+    Order is preserved rather than sorted: the first script a page names is the
+    entry point, and a reader following `assets_read` should see them in the
+    order the page does.
     """
     out: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        out.append(url)
+
     for raw in _SCRIPT_SRC.findall(html):
         if raw.startswith(("http://", "https://")):
             try:
@@ -442,10 +468,10 @@ def _same_origin_assets(html: str, target: _Target) -> list[str]:
                 continue
             if (other.hostname or "").lower() != target.host.lower():
                 continue
-            out.append(raw)
+            add(raw)
         else:
             path = raw if raw.startswith("/") else "/" + raw
-            out.append(f"{target.scheme}://{target.host}:{target.port}{path}")
+            add(f"{target.scheme}://{target.host}:{target.port}{path}")
     return out
 
 
