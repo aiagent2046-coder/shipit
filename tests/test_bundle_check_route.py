@@ -329,3 +329,88 @@ def test_the_route_is_registered_exactly_once():
             found += sum(1 for r in inner.routes
                          if getattr(r, "path", None) == path)
     assert found == 1, f"expected one registration of {path}, found {found}"
+
+
+def test_a_clean_bundle_still_reports_what_was_read(monkeypatch):
+    """THE DEFECT THE FIRST REAL RUN FOUND, and the reason it mattered.
+
+    Against our own deployment on 2026-08-31 the endpoint answered
+    `status: checked`, `leaked: false` — and `assets_read: []`. The list was
+    only appended to when a scan found a secret, so a clean bundle produced the
+    same empty list as a bundle nobody fetched, and the stored ledger row could
+    not say what had been read.
+
+    That is the disjoint-population failure this project keeps guarding
+    against, in the one place where the answer is "we found nothing": absence
+    of evidence rendered identical to evidence of absence. A row that cannot
+    show its scope is not accounting.
+    """
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    clean = _RecordingFetch({
+        "https://app.example/": INDEX_HTML,
+        "https://app.example:443/assets/app.js": "export const answer = 42;",
+    })
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=clean)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["leaked"] is False and body["findings"] == []
+    assert body["assets_read"] == [
+        "(served html)", "https://app.example:443/assets/app.js"], (
+        "a clean bundle must still report the scope of the fetch")
+    # And the ledger carries it, which is the half a support question reads.
+    assert ledger.completed[0]["assets_read"] == body["assets_read"]
+
+
+def test_a_capped_asset_list_says_so(monkeypatch):
+    """20 entries must not read as "the page had 20 scripts".
+
+    A Next.js build splits into far more chunks than MAX_ASSETS, so a clean
+    result on a large page covers the part we looked at and nothing more. The
+    caller has to be able to tell which of the two they got.
+    """
+    from app.proof.served_bundle import MAX_ASSETS
+
+    many = MAX_ASSETS + 5
+    html = "<html>" + "".join(
+        f'<script src="/assets/c{i}.js"></script>' for i in range(many)
+    ) + "</html>"
+    pages = {"https://app.example/": html}
+    for i in range(many):
+        pages[f"https://app.example:443/assets/c{i}.js"] = "const x = 1;"
+
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=_RecordingFetch(pages))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["evidence"]["assets_found"] == many
+    assert body["evidence"]["assets_truncated"] is True
+    # html + the capped assets, and not one more.
+    assert len(body["assets_read"]) == MAX_ASSETS + 1
+
+
+def test_an_uncapped_page_is_not_reported_as_truncated(monkeypatch):
+    """The other side of the same boundary: without it, always-true would pass."""
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger,
+              fetch=_RecordingFetch({
+                  "https://app.example/": INDEX_HTML,
+                  "https://app.example:443/assets/app.js": "const x = 1;"}))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["evidence"]["assets_found"] == 1
+    assert body["evidence"]["assets_truncated"] is False
