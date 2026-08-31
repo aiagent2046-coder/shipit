@@ -52,6 +52,7 @@ from app.db import (
     MonitoringRunRepository,
     PaymentRepository,
     ProcessorLockBusy,
+    ServedBundleCheckRepository,
     SubscriptionRepository,
 )
 from app.monitor import MONITORING_INTERVAL_HOURS
@@ -1329,6 +1330,12 @@ EXPECTED_DELETE_ACTIONS = {
     "payments_audit_id_fkey": "NO ACTION",
     "payments_fixpack_job_id_fkey": "NO ACTION",
     "rls_live_checks_audit_id_fkey": "SET NULL",
+    # SET NULL, matching rls_live_checks above and chosen for the same reason:
+    # this ledger records that somebody consented and that we fetched their
+    # deployment. That has to stay answerable after the audit it was offered
+    # from is gone, so deleting the audit must orphan the row rather than take
+    # it with it.
+    "served_bundle_checks_audit_id_fkey": "SET NULL",
     "subscriptions_account_id_fkey": "NO ACTION",
 }
 
@@ -1651,3 +1658,47 @@ async def test_claim_for_monitoring_holds_the_interval_in_real_sql(real_db):
     # not from t0 -- otherwise the cap would drift open under steady pushes.
     stamped = await sub_repo.list_active_for_repo(repo)
     assert stamped and stamped[0]["last_monitored_at"] == just_past
+
+
+async def test_served_bundle_check_ledger_round_trips_in_real_sql(real_db):
+    """The consent ledger for the served-bundle fetch (migration 0037).
+
+    This file's rule is that EVERY repository is exercised against real
+    Postgres, not only the ones present when it was written -- and this one
+    records the second path the product has out to somebody else's system, so
+    a column that silently does not accept what the route stores would be
+    found in an audit rather than here.
+
+    The round-trip that matters is `assets_read`: it is a Python list going
+    into a jsonb column, the shape the FakePool cannot type-check, and the
+    class of bug this file exists for (`DatatypeMismatch` twice in prod).
+    """
+    repo = ServedBundleCheckRepository()
+    run = uuid.uuid4().hex[:12]
+
+    started = await repo.start(
+        audit_id=None, client_key=f"client-{run}",
+        consent_phrase="i-own-this-project")
+    assert started is not None, "DATABASE_URL not reaching get_pool -- false green"
+    assert started["outcome"] is None and started["result_json"] is None, (
+        "a freshly started row must be open: a NULL outcome IS the record that "
+        "a check began and did not finish")
+
+    assets = [f"https://app-{run}.example/assets/index-abc.js"]
+    done = await repo.complete(
+        str(started["id"]),
+        deployment_url=f"https://app-{run}.example/",
+        outcome="checked",
+        assets_read=assets,
+        result={"status": "checked", "leaked": True,
+                "findings": [{"pattern": "supabase_service_role",
+                              "redacted": "eyJhbGci••••zdGU"}]},
+    )
+    assert done is not None
+    assert done["outcome"] == "checked"
+    assert done["assets_read"] == assets          # jsonb list round-trip
+    assert done["result_json"]["leaked"] is True  # jsonb dict round-trip
+    assert isinstance(done["completed_at"], datetime.datetime)
+    assert done["consent_phrase"] == "i-own-this-project", (
+        "the phrase the caller typed must survive verbatim -- a boolean would "
+        "store our interpretation of their act, not the act")
