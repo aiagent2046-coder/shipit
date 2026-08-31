@@ -487,3 +487,126 @@ def test_duplicates_do_not_spend_the_asset_budget(monkeypatch):
     assert body["evidence"]["assets_truncated"] is False, (
         "40 references to 3 files is not a truncated page")
     assert len(body["assets_read"]) == distinct + 1  # + the html
+
+
+def test_a_route_chunk_named_only_inside_js_is_found(monkeypatch):
+    """THE REASON THE WALK IS TRANSITIVE.
+
+    A bundler names route chunks inside JavaScript, never in the served HTML.
+    A one-pass walk over `<script src>` reads the shell and calls the
+    application clean — fine for a statement about our own landing page, not
+    fine for one about somebody else's app, which is the claim this endpoint
+    exists to support.
+
+    Here the key is in a chunk the HTML never mentions. Before the queue, this
+    returned `leaked: false`.
+    """
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    fetch = _RecordingFetch({
+        "https://app.example/": '<html><script src="/main.js"></script></html>',
+        # The manifest: a quoted filename, which is all a chunk map is.
+        "https://app.example:443/main.js":
+            'const chunks={"page":"/chunks/route-9f2.js"};export default chunks;',
+        "https://app.example:443/chunks/route-9f2.js": BUNDLE_JS,
+    })
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=fetch)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["leaked"] is True, (
+        "a key in a dynamically-imported chunk was missed")
+    assert body["findings"][0]["location"] == \
+        "https://app.example:443/chunks/route-9f2.js"
+    assert body["evidence"]["assets_found"] == 2  # main.js + the discovered one
+
+
+def test_discovery_widens_urls_but_never_addresses(monkeypatch):
+    """The guard must hold for what a fetched file names, not only for what the
+    customer typed. A chunk that references a script on another host — or one
+    whose host resolves somewhere private — is refused at the same two gates as
+    the seed URL.
+
+    `_RecordingFetch` raises on anything it was not given, so a leak here fails
+    the test rather than quietly widening the blast radius.
+    """
+    def _vet(host, port, **kw):
+        if host != "app.example":
+            raise __import__("app.proof.served_bundle", fromlist=["x"]) \
+                .UnsafeDeploymentUrl(f"refused {host}")
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet", _vet)
+    fetch = _RecordingFetch({
+        "https://app.example/": '<html><script src="/main.js"></script></html>',
+        "https://app.example:443/main.js": (
+            'a="https://evil.other/x.js";'          # off-origin, dropped early
+            'b="https://internal.corp/y.js";'       # off-origin too
+            'c="/ok.js";'
+        ),
+        "https://app.example:443/ok.js": "const ok = 1;",
+    })
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=fetch)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["assets_read"] == [
+        "(served html)",
+        "https://app.example:443/main.js",
+        "https://app.example:443/ok.js"]
+    assert all("app.example" in u for u in fetch.requested)
+
+
+def test_a_reference_cycle_terminates(monkeypatch):
+    """Two chunks naming each other must not loop. The queue de-duplicates on
+    the URL, so the cycle closes after one visit each — without that this hangs
+    until MAX_ASSETS, wasting a customer's bandwidth on the same two files."""
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    fetch = _RecordingFetch({
+        "https://app.example/": '<html><script src="/a.js"></script></html>',
+        "https://app.example:443/a.js": 'import "/b.js";',
+        "https://app.example:443/b.js": 'import "/a.js";',
+    })
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=fetch)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert fetch.requested.count("https://app.example:443/a.js") == 1
+    assert fetch.requested.count("https://app.example:443/b.js") == 1
+    assert body["evidence"]["assets_truncated"] is False
+
+
+def test_a_transitive_walk_that_hits_the_cap_says_truncated(monkeypatch):
+    """Discovery makes the cap reachable on a real app, so the honest signal
+    matters more than it did. Whatever is still queued was never looked at."""
+    from app.proof.served_bundle import MAX_ASSETS
+
+    total = MAX_ASSETS + 10
+    pages = {"https://app.example/":
+             '<html><script src="/c0.js"></script></html>'}
+    for i in range(total):
+        # Each chunk names the next: a chain longer than the budget.
+        pages[f"https://app.example:443/c{i}.js"] = f'import "/c{i + 1}.js";'
+    pages[f"https://app.example:443/c{total}.js"] = "const end = 1;"
+
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=_RecordingFetch(pages))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["evidence"]["assets_truncated"] is True
+    assert len(body["assets_read"]) == MAX_ASSETS + 1  # + the html

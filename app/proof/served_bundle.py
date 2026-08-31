@@ -27,10 +27,13 @@ WHAT IT MAY AND MAY NOT DO, and the wall is the point:
   * CONSENT has no default. A caller that has not thought about it cannot
     accidentally fetch a stranger's deployment — the result is `skipped`, the
     same posture rls_probe takes.
-  * SAME-ORIGIN assets only. The HTML names its script URLs; we follow only
-    those whose host matches the deployment host. An attacker-controlled page
-    that points its `<script src>` at an internal address is refused there, a
-    second time, by the same IP vetting.
+  * SAME-ORIGIN assets only, and the walk is TRANSITIVE: a fetched chunk's own
+    `.js` references join the queue, because a bundler names route chunks
+    inside JavaScript and never in the HTML. Following only the page's script
+    tags reads the shell and calls the application clean, which is fine for a
+    statement about our own landing page and not fine for one about somebody
+    else's app. Every discovered URL is re-vetted when it is popped, so
+    discovery widens the set of URLs and never the set of ADDRESSES.
   * NO auto-redirects. Each hop would be a fresh URL to re-vet, and a 302 to
     `http://169.254.169.254/` is the classic bypass. Redirects are not
     followed; a deployment that 301s its asset is handled explicitly when one
@@ -54,7 +57,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from app.proof.disclosure import Disclosure, Ownership, plan_disclosure
 from app.proof.secret_registry import Finding, ProbeResult, scan_text
@@ -63,7 +66,12 @@ from app.scan.secrets import _is_demo_jwt, _jwt_severity
 FETCH_TIMEOUT_S = 15
 MAX_HTML_BYTES = 2 * 1024 * 1024        # an index.html naming its bundles
 MAX_ASSET_BYTES = 12 * 1024 * 1024      # one JS chunk; larger is not a hand-built app
-MAX_ASSETS = 20                         # script tags to follow before giving up
+# TOTAL scripts fetched per check, not per level. The walk is transitive
+# now (a chunk's own references join the queue), so this is the whole
+# budget -- and it bounds requests made to somebody else's server as much
+# as it bounds our work. Raising it costs them load; `assets_truncated`
+# is what keeps a capped answer from reading as a complete one.
+MAX_ASSETS = 40
 
 # The same JWT shape the shipped secrets scanner matches.
 _JWT = re.compile(
@@ -74,6 +82,15 @@ _JWT = re.compile(
 _SCRIPT_SRC = re.compile(
     r"""(?:src|href)\s*=\s*["']([^"']+?\.m?js)(?:\?[^"']*)?["']""",
     re.IGNORECASE)
+
+# A quoted string inside JavaScript that looks like a path to a script. This is
+# what a bundler's chunk manifest is made of, and it is how route chunks that
+# the HTML never names are found. Bounded to 300 characters so a minified blob
+# cannot turn one line into an enormous candidate; `..` is refused outright
+# rather than normalised, because a traversal in a fetched file is not a thing
+# we want to follow even same-origin.
+_JS_ASSET_REF = re.compile(
+    r"""["'`](?!\.\.)([A-Za-z0-9_\-./]{1,300}?\.m?js)(?:\?[^"'`]*)?["'`]""")
 
 
 class UnsafeDeploymentUrl(ValueError):
@@ -341,15 +358,37 @@ def fetch_served_bundle(
 
     ingest(html, "(served html)")
 
-    # Counted BEFORE the cap, because "20 assets read" otherwise reads as "the
-    # page had 20 scripts" when it may mean "we stopped at 20". A Next.js build
-    # splits into far more chunks than that, so a clean result on a capped page
-    # covers the part we looked at and nothing more — and the caller has to be
-    # able to tell which of the two they got.
-    candidates = _same_origin_assets(html, target)
-    truncated = len(candidates) > MAX_ASSETS
+    # A WORKLIST, NOT A SINGLE PASS OVER THE HTML.
+    #
+    # The page's own `<script src>` tags are only the entry point. A Next.js or
+    # Vite build loads route-level chunks by dynamic import, named inside
+    # already-loaded JavaScript and never mentioned in the served HTML — so a
+    # one-pass walk reads the shell and calls the application clean. Measured
+    # on our own deployment (2026-08-31): 8 chunks named in the HTML, which is
+    # the entry point and not the app.
+    #
+    # That is fine for a statement about our own landing page and NOT fine for
+    # a statement about somebody else's application, which is the claim this
+    # endpoint exists to support. So each fetched chunk is scanned for further
+    # same-origin `.js` references and they join the queue.
+    #
+    # WHAT THIS IS NOT: executing the page. No browser, no build, no container
+    # — the three blockers that ended the runtime-CORS detector at 0 of 26 and
+    # that this whole class was chosen to avoid. It follows references that are
+    # written down, which is a heuristic and is described as one below.
+    queue: list[str] = _same_origin_assets(html, target)
+    queued: set[str] = set(queue)
+    discovered = len(queue)
+    truncated = False
+    fetched = 0
 
-    for asset_url in candidates[:MAX_ASSETS]:
+    while queue:
+        if fetched >= MAX_ASSETS:
+            # Stopped early: whatever is still queued was never looked at, and
+            # the caller has to be told that rather than shown a clean answer.
+            truncated = True
+            break
+        asset_url = queue.pop(0)
         try:
             a_target = validate_deployment_url(asset_url,
                                                allow_loopback=allow_loopback)
@@ -362,9 +401,20 @@ def fetch_served_bundle(
                                      a_target.port, MAX_ASSET_BYTES)
         except Exception:  # noqa: BLE001
             continue
+        fetched += 1
         if a_status != 200:
             continue
         ingest(a_text, a_target.url)
+
+        # Every reference is re-vetted when it is popped, so discovery widens
+        # the set of URLs but never the set of ADDRESSES: same-origin only,
+        # then the same IP check as the seed.
+        for ref in _asset_refs_in_js(a_text, a_target.url, target):
+            if ref in queued:
+                continue
+            queued.add(ref)
+            discovered += 1
+            queue.append(ref)
 
     # Disclosure is unconditional: one per secret finding, whatever ownership is.
     disclosures: list[Disclosure] = []
@@ -409,7 +459,7 @@ def fetch_served_bundle(
             assets_read=assets_read,
             evidence={"reason": reason, "classes": classes, "refs": refs,
                       "ownership": ownership, "assets": assets_read,
-                      "assets_found": len(candidates),
+                      "assets_found": discovered,
                       "assets_truncated": truncated,
                       "disclosures": [d.evidence() for d in disclosures]})
 
@@ -420,7 +470,7 @@ def fetch_served_bundle(
                   # The scope of a CLEAN answer is the half that matters: this
                   # is the result a reader is most likely to hear as "nothing
                   # here", so it has to say how much was looked at.
-                  "assets_found": len(candidates),
+                  "assets_found": discovered,
                   "assets_truncated": truncated,
                   "publishable": sorted({bf.finding.pattern_id
                                          for bf in publishable_found})})
@@ -472,6 +522,48 @@ def _same_origin_assets(html: str, target: _Target) -> list[str]:
         else:
             path = raw if raw.startswith("/") else "/" + raw
             add(f"{target.scheme}://{target.host}:{target.port}{path}")
+    return out
+
+
+def _asset_refs_in_js(text: str, base_url: str, target: _Target) -> list[str]:
+    """Same-origin `.js` URLs named inside a fetched chunk.
+
+    A HEURISTIC, and worth saying so plainly: it reads quoted string literals
+    that look like a path to a script and resolves them against the chunk that
+    named them, the way a relative import resolves. A bundler's chunk manifest
+    is exactly that — a table of quoted filenames — which is why this reaches
+    route chunks the HTML never mentions.
+
+    What it therefore does NOT reach: a URL the code assembles at runtime from
+    pieces (`base + hash + ".js"`), which is a real pattern and the honest
+    boundary of a crawl that does not execute anything. `assets_truncated` says
+    when the CAP stopped us; nothing can say when a computed name did, so the
+    claim this supports is "every script we could find from what is written
+    down", never "every script the app can load".
+
+    Same-origin is enforced here and the address is vetted again at fetch time.
+    Discovery widens the set of URLs, never the set of hosts.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in _JS_ASSET_REF.findall(text):
+        if raw.startswith(("//", "data:", "blob:")):
+            # A protocol-relative URL is a different origin's problem, and the
+            # other two are not fetchable addresses.
+            continue
+        try:
+            candidate = urljoin(base_url, raw)
+        except ValueError:
+            continue
+        parts = urlsplit(candidate)
+        if parts.scheme != target.scheme:
+            continue
+        if (parts.hostname or "").lower() != target.host.lower():
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        out.append(candidate)
     return out
 
 

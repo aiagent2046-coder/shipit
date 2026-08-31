@@ -594,6 +594,30 @@ verification being off entirely.
 Part C's transport precondition is met. What remains before a customer
 deployment is wiring and a decision, not a transport unknown.
 
+### The crawl is transitive, measured 2026-08-31 — and where it still stops
+
+Three runs against our own deployment closed two defects the suite could not
+show (an `assets_read` that only recorded files WITH a secret, and a duplicate
+chunk spending the cap), and then a third fact: the served HTML names 8
+scripts, and that is the ENTRY POINT, not the application. Next.js and Vite
+load route chunks by dynamic import, named inside JavaScript and never in the
+HTML — so a one-pass walk reads the shell and calls the app clean.
+
+Fine for a claim about our own landing page. Not fine for a claim about
+somebody else's application, which is what this endpoint exists to support. So
+a fetched chunk's own same-origin `.js` references now join the queue, bounded
+by MAX_ASSETS (40, a courtesy limit on the customer's server as much as ours).
+No browser, no build, no container — the three blockers that ended the
+runtime-CORS detector at 0 of 26 stay avoided.
+
+**Where it still stops, and this belongs beside any published result.** The
+walk follows references that are WRITTEN DOWN — quoted filenames, which is
+what a chunk manifest is made of. A URL the code assembles at runtime from
+pieces (`base + hash + ".js"`) is not written down anywhere and is not reached.
+`assets_truncated` says when the CAP stopped us; nothing can say when a
+computed name did. So the supportable sentence is "every script we could find
+from what is written down", never "every script the app can load".
+
 ### The class, assembled
 
 Part A (repo static) is blind to this class by ~93%. Part B proved the leak
