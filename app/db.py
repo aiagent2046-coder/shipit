@@ -3488,10 +3488,15 @@ class RlsLiveCheckRepository:
     """The consent ledger for the live RLS check (migration 0031).
 
     Every other stage of an audit reads a copy of the customer's code. This one
-    sends a request to a database that belongs to somebody, and it is the only
-    thing this product does that reaches outside our infrastructure and touches
-    a third party's system. If it is ever questioned, the answer has to be a
-    row rather than a log line that rotated out.
+    sends a request to a database that belongs to somebody. If it is ever
+    questioned, the answer has to be a row rather than a log line that rotated
+    out.
+
+    It was the ONLY path out to a third party's system until the served-bundle
+    check (migration 0037, ServedBundleCheckRepository below) added a second.
+    That sentence is corrected here rather than left standing, because a
+    docstring asserting uniqueness is exactly the kind of claim someone later
+    reasons from.
 
     THE ROW IS WRITTEN BEFORE THE REQUESTS GO OUT. A ledger that only records
     completed checks cannot show the one that crashed halfway, which is exactly
@@ -3559,6 +3564,79 @@ class RlsLiveCheckRepository:
                           created_at, completed_at
                 """,
                 (project_ref or None, outcome, json.dumps(tables_asked),
+                 json.dumps(result), uuid.UUID(str(check_id))),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+class ServedBundleCheckRepository:
+    """The consent ledger for the served-bundle check (migration 0037).
+
+    The second path this product has out to somebody else's system, and the
+    first that fetches an ARBITRARY customer-supplied URL rather than a
+    shape-constrained one. Same accounting as RlsLiveCheckRepository above and
+    for the same reason: if it is ever questioned, the answer has to be a row.
+
+    THE ROW IS WRITTEN BEFORE THE REQUEST GOES OUT, so a check that crashed
+    halfway is visible as a NULL outcome rather than absent — the case somebody
+    would actually ask about.
+
+    NO TOKEN AND NO FETCHED BYTES REACH THIS CLASS. It has no parameter for
+    either. What `complete()` stores is the redacted evidence the registry
+    already produced plus the asset URLs read; a leaked service_role key is
+    abused within minutes, so keeping one to prove we found it would repeat the
+    defect being reported.
+    """
+
+    async def start(
+        self, *, audit_id: str | None, client_key: str, consent_phrase: str,
+    ) -> dict[str, Any] | None:
+        """Record the intent to fetch, before anything leaves the process."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        parsed_audit_id = uuid.UUID(audit_id) if audit_id else None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into served_bundle_checks
+                    (audit_id, client_key, consent_phrase)
+                values (%s, %s, %s)
+                returning id, audit_id, client_key, deployment_url,
+                          consent_phrase, assets_read, outcome, result_json,
+                          created_at, completed_at
+                """,
+                (parsed_audit_id, client_key, consent_phrase),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def complete(
+        self, check_id: str, *, deployment_url: str, outcome: str,
+        assets_read: list[str], result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Close the row out with what actually happened."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update served_bundle_checks
+                   set deployment_url = %s,
+                       outcome        = %s,
+                       assets_read    = %s::jsonb,
+                       result_json    = %s::jsonb,
+                       completed_at   = now()
+                 where id = %s
+                returning id, audit_id, client_key, deployment_url,
+                          consent_phrase, assets_read, outcome, result_json,
+                          created_at, completed_at
+                """,
+                (deployment_url or None, outcome, json.dumps(assets_read),
                  json.dumps(result), uuid.UUID(str(check_id))),
             )
             row = await cur.fetchone()
