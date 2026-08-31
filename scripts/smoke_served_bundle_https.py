@@ -48,11 +48,28 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.proof.served_bundle import (  # noqa: E402
-    UnsafeDeploymentUrl,
-    _default_fetch_text,
-    resolve_and_vet,
-)
+try:
+    from app.proof.served_bundle import (  # noqa: E402
+        UnsafeDeploymentUrl,
+        _default_fetch_text,
+        resolve_and_vet,
+    )
+except ImportError as _exc:  # pragma: no cover - environment, not logic
+    # 78, NOT 1. Exit 1 from this script is a VERDICT — "a half genuinely
+    # failed" — and on the strength of it Part C stays blocked and someone goes
+    # looking for a defect in the TLS pinning. An interpreter without the app's
+    # dependencies is not that; it is the script never having run. Read on the
+    # production box with the system python on 2026-08-31, where the traceback
+    # exited 1 and read exactly like a real failure.
+    #
+    # The same rule the halves below follow, applied to the script's own
+    # start-up: not-determined must never be reported as decided.
+    print(f"UNDETERMINED: cannot import the application ({_exc}).")
+    print("  => wrong interpreter, not a transport defect. On the deployment "
+          "host use the venv:")
+    print("       /opt/shipit/.venv/bin/python "
+          "scripts/smoke_served_bundle_https.py")
+    raise SystemExit(78) from None
 
 # A plain, stable, publicly reachable HTTPS host. Nothing about the content
 # matters — only that TLS completes against a real certificate.
