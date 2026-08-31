@@ -42,6 +42,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.db import AuditRepository, ServedBundleCheckRepository
 from app.log_context import set_log_context
+from app.proof.rotation import RotationCheck, compare_findings
 from app.proof.served_bundle import ServedBundleResult, fetch_served_bundle
 from app.ratelimit import RateLimitExceeded, RateLimiter
 from app.routes._shared import _client_key
@@ -59,7 +60,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _payload(result: ServedBundleResult) -> dict:
+def payload_findings(result: ServedBundleResult) -> list[dict]:
+    """The finding evidence dicts, which is what the rotation comparison and
+    the stored row both read. One producer, so the fingerprints compared are
+    exactly the fingerprints stored."""
+    return [bf.evidence() for bf in result.findings]
+
+
+def _payload(result: ServedBundleResult,
+             rotation: RotationCheck | None = None) -> dict:
     """The storable, renderable form of a check.
 
     Findings are rendered through `evidence()`, never `Finding.secret`: the raw
@@ -72,7 +81,7 @@ def _payload(result: ServedBundleResult) -> dict:
         "status": result.status,
         "detail": result.detail,
         "leaked": result.leaked,
-        "findings": [bf.evidence() for bf in result.findings],
+        "findings": payload_findings(result),
         # Recognised and deliberately NOT alarmed on. Reported so a reader can
         # see the anon key was identified rather than missed -- the difference
         # between a scanner that is quiet because it looked and one that is
@@ -91,6 +100,11 @@ def _payload(result: ServedBundleResult) -> dict:
         ],
         "assets_read": result.assets_read,
         "evidence": result.evidence,
+        # Absent rather than a fabricated "no_baseline" when the ledger is not
+        # configured: on a DB-less deployment there is no baseline to have an
+        # opinion about, and a verdict shaped like one would be an answer to a
+        # question nobody could ask.
+        "rotation": None if rotation is None else rotation.evidence(),
         "duration_ms": result.duration_ms,
     }
 
@@ -147,6 +161,11 @@ async def create_bundle_check_for_audit(
             headers={"Retry-After": str(exc.retry_after)},
         ) from exc
 
+    # The previous FINISHED check of this same deployment, read before this
+    # run opens its own row so it can never compare against itself.
+    baseline = await check_repo.latest_completed_for(
+        audit_id=audit_id, deployment_url=deployment_url)
+
     # Written before the request goes out, so a crash mid-fetch leaves a row
     # with a NULL outcome rather than no row at all.
     ledger_row = await check_repo.start(
@@ -164,7 +183,26 @@ async def create_bundle_check_for_audit(
             url=deployment_url, consent=True, ownership="consented",
             fetch=bundle_fetch),
     )
-    payload = _payload(result)
+
+    # Read AFTER the fetch and BEFORE this run is stored, so the baseline is
+    # the previous check rather than this one. Reading it earlier would work
+    # too; doing it here keeps the ordering obvious next to the write below.
+    # TWO DIFFERENT ABSENCES, and the first version of this conflated them.
+    #
+    #   * No ledger at all (DB-less deployment): nothing was ever recorded and
+    #     nothing can be, so there is no question to answer -- rotation is None.
+    #   * A ledger, but no earlier row for this deployment: that IS an answer,
+    #     and it is `no_baseline`. Reporting None here would look identical to
+    #     the case above and hide that we are now keeping score.
+    #
+    # `ledger_row` is the discriminator: it exists exactly when the ledger is
+    # live.
+    rotation: RotationCheck | None = None
+    if ledger_row is not None:
+        previous = ((baseline or {}).get("result_json") or {}).get("findings") or []
+        rotation = compare_findings(previous, payload_findings(result))
+
+    payload = _payload(result, rotation)
 
     if ledger_row:
         await check_repo.complete(

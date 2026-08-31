@@ -65,10 +65,14 @@ class _FakeAuditRepo:
 class _FakeLedger:
     """Records the ledger calls so the before-the-request ordering is testable."""
 
-    def __init__(self, configured: bool = True):
+    def __init__(self, configured: bool = True, baseline: dict | None = None):
         self.configured = configured
+        self.baseline = baseline
         self.started: list[dict] = []
         self.completed: list[dict] = []
+
+    async def latest_completed_for(self, *, audit_id, deployment_url):
+        return self.baseline
 
     async def start(self, *, audit_id, client_key, consent_phrase):
         self.started.append({"audit_id": audit_id, "client_key": client_key,
@@ -610,3 +614,94 @@ def test_a_transitive_walk_that_hits_the_cap_says_truncated(monkeypatch):
 
     assert body["evidence"]["assets_truncated"] is True
     assert len(body["assets_read"]) == MAX_ASSETS + 1  # + the html
+
+
+def test_a_second_check_compares_against_the_first(monkeypatch):
+    """The chain end to end: a stored baseline plus a fresh clean read must
+    produce `gone_from_bundle` through the HTTP surface, not just in the pure
+    comparison."""
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    clean = _RecordingFetch({
+        "https://app.example/": INDEX_HTML,
+        "https://app.example:443/assets/app.js": "export const answer = 42;",
+    })
+    ledger = _FakeLedger(baseline={"result_json": {"findings": [
+        {"pattern": "supabase_service_role", "fingerprint": "old-fp"}]}})
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=clean)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["rotation"]["verdict"] == "gone_from_bundle"
+    assert "does not revoke" in body["rotation"]["detail"]
+
+
+def test_a_first_check_says_no_baseline_not_success(monkeypatch):
+    """With no earlier row the endpoint must not imply anything was fixed."""
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger(baseline=None)
+    _override(audit={"id": AUDIT_ID}, ledger=ledger,
+              fetch=_RecordingFetch({
+                  "https://app.example/": INDEX_HTML,
+                  "https://app.example:443/assets/app.js": "const x = 1;"}))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["rotation"]["verdict"] == "no_baseline"
+
+
+def test_the_stored_finding_carries_a_fingerprint_and_not_the_token(
+        monkeypatch, leaking_deployment):
+    """What makes the comparison possible, and the line it must not cross. The
+    fingerprint is what a later check reads; the token is what must never be in
+    the row that carries it."""
+    monkeypatch.setenv("API_KEY_PEPPER", "test-pepper-for-fingerprints")
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=leaking_deployment)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    stored = ledger.completed[0]["result"]
+    fp = stored["findings"][0]["fingerprint"]
+    assert fp and len(fp) == 64, "expected a hex HMAC-SHA256 digest"
+
+    # The same value in both places, from one producer: what a later check
+    # compares against is exactly what this caller was shown.
+    assert body["findings"][0]["fingerprint"] == fp
+
+    assert SERVICE_ROLE_JWT not in str(stored)
+    assert SERVICE_ROLE_JWT not in str(body)
+    assert fp not in SERVICE_ROLE_JWT and SERVICE_ROLE_JWT not in fp
+
+
+def test_without_a_ledger_there_is_no_rotation_opinion(monkeypatch):
+    """The other absence, and the one that must NOT read as `no_baseline`.
+
+    A DB-less deployment records nothing and can never compare anything, so
+    there is no question to answer. `no_baseline` means "we are keeping score
+    and this is entry one" -- saying that where no score is kept would promise
+    a comparison that will never come.
+    """
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger(configured=False)
+    _override(audit={"id": AUDIT_ID}, ledger=ledger,
+              fetch=_RecordingFetch({
+                  "https://app.example/": INDEX_HTML,
+                  "https://app.example:443/assets/app.js": "const x = 1;"}))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["rotation"] is None
+    assert body["persisted"] is False

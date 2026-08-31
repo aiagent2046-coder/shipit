@@ -56,12 +56,15 @@ publishable split to catch more.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal, Pattern
 
+from app.accounts import pepper_is_configured, require_pepper
 from app.scan.secrets import _is_demo_jwt, _jwt_severity
 
 Tier = Literal["A", "B", "C"]
@@ -77,6 +80,36 @@ ProbeStatus = Literal["stub", "success", "failure", "error"]
 # --------------------------------------------------------------------------- #
 # redaction — the raw token never leaves, only this does
 # --------------------------------------------------------------------------- #
+
+def fingerprint(secret: str) -> str:
+    """A stable, non-reversible identity for one credential.
+
+    HMAC-SHA256 under the deployment's own pepper — the same scheme
+    accounts.py uses for API keys, so this codebase has ONE story about how a
+    secret is hashed rather than two that drift.
+
+    WHAT IT IS FOR: comparing a credential to itself across two checks. "Is the
+    key still the one we found last week, or a different one" is the question a
+    rotation verdict turns on, and it is answerable from a hash. Nothing ever
+    needs the token back.
+
+    WHY NOT A BARE SHA-256. A JWT is high-entropy, so a plain digest would not
+    be brute-forceable — but the pepper makes a fingerprint useless OUTSIDE
+    this deployment, so a leaked row cannot be matched against a key somebody
+    holds. That is cheap, and it is the difference between an identifier and a
+    lookup key.
+
+    Empty string when no pepper is configured, deliberately: a fingerprint is
+    an accounting convenience, not the finding, and raising here would turn a
+    missing operational variable into a failed security check. accounts.py's
+    startup guard already refuses to boot with a database and no pepper, so the
+    degraded case is a DB-less deployment where nothing is stored to compare
+    against anyway.
+    """
+    if not secret or not pepper_is_configured():
+        return ""
+    return hmac.new(require_pepper(), secret.encode(), hashlib.sha256).hexdigest()
+
 
 def redact(secret: str) -> str:
     """Keep the classifying prefix and the last 4 chars; mask the middle.
@@ -347,10 +380,16 @@ class Finding:
     secret: str = field(repr=False, default="")
 
     def evidence(self) -> dict:
-        """What is safe to store or render — redaction and metadata, no token."""
+        """What is safe to store or render — redaction and metadata, no token.
+
+        `fingerprint` travels with it so a later check can ask whether this is
+        the SAME credential. It is a peppered HMAC, not the token; see
+        secret_registry.fingerprint for why the two must never be confused.
+        """
         return {"pattern": self.pattern_id, "name": self.name,
                 "kind": self.kind, "severity": self.severity,
-                "tier": self.tier, "redacted": self.redacted}
+                "tier": self.tier, "redacted": self.redacted,
+                "fingerprint": fingerprint(self.secret)}
 
     def probe(self) -> ProbeResult | None:
         """The declared read-only liveness check for Tier A classes, else None."""
