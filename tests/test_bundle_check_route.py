@@ -705,3 +705,132 @@ def test_without_a_ledger_there_is_no_rotation_opinion(monkeypatch):
 
     assert body["rotation"] is None
     assert body["persisted"] is False
+
+
+def test_a_manifest_path_relative_to_the_build_base_resolves(monkeypatch):
+    """MEASURED ON drydock.co, 2026-08-31, and it was silently failing.
+
+    The turbopack runtime is served from /_next/static/immutable/chunks/ and
+    names its chunks "static/immutable/chunks/<name>.js" -- relative to
+    /_next/, the build base, not to the directory it happens to live in.
+    Joining against the referrer produced a doubled path and four discovered
+    chunks became four 404s. The walk LOOKED like it worked: names were found,
+    the count went up, nothing was read.
+    """
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    runtime = "https://app.example:443/_next/static/immutable/chunks/turbopack.js"
+    route = "https://app.example:443/_next/static/immutable/chunks/route-9f2.js"
+    fetch = _RecordingFetch({
+        "https://app.example/":
+            '<html><script src="/_next/static/immutable/chunks/turbopack.js">'
+            '</script></html>',
+        runtime: 'const m={"page":"static/immutable/chunks/route-9f2.js"};',
+        route: BUNDLE_JS,
+    })
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=fetch)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert route in body["assets_read"], (
+        "the manifest reference did not resolve to the URL that serves it")
+    assert body["leaked"] is True
+    # The doubled form must never be requested; _RecordingFetch would raise.
+    assert not any("chunks/static/immutable" in u for u in fetch.requested)
+
+
+def test_a_discovered_url_that_404s_is_reported_not_silently_dropped(
+        monkeypatch):
+    """The reporting half of the same defect.
+
+    drydock.co returned `assets_found: 12`, `assets_read: 9`,
+    `truncated: false` -- and the only account of the four missing files was
+    subtraction. A number has to answer for itself, especially the one a reader
+    hears as "we looked at everything".
+    """
+    class _NotFound(_RecordingFetch):
+        def __call__(self, url, host, port, max_bytes):
+            if url.endswith("/missing.js"):
+                self.requested.append(url)
+                return 404, ""
+            return super().__call__(url, host, port, max_bytes)
+
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    fetch = _NotFound({
+        "https://app.example/": '<html><script src="/main.js"></script></html>',
+        "https://app.example:443/main.js": 'const m="/missing.js";',
+    })
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=fetch)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    unread = body["evidence"]["assets_unread"]
+    assert [u["url"] for u in unread] == ["https://app.example:443/missing.js"]
+    assert unread[0]["reason"] == "http_404"
+    # And the books balance: found = read (minus the html) + unread.
+    assert body["evidence"]["assets_found"] == \
+        (len(body["assets_read"]) - 1) + len(unread)
+
+
+def test_a_refused_url_is_recorded_as_refused_not_as_clean(monkeypatch):
+    """A refusal is not a file that was read and found clean. Collapsing the
+    two would let the guard's own work read as coverage.
+
+    The case exercised is an `http://` script on the SAME host of an https
+    page: `_same_origin_assets` keeps it (the hostname matches) and
+    `validate_deployment_url` then refuses the scheme. Off-origin references
+    are a DIFFERENT path -- they never reach the queue at all, being dropped at
+    selection, so they are not "discovered and unread"; they were never ours to
+    read. That distinction is why this test does not use one.
+    """
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    fetch = _RecordingFetch({
+        "https://app.example/":
+            '<html><script src="/main.js"></script>'
+            '<script src="http://app.example/insecure.js"></script></html>',
+        "https://app.example:443/main.js": "const x = 1;",
+    })
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=fetch)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    unread = body["evidence"]["assets_unread"]
+    assert [u["url"] for u in unread] == ["http://app.example/insecure.js"]
+    assert unread[0]["reason"].startswith("refused:")
+    assert not any(u.startswith("http://") for u in fetch.requested)
+
+
+def test_the_budget_names_what_it_never_looked_at(monkeypatch):
+    """`truncated: true` says we stopped; this says WHAT we stopped before."""
+    from app.proof.served_bundle import MAX_ASSETS
+
+    total = MAX_ASSETS + 3
+    pages = {"https://app.example/":
+             "<html>" + "".join(f'<script src="/c{i}.js"></script>'
+                                for i in range(total)) + "</html>"}
+    for i in range(total):
+        pages[f"https://app.example:443/c{i}.js"] = "const x = 1;"
+
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger()
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=_RecordingFetch(pages))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    unread = body["evidence"]["assets_unread"]
+    assert len(unread) == 3
+    assert all(u["reason"] == "budget_exhausted" for u in unread)
