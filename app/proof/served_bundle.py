@@ -309,28 +309,47 @@ def fetch_served_bundle(
     assets_read: list[str] = []
     seen: set[tuple[str, str]] = set()
 
-    def ingest(text: str, location: str) -> bool:
+    def ingest(text: str, location: str) -> None:
+        """Classify one blob, and record that we read it.
+
+        `assets_read` is appended HERE, unconditionally, and that is the whole
+        point of the field. It used to be appended by the callers only when a
+        scan turned up a secret, which made "we read twenty chunks and they
+        were clean" indistinguishable from "we read nothing" — both an empty
+        list. Found on the first real run, against our own deployment
+        (2026-08-31): `checked`, no findings, `assets_read: []`, and the stored
+        ledger row could not say what had been fetched.
+
+        Where a secret was FOUND is already carried by BundleFinding.location.
+        This answers the different question of what was LOOKED AT, and a row
+        that cannot answer it is not accounting.
+        """
+        assets_read.append(location)
         secrets, publ = scan_text(text)
-        had_secret = False
         for f in secrets:
             key = (f.pattern_id, f.secret)
             if key in seen:
                 continue
             seen.add(key)
             secret_found.append(BundleFinding(f, location))
-            had_secret = True
         for f in publ:
             key = (f.pattern_id, f.secret)
             if key in seen:
                 continue
             seen.add(key)
             publishable_found.append(BundleFinding(f, location))
-        return had_secret
 
-    if ingest(html, "(served html)"):
-        assets_read.append("(served html)")
+    ingest(html, "(served html)")
 
-    for asset_url in _same_origin_assets(html, target)[:MAX_ASSETS]:
+    # Counted BEFORE the cap, because "20 assets read" otherwise reads as "the
+    # page had 20 scripts" when it may mean "we stopped at 20". A Next.js build
+    # splits into far more chunks than that, so a clean result on a capped page
+    # covers the part we looked at and nothing more — and the caller has to be
+    # able to tell which of the two they got.
+    candidates = _same_origin_assets(html, target)
+    truncated = len(candidates) > MAX_ASSETS
+
+    for asset_url in candidates[:MAX_ASSETS]:
         try:
             a_target = validate_deployment_url(asset_url,
                                                allow_loopback=allow_loopback)
@@ -345,8 +364,7 @@ def fetch_served_bundle(
             continue
         if a_status != 200:
             continue
-        if ingest(a_text, a_target.url):
-            assets_read.append(a_target.url)
+        ingest(a_text, a_target.url)
 
     # Disclosure is unconditional: one per secret finding, whatever ownership is.
     disclosures: list[Disclosure] = []
@@ -391,12 +409,19 @@ def fetch_served_bundle(
             assets_read=assets_read,
             evidence={"reason": reason, "classes": classes, "refs": refs,
                       "ownership": ownership, "assets": assets_read,
+                      "assets_found": len(candidates),
+                      "assets_truncated": truncated,
                       "disclosures": [d.evidence() for d in disclosures]})
 
     return done(
         "checked", "секретов в отданном бандле не найдено",
         publishable=publishable_found, assets_read=assets_read,
         evidence={"reason": "no_secret", "ownership": ownership,
+                  # The scope of a CLEAN answer is the half that matters: this
+                  # is the result a reader is most likely to hear as "nothing
+                  # here", so it has to say how much was looked at.
+                  "assets_found": len(candidates),
+                  "assets_truncated": truncated,
                   "publishable": sorted({bf.finding.pattern_id
                                          for bf in publishable_found})})
 
