@@ -573,6 +573,27 @@ refuses to collapse the two — the same disjoint-population rule Part A applies
 to an unreadable bundle. Run it somewhere with outbound HTTPS; from a sandboxed
 agent session it returns 78, which leaves Part C blocked, correctly.
 
+### Result, measured 2026-08-31 on the production host — PASSED
+
+```
+HALF 1  connecting to 104.20.23.154  (Host + SNI = example.com)
+        OK: status=200, 559 chars read over verified TLS
+HALF 2  https://wrong.host.badssl.com/
+        OK: rejected by certificate verification (ConnectError)
+exit=0
+```
+
+**The doubt is resolved, in the good direction: httpx verifies the certificate
+against the SNI hostname, not against the connected IP.** So
+`_default_fetch_text` closes the resolve-then-connect TOCTOU *without* paying
+for it in verification — the bytes come from the address the guard vetted, and
+the certificate still has to be valid for the name. Half 2 is what establishes
+the second clause; on its own, half 1 would have been equally consistent with
+verification being off entirely.
+
+Part C's transport precondition is met. What remains before a customer
+deployment is wiring and a decision, not a transport unknown.
+
 ### The class, assembled
 
 Part A (repo static) is blind to this class by ~93%. Part B proved the leak
