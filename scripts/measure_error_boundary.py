@@ -48,10 +48,12 @@ measures THAT commit, and prints the `slug@sha` list to replay the run exactly.
 
 from __future__ import annotations
 
+import datetime
 import io
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -220,6 +222,34 @@ def _resolve_head(slug: str) -> str:
         return json.load(resp)[0]["sha"]
 
 
+def _rate_limit_reset(exc: Exception) -> int | None:
+    """The epoch this exception's rate limit clears, or None if it is not one.
+
+    Separated from the message because the CALLER has to act on it: a spent
+    quota is a fact about the next request too, not only about this one.
+    """
+    if not isinstance(exc, urllib.error.HTTPError):
+        return None
+    if exc.code not in (403, 429):
+        return None
+    if exc.headers.get("x-ratelimit-remaining") != "0":
+        return None
+    try:
+        return int(exc.headers.get("x-ratelimit-reset", ""))
+    except ValueError:
+        return 0
+
+
+def _when(epoch: int) -> str:
+    """A time a person can act on. `unix 1788265311` needed a decoder ring to
+    answer the only question being asked of it — how long do I wait."""
+    if not epoch:
+        return "an unknown time"
+    when = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+    minutes = max(0, round((epoch - time.time()) / 60))
+    return f"{when:%Y-%m-%d %H:%M:%S UTC} (in {minutes} min)"
+
+
 def _why_unresolved(exc: Exception) -> str:
     """Rate limit, gone, or something else — never one word for all three.
 
@@ -227,12 +257,11 @@ def _why_unresolved(exc: Exception) -> str:
     a spent rate limit, and it read exactly like 43 deleted repositories. The
     same collapse has cost this project a diagnosis three times.
     """
+    reset = _rate_limit_reset(exc)
+    if reset is not None:
+        return (f"RATE LIMITED — quota resets at {_when(reset)}; set "
+                "GITHUB_TOKEN to raise the ceiling from 60/hour to 5000")
     if isinstance(exc, urllib.error.HTTPError):
-        remaining = exc.headers.get("x-ratelimit-remaining")
-        if exc.code in (403, 429) and remaining == "0":
-            reset = exc.headers.get("x-ratelimit-reset", "?")
-            return (f"RATE LIMITED (resets at unix {reset}); set GITHUB_TOKEN "
-                    "to raise the ceiling from 60/hour to 5000")
         if exc.code == 404:
             return "404 — private, renamed or deleted since the audit"
         return f"HTTP {exc.code}"
@@ -262,6 +291,19 @@ def _targets_from_file(path: Path) -> list[tuple[str, str]]:
         try:
             out.append((slug, _resolve_head(slug)))
         except Exception as exc:  # noqa: BLE001 — gone private, renamed, limited
+            reset = _rate_limit_reset(exc)
+            if reset is not None:
+                # STOP, do not send the rest. The quota is spent for every
+                # request, not just this one -- continuing printed the same
+                # sentence 43 times and buried the one fact worth reading
+                # under 42 copies of itself, having spent 42 more requests to
+                # learn nothing.
+                print(f"  ‼   RATE LIMITED after {len(out)} of {len(seen)} "
+                      f"resolved. Quota resets at {_when(reset)}.")
+                print("      Stopped instead of sending the rest, which would "
+                      "all fail. Re-run then,\n      or set GITHUB_TOKEN for "
+                      "5000/hour.")
+                break
             print(f"  ??  {slug:45s} head unresolved: {_why_unresolved(exc)}")
     return out
 
