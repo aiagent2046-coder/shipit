@@ -22,6 +22,10 @@ import zipfile
 from app.scan.error_boundary import (
     COVERAGE_COMPLETE,
     COVERAGE_EXHAUSTED,
+    MOUNT_NO,
+    MOUNT_NOT_REACT,
+    MOUNT_UNKNOWN,
+    MOUNT_YES,
     scan_error_boundary,
 )
 
@@ -295,6 +299,73 @@ def test_a_complete_walk_says_so_on_a_clean_verdict():
 
     assert scan.coverage == COVERAGE_COMPLETE
     assert scan.findings == []
+
+
+# --------------------------------------------------------------------------- #
+# mount — the denominator, which is a separate question from the finding
+# --------------------------------------------------------------------------- #
+
+def test_a_non_react_repo_is_not_in_the_denominator():
+    """An incidence over "every repository somebody submitted" says nothing
+    about a frontend tier. A Express server is not evidence that apps do or do
+    not blank."""
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"dependencies":{"express":"4"}}',
+        "server.js": "require('express')()",
+    }))
+
+    assert scan.mount == MOUNT_NOT_REACT
+
+
+def test_a_library_is_react_but_not_in_the_denominator_either():
+    scan = scan_error_boundary(_zip({
+        "package.json": LIB_PKG,
+        "src/components/Button/index.tsx": "export const B=()=> <button/>",
+    }))
+
+    assert scan.mount == MOUNT_NO
+
+
+def test_a_mounted_app_is_in_the_denominator_whether_or_not_it_fires():
+    fires = scan_error_boundary(_zip(ROUTED_SPA))
+    silent = scan_error_boundary(_zip({
+        **ROUTED_NEXT,
+        "app/error.tsx": "export default ()=> null",
+    }))
+
+    assert fires.mount == MOUNT_YES and fires.findings
+    assert silent.mount == MOUNT_YES and not silent.findings, (
+        "a router entry names the mount without reading a byte")
+
+
+def test_an_early_boundary_leaves_the_mount_unknown():
+    """The honest cost of the early exit. A boundary token ends the walk, so a
+    render call later in it was never looked for — and a component library that
+    ships an ErrorBoundary looks exactly like an app that has one. Counting
+    those as apps would inflate the denominator with things never at risk, so
+    they are counted separately instead of guessed."""
+    scan = scan_error_boundary(_zip({
+        "package.json": LIB_PKG,
+        "src/AAA.tsx": "class B{componentDidCatch(){}}",
+        "src/components/Button/index.tsx": "export const B=()=> <button/>",
+    }))
+
+    assert scan.findings == []
+    assert scan.mount == MOUNT_UNKNOWN
+
+
+def test_a_mount_seen_before_the_boundary_is_still_known():
+    """The same early exit, when the walk happened to pass the mount first:
+    then it IS known, and reporting it as undetermined would throw away a fact
+    we hold."""
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"dependencies":{"react":"18","react-dom":"18"}}',
+        "src/AAA_main.tsx": "createRoot(el).render(<App/>)",
+        "src/BBB_boundary.tsx": "class B{componentDidCatch(){}}",
+    }))
+
+    assert scan.findings == []
+    assert scan.mount == MOUNT_YES
 
 
 # --------------------------------------------------------------------------- #

@@ -4,8 +4,9 @@ The DRYDOCK_LENS_PLAN experiment, made concrete for question 1 of the frontend
 rubric — the cheapest of the six, the one the rubric says is "settled by reading
 lines". No LLM spend, no browser.
 
-    python scripts/measure_error_boundary.py
-    python scripts/measure_error_boundary.py owner/repo@<sha> owner/repo2@<sha>
+    python scripts/measure_error_boundary.py                    # pinned SERIES
+    python scripts/measure_error_boundary.py owner/repo@<sha> ...
+    python scripts/measure_error_boundary.py --from-file /root/audited-repos.txt
 
 THREE VERDICTS, NOT TWO. A repository is `MISSING`, `ok`, or `undetermined`, and
 the third is the reason app/scan/error_boundary.py returns a BoundaryScan rather
@@ -21,16 +22,34 @@ report could explain a verdict using logic that did not produce it. The whole
 deliverable here is an accountable per-repo call, so the analyzer says why and
 this prints what it said.
 
+TWO DENOMINATORS, AND ONLY ONE ANSWERS THE QUESTION. Incidence over every
+submitted repository is diluted by servers, CLIs and component libraries — none
+of which have a screen to blank, so none of them are evidence either way. The
+plan asks what a free frontend tier would have to say to the people it is for,
+and that is the incidence among MOUNTED react/next apps. Both are printed, the
+useful one first, with the mount classes beside them.
+
 THE CORPUS IS SMALL AND THAT IS THE POINT OF SAYING SO. batch_audit.SERIES pins
-three repositories by full commit SHA. Three is an anecdote, not an incidence,
-and no outcome over three repositories decides the plan's question. Widen it
-with slug@sha arguments — the plan names the cheap source: re-fetch the audited
-repositories and keep the ones that still reproduce their stored content_hash.
+three repositories by full commit SHA; three is an anecdote, not an incidence.
+`--from-file` reads the audited repositories out of a `repo_url|content_hash`
+dump and measures them.
+
+    THE STORED content_hash IS READ AND IGNORED, deliberately. It answers "is
+    this the same code the LLM saw", which is the ground-truth question for
+    comparing against stored findings. Incidence of a DETERMINISTIC rule does
+    not need it — any real repository counts — and requiring a hash match would
+    have discarded most of the corpus for a property this measurement never
+    uses. The two experiments were conflated in the plan; they are separate.
+
+A head resolved today is not reproducible tomorrow, which is why SERIES pins
+SHAs at all. So `--from-file` resolves each default branch to its commit SHA,
+measures THAT commit, and prints the `slug@sha` list to replay the run exactly.
 """
 
 from __future__ import annotations
 
 import io
+import json
 import sys
 import urllib.request
 import zipfile
@@ -40,6 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.scan.error_boundary import (  # noqa: E402
     COVERAGE_EXHAUSTED,
+    MOUNT_YES,
     scan_error_boundary,
 )
 
@@ -144,6 +164,63 @@ def _slug_sha(arg: str) -> tuple[str, str]:
     return slug, sha
 
 
+def _slug_from_repo_url(raw: str) -> str:
+    """`owner/repo` out of whatever the audits table stored."""
+    s = raw.strip().removesuffix(".git")
+    for prefix in ("https://github.com/", "http://github.com/", "github.com/"):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    parts = [p for p in s.split("/") if p]
+    return "/".join(parts[:2]) if len(parts) >= 2 else ""
+
+
+def _resolve_head(slug: str) -> str:
+    """The default branch's current commit SHA.
+
+    RESOLVED AND PRINTED, never used implicitly. A corpus fetched at "whatever
+    the branch points at today" is not a measurement anyone can repeat — the
+    same rule that made batch_audit.SERIES pin full SHAs ("a branch head would
+    silently fork the series"). So a run over a URL list resolves each head
+    once, measures that exact commit, and emits the `slug@sha` line needed to
+    replay the run byte for byte.
+    """
+    with urllib.request.urlopen(  # noqa: S310
+            f"https://api.github.com/repos/{slug}", timeout=60) as resp:
+        branch = json.load(resp).get("default_branch") or "HEAD"
+    with urllib.request.urlopen(  # noqa: S310
+            f"https://api.github.com/repos/{slug}/commits/{branch}",
+            timeout=60) as resp:
+        return json.load(resp)["sha"]
+
+
+def _targets_from_file(path: Path) -> list[tuple[str, str]]:
+    """`repo_url|content_hash` lines (the audits query) or bare repo URLs.
+
+    The content_hash column is READ AND IGNORED here, deliberately. It answers
+    "is this the same code the LLM saw", which is the ground-truth question for
+    comparing against stored findings. Incidence of a deterministic rule does
+    not need it: any real repository counts, and requiring a hash match would
+    have thrown away most of the corpus for a property this measurement never
+    uses.
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in path.read_text().splitlines():
+        raw = line.split("|", 1)[0].strip()
+        if not raw:
+            continue
+        slug = _slug_from_repo_url(raw)
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        try:
+            out.append((slug, _resolve_head(slug)))
+        except Exception as exc:  # noqa: BLE001 — gone private, renamed, deleted
+            print(f"  ??  {slug:45s} head unresolved: {type(exc).__name__}")
+    return out
+
+
 def _fetch(slug: str, sha: str) -> bytes:
     if fetch_repack is not None:
         return fetch_repack(slug, sha)
@@ -166,7 +243,13 @@ def main() -> int:
         return 1
 
     args = sys.argv[1:]
-    if args:
+    if args and args[0] == "--from-file":
+        if len(args) < 2:
+            raise SystemExit("--from-file needs a path")
+        print(f"RESOLVING heads from {args[1]}")
+        targets = _targets_from_file(Path(args[1]))
+        print(f"  {len(targets)} repositories resolved\n")
+    elif args:
         targets = [(*_slug_sha(a),) for a in args]
     else:
         targets = [(s.slug, s.sha) for s in SERIES]
@@ -177,9 +260,14 @@ def main() -> int:
               "here", file=sys.stderr)
         return 0
 
-    print(f"CORPUS — {len(targets)} pinned repositories\n")
-    fired = undetermined = decided = failed = 0
+    print(f"CORPUS — {len(targets)} repositories\n")
+    fired = undetermined = failed = 0
+    mounted_decided = other_decided = 0
+    by_mount: dict[str, int] = {}
+    replay: list[str] = []
+
     for slug, sha in targets:
+        replay.append(f"{slug}@{sha}")
         try:
             data = _fetch(slug, sha)
         except Exception as exc:  # noqa: BLE001 — one bad fetch must not end the run
@@ -188,32 +276,50 @@ def main() -> int:
             continue
 
         scan = scan_error_boundary(io.BytesIO(data))
+        by_mount[scan.mount] = by_mount.get(scan.mount, 0) + 1
+        # `files_read` can be far below `files_total` on a COMPLETE scan: a
+        # boundary token ends the walk. Printed together so nobody reads the
+        # small number as a truncated pass.
+        span = f"[{scan.coverage}, read {scan.files_read}]"
+
         if scan.coverage == COVERAGE_EXHAUSTED:
             undetermined += 1
-            print(f"  —   {slug:45s} UNDETERMINED — {scan.reason}")
-        elif scan.findings:
-            fired += 1
-            decided += 1
-            print(f"  ✗   {slug:45s} MISSING error boundary — {scan.reason}")
+            print(f"  —   {slug:45s} UNDETERMINED {span} — {scan.reason}")
+            continue
+        if scan.mount == MOUNT_YES:
+            mounted_decided += 1
         else:
-            decided += 1
-            print(f"  ✓   {slug:45s} ok — {scan.reason}")
+            other_decided += 1
+        if scan.findings:
+            fired += 1
+            print(f"  ✗   {slug:45s} MISSING {span} — {scan.reason}")
+        else:
+            print(f"  ✓   {slug:45s} ok {span} — {scan.reason}")
 
+    # TWO DENOMINATORS, AND ONLY ONE OF THEM ANSWERS THE QUESTION. Incidence
+    # over every submitted repository is diluted by servers, CLIs and component
+    # libraries, none of which have a screen to blank. The plan asks what a
+    # free frontend tier would have to say to the people it is for, and those
+    # are the MOUNTED apps.
     print()
-    if decided:
-        print(f"per-repo incidence: {fired}/{decided} = "
-              f"{100 * fired / decided:.0f}% of DECIDED repositories")
+    total_decided = mounted_decided + other_decided
+    if mounted_decided:
+        print(f"incidence among MOUNTED react/next apps: "
+              f"{fired}/{mounted_decided} = "
+              f"{100 * fired / mounted_decided:.0f}%   <- the plan's question")
     else:
-        print("per-repo incidence: no repository was decided")
+        print("incidence among MOUNTED react/next apps: none in this corpus")
+    if total_decided:
+        print(f"incidence over all decided repositories: {fired}/{total_decided}"
+              f" = {100 * fired / total_decided:.0f}%   (diluted by non-apps)")
+    classes = ", ".join(f"{k}={v}" for k, v in sorted(by_mount.items()))
+    print(f"  mount classes: {classes or 'none — nothing was read'}")
     if undetermined or failed:
         print(f"  not counted: {undetermined} undetermined (read budget), "
               f"{failed} unfetchable")
 
-    print("\nThis is the number DRYDOCK_LENS_PLAN asked for on the cheapest of "
-          "the six\nquestions. High incidence => a free static tier has "
-          "something to say on most\napps. Three pinned repositories cannot "
-          "decide that either way; widen the\ncorpus with slug@sha arguments "
-          "before drawing a line.")
+    print("\nreplay this exact run:\n  python scripts/measure_error_boundary.py "
+          + " \\\n    ".join(replay))
     return 0
 
 

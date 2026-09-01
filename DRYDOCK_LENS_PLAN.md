@@ -272,8 +272,57 @@ over DECIDED repositories and prints the undetermined and unfetchable counts
 beside it rather than absorbing them into a denominator — so a thin corpus reads
 as a thin corpus.
 
-The corpus has to be widened first, and the plan already named the free way: the
-re-fetchable audited repositories, kept where they still reproduce their stored
-`content_hash`.
+### First corpus run, 2026-09-01 — 2 of 3, and every call checked by hand
+
+| repository | verdict | evidence |
+|---|---|---|
+| `ai-co-founder-matching` | MISSING | 100 of 100 source files read, `app/layout.tsx`, no `error.*` |
+| `blank-slate` | ok | real class boundary, `<ErrorBoundary>` in the tree |
+| `zombiecodersmarteditor` | MISSING | 40 of 40 source files read, `app/layout.tsx`, no `error.*` |
+
+Not taken on the analyzer's word. Every boundary token and every mount in all
+three was printed with its line, and `blank-slate`'s silence is genuine:
+`src/components/ErrorBoundary.tsx` defines `getDerivedStateFromError` and
+`componentDidCatch`, and `src/App.tsx:217` wraps the tree in `<ErrorBoundary>`.
+Not a comment, not a string literal. **Zero false positives and zero false
+silences on three repositories, hand-checked** — which fixtures could not have
+established, since the fixtures were written by the same hand as the code.
+
+**And the number means nothing yet.** 2 of 3 carries a 95% interval of roughly
+9%–99%. It is not "67% of apps have no boundary"; it is "we looked at three".
+
+### The plan conflated two experiments, and one of them is much cheaper
+
+This document tied widening the corpus to re-fetching audited repositories and
+keeping the ones that still reproduce their stored `content_hash`. That is the
+right rule for ONE of the two uses, and the wrong rule for the one at hand:
+
+* **comparing a deterministic rule against the stored LLM findings** needs the
+  hash to match, or the comparison is against different code;
+* **measuring the incidence of a deterministic rule** does not need it at all.
+  Any real repository counts.
+
+Requiring the match would have discarded most of the corpus for a property this
+measurement never uses. The 43 audited repositories are usable today, and they
+are a better population than a random GitHub sample: they are what people
+actually brought to drydock, which is exactly who a free tier is for.
+
+`--from-file` does this, and pins what it measured: each default branch is
+resolved to a commit SHA, that SHA is what gets fetched, and the run prints the
+`slug@sha` list to replay itself. A head fetched implicitly is not a measurement
+anyone can repeat — the same rule that made `SERIES` pin full SHAs.
+
+### The denominator is the other half of the number
+
+Most of the 43 are not React apps. An incidence over "every repository somebody
+submitted" is diluted by servers, CLIs and component libraries, none of which
+have a screen to blank — and none of which are evidence either way. So
+`BoundaryScan` carries `mount` (`mounted` / `no_mount` / `not_react` /
+`undetermined`), and the report leads with **incidence among mounted apps**.
+
+`undetermined` is there for the same reason `coverage` is. Finding a boundary
+token ends the walk, correctly, and if no mount was seen before it, we do not
+know whether this is an app or a component library that ships a boundary.
+Counting those as apps would inflate the denominator with things never at risk.
 
 ## Result — TODO (per-repo incidence of the first deterministic frontend rules)
