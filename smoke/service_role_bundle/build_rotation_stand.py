@@ -47,13 +47,25 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 KEYS = HERE / "keys.rotation.env"
 
+# THE PAGE SAYS WHAT IT IS, IN PUBLIC. Whoever finds this host — a scanner, a
+# curious reader, us in six months — sees a JWT with a `service_role` claim in
+# the bundle and draws the only reasonable conclusion available to them, which
+# is that somebody leaked one. The note costs two lines and removes a reading
+# that would otherwise be entirely rational.
 INDEX = """<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>rotation stand</title>
+    <title>Drydock rotation stand — synthetic fixture</title>
   </head>
   <body>
+    <h1>Drydock rotation stand</h1>
+    <p><strong>This is a test fixture, not a deployed application.</strong>
+      The Supabase-shaped credential in this page's JavaScript is synthetic: a
+      random project ref, signed with a random secret that was discarded when it
+      was minted. It was never issued by Supabase and grants access to nothing.
+      It exists so an automated check can be shown to notice a credential in a
+      served bundle, and to notice when one changes.</p>
     <div id="app">loading…</div>
     <script type="module" src="/assets/entry-{entry}.js"></script>
   </body>
