@@ -415,6 +415,74 @@ def test_a_plain_nested_layout_is_still_not_the_root():
 
 
 # --------------------------------------------------------------------------- #
+# frameworks that write the mount for you
+# --------------------------------------------------------------------------- #
+
+def test_a_tanstack_start_app_is_mounted_without_a_render_call():
+    """MEASURED: Moscow2260/ai-productivity-hub in the 2026-09-01 corpus — a
+    Lovable-generated app, `.lovable/`, vite.config.ts, `"dev": "vite dev"`,
+    src/routes/index.tsx — was classified `no_mount` and dropped out of the
+    denominator. It is exactly the population a free frontend tier is for, and
+    it has no error boundary at all.
+
+    Next.js is not the only framework where nobody writes createRoot. When the
+    framework generates the entry, the author's source has no render call and
+    the app looked like a library."""
+    scan = scan_error_boundary(_zip({
+        "package.json": ('{"dependencies":{"react":"18","react-dom":"18",'
+                         '"@tanstack/react-start":"1"}}'),
+        "src/routes/index.tsx": "export const Route = createFileRoute('/')({})",
+        "src/routes/about.tsx": "export const Route = createFileRoute('/a')({})",
+    }))
+
+    assert scan.mount == MOUNT_YES
+    assert len(scan.findings) == 1
+    assert "TanStack" in scan.findings[0].file
+
+
+def test_a_remix_app_is_mounted():
+    scan = scan_error_boundary(_zip({
+        "package.json": ('{"dependencies":{"react":"18","react-dom":"18",'
+                         '"@remix-run/react":"2"}}'),
+        "app/routes/_index.tsx": "export default function Index(){return null}",
+    }))
+
+    assert scan.mount == MOUNT_YES
+
+
+def test_the_dependency_alone_is_not_a_mount():
+    """THE LINE THAT KEEPS THIS FROM RE-OPENING THE LIBRARY FALSE POSITIVE. A
+    package that merely depends on @tanstack/react-router is a consumer of it;
+    one that also carries a routes/ tree is an application built with it. Only
+    the pair counts."""
+    scan = scan_error_boundary(_zip({
+        "package.json": ('{"name":"router-helpers","dependencies":{"react":"18",'
+                         '"@tanstack/react-router":"1"}}'),
+        "src/helpers/link.tsx": "export const Link = ()=> <a/>",
+    }))
+
+    assert scan.mount == MOUNT_NO
+    assert scan.findings == []
+
+
+def test_a_terminal_react_app_is_not_a_screen_that_can_blank():
+    """MEASURED, and the gate got this one RIGHT: anxelswanz/astraea-agent is
+    React rendered to a terminal with ink — `ink`, `cli-highlight`, a repl
+    script. There is no white page to prevent, so it is correctly outside the
+    denominator. Kept as a test because it is the shape most likely to be
+    swept in by a future widening of the mount rule."""
+    scan = scan_error_boundary(_zip({
+        "package.json": ('{"dependencies":{"react":"18","ink":"5",'
+                         '"ink-text-input":"6"}}'),
+        "src/cli.ts": "run()",
+        "src/repl.tsx": "export const Repl = ()=> <Box/>",
+    }))
+
+    assert scan.mount == MOUNT_NO
+    assert scan.findings == []
+
+
+# --------------------------------------------------------------------------- #
 # workspaces — a monorepo is not "not a react app"
 # --------------------------------------------------------------------------- #
 

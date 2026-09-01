@@ -373,4 +373,76 @@ one sense and a mixed one in another: it contains `Blazity/next-enterprise`,
 curated starter templates, not applications somebody built in an evening. Any
 published number has to say so.
 
+## Result, 2026-09-01 — 11 of 12 mounted apps ship no error boundary
+
+41 of the 43 audited repositories resolved (two are gone: private, renamed or
+deleted since their audit).
+
+```
+incidence among MOUNTED react/next apps: 11/12 = 92%
+incidence over all decided repositories: 11/41 = 27%   (diluted by non-apps)
+  mount classes: mounted=12, no_mount=3, not_react=20, workspace_not_analyzed=6
+```
+
+### The three that decide whether to believe it, read by hand
+
+The rate is only interesting if it survives the most reputable repositories in
+the corpus, so those were checked rather than trusted:
+
+| repository | boundary tokens in source | app-router error file |
+|---|---|---|
+| `vercel/nextjs-subscription-payments` | **none** | none |
+| `Blazity/next-enterprise` | **none** | none |
+| `mckaywrigley/chatbot-ui` | **none** | none |
+
+Vercel's own subscription-payments template, an "enterprise-grade" Next.js
+starter, and a 30k-star chat application all ship no error boundary. The 92% is
+not the analyzer being wrong about serious projects.
+
+### What the number does NOT support, stated before anybody quotes it
+
+**Three of the twelve are ours** — `aiagent2046-coder/ai-co-founder-matching`,
+`aiagent2046-coder/devtools-aggregator`, and the `donjonson-hash` fork of the
+second. Exactly the contamination that killed the 56.5% figure earlier in this
+document. Without them: **8 of 9 = 89%**.
+
+**Six workspace repositories were not analyzed at all**, and they are the wide
+part of the uncertainty. If every one of them has a boundary the true figure is
+11/18 = **61%**; if none does, 17/18 = **94%**. That is the honest interval, and
+the six skew mature (`dubinc/dub` among them), so the low end is the more likely
+half. It still answers the plan's question in the affirmative: **even at 61%, a
+free deterministic tier has something to say about most applications it sees.**
+
+**The corpus is mixed.** `Blazity/next-enterprise`, `ixartz/Next-js-Boilerplate`,
+`jvidalv/nextal`, `hadrysm/nextjs-boilerplate` are curated starter templates, not
+applications somebody built in an evening. The single silent app is one of them.
+
+### Two more mount defects, both found by reading the per-repository lines
+
+**`Moscow2260/ai-productivity-hub` was dropped from the denominator, and it is
+the target user.** `.lovable/`, `vite.config.ts`, `"dev": "vite dev"`,
+`src/routes/index.tsx` — a Lovable-generated TanStack Start app with no boundary
+anywhere. Next.js is not the only framework that writes the mount for you; when
+it does, the author's source has no `createRoot` and the app reads as a library.
+Now recognized, paired: the framework dependency AND its routing directory,
+because a package that merely depends on `@tanstack/react-router` is a consumer
+of it while one that also carries a `routes/` tree is an application built with
+it.
+
+**`anxelswanz/astraea-agent` was excluded CORRECTLY**, and for a better reason
+than the run knew: `ink`, `ink-text-input`, `cli-highlight`, a `repl` script — it
+is React rendered to a terminal. There is no white page to prevent. Kept as a
+test, because it is the shape most likely to be swept back in by a future
+widening of the mount rule.
+
+### What this decides
+
+The plan asked whether a deterministic free tier would have anything to say on
+most apps. On this question, with this corpus: **yes**, with an interval of
+61–94% and a hand-checked centre of 89–92%.
+
+That is one of the six rubric questions. Whether the tier is worth building
+rests on two or three of them together, and the cost of the next one is now
+known: about a day, most of it spent on the mount gate rather than the rule.
+
 ## Result — TODO (per-repo incidence of the first deterministic frontend rules)

@@ -156,6 +156,28 @@ _ROOT_APP_LAYOUT = re.compile(
     r"^(src/)?app/((\([^/]+\)|\[[^/]+\])/)*layout\.(t|j)sx?$")
 _ROOT_PAGES_APP = re.compile(r"^(src/)?pages/(_app|index)\.(t|j)sx?$")
 
+# FRAMEWORKS THAT OWN THE MOUNT. Next.js is not the only one where nobody
+# writes createRoot: TanStack Start, Remix and Gatsby generate the entry, so
+# their applications have no render call anywhere in the author's source and
+# looked like libraries.
+#
+# MEASURED: Moscow2260/ai-productivity-hub, a Lovable-generated app in the
+# 2026-09-01 corpus -- `.lovable/`, vite.config.ts, `"dev": "vite dev"`,
+# src/routes/index.tsx -- was classified `no_mount` and dropped out of the
+# denominator. It is exactly the population a free frontend tier is for, it has
+# no error boundary at all, and it was not being counted.
+#
+# THE DEPENDENCY ALONE IS NOT ENOUGH, and pairing it with the routing directory
+# is what keeps this from re-opening the library false positive: a package that
+# merely depends on @tanstack/react-router is a consumer of it, while one that
+# also carries a routes/ tree is an application built with it.
+_FRAMEWORK_MOUNTS = (
+    ("@tanstack/react-start", re.compile(r"^(src/)?routes/"), "TanStack Start"),
+    ("@tanstack/react-router", re.compile(r"^(src/)?routes/"), "TanStack Router"),
+    ("@remix-run/react", re.compile(r"^app/routes/"), "Remix"),
+    ("gatsby", re.compile(r"^src/pages/"), "Gatsby"),
+)
+
 # An app-router error boundary file, anywhere under an app/ tree: a nested
 # error.tsx still catches for its subtree, and any of them buys silence.
 _APP_ERROR_FILE = re.compile(r"(^|/)app/(.*/)?(error|global-error)\.(t|j)sx?$")
@@ -249,13 +271,24 @@ def _all_deps(pkg: dict) -> dict:
     return deps
 
 
-def _router_entry(files: list[str]) -> str:
-    """A root-level router entry, or "". Names only — no contents needed."""
+def _router_entry(files: list[str], deps: dict) -> str:
+    """A router entry that means an application, or "". Names only.
+
+    Next.js and the pages router first, then the frameworks that generate the
+    mount themselves — see _FRAMEWORK_MOUNTS for why the dependency has to be
+    paired with the routing directory rather than trusted on its own.
+    """
     for name in files:
-        if _ROOT_APP_LAYOUT.search(name):
+        if _ROOT_APP_LAYOUT.search(name) or _ROOT_PAGES_APP.search(name):
             return name
-        if _ROOT_PAGES_APP.search(name):
-            return name
+    for dep, route_dir, label in _FRAMEWORK_MOUNTS:
+        if dep not in deps:
+            continue
+        for name in files:
+            if route_dir.search(name):
+                head = name.split("/")
+                where = "/".join(head[:2]) if head[0] == "src" else head[0]
+                return f"{where}/ ({label})"
     return ""
 
 
@@ -290,7 +323,7 @@ def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
 
         # Names settle two things without reading a byte, and one of them is
         # conclusive silence.
-        entry = _router_entry(files)
+        entry = _router_entry(files, deps)
         # A name-only silence cannot see a render call, so the mount is known
         # only when a router entry named it.
         named_mount = MOUNT_YES if entry else MOUNT_UNKNOWN
