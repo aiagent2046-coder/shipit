@@ -1702,3 +1702,67 @@ async def test_served_bundle_check_ledger_round_trips_in_real_sql(real_db):
     assert done["consent_phrase"] == "i-own-this-project", (
         "the phrase the caller typed must survive verbatim -- a boolean would "
         "store our interpretation of their act, not the act")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_check_is_not_a_baseline_in_real_sql(real_db):
+    """`latest_completed_for`'s outcome filter, against a real planner.
+
+    A row that finished as `skipped` (URL refused) or `error` (the deployment
+    would not answer) carries an empty finding list and means WE NEVER LOOKED.
+    Since an empty baseline now reads as "this deployment was clean at the last
+    check" (app/proof/rotation.py), admitting such a row would turn a failed
+    fetch into evidence of cleanliness — and then a credential that was there
+    all along would be reported as `newly_exposed`, blaming whatever shipped
+    in between.
+
+    The predicate is three words of SQL and no unit test can evaluate it; that
+    is what this file is for.
+    """
+    audit_repo = AuditRepository()
+    repo = ServedBundleCheckRepository()
+    run = uuid.uuid4().hex[:12]
+    url = f"https://app-{run}.example/"
+
+    audit = await audit_repo.create(
+        stack="nextjs", file_count=1, score_total=9.0,
+        score_json={"total": 9.0, "categories": {}, "basis": "static+llm"},
+        findings_json=[], repo_url=f"https://github.com/acme/app-{run}",
+        content_hash=f"smoke-bundle-{run}", engine_version="smoke-engine-1",
+    )
+    assert audit is not None, "DATABASE_URL not reaching get_pool -- false green"
+    audit_id = audit["id"]
+
+    for outcome in ("error", "skipped"):
+        row = await repo.start(audit_id=audit_id, client_key=f"c-{run}",
+                               consent_phrase="i-own-this-project")
+        await repo.complete(str(row["id"]), deployment_url=url,
+                            outcome=outcome, assets_read=[],
+                            result={"status": outcome, "findings": []})
+
+        assert await repo.latest_completed_for(
+            audit_id=audit_id, deployment_url=url) is None, (
+            f"a completed-but-{outcome} row must not serve as a baseline: it "
+            "has no findings because nothing was read, not because nothing "
+            "was there")
+
+    # A real check of the same deployment IS a baseline, so the filter is
+    # excluding the failures rather than excluding everything -- the way this
+    # assertion could pass for the wrong reason.
+    ok = await repo.start(audit_id=audit_id, client_key=f"c-{run}",
+                          consent_phrase="i-own-this-project")
+    await repo.complete(str(ok["id"]), deployment_url=url, outcome="checked",
+                        assets_read=["(served html)"],
+                        result={"status": "checked", "findings": []})
+
+    baseline = await repo.latest_completed_for(
+        audit_id=audit_id, deployment_url=url)
+    assert baseline is not None and str(baseline["id"]) == str(ok["id"])
+    assert baseline["result_json"]["findings"] == [], (
+        "and the empty list must survive the jsonb round-trip: it is what "
+        "still_clean is decided from")
+
+    # A different deployment under the same audit keeps its own history.
+    assert await repo.latest_completed_for(
+        audit_id=audit_id, deployment_url=f"https://other-{run}.example/",
+    ) is None
