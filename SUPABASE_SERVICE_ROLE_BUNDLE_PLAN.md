@@ -675,6 +675,31 @@ baseline row with `outcome` of `skipped` or `error`, and the ledger was keyed
 on the URL as typed rather than as normalized, so `https://app.example` and
 `https://app.example/` wrote two separate histories.
 
+**Confirmed live on `v2026.09.01-1`**, the first rotation verdict that is not a
+fixture:
+
+```
+"rotation": {"verdict": "still_clean",
+             "detail": "no credentials in the previous check of this deployment
+                        and none now, in the assets we were able to read —
+                        unchanged, not audited clean"}
+```
+
+That single line exercises the whole chain in production: the baseline row was
+found, `result_json.findings` came back out of jsonb as `[]`, `had_baseline`
+reached `compare_findings`, and the answer was "clean then, clean now" instead
+of "nothing to compare against". Six earlier runs could not produce it.
+
+**And what that run did NOT prove, because two of the three fixes were not
+reachable by it.** Every prior row was already `outcome = checked`, so the new
+filter never had a failed row to exclude; and the URL was typed with its
+trailing slash both times, so normalization changed nothing. Both are covered
+against real Postgres in `tests/test_db_postgres_smoke.py`, which is a
+different claim from "seen in production" and is written here as the weaker
+one. The remaining five verdicts — `newly_exposed`, `unchanged`,
+`replaced_still_shipped`, `gone_from_bundle`, `not_comparable` — need a
+deployment that actually serves a credential, and are fixture-only.
+
 **Where it was found matters more than what it was.** Not by a failing test —
 the suite was green, and the fixtures asserted `no_baseline` as correct. By
 looking at six identical live results and asking why they could not be anything
