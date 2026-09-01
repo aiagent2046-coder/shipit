@@ -706,6 +706,41 @@ looking at six identical live results and asking why they could not be anything
 else. Same shape as the three defects before it: the fixture agreed with the
 code, and reality did not.
 
+### The transitive walk reached a real finding, 2026-09-01
+
+Shipped 2026-08-31, and until now shown only against fixtures and against
+drydock.co, where it read 8 chunks and found nothing because there is nothing
+there. Those two together could not distinguish a walk that works from a walk
+that runs.
+
+The rotation stand is deliberately two hops deep — `index.html` names an entry
+chunk, that chunk names a client chunk by quoted filename, and the credential
+is only in the second. Against the live host:
+
+```
+status     : checked        leaked: True
+findings   : supabase_service_role  eyJhbGci••••K6T8  fp f88114460498
+             at .../assets/client-7ee9d42c.js
+assets_read: ["(served html)",
+              ".../assets/entry-bba46b16.js",
+              ".../assets/client-7ee9d42c.js"]
+assets_found: 2   assets_truncated: false   assets_unread: []
+```
+
+Three hops, and the finding is in the third. The fingerprint matches what the
+minter reported for `SERVICE_ROLE_A`, so the chain holds from mint through
+crawl to classification.
+
+**This does not move the boundary described above.** The walk still follows only
+names that are WRITTEN DOWN; a URL assembled at runtime from pieces is still not
+reached, and nothing can report when a computed name was missed. What changed is
+narrower and was worth having: "the walk finds a credential two hops from the
+HTML" is now measured rather than assumed.
+
+Measured with `scripts/preflight_bundle_check.py`, which runs the same fetch
+without calling the endpoint — so this cost none of the five daily requests, and
+the four that remain to spend are the ones that buy ledger rows.
+
 ### The class, assembled
 
 Part A (repo static) is blind to this class by ~93%. Part B proved the leak
