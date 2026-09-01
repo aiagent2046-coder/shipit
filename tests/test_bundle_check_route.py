@@ -70,8 +70,10 @@ class _FakeLedger:
         self.baseline = baseline
         self.started: list[dict] = []
         self.completed: list[dict] = []
+        self.looked_up: list[str] = []
 
     async def latest_completed_for(self, *, audit_id, deployment_url):
+        self.looked_up.append(deployment_url)
         return self.baseline
 
     async def start(self, *, audit_id, client_key, consent_phrase):
@@ -643,6 +645,100 @@ def test_a_first_check_says_no_baseline_not_success(monkeypatch):
     monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
                         lambda host, port, **kw: ["93.184.216.34"])
     ledger = _FakeLedger(baseline=None)
+    _override(audit={"id": AUDIT_ID}, ledger=ledger,
+              fetch=_RecordingFetch({
+                  "https://app.example/": INDEX_HTML,
+                  "https://app.example:443/assets/app.js": "const x = 1;"}))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["rotation"]["verdict"] == "no_baseline"
+
+
+def test_a_clean_recheck_of_a_clean_deployment_is_not_no_baseline(monkeypatch):
+    """THE CASE OUR OWN SITE IS IN, and the one that hid the defect.
+
+    drydock.co ships a publishable anon key and no secrets, so every check of
+    it stores `findings: []`. The route used to hand that empty list to
+    compare_findings and let it infer "no baseline" from emptiness -- which
+    meant the deployment we re-check most often could never report anything but
+    `no_baseline`, and we read that as the comparison not working rather than
+    as the comparison being asked the wrong question.
+    """
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger(baseline={"result_json": {"findings": []}})
+    _override(audit={"id": AUDIT_ID}, ledger=ledger,
+              fetch=_RecordingFetch({
+                  "https://app.example/": INDEX_HTML,
+                  "https://app.example:443/assets/app.js": "const x = 1;"}))
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["rotation"]["verdict"] == "still_clean"
+
+
+def test_a_secret_appearing_since_a_clean_check_reads_as_a_regression(
+        monkeypatch, leaking_deployment):
+    """The payoff. Same empty baseline as the test above, a credential now:
+    the endpoint must say the exposure APPEARED, not that it has nothing to
+    compare against."""
+    monkeypatch.setenv("API_KEY_PEPPER", "test-pepper-for-fingerprints")
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger(baseline={"result_json": {"findings": []}})
+    _override(audit={"id": AUDIT_ID}, ledger=ledger, fetch=leaking_deployment)
+    try:
+        body = _post().json()
+    finally:
+        _clear()
+
+    assert body["rotation"]["verdict"] == "newly_exposed"
+    assert body["rotation"]["still_shipped"]
+
+
+def test_the_same_deployment_typed_two_ways_is_one_history(monkeypatch):
+    """A URL with no path and the same URL with "/" are one deployment.
+
+    validate_deployment_url normalizes the empty path to "/", so the ledger has
+    to be keyed on the normalized form both when reading a baseline and when
+    writing the row. Keyed on what was typed, a customer alternating between
+    the two forms writes two histories and every check reports `no_baseline` --
+    which is exactly how a `newly_exposed` would be lost, since a missed
+    baseline and an absent one now say different things.
+    """
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger(baseline={"result_json": {"findings": []}})
+    _override(audit={"id": AUDIT_ID}, ledger=ledger,
+              fetch=_RecordingFetch({
+                  "https://app.example/": INDEX_HTML,
+                  "https://app.example:443/assets/app.js": "const x = 1;"}))
+    try:
+        # Typed WITHOUT the trailing slash, unlike every other test here.
+        body = _post(deployment_url="https://app.example").json()
+    finally:
+        _clear()
+
+    assert ledger.looked_up == ["https://app.example/"]
+    assert ledger.completed[0]["deployment_url"] == "https://app.example/"
+    # And the consequence: the earlier row was found, so this is a comparison.
+    assert body["rotation"]["verdict"] == "still_clean"
+
+
+def test_a_baseline_row_without_a_finding_list_is_no_baseline(monkeypatch):
+    """A completed row whose result_json is null or is missing `findings`
+    cannot say the deployment was clean -- it says we cannot read it. Treating
+    a missing key as an empty list is how "we have no record" would become
+    "there was nothing there", which is the same fabrication in a smaller
+    place."""
+    monkeypatch.setattr("app.proof.served_bundle.resolve_and_vet",
+                        lambda host, port, **kw: ["93.184.216.34"])
+    ledger = _FakeLedger(baseline={"result_json": None})
     _override(audit={"id": AUDIT_ID}, ledger=ledger,
               fetch=_RecordingFetch({
                   "https://app.example/": INDEX_HTML,
