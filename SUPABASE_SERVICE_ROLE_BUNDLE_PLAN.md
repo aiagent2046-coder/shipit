@@ -618,6 +618,69 @@ pieces (`base + hash + ".js"`) is not written down anywhere and is not reached.
 computed name did. So the supportable sentence is "every script we could find
 from what is written down", never "every script the app can load".
 
+### The four phantom chunks are gone, measured 2026-09-01 on drydock.co
+
+The transitive walk shipped in `v2026.08.31-5` and the first run after it says:
+
+| | 2026-08-31, before | 2026-09-01, after |
+|---|---|---|
+| `assets_found` | 12 | **8** |
+| JS actually read | 8 | **8** |
+| `assets_unread` | (field not yet shipped) | **`[]`** |
+| `assets_truncated` | false | false |
+
+Twelve minus the four doubled turbopack manifest paths is eight, and the set of
+chunks actually read did not change. So the fix removed phantoms rather than
+narrowing the walk — which is the reading the numbers had to distinguish,
+because a walk that found fewer things and read the same number of things looks
+identical to a walk that broke.
+
+**What this does NOT show.** `assets_unread` is empty here because nothing
+failed, and that is only legible because the empty list is now written on every
+run. A NON-empty `assets_unread` on a live deployment has still never been
+observed — the reasons (`budget_exhausted`, `refused: …`, `fetch_failed: …`,
+`http_<n>`) are covered by fixtures only. And drydock.co is a landing page: the
+route-level chunk splitting that would exercise the transitive walk's real
+purpose is not present on it, so the boundary described above is still
+unmeasured, not disproved.
+
+### The rotation verdict was unreachable on a clean deployment, found 2026-09-01
+
+Six consented runs against drydock.co, and every one reported
+`rotation: no_baseline`. Read as a fluke of ordering for a day; it was
+structural, and the ledger says so plainly — five completed rows, all
+`outcome = checked`, all with `jsonb_array_length(result_json->'findings') = 0`.
+
+`compare_findings` inferred "no baseline" from an EMPTY baseline finding list.
+Three unrelated situations produce that list, and they had one answer between
+them:
+
+* no earlier check of this deployment — genuinely `no_baseline`;
+* an earlier check that found no credentials — the baseline exists and is clean;
+* an earlier check whose findings carry no fingerprint (no pepper) — not
+  comparable, which is a gap in OUR configuration, not a fact about theirs.
+
+The consequence is not cosmetic. A credential appearing on a deployment that
+was clean at the last check is the most valuable sentence this table can
+produce, and it was being rendered as "nothing to compare against" — on the
+class of deployment most likely to be re-checked on a schedule, since a clean
+one is exactly the one a customer re-runs.
+
+The caller now states `had_baseline` (a required keyword, no default: only the
+caller knows whether a prior row exists), and two verdicts were added,
+`still_clean` and `newly_exposed`, plus `not_comparable` for the missing
+fingerprint. Two adjacent holes closed with it, both of which would have turned
+"we never looked" into "it was clean": `latest_completed_for` accepted a
+baseline row with `outcome` of `skipped` or `error`, and the ledger was keyed
+on the URL as typed rather than as normalized, so `https://app.example` and
+`https://app.example/` wrote two separate histories.
+
+**Where it was found matters more than what it was.** Not by a failing test —
+the suite was green, and the fixtures asserted `no_baseline` as correct. By
+looking at six identical live results and asking why they could not be anything
+else. Same shape as the three defects before it: the fixture agreed with the
+code, and reality did not.
+
 ### The class, assembled
 
 Part A (repo static) is blind to this class by ~93%. Part B proved the leak

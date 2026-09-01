@@ -3616,18 +3616,33 @@ class ServedBundleCheckRepository:
     async def latest_completed_for(
         self, *, audit_id: str, deployment_url: str,
     ) -> dict[str, Any] | None:
-        """The most recent FINISHED check of this deployment, or None.
+        """The most recent SUCCESSFUL check of this deployment, or None.
 
-        The baseline a rotation verdict compares against. Two filters carry the
-        meaning:
+        The baseline a rotation verdict compares against. Three filters carry
+        the meaning:
 
         * `completed_at is not null` — an open row is a check that started and
           may never have read anything. Comparing against one would produce
           "the credential is gone" from a run that simply crashed, which is the
           worst possible direction for this verdict to be wrong in.
+        * `outcome = 'checked'` — a row that finished as 'skipped' (URL
+          refused) or 'error' (the deployment would not answer) also carries an
+          empty finding list, and it means we never looked. Since an empty
+          baseline now reads as "this deployment was clean at the last check",
+          admitting those rows would turn a failed fetch into evidence of
+          cleanliness. The literal matches ServedBundleResult.status in
+          app/proof/served_bundle.py, spelled out rather than imported so this
+          module keeps no dependency on the fetch layer.
         * the SAME deployment_url — a customer with a staging and a production
           URL under one audit gets two independent baselines, because they are
-          two different exposures.
+          two different exposures. The caller passes the NORMALIZED url
+          (app/proof/served_bundle.validate_deployment_url), so that split
+          happens on genuinely different deployments and not on whether
+          somebody typed a trailing slash. Migration 0037 already describes
+          this column as "the URL as validated, not as typed"; that was the
+          intent and it only became true in the route on 2026-09-01 — the
+          comment is left alone because the file is checksummed in the
+          migration ledger, and the correction lives here instead.
         """
         try:
             pool = await get_pool()
@@ -3643,6 +3658,7 @@ class ServedBundleCheckRepository:
                 where audit_id = %s
                   and deployment_url = %s
                   and completed_at is not null
+                  and outcome = 'checked'
                 order by completed_at desc
                 limit 1
                 """,
