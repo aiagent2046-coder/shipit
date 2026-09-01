@@ -124,6 +124,10 @@ _MAX_SOURCE_FILES = 4000
 _MAX_TOTAL_BYTES = 24_000_000
 _MAX_FILE_BYTES = 400_000
 
+# The finding this module emits, named once so the Fix Pack and the
+# scanner set pin can import it rather than re-spell it.
+RULE_ID = "missing-error-boundary"
+
 COVERAGE_COMPLETE = "complete"
 COVERAGE_EXHAUSTED = "budget_exhausted"
 
@@ -334,7 +338,7 @@ class _Budget:
 
 def _finding(where: str, read: int) -> CheckFinding:
     return CheckFinding(
-        rule_id="missing-error-boundary",
+        rule_id=RULE_ID,
         title="No error boundary above the app's routes",
         severity="high",
         # The fact -- no boundary token in a mounted react/next app -- is

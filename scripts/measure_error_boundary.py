@@ -7,6 +7,7 @@ lines". No LLM spend, no browser.
     python scripts/measure_error_boundary.py                    # pinned SERIES
     python scripts/measure_error_boundary.py owner/repo@<sha> ...
     python scripts/measure_error_boundary.py --from-file /root/audited-repos.txt
+    PER_STRATUM=40 python scripts/measure_error_boundary.py --strata
 
 THREE VERDICTS, NOT TWO. A repository is `MISSING`, `ok`, or `undetermined`, and
 the third is the reason app/scan/error_boundary.py returns a BoundaryScan rather
@@ -267,6 +268,60 @@ def _why_unresolved(exc: Exception) -> str:
     return type(exc).__name__
 
 
+DATA = Path(__file__).resolve().parent / "data"
+STRATA = (("Lovable", "lovable_candidates.txt"),
+          ("bolt", "bolt_candidates.txt"),
+          ("hand-written", "handwritten_candidates.txt"))
+
+
+def _load_candidates(filename: str, per_stratum: int | None) -> list[str]:
+    """The sibling scripts' loader, verbatim in semantics: strip, skip `#`,
+    first occurrence wins. The same rules or the counts stop agreeing with
+    measure_rls_blind_spot and the others that read these files."""
+    slugs: list[str] = []
+    seen: set[str] = set()
+    for line in (DATA / filename).read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line in seen:
+            continue
+        seen.add(line)
+        slugs.append(line)
+    return slugs[:per_stratum] if per_stratum else slugs
+
+
+def _strata_targets(per_stratum: int | None) -> list[tuple[str, str, str]]:
+    """`(stratum, slug, sha)` for the three-strata corpus in scripts/data/.
+
+    Resolving a head costs one API request per repository and the anonymous
+    ceiling is 60 an hour; the full corpus is 540. So a run over more than 60
+    REFUSES without GITHUB_TOKEN rather than resolving the first 60 and
+    reporting a stratum that is 60/211 Lovable and 0 of the rest -- a shape
+    that would read as a result and be nothing of the kind.
+    """
+    wanted = [(label, slug) for label, fn in STRATA
+              for slug in _load_candidates(fn, per_stratum)]
+    if len(wanted) > 60 and not os.environ.get("GITHUB_TOKEN", "").strip():
+        raise SystemExit(
+            f"{len(wanted)} repositories need {len(wanted)} head resolutions "
+            "and the anonymous ceiling is 60 an hour. Set GITHUB_TOKEN, or "
+            "PER_STRATUM=20 for a first look that fits.")
+    out: list[tuple[str, str, str]] = []
+    for label, raw in wanted:
+        slug = _slug_from_repo_url(raw)
+        if not slug:
+            continue
+        try:
+            out.append((label, slug, _resolve_head(slug)))
+        except Exception as exc:  # noqa: BLE001 — gone, or limited
+            reset = _rate_limit_reset(exc)
+            if reset is not None:
+                print(f"  ‼   RATE LIMITED after {len(out)} of {len(wanted)} "
+                      f"resolved. Quota resets at {_when(reset)}.")
+                break
+            print(f"  ??  {slug:45s} head unresolved: {_why_unresolved(exc)}")
+    return out
+
+
 def _targets_from_file(path: Path) -> list[tuple[str, str]]:
     """`repo_url|content_hash` lines (the audits query) or bare repo URLs.
 
@@ -329,7 +384,17 @@ def main() -> int:
         return 1
 
     args = sys.argv[1:]
-    if args and args[0] == "--from-file":
+    strata_of: dict[str, str] = {}
+    if args and args[0] == "--strata":
+        per = os.environ.get("PER_STRATUM", "").strip()
+        per_stratum = int(per) if per else None
+        print(f"RESOLVING heads for the three-strata corpus in {DATA}"
+              + (f" (PER_STRATUM={per_stratum})" if per_stratum else ""))
+        triples = _strata_targets(per_stratum)
+        targets = [(slug, sha) for _, slug, sha in triples]
+        strata_of = {slug: label for label, slug, _ in triples}
+        print(f"  {len(targets)} repositories resolved\n")
+    elif args and args[0] == "--from-file":
         if len(args) < 2:
             raise SystemExit("--from-file needs a path")
         print(f"RESOLVING heads from {args[1]}")
@@ -355,6 +420,9 @@ def main() -> int:
     mounted_decided = other_decided = 0
     by_mount: dict[str, int] = {}
     replay: list[str] = []
+    # (fired, mounted-decided) per stratum, so a difference between Lovable
+    # and hand-written is a number and not an impression.
+    per_stratum_tally: dict[str, list[int]] = {}
 
     for slug, sha in targets:
         replay.append(f"{slug}@{sha}")
@@ -378,6 +446,10 @@ def main() -> int:
             continue
         if scan.mount == MOUNT_YES:
             mounted_decided += 1
+            tally = per_stratum_tally.setdefault(strata_of.get(slug, "-"), [0, 0])
+            tally[1] += 1
+            if scan.findings:
+                tally[0] += 1
         else:
             other_decided += 1
         if scan.findings:
@@ -404,6 +476,12 @@ def main() -> int:
               f" = {100 * fired / total_decided:.0f}%   (diluted by non-apps)")
     classes = ", ".join(f"{k}={v}" for k, v in sorted(by_mount.items()))
     print(f"  mount classes: {classes or 'none — nothing was read'}")
+    if strata_of:
+        print("  by stratum (fired / mounted):")
+        for label, _fn in STRATA:
+            f_, m_ = per_stratum_tally.get(label, [0, 0])
+            pct = f"{100 * f_ / m_:.0f}%" if m_ else "—"
+            print(f"    {label:13s} {f_}/{m_} = {pct}")
     if undetermined or failed:
         print(f"  not counted: {undetermined} undetermined (read budget), "
               f"{failed} unfetchable")

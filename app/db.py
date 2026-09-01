@@ -47,7 +47,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.scan.pipeline import BASIS_STATIC_ONLY
-from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
+from app.scan.scoring import CATEGORIES
 
 import psycopg
 from psycopg.rows import dict_row
@@ -378,16 +378,36 @@ def _backfill_unexamined(score: Any) -> Any:
     full green 10.0, which is precisely the claim (issue #181) the key exists
     to prevent. Absent must not read as "everything was examined".
 
-    Derived from LLM_ONLY_CATEGORIES rather than a literal list: it is the
-    same constant compute_scores excludes from the mean, so the backfilled
-    answer cannot disagree with the one a fresh audit produces.
+    A FROZEN LIST, AND NO LONGER THE LIVE CONSTANT. This used to derive from
+    LLM_ONLY_CATEGORIES on the argument that the backfill must agree with a
+    fresh audit. That argument inverted the day Frontend left that set: a row
+    with no `unexamined` key predates the key itself, so it predates
+    app/scan/error_boundary.py by weeks, and on the engine that produced it
+    nothing looked at Frontend at all. Its 10.0 there is as unearned as its
+    Auth 10.0. Reading today's constant would have those old rows start
+    claiming a Frontend examination that never happened -- the exact defect
+    this function exists to prevent, arriving through the fix for it.
+
+    The set is what LLM-only meant for every engine that stored a row without
+    this key. It does not track the constant, by design, and is asserted in
+    tests/test_db.py as the historical fact it is.
     """
     if not isinstance(score, dict) or "unexamined" in score:
         return score
     if str(score.get("basis") or "") != BASIS_STATIC_ONLY:
         return score
     return {**score,
-            "unexamined": [c for c in CATEGORIES if c in LLM_ONLY_CATEGORIES]}
+            "unexamined": [c for c in CATEGORIES
+                           if c in _LLM_ONLY_BEFORE_UNEXAMINED_WAS_STORED]}
+
+
+# What LLM_ONLY_CATEGORIES contained on every engine that stored a score
+# without an `unexamined` key. Frontend joined the live set on 2026-08-2x with
+# only the web rubric producing it, and left on 2026-09-01 when the
+# error-boundary scan became a static producer; every row this backfill
+# touches was scored while it was in. See _backfill_unexamined.
+_LLM_ONLY_BEFORE_UNEXAMINED_WAS_STORED = frozenset(
+    {"Auth", "Money & Data", "Frontend"})
 
 
 # Marks a fixpack_jobs.detail written by the stale-lease reaper rather than by the

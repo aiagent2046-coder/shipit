@@ -12,6 +12,8 @@ import email.message
 import time
 import urllib.error
 
+import pytest
+
 from scripts.measure_error_boundary import (
     _api_headers,
     _rate_limit_reset,
@@ -205,3 +207,47 @@ def test_something_that_is_not_a_repository_url_yields_nothing():
     corpus, not become a request for a repository nobody named."""
     assert _slug_from_repo_url("not-a-url") == ""
     assert _slug_from_repo_url("") == ""
+
+
+def test_the_strata_loader_matches_the_sibling_scripts(tmp_path, monkeypatch):
+    """Comment lines skipped, first occurrence wins, PER_STRATUM caps -- the
+    exact rules measure_rls_blind_spot.load_candidates applies. If they
+    diverge, the error-boundary incidence and the RLS blind-spot rate are
+    measured over two different corpora that share a filename."""
+    from scripts import measure_error_boundary as m
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "x_candidates.txt").write_text(
+        "# discovery output, not a corpus\n"
+        "acme/one\n\nacme/two\nacme/one\n# trailing\nacme/three\n")
+    monkeypatch.setattr(m, "DATA", data)
+
+    assert m._load_candidates("x_candidates.txt", None) == [
+        "acme/one", "acme/two", "acme/three"]
+    assert m._load_candidates("x_candidates.txt", 2) == ["acme/one", "acme/two"]
+
+
+def test_a_strata_run_over_the_anonymous_ceiling_refuses_up_front(
+        tmp_path, monkeypatch):
+    """Resolving 61+ heads without a token would resolve the first 60 and
+    stop -- a corpus that is 60/211 Lovable and none of the other two strata,
+    which reads as a result and is nothing of the kind. Refuse before the
+    first request, with the arithmetic."""
+    from scripts import measure_error_boundary as m
+    data = tmp_path / "data"
+    data.mkdir()
+    for _, fn in m.STRATA:
+        (data / fn).write_text("\n".join(f"acme/r{i}" for i in range(25)))
+    monkeypatch.setattr(m, "DATA", data)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    calls: list[str] = []
+    monkeypatch.setattr(m, "_resolve_head", lambda s: calls.append(s) or "a" * 40)
+
+    with pytest.raises(SystemExit, match="ceiling is 60"):
+        m._strata_targets(None)
+    assert calls == [], "refused before spending a single request"
+
+    # Under the ceiling it runs, and each triple carries its stratum.
+    out = m._strata_targets(10)
+    assert len(out) == 30
+    assert {label for label, _, _ in out} == {"Lovable", "bolt", "hand-written"}

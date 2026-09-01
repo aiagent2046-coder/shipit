@@ -44,6 +44,7 @@ from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
 from app.scan.rls import read_committed_sql
 from app.scan.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
 from app.scan.service_role import RULE_ID as SERVICE_ROLE_RULE_ID
+from app.scan.error_boundary import RULE_ID as ERROR_BOUNDARY_RULE_ID
 from app.scan.sql_schema import parse_schema
 from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
 from app.scan.secrets import (
@@ -66,6 +67,12 @@ SECRET_RULE_IDS = frozenset(r.id for r in RULES) - _EXCLUDED_SECRET_RULE_IDS
 _CHECK_RULE_IDS = frozenset({"env-file-committed", "gitignore-missing-secrets"})
 
 _RLS_RULE_IDS = frozenset({RLS_RULE_ID})
+
+# Frontend fixes the Pack can generate. Only the error boundary so far, and
+# only its app-router shape produces a file — the SPA/pages/Remix shapes are
+# recorded as skipped with the two-line change, because wrapping a mount is an
+# edit to the customer's own entry file and this Pack does not guess at those.
+_FRONTEND_RULE_IDS = frozenset({ERROR_BOUNDARY_RULE_ID})
 
 # rule_id -> the environment variable name we substitute the literal with.
 # Small, explicit, and deliberately not clever: a sensible conventional
@@ -428,7 +435,7 @@ def _is_fixable_rule(finding: dict) -> bool:
     code generation turns them into a pull request.
     """
     return finding.get("rule_id") in (
-        SECRET_RULE_IDS | _CHECK_RULE_IDS | _RLS_RULE_IDS)
+        SECRET_RULE_IDS | _CHECK_RULE_IDS | _RLS_RULE_IDS | _FRONTEND_RULE_IDS)
 
 
 # Below this length a dotenv value is not a credential, it is configuration.
@@ -958,6 +965,10 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     # database and rewriting a link in it desynchronises the two.
     _plan_rls_fixes(plan, eligible, zip_bytes)
 
+    # Frontend: create the app-router error boundary where we can, record the
+    # two-line change where we will not edit the customer's mount.
+    _plan_error_boundary_fixes(plan, eligible, zip_bytes)
+
     if known_secret_values:
         delivered: dict[str, str] = {}
         for name, text in contents.items():
@@ -972,6 +983,201 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
 
     return plan
 
+
+
+_ERROR_TSX = """\
+'use client'
+
+// Added by Drydock. Without an error boundary above your routes, a single
+// render error blanks the whole app; this shows a recoverable fallback and a
+// retry instead. See https://nextjs.org/docs/app/building-your-application/routing/error-handling
+export default function Error({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string }
+  reset: () => void
+}) {
+  return (
+    <div style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+      <h2>Something went wrong</h2>
+      <p>An unexpected error occurred while loading this page.</p>
+      <button onClick={() => reset()}>Try again</button>
+    </div>
+  )
+}
+"""
+
+_ERROR_JSX = """\
+'use client'
+
+// Added by Drydock. Without an error boundary above your routes, a single
+// render error blanks the whole app; this shows a recoverable fallback and a
+// retry instead. See https://nextjs.org/docs/app/building-your-application/routing/error-handling
+export default function Error({ error, reset }) {
+  return (
+    <div style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+      <h2>Something went wrong</h2>
+      <p>An unexpected error occurred while loading this page.</p>
+      <button onClick={() => reset()}>Try again</button>
+    </div>
+  )
+}
+"""
+
+
+_GLOBAL_ERROR_TSX = """\
+'use client'
+
+// Added by Drydock. `error.tsx` catches render errors in your routes, but not
+// an error in the root layout itself -- that one still blanks the page.
+// `global-error.tsx` is the boundary for the root layout, so it must render its
+// own <html> and <body> (it replaces the layout when it activates).
+export default function GlobalError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string }
+  reset: () => void
+}) {
+  return (
+    <html>
+      <body style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+        <h2>Something went wrong</h2>
+        <p>An unexpected error occurred while loading the app.</p>
+        <button onClick={() => reset()}>Try again</button>
+      </body>
+    </html>
+  )
+}
+"""
+
+_GLOBAL_ERROR_JSX = """\
+'use client'
+
+// Added by Drydock. `error.jsx` catches render errors in your routes, but not
+// an error in the root layout itself -- that one still blanks the page.
+// `global-error.jsx` is the boundary for the root layout, so it must render its
+// own <html> and <body> (it replaces the layout when it activates).
+export default function GlobalError({ error, reset }) {
+  return (
+    <html>
+      <body style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+        <h2>Something went wrong</h2>
+        <p>An unexpected error occurred while loading the app.</p>
+        <button onClick={() => reset()}>Try again</button>
+      </body>
+    </html>
+  )
+}
+"""
+
+
+def _app_router_target(file: str) -> tuple[str, str, str] | None:
+    """(directory for error.*, directory for global-error.*, extension) for a
+    Next.js app-router finding, or None when the render root is not an app
+    router we place a file into.
+
+    Only the app router gets a generated file: `error.tsx`/`error.jsx` is an
+    app-router mechanism. A SPA mount (`src/main.tsx`), the pages router
+    (`pages/_app.*`), Remix or TanStack entries are NOT app router and return
+    None, so the caller records them as skipped with the two-line change rather
+    than writing a file that would not be the boundary.
+
+    TWO DIRECTORIES, NOT ONE, and the first version of this got both wrong by
+    collapsing them. `error.tsx` only catches for the layout it sits BESIDE:
+    for a root layout at `app/[locale]/layout.tsx` an `app/error.tsx` is
+    outside that layout and catches nothing. So `error.*` goes in the
+    layout's own directory. `global-error.*` replaces the root layout and
+    Next.js only reads it at the app root, so that one goes at the `app/`
+    segment. And the whole path is kept: a workspace app's finding reads
+    `apps/web/app/layout.tsx`, and dropping the prefix wrote the file at the
+    repository root, in a directory that was not the application.
+    """
+    f = (file or "").strip()
+    # A framework label reads `src/routes/ (TanStack Start)`: space, paren,
+    # words, at the END. A route group reads `app/(onboarding)/layout.tsx`:
+    # paren as a path segment. Only the first is not an app-router layout --
+    # the first version of this test caught both with "(" in f, and
+    # ai-co-founder-matching's real root layout was skipped as a label.
+    if " (" in f or f.startswith("pages/") or "/pages/" in f:
+        return None
+    m = re.search(r"^(.*?)(?:^|/)?(app)/(?:.*/)?layout\.([jt]sx?)$", f)
+    if not m:
+        return None
+    layout_dir = f.rsplit("/", 1)[0]
+    # The app root is the `app` segment closest to the layout, with whatever
+    # sits before it -- "", "src", or "apps/web" -- preserved.
+    parts = layout_dir.split("/")
+    try:
+        app_idx = len(parts) - 1 - parts[::-1].index("app")
+    except ValueError:
+        return None
+    app_root = "/".join(parts[: app_idx + 1])
+    ext = "jsx" if m.group(3) in ("jsx", "js") else "tsx"
+    return layout_dir, app_root, ext
+
+
+def _plan_error_boundary_fixes(plan: FixpackPlan, eligible: list[dict],
+                               zip_bytes: bytes) -> None:
+    """Create `app/error.tsx` for an app-router app; record the rest as skipped.
+
+    The app-router case is a pure file creation -- no edit to code the customer
+    wrote -- so it is the shape the Pack delivers with confidence. Every other
+    render root (a Vite SPA, the pages router, Remix) needs the customer's own
+    entry file wrapped, and this Pack does not rewrite a mount it did not write;
+    those are recorded in `skipped`, carrying the analyzer's own fix_hint (the
+    <ErrorBoundary> two-liner), because a refusal with the change in hand is
+    information and silence is not -- the same rule as the RLS refusals above.
+    """
+    findings = [f for f in eligible
+                if f.get("rule_id") == ERROR_BOUNDARY_RULE_ID]
+    if not findings:
+        return
+
+    existing = {_repo_relative(n)
+                for n in zipfile.ZipFile(io.BytesIO(zip_bytes)).namelist()}
+
+    for finding in findings:
+        target = _app_router_target(finding.get("file", ""))
+        if target is None:
+            plan.skipped.append(_skipped(
+                finding,
+                "adding an error boundary here means wrapping your app's root "
+                "component, which edits your entry file — the Pack does not "
+                "rewrite a mount you wrote. The two-line change is in the "
+                "suggested fix."))
+            continue
+        layout_dir, app_root, ext = target
+        filename = f"error.{ext}"
+        error_path = f"{layout_dir}/error.{ext}"
+        global_path = f"{app_root}/global-error.{ext}"
+        # The analyzer fires only when NO boundary exists, so in the fire case
+        # neither of these is present. This guard is defensive: if either is
+        # somehow here, the app already has a boundary and the Pack leaves it.
+        if error_path in existing or global_path in existing:
+            plan.skipped.append(_skipped(
+                finding, f"`{error_path}` (or a global-error beside it) already "
+                "exists; leaving your boundary untouched."))
+            continue
+        is_tsx = ext == "tsx"
+        # Both files, because they catch DIFFERENT failures: error.tsx covers
+        # render errors in the routes below the root layout, global-error.tsx
+        # covers an error in the root layout itself -- which error.tsx cannot
+        # catch and which is a common blank-page source. Both are new files.
+        plan.files[error_path] = _ERROR_TSX if is_tsx else _ERROR_JSX
+        plan.files[global_path] = _GLOBAL_ERROR_TSX if is_tsx else _GLOBAL_ERROR_JSX
+        plan.config_fixes.append(ConfigFix(
+            rule_id=ERROR_BOUNDARY_RULE_ID,
+            title="Error boundaries above your routes",
+            detail=(
+                f"`{error_path}` and `{global_path}` — Next.js app-router error "
+                f"boundaries. Without them, a render error replaces the whole "
+                f"app with a blank page: `{filename}` catches errors in your "
+                f"routes, and `global-error.{ext}` catches an error in the root "
+                f"layout itself, which the first cannot. Both are new files, so "
+                f"they change nothing you already wrote."),
+        ))
 
 
 def _plan_rls_fixes(plan: FixpackPlan, eligible: list[dict],
@@ -1063,6 +1269,18 @@ def render_pr_title(plan: FixpackPlan) -> str:
     if n_sec:
         return (f"Drydock Fix Pack: rotate {n_sec} hardcoded "
                 f"{_plural(n_sec, 'secret')} before merging")
+
+    # No rotation to demand -- so the title names what the PR DOES, not what is
+    # left to do. When the only substantive change is the error boundary, the
+    # old "secure repository configuration" was both vague and wrong-category:
+    # a blank-page-on-error is reliability, not security, and the customer
+    # skimming the title could not tell what the Pack added. A rotation Pack
+    # that ALSO adds a boundary never reaches here -- the branches above keep
+    # rotation as the headline, because that is the half nobody may scroll
+    # past. This branch only sharpens the previously-bland case.
+    config_rules = {cf.rule_id for cf in plan.config_fixes}
+    if config_rules == {ERROR_BOUNDARY_RULE_ID}:
+        return "Drydock Fix Pack: add the error boundary your app is missing"
     return "Drydock Fix Pack: secure repository configuration"
 
 
