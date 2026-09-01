@@ -116,6 +116,21 @@ _MAX_FILE_BYTES = 400_000
 COVERAGE_COMPLETE = "complete"
 COVERAGE_EXHAUSTED = "budget_exhausted"
 
+# What kind of thing this repository is, which is the DENOMINATOR question. An
+# incidence over "every repository somebody submitted" answers nothing about a
+# frontend tier: most of them are not React apps at all, and a library that
+# cannot go blank is not evidence that apps do not blank either.
+#
+# MOUNT_UNKNOWN is not squeamishness. Finding a boundary token ends the walk --
+# correctly, since nothing later could unsee it -- and if no mount was seen in
+# the files read before it, we genuinely do not know whether this is an app or a
+# component library that ships a boundary. Counting those as apps would inflate
+# the denominator with things that were never at risk.
+MOUNT_YES = "mounted"
+MOUNT_NO = "no_mount"
+MOUNT_NOT_REACT = "not_react"
+MOUNT_UNKNOWN = "undetermined"
+
 # A ROOT-level router entry: the file an app-router error.tsx sits beside.
 # Anchored at the start of the (root-stripped) path, so `website/examples/app/`
 # in a docs repository is not somebody's application.
@@ -143,6 +158,9 @@ class BoundaryScan:
     # One phrase naming the signal that decided it, so a verdict is
     # accountable without re-deriving it somewhere else.
     reason: str = ""
+    # Whether this repository is a thing that can go blank -- the denominator
+    # for any incidence measured with this analyzer. See the MOUNT_* constants.
+    mount: str = MOUNT_UNKNOWN
     files_read: int = 0
     files_total: int = 0
 
@@ -220,19 +238,22 @@ def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
         deps = _all_deps(_read_package_json(zf, root))
         if not ({"react", "react-dom", "next"} & set(deps)):
             return BoundaryScan(reason="not a react/next app",
-                                files_total=len(files))
+                                mount=MOUNT_NOT_REACT, files_total=len(files))
 
         # Names settle two things without reading a byte, and one of them is
         # conclusive silence.
+        entry = _router_entry(files)
+        # A name-only silence cannot see a render call, so the mount is known
+        # only when a router entry named it.
+        named_mount = MOUNT_YES if entry else MOUNT_UNKNOWN
+
         if "react-error-boundary" in deps:
             return BoundaryScan(reason="react-error-boundary in dependencies",
-                                files_total=len(files))
+                                mount=named_mount, files_total=len(files))
         for name in files:
             if _APP_ERROR_FILE.search(name):
                 return BoundaryScan(reason=f"app-router error file: {name}",
-                                    files_total=len(files))
-
-        entry = _router_entry(files)
+                                    mount=named_mount, files_total=len(files))
 
         source = [n for n in files if _is_source(n)]
         read = 0
@@ -257,6 +278,10 @@ def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
                 return BoundaryScan(
                     coverage=COVERAGE_COMPLETE,
                     reason=f"boundary token in {name}",
+                    # The walk stopped here, so a mount later in it was never
+                    # looked for. Known only if something already named one.
+                    mount=(MOUNT_YES if (entry or render_call_in)
+                           else MOUNT_UNKNOWN),
                     files_read=read, files_total=len(files))
             if not render_call_in and any(c in text for c in _RENDER_CALLS):
                 render_call_in = name
@@ -268,13 +293,14 @@ def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
             coverage=COVERAGE_EXHAUSTED,
             reason=(f"stopped after {read} of {len(source)} source files; "
                     "whether a boundary exists is undetermined"),
+            mount=(MOUNT_YES if (entry or render_call_in) else MOUNT_UNKNOWN),
             files_read=read, files_total=len(files))
 
     render_root = entry or render_call_in
     if not render_root:
         return BoundaryScan(
             reason="react present but nothing mounts an app (library/embedded)",
-            files_read=read, files_total=len(files))
+            mount=MOUNT_NO, files_read=read, files_total=len(files))
 
     return BoundaryScan(
         findings=[CheckFinding(
@@ -305,4 +331,4 @@ def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
             ),
         )],
         reason=f"mounted at {render_root}, no boundary token in {read} files",
-        files_read=read, files_total=len(files))
+        mount=MOUNT_YES, files_read=read, files_total=len(files))
