@@ -9,11 +9,14 @@ tell.
 from __future__ import annotations
 
 import email.message
+import time
 import urllib.error
 
 from scripts.measure_error_boundary import (
     _api_headers,
+    _rate_limit_reset,
     _slug_from_repo_url,
+    _targets_from_file,
     _why_unresolved,
 )
 
@@ -35,8 +38,110 @@ def test_a_spent_rate_limit_does_not_read_as_a_deleted_repository():
         403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1756800000"}))
 
     assert "RATE LIMITED" in reason
-    assert "1756800000" in reason
     assert "GITHUB_TOKEN" in reason
+
+
+def test_the_reset_time_is_readable_without_a_decoder():
+    """`resets at unix 1788265311` answered no question anybody was asking. The
+    only one being asked is "how long do I wait", so the message says a clock
+    time and the minutes until it."""
+    reason = _why_unresolved(_http_error(
+        403, {"x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": str(int(time.time()) + 630)}))
+
+    assert "UTC" in reason
+    assert "in 10 min" in reason or "in 11 min" in reason
+    assert "unix" not in reason
+
+
+def test_a_rate_limit_is_reported_to_the_caller_and_not_only_to_the_reader():
+    """The caller has to STOP. A spent quota is a fact about the next request
+    too, so `_rate_limit_reset` returns the epoch rather than the resolver
+    learning it only from prose it cannot act on — which is how 42 further
+    requests got sent to be told the same thing."""
+    limited = _http_error(403, {"x-ratelimit-remaining": "0",
+                                "x-ratelimit-reset": "1756800000"})
+
+    assert _rate_limit_reset(limited) == 1756800000
+    assert _rate_limit_reset(_http_error(404, {})) is None
+    assert _rate_limit_reset(_http_error(403, {"x-ratelimit-remaining": "7"})) is None
+    assert _rate_limit_reset(TimeoutError()) is None
+
+
+def test_an_unparseable_reset_header_is_still_a_rate_limit():
+    """Losing the clock must not lose the diagnosis: without a usable reset we
+    still know the quota is spent, which is the part that decides whether to
+    keep sending."""
+    exc = _http_error(403, {"x-ratelimit-remaining": "0",
+                            "x-ratelimit-reset": "soon"})
+
+    assert _rate_limit_reset(exc) == 0
+    assert "RATE LIMITED" in _why_unresolved(exc)
+    assert "unknown time" in _why_unresolved(exc)
+
+
+def test_the_resolver_stops_sending_once_the_quota_is_spent(tmp_path,
+                                                            monkeypatch):
+    """THE POINT OF THE WHOLE DIAGNOSTIC. Knowing the quota is spent is worth
+    nothing if the loop keeps going: the 2026-09-01 run sent 42 more requests
+    after the first refusal and printed the same sentence 43 times, burying the
+    one fact worth reading under 42 copies of itself.
+    """
+    listing = tmp_path / "repos.txt"
+    listing.write_text("\n".join(
+        f"https://github.com/acme/app{i}|hash{i}" for i in range(20)))
+
+    calls: list[str] = []
+
+    def _limited(slug: str) -> str:
+        calls.append(slug)
+        if len(calls) <= 2:
+            return "a" * 40
+        raise _http_error(403, {"x-ratelimit-remaining": "0",
+                                "x-ratelimit-reset": "1756800000"})
+
+    monkeypatch.setattr(
+        "scripts.measure_error_boundary._resolve_head", _limited)
+    out = _targets_from_file(listing)
+
+    assert len(calls) == 3, (
+        "two successes, one refusal, and then it must stop — not walk the "
+        "remaining 17")
+    assert len(out) == 2, "what did resolve is kept and measured"
+
+
+def test_a_gone_repository_does_not_stop_the_resolver(tmp_path, monkeypatch):
+    """The other half: a 404 is about ONE repository, so the run continues.
+    Stopping on it would let a single deleted repo truncate the corpus."""
+    listing = tmp_path / "repos.txt"
+    listing.write_text("\n".join(
+        f"https://github.com/acme/app{i}" for i in range(5)))
+
+    def _one_gone(slug: str) -> str:
+        if slug == "acme/app2":
+            raise _http_error(404, {})
+        return "b" * 40
+
+    monkeypatch.setattr(
+        "scripts.measure_error_boundary._resolve_head", _one_gone)
+
+    assert len(_targets_from_file(listing)) == 4
+
+
+def test_the_same_repository_twice_is_resolved_once(tmp_path, monkeypatch):
+    """The audits dump is one row per repo_url, and the same repository can
+    appear as both a bare slug and a full URL. Resolving it twice would spend a
+    request to learn something already known, against a 60/hour ceiling."""
+    listing = tmp_path / "repos.txt"
+    listing.write_text(
+        "https://github.com/acme/app|h1\nacme/app|h2\ngithub.com/acme/app|h3\n")
+
+    calls: list[str] = []
+    monkeypatch.setattr("scripts.measure_error_boundary._resolve_head",
+                        lambda slug: calls.append(slug) or ("c" * 40))
+
+    assert _targets_from_file(listing) == [("acme/app", "c" * 40)]
+    assert calls == ["acme/app"]
 
 
 def test_a_404_says_the_repository_is_gone_not_that_we_were_throttled():
