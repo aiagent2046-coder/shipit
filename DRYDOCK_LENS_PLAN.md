@@ -406,12 +406,12 @@ not the analyzer being wrong about serious projects.
 second. Exactly the contamination that killed the 56.5% figure earlier in this
 document. Without them: **8 of 9 = 89%**.
 
-**Six workspace repositories were not analyzed at all**, and they are the wide
-part of the uncertainty. If every one of them has a boundary the true figure is
-11/18 = **61%**; if none does, 17/18 = **94%**. That is the honest interval, and
-the six skew mature (`dubinc/dub` among them), so the low end is the more likely
-half. It still answers the plan's question in the affirmative: **even at 61%, a
-free deterministic tier has something to say about most applications it sees.**
+**Six workspace repositories were not analyzed at all**, and they were the wide
+part of the uncertainty. If every one of them had a boundary the figure would be
+11/18 = **61%**; if none did, 17/18 = **94%**. That interval is why the next
+change was to analyze them rather than publish a range — see below. Even its low
+end answered the plan's question in the affirmative: at 61%, a free
+deterministic tier has something to say about most applications it sees.
 
 **The corpus is mixed.** `Blazity/next-enterprise`, `ixartz/Next-js-Boilerplate`,
 `jvidalv/nextal`, `hadrysm/nextjs-boilerplate` are curated starter templates, not
@@ -444,5 +444,30 @@ most apps. On this question, with this corpus: **yes**, with an interval of
 That is one of the six rubric questions. Whether the tier is worth building
 rests on two or three of them together, and the cost of the next one is now
 known: about a day, most of it spent on the mount gate rather than the rule.
+
+### Workspaces are analyzed now, so the interval can close
+
+Naming the six as `workspace_not_analyzed` was honest and not enough: an
+interval of 61–94% is not a measurement, it is a confession. Each react package
+inside a workspace is now analyzed as the application it is.
+
+Three decisions in it worth keeping:
+
+* **One finding per application, not per repository.** A monorepo's apps are
+  separate deployables that blank separately. Collapsing them would let a
+  protected `apps/web` report an unprotected `apps/admin` as fine — the exact
+  failure a repository-level verdict produces, and it has its own test.
+* **The read budget is shared across packages.** Per-package budgets would let
+  a six-application monorepo cost six times a single app's reading for one
+  audit. The allowance is what we are willing to spend on a repository.
+* **The finding's path carries the package prefix back**, so it names a file
+  that exists in the repository rather than one relative to a root only the
+  analyzer knows about.
+
+And a defect the change introduced and the tests caught: `_Budget` took the
+limits as plain dataclass defaults, which are evaluated when the class is
+defined. The two budget tests kept passing while silently exercising the real
+4000-file allowance instead of the small one they set. `default_factory` fixes
+it, and the mutation that restores the plain default now turns them red.
 
 ## Result — TODO (per-repo incidence of the first deterministic frontend rules)

@@ -63,7 +63,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.scan.error_boundary import (  # noqa: E402
     COVERAGE_EXHAUSTED,
-    MOUNT_WORKSPACE,
     MOUNT_YES,
     scan_error_boundary,
 )
@@ -405,12 +404,6 @@ def main() -> int:
               f" = {100 * fired / total_decided:.0f}%   (diluted by non-apps)")
     classes = ", ".join(f"{k}={v}" for k, v in sorted(by_mount.items()))
     print(f"  mount classes: {classes or 'none — nothing was read'}")
-    workspaces = by_mount.get(MOUNT_WORKSPACE, 0)
-    if workspaces:
-        print(f"  {workspaces} workspace repositories were NOT analyzed — their "
-              "react is in a\n  nested manifest, and those are disproportionately "
-              "the mature products,\n  so their absence pushes the rate above "
-              "what a full analysis would give")
     if undetermined or failed:
         print(f"  not counted: {undetermined} undetermined (read budget), "
               f"{failed} unfetchable")

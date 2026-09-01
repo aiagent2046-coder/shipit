@@ -47,6 +47,17 @@ is a property of mounting an app, so the signal is the mount — `createRoot(`,
 optionally under route groups and dynamic segments, or `pages/_app.*`), which is
 the file an `error.tsx` sits beside.
 
+A REPOSITORY CAN HOLD SEVERAL APPLICATIONS. A workspace root declares no react
+of its own, and reading only that manifest reported `dubinc/dub` — a Next.js
+product with its react in `apps/web/package.json` — as "not a react/next app"
+after reading zero files. Six of the 41 repositories in the 2026-09-01 corpus
+sat in that class, they skewed mature, and their absence is what left the
+measured rate as an interval (61-94%) instead of a number. Each react package in
+a workspace is now analyzed as the application it is, and each that lacks a
+boundary gets its own finding: they are separate deployables that blank
+separately, so one repository-level verdict would report an unprotected app as
+fine because a sibling was protected.
+
 AN EXHAUSTED BUDGET IS NOT AN ABSENCE, and this is the reason for `coverage`.
 Reading every file of a large monorepo to find one token is not free, so the
 sweep is bounded. When the bound is reached before a boundary is found, we do
@@ -130,12 +141,6 @@ MOUNT_YES = "mounted"
 MOUNT_NO = "no_mount"
 MOUNT_NOT_REACT = "not_react"
 MOUNT_UNKNOWN = "undetermined"
-# A workspace/monorepo whose root manifest declares no react, but some nested
-# one does. NOT the same as `not_react`, and calling it that was a false
-# statement in a report: `dubinc/dub` is a Next.js product and was printed as
-# "not a react/next app" after reading zero files. Analyzing workspaces is a
-# separate piece of work; until it exists, this says which it is.
-MOUNT_WORKSPACE = "workspace_not_analyzed"
 
 # A ROOT-level router entry: the file an app-router error.tsx sits beside.
 # Anchored at the start of the (root-stripped) path, so `website/examples/app/`
@@ -223,10 +228,9 @@ def _is_source(name: str) -> bool:
 def _read_package_json(zf: zipfile.ZipFile, root: str) -> dict:
     """The root package.json's parsed contents, or {}.
 
-    A nested manifest under `apps/*` or `packages/*` is not the application's
-    root manifest and is not read: in a workspace the root file is what
-    describes the deployed app. The cost is a miss on monorepos that keep no
-    root dependencies, which is the acceptable direction.
+    The first question only: is THIS directory an application. A workspace root
+    usually declares no react at all, and `_workspace_packages` is what finds
+    the applications inside it — see `scan_error_boundary`.
     """
     target = root + "package.json" if root else "package.json"
     try:
@@ -239,27 +243,6 @@ def _read_package_json(zf: zipfile.ZipFile, root: str) -> dict:
         return {}
 
 
-def _workspace_react_manifest(zf: zipfile.ZipFile, files: list[str],
-                              root: str) -> str:
-    """A nested package.json that declares react, or "".
-
-    Only asked when the ROOT manifest declares none. Depth-bounded: `apps/web`
-    and `packages/ui` are where a workspace puts its manifests, and walking
-    deeper would start reading vendored copies.
-    """
-    for name in files:
-        if not name.endswith("/package.json") or name.count("/") > 3:
-            continue
-        if any(p in _SKIP_DIRS for p in name.split("/")[:-1]):
-            continue
-        try:
-            raw = zf.read(root + name if root else name)
-            pkg = json.loads(raw[:_MAX_FILE_BYTES].decode("utf-8", "ignore"))
-        except (KeyError, ValueError):
-            continue
-        if {"react", "react-dom", "next"} & set(_all_deps(pkg)):
-            return name
-    return ""
 
 
 def _all_deps(pkg: dict) -> dict:
@@ -269,6 +252,37 @@ def _all_deps(pkg: dict) -> dict:
         if isinstance(val, dict):
             deps.update(val)
     return deps
+
+
+def _is_react(deps: dict) -> bool:
+    return bool({"react", "react-dom", "next"} & set(deps))
+
+
+def _workspace_packages(zf: zipfile.ZipFile, files: list[str],
+                        root: str) -> list[tuple[str, dict]]:
+    """`(directory, deps)` for every nested package that declares react.
+
+    Only asked when the ROOT manifest declares none. Depth-bounded: `apps/web`,
+    `packages/ui`, `frontend`, `web` are where a workspace puts its manifests,
+    and walking deeper starts reading vendored copies.
+
+    A monorepo can hold SEVERAL applications, and they are separate deployables
+    that blank separately — so this returns all of them rather than the first.
+    """
+    out: list[tuple[str, dict]] = []
+    for name in sorted(files):
+        if not name.endswith("/package.json") or name.count("/") > 3:
+            continue
+        if any(p in _SKIP_DIRS for p in name.split("/")[:-1]):
+            continue
+        try:
+            raw = zf.read(root + name if root else name)
+            pkg = json.loads(raw[:_MAX_FILE_BYTES].decode("utf-8", "ignore"))
+        except (KeyError, ValueError):
+            continue
+        if _is_react(_all_deps(pkg)):
+            out.append((name[: -len("package.json")], _all_deps(pkg)))
+    return out
 
 
 def _router_entry(files: list[str], deps: dict) -> str:
@@ -292,124 +306,210 @@ def _router_entry(files: list[str], deps: dict) -> str:
     return ""
 
 
-def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
-    """At most one `missing-error-boundary` finding for the whole repository.
+@dataclass
+class _Budget:
+    """Reading allowance, SHARED across the packages of one repository.
 
-    Whole-repo by nature: the question is whether ANY boundary exists above the
-    routes, so the answer is one finding or none, never one per file.
+    Per-package budgets would let a six-application monorepo cost six times a
+    single app's worth of reading for one audit. The allowance is a property of
+    what we are willing to spend on a repository, so it lives here and is spent
+    down.
+    """
+    # default_factory, not a plain default: a plain one is evaluated when the
+    # class is defined, which silently froze these at import and made the
+    # budget untestable -- the tests that set the limits kept passing while
+    # exercising the real 4000-file allowance instead.
+    files_left: int = field(default_factory=lambda: _MAX_SOURCE_FILES)
+    bytes_left: int = field(default_factory=lambda: _MAX_TOTAL_BYTES)
+    read: int = 0
+
+    def spent(self) -> bool:
+        return self.files_left <= 0 or self.bytes_left <= 0
+
+    def take(self, size: int) -> None:
+        self.files_left -= 1
+        self.bytes_left -= min(size, _MAX_FILE_BYTES)
+        self.read += 1
+
+
+def _finding(where: str, read: int) -> CheckFinding:
+    return CheckFinding(
+        rule_id="missing-error-boundary",
+        title="No error boundary above the app's routes",
+        severity="high",
+        # The fact -- no boundary token in a mounted react/next app -- is
+        # certain over what was read. The residual doubt is whether a boundary
+        # exists under a name nobody uses.
+        confidence=0.8,
+        category="Frontend",
+        file=where,
+        explanation=(
+            "Your app has no error boundary above its pages. In React, when "
+            "any single component hits an error while rendering, there is "
+            "nothing to contain it — so instead of one broken section, the "
+            "entire app is replaced with a blank white page, and the person "
+            "using it has no way forward except to reload and hope. One small "
+            "bug anywhere becomes a total outage of the screen."
+        ),
+        fix_hint=(
+            "Add an error boundary above your routes so a render error shows a "
+            "fallback instead of a blank page. In the Next.js app router, "
+            "create an app/error.tsx (and app/global-error.tsx for the root "
+            "layout). In a plain React app, wrap your top-level component in "
+            "an <ErrorBoundary> — the react-error-boundary package gives you "
+            "one — with a small fallback that offers a reload."
+        ),
+    )
+
+
+def _analyze_package(zf: zipfile.ZipFile, root: str, prefix: str,
+                     files: list[str], deps: dict,
+                     budget: _Budget) -> BoundaryScan:
+    """One application: the whole decision, on paths relative to `prefix`.
+
+    `prefix` is "" for a single-package repository and `apps/web/` for one
+    application inside a workspace. Everything the report names is prefixed
+    back, so a finding points at a path that exists in the repository.
 
     ONE PASS ANSWERS BOTH QUESTIONS. "Is there a boundary?" and "is this a
     mounted app rather than a library?" are both settled by tokens in source,
-    so the sweep collects both and stops early on the one signal that is
-    conclusive on its own — a boundary token, which means silence whatever else
-    is true. Absence is never conclusive until the pass finishes, which is what
+    so the sweep collects both and stops early on the one signal conclusive on
+    its own — a boundary token, which means silence whatever else is true.
+    Absence is never conclusive until the pass finishes, which is what
     `coverage` reports.
+    """
+    entry = _router_entry(files, deps)
+    # A name-only silence cannot see a render call, so the mount is known only
+    # when a router entry named it.
+    named_mount = MOUNT_YES if entry else MOUNT_UNKNOWN
+
+    if "react-error-boundary" in deps:
+        return BoundaryScan(reason=f"{prefix}: react-error-boundary in "
+                                   "dependencies" if prefix else
+                                   "react-error-boundary in dependencies",
+                            mount=named_mount)
+    for name in files:
+        if _APP_ERROR_FILE.search(name):
+            return BoundaryScan(
+                reason=f"app-router error file: {prefix}{name}",
+                mount=named_mount)
+
+    source = [n for n in files if _is_source(n)]
+    render_call_in = ""
+    started = budget.read
+
+    for name in source:
+        if budget.spent():
+            return BoundaryScan(
+                coverage=COVERAGE_EXHAUSTED,
+                reason=(f"stopped after {budget.read - started} of "
+                        f"{len(source)} source files in {prefix or 'the repo'}; "
+                        "whether a boundary exists is undetermined"),
+                mount=(MOUNT_YES if (entry or render_call_in)
+                       else MOUNT_UNKNOWN),
+                files_read=budget.read - started)
+        try:
+            body = zf.read(root + prefix + name if root else prefix + name)
+        except KeyError:
+            continue
+        budget.take(len(body))
+        text = body[:_MAX_FILE_BYTES].decode("utf-8", errors="ignore")
+        if any(tok in text for tok in _BOUNDARY_TOKENS):
+            return BoundaryScan(
+                coverage=COVERAGE_COMPLETE,
+                reason=f"boundary token in {prefix}{name}",
+                # The walk stopped here, so a mount later in it was never
+                # looked for. Known only if something already named one.
+                mount=(MOUNT_YES if (entry or render_call_in)
+                       else MOUNT_UNKNOWN),
+                files_read=budget.read - started)
+        if not render_call_in and any(c in text for c in _RENDER_CALLS):
+            render_call_in = name
+
+    read = budget.read - started
+    render_root = entry or render_call_in
+    if not render_root:
+        return BoundaryScan(
+            reason=(f"react present in {prefix or 'the root manifest'} but "
+                    "nothing mounts an app (library/embedded)"),
+            mount=MOUNT_NO, files_read=read)
+
+    where = render_root if "(" in render_root else prefix + render_root
+    return BoundaryScan(
+        findings=[_finding(where, read)],
+        reason=f"mounted at {where}, no boundary token in {read} files",
+        mount=MOUNT_YES, files_read=read)
+
+
+def _merge(parts: list[tuple[str, BoundaryScan]], files_total: int
+           ) -> BoundaryScan:
+    """One verdict for a repository that holds several applications.
+
+    A monorepo's applications are separate deployables, so each that lacks a
+    boundary gets its own finding — that is not the "one finding per file" this
+    module refuses, it is one per thing that can blank on its own.
+
+    The aggregates take the WEAKER claim in every direction: mounted if any
+    application mounts, undetermined coverage if ANY package ran out of budget,
+    because "we found one and there may be more we did not read" is the honest
+    state and reporting it as complete would hide the second half.
+    """
+    findings = [f for _, part in parts for f in part.findings]
+    mounts = {part.mount for _, part in parts}
+    if MOUNT_YES in mounts:
+        mount = MOUNT_YES
+    elif MOUNT_UNKNOWN in mounts:
+        mount = MOUNT_UNKNOWN
+    else:
+        mount = MOUNT_NO
+    coverage = (COVERAGE_EXHAUSTED
+                if any(p.coverage == COVERAGE_EXHAUSTED for _, p in parts)
+                else COVERAGE_COMPLETE)
+    if len(parts) == 1:
+        reason = parts[0][1].reason
+    else:
+        fired = sum(1 for _, p in parts if p.findings)
+        reason = (f"{len(parts)} workspace packages declare react; {fired} "
+                  "without a boundary — "
+                  + "; ".join(f"{d.rstrip('/')}: {p.reason}"
+                              for d, p in parts)[:400])
+    return BoundaryScan(findings=findings, coverage=coverage, reason=reason,
+                        mount=mount,
+                        files_read=sum(p.files_read for _, p in parts),
+                        files_total=files_total)
+
+
+def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
+    """`missing-error-boundary` for a repository, one finding per application.
+
+    Single-package repositories are the common case and take the first branch.
+    A workspace whose root manifest declares no react is not "not a React app"
+    — dubinc/dub is a Next.js product with its react in apps/web/package.json,
+    and it was reported as non-React after reading zero files. Those packages
+    are found and each is analyzed as the application it is.
     """
     with zipfile.ZipFile(fileobj) as zf:
         raw_names = zf.namelist()
         root = archive_root(raw_names)
         files = _norm(raw_names)
+        budget = _Budget()
 
         deps = _all_deps(_read_package_json(zf, root))
-        if not ({"react", "react-dom", "next"} & set(deps)):
-            nested = _workspace_react_manifest(zf, files, root)
-            if nested:
-                return BoundaryScan(
-                    reason=(f"react is declared in {nested}, not the root "
-                            "manifest — workspaces are not analyzed"),
-                    mount=MOUNT_WORKSPACE, files_total=len(files))
-            return BoundaryScan(reason="not a react/next app",
-                                mount=MOUNT_NOT_REACT, files_total=len(files))
+        if _is_react(deps):
+            part = _analyze_package(zf, root, "", files, deps, budget)
+            return _merge([("", part)], len(files))
 
-        # Names settle two things without reading a byte, and one of them is
-        # conclusive silence.
-        entry = _router_entry(files, deps)
-        # A name-only silence cannot see a render call, so the mount is known
-        # only when a router entry named it.
-        named_mount = MOUNT_YES if entry else MOUNT_UNKNOWN
+        packages = _workspace_packages(zf, files, root)
+        if not packages:
+            return BoundaryScan(
+                reason=("no react in the root manifest or any nested one "
+                        "within three levels"),
+                mount=MOUNT_NOT_REACT, files_total=len(files))
 
-        if "react-error-boundary" in deps:
-            return BoundaryScan(reason="react-error-boundary in dependencies",
-                                mount=named_mount, files_total=len(files))
-        for name in files:
-            if _APP_ERROR_FILE.search(name):
-                return BoundaryScan(reason=f"app-router error file: {name}",
-                                    mount=named_mount, files_total=len(files))
-
-        source = [n for n in files if _is_source(n)]
-        read = 0
-        total_bytes = 0
-        render_call_in = ""
-        exhausted = False
-
-        for name in source:
-            if read >= _MAX_SOURCE_FILES or total_bytes >= _MAX_TOTAL_BYTES:
-                exhausted = True
-                break
-            try:
-                body = zf.read(root + name if root else name)
-            except KeyError:
-                continue
-            read += 1
-            total_bytes += min(len(body), _MAX_FILE_BYTES)
-            text = body[:_MAX_FILE_BYTES].decode("utf-8", errors="ignore")
-            if any(tok in text for tok in _BOUNDARY_TOKENS):
-                # Conclusive on its own: a boundary exists, and nothing later
-                # in the walk could change that.
-                return BoundaryScan(
-                    coverage=COVERAGE_COMPLETE,
-                    reason=f"boundary token in {name}",
-                    # The walk stopped here, so a mount later in it was never
-                    # looked for. Known only if something already named one.
-                    mount=(MOUNT_YES if (entry or render_call_in)
-                           else MOUNT_UNKNOWN),
-                    files_read=read, files_total=len(files))
-            if not render_call_in and any(c in text for c in _RENDER_CALLS):
-                render_call_in = name
-
-    if exhausted:
-        # We do not know whether a boundary exists, so we do not say. NOT a
-        # finding with a caveat -- a finding is a claim, and we have none.
-        return BoundaryScan(
-            coverage=COVERAGE_EXHAUSTED,
-            reason=(f"stopped after {read} of {len(source)} source files; "
-                    "whether a boundary exists is undetermined"),
-            mount=(MOUNT_YES if (entry or render_call_in) else MOUNT_UNKNOWN),
-            files_read=read, files_total=len(files))
-
-    render_root = entry or render_call_in
-    if not render_root:
-        return BoundaryScan(
-            reason="react present but nothing mounts an app (library/embedded)",
-            mount=MOUNT_NO, files_read=read, files_total=len(files))
-
-    return BoundaryScan(
-        findings=[CheckFinding(
-            rule_id="missing-error-boundary",
-            title="No error boundary above the app's routes",
-            severity="high",
-            # The fact -- no boundary token in a mounted react/next app -- is
-            # certain over what was read. The residual doubt is whether a
-            # boundary exists under a name nobody uses.
-            confidence=0.8,
-            category="Frontend",
-            file=render_root,
-            explanation=(
-                "Your app has no error boundary above its pages. In React, when "
-                "any single component hits an error while rendering, there is "
-                "nothing to contain it — so instead of one broken section, the "
-                "entire app is replaced with a blank white page, and the person "
-                "using it has no way forward except to reload and hope. One "
-                "small bug anywhere becomes a total outage of the screen."
-            ),
-            fix_hint=(
-                "Add an error boundary above your routes so a render error shows "
-                "a fallback instead of a blank page. In the Next.js app router, "
-                "create an app/error.tsx (and app/global-error.tsx for the root "
-                "layout). In a plain React app, wrap your top-level component in "
-                "an <ErrorBoundary> — the react-error-boundary package gives you "
-                "one — with a small fallback that offers a reload."
-            ),
-        )],
-        reason=f"mounted at {render_root}, no boundary token in {read} files",
-        mount=MOUNT_YES, files_read=read, files_total=len(files))
+        parts: list[tuple[str, BoundaryScan]] = []
+        for directory, pkg_deps in packages:
+            scoped = [n[len(directory):] for n in files
+                      if n.startswith(directory) and n != directory]
+            parts.append((directory, _analyze_package(
+                zf, root, directory, scoped, pkg_deps, budget)))
+        return _merge(parts, len(files))
