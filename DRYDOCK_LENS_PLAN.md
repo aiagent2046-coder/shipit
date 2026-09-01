@@ -325,4 +325,52 @@ token ends the walk, correctly, and if no mount was seen before it, we do not
 know whether this is an app or a component library that ships a boundary.
 Counting those as apps would inflate the denominator with things never at risk.
 
+## The 43-repository run, and why 100% was the warning and not the answer
+
+Measured 2026-09-01 over the audited repositories. 14 heads could not be
+resolved (unauthenticated GitHub allows 60 requests an hour and the run needs
+two per repository), leaving 29 measured.
+
+```
+incidence among MOUNTED react/next apps: 8/8 = 100%
+incidence over all decided repositories: 8/29 = 28%   (diluted by non-apps)
+  mount classes: mounted=8, no_mount=4, not_react=16, undetermined=1
+```
+
+**A rule that fires on every member of its own denominator is a claim about the
+denominator.** Reading the per-repository lines rather than the summary found
+two defects, both of which removed real applications from that denominator, and
+both in the same direction.
+
+**1. The root layout was required to be exactly `app/layout.tsx`.** Next.js puts
+it under route groups and dynamic segments constantly, and three repositories in
+this very corpus do: `mckaywrigley/chatbot-ui` and `ixartz/Next-js-Boilerplate`
+at `app/[locale]/layout.tsx`, `DayuanJiang/next-ai-draw-io` similarly. A Next.js
+app has no `createRoot` to fall back on, so a missed layout is a missed
+application. The run's own output gave it away before any repository was
+re-fetched: `ixartz` came back `undetermined` while reporting
+`app-router error file: src/app/global-error.tsx` — an app-router error file
+in a repository we had just decided had no app-router entry.
+
+**2. A workspace root was reported as "not a react/next app".** `dubinc/dub` is
+a Next.js product; its react is in `apps/web/package.json`, and only the root
+manifest was read. The report printed a false sentence about it after reading
+zero files. This is now its own class, `workspace_not_analyzed` — no claim in
+either direction, but counted and named, because "we do not analyze this shape"
+and "this is not a React app" are different statements.
+
+**The bias has a direction, and it is the flattering one.** Both defects
+excluded the mature, well-maintained projects — the ones most likely to HAVE a
+boundary — and left the small apps and boilerplates, which is how 8 of 8 became
+100%. The corrected denominator will be larger and the rate lower; how much
+lower is the re-run's job, not this paragraph's.
+
+### And a caveat about the population, independent of the defects
+
+The corpus is what people brought to drydock, which is the right population in
+one sense and a mixed one in another: it contains `Blazity/next-enterprise`,
+`ixartz/Next-js-Boilerplate`, `jvidalv/nextal`, `hadrysm/nextjs-boilerplate` —
+curated starter templates, not applications somebody built in an evening. Any
+published number has to say so.
+
 ## Result — TODO (per-repo incidence of the first deterministic frontend rules)

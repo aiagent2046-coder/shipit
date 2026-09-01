@@ -25,6 +25,7 @@ from app.scan.error_boundary import (
     MOUNT_NO,
     MOUNT_NOT_REACT,
     MOUNT_UNKNOWN,
+    MOUNT_WORKSPACE,
     MOUNT_YES,
     scan_error_boundary,
 )
@@ -366,6 +367,95 @@ def test_a_mount_seen_before_the_boundary_is_still_known():
 
     assert scan.findings == []
     assert scan.mount == MOUNT_YES
+
+
+# --------------------------------------------------------------------------- #
+# the root layout is still the root layout under a group or a dynamic segment
+# --------------------------------------------------------------------------- #
+
+def test_a_locale_segment_root_layout_is_a_mount():
+    """MEASURED on the 2026-09-01 corpus run. mckaywrigley/chatbot-ui and
+    ixartz/Next-js-Boilerplate both put their root layout at
+    `app/[locale]/layout.tsx`; the anchor required `app/layout.tsx` exactly, so
+    neither was seen as an app. A Next.js app has no createRoot to fall back
+    on, so a missed layout is a missed application — and the ones missed this
+    way were the mature projects, which is the direction that quietly inflates
+    any rate measured over what remains."""
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"dependencies":{"next":"14","react":"18"}}',
+        "src/app/[locale]/layout.tsx": "export default ({children})=> children",
+        "src/app/[locale]/page.tsx": "export default ()=> <div/>",
+    }))
+
+    assert scan.mount == MOUNT_YES
+    assert len(scan.findings) == 1
+
+
+def test_a_route_group_root_layout_is_a_mount():
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"dependencies":{"next":"14","react":"18"}}',
+        "app/(marketing)/layout.tsx": "export default ({children})=> children",
+    }))
+
+    assert scan.mount == MOUNT_YES
+
+
+def test_a_plain_nested_layout_is_still_not_the_root():
+    """Only `(group)` and `[param]` segments pass. Admitting a plain segment
+    would re-open the docs-site false positive the anchor exists to stop —
+    `app/dashboard/layout.tsx` is a section, not the application's root, and
+    `website/examples/app/` is not the application at all."""
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"dependencies":{"react":"18"}}',
+        "website/examples/app/demo/layout.tsx": "export default ()=> <div/>",
+    }))
+
+    assert scan.mount != MOUNT_YES
+    assert scan.findings == []
+
+
+# --------------------------------------------------------------------------- #
+# workspaces — a monorepo is not "not a react app"
+# --------------------------------------------------------------------------- #
+
+def test_a_workspace_root_without_react_is_not_called_non_react():
+    """MEASURED: `dubinc/dub` is a Next.js product and the run printed "not a
+    react/next app" for it, after reading zero files, because its react lives
+    in apps/web/package.json. That is a false statement in a report, and it
+    removed one of the corpus's most mature applications from the denominator
+    — silently, and in the direction that inflates the rate."""
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"private":true,"workspaces":["apps/*"]}',
+        "apps/web/package.json": '{"dependencies":{"next":"14","react":"18"}}',
+        "apps/web/app/layout.tsx": "export default ({children})=> children",
+    }))
+
+    assert scan.mount == MOUNT_WORKSPACE
+    assert scan.findings == [], "not analyzed means no claim, in either direction"
+    assert "not the root manifest" in scan.reason
+    assert "apps/web/package.json" in scan.reason
+
+
+def test_a_repository_with_no_react_anywhere_is_still_not_react():
+    """The distinction has to cut both ways, or MOUNT_WORKSPACE just becomes
+    the new place everything unclassifiable goes."""
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"private":true,"workspaces":["packages/*"]}',
+        "packages/cli/package.json": '{"dependencies":{"commander":"12"}}',
+        "packages/cli/index.js": "console.log('hi')",
+    }))
+
+    assert scan.mount == MOUNT_NOT_REACT
+
+
+def test_a_vendored_manifest_does_not_make_a_repository_a_workspace():
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"dependencies":{"express":"4"}}',
+        "node_modules/react/package.json": '{"dependencies":{"react":"18"}}',
+        "server.js": "require('express')()",
+    }))
+
+    assert scan.mount == MOUNT_NOT_REACT
 
 
 # --------------------------------------------------------------------------- #
