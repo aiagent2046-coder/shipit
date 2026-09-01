@@ -206,4 +206,74 @@ before the product can.
   weight. It is a separate decision and does not gate the experiment above.
 * The name. `Drydock Lens` is a good one and nothing here depends on it.
 
+## The first analyzer is written; the number is still owed
+
+`app/scan/error_boundary.py` implements question 1 — the error boundary — with
+`scripts/measure_error_boundary.py` to run it over a corpus. The analyzer is
+proven; the measurement is not, and the two are separated on purpose below.
+
+### Three defects, found by running the first draft rather than by reading it
+
+**1. The UI gate named four shapes and stopped none of them.** The draft's
+docstring said the gate was "not optional" and listed why: a component library,
+a design system, react-email templates, a Storybook-only package. Built as
+archives and run:
+
+| shape | render root the draft found | verdict |
+|---|---|---|
+| component library | `src/components/Button/index.tsx` | FIRED |
+| design system | `src/index.tsx` | FIRED |
+| react-email | `emails/index.tsx` | FIRED |
+| docs site | `website/examples/app/demo/page.tsx` | FIRED |
+
+Four of four. One line did it: `(^|/)(src/)?(main|index|App)\.(t|j)sx$` matches
+any `index.tsx` at any depth. Its fixture used `src/Button.tsx` — the single
+library shape with no index barrel — so the suite agreed with the code.
+
+A name cannot carry this question. "Can this go blank" is a property of
+MOUNTING an app, so the signal is now the mount itself (`createRoot(`,
+`hydrateRoot(`, `ReactDOM.render(`) or a root-anchored router entry.
+
+**2. The read budget turned a miss into an accusation.** The draft capped at
+1200 source files and emitted the finding anyway. A monorepo with a real
+`componentDidCatch` and 1400 icon components was reported as having no error
+boundary — a false positive on an app that is correct.
+
+**3. `_SKIP_DIRS` matched substrings**, so `src/rebuild/` was excluded as build
+output and its files never read — the same direction as (2).
+
+### The signal a bounded reader owes the reader
+
+Fixing (2) by suppressing the finding is only half an answer, and the wrong half
+alone is worse than nothing: a silent scanner and a scanner that gave up look
+identical. So `scan_error_boundary` returns a `BoundaryScan` — findings plus
+`coverage` (`complete` / `budget_exhausted`), plus the `reason` that decided it.
+
+`coverage` is a FIELD BESIDE THE FINDINGS, not a low-severity finding, and the
+reason is in `scoring.py` already: `SEVERITY_WEIGHT` has no level below `low`
+(0.1), so a "we did not finish looking" finding would deduct from the Frontend
+subscore — and that file's own rule is that a number nothing measured must not
+vote on the total. Same shape as `assets_truncated` in
+`app/proof/served_bundle.py`: absence of evidence gets its own channel.
+
+The asymmetry is recorded in the tests: a boundary token found at file 3 of 5000
+is conclusive silence, because nothing later could unsee it. Only ABSENCE needs
+the whole pass.
+
+### What is proven, and what is not
+
+Proven: 22 tests, one per decision, including all four measured shapes above and
+both budget bounds. Mutation-checked — restoring the filename render-root turns
+3 red, letting an exhausted budget fall through turns 2 red.
+
+Not proven: **the incidence**. `batch_audit.SERIES` pins three repositories, and
+three cannot decide this question at any outcome. The measurement script reports
+over DECIDED repositories and prints the undetermined and unfetchable counts
+beside it rather than absorbing them into a denominator — so a thin corpus reads
+as a thin corpus.
+
+The corpus has to be widened first, and the plan already named the free way: the
+re-fetchable audited repositories, kept where they still reproduce their stored
+`content_hash`.
+
 ## Result — TODO (per-repo incidence of the first deterministic frontend rules)
