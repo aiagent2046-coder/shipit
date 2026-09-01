@@ -25,7 +25,6 @@ from app.scan.error_boundary import (
     MOUNT_NO,
     MOUNT_NOT_REACT,
     MOUNT_UNKNOWN,
-    MOUNT_WORKSPACE,
     MOUNT_YES,
     scan_error_boundary,
 )
@@ -223,7 +222,7 @@ def test_a_non_react_repo_is_not_examined():
     }))
 
     assert scan.findings == []
-    assert scan.reason == "not a react/next app"
+    assert "no react" in scan.reason
 
 
 # --------------------------------------------------------------------------- #
@@ -415,30 +414,164 @@ def test_a_plain_nested_layout_is_still_not_the_root():
 
 
 # --------------------------------------------------------------------------- #
+# frameworks that write the mount for you
+# --------------------------------------------------------------------------- #
+
+def test_a_tanstack_start_app_is_mounted_without_a_render_call():
+    """MEASURED: Moscow2260/ai-productivity-hub in the 2026-09-01 corpus — a
+    Lovable-generated app, `.lovable/`, vite.config.ts, `"dev": "vite dev"`,
+    src/routes/index.tsx — was classified `no_mount` and dropped out of the
+    denominator. It is exactly the population a free frontend tier is for, and
+    it has no error boundary at all.
+
+    Next.js is not the only framework where nobody writes createRoot. When the
+    framework generates the entry, the author's source has no render call and
+    the app looked like a library."""
+    scan = scan_error_boundary(_zip({
+        "package.json": ('{"dependencies":{"react":"18","react-dom":"18",'
+                         '"@tanstack/react-start":"1"}}'),
+        "src/routes/index.tsx": "export const Route = createFileRoute('/')({})",
+        "src/routes/about.tsx": "export const Route = createFileRoute('/a')({})",
+    }))
+
+    assert scan.mount == MOUNT_YES
+    assert len(scan.findings) == 1
+    assert "TanStack" in scan.findings[0].file
+
+
+def test_a_remix_app_is_mounted():
+    scan = scan_error_boundary(_zip({
+        "package.json": ('{"dependencies":{"react":"18","react-dom":"18",'
+                         '"@remix-run/react":"2"}}'),
+        "app/routes/_index.tsx": "export default function Index(){return null}",
+    }))
+
+    assert scan.mount == MOUNT_YES
+
+
+def test_the_dependency_alone_is_not_a_mount():
+    """THE LINE THAT KEEPS THIS FROM RE-OPENING THE LIBRARY FALSE POSITIVE. A
+    package that merely depends on @tanstack/react-router is a consumer of it;
+    one that also carries a routes/ tree is an application built with it. Only
+    the pair counts."""
+    scan = scan_error_boundary(_zip({
+        "package.json": ('{"name":"router-helpers","dependencies":{"react":"18",'
+                         '"@tanstack/react-router":"1"}}'),
+        "src/helpers/link.tsx": "export const Link = ()=> <a/>",
+    }))
+
+    assert scan.mount == MOUNT_NO
+    assert scan.findings == []
+
+
+def test_a_terminal_react_app_is_not_a_screen_that_can_blank():
+    """MEASURED, and the gate got this one RIGHT: anxelswanz/astraea-agent is
+    React rendered to a terminal with ink — `ink`, `cli-highlight`, a repl
+    script. There is no white page to prevent, so it is correctly outside the
+    denominator. Kept as a test because it is the shape most likely to be
+    swept in by a future widening of the mount rule."""
+    scan = scan_error_boundary(_zip({
+        "package.json": ('{"dependencies":{"react":"18","ink":"5",'
+                         '"ink-text-input":"6"}}'),
+        "src/cli.ts": "run()",
+        "src/repl.tsx": "export const Repl = ()=> <Box/>",
+    }))
+
+    assert scan.mount == MOUNT_NO
+    assert scan.findings == []
+
+
+# --------------------------------------------------------------------------- #
 # workspaces — a monorepo is not "not a react app"
 # --------------------------------------------------------------------------- #
 
-def test_a_workspace_root_without_react_is_not_called_non_react():
-    """MEASURED: `dubinc/dub` is a Next.js product and the run printed "not a
-    react/next app" for it, after reading zero files, because its react lives
-    in apps/web/package.json. That is a false statement in a report, and it
-    removed one of the corpus's most mature applications from the denominator
-    — silently, and in the direction that inflates the rate."""
+def test_a_workspace_application_is_analyzed_not_skipped():
+    """MEASURED: `dubinc/dub` is a Next.js product and the first run printed
+    "not a react/next app" for it, after reading zero files, because its react
+    lives in apps/web/package.json. The second version named the shape but
+    still refused to look; six repositories sat in that class and they were
+    disproportionately the mature ones, which is what made the interval on the
+    measured rate 61-94% instead of a number."""
     scan = scan_error_boundary(_zip({
         "package.json": '{"private":true,"workspaces":["apps/*"]}',
         "apps/web/package.json": '{"dependencies":{"next":"14","react":"18"}}',
         "apps/web/app/layout.tsx": "export default ({children})=> children",
+        "apps/web/app/page.tsx": "export default ()=> <div/>",
     }))
 
-    assert scan.mount == MOUNT_WORKSPACE
-    assert scan.findings == [], "not analyzed means no claim, in either direction"
-    assert "not the root manifest" in scan.reason
-    assert "apps/web/package.json" in scan.reason
+    assert scan.mount == MOUNT_YES
+    assert len(scan.findings) == 1
+    assert scan.findings[0].file == "apps/web/app/layout.tsx", (
+        "the path has to exist in the repository, so it carries the package "
+        "prefix back")
+
+
+def test_a_workspace_application_with_a_boundary_stays_silent():
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"private":true,"workspaces":["apps/*"]}',
+        "apps/web/package.json": '{"dependencies":{"next":"14","react":"18"}}',
+        "apps/web/app/layout.tsx": "export default ({children})=> children",
+        "apps/web/app/error.tsx": "export default ()=> null",
+    }))
+
+    assert scan.findings == []
+    assert "apps/web/app/error.tsx" in scan.reason
+
+
+def test_two_applications_in_one_workspace_are_two_findings():
+    """A monorepo's applications are separate deployables that blank
+    separately. This is not the "one finding per file" the module refuses — it
+    is one per thing that can go blank on its own, and collapsing them would
+    hide an entire application from its owner."""
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"private":true,"workspaces":["apps/*"]}',
+        "apps/web/package.json": '{"dependencies":{"next":"14","react":"18"}}',
+        "apps/web/app/layout.tsx": "export default ({children})=> children",
+        "apps/admin/package.json": '{"dependencies":{"next":"14","react":"18"}}',
+        "apps/admin/app/layout.tsx": "export default ({children})=> children",
+    }))
+
+    assert len(scan.findings) == 2
+    assert {f.file for f in scan.findings} == {
+        "apps/web/app/layout.tsx", "apps/admin/app/layout.tsx"}
+
+
+def test_one_workspace_application_with_a_boundary_does_not_cover_the_other():
+    """THE FAILURE A COLLAPSED VERDICT WOULD PRODUCE. apps/web is protected and
+    apps/admin is not; a single repository-level "has a boundary" would report
+    the unprotected one as fine."""
+    scan = scan_error_boundary(_zip({
+        "package.json": '{"private":true,"workspaces":["apps/*"]}',
+        "apps/web/package.json": '{"dependencies":{"next":"14","react":"18"}}',
+        "apps/web/app/layout.tsx": "export default ({children})=> children",
+        "apps/web/app/error.tsx": "export default ()=> null",
+        "apps/admin/package.json": '{"dependencies":{"next":"14","react":"18"}}',
+        "apps/admin/app/layout.tsx": "export default ({children})=> children",
+    }))
+
+    assert [f.file for f in scan.findings] == ["apps/admin/app/layout.tsx"]
+
+
+def test_the_reading_budget_is_shared_across_workspace_packages(monkeypatch):
+    """Per-package budgets would let a six-application monorepo cost six times
+    a single app's worth of reading for one audit. The allowance is what we are
+    willing to spend on a REPOSITORY."""
+    monkeypatch.setattr("app.scan.error_boundary._MAX_SOURCE_FILES", 6)
+    files = {"package.json": '{"private":true,"workspaces":["apps/*"]}'}
+    for app in ("a", "b", "c"):
+        files[f"apps/{app}/package.json"] = (
+            '{"dependencies":{"react":"18","react-dom":"18"}}')
+        for i in range(10):
+            files[f"apps/{app}/src/f{i}.tsx"] = "export const X=()=> <i/>"
+
+    scan = scan_error_boundary(_zip(files))
+
+    assert scan.files_read <= 6, "the budget is per repository, not per package"
+    assert scan.coverage == COVERAGE_EXHAUSTED
 
 
 def test_a_repository_with_no_react_anywhere_is_still_not_react():
-    """The distinction has to cut both ways, or MOUNT_WORKSPACE just becomes
-    the new place everything unclassifiable goes."""
+    """The workspace walk must not turn every monorepo into a React app."""
     scan = scan_error_boundary(_zip({
         "package.json": '{"private":true,"workspaces":["packages/*"]}',
         "packages/cli/package.json": '{"dependencies":{"commander":"12"}}',
