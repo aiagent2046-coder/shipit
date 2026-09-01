@@ -564,6 +564,19 @@ rule). The real figure sits between them at the corpus's incidence. If the
 ceiling moves the average by more than the +0.29 the last category cost, that
 is a calibration decision to make deliberately, not a side effect to ship.
 
+**Run 2026-09-01 on the 34 stored static-only rows, before the deploy:**
+
+| | mean |
+|---|---|
+| before | 8.78 |
+| after, ceiling (every repo clean) | 9.04 (+0.26) |
+| after, floor (every repo firing) | 8.87 (+0.09) |
+
+Both bounds sit under the +0.29 the previous category cost, so the change
+shipped. The real shift is between them: mounted apps fire at the measured
+incidence and pull toward the floor, non-frontend repositories sit at the
+ceiling. That second group is the next calibration question, recorded below.
+
 **Still open, and now the next calibration decision rather than this one:**
 whether a repository with no frontend at all (`mount = not_react`) should have
 Frontend *excluded* as not-applicable rather than counted at 10.0. The `mount`
