@@ -43,9 +43,9 @@ The gate that was "not optional" was not present. Its fixture used
 `src/Button.tsx`, the one library shape with no index file, so the suite agreed
 with the code and reality did not. A name cannot carry this: "can go blank"
 is a property of mounting an app, so the signal is the mount — `createRoot(`,
-`ReactDOM.render(`, `hydrateRoot(` — or a ROOT-level router entry
-(`app/layout.*`, `src/app/layout.*`, `pages/_app.*`), which is the file an
-`error.tsx` sits beside.
+`ReactDOM.render(`, `hydrateRoot(` — or a ROOT-level router entry (`app/layout.*`
+optionally under route groups and dynamic segments, or `pages/_app.*`), which is
+the file an `error.tsx` sits beside.
 
 AN EXHAUSTED BUDGET IS NOT AN ABSENCE, and this is the reason for `coverage`.
 Reading every file of a large monorepo to find one token is not free, so the
@@ -130,11 +130,30 @@ MOUNT_YES = "mounted"
 MOUNT_NO = "no_mount"
 MOUNT_NOT_REACT = "not_react"
 MOUNT_UNKNOWN = "undetermined"
+# A workspace/monorepo whose root manifest declares no react, but some nested
+# one does. NOT the same as `not_react`, and calling it that was a false
+# statement in a report: `dubinc/dub` is a Next.js product and was printed as
+# "not a react/next app" after reading zero files. Analyzing workspaces is a
+# separate piece of work; until it exists, this says which it is.
+MOUNT_WORKSPACE = "workspace_not_analyzed"
 
 # A ROOT-level router entry: the file an app-router error.tsx sits beside.
 # Anchored at the start of the (root-stripped) path, so `website/examples/app/`
 # in a docs repository is not somebody's application.
-_ROOT_APP_LAYOUT = re.compile(r"^(src/)?app/layout\.(t|j)sx?$")
+#
+# ROUTE GROUPS AND DYNAMIC SEGMENTS ARE STILL THE ROOT LAYOUT, and leaving them
+# out cost three real applications in the 2026-09-01 corpus run:
+# mckaywrigley/chatbot-ui and ixartz/Next-js-Boilerplate both put theirs at
+# `app/[locale]/layout.tsx`, and neither was seen. A Next.js app has no
+# createRoot to fall back on, so a missed layout means a missed app -- and the
+# apps missed this way were the mature ones, which is the direction that
+# quietly inflates any rate measured over what is left.
+#
+# Only `(group)` and `[param]` segments are allowed through. A plain segment
+# would re-admit `website/examples/app/demo/` -- the docs-site false positive
+# this anchor exists to stop.
+_ROOT_APP_LAYOUT = re.compile(
+    r"^(src/)?app/((\([^/]+\)|\[[^/]+\])/)*layout\.(t|j)sx?$")
 _ROOT_PAGES_APP = re.compile(r"^(src/)?pages/(_app|index)\.(t|j)sx?$")
 
 # An app-router error boundary file, anywhere under an app/ tree: a nested
@@ -198,6 +217,29 @@ def _read_package_json(zf: zipfile.ZipFile, root: str) -> dict:
         return {}
 
 
+def _workspace_react_manifest(zf: zipfile.ZipFile, files: list[str],
+                              root: str) -> str:
+    """A nested package.json that declares react, or "".
+
+    Only asked when the ROOT manifest declares none. Depth-bounded: `apps/web`
+    and `packages/ui` are where a workspace puts its manifests, and walking
+    deeper would start reading vendored copies.
+    """
+    for name in files:
+        if not name.endswith("/package.json") or name.count("/") > 3:
+            continue
+        if any(p in _SKIP_DIRS for p in name.split("/")[:-1]):
+            continue
+        try:
+            raw = zf.read(root + name if root else name)
+            pkg = json.loads(raw[:_MAX_FILE_BYTES].decode("utf-8", "ignore"))
+        except (KeyError, ValueError):
+            continue
+        if {"react", "react-dom", "next"} & set(_all_deps(pkg)):
+            return name
+    return ""
+
+
 def _all_deps(pkg: dict) -> dict:
     deps: dict = {}
     for key in ("dependencies", "devDependencies", "peerDependencies"):
@@ -237,6 +279,12 @@ def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
 
         deps = _all_deps(_read_package_json(zf, root))
         if not ({"react", "react-dom", "next"} & set(deps)):
+            nested = _workspace_react_manifest(zf, files, root)
+            if nested:
+                return BoundaryScan(
+                    reason=(f"react is declared in {nested}, not the root "
+                            "manifest — workspaces are not analyzed"),
+                    mount=MOUNT_WORKSPACE, files_total=len(files))
             return BoundaryScan(reason="not a react/next app",
                                 mount=MOUNT_NOT_REACT, files_total=len(files))
 
