@@ -50,7 +50,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -176,8 +178,26 @@ def _slug_from_repo_url(raw: str) -> str:
     return "/".join(parts[:2]) if len(parts) >= 2 else ""
 
 
+def _api_headers() -> dict[str, str]:
+    """Authorization from GITHUB_TOKEN when the environment offers one.
+
+    NOT the same decision as app/ingest/github_fetch.py, which sends no
+    Authorization header BY DESIGN because it fetches a URL a stranger supplied
+    — a token there would let a caller aim our credentials at repositories they
+    cannot see. This script fetches a list WE chose, offline, run by hand. The
+    token is read from the environment only: never from /opt/shipit/.env, never
+    an argument, and never printed.
+    """
+    headers = {"Accept": "application/vnd.github+json",
+               "User-Agent": "drydock-measure-error-boundary"}
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _resolve_head(slug: str) -> str:
-    """The default branch's current commit SHA.
+    """The default branch's current commit SHA, in ONE request.
 
     RESOLVED AND PRINTED, never used implicitly. A corpus fetched at "whatever
     the branch points at today" is not a measurement anyone can repeat — the
@@ -185,14 +205,38 @@ def _resolve_head(slug: str) -> str:
     silently fork the series"). So a run over a URL list resolves each head
     once, measures that exact commit, and emits the `slug@sha` line needed to
     replay the run byte for byte.
+
+    ONE REQUEST, NOT TWO, and that is what makes the run possible without a
+    token. The first version asked /repos/{slug} for the default branch and
+    then /commits/{branch} for its head: 86 requests for 43 repositories,
+    against an unauthenticated ceiling of 60 an hour. It did not "sometimes
+    fall short" — it could not complete, and the second run resolved zero.
+    /commits?per_page=1 already answers on the default branch.
     """
-    with urllib.request.urlopen(  # noqa: S310
-            f"https://api.github.com/repos/{slug}", timeout=60) as resp:
-        branch = json.load(resp).get("default_branch") or "HEAD"
-    with urllib.request.urlopen(  # noqa: S310
-            f"https://api.github.com/repos/{slug}/commits/{branch}",
-            timeout=60) as resp:
-        return json.load(resp)["sha"]
+    req = urllib.request.Request(  # noqa: S310
+        f"https://api.github.com/repos/{slug}/commits?per_page=1",
+        headers=_api_headers())
+    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+        return json.load(resp)[0]["sha"]
+
+
+def _why_unresolved(exc: Exception) -> str:
+    """Rate limit, gone, or something else — never one word for all three.
+
+    `head unresolved: HTTPError` was printed 43 times for what turned out to be
+    a spent rate limit, and it read exactly like 43 deleted repositories. The
+    same collapse has cost this project a diagnosis three times.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        remaining = exc.headers.get("x-ratelimit-remaining")
+        if exc.code in (403, 429) and remaining == "0":
+            reset = exc.headers.get("x-ratelimit-reset", "?")
+            return (f"RATE LIMITED (resets at unix {reset}); set GITHUB_TOKEN "
+                    "to raise the ceiling from 60/hour to 5000")
+        if exc.code == 404:
+            return "404 — private, renamed or deleted since the audit"
+        return f"HTTP {exc.code}"
+    return type(exc).__name__
 
 
 def _targets_from_file(path: Path) -> list[tuple[str, str]]:
@@ -217,8 +261,8 @@ def _targets_from_file(path: Path) -> list[tuple[str, str]]:
         seen.add(slug)
         try:
             out.append((slug, _resolve_head(slug)))
-        except Exception as exc:  # noqa: BLE001 — gone private, renamed, deleted
-            print(f"  ??  {slug:45s} head unresolved: {type(exc).__name__}")
+        except Exception as exc:  # noqa: BLE001 — gone private, renamed, limited
+            print(f"  ??  {slug:45s} head unresolved: {_why_unresolved(exc)}")
     return out
 
 
@@ -248,6 +292,10 @@ def main() -> int:
         if len(args) < 2:
             raise SystemExit("--from-file needs a path")
         print(f"RESOLVING heads from {args[1]}")
+        if not os.environ.get("GITHUB_TOKEN", "").strip():
+            print("  no GITHUB_TOKEN — GitHub allows 60 requests an hour "
+                  "unauthenticated, and this\n  costs one per repository. A "
+                  "list longer than that will not resolve in full.")
         targets = _targets_from_file(Path(args[1]))
         print(f"  {len(targets)} repositories resolved\n")
     elif args:
