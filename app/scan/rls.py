@@ -294,9 +294,45 @@ def scan_rls(fileobj: BinaryIO) -> list[CheckFinding]:
         reported, why = table_is_reported(table)
         if not reported:
             continue
+        # RLS ON yet anon still reads it means a policy opens the table to
+        # everyone -- the cross-tenant shape, distinct from no RLS at all. The
+        # cause is already in `why` ("permissive policy" vs "RLS never
+        # enabled"), but the customer-facing text read the same for both, so a
+        # policy that lets any logged-in user read every row looked identical
+        # to a table with no protection. The measurement that split cross-tenant
+        # policies (10% auth-only, 7% public-true) is the reason this now says
+        # which one it is. Read structurally off the table, not by parsing
+        # `why`, so the two never drift.
+        cross_tenant = table.rls_enabled
+        if cross_tenant:
+            title = (f"Table `{table.name}` is open to everyone despite "
+                     f"Row Level Security")
+            explanation = (
+                f"`{table.name}` has Row Level Security enabled, but a read "
+                f"policy makes it readable by everyone ({why}). The policy is "
+                f"on, so this is easy to mistake for protected — but it does "
+                f"not scope rows to their owner, so the anonymous key (and any "
+                f"signed-in user) can read EVERY row, not just their own. That "
+                f"is a cross-tenant leak: one user's data is visible to "
+                f"another.\n\n"
+                f"We read this from your repository, NOT from your database — "
+                f"the two often differ, so treat it as something to check "
+                f"rather than something we observed."
+            )
+        else:
+            title = f"Table `{table.name}` is readable with your public key"
+            explanation = (
+                f"Your migrations define `{table.name}` and leave it readable "
+                f"by the anonymous key ({why}). That key ships to every "
+                f"visitor's browser by design, so anyone who opens your site "
+                f"can request the whole table.\n\n"
+                f"We read this from your repository, NOT from your database — "
+                f"the two often differ, so treat it as something to check "
+                f"rather than something we observed."
+            )
         findings.append(CheckFinding(
             rule_id=RULE_ID,
-            title=f"Table `{table.name}` is readable with your public key",
+            title=title,
             severity="high",
             # Deliberately not 0.9. MEASURED against a real deployment: of
             # three tables this method judged, it was wrong twice and silent
@@ -305,15 +341,7 @@ def scan_rls(fileobj: BinaryIO) -> list[CheckFinding]:
             confidence=0.6,
             category="Security",
             file=paths[0] if paths else "",
-            explanation=(
-                f"Your migrations define `{table.name}` and leave it readable "
-                f"by the anonymous key ({why}). That key ships to every "
-                f"visitor's browser by design, so anyone who opens your site "
-                f"can request the whole table.\n\n"
-                f"We read this from your repository, NOT from your database — "
-                f"the two often differ, so treat it as something to check "
-                f"rather than something we observed."
-            ),
+            explanation=explanation,
             fix_hint=(
                 f"Confirm it in one request against your own project:\n"
                 f"    curl '<project-url>/rest/v1/{table.name}?select=*&limit=3' "
