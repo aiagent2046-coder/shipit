@@ -98,13 +98,31 @@ assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
 # people their auth was perfect when nothing had looked at it. Adding a second
 # LLM-only category would have taken 42% of the weight to a constant 10.0.
 #
-# Frontend joins them: the "web" rubric is its only producer, no static check
-# emits it, so on a static-only audit it would read a perfect 10.0 for the
-# reason this set exists. That takes the LLM-only share of the weight from 36%
-# to 45%, which is the cost of the note above being right about Auth -- a free
-# tier that stayed silent on three categories is honest, one that reports 10.0
-# on them is not.
-LLM_ONLY_CATEGORIES = frozenset({"Auth", "Money & Data", "Frontend"})
+# Frontend WAS here, and left on a number. When it joined, the "web" rubric
+# was its only producer and no static check emitted it, so a static-only audit
+# would have read a perfect 10.0 for the reason this set exists. Then question
+# 1 of that rubric -- no error boundary above the routes -- was lifted into
+# app/scan/error_boundary.py and measured (DRYDOCK_LENS_PLAN.md, 2026-09-01):
+# 11 of 12 mounted apps in the audited corpus fire it, the three most
+# reputable hits -- Vercel's own subscription template, Blazity's enterprise
+# starter, chatbot-ui -- read by hand and real, and it fires the same way
+# twice. The honest interval is 61-94% until the workspace re-run lands. A
+# figure of "72 of 103 (70%)" over the three-strata corpus in scripts/data/
+# also circulated; the corpus is real, but the analyzer version behind that
+# run is not in this repository and an early draft fired on component
+# libraries, so it is not cited until `measure_error_boundary.py --strata`
+# reproduces it with the analyzer that ships. That is a static producer,
+# and a category with a static producer is examined on a static-only audit by
+# the same rule that lets Security vote on the strength of the secrets scan:
+# neither is exhaustive, both actually looked.
+#
+# What it does NOT mean: that a static-only Frontend score covers the other
+# five rubric questions. It covers one. The remaining five were measured too
+# and stay with the model -- Q2 (90% of loading-awaits sit in a try the text
+# cannot judge), Q3/Q5/Q6 (the structural half does not separate the finding
+# from the noise), Q4 (~0% incidence; every timer effect already returns a
+# cleanup). Frontend on a free scan reads what one question found.
+LLM_ONLY_CATEGORIES = frozenset({"Auth", "Money & Data"})
 
 
 @dataclass(frozen=True)
@@ -352,7 +370,8 @@ def _apply_gate(total: float, reasons: list[dict]) -> float:
 
 def compute_scores(findings: list[ScoredFinding],
                    llm_ran: bool = True,
-                   llm_categories: frozenset[str] | None = None) -> dict:
+                   llm_categories: frozenset[str] | None = None,
+                   incomplete_static: frozenset[str] = frozenset()) -> dict:
     """Per-category subscores and their weighted mean.
 
     `llm_ran=False` marks a static-only audit, where LLM_ONLY_CATEGORIES had
@@ -408,11 +427,20 @@ def compute_scores(findings: list[ScoredFinding],
         and any(f.origin_category == c for f in findings)
     }
     def _examined(cat: str) -> bool:
-        if cat not in LLM_ONLY_CATEGORIES:
-            return True          # a static producer always ran
-        if not llm_ran:
-            return False
-        return llm_categories is None or cat in llm_categories
+        llm_examined = llm_ran and (llm_categories is None
+                                    or cat in llm_categories)
+        if cat in LLM_ONLY_CATEGORIES:
+            return llm_examined
+        # A static producer normally always ran -- except one that gave up
+        # before it could say a finding is absent. `incomplete_static` names
+        # those categories (Frontend when the error-boundary scan hit its read
+        # budget), and for them a clean number is unearned unless the LLM stage
+        # examined the category instead. Same rule as the LLM-only case, one
+        # step down: "no producer FINISHED" rather than "no producer ran". A
+        # scan that stopped looking must not read as a clean bill (#392).
+        if cat in incomplete_static:
+            return llm_examined
+        return True          # a static producer ran and finished
 
     counted = [c for c in CATEGORIES
                if _examined(c) and c not in reported_elsewhere]

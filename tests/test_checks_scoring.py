@@ -552,8 +552,11 @@ def test_a_static_only_score_names_the_categories_nothing_examined():
     """
     findings = [_f("critical", 0.9, "Security")]
 
+    # Frontend is NOT in this list any more: app/scan/error_boundary.py is a
+    # static producer for it, so a static-only audit has looked. Auth and
+    # Money & Data still have no producer outside the LLM stage.
     assert compute_scores(findings, llm_ran=False)["unexamined"] == [
-        "Auth", "Money & Data", "Frontend"]
+        "Auth", "Money & Data"]
     assert compute_scores(findings, llm_ran=True)["unexamined"] == []
 
 
@@ -608,16 +611,38 @@ def test_frontend_is_weighted_with_testing_and_deploy_not_with_the_safety_three(
     assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
 
 
-def test_frontend_is_not_examined_by_a_static_only_audit():
-    """The "web" rubric is its only producer. On a static-only audit it would
-    otherwise read a perfect 10.0 for a reason that has nothing to do with the
-    repository -- which is what LLM_ONLY_CATEGORIES exists to stop, and what
-    the free tier was doing to Auth in 25 of 25 audits."""
-    assert "Frontend" in LLM_ONLY_CATEGORIES
+def test_frontend_is_examined_by_a_static_only_audit_now():
+    """It WAS LLM-only, and left on a number: question 1 of the web rubric --
+    no error boundary above the routes -- is a static producer in
+    app/scan/error_boundary.py, measured at 11 of 12 mounted apps with the
+    reputable hits read by hand (DRYDOCK_LENS_PLAN.md). A category with a
+    static producer is examined on a static-only audit by the same rule that
+    lets Security vote on the strength of the secrets scan."""
+    assert "Frontend" not in LLM_ONLY_CATEGORIES
 
     scores = compute_scores([_f("critical", 0.9, "Security")], llm_ran=False)
 
-    assert "Frontend" in scores["unexamined"]
+    assert "Frontend" not in scores["unexamined"]
+
+
+def test_a_frontend_scan_that_ran_out_of_budget_is_not_a_clean_frontend():
+    """The other half of letting a static producer count. The error-boundary
+    scan is bounded, and when it stops before it can say a boundary is absent
+    it emits no finding -- so without this, an unfinished look would score a
+    perfect 10.0 and vote. `incomplete_static` is the pipeline's word for that
+    (#392), and Frontend leaves the mean exactly as an unexamined category
+    does, unless the LLM stage examined it instead."""
+    findings = [_f("critical", 0.9, "Security")]
+
+    static_only = compute_scores(findings, llm_ran=False,
+                                 incomplete_static=frozenset({"Frontend"}))
+    assert "Frontend" in static_only["unexamined"]
+
+    # A paid audit ran the web rubric, so the category WAS examined -- by the
+    # model, which does not share the static scan's budget.
+    paid = compute_scores(findings, llm_ran=True,
+                          incomplete_static=frozenset({"Frontend"}))
+    assert "Frontend" not in paid["unexamined"]
 
 
 def test_a_critical_frontend_finding_does_not_gate_the_headline():
@@ -857,7 +882,9 @@ def test_a_widened_preview_credits_the_rubric_it_gained():
                            llm_categories=frozenset({"Security", "Auth"}))
 
     assert "Auth" not in wider["unexamined"]
-    assert set(wider["unexamined"]) == {"Money & Data", "Frontend"}
+    # Frontend has a static producer now, so it is examined even on a preview
+    # whose rubric list never mentions it.
+    assert set(wider["unexamined"]) == {"Money & Data"}
 
 
 def test_none_means_every_category_and_is_not_an_empty_set():

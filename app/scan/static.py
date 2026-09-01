@@ -6,6 +6,7 @@ from typing import BinaryIO
 
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
+from app.scan.error_boundary import scan_error_boundary
 from app.scan.rls import scan_rls
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
@@ -72,6 +73,21 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             line=h.line, explanation=h.explanation, fix_hint=h.fix_hint,
         ))
 
+    # The first static producer for Frontend. Wired on a number measured in
+    # this repository (DRYDOCK_LENS_PLAN.md): 11 of 12 mounted apps in the
+    # audited corpus ship no error boundary above their routes, the hits on
+    # the most reputable repositories read by hand. The three-strata figure
+    # is reproducible with `scripts/measure_error_boundary.py --strata`. This
+    # is what took Frontend out of LLM_ONLY_CATEGORIES in scoring.py.
+    fileobj.seek(0)
+    boundary = scan_error_boundary(fileobj)
+    for b in boundary.findings:
+        findings.append(ScoredFinding(
+            rule_id=b.rule_id, title=b.title, severity=b.severity,
+            confidence=b.confidence, category=b.category, file=b.file,
+            line=b.line, explanation=b.explanation, fix_hint=b.fix_hint,
+        ))
+
     return {
         # llm_ran=False, not the default: no LLM stage runs inside this
         # function, so Auth and Money & Data sit at 10.0 for want of a
@@ -81,4 +97,11 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # reached by leaving an argument out rather than by passing it wrong.
         "score": compute_scores(findings, llm_ran=False),
         "findings": [vars(f) for f in findings],
+        # Carried, not folded into a finding: `budget_exhausted` means the
+        # boundary scan stopped before it could say a boundary is absent, so
+        # no finding was emitted AND Frontend's clean read is unearned for this
+        # repository. A scanner that found nothing and one that gave up must
+        # not look identical (#392). Consuming this in the pipeline/report is
+        # the follow-up; here it is preserved so it can be.
+        "coverage": {"error_boundary": boundary.coverage},
     }

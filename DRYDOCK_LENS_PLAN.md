@@ -470,4 +470,105 @@ defined. The two budget tests kept passing while silently exercising the real
 4000-file allowance instead of the small one they set. `default_factory` fixes
 it, and the mutation that restores the plain default now turns them red.
 
+## The analyzer is wired into the product, 2026-09-01
+
+Five files arrived from a session that had no access to this repository,
+carrying the integration this plan said would follow the number: the scanner
+wired into `app/scan/static.py`, `coverage` consumed by the pipeline and the
+scorer, Frontend removed from `LLM_ONLY_CATEGORIES`, and a Fix Pack that writes
+`app/error.tsx` and `app/global-error.tsx` for the app-router shape. The design
+is the one this plan asked for and it is taken.
+
+It was reviewed against the code, not against its own report, and that report
+says why it had to be: *"all edits tested in isolation from conftest"*. Four
+existing tests failed on the full suite and one import broke everything that
+transitively loads `app/db.py`. Each is recorded because each is a shape the
+next hand-off will repeat.
+
+**What the integration did not know about this repository**
+
+* `RULE_ID` did not exist in `app/scan/error_boundary.py`. The Fix Pack
+  imported it, `pipeline.py` imports the Fix Pack, `db.py` imports the
+  pipeline — so nothing that touches the database imported at all.
+* `AUDIT_ENGINE_VERSION` was not bumped. `tests/test_engine_version_pins_the_
+  scanners.py` exists because this exact omission shipped three times and left
+  cached audits serving pre-change results; it fails now, and the version is
+  `2026-09-01-1`. The pin's stub also had to learn that this scanner returns a
+  `BoundaryScan`, not a list.
+* Three tests in `test_checks_scoring.py`, one in `test_llm_scan.py` and one in
+  `test_partial_llm_stage.py` asserted Frontend as LLM-only by literal. The
+  partial-stage test was the interesting one: it lost the *last* rubric, which
+  is `web`, and its premise — "nothing looked at this category" — is simply
+  false for Frontend now. It picks an LLM-only rubric by property instead.
+* `_backfill_unexamined` in `db.py` derived the historical answer from the
+  *live* constant, on the argument that the backfill must agree with a fresh
+  audit. That argument inverted the day Frontend left the set: a row without an
+  `unexamined` key predates this analyzer by weeks, and on the engine that
+  scored it nothing looked at Frontend. The set is frozen to what it
+  historically was, with the reason beside it.
+
+**The citation was replaced, and then the replacement was corrected.** The
+uploaded comments justified the scoring change with *"72 of 103 decided apps
+(70%, 95% CI 60–78%) across the three-strata corpus"*. The first review wrote
+that this could not be reproduced here. That was wrong: `scripts/data/` holds
+the corpus — 540 candidates across the Lovable, bolt and hand-written strata,
+already used by four `measure_*` scripts. What remains true is narrower: the
+analyzer version behind that run is not in this repository, and its early
+draft fired on component libraries (measured, 4 of 4 shapes), so 70% may be
+inflated and may not. The code cites what this document measured — 11 of 12
+mounted apps, the reputable hits read by hand, interval 61–94% — and
+`measure_error_boundary.py --strata` now runs the shipping analyzer over the
+same corpus so the three-strata figure can be reproduced rather than argued
+about.
+
+**The Fix Pack placed the boundary in the wrong directory for two of the
+shapes measured this morning.** `error.tsx` only catches for the layout it sits
+beside; for chatbot-ui's `app/[locale]/layout.tsx` the Pack wrote
+`app/error.tsx`, outside that layout, catching nothing. And a workspace app's
+`apps/web/app/layout.tsx` lost its prefix and produced `app/error.tsx` at the
+repository root — a directory that was not the application. Both now resolve
+from the finding's own path: `error.*` beside the layout, `global-error.*` at
+the app root, prefix kept. The first fix of that introduced a third defect —
+excluding route groups as if they were framework labels, which skipped
+`ai-co-founder-matching`'s real root — and the test for it is in the file.
+
+### The calibration check that must run BEFORE this deploys
+
+Frontend joining the mean on static-only audits moves every free-tier headline
+for a repository where the analyzer finds nothing: a Flask API now carries a
+Frontend 10.0 at 15/110 of the weight. The earlier Frontend join measured its
+own effect on the average (+0.29) before landing; this one must too, and it is
+one query over the stored rows, an estimate that ignores the gate because the
+gate scales both sides by the same factor:
+
+```sql
+with s as (
+  select id,
+         (score_json->'categories'->>'Security')::numeric as sec,
+         (score_json->'categories'->>'Testing')::numeric  as tst,
+         (score_json->'categories'->>'Deploy')::numeric   as dep
+  from audits
+  where score_json->>'basis' = 'static_only'
+    and score_json->'categories' ? 'Security'
+)
+select count(*)                                                    as rows,
+       round(avg((0.25*sec+0.15*tst+0.15*dep)/0.55), 2)             as old_mean,
+       round(avg((0.25*sec+0.15*tst+0.15*dep+0.15*10)/0.70), 2)     as new_mean_if_clean,
+       round(avg((0.25*sec+0.15*tst+0.15*dep+0.15*9.2)/0.70), 2)    as new_mean_if_missing
+from s;
+```
+
+`new_mean_if_clean` is the ceiling of the shift (every repo with a boundary or
+no frontend at all); `new_mean_if_missing` is the floor (every repo firing the
+rule). The real figure sits between them at the corpus's incidence. If the
+ceiling moves the average by more than the +0.29 the last category cost, that
+is a calibration decision to make deliberately, not a side effect to ship.
+
+**Still open, and now the next calibration decision rather than this one:**
+whether a repository with no frontend at all (`mount = not_react`) should have
+Frontend *excluded* as not-applicable rather than counted at 10.0. The `mount`
+field carries exactly that signal. It would also change paid audits, where the
+web rubric already counts an empty Frontend at 10.0 today, so it is its own
+measurement against the stored rows.
+
 ## Result — TODO (per-repo incidence of the first deterministic frontend rules)

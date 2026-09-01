@@ -79,7 +79,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # it is an environment variable read at process start, which is exactly what
 # this constant's opening comment warns about. It is bumped here by hand, in
 # the same change that prices the model, so the two travel together.
-AUDIT_ENGINE_VERSION = "2026-08-28-1"
+# 2026-09-01-1: a new static scanner (error_boundary), a new rule id
+# (missing-error-boundary), and Frontend leaving LLM_ONLY_CATEGORIES -- so a
+# static-only audit now scores a category it used to leave out. All three are
+# exactly the kind of change the pin test above was written for.
+AUDIT_ENGINE_VERSION = "2026-09-01-1"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
@@ -437,6 +441,16 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
                 # tier's rubric list is changed by an env var.
                 llm_categories=frozenset(
                     RUBRICS[r]["category"] for r in ran if r in RUBRICS),
+                # A static producer that ran out of read budget did not finish,
+                # so the absence of its finding is not evidence of a clean
+                # category. The error-boundary scan reports this in
+                # static["coverage"]; here is where it stops Frontend scoring a
+                # clean 10.0 off a look that never completed. Other analyzers
+                # can join by reporting their own coverage the same way.
+                incomplete_static=frozenset(
+                    {"Frontend"}
+                    if static.get("coverage", {}).get("error_boundary")
+                    == "budget_exhausted" else set()),
             ),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0

@@ -1740,8 +1740,10 @@ def test_run_scan_at_preview_depth_does_not_credit_unrun_rubrics():
     assert llm.prompts, "the security rubric selected no file -- fixture is inert"
 
     assert scan["score"]["basis"] == BASIS_PREVIEW
-    assert set(scan["score"]["unexamined"]) == {"Auth", "Money & Data",
-                                                "Frontend"}
+    # Frontend is not here: app/scan/error_boundary.py is a static producer
+    # for it, so a preview that ran only the security rubric has still looked
+    # at Frontend -- through the static stage, which runs at every depth.
+    assert set(scan["score"]["unexamined"]) == {"Auth", "Money & Data"}
 
 
 def test_run_scan_at_full_depth_still_credits_every_category():
