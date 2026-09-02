@@ -715,7 +715,8 @@ that runs.
 
 The rotation stand is deliberately two hops deep — `index.html` names an entry
 chunk, that chunk names a client chunk by quoted filename, and the credential
-is only in the second. Against the live host:
+is only in the second. Against the live host, measured with
+`scripts/preflight_bundle_check.py` (free, no ledger row):
 
 ```
 status     : checked        leaked: True
@@ -752,3 +753,43 @@ smoke above, then wire the served-bundle fetch behind consent into the audit,
 give it its own `service_role_bundle_runtime` template id (so a stored
 `proof_json` row is unambiguous), and run the first consented customer
 deployment.
+
+### The four rotation verdicts, measured live 2026-09-02 — three leave the fixtures
+
+`scripts/run_rotation_sequence.sh` against the sslip.io stand, audit
+`4e738001-2a1d-4749-9ac5-f6289c49b8cd`, four real requests spent from the day's
+five. The `current` symlink was set per step and the served entry-chunk hash
+confirmed before each request, so no verdict was compared against a variant that
+was not live when it was checked — the failure mode the script exists to
+prevent. Rehearsed first with `preflight_bundle_check.py` (a fifth, free fetch)
+to confirm the URL was readable before spending anything.
+
+| run | served variant | verdict | findings | `rot-N.json` |
+|---|---|---|---|---|
+| 1 | `dist_key_a` — no prior check | `no_baseline` | 1 (`service_role`) | `/root/rot-1.json` |
+| 2 | `dist_key_a` — same key, unchanged | `unchanged` | 1 | `/root/rot-2.json` |
+| 3 | `dist_key_b` — new key, same class | `replaced_still_shipped` | 1 | `/root/rot-3.json` |
+| 4 | `dist_clean` — credential removed | `gone_from_bundle` | 0 | `/root/rot-4.json` |
+
+Every verdict matched the expected successor; the script halts on the first
+mismatch, so a clean finish is the assertion. The entry-chunk hash advanced with
+each variant (`bba46b16` → `bba46b16` → `76cba4b2` → `a389f865`), which is the
+served proof that the deployment was the one the comparison assumed.
+
+**What this moves out of the fixtures.** Before this run, five rotation verdicts
+were fixture-only (`SUPABASE_SERVICE_ROLE_BUNDLE_PLAN.md`, "what that run did NOT
+prove"): `newly_exposed`, `unchanged`, `replaced_still_shipped`,
+`gone_from_bundle`, `not_comparable`. Three are now measured against the live
+endpoint: **`unchanged`, `replaced_still_shipped`, `gone_from_bundle`**.
+`no_baseline` and `still_clean` were already live (six clean drydock.co runs and
+`v2026.09.01-1` respectively). Two remain fixture-only and this sequence does not
+reach them: **`newly_exposed`** (needs a clean baseline followed by a credential
+appearing — the sequence's first step is always the baseline, so it never
+produces it) and **`not_comparable`** (the missing-fingerprint / no-pepper case,
+a gap in our configuration rather than a deployment shape).
+
+The synthetic credential is inert (random ref, secret discarded at mint), so
+nothing was rotated or revoked afterward; the stand is left serving `dist_clean`,
+which carries no key. With the four verdicts recorded, the temporary
+`rotation-stand.45-10-40-169.sslip.io` block in `deploy/caddy/Caddyfile` is
+removed in the same change that adds this section.
