@@ -668,6 +668,51 @@ def test_a_wrapped_archive_still_finds_its_boundary():
     assert scan_error_boundary(_zip(wrapped)).findings == []
 
 
+def test_a_boundary_that_only_a_test_renders_does_not_silence_it():
+    """MEASURED 2026-09-04: khuepm/GeniusQA's desktop package was silent on
+    `packages/desktop/src/__tests__/utils/TestErrorBoundary.tsx` -- a fixture
+    built to be rendered BY a test, and the app's only boundary token. Nothing
+    stands between a visitor and a blank page there."""
+    scan = scan_error_boundary(_zip({
+        **ROUTED_SPA,
+        "src/__tests__/utils/TestErrorBoundary.tsx": (
+            "class B extends React.Component{componentDidCatch(e){}}"),
+    }))
+
+    assert [f.rule_id for f in scan.findings] == ["missing-error-boundary"]
+
+
+def test_a_boundary_in_a_test_or_story_FILE_does_not_silence_it():
+    """The same fixture by naming rather than by directory. `Boundary.test.tsx`
+    is a test OF a boundary; `Boundary.stories.tsx` is a catalogue entry."""
+    for name in ("src/Boundary.test.tsx", "src/Boundary.spec.tsx",
+                 "src/Boundary.stories.tsx"):
+        scan = scan_error_boundary(_zip({
+            **ROUTED_SPA,
+            name: "class B extends React.Component{componentDidCatch(e){}}",
+        }))
+
+        assert scan.findings, f"{name} must not buy silence"
+
+
+def test_a_real_boundary_beside_a_test_still_silences_it():
+    """The guard rail on the guard. Skipping a file removes its power to
+    silence, so the list is short on purpose: a repository that has BOTH a
+    fixture and a real boundary must stay silent, or the tightening would
+    invent findings -- the expensive direction for something a customer pays
+    for."""
+    scan = scan_error_boundary(_zip({
+        **ROUTED_SPA,
+        "src/__tests__/utils/TestErrorBoundary.tsx": (
+            "class T extends React.Component{componentDidCatch(e){}}"),
+        "src/components/ErrorBoundary.tsx": (
+            "class B extends React.Component{componentDidCatch(e){}}"),
+    }))
+
+    assert scan.findings == []
+    assert "src/components/ErrorBoundary.tsx" in scan.reason
+
+
 EXPO_ROUTER = {
     "package.json": ('{"dependencies":{"expo":"52","expo-router":"4",'
                      '"react":"18","react-native":"0.76"}}'),
