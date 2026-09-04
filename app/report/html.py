@@ -209,7 +209,7 @@ def _bar(label: str, value: float, examined: bool = True,
     )
 
 
-def _unexamined_sentence(score: dict) -> str:
+def _unexamined_sentence(score: dict, holding: set[str] | None = None) -> str:
     """Name the categories nothing looked at, for the scope note.
 
     Reads the scorer's own `unexamined` list rather than re-deriving it from
@@ -224,19 +224,27 @@ def _unexamined_sentence(score: dict) -> str:
     needed, because neither is the other: nobody surveyed the category, and
     something was still found in it.
     """
-    holding = [str(n) for n in score.get("unexamined_with_findings") or []]
-    names = [str(n) for n in score.get("unexamined") or [] if n not in holding]
+    # PASSED IN, not read from the score a second time. It was read here
+    # directly once, and a live report caught it: a stored row predating the
+    # key got the fallback for its category ROW ("not surveyed — see
+    # findings") and not for this sentence, so one page said both. Half a fix
+    # is worse than none here, because the contradiction moved rather than
+    # went. The caller derives it once and both surfaces spend the same value.
+    held = sorted(holding) if holding is not None else [
+        str(n) for n in score.get("unexamined_with_findings") or []]
+    names = [str(n) for n in score.get("unexamined") or [] if n not in held]
+    holding_names = held
 
-    if not names and not holding:
+    if not names and not holding_names:
         return ("It does not review your authentication and does not look "
                 "for injection paths.")
 
     parts = []
     if names:
         parts.append(f"Nothing here examined {_listed(names)}.")
-    if holding:
+    if holding_names:
         also = " either" if names else ""
-        parts.append(f"It did not survey {_listed(holding)}{also}, but "
+        parts.append(f"It did not survey {_listed(holding_names)}{also}, but "
                      f"something was found there anyway — those findings are "
                      f"listed below.")
     return " ".join(parts)
@@ -582,7 +590,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
             '<section><p class="secnote">A free scan does not produce a mark '
             'out of ten, because it does not look at enough to earn one. '
             + ran + ' '
-            + _unexamined_sentence(score) +
+            + _unexamined_sentence(score, holds) +
             ' The categories it did look at are marked "partly checked" '
             'rather than scored, because one pass with the fastest model is '
             'not the same examination a full audit makes. Finding nothing in '

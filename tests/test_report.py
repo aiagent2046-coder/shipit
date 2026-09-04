@@ -690,16 +690,32 @@ def test_a_stored_row_without_the_new_key_still_stops_lying():
     """Rows written before the key exist on somebody's screen today. The
     renderer falls back to intersecting `unexamined` with the findings it is
     rendering -- derivable from what is already on the page, so no scoring
-    rule is copied into the report to do it."""
-    r = result([_service_role_finding()])
-    r["score"]["basis"] = "static_only"
-    r["score"]["unexamined"] = ["Auth"]
-    r["score"].pop("unexamined_with_findings", None)
-    html = render_report(r)
+    rule is copied into the report to do it.
 
-    auth_row = next(row for row in html.split('<div class="cat">')
-                    if row.startswith('<span class="cat-name">Auth</span>'))
-    assert "not surveyed" in auth_row
+    BOTH SURFACES OF THE PAGE, and that is what this test is for. Shipped
+    with the fallback wired to the category ROW only, the live report for
+    audit 544b91bd printed "not surveyed — see findings" on the Auth row and
+    "Nothing here examined Auth" in the paragraph above it. Half a fix moved
+    the contradiction rather than removing it, and one assertion would have
+    passed on that page.
+    """
+    # Both free depths, because the row that caught this in production was
+    # `static+preview` and the test that missed it was `static_only`.
+    for basis in ("static_only", "static+preview"):
+        r = result([_service_role_finding()])
+        r["score"]["basis"] = basis
+        r["score"]["unexamined"] = ["Auth", "Money & Data"]
+        r["score"].pop("unexamined_with_findings", None)
+        html = render_report(r)
+
+        auth_row = next(row for row in html.split('<div class="cat">')
+                        if row.startswith('<span class="cat-name">Auth</span>'))
+        assert "not surveyed" in auth_row, basis
+        assert "Nothing here examined Auth" not in html, basis
+        assert "did not survey Auth" in html, basis
+        # The category with nothing in it keeps the other sentence, or the fix
+        # would just have swapped one blanket claim for another.
+        assert "Nothing here examined Money &amp; Data." in html, basis
 
 
 def test_an_unexamined_category_holding_nothing_still_says_not_checked():
