@@ -274,15 +274,52 @@ def test_an_unsure_critical_does_not_gate_by_itself():
     assert sure["total"] <= GATED_MAX
 
 
-def test_critical_in_an_unexamined_category_cannot_gate():
-    """On a static-only audit nothing ran that could produce an Auth finding,
-    so an Auth critical cannot be present -- but a Security one can, and the
-    gate must read only what was examined. Mirrors the subscore rule: an
-    unexamined category neither clears the gate nor fails it.
+def test_a_critical_gates_from_whatever_category_it_sits_in():
+    """INVERTED 2026-09-04. This test used to assert the opposite, on the
+    premise its own docstring stated: "on a static-only audit nothing ran that
+    could produce an Auth finding, so an Auth critical cannot be present". It
+    then built exactly that finding as its fixture and asserted the score
+    stayed high.
+
+    The premise is false twice over. app/scan/service_role.py has filed
+    statically under Auth since #299, and a rubric that ran files its finding
+    by what the finding IS (#10) -- so a preview whose one rubric is Security
+    returns a CRITICAL categorised Auth, into a category `llm_categories` does
+    not cover. Measured before the change, the same finding:
+
+        full audit                 total 6.6  gated_by ['critical']
+        preview (one rubric ran)   total 9.9  gated_by []
+
+    9.9 over "endpoint runs shell commands with no login" at 0.95 confidence
+    is #22, #27 and #35 arriving again by a new route.
     """
     findings = [_f("critical", 0.95, "Auth")]
-    assert compute_scores(findings, llm_ran=False)["total"] > GATE_THRESHOLD
+
+    assert compute_scores(findings, llm_ran=False)["total"] <= GATED_MAX
     assert compute_scores(findings, llm_ran=True)["total"] <= GATED_MAX
+    # The narrow depth is the one this is for: one rubric ran, its category is
+    # not Auth, and the finding landed in Auth anyway.
+    preview = compute_scores(findings, llm_ran=True,
+                             llm_categories=frozenset({"Security"}))
+    assert preview["total"] <= GATED_MAX
+    assert [r["kind"] for r in preview["gated_by"]] == ["critical"]
+
+
+def test_a_clean_unexamined_category_still_neither_clears_nor_fails_the_gate():
+    """The asymmetry, pinned. Only the CRITICAL route stopped reading
+    `counted`; the subscore route still respects it, and the two say different
+    things. A clean subscore is evidence only if somebody looked -- absence of
+    evidence. A critical sitting in the category is evidence already.
+
+    Without this test the previous one reads as "unexamined categories vote
+    now", which is the defect LLM_ONLY_CATEGORIES exists to prevent.
+    """
+    scores = compute_scores([_f("low", 0.9, "Deploy")], llm_ran=False)
+
+    assert "Auth" in scores["unexamined"]
+    assert scores["categories"]["Auth"] == 10.0
+    assert scores["gated_by"] == []
+    assert scores["total"] > GATE_THRESHOLD
 
 
 def test_gate_does_not_fire_on_hygiene_only_findings():

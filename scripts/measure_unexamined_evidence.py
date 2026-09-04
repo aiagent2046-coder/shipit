@@ -31,8 +31,14 @@ TWO ROUTES ARE MEASURED, AND ONE OF THEM IS REFUSED BY ITS OWN NUMBER.
   ever compresses downward, so this direction cannot invert. Reachable today
   and not hypothetically: a preview runs one rubric, the model files its
   finding by what it IS (#10), and a CRITICAL categorised Auth lands outside
-  `llm_categories`. The same finding scores 6.6 with the gate firing on a full
+  `llm_categories`. The same finding scored 6.6 with the gate firing on a full
   audit and 9.9 with it silent on a preview.
+
+  SHIPPED 2026-09-04, on 0 affected rows in the ledger. This script therefore
+  reproduces a stored total under the PRE-change gate (`pre_change_gate`) --
+  the engine that wrote those rows is no longer today's, and reproducing them
+  under today's rules would silently reclassify as "unreproducible" exactly
+  the rows the change is about.
 
 READ-ONLY, and off a dump rather than off the database. Re-auditing these
 repositories to answer a scoring question would write fresh rows for repositories
@@ -91,18 +97,17 @@ def _finding(raw: dict) -> ScoredFinding:
 
 def _deaf_criticals(by_cat: dict[str, float], counted: list[str],
                     findings: list[ScoredFinding]) -> list[ScoredFinding]:
-    """Criticals the gate cannot hear, because their category went unexamined.
+    """Criticals the PRE-2026-09-04 gate could not hear.
 
-    `_gating_criticals` filters by `counted` on the stated premise that "on a
-    static-only audit nothing ran that could have produced an Auth or Money &
-    Data finding". Two producers contradict it: app/scan/service_role.py files
-    statically under Auth, and an LLM rubric that DID run files a finding by
-    what it is (#10) -- so a preview whose one rubric is Security can return a
-    confident CRITICAL categorised Auth, land it in a category `llm_categories`
-    does not cover, and gate on nothing.
-
-    Demonstrated: the same critical scores 6.6 with the gate firing on a full
-    audit and 9.9 with the gate silent on a preview.
+    `_gating_criticals` used to filter by `counted`, on the stated premise
+    that "on a static-only audit nothing ran that could have produced an Auth
+    or Money & Data finding". Two producers contradict it: service_role.py
+    files statically under Auth, and a rubric that DID run files a finding by
+    what it IS (#10), so a preview whose one rubric is Security can return a
+    confident CRITICAL categorised Auth. That filter is gone as of the change
+    this script measured; the set is still computed here because it is the
+    difference between the two engines, which is what a shift is measured
+    across.
     """
     return [f for f in findings
             if f.severity == "critical"
@@ -114,19 +119,25 @@ def _deaf_criticals(by_cat: dict[str, float], counted: list[str],
 
 def _total(by_cat: dict[str, float], counted: list[str],
            findings: list[ScoredFinding], *,
-           deaf_criticals_gate: bool = False) -> float:
+           pre_change_gate: bool = False) -> float:
     """The headline, computed by the shipping rules rather than by a copy.
 
     Mirrors compute_scores' tail: weighted mean over the counted categories,
     then the gate, then the 10.0-with-findings correction.
 
-    `deaf_criticals_gate` models the ONE change that survived measurement: a
-    confident critical gates from wherever it sits. The mean is untouched by
-    it deliberately -- admitting a category to the mean because it holds a
-    finding was measured and refused, because a category at 9.3 sitting above
-    a weak repository's mean RAISES the total, so finding a vulnerability
-    would improve the score. A gate only ever lowers, so this direction cannot
-    invert.
+    `pre_change_gate` walks the gate BACK to the engine that wrote the stored
+    rows, by dropping the critical reasons whose category went unexamined --
+    subtracted from the shipping rule rather than reimplemented beside it, so
+    the baseline cannot drift from the real one in any other respect.
+
+    It is a subtraction and not an addition because the change shipped: a
+    confident critical now gates from wherever it sits. Reproducing a stored
+    total means modelling the engine that produced it, and after the change
+    that is no longer today's engine. The mean is untouched by any of this --
+    admitting a category to the mean because it holds a finding was measured
+    and REFUSED (route A): a category at 9.3 sitting above a weak
+    repository's mean raises the total, so finding a vulnerability would
+    improve the score.
     """
     divisor = sum(_RAW_CATEGORY_WEIGHT[c] for c in counted)
     if not divisor:
@@ -137,11 +148,12 @@ def _total(by_cat: dict[str, float], counted: list[str],
     total = sum(by_cat[c] * _RAW_CATEGORY_WEIGHT[c]
                 for c in counted) / divisor
     reasons = _gate_reasons(by_cat, counted, findings)
-    if deaf_criticals_gate:
-        reasons = reasons + [
-            {"kind": "critical", "category": f.category, "rule_id": f.rule_id,
-             "title": f.title}
-            for f in _deaf_criticals(by_cat, counted, findings)]
+    if pre_change_gate:
+        deaf = {(f.rule_id, f.category)
+                for f in _deaf_criticals(by_cat, counted, findings)}
+        reasons = [r for r in reasons
+                   if r.get("kind") != "critical"
+                   or (r.get("rule_id"), r.get("category")) not in deaf]
     total = round(_apply_gate(total, reasons), 1)
     if findings and total == 10.0:
         total = 9.9
@@ -187,9 +199,12 @@ def main(path: str) -> int:
                    if c not in unexamined and c not in elsewhere]
         findings = [_finding(f) for f in (row.get("findings_json") or [])]
 
-        # Reproduce the stored number first. Anything else is a delta between
-        # two numbers of unknown provenance.
-        if abs(_total(by_cat, counted, findings) - float(score["total"])) > 0.05:
+        # Reproduce the stored number first, under the gate of the engine that
+        # WROTE it. Anything else is a delta between two numbers of unknown
+        # provenance -- and after the route-B change shipped, today's gate is
+        # no longer the one these rows were scored by.
+        if abs(_total(by_cat, counted, findings, pre_change_gate=True)
+               - float(score["total"])) > 0.05:
             unreproducible += 1
             continue
 
@@ -206,16 +221,17 @@ def main(path: str) -> int:
             if any(f.category == c for f in findings))
         if with_evidence:
             affected.append((audit_id, repo_url, stored,
-                             _total(by_cat, counted + with_evidence, findings),
+                             _total(by_cat, counted + with_evidence, findings,
+                                    pre_change_gate=True),
                              with_evidence))
 
-        # ROUTE B -- the gate. A confident critical gates from wherever it
-        # sits. This one can only lower a total.
+        # ROUTE B -- the gate, now SHIPPED. A confident critical gates from
+        # wherever it sits; `stored` is what the old engine said and the
+        # second number is what today's says. This one can only lower.
         deaf_here = _deaf_criticals(by_cat, counted, findings)
         if deaf_here:
             deaf.append((audit_id, repo_url, stored,
-                         _total(by_cat, counted, findings,
-                                deaf_criticals_gate=True),
+                         _total(by_cat, counted, findings),
                          sorted({f.category for f in deaf_here})))
 
     print(f"{len(rows)} rows in dump, {examined_rows} scored, "
@@ -235,7 +251,7 @@ def main(path: str) -> int:
             "a weak repository's total, so finding a vulnerability would "
             "improve its score)", affected)
     _report("ROUTE B -- a confident critical gates from wherever it sits "
-            "(can only lower)", deaf)
+            "(SHIPPED 2026-09-04; can only lower)", deaf)
     return 0
 
 
