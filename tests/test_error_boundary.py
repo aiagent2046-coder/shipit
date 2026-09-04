@@ -668,6 +668,52 @@ def test_a_wrapped_archive_still_finds_its_boundary():
     assert scan_error_boundary(_zip(wrapped)).findings == []
 
 
+EXPO_ROUTER = {
+    "package.json": ('{"dependencies":{"expo":"52","expo-router":"4",'
+                     '"react":"18","react-native":"0.76"}}'),
+    "app/_layout.tsx": "export default function L(){return null}",
+    "app/index.tsx": "export default function Home(){return null}",
+}
+
+
+def test_an_expo_router_app_mounts_even_with_no_render_call():
+    """MEASURED 2026-09-04: `Karuna-Android` and `Failed_Taska` carry
+    `app/_layout.tsx` and no createRoot anywhere, because Expo Router writes the
+    mount. Both were classified `undetermined` and left the incidence
+    denominator -- the same defect that once cost `ai-productivity-hub` its
+    place. An app that can blank must be counted whether or not its author typed
+    the mount."""
+    scan = scan_error_boundary(_zip(EXPO_ROUTER))
+
+    assert scan.mount == MOUNT_YES
+    assert "Expo Router" in scan.reason
+    assert [f.rule_id for f in scan.findings] == ["missing-error-boundary"]
+
+
+def test_a_protected_expo_router_app_is_silent_but_still_counted():
+    """The other half, and the one that decides the denominator: recognising the
+    mount must put a PROTECTED Expo app into it too. Counting only the ones that
+    fire is how the rate got inflated in the first place."""
+    scan = scan_error_boundary(_zip({
+        **EXPO_ROUTER,
+        "app/_layout.tsx": ("class B extends React.Component{"
+                            "componentDidCatch(e){}}"),
+    }))
+
+    assert scan.findings == []
+    assert scan.mount == MOUNT_YES, "silent, but in the denominator"
+
+
+def test_expo_router_needs_the_dependency_not_just_the_directory():
+    """A repository can carry `app/_layout.tsx` without being an Expo app, and
+    the dependency is what tells them apart -- the same pairing every other
+    entry in _FRAMEWORK_MOUNTS uses, for the same reason."""
+    no_dep = {k: v for k, v in EXPO_ROUTER.items()}
+    no_dep["package.json"] = '{"dependencies":{"react":"18"}}'
+
+    assert scan_error_boundary(_zip(no_dep)).mount != MOUNT_YES
+
+
 def test_a_wide_workspace_names_whole_packages_and_counts_what_it_omits():
     """`reason` used to be cut at a character count, which sliced a package name
     mid-word on a wide monorepo -- and a clipped list reads exactly like a short
