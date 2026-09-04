@@ -102,16 +102,19 @@ assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
 # was its only producer and no static check emitted it, so a static-only audit
 # would have read a perfect 10.0 for the reason this set exists. Then question
 # 1 of that rubric -- no error boundary above the routes -- was lifted into
-# app/scan/error_boundary.py and measured (DRYDOCK_LENS_PLAN.md, 2026-09-01):
-# 11 of 12 mounted apps in the audited corpus fire it, the three most
-# reputable hits -- Vercel's own subscription template, Blazity's enterprise
-# starter, chatbot-ui -- read by hand and real, and it fires the same way
-# twice. The honest interval is 61-94% until the workspace re-run lands. A
-# figure of "72 of 103 (70%)" over the three-strata corpus in scripts/data/
-# also circulated; the corpus is real, but the analyzer version behind that
-# run is not in this repository and an early draft fired on component
-# libraries, so it is not cited until `measure_error_boundary.py --strata`
-# reproduces it with the analyzer that ships. That is a static producer,
+# app/scan/error_boundary.py and measured. First on 2026-09-01 (11 of 12
+# mounted apps), then reproduced 2026-09-03/04 with the analyzer that SHIPS,
+# over both corpora (DRYDOCK_LENS_PLAN.md): 72 of 83 mounted apps = 87% on the
+# three-strata discovery corpus in scripts/data/ (`--strata`), and 16 of 17 =
+# 94% on the repositories that actually came through the product
+# (`--from-file`). The reputable hits -- Vercel's own subscription template,
+# Blazity's enterprise starter, chatbot-ui -- reappear in both runs, read by
+# hand and real. Both numbers are FLOORS: the error-file rule credits an
+# error.tsx ANYWHERE under app/, so an app protected only in one route reads
+# as ok; a refinement to require a root-level boundary is tracked separately
+# and would only raise these. The earlier "61-94% until the workspace re-run
+# lands" is now closed, and the stray "72 of 103 (70%)" framing is superseded
+# by the mounted-app denominator above. That is a static producer,
 # and a category with a static producer is examined on a static-only audit by
 # the same rule that lets Security vote on the strength of the secrets scan:
 # neither is exhaustive, both actually looked.
