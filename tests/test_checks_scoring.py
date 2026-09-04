@@ -305,6 +305,38 @@ def test_a_critical_gates_from_whatever_category_it_sits_in():
     assert [r["kind"] for r in preview["gated_by"]] == ["critical"]
 
 
+def test_an_unexamined_category_holding_a_finding_is_named_as_such():
+    """The words a report may use about the row, decided here so the surfaces
+    do not each grow their own copy.
+
+    MEASURED on a live report: Auth printed "not checked" while the findings
+    table below listed, under Auth, a service-role key bypassing Row Level
+    Security in 21 places. It stays in `unexamined` -- its number is still
+    unearned and still must not be drawn -- and it is additionally named here
+    so the sentence can stop being false.
+    """
+    scores = compute_scores([_f("high", 0.7, "Auth")], llm_ran=False)
+
+    assert "Auth" in scores["unexamined"], "its number is still not earned"
+    assert scores["unexamined_with_findings"] == ["Auth"]
+    # The category nothing was found in must NOT be named: if it were, the key
+    # would just be a second copy of `unexamined` and would tell no surface
+    # anything it did not already know.
+    assert "Money & Data" in scores["unexamined"]
+    assert "Money & Data" not in scores["unexamined_with_findings"]
+
+
+def test_the_new_key_is_empty_rather_than_absent_when_nothing_qualifies():
+    """Same contract as `gated_by`: an empty list means "asked and nothing
+    matched", while a missing key means "produced before this existed". A
+    reader that cannot tell those apart guesses, and this is the key it would
+    guess about a row nobody surveyed."""
+    scores = compute_scores([_f("low", 0.9, "Deploy")], llm_ran=False)
+
+    assert scores["unexamined_with_findings"] == []
+    assert {}.get("unexamined_with_findings") is None
+
+
 def test_a_clean_unexamined_category_still_neither_clears_nor_fails_the_gate():
     """The asymmetry, pinned. Only the CRITICAL route stopped reading
     `counted`; the subscore route still respects it, and the two say different

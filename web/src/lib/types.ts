@@ -60,6 +60,13 @@ export interface Score {
   // appear in `categories` at 10.0, so a renderer MUST consult this before
   // drawing a bar. Absent on audits stored before the key existed.
   unexamined?: string[];
+  // The subset of `unexamined` that holds at least one finding anyway: a
+  // static producer filed there, or a rubric that ran filed by what the
+  // finding IS. Those rows must not say "not checked" — that sentence was
+  // printed over a service-role key bypassing Row Level Security in 21
+  // places. Absent on audits stored before the key existed, and a renderer
+  // then falls back to intersecting `unexamined` with the findings it has.
+  unexamined_with_findings?: string[];
 }
 
 export interface Finding {
