@@ -251,3 +251,61 @@ def test_a_strata_run_over_the_anonymous_ceiling_refuses_up_front(
     out = m._strata_targets(10)
     assert len(out) == 30
     assert {label for label, _, _ in out} == {"Lovable", "bolt", "hand-written"}
+
+
+# --- the exclusion's own question --------------------------------------------
+
+def _zip(files: dict[str, str]) -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, body in files.items():
+            zf.writestr(name, body)
+    return buf.getvalue()
+
+
+_MAIN = ("import {createRoot} from 'react-dom/client';"
+         "createRoot(el).render(<App/>)")
+
+
+def test_a_silenced_repository_is_asked_whether_it_was_an_app_after_all():
+    """MEASURED 2026-09-04: 13 repositories left the incidence denominator
+    because a boundary token stopped the walk before it reached their mount --
+    and an UNPROTECTED repository never stops early, so the exclusion only ever
+    removed protected apps and inflated the rate. This is the question that
+    decides whether each exclusion was right, so it has to be right itself."""
+    from scripts.measure_error_boundary import _render_call_anywhere
+
+    # A GitHub zip wraps everything in <repo>-<sha>/; the mount is still found.
+    assert _render_call_anywhere(_zip({
+        "repo-abc123/package.json": "{}",
+        "repo-abc123/src/App.tsx": "export default function App(){}",
+        "repo-abc123/src/main.tsx": _MAIN,
+    })) == "src/main.tsx"
+
+    # An archive with no wrapping directory works the same way.
+    assert _render_call_anywhere(_zip({
+        "package.json": "{}",
+        "src/main.tsx": _MAIN,
+    })) == "src/main.tsx"
+
+    # A library really has no mount: the exclusion was correct for it.
+    assert _render_call_anywhere(_zip({
+        "repo-abc123/package.json": "{}",
+        "repo-abc123/src/Button.tsx": "export const B = () => null",
+    })) == ""
+
+
+def test_a_render_call_in_node_modules_does_not_make_it_an_app():
+    """Every dependency tree contains createRoot. Counting one would move a
+    library into the denominator and pull the incidence DOWN with a repository
+    that has no screen to blank -- the mirror of the defect this exists to
+    measure, and just as wrong."""
+    from scripts.measure_error_boundary import _render_call_anywhere
+
+    assert _render_call_anywhere(_zip({
+        "repo-abc123/package.json": "{}",
+        "repo-abc123/src/Button.tsx": "export const B = () => null",
+        "repo-abc123/node_modules/react-dom/client.js": _MAIN,
+    })) == ""
