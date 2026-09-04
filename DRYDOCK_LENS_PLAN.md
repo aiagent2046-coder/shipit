@@ -614,24 +614,74 @@ answered yes on both corpora, not just the discovery list.
 
 ### Both numbers are FLOORS, and this belongs beside any quote of them
 
-`_APP_ERROR_FILE` credits an `error.tsx`/`global-error.tsx` **anywhere** under
-an `app/` tree — the rule's own comment says "any of them buys silence." But
-the finding is about the *root* white page, and a nested `error.tsx` catches
-only its own subtree, not the root layout or sibling routes. So an app
-protected in one route reads as `ok`, and the true incidence is **≥** these
-figures. Two strata hits are the symptom, both credited `ok` on a boundary
-sitting segments deep:
+**Two** rules can silence this finding, and both are blind to where the
+boundary actually sits:
 
-* `elevate-for-humanity/Elevate-lms` → `apps/admin/app/barber-shop-applications/error.tsx`
-* `iBob78/Apex-collector` → `src/app/app/error.tsx`
+* the **file** rule credited an `error.tsx`/`global-error.tsx` anywhere under
+  an `app/` tree (`_APP_ERROR_FILE`, "any of them buys silence"); and
+* the **token** rule credits a boundary token — `componentDidCatch`,
+  `<ErrorBoundary`, `react-error-boundary`, … — found in **any source file at
+  all** (`_BOUNDARY_TOKENS`, and `test_a_class_boundary_anywhere_silences_it`
+  is where that leniency is deliberately written down).
 
-The rule cannot tell a root boundary from a route-segment one. The refinement
-— credit only a root-level `error.tsx`/`global-error.tsx` (mirroring
-`_ROOT_APP_LAYOUT`'s anchoring), and note that even a root `error.tsx` does not
-catch a fault in the root layout itself, only `global-error.tsx` does — is
-tracked as its own PR with fixtures for the nested case, NOT folded into this
-measurement. Both corpora were measured on the shipped detector so they stay
-comparable to what a customer gets today.
+The finding is about the *root* white page, and neither a nested `error.tsx`
+nor a boundary component living inside one route covers the root layout or the
+sibling routes. So an app protected in one place reads as `ok`, and the true
+incidence is **≥** these figures. Of the two, the **token rule is the dominant
+source of the gap** — see the correction below, which is how that was
+established rather than assumed.
+
+### Correction, 2026-09-04 — the two repositories named here were not the symptom
+
+This section first named `elevate-for-humanity/Elevate-lms` and
+`iBob78/Apex-collector` as apps credited `ok` on a boundary sitting segments
+deep, and the follow-up PR claimed both would fire once the file rule was
+anchored to the root. **Both claims were wrong, and both were inferred from a
+single line of run output without reading the repositories.**
+
+Replaying the corpus on identical commits with the tightened rule settled it:
+
+| repository | before | after | verdict |
+|---|---|---|---|
+| `iBob78/Apex-collector` | `app-router error file: src/app/app/error.tsx` | `root app-router error file: **src/app/error.tsx**` | `ok` → `ok` |
+| `elevate-for-humanity/Elevate-lms` | `app-router error file: …/barber-shop-applications/error.tsx` | `boundary token in …/blog/management/error.tsx` | `ok` → `ok` |
+
+`Apex-collector` **always had a real root boundary**; the old rule merely named
+whichever error file it reached first, and that was read as if it were the only
+one. `Elevate-lms` is silenced by a boundary **token** in a nested file, so
+anchoring the file rule moved nothing for it — when one lenient path stopped
+crediting, the other picked it up immediately. That is the evidence for the
+claim above that the token rule, not the file rule, is what holds these numbers
+down.
+
+The failure mode is the one this document keeps recording: a verdict inferred
+from output that agreed with the expectation, and reality checked only
+afterwards. The measurement below is what checking looked like.
+
+### The refinement's measured effect: none
+
+`--strata` replayed on the **same 119 pinned commits** as 2026-09-03, on the
+tightened engine (`AUDIT_ENGINE_VERSION` 2026-09-04-1):
+
+```
+incidence among MOUNTED react/next apps: 72/83 = 87%     <- identical
+mount classes: mounted=83, no_mount=4, not_react=19, undetermined=13
+```
+
+Byte-identical inputs, byte-identical outcome: **zero verdicts changed**, two
+reason strings changed (the table above). The tightening forbids a class of
+false negative that this corpus does not happen to contain.
+
+That is a reason to keep the rule — a nested `error.tsx` genuinely does not
+cover the root, and the negative control confirms legitimate root boundaries
+(`Next-js-Boilerplate`'s `src/app/global-error.tsx`) are still credited — but
+it is **not** a reason to claim the change found anything. The engine-version
+bump remains correct regardless: the rule *can* change a verdict on a
+repository whose only boundary is nested and tokenless, and cached results must
+not straddle a rule change.
+
+The floors themselves are unmoved and their "≥" stands, now for the right
+reason.
 
 ### The reputable hits reconfirm live
 
@@ -666,10 +716,15 @@ the analyzer's hits, not its mistakes.
 through route groups `(group)` and dynamic segments `[param]` — silences the
 finding. A plain named segment (`app/dashboard/error.tsx`) no longer does,
 because it catches only its own subtree while the root layout and sibling
-routes still blank. The two 2026-09-03 symptom hits (`Elevate-lms`,
-`Apex-collector`) fire now; the route-group and dynamic-segment roots that
-`chatbot-ui` and `Next-js-Boilerplate` use stay credited. Fixtures for all four
-cases are in `tests/test_error_boundary.py`, and the version pin moved.
+routes still blank. The route-group and dynamic-segment roots that `chatbot-ui`
+and `Next-js-Boilerplate` use stay credited. Fixtures for all four cases are in
+`tests/test_error_boundary.py`, and the version pin moved.
+
+**This section first claimed the two 2026-09-03 hits (`Elevate-lms`,
+`Apex-collector`) "fire now". They do not** — see the correction above. Neither
+was a false negative of the file rule, and the replay on identical commits
+moved no verdict at all. The rule is kept on its own correctness, not on a
+result it did not produce.
 
 **No re-calibration gate.** The change only makes the rule fire more (an app
 credited on a nested boundary now fires), which moves a static-only score

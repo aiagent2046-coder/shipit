@@ -109,12 +109,14 @@ assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
 # 94% on the repositories that actually came through the product
 # (`--from-file`). The reputable hits -- Vercel's own subscription template,
 # Blazity's enterprise starter, chatbot-ui -- reappear in both runs, read by
-# hand and real. Both numbers are FLOORS: the error-file rule credits an
-# error.tsx ANYWHERE under app/, so an app protected only in one route reads
-# as ok; a refinement to require a root-level boundary is tracked separately
-# and would only raise these. The earlier "61-94% until the workspace re-run
-# lands" is now closed, and the stray "72 of 103 (70%)" framing is superseded
-# by the mounted-app denominator above. That is a static producer,
+# hand and real. Both numbers are FLOORS, because a boundary token found in
+# ANY source file silences the finding wherever it sits -- a component inside
+# one route reads as covering the whole app. (The file rule was tightened to
+# root-only on 2026-09-04; replayed on identical commits it changed no verdict,
+# so it is not what holds these numbers down. That is recorded in the plan, not
+# assumed here.) The earlier "61-94% until the workspace re-run lands" is now
+# closed, and the stray "72 of 103 (70%)" framing is superseded by the
+# mounted-app denominator above. That is a static producer,
 # and a category with a static producer is examined on a static-only audit by
 # the same rule that lets Security vote on the strength of the secrets scan:
 # neither is exhaustive, both actually looked.
