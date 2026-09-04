@@ -36,10 +36,11 @@ def _dump(tmp_path, rows: list[dict]):
     return str(path)
 
 
-def test_a_category_with_evidence_rejoins_the_mean(tmp_path, capsys):
-    """The whole proposal in one row: Auth was lowered by a static finding, and
-    that lowering must reach the headline instead of being dropped with the
-    category."""
+def test_route_a_the_refused_one_is_still_measured_and_printed(tmp_path, capsys):
+    """Route A rejoins the category to the mean. It was MEASURED AND REFUSED --
+    on a weak repository it raises the total, so finding a vulnerability would
+    improve the score -- and it stays in the report with its number beside it.
+    A rejected proposal without its measurement is just an assertion."""
     cats = {**_ALL_CLEAN, "Auth": 9.3}
     rows = [_row("aaaaaaaa", "https://github.com/third/app",
                  total=_total(dict(cats), ["Security", "Frontend", "Deploy",
@@ -52,7 +53,7 @@ def test_a_category_with_evidence_rejoins_the_mean(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert "0 could not be reproduced" in out
-    assert "1 rows hold a finding" in out
+    assert "ROUTE A" in out and "1 rows" in out
     assert "-0.1" in out
 
 
@@ -69,7 +70,7 @@ def test_silence_in_an_unexamined_category_still_moves_nothing(tmp_path, capsys)
 
     main(_dump(tmp_path, rows))
 
-    assert "no measurable shift" in capsys.readouterr().out
+    assert "moves nothing already stored" in capsys.readouterr().out
 
 
 def test_a_row_that_cannot_be_reproduced_is_counted_not_shifted(tmp_path, capsys):
@@ -87,7 +88,7 @@ def test_a_row_that_cannot_be_reproduced_is_counted_not_shifted(tmp_path, capsys
     out = capsys.readouterr().out
 
     assert "1 could not be reproduced" in out
-    assert "no measurable shift" in out
+    assert "moves nothing already stored" in out
 
 
 def test_a_row_scored_under_a_different_category_set_is_refused(tmp_path, capsys):
@@ -108,8 +109,9 @@ def test_a_row_scored_under_a_different_category_set_is_refused(tmp_path, capsys
     main(_dump(tmp_path, rows))
     out = capsys.readouterr().out
 
-    assert "different category set: Money & Data (1)" in out
-    assert "no measurable shift" in out
+    assert "predates a category: Money & Data (1)" in out
+    assert "1 refused" in out
+    assert "moves nothing already stored" in out
 
 
 def test_our_own_fixtures_are_counted_in_their_own_column(tmp_path, capsys):
@@ -130,6 +132,61 @@ def test_our_own_fixtures_are_counted_in_their_own_column(tmp_path, capsys):
 
     assert "third-party    1 rows" in out
     assert "ours           1 rows" in out
+
+
+_CRITICAL_IN_AUTH = {"rule_id": "llm-security",
+                     "title": "Endpoint runs shell commands with no login",
+                     "severity": "critical", "confidence": 0.95,
+                     "category": "Auth"}
+
+
+def test_route_b_finds_the_critical_the_gate_cannot_hear(tmp_path, capsys):
+    """A preview runs one rubric, the model files its finding by what it IS
+    (#10), and the category `llm_categories` does not cover is marked
+    unexamined -- so a confident CRITICAL gates on nothing. Demonstrated
+    against compute_scores: the same finding scores 6.6 with the gate firing
+    on a full audit and 9.9 with it silent on a preview."""
+    cats = {**_ALL_CLEAN, "Auth": 8.1}
+    rows = [_row("77777777", "https://github.com/third/app",
+                 total=_total(dict(cats), ["Security", "Frontend", "Deploy",
+                                           "Testing"],
+                              [ScoredFinding(**_CRITICAL_IN_AUTH)]),
+                 categories=cats, unexamined=["Auth", "Money & Data"],
+                 findings=[_CRITICAL_IN_AUTH])]
+
+    main(_dump(tmp_path, rows))
+    out = capsys.readouterr().out
+
+    route_b = out.split("ROUTE B")[1]
+    assert "1 rows" in route_b
+    assert "Auth" in route_b
+
+
+def test_route_b_never_raises_a_total_and_route_a_does(tmp_path, capsys):
+    """The property that makes this the half worth shipping.
+
+    Route A inverts because a category sitting above the mean pulls it up. A
+    gate has no such direction: it compresses into [0, GATED_MAX] preserving
+    order, so it lowers a strong row and leaves an already-weak one where it
+    is -- never above it. Both cases are asserted, because "can only lower"
+    read as "always lowers" would be a claim this does not support.
+    """
+    weak = {**_ALL_CLEAN, "Auth": 8.1, "Security": 4.0, "Frontend": 5.0}
+    strong = {**_ALL_CLEAN, "Auth": 8.1}
+    counted = ["Security", "Frontend", "Deploy", "Testing"]
+    findings = [ScoredFinding(**_CRITICAL_IN_AUTH)]
+
+    for cats in (weak, strong):
+        before = _total(dict(cats), counted, findings)
+        after = _total(dict(cats), counted, findings, deaf_criticals_gate=True)
+        assert after <= before, "a gate must never raise a total"
+
+    # Strong row: the gate bites, and the refused route pulls the other way.
+    before = _total(dict(strong), counted, findings)
+    assert _total(dict(strong), counted, findings,
+                  deaf_criticals_gate=True) < before
+    assert _total(dict(weak), counted + ["Auth"], findings) > _total(
+        dict(weak), counted, findings), "the refused route raises it, as measured"
 
 
 def test_ours_is_recognised_by_owner_and_by_fixture_name():
