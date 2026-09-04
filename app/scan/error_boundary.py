@@ -183,11 +183,28 @@ _ROOT_PAGES_APP = re.compile(r"^(src/)?pages/(_app|index)\.(t|j)sx?$")
 # is what keeps this from re-opening the library false positive: a package that
 # merely depends on @tanstack/react-router is a consumer of it, while one that
 # also carries a routes/ tree is an application built with it.
+# MEASURED, 2026-09-04: `GC-CODER1/Karuna-Android` and
+# `LuckyYaduvanshi5/Failed_Taska` carry `app/_layout.tsx` and no render call
+# anywhere -- Expo Router writes the mount, exactly as the three above do. Both
+# were classified `undetermined` and dropped out of the incidence denominator,
+# which is the same defect that once cost `Moscow2260/ai-productivity-hub` its
+# place. Note the underscore: `_ROOT_APP_LAYOUT` matches Next's `app/layout.tsx`
+# and cannot match Expo's `app/_layout.tsx`, so the two conventions do not
+# collide and the dependency gates this one anyway.
+#
+# NOT ADDED HERE, and deliberately: Expo Router has its OWN boundary
+# convention -- a route file exporting `ErrorBoundary` -- which none of
+# _BOUNDARY_TOKENS matches. All three Expo repositories in the corpus happen to
+# be silenced by an existing token in their root layout, so recognising the
+# mount does not make them fire, but an Expo app protected ONLY by that export
+# would now be a false positive. How often that happens is unmeasured, so the
+# token stays unwritten until it is measured rather than guessed.
 _FRAMEWORK_MOUNTS = (
     ("@tanstack/react-start", re.compile(r"^(src/)?routes/"), "TanStack Start"),
     ("@tanstack/react-router", re.compile(r"^(src/)?routes/"), "TanStack Router"),
     ("@remix-run/react", re.compile(r"^app/routes/"), "Remix"),
     ("gatsby", re.compile(r"^src/pages/"), "Gatsby"),
+    ("expo-router", re.compile(r"^(src/)?app/_layout\.(t|j)sx?$"), "Expo Router"),
 )
 
 # A ROOT-level app-router error boundary, anchored exactly like

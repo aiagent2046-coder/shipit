@@ -838,10 +838,16 @@ every run, so this cannot silently return.
 
 ### Still open, carried forward
 
-* **Expo Router is not in `_FRAMEWORK_MOUNTS`** — `app/_layout.tsx` plus the
-  `expo-router` dependency is a mount the analyzer does not recognise, so those
-  apps land in `undetermined`. Its own change, with a fixture and an engine
-  bump, since it changes what the scanner decides.
+* ~~**Expo Router is not in `_FRAMEWORK_MOUNTS`**~~ — **done 2026-09-04**
+  (`AUDIT_ENGINE_VERSION` 2026-09-04-2). `app/_layout.tsx` paired with the
+  `expo-router` dependency is a mount now, so those apps enter the denominator
+  whether they fire or stay silent. **Not** done in the same change, and it is
+  the risk this one carries: Expo Router's own boundary convention is a route
+  file exporting `ErrorBoundary`, which no entry in `_BOUNDARY_TOKENS` matches.
+  All three Expo repositories in the corpus happen to be silenced by an existing
+  token in their root layout, so nothing fires falsely today — but an Expo app
+  protected only by that export would. How common that is has not been measured,
+  so the token stays unwritten rather than guessed.
 * **The token rule's leniency** — separate from the denominator defect and still
   unaddressed: a boundary token in ANY source file silences the finding, so an
   app protected in one route reads as covered. A calibration decision with its

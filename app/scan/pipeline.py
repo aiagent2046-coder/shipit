@@ -89,7 +89,12 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # differently (a nested-only boundary that read as covered now fires), so
 # cached audits must not serve the pre-change verdict. Measured floors that
 # motivated it: DRYDOCK_LENS_PLAN.md, 2026-09-03/04.
-AUDIT_ENGINE_VERSION = "2026-09-04-1"
+# 2026-09-04-2: Expo Router joins _FRAMEWORK_MOUNTS. An `app/_layout.tsx` app
+# with the `expo-router` dependency was `undetermined` -- no createRoot, because
+# the framework writes the mount -- so it produced no finding and left the
+# incidence denominator. It can now both mount and fire, which is a different
+# verdict for the same repository.
+AUDIT_ENGINE_VERSION = "2026-09-04-2"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
