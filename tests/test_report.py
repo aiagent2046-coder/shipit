@@ -637,6 +637,93 @@ def test_a_category_that_exported_its_findings_draws_no_bar():
     assert "not checked" not in html
 
 
+def _service_role_finding() -> dict:
+    """The real one. Static producer, files under Auth, and Auth is
+    unexamined on any depth that did not run an auth rubric."""
+    return {"severity": "high", "confidence": 0.7, "category": "Auth",
+            "rule_id": "supabase-service-role-route",
+            "title": "Request handler runs with the service-role key, "
+                     "bypassing Row Level Security — found in 21 places",
+            "file": "app/api/agents/chat/route.ts", "line": 125}
+
+
+def test_a_category_nobody_surveyed_but_holding_a_finding_does_not_say_unchecked():
+    """MEASURED on a live report, 2026-09-04: the Auth row read "not checked"
+    while the findings table below listed, under Auth, a service-role key
+    bypassing Row Level Security in 21 places. Both came off one score.
+
+    Nobody surveyed Auth, so it still draws no bar and no number -- neither is
+    earned. Only the sentence changes.
+    """
+    r = result([_service_role_finding()])
+    r["score"]["basis"] = "static_only"
+    r["score"]["categories"] = {"Security": 10.0, "Auth": 9.3,
+                                "Testing": 9.6, "Deploy": 9.8}
+    r["score"]["unexamined"] = ["Auth"]
+    r["score"]["unexamined_with_findings"] = ["Auth"]
+    html = render_report(r)
+
+    auth_row = next(row for row in html.split('<div class="cat">')
+                    if row.startswith('<span class="cat-name">Auth</span>'))
+    assert "not surveyed" in auth_row
+    assert "not checked" not in auth_row
+    assert "9.3" not in auth_row
+    assert "fill" not in auth_row, "an unsurveyed category must draw no bar"
+
+
+def test_the_scope_note_stops_claiming_nothing_examined_a_category_that_found_something():
+    """The other half of the same contradiction, one paragraph up. "Nothing
+    here examined Auth" is false when an Auth finding is printed below it, and
+    a reader who trusts the sentence stops scrolling."""
+    r = result([_service_role_finding()])
+    r["score"]["basis"] = "static_only"
+    r["score"]["unexamined"] = ["Auth", "Money & Data"]
+    r["score"]["unexamined_with_findings"] = ["Auth"]
+    html = render_report(r)
+
+    assert "Nothing here examined Money &amp; Data." in html
+    assert "Nothing here examined Auth" not in html
+    assert "did not survey Auth" in html
+
+
+def test_a_stored_row_without_the_new_key_still_stops_lying():
+    """Rows written before the key exist on somebody's screen today. The
+    renderer falls back to intersecting `unexamined` with the findings it is
+    rendering -- derivable from what is already on the page, so no scoring
+    rule is copied into the report to do it."""
+    r = result([_service_role_finding()])
+    r["score"]["basis"] = "static_only"
+    r["score"]["unexamined"] = ["Auth"]
+    r["score"].pop("unexamined_with_findings", None)
+    html = render_report(r)
+
+    auth_row = next(row for row in html.split('<div class="cat">')
+                    if row.startswith('<span class="cat-name">Auth</span>'))
+    assert "not surveyed" in auth_row
+
+
+def test_an_unexamined_category_holding_nothing_still_says_not_checked():
+    """The distinction, pinned from the other side. If this row moved too, the
+    change would have replaced one blanket sentence with another rather than
+    telling the two states apart."""
+    r = result([_service_role_finding()])
+    r["score"]["basis"] = "static_only"
+    r["score"]["categories"] = {"Security": 10.0, "Auth": 9.3,
+                                "Money & Data": 10.0, "Deploy": 9.8}
+    r["score"]["unexamined"] = ["Auth", "Money & Data"]
+    r["score"]["unexamined_with_findings"] = ["Auth"]
+    # Or the row is never rendered and the assertions below measure nothing --
+    # which is exactly how this test first "passed" locally, with a
+    # StopIteration standing in for a verdict.
+    assert "Money & Data" in r["score"]["categories"]
+    html = render_report(r)
+
+    money_row = next(row for row in html.split('<div class="cat">')
+                     if row.startswith('<span class="cat-name">Money &amp; Data</span>'))
+    assert "not checked" in money_row
+    assert "not surveyed" not in money_row
+
+
 def test_the_two_blanked_rows_do_not_borrow_each_others_wording():
     """`unexamined` and `reported_elsewhere` both blank a number, for opposite
     reasons. A report that renders them alike tells the reader the wrong thing

@@ -135,7 +135,7 @@ def _band(value: float, holds_serious: bool = False) -> tuple[str, int, str]:
 
 def _bar(label: str, value: float, examined: bool = True,
          elsewhere: list[str] | None = None, partial: bool = False,
-         serious: bool = False) -> str:
+         serious: bool = False, holds_findings: bool = False) -> str:
     """One category row. Neither flag set means a real bar and a real number.
 
     An unexamined category sits at 10.0 because nothing produced a finding
@@ -178,6 +178,22 @@ def _bar(label: str, value: float, examined: bool = True,
             f'<div class="track"></div>'
             f'<span class="cat-val cat-skip">partly checked</span></div>'
         )
+    if not examined and holds_findings:
+        # The fourth state. Nobody surveyed this category, AND something
+        # landed in it anyway -- a static producer, or a rubric that filed its
+        # finding by what the finding is. "not checked" is then false to the
+        # one reader who scrolls: Auth printed it on a real report while the
+        # table below listed, under Auth, a service-role key bypassing Row
+        # Level Security in 21 places.
+        #
+        # No bar and no number, because neither is earned: the category was
+        # not surveyed and did not vote. What changes is only the claim.
+        return (
+            f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
+            f'<div class="track"></div>'
+            f'<span class="cat-val cat-skip">not surveyed — see findings'
+            f'</span></div>'
+        )
     if not examined:
         return (
             f'<div class="cat"><span class="cat-name">{escape(label)}</span>'
@@ -200,16 +216,39 @@ def _unexamined_sentence(score: dict) -> str:
     the basis: the rule for which categories an LLM-less scan cannot fill
     lives in app/scan/scoring.py, and a second copy here would drift from it.
     An older stored audit has no such key and gets a generic sentence.
+
+    A category that WAS NOT SURVEYED BUT HOLDS A FINDING is dropped from the
+    sentence and named in its own. "Nothing here examined Auth" was printed on
+    a real report directly above an Auth finding reading "service-role key,
+    bypassing Row Level Security -- found in 21 places". Both sentences are
+    needed, because neither is the other: nobody surveyed the category, and
+    something was still found in it.
     """
-    names = [str(n) for n in score.get("unexamined") or []]
-    if not names:
+    holding = [str(n) for n in score.get("unexamined_with_findings") or []]
+    names = [str(n) for n in score.get("unexamined") or [] if n not in holding]
+
+    if not names and not holding:
         return ("It does not review your authentication and does not look "
                 "for injection paths.")
+
+    parts = []
+    if names:
+        parts.append(f"Nothing here examined {_listed(names)}.")
+    if holding:
+        also = " either" if names else ""
+        parts.append(f"It did not survey {_listed(holding)}{also}, but "
+                     f"something was found there anyway — those findings are "
+                     f"listed below.")
+    return " ".join(parts)
+
+
+def _listed(names: list[str]) -> str:
+    """"A", "A and B", "A, B and C" -- escaped. One copy, because the two
+    sentences above disagreeing about how to join a list is the kind of thing
+    nobody notices until a report reads "Auth, Money & Data"."""
     if len(names) == 1:
-        listed = escape(names[0])
-    else:
-        listed = escape(", ".join(names[:-1]) + " and " + names[-1])
-    return f"Nothing here examined {listed}."
+        return escape(names[0])
+    return escape(", ".join(names[:-1]) + " and " + names[-1])
 
 
 def _category_label(f: dict) -> str:
@@ -349,6 +388,17 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # category handed its findings away" -- the same answer those rows already
     # give today, so nothing changes retroactively.
     moved = score.get("reported_elsewhere") or {}
+    # Unexamined AND holding a finding: the row says "not surveyed" instead of
+    # "not checked". Falls back to reading the findings when the key is absent
+    # -- a stored row predating it would otherwise keep printing "not checked"
+    # over its own findings, and that row is on somebody's screen today. This
+    # is the ONE place the fact is re-derived, and it is derivable from the
+    # rendered findings alone: no scoring rule is copied here.
+    if "unexamined_with_findings" in score:
+        holds = set(str(n) for n in (score.get("unexamined_with_findings") or []))
+    else:
+        holds = {str(f.get("category")) for f in result.get("findings", [])
+                 } & unexamined
     # On the free tier no category number is published. Not because the
     # arithmetic is wrong, but because none of these numbers is earned: the
     # free scan reads Security with regexes and one rubric on the cheapest
@@ -364,7 +414,8 @@ def render_report(result: dict, project_name: str = "your app") -> str:
              elsewhere=[str(d) for d in (moved.get(name) or [])],
              partial=not scored and name not in unexamined
              and name not in moved,
-             serious=name in serious_cats)
+             serious=name in serious_cats,
+             holds_findings=name in holds)
         for name, val in score["categories"].items()
     )
 

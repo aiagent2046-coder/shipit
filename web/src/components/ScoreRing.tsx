@@ -111,6 +111,7 @@ export function CategoryBars({
   categories,
   gatedBy,
   unexamined,
+  unexaminedWithFindings,
   scored = true,
   findings = [],
 }: {
@@ -134,6 +135,17 @@ export function CategoryBars({
    * Read from the score rather than derived here: the rule for which
    * categories an LLM-less scan cannot fill lives in app/scan/scoring.py. */
   unexamined?: string[];
+  /** The subset of `unexamined` that holds a finding anyway. Those rows say
+   * "not surveyed — see findings" instead of "not checked", because "not
+   * checked" was printed above an Auth finding reading "service-role key,
+   * bypassing Row Level Security — found in 21 places" on the same page.
+   *
+   * Read from the score rather than derived, and it matters here: this
+   * component is handed the findings the PAGE shows, which on a free depth
+   * is not necessarily all of them. Deriving would then quietly under-report
+   * exactly the row this exists to correct. The fallback below is for stored
+   * rows that predate the key. */
+  unexaminedWithFindings?: string[];
   /** The audit's findings, for the serious-finding band override: a category
    * holding a confident critical or high may not claim the top band, because
    * the table below marks those rows "Important". See seriousCategories in
@@ -141,6 +153,12 @@ export function CategoryBars({
   findings?: { category?: string; severity: string; confidence?: number }[];
 }) {
   const skipped = new Set(unexamined ?? []);
+  const holds = new Set(
+    unexaminedWithFindings ??
+      findings
+        .map((f) => f.category ?? "")
+        .filter((c) => skipped.has(c)),
+  );
   const serious = seriousCategories(findings);
   return (
     <>
@@ -151,7 +169,18 @@ export function CategoryBars({
           return (
           <div key={name} className="flex items-center gap-3 text-sm">
             <span className="w-24 shrink-0 text-muted">{name}</span>
-            {skipped.has(name) ? (
+            {skipped.has(name) && holds.has(name) ? (
+              // Nobody surveyed this category, and something landed in it
+              // anyway. No bar and no number -- neither is earned -- but
+              // "not checked" is false to the reader who scrolls to the
+              // table and finds a row filed under this very name.
+              <>
+                <div className="h-2 flex-1 rounded-full bg-border/40" />
+                <span className="shrink-0 text-right text-xs text-muted">
+                  not surveyed — see findings
+                </span>
+              </>
+            ) : skipped.has(name) ? (
               <>
                 <div className="h-2 flex-1 rounded-full bg-border/40" />
                 <span className="shrink-0 text-right text-xs text-muted">

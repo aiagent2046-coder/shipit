@@ -250,6 +250,7 @@ function AuditPageInner() {
               categories={view.score.categories}
               gatedBy={view.score.gated_by}
               unexamined={view.score.unexamined}
+              unexaminedWithFindings={view.score.unexamined_with_findings}
               scored={scored}
               findings={view.findings}
             />

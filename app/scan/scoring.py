@@ -549,5 +549,28 @@ def compute_scores(findings: list[ScoredFinding],
     # sends someone hunting for an audit that already happened.
     unexamined = [c for c in CATEGORIES
                   if c not in counted and c not in reported_elsewhere]
+    # The fourth state, and the one that made a live report contradict itself.
+    #
+    # MEASURED 2026-09-04 on a real repository: Auth printed "not checked"
+    # while the findings table two inches below listed, under Auth, "request
+    # handler runs with the service-role key, bypassing Row Level Security --
+    # found in 21 places". Both came off the same score. Nobody surveyed Auth,
+    # which is why it does not vote; but a producer did put something in it,
+    # so "nothing here examined Auth" is false on its face to the one reader
+    # who scrolls.
+    #
+    # A SEPARATE KEY rather than removing the category from `unexamined`.
+    # Dropping it there would leave it in none of the three lists, and every
+    # surface reads that as "ordinary category" and draws its number -- a
+    # figure that did not vote on the total, published as though it had. The
+    # category's number is still unearned; only the WORDS were wrong.
+    #
+    # Same argument, same shape as `reported_elsewhere`: derived here so the
+    # surfaces do not each grow their own copy, additive so a stored row that
+    # predates it simply has no key, and read through .get() everywhere.
+    unexamined_with_findings = [c for c in unexamined
+                                if any(f.category == c for f in findings)]
     return {"total": total, "categories": by_cat, "gated_by": reasons,
-            "unexamined": unexamined, "reported_elsewhere": reported_elsewhere}
+            "unexamined": unexamined,
+            "unexamined_with_findings": unexamined_with_findings,
+            "reported_elsewhere": reported_elsewhere}
