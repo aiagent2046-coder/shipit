@@ -848,10 +848,23 @@ every run, so this cannot silently return.
   token in their root layout, so nothing fires falsely today — but an Expo app
   protected only by that export would. How common that is has not been measured,
   so the token stays unwritten rather than guessed.
-* **The token rule's leniency** — separate from the denominator defect and still
-  unaddressed: a boundary token in ANY source file silences the finding, so an
-  app protected in one route reads as covered. A calibration decision with its
-  own measurement, not a hotfix; `test_a_class_boundary_anywhere_silences_it` is
-  where the current answer is deliberately written down.
+* **The token rule's leniency — narrowed once, and the rest is now a decision
+  rather than an omission.** A boundary token in a TEST file or a story no
+  longer silences (`AUDIT_ENGINE_VERSION` 2026-09-04-3): `khuepm/GeniusQA`'s
+  desktop package was silent on a fixture built to be rendered by a test, which
+  stands between nobody and a blank page. The skip list is short on purpose,
+  because this tightening runs in the EXPENSIVE direction — removing a file's
+  power to silence can invent a finding, and a false one costs more than a
+  missed one on something a customer pays for. A plain `test/` directory is
+  deliberately excluded from the exclusion for that reason.
+
+  **What stays lenient, and why it is a choice:** a boundary token in ordinary
+  source silences wherever it sits, so an app protected in one route still reads
+  as covered. Proving a component is actually mounted above the routes needs an
+  import graph, which is a different order of cost; and the error it would trade
+  into is the one that damages a paid finding. So the rate stays a floor, which
+  is recorded beside every quote of it.
+  `test_a_class_boundary_anywhere_silences_it` is where that answer is written
+  down deliberately rather than by omission.
 * **`mount = not_react` Frontend exclusion** — the calibration question recorded
   in the section above, unchanged by this run.

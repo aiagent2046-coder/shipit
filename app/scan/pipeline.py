@@ -94,7 +94,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # the framework writes the mount -- so it produced no finding and left the
 # incidence denominator. It can now both mount and fire, which is a different
 # verdict for the same repository.
-AUDIT_ENGINE_VERSION = "2026-09-04-2"
+# 2026-09-04-3: a boundary token in a test file or a story no longer silences
+# the finding. A fixture built to be rendered BY a test does not stand between
+# a visitor and a blank page, and one was holding a real repository's only
+# boundary token. Repositories protected only that way now fire.
+AUDIT_ENGINE_VERSION = "2026-09-04-3"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
