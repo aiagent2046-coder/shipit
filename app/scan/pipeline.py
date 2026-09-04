@@ -98,7 +98,17 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # the finding. A fixture built to be rendered BY a test does not stand between
 # a visitor and a blank page, and one was holding a real repository's only
 # boundary token. Repositories protected only that way now fire.
-AUDIT_ENGINE_VERSION = "2026-09-04-3"
+# 2026-09-04-4: a confident critical gates from whatever category it sits in.
+# The gate used to read only categories an examiner had covered, on the premise
+# that nothing could produce an Auth or Money & Data finding without one --
+# false since #299 (a static Auth producer) and since #10 (a rubric that ran
+# files its finding by what it IS, so a preview's Security rubric can return a
+# CRITICAL categorised Auth). Measured: the same critical scored 6.6 with the
+# gate firing on a full audit and 9.9 with it silent on a preview. 0 stored
+# rows move; the mean is deliberately unchanged, because admitting such a
+# category to it RAISES a weak repository's total
+# (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
+AUDIT_ENGINE_VERSION = "2026-09-04-4"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

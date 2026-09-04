@@ -147,10 +147,15 @@ def test_route_b_finds_the_critical_the_gate_cannot_hear(tmp_path, capsys):
     against compute_scores: the same finding scores 6.6 with the gate firing
     on a full audit and 9.9 with it silent on a preview."""
     cats = {**_ALL_CLEAN, "Auth": 8.1}
+    # The total the OLD engine wrote -- this is a stored row, and the gate it
+    # was scored by is the one that could not hear this critical. Using
+    # today's here would make the row reproduce as already-gated and the
+    # route show nothing, which is the whole thing being measured.
     rows = [_row("77777777", "https://github.com/third/app",
                  total=_total(dict(cats), ["Security", "Frontend", "Deploy",
                                            "Testing"],
-                              [ScoredFinding(**_CRITICAL_IN_AUTH)]),
+                              [ScoredFinding(**_CRITICAL_IN_AUTH)],
+                              pre_change_gate=True),
                  categories=cats, unexamined=["Auth", "Money & Data"],
                  findings=[_CRITICAL_IN_AUTH])]
 
@@ -177,16 +182,17 @@ def test_route_b_never_raises_a_total_and_route_a_does(tmp_path, capsys):
     findings = [ScoredFinding(**_CRITICAL_IN_AUTH)]
 
     for cats in (weak, strong):
-        before = _total(dict(cats), counted, findings)
-        after = _total(dict(cats), counted, findings, deaf_criticals_gate=True)
+        before = _total(dict(cats), counted, findings, pre_change_gate=True)
+        after = _total(dict(cats), counted, findings)
         assert after <= before, "a gate must never raise a total"
 
     # Strong row: the gate bites, and the refused route pulls the other way.
-    before = _total(dict(strong), counted, findings)
-    assert _total(dict(strong), counted, findings,
-                  deaf_criticals_gate=True) < before
-    assert _total(dict(weak), counted + ["Auth"], findings) > _total(
-        dict(weak), counted, findings), "the refused route raises it, as measured"
+    before = _total(dict(strong), counted, findings, pre_change_gate=True)
+    assert _total(dict(strong), counted, findings) < before
+    assert _total(dict(weak), counted + ["Auth"], findings,
+                  pre_change_gate=True) > _total(
+        dict(weak), counted, findings,
+        pre_change_gate=True), "the refused route raises it, as measured"
 
 
 def test_ours_is_recognised_by_owner_and_by_fixture_name():

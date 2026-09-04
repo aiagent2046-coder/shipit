@@ -305,19 +305,42 @@ GATE_ON_CRITICAL = True
 CRITICAL_GATE_MIN_CONFIDENCE = 0.7
 
 
-def _gating_criticals(findings: list[ScoredFinding],
-                      counted: list[str]) -> list[ScoredFinding]:
-    """Criticals confident enough, and in a category examined enough, to gate.
+def _gating_criticals(findings: list[ScoredFinding]) -> list[ScoredFinding]:
+    """Criticals confident enough to gate, from whatever category they sit in.
 
-    Restricted to `counted` for the same reason the subscore test is: on a
-    static-only audit nothing ran that could have produced an Auth or
-    Money & Data finding, so their absence is not evidence of anything.
+    NOT restricted to `counted`, and that restriction is what this docstring
+    used to justify: "on a static-only audit nothing ran that could have
+    produced an Auth or Money & Data finding". Two producers contradict it.
+    app/scan/service_role.py has filed statically under Auth since #299. And a
+    rubric that DID run files its finding by what the finding IS (#10), so a
+    preview whose one rubric is Security can return a confident CRITICAL
+    categorised Auth -- into a category `llm_categories` does not cover.
+
+    MEASURED 2026-09-04, the same critical through compute_scores:
+
+        full audit                 total 6.6  Auth 5.6  gated_by ['critical']
+        preview (one rubric ran)   total 9.9  Auth 8.1  gated_by []
+
+    9.9 over "endpoint runs shell commands with no login" at 0.95 confidence.
+    That is #22, #27 and #35 arriving again through the recategorisation door.
+
+    The subscore route keeps its `counted` filter, because the two say
+    different things. A category's clean SUBSCORE is only evidence if someone
+    looked -- absence of evidence. A critical sitting in it is evidence
+    already, whoever produced it, and no examination of the rest of the
+    category makes it less true.
+
+    Symmetry was considered for the mean and REFUSED on its own measurement
+    (scripts/measure_unexamined_evidence.py, route A): admitting a category to
+    the mean because it holds a finding RAISES a weak repository's total,
+    since Auth at 9.3 sits above it -- so finding a vulnerability would
+    improve the score, 3.4 -> 4.0 on a constructed pair. A gate only ever
+    compresses downward, which is why this half ships and that one does not.
     """
     return [f for f in findings
             if f.severity == "critical"
             and f.confidence >= CRITICAL_GATE_MIN_CONFIDENCE
-            and f.category in GATED_CATEGORIES
-            and f.category in counted]
+            and f.category in GATED_CATEGORIES]
 
 
 def _gate_reasons(by_cat: dict[str, float], counted: list[str],
@@ -344,7 +367,7 @@ def _gate_reasons(by_cat: dict[str, float], counted: list[str],
     reasons += [
         {"kind": "critical", "category": f.category, "rule_id": f.rule_id,
          "title": f.title}
-        for f in _gating_criticals(findings, counted)
+        for f in _gating_criticals(findings)
     ]
     reasons += [
         {"kind": "unaudited_deployment", "category": f.category,
