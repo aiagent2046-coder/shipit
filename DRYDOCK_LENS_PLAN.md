@@ -944,3 +944,66 @@ first half needs audits that have not happened yet. Then the question is one
 query with no guessing about proportions, and no re-fetching of anybody's
 repository. Until such rows exist, changing the scoring would be a decision
 taken on a number that does not exist.
+
+## The number exists now, and it is n = 1, 2026-09-04
+
+The stale-Frontend obstacle above was removed by deploying `2026-09-04-3`, so
+the question was put to the ledger a second way: classify every static-only
+repository by running the shipping analyzer over it **read-only**, and join that
+classification back to the stored scores. No rows were written.
+
+**Re-auditing was considered first and rejected.** Re-running these repositories
+through the product would have written fresh rows for repositories already in
+the corpus — contaminating the very population the calibration is measured on,
+which is the mistake this document already records once, as the thing that
+killed the 56.5% figure. The question needed reading, not writing, and reading
+was enough.
+
+### What the ledger's own repositories are
+
+18 unique repositories behind 34 static-only rows; **1 row arrived as a zip
+upload and is permanently unanswerable** (the content is not kept), and one
+repository has since 404'd. Of the 17 that resolved:
+
+| class | n | which |
+|---|---|---|
+| `mounted` | 13 | 12 fire, 1 budget-exhausted (`dubinc/dub`) |
+| `not_react` | 2 | `shipit-fixpack-canary-…` (**ours**), `megadose/holehe` |
+| `no_mount` | 2 | `drydock-fixpack-e2e-test` (**ours**), `drydock-vite-react-fixture` (**ours**) |
+
+**Three of the four repositories the change would affect are our own test
+fixtures.** One is third-party.
+
+### The measurement, with its contamination in a column rather than hidden
+
+| population | rows | Frontend at 10.0 | Frontend excluded | shift |
+|---|---|---|---|---|
+| **affected, third-party** | **2** | **9.65** | **9.55** | **−0.10** |
+| affected, ours | 7 | 8.25 | 7.77 | −0.48 |
+| unaffected, third-party | 13 | 9.38 | 9.21 | — |
+| unaffected, ours | 11 | 8.98 | 8.71 | — |
+
+The first row is the whole honest result, and its two rows are **one
+repository** audited twice. **n = 1.** The `ours` row moves further only because
+our fixtures score low on the other categories; calibrating on it would be
+measuring our own test inventory.
+
+### The decision
+
+**The scoring is not changed.** Not out of caution — the effect is about a tenth
+of a point, which is small enough that either answer is defensible — but because
+a single third-party repository cannot support a change to how every audit is
+scored. The exclusion is probably right and definitely cheap; what is missing is
+anyone to check it against.
+
+The obstacle has moved twice and is worth naming precisely each time: first the
+stored Frontend scores were placeholders from an engine with no producer
+(fixed); now the population the change would touch is 3/4 our own fixtures. The
+next move is not a code change but arrivals — third-party repositories with no
+frontend, audited under an engine that measures Frontend. When a handful exist,
+this is one query.
+
+Recorded also because it is a real fact about the market we serve: **12 of 12
+mounted repositories in our own ledger ship no error boundary.** Consistent with
+the 75–79% measured on the discovery corpus, on far too small an n to quote as
+anything else.
