@@ -582,7 +582,9 @@ whether a repository with no frontend at all (`mount = not_react`) should have
 Frontend *excluded* as not-applicable rather than counted at 10.0. The `mount`
 field carries exactly that signal. It would also change paid audits, where the
 web rubric already counts an empty Frontend at 10.0 today, so it is its own
-measurement against the stored rows.
+measurement against the stored rows. **That measurement was attempted on
+2026-09-04 and the stored rows cannot carry it — see the section at the end of
+this document.**
 
 ## Result, 2026-09-03/04 — the interval closes to two floors, on the shipping analyzer
 
@@ -866,5 +868,79 @@ every run, so this cannot silently return.
   is recorded beside every quote of it.
   `test_a_class_boundary_anywhere_silences_it` is where that answer is written
   down deliberately rather than by omission.
-* **`mount = not_react` Frontend exclusion** — the calibration question recorded
-  in the section above, unchanged by this run.
+* **`mount = not_react` Frontend exclusion** — attempted 2026-09-04 and
+  **deferred on the data, not on nerve**; see the section below.
+
+## The `not_react` calibration cannot be measured yet, 2026-09-04
+
+The question — should a repository with no frontend have Frontend excluded
+rather than counted at 10.0 — was put to the stored rows and **they cannot
+answer it**. Recorded because "we did not get to it" and "the data to answer it
+does not exist" are different states, and only one of them is a schedule.
+
+### What the rows actually contain
+
+34 static-only rows carry a Security score. **8 of them carry a Frontend score,
+and every one is exactly 10.0** (`min = max = 10.0`). The other 26 have no
+`Frontend` key at all.
+
+And the 8 are all older than the producer:
+
+```
+engine_version   rows   first        Frontend
+2026-08-11-1        1   2026-08-11   10.0
+2026-08-11-4        1   2026-08-12   10.0
+2026-08-12-1        2   2026-08-12   10.0
+2026-08-14-1        1   2026-08-14   10.0
+2026-08-14-5        2   2026-08-14   10.0
+2026-08-28-1        1   2026-08-28   10.0
+```
+
+The error-boundary scanner landed in `2026-09-01-1`. Every stored Frontend
+score predates it by days, so each 10.0 was assigned by an engine with **no
+producer for Frontend** — the exact condition `LLM_ONLY_CATEGORIES` exists to
+prevent, preserved in rows written before the fix. They are placeholders, not
+measurements. **No static-only row scored by an engine that can measure
+Frontend exists yet.**
+
+### Demonstrated, not argued
+
+The 8 rows resolve to 6 repositories. Re-run on the shipping analyzer:
+
+| repository | mount | today's verdict | stored Frontend |
+|---|---|---|---|
+| `dgero22/digital-rolecraft` | mounted | **MISSING** | 10.0 |
+| `vercel/nextjs-subscription-payments` | mounted | **MISSING** | 10.0 |
+| `aiagent2046-coder/ai-co-founder-matching` | mounted | **MISSING** | 10.0 |
+| `aiagent2046-coder/shipit` | mounted | **MISSING** | 10.0 |
+| `dubinc/dub` | mounted | UNDETERMINED (budget) | 10.0 |
+| `megadose/holehe` | not_react | ok | 10.0 |
+
+`vercel/nextjs-subscription-payments` was hand-checked on 2026-09-01 and
+genuinely has no boundary. Its stored row says 10.0. One row is enough to show
+the stored value carries no information; here there are four.
+
+### The hypothesis this refuted, and why it is written down
+
+The reasonable guess was that 8 clean tens meant 8 repositories with no
+frontend — plausible, since the measured incidence is ~78% among mounted apps
+and eight clean in a row would be unlikely otherwise. **Five of the six are
+mounted.** The guess was wrong, and it was tested before it was acted on. Three
+inferences drawn from indirect evidence were wrong on this one day; the
+difference in this case is only that the check came first.
+
+### What is NOT wrong
+
+Customers never see these rows. The audit cache is keyed on
+`(content_hash, engine_version, basis)`, so a re-audit under the current engine
+cannot return a row written by `2026-08-28-1`. The blindness is in the
+measurement, not in what anyone is served.
+
+### What would make the question answerable
+
+Static-only rows scored by an engine that has the Frontend producer AND stores
+`mount` — the second half landed as `frontend_scan` in the same day's work, the
+first half needs audits that have not happened yet. Then the question is one
+query with no guessing about proportions, and no re-fetching of anybody's
+repository. Until such rows exist, changing the scoring would be a decision
+taken on a number that does not exist.
