@@ -90,6 +90,28 @@ def test_a_row_that_cannot_be_reproduced_is_counted_not_shifted(tmp_path, capsys
     assert "no measurable shift" in out
 
 
+def test_a_row_scored_under_a_different_category_set_is_refused(tmp_path, capsys):
+    """MEASURED: the first run against the real ledger died here with
+    KeyError('Money & Data') -- rows exist that were written before that
+    category did.
+
+    Refused rather than patched. Filling the gap with 10.0 would invent a
+    subscore the audit never assigned and then report a shift relative to the
+    invention, which is the same species of error as measuring a delta off a
+    reconstruction that does not reproduce the original.
+    """
+    cats = {k: v for k, v in _ALL_CLEAN.items() if k != "Money & Data"}
+    rows = [_row("ffffffff", "https://github.com/third/app", total=9.6,
+                 categories={**cats, "Auth": 9.3},
+                 unexamined=["Auth"], findings=[_AUTH_FINDING])]
+
+    main(_dump(tmp_path, rows))
+    out = capsys.readouterr().out
+
+    assert "different category set: Money & Data (1)" in out
+    assert "no measurable shift" in out
+
+
 def test_our_own_fixtures_are_counted_in_their_own_column(tmp_path, capsys):
     """#421's rule, kept: a mean that mixes our canaries into a customer-facing
     calibration stops meaning what its label says."""
