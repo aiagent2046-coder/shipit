@@ -195,6 +195,61 @@ def test_route_b_never_raises_a_total_and_route_a_does(tmp_path, capsys):
         pre_change_gate=True), "the refused route raises it, as measured"
 
 
+def test_the_wording_count_includes_rows_the_routes_had_to_refuse(tmp_path, capsys):
+    """Different question, different denominator, and this one is wider.
+
+    The routes need a reconstructed total, so they drop rows whose category
+    set predates today's. "Did this report say `not checked` above a finding"
+    needs no arithmetic, and those dropped rows are on somebody's screen right
+    now saying it. Counting them out would report the defect as rarer than it
+    is -- the artefact that put the Frontend incidence at 87% instead of 78%.
+    """
+    cats = {k: v for k, v in _ALL_CLEAN.items() if k != "Money & Data"}
+    rows = [_row("11111111", "https://github.com/third/old", total=9.6,
+                 categories={**cats, "Auth": 9.3},
+                 unexamined=["Auth"], findings=[_AUTH_FINDING])]
+
+    main(_dump(tmp_path, rows))
+    out = capsys.readouterr().out
+
+    assert "1 refused" in out                      # the routes could not use it
+    assert "1 of 1 scored rows" in out             # the wording count still did
+    assert "Auth (1)" in out
+
+
+def test_the_wording_count_honours_the_read_time_backfill(tmp_path, capsys):
+    """A row stored before `unexamined` existed has it filled in by
+    app/db.py at READ time -- the moment the report renders. Reading the raw
+    blob would call such a row unaffected while the page it produces carries
+    the label."""
+    row = _row("22222222", "https://github.com/third/ancient", total=9.6,
+               categories=dict(_ALL_CLEAN), unexamined=[],
+               findings=[_AUTH_FINDING])
+    del row["score_json"]["unexamined"]
+    row["score_json"]["basis"] = "static_only"
+
+    main(_dump(tmp_path, [row]))
+
+    assert "1 of 1 scored rows" in capsys.readouterr().out
+
+
+def test_a_row_with_no_finding_in_an_unexamined_category_is_not_counted(
+        tmp_path, capsys):
+    """The label is only wrong when something was found there. Without this
+    the count would just be "rows that have unexamined categories", which is
+    nearly all of them and says nothing."""
+    rows = [_row("33333333", "https://github.com/third/app", total=9.6,
+                 categories=dict(_ALL_CLEAN),
+                 unexamined=["Auth", "Money & Data"],
+                 findings=[{"rule_id": "no-dockerfile", "title": "y",
+                            "severity": "low", "confidence": 0.9,
+                            "category": "Deploy"}])]
+
+    main(_dump(tmp_path, rows))
+
+    assert "0 of 1 scored rows" in capsys.readouterr().out
+
+
 def test_ours_is_recognised_by_owner_and_by_fixture_name():
     assert _is_ours("https://github.com/aiagent2046-coder/anything")
     assert _is_ours("https://github.com/someone/drydock-vite-react-fixture")
