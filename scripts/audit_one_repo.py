@@ -129,6 +129,17 @@ def main(argv: list[str]) -> int:
         mark = " (unexamined)" if name in (score.get("unexamined") or []) else ""
         print(f"    {name:16s} {value}{mark}")
 
+    # Printed beside the categories because it is what makes the Frontend
+    # number readable. `Frontend 10.0` means two different things -- a mounted
+    # app with a boundary above its routes, and a repository with no frontend
+    # at all -- and grading a run against a key written first requires knowing
+    # which. The engine has persisted this in score_json since 2026-09-04; a
+    # grading tool that did not print it left the reader to guess.
+    scan_context = score.get("frontend_scan") or {}
+    if scan_context:
+        print(f"    {'(frontend scan)':16s} mount={scan_context.get('mount')} "
+              f"coverage={scan_context.get('coverage')}")
+
     llm = scan["llm"]
     print(f"\nllm: {llm if isinstance(llm, str) else json.dumps(llm, sort_keys=True)}")
     print(f"usage: {json.dumps(scan['llm_usage'], sort_keys=True)}")
