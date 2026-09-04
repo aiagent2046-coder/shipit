@@ -586,6 +586,13 @@ measurement against the stored rows.
 
 ## Result, 2026-09-03/04 — the interval closes to two floors, on the shipping analyzer
 
+> **SUPERSEDED IN PART, 2026-09-04. The 87% below is an artefact, not a
+> result.** The denominator silently excluded protected apps, one-directionally.
+> The corrected discovery figure is **72/92 = 78%, in a band of 75–79%** — see
+> "The denominator excluded the apps it should have counted" at the end of this
+> document. The per-stratum split and the product-corpus figure are unaffected;
+> the run output below is kept verbatim because it is what the run said.
+
 The 61–94% interval was a confession, not a measurement. Both corpora were
 re-run with the analyzer that ships (workspaces analyzed per package), and the
 interval closes to two agreeing floors.
@@ -605,12 +612,14 @@ interval closes to two agreeing floors.
 ```
 
 The discovery corpus (three strata in `scripts/data/`) and the product corpus
-(repositories that actually came through drydock.co, dumped from `audits`)
-agree: **~87–94% of mounted react/next apps ship no error boundary.** The
-vibe-coded strata (Lovable 91%, bolt 89%) run higher than hand-written (78%),
-which is now a number rather than an impression. The plan's question — would a
-free deterministic tier have something to say about most apps it sees — is
-answered yes on both corpora, not just the discovery list.
+(repositories that actually came through drydock.co, dumped from `audits`) both
+say most mounted react/next apps ship no error boundary. **The rate stated here
+as "~87–94%" was wrong on its discovery half** (corrected below to 75–79%); the
+product half stands, on a small n. The vibe-coded strata (Lovable 91%, bolt 89%)
+run higher than hand-written (78%), which is now a number rather than an
+impression. The plan's question — would a free deterministic tier have something
+to say about most apps it sees — is answered yes on both corpora at either
+figure, and that answer is what did not depend on the error.
 
 ### Both numbers are FLOORS, and this belongs beside any quote of them
 
@@ -672,6 +681,12 @@ Byte-identical inputs, byte-identical outcome: **zero verdicts changed**, two
 reason strings changed (the table above). The tightening forbids a class of
 false negative that this corpus does not happen to contain.
 
+(That `72/83` is the artefact denominator, corrected to `72/92` at the end of
+this document. It is identical on both sides of this comparison, which is all
+this section claims — the tightening changed nothing, and it changed nothing
+under the wrong denominator and the right one alike. The `undetermined=13`
+sitting in the line below is the defect itself, unread at the time.)
+
 That is a reason to keep the rule — a nested `error.tsx` genuinely does not
 cover the root, and the negative control confirms legitimate root boundaries
 (`Next-js-Boilerplate`'s `src/app/global-error.tsx`) are still credited — but
@@ -699,7 +714,10 @@ the analyzer's hits, not its mistakes.
   `ai-co-founder-matching`, both `devtools-aggregator` forks, and the
   `donjonson-hash` dev account. `--from-file` is a real denominator but a small
   and self-contaminated one (n=17), so 94% is a floor with a wide interval; the
-  discovery corpus's 87% on n=83 is the sturdier number.
+  discovery corpus is the sturdier one — at **78% on n=92**, not the 87% on
+  n=83 this line first named. Its denominator was wrong, and by the time it was
+  corrected the correction was larger than the difference between the two
+  corpora.
 * **`dubinc/dub` is UNDETERMINED, not clean.** A 3587-file `apps/web` exhausted
   the shared 4000-file read budget, so it is reported as budget-exhausted and
   excluded from the denominator — the separate signal, never counted as "has a
@@ -737,7 +755,97 @@ lenient rule, so the true incidence is at or above them, exactly as recorded.
 A re-run on the tightened rule would raise them; it is not re-run here because
 the floors already carry that "≥" honestly.
 
+## The denominator excluded the apps it should have counted, 2026-09-04
+
+**The published 87% was an artefact of the measurement, not a property of the
+market.** The corrected discovery figure is **72/92 = 78%**, in a band of
+**75–79%**.
+
+### The defect
+
+Two things silence this finding, and one of them also decides the mount. A
+repository silenced by a boundary TOKEN stops the walk right there — and for a
+Vite/CRA app the mount is only learned when the walk reaches its `createRoot`.
+If the boundary file sorts before the mount file, the mount is never
+established, the repository is classified `undetermined`, and it leaves the
+incidence denominator.
+
+An UNPROTECTED repository never stops early. It always reaches its mount, and
+always stays in the denominator. So the exclusion removes only protected apps,
+and the rate can only be pushed **up**. Reproduced on three fixtures identical
+but for where the boundary lives:
+
+```
+protected, token in src/App.tsx     -> mount=undetermined  (leaves)
+unprotected, same layout            -> mount=mounted       (stays, fires)
+protected, token in src/zBoundary   -> mount=mounted       (stays, silent)
+```
+
+Whether a protected SPA counted came down to alphabetical order.
+
+### What the 13 excluded repositories actually are
+
+All 13 were silenced by a token — not one by a dependency, not one by an error
+file. Asked directly whether a render call exists further in (`--strata` replay
+on the same pinned commits, 2026-09-04):
+
+| verdict | n | repositories |
+|---|---|---|
+| mounts at `src/main.tsx` / `frontend/src/main.tsx` — unambiguous apps | 8 | djzeneyer, spares_client, careconnect, FitFi, semkat-hub, gpt-for-kids, HomeSchool, nido-phase-4 |
+| render call found, but in a design archive — **doubtful** | 1 | oxv-coach-app (`design-retours/refonte-v1/support.js`) |
+| no render call — **not proof of "not an app"** | 4 | Elevate-lms, Karuna-Android, Failed_Taska, CookMate-AI |
+
+`72/92 = 78%` counts the 9. The band's other end counts all 13 (`72/96 = 75%`),
+and that end is closer than it looks, because **the probe only sees SPA-style
+mounts**: a framework that writes the mount for the author leaves no
+`createRoot` at all.
+
+* `elevate-for-humanity/Elevate-lms` is a Next.js monorepo. Next owns the mount;
+  the absence of a render call there means nothing. It is an app.
+* `Karuna-Android` and `Failed_Taska` carry `app/_layout.tsx` — **Expo Router**,
+  which owns the mount exactly as TanStack Start, Remix and Gatsby do in
+  `_FRAMEWORK_MOUNTS`. Expo is simply missing from that tuple. Same class of
+  gap that once cost `Moscow2260/ai-productivity-hub` its place in the
+  denominator, and it is recorded below as its own change rather than folded in
+  here.
+
+So `78%` is the measured point and `75%` the honest low end; `87%` is not a
+defensible reading of this corpus under any of them.
+
+### What did not change
+
+The per-stratum ordering (Lovable 91% > bolt 89% > hand-written 78%) is
+unaffected: the exclusion applies across strata, and the comparison was always
+between like and like. The product corpus (`--from-file`, 16/17) had exactly one
+`undetermined`, and it was a budget exhaustion rather than this defect, so that
+figure stands — on n=17, which was always its real limit.
+
+And the plan's actual question is untouched. At 75%, at 78%, at 87%, a free
+deterministic tier has something to say about most apps it sees. The error
+changed the number quoted in a sentence, never the decision the number was
+gathered to make.
+
+### How it was found, which is the part worth keeping
+
+Not by a failing test — the suite was green and the fixtures agreed with the
+code. By printing `mount=` per repository after a correction to an unrelated
+claim, then noticing that the aggregate had been hiding a population, then
+asking the excluded repositories directly instead of inferring from their reason
+strings. The two inferences made from reason strings earlier the same day were
+both wrong (see the correction above). The measurement is in
+`scripts/measure_error_boundary.py` and reports the corrected denominator on
+every run, so this cannot silently return.
+
 ### Still open, carried forward
 
+* **Expo Router is not in `_FRAMEWORK_MOUNTS`** — `app/_layout.tsx` plus the
+  `expo-router` dependency is a mount the analyzer does not recognise, so those
+  apps land in `undetermined`. Its own change, with a fixture and an engine
+  bump, since it changes what the scanner decides.
+* **The token rule's leniency** — separate from the denominator defect and still
+  unaddressed: a boundary token in ANY source file silences the finding, so an
+  app protected in one route reads as covered. A calibration decision with its
+  own measurement, not a hotfix; `test_a_class_boundary_anywhere_silences_it` is
+  where the current answer is deliberately written down.
 * **`mount = not_react` Frontend exclusion** — the calibration question recorded
   in the section above, unchanged by this run.

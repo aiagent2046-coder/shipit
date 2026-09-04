@@ -102,21 +102,28 @@ assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
 # was its only producer and no static check emitted it, so a static-only audit
 # would have read a perfect 10.0 for the reason this set exists. Then question
 # 1 of that rubric -- no error boundary above the routes -- was lifted into
-# app/scan/error_boundary.py and measured. First on 2026-09-01 (11 of 12
-# mounted apps), then reproduced 2026-09-03/04 with the analyzer that SHIPS,
-# over both corpora (DRYDOCK_LENS_PLAN.md): 72 of 83 mounted apps = 87% on the
-# three-strata discovery corpus in scripts/data/ (`--strata`), and 16 of 17 =
-# 94% on the repositories that actually came through the product
-# (`--from-file`). The reputable hits -- Vercel's own subscription template,
-# Blazity's enterprise starter, chatbot-ui -- reappear in both runs, read by
-# hand and real. Both numbers are FLOORS, because a boundary token found in
-# ANY source file silences the finding wherever it sits -- a component inside
-# one route reads as covering the whole app. (The file rule was tightened to
-# root-only on 2026-09-04; replayed on identical commits it changed no verdict,
-# so it is not what holds these numbers down. That is recorded in the plan, not
-# assumed here.) The earlier "61-94% until the workspace re-run lands" is now
-# closed, and the stray "72 of 103 (70%)" framing is superseded by the
-# mounted-app denominator above. That is a static producer,
+# app/scan/error_boundary.py and measured, on the analyzer that SHIPS, over the
+# three-strata discovery corpus in scripts/data/ (DRYDOCK_LENS_PLAN.md,
+# 2026-09-04): 72 of 92 mounted apps = 78%, in a band of 75-79%. The
+# repositories that came through the product agree on a much smaller n
+# (`--from-file`, 16 of 17), and the reputable hits -- Vercel's own
+# subscription template, Blazity's enterprise starter, chatbot-ui -- are in
+# both runs, read by hand and real.
+#
+# AN EARLIER 87% IS SUPERSEDED and the reason belongs next to the figure: a
+# repository silenced by a boundary token stops the walk before its mount is
+# established, so it left the denominator -- while an unprotected repository
+# always reaches its mount and always stayed in. The exclusion was
+# one-directional and could only push the rate up. Corrected by asking each
+# excluded repository whether it mounts an app after all; the measurement
+# reports the corrected denominator on every run.
+#
+# The band's low end (75%) counts every excluded repository as an app, which is
+# closer to right than it looks: a framework that writes the mount for the
+# author (Next, and Expo -- not yet in _FRAMEWORK_MOUNTS) leaves no createRoot
+# to find. The rate remains a floor for a second, separate reason: a boundary
+# token in ANY source file silences the finding wherever it sits. That is a
+# static producer,
 # and a category with a static producer is examined on a static-only audit by
 # the same rule that lets Security vote on the strength of the secrets scan:
 # neither is exhaustive, both actually looked.
