@@ -86,7 +86,10 @@ def _total(by_cat: dict[str, float], counted: list[str],
     divisor = sum(_RAW_CATEGORY_WEIGHT[c] for c in counted)
     if not divisor:
         return 0.0
-    total = sum(by_cat.get(c, 10.0) * _RAW_CATEGORY_WEIGHT[c]
+    # by_cat[c], not by_cat.get(c, 10.0): main() has already refused any row
+    # whose stored categories do not cover CATEGORIES, so a missing key here
+    # would be a bug rather than an old row, and a default would hide it.
+    total = sum(by_cat[c] * _RAW_CATEGORY_WEIGHT[c]
                 for c in counted) / divisor
     total = round(_apply_gate(total, _gate_reasons(by_cat, counted, findings)), 1)
     if findings and total == 10.0:
@@ -101,6 +104,7 @@ def main(path: str) -> int:
     affected: list[tuple[str, str, float, float, list[str]]] = []
     unreproducible = 0
     examined_rows = 0
+    absent_categories: dict[str, int] = {}
 
     for row in rows:
         score = row.get("score_json") or {}
@@ -108,6 +112,19 @@ def main(path: str) -> int:
         if not by_cat or score.get("total") is None:
             continue
         examined_rows += 1
+
+        # A row scored by an engine whose category set differs from today's.
+        # MEASURED: the first real dump raised KeyError('Money & Data') here,
+        # because rows exist that were written before that category did. Such
+        # a row is refused rather than patched: filling the gap with 10.0
+        # would invent a subscore the audit never assigned and then report a
+        # shift relative to the invention. Which names are missing is printed,
+        # because that is a fact about the ledger worth knowing.
+        missing = [c for c in CATEGORIES if c not in by_cat]
+        if missing:
+            for name in missing:
+                absent_categories[name] = absent_categories.get(name, 0) + 1
+            continue
 
         unexamined = set(score.get("unexamined") or [])
         elsewhere = set((score.get("reported_elsewhere") or {}).keys())
@@ -134,6 +151,10 @@ def main(path: str) -> int:
     print(f"{len(rows)} rows in dump, {examined_rows} scored, "
           f"{unreproducible} could not be reproduced from what was stored "
           f"(gated rows: the ceiling rewrote their subscores)")
+    if absent_categories:
+        named = ", ".join(f"{name} ({count})"
+                          for name, count in sorted(absent_categories.items()))
+        print(f"refused, scored under a different category set: {named}")
     print(f"{len(affected)} rows hold a finding in a category the score "
           f"marked unexamined\n")
 
