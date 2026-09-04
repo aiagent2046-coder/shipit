@@ -62,12 +62,45 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.scan.checks import archive_root  # noqa: E402
 from app.scan.error_boundary import (  # noqa: E402
+    _MAX_FILE_BYTES,
+    _RENDER_CALLS,
+    _is_source,
+    _norm,
     COVERAGE_EXHAUSTED,
     MOUNT_UNKNOWN,
     MOUNT_YES,
     scan_error_boundary,
 )
+
+
+def _render_call_anywhere(data: bytes) -> str:
+    """The mount the analyzer stopped before reaching, or "".
+
+    NOT a product code path, and it must not become one. The scanner stops at a
+    boundary token on purpose -- a boundary means silence whatever else is true,
+    and reading on would buy nothing for the FINDING. It buys something for the
+    MEASUREMENT: a repository silenced that early never had its mount decided,
+    so it left the incidence denominator, and only "is there a render call
+    further in?" says whether that exclusion was right. Skips the same
+    directories the scanner does, so a createRoot inside node_modules or a
+    committed dist/ cannot answer yes.
+    """
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        raw_names = zf.namelist()
+        root = archive_root(raw_names)
+        for name in _norm(raw_names):
+            if not _is_source(name):
+                continue
+            try:
+                body = zf.read(root + name if root else name)
+            except KeyError:
+                continue
+            text = body[:_MAX_FILE_BYTES].decode("utf-8", errors="ignore")
+            if any(call in text for call in _RENDER_CALLS):
+                return name
+    return ""
 
 try:
     from scripts.batch_audit import SERIES, fetch_repack  # noqa: E402
@@ -425,7 +458,7 @@ def main() -> int:
     # population the incidence silently drops. Collected by name because the
     # question "is that actually an app?" is answered by reading it, not by a
     # count.
-    excluded_unknown: list[tuple[str, str]] = []
+    excluded_unknown: list[tuple[str, str, str]] = []
     # (fired, mounted-decided) per stratum, so a difference between Lovable
     # and hand-written is a number and not an impression.
     per_stratum_tally: dict[str, list[int]] = {}
@@ -448,7 +481,12 @@ def main() -> int:
         # The exclusion is therefore one-directional and inflates the rate. Only
         # the per-repository mount says who this happened to.
         if scan.mount == MOUNT_UNKNOWN and scan.coverage != COVERAGE_EXHAUSTED:
-            excluded_unknown.append((slug, scan.reason))
+            # Answer the exclusion's own question in the same pass, on bytes
+            # already in hand: was this an app after all? Only for the handful
+            # that landed here, so the cost is a second read of a few
+            # repositories, not of the corpus.
+            excluded_unknown.append((slug, scan.reason,
+                                     _render_call_anywhere(data)))
         # `files_read` can be far below `files_total` on a COMPLETE scan: a
         # boundary token ends the walk. Printed together so nobody reads the
         # small number as a truncated pass.
@@ -507,16 +545,22 @@ def main() -> int:
     # incidence is the LOW end below; if none of them are, it is the high end.
     # Which they are is settled by reading them, so they are named.
     if excluded_unknown and mounted_decided:
-        low_denom = mounted_decided + len(excluded_unknown)
+        really_apps = [e for e in excluded_unknown if e[2]]
         print(f"\n  {len(excluded_unknown)} silenced repositories left the "
-              f"denominator with no mount established:")
-        for slug, reason in excluded_unknown:
-            print(f"    {slug:45s} {reason[:90]}")
-        print(f"\n  incidence is bounded, not a point: "
-              f"{fired}/{low_denom} = {100 * fired / low_denom:.0f}% "
-              f"(if every one of them is an app) .. "
-              f"{fired}/{mounted_decided} = "
-              f"{100 * fired / mounted_decided:.0f}% (if none are)")
+              f"denominator with no mount established;")
+        print(f"  {len(really_apps)} of them DO mount an app the walk never "
+              f"reached, so the exclusion was wrong for those:")
+        for slug, _reason, mount in excluded_unknown:
+            where = f"mounts at {mount}" if mount else "no render call anywhere"
+            print(f"    {slug:45s} {where}")
+        # Not a bound any more: each repository was asked directly. The ones
+        # that mount belong in the denominator, the ones that do not were
+        # excluded correctly.
+        true_denom = mounted_decided + len(really_apps)
+        print(f"\n  incidence, denominator corrected: {fired}/{true_denom} = "
+              f"{100 * fired / true_denom:.0f}%   "
+              f"(reported as {fired}/{mounted_decided} = "
+              f"{100 * fired / mounted_decided:.0f}% before this was measured)")
 
     print("\nreplay this exact run:\n  python scripts/measure_error_boundary.py "
           + " \\\n    ".join(replay))
