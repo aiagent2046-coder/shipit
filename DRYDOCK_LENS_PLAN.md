@@ -659,9 +659,30 @@ the analyzer's hits, not its mistakes.
   `GITHUB_TOKEN` would add the one unresolved repo; the incidence is not
   expected to move on n that small.
 
+### The error-file root-scoping refinement landed, 2026-09-04 (`AUDIT_ENGINE_VERSION` 2026-09-04-1)
+
+`_APP_ERROR_FILE` became `_ROOT_APP_ERROR`, anchored exactly like
+`_ROOT_APP_LAYOUT`: only an `error.tsx`/`global-error.tsx` at the app root —
+through route groups `(group)` and dynamic segments `[param]` — silences the
+finding. A plain named segment (`app/dashboard/error.tsx`) no longer does,
+because it catches only its own subtree while the root layout and sibling
+routes still blank. The two 2026-09-03 symptom hits (`Elevate-lms`,
+`Apex-collector`) fire now; the route-group and dynamic-segment roots that
+`chatbot-ui` and `Next-js-Boilerplate` use stay credited. Fixtures for all four
+cases are in `tests/test_error_boundary.py`, and the version pin moved.
+
+**No re-calibration gate.** The change only makes the rule fire more (an app
+credited on a nested boundary now fires), which moves a static-only score
+toward the already-measured floor (8.87, +0.09), never past the ceiling (9.04,
++0.26) that the Frontend join was gated on. It stays inside the envelope
+already approved, so it ships on the same calibration.
+
+The reported floors do not move retroactively — they were measured on the
+lenient rule, so the true incidence is at or above them, exactly as recorded.
+A re-run on the tightened rule would raise them; it is not re-run here because
+the floors already carry that "≥" honestly.
+
 ### Still open, carried forward
 
-* **The error-file root-scoping refinement** above — the next task after these
-  corpora, its own PR with tests.
 * **`mount = not_react` Frontend exclusion** — the calibration question recorded
   in the section above, unchanged by this run.

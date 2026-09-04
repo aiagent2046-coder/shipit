@@ -153,15 +153,57 @@ def test_an_app_router_error_file_silences_it():
     assert "app-router error file" in scan.reason
 
 
-def test_a_nested_error_file_silences_it():
-    """A route-group error.tsx catches for its subtree. Nested is still a
-    boundary, and a miss is the acceptable direction."""
+def test_a_route_group_error_file_still_silences_it():
+    """A route group adds no URL segment, so `app/(dashboard)/error.tsx` sits at
+    the root level and is a boundary above the routes. It must stay credited --
+    excluding it would re-lose chatbot-ui / Next-js-Boilerplate, which put their
+    root files behind a group or a dynamic segment."""
     scan = scan_error_boundary(_zip({
         **ROUTED_NEXT,
         "app/(dashboard)/error.tsx": "export default function E(){return null}",
     }))
 
     assert scan.findings == []
+    assert "root app-router error file" in scan.reason
+
+
+def test_a_dynamic_segment_root_error_silences_it():
+    """`app/[locale]/error.tsx` is the root boundary for a localized app -- the
+    chatbot-ui shape. A dynamic segment adds a path variable, not a nesting
+    level the root escapes."""
+    scan = scan_error_boundary(_zip({
+        **ROUTED_NEXT,
+        "app/[locale]/error.tsx": "export default function E(){return null}",
+    }))
+
+    assert scan.findings == []
+
+
+def test_a_root_global_error_silences_it():
+    """`global-error.tsx` at the app root is the strongest boundary -- it is the
+    only one that also catches a fault in the root layout itself."""
+    scan = scan_error_boundary(_zip({
+        **ROUTED_NEXT,
+        "app/global-error.tsx": "'use client'; export default ()=> null",
+    }))
+
+    assert scan.findings == []
+
+
+def test_a_deeply_nested_error_file_does_not_silence_it():
+    """The correction measured 2026-09-04. A plain named segment
+    (`app/dashboard/error.tsx`) catches only its own subtree -- the root layout
+    and every sibling route still blank. Crediting it read
+    elevate-for-humanity/Elevate-lms as protected on a boundary two segments
+    deep while its root was bare. It must FIRE now."""
+    scan = scan_error_boundary(_zip({
+        **ROUTED_NEXT,
+        "app/dashboard/error.tsx": "export default function E(){return null}",
+    }))
+
+    assert [f.rule_id for f in scan.findings] == ["missing-error-boundary"]
+    assert "mounted at" in scan.reason
+    assert "error file" not in scan.reason
 
 
 def test_a_class_boundary_anywhere_silences_it():

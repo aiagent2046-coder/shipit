@@ -83,7 +83,13 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # (missing-error-boundary), and Frontend leaving LLM_ONLY_CATEGORIES -- so a
 # static-only audit now scores a category it used to leave out. All three are
 # exactly the kind of change the pin test above was written for.
-AUDIT_ENGINE_VERSION = "2026-09-01-1"
+# 2026-09-04-1: the error_boundary rule tightened -- only a ROOT-level
+# error.tsx/global-error.tsx silences it now, not one buried in a route
+# segment. Same scanner, same rule id, but the same repository can now score
+# differently (a nested-only boundary that read as covered now fires), so
+# cached audits must not serve the pre-change verdict. Measured floors that
+# motivated it: DRYDOCK_LENS_PLAN.md, 2026-09-03/04.
+AUDIT_ENGINE_VERSION = "2026-09-04-1"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
