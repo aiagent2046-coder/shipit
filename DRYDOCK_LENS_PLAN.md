@@ -584,4 +584,84 @@ field carries exactly that signal. It would also change paid audits, where the
 web rubric already counts an empty Frontend at 10.0 today, so it is its own
 measurement against the stored rows.
 
-## Result — TODO (per-repo incidence of the first deterministic frontend rules)
+## Result, 2026-09-03/04 — the interval closes to two floors, on the shipping analyzer
+
+The 61–94% interval was a confession, not a measurement. Both corpora were
+re-run with the analyzer that ships (workspaces analyzed per package), and the
+interval closes to two agreeing floors.
+
+```
+--strata     PER_STRATUM=40, 119 of 120 resolved (1 gone)
+  incidence among MOUNTED react/next apps: 72/83 = 87%   <- discovery corpus
+    by stratum (fired / mounted):
+      Lovable       29/32 = 91%
+      bolt          25/28 = 89%
+      hand-written  18/23 = 78%
+  mount classes: mounted=83, no_mount=4, not_react=19, undetermined=13
+
+--from-file  55 audited repos, 30 of 31 resolved before the anon quota reset
+  incidence among MOUNTED react/next apps: 16/17 = 94%   <- product corpus
+  mount classes: mounted=18, no_mount=2, not_react=10; undetermined=1
+```
+
+The discovery corpus (three strata in `scripts/data/`) and the product corpus
+(repositories that actually came through drydock.co, dumped from `audits`)
+agree: **~87–94% of mounted react/next apps ship no error boundary.** The
+vibe-coded strata (Lovable 91%, bolt 89%) run higher than hand-written (78%),
+which is now a number rather than an impression. The plan's question — would a
+free deterministic tier have something to say about most apps it sees — is
+answered yes on both corpora, not just the discovery list.
+
+### Both numbers are FLOORS, and this belongs beside any quote of them
+
+`_APP_ERROR_FILE` credits an `error.tsx`/`global-error.tsx` **anywhere** under
+an `app/` tree — the rule's own comment says "any of them buys silence." But
+the finding is about the *root* white page, and a nested `error.tsx` catches
+only its own subtree, not the root layout or sibling routes. So an app
+protected in one route reads as `ok`, and the true incidence is **≥** these
+figures. Two strata hits are the symptom, both credited `ok` on a boundary
+sitting segments deep:
+
+* `elevate-for-humanity/Elevate-lms` → `apps/admin/app/barber-shop-applications/error.tsx`
+* `iBob78/Apex-collector` → `src/app/app/error.tsx`
+
+The rule cannot tell a root boundary from a route-segment one. The refinement
+— credit only a root-level `error.tsx`/`global-error.tsx` (mirroring
+`_ROOT_APP_LAYOUT`'s anchoring), and note that even a root `error.tsx` does not
+catch a fault in the root layout itself, only `global-error.tsx` does — is
+tracked as its own PR with fixtures for the nested case, NOT folded into this
+measurement. Both corpora were measured on the shipped detector so they stay
+comparable to what a customer gets today.
+
+### The reputable hits reconfirm live
+
+`vercel/nextjs-subscription-payments`, `Blazity/next-enterprise` and
+`mckaywrigley/chatbot-ui` — hand-checked on 2026-09-01 — fire again in these
+runs without a hand check, and `ixartz/Next-js-Boilerplate` is a genuine `ok`
+on a *root* `src/app/global-error.tsx` (the shape the refinement will keep). A
+30k-star chat app, an "enterprise" starter, and Vercel's own template are still
+the analyzer's hits, not its mistakes.
+
+### What the numbers do NOT support
+
+* **Our own repositories are in the product corpus.** `aiagent2046-coder/shipit`
+  (its `web/` app fires — our own frontend has no boundary, worth fixing),
+  `ai-co-founder-matching`, both `devtools-aggregator` forks, and the
+  `donjonson-hash` dev account. `--from-file` is a real denominator but a small
+  and self-contaminated one (n=17), so 94% is a floor with a wide interval; the
+  discovery corpus's 87% on n=83 is the sturdier number.
+* **`dubinc/dub` is UNDETERMINED, not clean.** A 3587-file `apps/web` exhausted
+  the shared 4000-file read budget, so it is reported as budget-exhausted and
+  excluded from the denominator — the separate signal, never counted as "has a
+  boundary."
+* **The product run was rate-limited**, resolving 30 of 31 anonymously (the
+  strata run had spent the hour's 60). Re-running after the reset with a
+  `GITHUB_TOKEN` would add the one unresolved repo; the incidence is not
+  expected to move on n that small.
+
+### Still open, carried forward
+
+* **The error-file root-scoping refinement** above — the next task after these
+  corpora, its own PR with tests.
+* **`mount = not_react` Frontend exclusion** — the calibration question recorded
+  in the section above, unchanged by this run.
