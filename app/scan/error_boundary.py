@@ -187,9 +187,27 @@ _FRAMEWORK_MOUNTS = (
     ("gatsby", re.compile(r"^src/pages/"), "Gatsby"),
 )
 
-# An app-router error boundary file, anywhere under an app/ tree: a nested
-# error.tsx still catches for its subtree, and any of them buys silence.
-_APP_ERROR_FILE = re.compile(r"(^|/)app/(.*/)?(error|global-error)\.(t|j)sx?$")
+# A ROOT-level app-router error boundary, anchored exactly like
+# _ROOT_APP_LAYOUT: `error.tsx`/`global-error.tsx` beside the root layout,
+# through route groups `(group)` and dynamic segments `[param]` only. A plain
+# named segment (`app/settings/error.tsx`) is a NESTED boundary that catches
+# only its own subtree -- not the root layout, not sibling routes -- so it does
+# not answer this finding's question, the whole-app white page.
+#
+# Crediting any error file anywhere (the previous rule) read apps that were
+# protected in ONE route as fully covered. Measured 2026-09-04:
+# elevate-for-humanity/Elevate-lms was silenced by
+# `apps/admin/app/barber-shop-applications/error.tsx` and iBob78/Apex-collector
+# by `src/app/app/error.tsx`, both with a bare root. Route groups stay credited
+# because they add no URL segment (`app/(dashboard)/error.tsx` is still root).
+#
+# NUANCE, in a comment rather than the rule: even a root `error.tsx` does not
+# catch a fault thrown in the root layout itself -- only `global-error.tsx`
+# does. Both silence here, because the finding is "a boundary above the ROUTES"
+# and a root error.tsx is one; the narrower root-layout gap is a separate,
+# noisier finding that would need its own calibration before it may fire.
+_ROOT_APP_ERROR = re.compile(
+    r"^(src/)?app/((\([^/]+\)|\[[^/]+\])/)*(error|global-error)\.(t|j)sx?$")
 
 
 @dataclass(frozen=True)
@@ -393,9 +411,9 @@ def _analyze_package(zf: zipfile.ZipFile, root: str, prefix: str,
                                    "react-error-boundary in dependencies",
                             mount=named_mount)
     for name in files:
-        if _APP_ERROR_FILE.search(name):
+        if _ROOT_APP_ERROR.search(name):
             return BoundaryScan(
-                reason=f"app-router error file: {prefix}{name}",
+                reason=f"root app-router error file: {prefix}{name}",
                 mount=named_mount)
 
     source = [n for n in files if _is_source(n)]
