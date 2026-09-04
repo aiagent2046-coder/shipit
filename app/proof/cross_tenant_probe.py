@@ -170,6 +170,21 @@ def run_cross_tenant_probe(
             "skipped", False, f"недопустимое имя таблицы: {table[:40]!r}",
             {"table": table, "reason": "unsafe_table_name"}, started)
 
+    # THE PREFIX IS A PROMISE, NOT A DEFAULT. This module's docstring tells the
+    # customer the leftover account is greppable by `drydock-probe+` so they can
+    # delete what this probe cannot delete itself. An injected address without
+    # it would leave an account nobody can find -- breaking the one guarantee
+    # offered in exchange for an unrecoverable write. So it is REFUSED rather
+    # than quietly re-prefixed, the same choice this codebase makes for email
+    # header injection: sanitising hides the caller's mistake, refusing names it.
+    if email is not None and not email.startswith(_PROBE_EMAIL_PREFIX):
+        return _attempt(
+            "skipped", False,
+            "проба не запускалась: адрес тестового аккаунта обязан начинаться "
+            f"с {_PROBE_EMAIL_PREFIX!r}, иначе владелец проекта не сможет найти "
+            "и удалить оставленный аккаунт",
+            {"table": table, "reason": "email_without_probe_prefix"}, started)
+
     test_email = email or f"{_PROBE_EMAIL_PREFIX}{_secrets.token_hex(8)}@example.com"
     password = _secrets.token_urlsafe(24)
 

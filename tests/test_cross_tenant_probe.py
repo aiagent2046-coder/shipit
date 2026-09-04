@@ -75,6 +75,34 @@ def test_no_read_consent_skips_without_signing_up():
     assert calls == []                       # never wrote
 
 
+# --- the throwaway address is a promise, not a default ----------------------
+
+def test_an_injected_email_without_the_probe_prefix_is_refused():
+    """The module docstring offers the customer one thing in exchange for a
+    write it cannot undo: the leftover account is greppable by `drydock-probe+`
+    so they can delete it. An injected address without the prefix would leave an
+    account nobody can find, so it is REFUSED -- not silently re-prefixed, the
+    same choice this codebase makes for email header injection. The literal is
+    hardcoded here on purpose: renaming the constant without changing the
+    promise in the docstring must fail this test."""
+    calls = []
+    res = _probe(email="anything@example.com",
+                 signup=lambda *a: calls.append(a) or _signup_ok())
+
+    assert res.status == "skipped"
+    assert res.evidence["reason"] == "email_without_probe_prefix"
+    assert calls == [], "refused BEFORE the unrecoverable write"
+
+
+def test_an_injected_email_carrying_the_prefix_is_accepted():
+    """The guard checks the invariant, not the caller's right to choose an
+    address: a prefixed address still runs, or the refusal above would be a ban
+    on the parameter rather than a guarantee about it."""
+    res = _probe(email="drydock-probe+chosen@example.com")
+
+    assert res.status == "success"
+
+
 def test_read_consent_alone_does_not_authorise_the_write():
     """The gap this probe must not fall into: a customer who approved a read
     must not get an account created by omission."""

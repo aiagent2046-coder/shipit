@@ -666,3 +666,29 @@ def test_a_wrapped_archive_still_finds_its_boundary():
     wrapped["myapp-abc123/app/error.tsx"] = "export default ()=> null"
 
     assert scan_error_boundary(_zip(wrapped)).findings == []
+
+
+def test_a_wide_workspace_names_whole_packages_and_counts_what_it_omits():
+    """`reason` used to be cut at a character count, which sliced a package name
+    mid-word on a wide monorepo -- and a clipped list reads exactly like a short
+    one, so the reader could not tell whether the packages they cannot see were
+    reported or dropped. Whole entries only, then an explicit count of the rest.
+    """
+    names = [f"packages/service-with-a-long-name-{i:02d}" for i in range(9)]
+    files = {"package.json": '{"workspaces":["packages/*"]}'}
+    for n in names:
+        files[f"{n}/package.json"] = (
+            '{"dependencies":{"react":"18","react-dom":"18"}}')
+        files[f"{n}/src/main.tsx"] = (
+            "import {createRoot} from 'react-dom/client';"
+            "createRoot(el).render(<App/>)")
+
+    scan = scan_error_boundary(_zip(files))
+
+    assert len(scan.findings) == 9, "every app that can blank gets its own"
+    assert "more)" in scan.reason, "the omitted packages are counted, not hidden"
+
+    listed = scan.reason.split("— ", 1)[1].split(" …(+")[0]
+    for entry in listed.split("; "):
+        assert entry.split(":")[0] in names, (
+            f"a package name was cut mid-word: {entry.split(':')[0]!r}")
