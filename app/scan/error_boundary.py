@@ -43,9 +43,9 @@ The gate that was "not optional" was not present. Its fixture used
 `src/Button.tsx`, the one library shape with no index file, so the suite agreed
 with the code and reality did not. A name cannot carry this: "can go blank"
 is a property of mounting an app, so the signal is the mount — `createRoot(`,
-`ReactDOM.render(`, `hydrateRoot(` — or a ROOT-level router entry (`app/layout.*`
-optionally under route groups and dynamic segments, or `pages/_app.*`), which is
-the file an `error.tsx` sits beside.
+`ReactDOM.render(`, `hydrateRoot(`, `ReactDOM.hydrate(` — or a ROOT-level router
+entry (`app/layout.*` optionally under route groups and dynamic segments, or
+`pages/_app.*`), which is the file an `error.tsx` sits beside.
 
 A REPOSITORY CAN HOLD SEVERAL APPLICATIONS. A workspace root declares no react
 of its own, and reading only that manifest reported `dubinc/dub` — a Next.js
@@ -121,6 +121,9 @@ _RENDER_CALLS = ("createRoot(", "ReactDOM.render(", "hydrateRoot(",
 # directions: too small and large repositories come back undetermined, too
 # large and one audit reads a monorepo end to end.
 _MAX_SOURCE_FILES = 4000
+# How much of a workspace's per-package detail one `reason` may carry. Spent in
+# whole entries by _merge, never mid-name.
+_MAX_REASON_CHARS = 400
 _MAX_TOTAL_BYTES = 24_000_000
 _MAX_FILE_BYTES = 400_000
 
@@ -306,8 +309,9 @@ def _workspace_packages(zf: zipfile.ZipFile, files: list[str],
             pkg = json.loads(raw[:_MAX_FILE_BYTES].decode("utf-8", "ignore"))
         except (KeyError, ValueError):
             continue
-        if _is_react(_all_deps(pkg)):
-            out.append((name[: -len("package.json")], _all_deps(pkg)))
+        deps = _all_deps(pkg)
+        if _is_react(deps):
+            out.append((name[: -len("package.json")], deps))
     return out
 
 
@@ -495,10 +499,25 @@ def _merge(parts: list[tuple[str, BoundaryScan]], files_total: int
         reason = parts[0][1].reason
     else:
         fired = sum(1 for _, p in parts if p.findings)
+        # WHOLE ENTRIES OR NONE. Cutting the joined string at a character count
+        # sliced a package name mid-word on a wide monorepo, and a clipped list
+        # is indistinguishable from a short one -- the reader cannot tell
+        # whether the packages they cannot see were reported or dropped. Fit
+        # what fits, then say how many were left out.
+        entries = [f"{d.rstrip('/')}: {p.reason}" for d, p in parts]
+        shown: list[str] = []
+        left_in_budget = _MAX_REASON_CHARS
+        for entry in entries:
+            # The first entry goes in whatever its length: one whole reason
+            # beats a truncated one, and dropping all of them says less.
+            if shown and len(entry) + 2 > left_in_budget:
+                break
+            shown.append(entry)
+            left_in_budget -= len(entry) + 2
+        omitted = len(entries) - len(shown)
         reason = (f"{len(parts)} workspace packages declare react; {fired} "
-                  "without a boundary — "
-                  + "; ".join(f"{d.rstrip('/')}: {p.reason}"
-                              for d, p in parts)[:400])
+                  "without a boundary — " + "; ".join(shown)
+                  + (f" …(+{omitted} more)" if omitted else ""))
     return BoundaryScan(findings=findings, coverage=coverage, reason=reason,
                         mount=mount,
                         files_read=sum(p.files_read for _, p in parts),
