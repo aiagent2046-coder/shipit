@@ -64,6 +64,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.scan.error_boundary import (  # noqa: E402
     COVERAGE_EXHAUSTED,
+    MOUNT_UNKNOWN,
     MOUNT_YES,
     scan_error_boundary,
 )
@@ -420,6 +421,11 @@ def main() -> int:
     mounted_decided = other_decided = 0
     by_mount: dict[str, int] = {}
     replay: list[str] = []
+    # Repositories that finished a COMPLETE scan and still have no mount: the
+    # population the incidence silently drops. Collected by name because the
+    # question "is that actually an app?" is answered by reading it, not by a
+    # count.
+    excluded_unknown: list[tuple[str, str]] = []
     # (fired, mounted-decided) per stratum, so a difference between Lovable
     # and hand-written is a number and not an impression.
     per_stratum_tally: dict[str, list[int]] = {}
@@ -435,10 +441,18 @@ def main() -> int:
 
         scan = scan_error_boundary(io.BytesIO(data))
         by_mount[scan.mount] = by_mount.get(scan.mount, 0) + 1
+        # MOUNT ON EVERY LINE, because the aggregate hid a defect. A repository
+        # silenced by a boundary token BEFORE the walk reached its render call
+        # is classified `undetermined` and leaves the denominator -- and an
+        # UNPROTECTED repository never stops early, so it always stays in it.
+        # The exclusion is therefore one-directional and inflates the rate. Only
+        # the per-repository mount says who this happened to.
+        if scan.mount == MOUNT_UNKNOWN and scan.coverage != COVERAGE_EXHAUSTED:
+            excluded_unknown.append((slug, scan.reason))
         # `files_read` can be far below `files_total` on a COMPLETE scan: a
         # boundary token ends the walk. Printed together so nobody reads the
         # small number as a truncated pass.
-        span = f"[{scan.coverage}, read {scan.files_read}]"
+        span = f"[{scan.coverage}, mount={scan.mount}, read {scan.files_read}]"
 
         if scan.coverage == COVERAGE_EXHAUSTED:
             undetermined += 1
@@ -485,6 +499,24 @@ def main() -> int:
     if undetermined or failed:
         print(f"  not counted: {undetermined} undetermined (read budget), "
               f"{failed} unfetchable")
+
+    # THE DENOMINATOR'S OWN BLIND SPOT, printed because a rate quoted without it
+    # is quoted too high. Each of these finished a complete scan, found a
+    # boundary, and never established a mount -- so it left the denominator
+    # while every unprotected repository stayed in. If they are apps, the true
+    # incidence is the LOW end below; if none of them are, it is the high end.
+    # Which they are is settled by reading them, so they are named.
+    if excluded_unknown and mounted_decided:
+        low_denom = mounted_decided + len(excluded_unknown)
+        print(f"\n  {len(excluded_unknown)} silenced repositories left the "
+              f"denominator with no mount established:")
+        for slug, reason in excluded_unknown:
+            print(f"    {slug:45s} {reason[:90]}")
+        print(f"\n  incidence is bounded, not a point: "
+              f"{fired}/{low_denom} = {100 * fired / low_denom:.0f}% "
+              f"(if every one of them is an app) .. "
+              f"{fired}/{mounted_decided} = "
+              f"{100 * fired / mounted_decided:.0f}% (if none are)")
 
     print("\nreplay this exact run:\n  python scripts/measure_error_boundary.py "
           + " \\\n    ".join(replay))
