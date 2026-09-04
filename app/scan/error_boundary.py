@@ -194,12 +194,16 @@ _FRAMEWORK_MOUNTS = (
 # only its own subtree -- not the root layout, not sibling routes -- so it does
 # not answer this finding's question, the whole-app white page.
 #
-# Crediting any error file anywhere (the previous rule) read apps that were
-# protected in ONE route as fully covered. Measured 2026-09-04:
-# elevate-for-humanity/Elevate-lms was silenced by
-# `apps/admin/app/barber-shop-applications/error.tsx` and iBob78/Apex-collector
-# by `src/app/app/error.tsx`, both with a bare root. Route groups stay credited
-# because they add no URL segment (`app/(dashboard)/error.tsx` is still root).
+# Crediting any error file anywhere (the previous rule) would read an app
+# protected in ONE route as fully covered. Route groups stay credited because
+# they add no URL segment (`app/(dashboard)/error.tsx` is still root).
+#
+# This tightening is a CORRECTNESS change with NO measured effect: replayed
+# over the three-strata corpus on identical commits it moved no verdict at all
+# (DRYDOCK_LENS_PLAN.md, 2026-09-04). It forbids a false negative this corpus
+# does not happen to contain -- a reason to keep the rule, never a claim that
+# it caught something. Measured cases live in the plan rather than here, so
+# this comment cannot go stale on the next corpus run.
 #
 # NUANCE, in a comment rather than the rule: even a root `error.tsx` does not
 # catch a fault thrown in the root layout itself -- only `global-error.tsx`
