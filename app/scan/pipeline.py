@@ -467,6 +467,11 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
                     if static.get("coverage", {}).get("error_boundary")
                     == "budget_exhausted" else set()),
             ),
+            # Carried through from the static stage, which decided it. Without
+            # this line a PAID row would be blind to the same question a
+            # static-only row can answer, and the paid rows are the ones a
+            # calibration decision costs money to get wrong.
+            "frontend_scan": static.get("score", {}).get("frontend_scan", {}),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0
             # with the LLM stage present scored 9.2 without it (seen in
