@@ -40,6 +40,13 @@ TWO ROUTES ARE MEASURED, AND ONE OF THEM IS REFUSED BY ITS OWN NUMBER.
   under today's rules would silently reclassify as "unreproducible" exactly
   the rows the change is about.
 
+THE WORDING is a third question and it has a WIDER denominator, so it is
+counted separately and printed first: how many already-delivered reports said
+"not checked" over a category that holds a finding. It needs no arithmetic, so
+the rows the routes must refuse are counted here -- they render today, saying
+it. `unexamined` is read through app/db.py's read-time backfill, because that
+is the moment the report renders.
+
 READ-ONLY, and off a dump rather than off the database. Re-auditing these
 repositories to answer a scoring question would write fresh rows for repositories
 already in the corpus -- the mistake DRYDOCK_LENS_PLAN.md records as the one
@@ -60,6 +67,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.db import _backfill_unexamined  # noqa: E402
 from app.scan.scoring import (  # noqa: E402
     CATEGORIES,
     CRITICAL_GATE_MIN_CONFIDENCE,
@@ -171,6 +179,8 @@ def main(path: str) -> int:
     refused_rows = 0
     measurable = 0
     absent_categories: dict[str, int] = {}
+    mislabelled: dict[str, int] = {}
+    mislabelled_rows = 0
 
     for row in rows:
         score = row.get("score_json") or {}
@@ -178,6 +188,28 @@ def main(path: str) -> int:
         if not by_cat or score.get("total") is None:
             continue
         examined_rows += 1
+
+        # THE WORDING, counted BEFORE the refusals below and over every scored
+        # row. The two routes need a reconstructed total, so they must drop
+        # rows whose category set predates today's. This question needs no
+        # arithmetic at all -- only "did a row say `not checked` above a
+        # finding" -- and those dropped rows are on somebody's screen right
+        # now, saying it. A denominator that excluded them would report the
+        # defect as rarer than it is.
+        #
+        # `unexamined` is read through app/db.py's own backfill rather than
+        # off the blob: a row stored before the key existed has it filled in
+        # at READ time, which is exactly the moment the report renders. Taking
+        # the raw blob would call those rows unaffected while the page they
+        # produce carries the label.
+        labelled = set(
+            (_backfill_unexamined(score) or {}).get("unexamined") or [])
+        holding = sorted(labelled & {str(f.get("category"))
+                                     for f in (row.get("findings_json") or [])})
+        if holding:
+            mislabelled_rows += 1
+            for name in holding:
+                mislabelled[name] = mislabelled.get(name, 0) + 1
 
         # A row scored by an engine whose category set differs from today's.
         # MEASURED: the first real dump raised KeyError('Money & Data') here,
@@ -246,6 +278,16 @@ def main(path: str) -> int:
     # above. Naming which categories were missing said nothing about how many
     # ROWS that removed, so "2 rows are affected" had no population behind it.
     print(f"{measurable} rows measurable\n")
+
+    # Printed first because it is the one number here that describes rows
+    # already delivered rather than a proposal about future ones.
+    print("THE WORDING -- rows whose report said \"not checked\" over a "
+          "category that holds a finding")
+    print(f"  {mislabelled_rows} of {examined_rows} scored rows"
+          + (f"   ({', '.join(f'{n} ({c})' for n, c in sorted(mislabelled.items()))})"
+             if mislabelled else ""))
+    print("  counted over every scored row, refusals included: the question "
+          "needs no arithmetic\n")
 
     _report("ROUTE A -- category rejoins the mean (REFUSED: measured to raise "
             "a weak repository's total, so finding a vulnerability would "
