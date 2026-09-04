@@ -18,10 +18,21 @@ and moves the headline by exactly nothing.
 nothing ran that could have produced an Auth or Money & Data finding" -- and
 app/scan/service_role.py has produced exactly that since 2026-08-19.
 
-THE PROPOSAL MEASURED HERE, and it is asymmetric on purpose. Silence in a
-category with no examiner stays excluded; a category holding at least one
-finding re-enters the mean and the gate. Absence of evidence keeps proving
-nothing; presence of evidence stops proving nothing too.
+TWO ROUTES ARE MEASURED, AND ONE OF THEM IS REFUSED BY ITS OWN NUMBER.
+
+  ROUTE A -- a category holding a finding rejoins the MEAN. Measured, then
+  refused: on a weak repository Auth at 9.3 sits above the mean, so admitting
+  it RAISES the total (3.4 -> 4.0 on a constructed pair). Two otherwise
+  identical repositories, and the one with the service-role bypass would score
+  higher. It stays in this report with its number, because a rejected proposal
+  without its measurement is only an assertion.
+
+  ROUTE B -- a confident critical GATES from wherever it sits. A gate only
+  ever compresses downward, so this direction cannot invert. Reachable today
+  and not hypothetically: a preview runs one rubric, the model files its
+  finding by what it IS (#10), and a CRITICAL categorised Auth lands outside
+  `llm_categories`. The same finding scores 6.6 with the gate firing on a full
+  audit and 9.9 with it silent on a preview.
 
 READ-ONLY, and off a dump rather than off the database. Re-auditing these
 repositories to answer a scoring question would write fresh rows for repositories
@@ -45,6 +56,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.scan.scoring import (  # noqa: E402
     CATEGORIES,
+    CRITICAL_GATE_MIN_CONFIDENCE,
+    GATED_CATEGORIES,
     _RAW_CATEGORY_WEIGHT,
     _apply_gate,
     _gate_reasons,
@@ -76,12 +89,44 @@ def _finding(raw: dict) -> ScoredFinding:
     )
 
 
+def _deaf_criticals(by_cat: dict[str, float], counted: list[str],
+                    findings: list[ScoredFinding]) -> list[ScoredFinding]:
+    """Criticals the gate cannot hear, because their category went unexamined.
+
+    `_gating_criticals` filters by `counted` on the stated premise that "on a
+    static-only audit nothing ran that could have produced an Auth or Money &
+    Data finding". Two producers contradict it: app/scan/service_role.py files
+    statically under Auth, and an LLM rubric that DID run files a finding by
+    what it is (#10) -- so a preview whose one rubric is Security can return a
+    confident CRITICAL categorised Auth, land it in a category `llm_categories`
+    does not cover, and gate on nothing.
+
+    Demonstrated: the same critical scores 6.6 with the gate firing on a full
+    audit and 9.9 with the gate silent on a preview.
+    """
+    return [f for f in findings
+            if f.severity == "critical"
+            and f.confidence >= CRITICAL_GATE_MIN_CONFIDENCE
+            and f.category in GATED_CATEGORIES
+            and f.category in by_cat
+            and f.category not in counted]
+
+
 def _total(by_cat: dict[str, float], counted: list[str],
-           findings: list[ScoredFinding]) -> float:
+           findings: list[ScoredFinding], *,
+           deaf_criticals_gate: bool = False) -> float:
     """The headline, computed by the shipping rules rather than by a copy.
 
     Mirrors compute_scores' tail: weighted mean over the counted categories,
     then the gate, then the 10.0-with-findings correction.
+
+    `deaf_criticals_gate` models the ONE change that survived measurement: a
+    confident critical gates from wherever it sits. The mean is untouched by
+    it deliberately -- admitting a category to the mean because it holds a
+    finding was measured and refused, because a category at 9.3 sitting above
+    a weak repository's mean RAISES the total, so finding a vulnerability
+    would improve the score. A gate only ever lowers, so this direction cannot
+    invert.
     """
     divisor = sum(_RAW_CATEGORY_WEIGHT[c] for c in counted)
     if not divisor:
@@ -91,7 +136,13 @@ def _total(by_cat: dict[str, float], counted: list[str],
     # would be a bug rather than an old row, and a default would hide it.
     total = sum(by_cat[c] * _RAW_CATEGORY_WEIGHT[c]
                 for c in counted) / divisor
-    total = round(_apply_gate(total, _gate_reasons(by_cat, counted, findings)), 1)
+    reasons = _gate_reasons(by_cat, counted, findings)
+    if deaf_criticals_gate:
+        reasons = reasons + [
+            {"kind": "critical", "category": f.category, "rule_id": f.rule_id,
+             "title": f.title}
+            for f in _deaf_criticals(by_cat, counted, findings)]
+    total = round(_apply_gate(total, reasons), 1)
     if findings and total == 10.0:
         total = 9.9
     return total
@@ -102,8 +153,11 @@ def main(path: str) -> int:
             if line.strip()]
 
     affected: list[tuple[str, str, float, float, list[str]]] = []
+    deaf: list[tuple[str, str, float, float, list[str]]] = []
     unreproducible = 0
     examined_rows = 0
+    refused_rows = 0
+    measurable = 0
     absent_categories: dict[str, int] = {}
 
     for row in rows:
@@ -122,6 +176,7 @@ def main(path: str) -> int:
         # because that is a fact about the ledger worth knowing.
         missing = [c for c in CATEGORIES if c not in by_cat]
         if missing:
+            refused_rows += 1
             for name in missing:
                 absent_categories[name] = absent_categories.get(name, 0) + 1
             continue
@@ -138,47 +193,74 @@ def main(path: str) -> int:
             unreproducible += 1
             continue
 
+        measurable += 1
+        stored = float(score["total"])
+        audit_id = str(row.get("id"))
+        repo_url = str(row.get("repo_url") or "")
+
+        # ROUTE A -- the mean. Measured and REFUSED: see _total's docstring.
+        # Kept in the report because a rejected proposal with its number
+        # beside it is the record; deleting it would leave only the assertion.
         with_evidence = sorted(
             c for c in unexamined
             if any(f.category == c for f in findings))
-        if not with_evidence:
-            continue
+        if with_evidence:
+            affected.append((audit_id, repo_url, stored,
+                             _total(by_cat, counted + with_evidence, findings),
+                             with_evidence))
 
-        after = _total(by_cat, counted + with_evidence, findings)
-        affected.append((str(row.get("id")), str(row.get("repo_url") or ""),
-                         float(score["total"]), after, with_evidence))
+        # ROUTE B -- the gate. A confident critical gates from wherever it
+        # sits. This one can only lower a total.
+        deaf_here = _deaf_criticals(by_cat, counted, findings)
+        if deaf_here:
+            deaf.append((audit_id, repo_url, stored,
+                         _total(by_cat, counted, findings,
+                                deaf_criticals_gate=True),
+                         sorted({f.category for f in deaf_here})))
 
     print(f"{len(rows)} rows in dump, {examined_rows} scored, "
-          f"{unreproducible} could not be reproduced from what was stored "
-          f"(gated rows: the ceiling rewrote their subscores)")
+          f"{refused_rows} refused, {unreproducible} could not be reproduced "
+          f"from what was stored (gated rows: the ceiling rewrote their "
+          f"subscores)")
     if absent_categories:
         named = ", ".join(f"{name} ({count})"
                           for name, count in sorted(absent_categories.items()))
-        print(f"refused, scored under a different category set: {named}")
-    print(f"{len(affected)} rows hold a finding in a category the score "
-          f"marked unexamined\n")
+        print(f"  refused because the row predates a category: {named}")
+    # The denominator, printed rather than left to be inferred from the counts
+    # above. Naming which categories were missing said nothing about how many
+    # ROWS that removed, so "2 rows are affected" had no population behind it.
+    print(f"{measurable} rows measurable\n")
 
-    if not affected:
-        print("no measurable shift: the proposal moves nothing already stored")
-        return 0
+    _report("ROUTE A -- category rejoins the mean (REFUSED: measured to raise "
+            "a weak repository's total, so finding a vulnerability would "
+            "improve its score)", affected)
+    _report("ROUTE B -- a confident critical gates from wherever it sits "
+            "(can only lower)", deaf)
+    return 0
 
+
+def _report(title: str,
+            rows: list[tuple[str, str, float, float, list[str]]]) -> None:
+    print(f"{title}\n  {len(rows)} rows")
+    if not rows:
+        print("  moves nothing already stored\n")
+        return
     for audit_id, repo_url, before, after, cats in sorted(
-            affected, key=lambda r: r[3] - r[2]):
+            rows, key=lambda r: r[3] - r[2]):
         mark = "ours " if _is_ours(repo_url) else "3rd  "
         print(f"  {mark} {audit_id[:8]}  {before:4.1f} -> {after:4.1f} "
               f"({after - before:+.2f})  {','.join(cats)}  {repo_url}")
-
-    for label, subset in (("third-party", [a for a in affected
-                                           if not _is_ours(a[1])]),
-                          ("ours", [a for a in affected if _is_ours(a[1])])):
+    for label, subset in (("third-party", [r for r in rows
+                                           if not _is_ours(r[1])]),
+                          ("ours", [r for r in rows if _is_ours(r[1])])):
         if not subset:
-            print(f"\n  {label:12s} no rows")
+            print(f"  {label:12s} no rows")
             continue
-        before = sum(a[2] for a in subset) / len(subset)
-        after = sum(a[3] for a in subset) / len(subset)
-        print(f"\n  {label:12s} {len(subset):3d} rows   "
+        before = sum(r[2] for r in subset) / len(subset)
+        after = sum(r[3] for r in subset) / len(subset)
+        print(f"  {label:12s} {len(subset):3d} rows   "
               f"{before:.2f} -> {after:.2f}   ({after - before:+.2f})")
-    return 0
+    print()
 
 
 if __name__ == "__main__":
