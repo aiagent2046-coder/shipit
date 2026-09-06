@@ -664,6 +664,8 @@ SYSTEM_PROMPT = (
 
 @dataclass
 class LLMScanStats:
+    candidate_files: int | None = None
+    submitted_files: tuple[str, ...] = ()
     prompts: int = 0
     raw_findings: int = 0
     verified: int = 0
@@ -1269,6 +1271,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     findings: list[ScoredFinding] = []
     ran: set[str] = set()
 
+    stats.candidate_files = len(files)
+
     def _record_ran(rubric: str) -> None:
         # In declaration order, deduplicated across passes, so the value is a
         # set of rubrics rather than a log of attempts. The scorer asks it one
@@ -1295,6 +1299,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   selected, rubric, request_limit - len(SYSTEM_PROMPT))
               sent = len(SYSTEM_PROMPT) + len(prompt)
               try:
+                  stats.submitted_files = tuple(sorted(set(stats.submitted_files) | {n for n, _ in selected}))
                   raw, usage = client.complete(SYSTEM_PROMPT, prompt,
                                                max_tokens=8192)
                   break
@@ -1397,8 +1402,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   category=category,
                   file=f["file"],
                   line=int(f["line_start"]),
-                  explanation=clip(str(f.get("explanation", "")), 600),
-                  fix_hint=clip(str(f.get("fix_hint", "")), 300),
+                  explanation=str(f.get("explanation", "")),
+                  fix_hint=str(f.get("fix_hint", "")),
                   context=context,
                   origin_category=origin,
                   source="llm",

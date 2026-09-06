@@ -92,13 +92,12 @@ def test_a_local_database_is_not_sent_to_a_provider_dashboard():
     local_fix = _advice(_finding(LOCAL))[2]
     live_fix = _advice(_finding(LIVE))[2]
 
-    # The first sentence of the live-leak advice: go to your provider and
-    # change the password there.
-    live_instruction = live_fix.split(",")[0]
-    assert "provider" in live_instruction, "the live advice under test moved"
-
+    # Neither format match establishes a live database. The local advice
+    # must address reuse without assuming a provider dashboard exists.
+    assert "provider" not in local_fix
+    assert "synthetic or reused on a real service" in local_fix
+    assert "If real database credentials were exposed" in live_fix
     assert local_fix != live_fix
-    assert live_instruction not in local_fix
     # Deleting the advice is not an improvement over the wrong advice: with
     # no dictionary entry plain_fields falls back to the technical title and
     # a static secret finding has no fix_hint of its own, so "what to do"
@@ -107,10 +106,8 @@ def test_a_local_database_is_not_sent_to_a_provider_dashboard():
     assert len(local_fix) > 40
 
 
-def test_the_live_leak_still_gets_the_rotate_it_now_advice():
-    """The half that must never be damped. A production DSN with a real
-    password is the database in one line, and this is the only finding of the
-    three where the reader has to act today."""
+def test_remote_dsn_advice_keeps_conditional_rotation_guidance():
+    """A remote hostname alone does not verify credential validity or access."""
     what, risk, fix = _advice(_finding(LIVE))
 
     assert (what, risk, fix) == PLAIN["connection-string-password"]

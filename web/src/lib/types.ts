@@ -37,7 +37,26 @@ export interface GateReason {
   title?: string; // critical only
 }
 
+export interface ScanManifest {
+  archive_sha256: string;
+  commit_sha: string | null;
+  engine_version: string;
+  archive_files: number;
+  static_checks: string[];
+  static_limits: Record<string, string>;
+  inventory: Record<string, string[]>;
+  model: string | null;
+  model_calls: number;
+  rubrics_completed: string[];
+  llm_candidate_files: number | null;
+  llm_submitted_files: number | null;
+  llm_files_not_submitted: number | null;
+  limitations: string[];
+  runtime_verified: false;
+}
+
 export interface Score {
+  scan_manifest?: ScanManifest;
   // Numeric fields remain for older API consumers; they are not a readiness verdict.
   readiness_score_validated?: false;
   total: number;
@@ -71,6 +90,9 @@ export interface Score {
 }
 
 export interface Finding {
+  occurrence_count?: number;
+  occurrence_files?: string[];
+  occurrence_titles?: string[];
   rule_id: string;
   title: string;
   severity: Severity;

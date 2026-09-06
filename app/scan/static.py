@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import BinaryIO
 
+from app.scan.auth_read import scan_auth_read
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
@@ -73,6 +74,14 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             line=h.line, explanation=h.explanation, fix_hint=h.fix_hint,
         ))
 
+    fileobj.seek(0)
+    for a in scan_auth_read(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=a.rule_id, title=a.title, severity=a.severity,
+            confidence=a.confidence, category=a.category, file=a.file,
+            line=a.line, explanation=a.explanation, fix_hint=a.fix_hint,
+        ))
+
     # The first static producer for Frontend. Wired on a number measured in
     # this repository (DRYDOCK_LENS_PLAN.md): 11 of 12 mounted apps in the
     # audited corpus ship no error boundary above their routes, the hits on
@@ -122,5 +131,9 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # repository. A scanner that found nothing and one that gave up must
         # not look identical (#392). Consuming this in the pipeline/report is
         # the follow-up; here it is preserved so it can be.
-        "coverage": {"error_boundary": boundary.coverage},
+        "checks_run": ["secrets", "rls", "schema_drift", "project_files",
+                       "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency"],
+        "coverage": {"error_boundary": boundary.coverage,
+                     "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
+                     "test/vendor files excluded; middleware and runtime access not resolved"},
     }

@@ -1,16 +1,13 @@
 """Plain-language layer for the audit report.
 
-The report is read by vibe-coders — founders who built their app with
-Lovable/Bolt/v0 and are often not professional developers. A finding
-they don't understand doesn't scare them, doesn't get shared, and
-doesn't sell a Fix Pack. Every static rule therefore gets a hand-written
-translation: what it is, what can actually go wrong (a concrete harm
-scenario, not a term of art), and what to do. LLM findings carry their
-own plain-language explanation/fix_hint under the same contract (see
-SYSTEM_PROMPT in app/scan/llm_scan.py).
+Describe observations, evidence limits and conditional consequences so the
+reader can decide what to verify. A pattern match does not establish that a
+credential is live, that a service is reachable, or that an attack succeeded.
 """
 
 from __future__ import annotations
+
+from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 
 # severity -> reader-facing tier (technical severity stays in the API
 # and in the collapsed developer details)
@@ -23,84 +20,82 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
-    "aws-access-key-id": (
-        "An Amazon Web Services key is written directly in your code.",
-        "Anyone who sees your code can use your AWS account: run servers "
-        "on your credit card, read your stored files, or delete them. "
-        "Leaked AWS keys are typically abused within minutes of reaching "
-        "a public repo.",
-        "Remove the key from the code, revoke it in AWS right away, and "
-        "keep the new one in environment variables.",
+    "python-route-read-auth-consistency": (
+        "Object lookup differs from protected sibling routes.",
+        'A local route uses a different lookup from protected sibling routes. Global '
+        'authorization is unresolved.',
+        "Check ownership authorization and reproduce missing/wrong-token access using synthetic records.",
     ),
-    "github-pat": (
-        "A GitHub access token is written directly in your code.",
-        "Whoever finds it can read and change your repositories as you — "
-        "including pushing malicious code your users would then run.",
-        "Revoke the token on GitHub and move the new one to environment "
-        "variables.",
+    'aws-access-key-id': (
+        'A value matches the AWS access key ID format.',
+        'An access key ID alone cannot authenticate AWS requests; a matching secret access key '
+        'is also required. This scan has not checked validity or permissions.',
+        'Check whether this is synthetic. If a real credential pair was exposed, revoke it and '
+        'move its replacement outside the repository.',
     ),
-    "stripe-live-key": (
-        "A live Stripe payment key is written directly in your code.",
-        "This key moves real money. Anyone who finds it can issue "
-        "refunds, read customer payment data, or create charges.",
-        "Roll the key in the Stripe dashboard immediately and keep the "
-        "new one in environment variables.",
+    'github-pat': (
+        'A value matches a GitHub token format.',
+        'If this is a valid token, its permissions may allow access to repositories. The scan '
+        'has not checked validity, scope or expiry.',
+        'Confirm whether the value is synthetic. Revoke an exposed real token and store its '
+        'replacement outside the repository.',
     ),
-    "anthropic-api-key": (
-        "An AI provider (Anthropic) key is written directly in your code.",
-        "Anyone who finds it can make AI requests on your account and "
-        "run up your bill until the provider blocks it.",
-        "Revoke the key and keep the new one in environment variables.",
+    'stripe-live-key': (
+        'A value matches a Stripe live-key format.',
+        'A valid key may allow payment operations within its permissions. A format match does '
+        'not establish that this key works or which operations it permits.',
+        'Check whether this is a fixture. Rotate an exposed real key and store its replacement '
+        'in server configuration.',
     ),
-    "telegram-bot-token": (
-        "A Telegram bot token is written directly in your code.",
-        "Whoever finds it fully controls your bot: they can read its "
-        "messages and impersonate it to your users.",
-        "Revoke the token via @BotFather and keep the new one in "
-        "environment variables.",
+    'anthropic-api-key': (
+        'A value matches an Anthropic API key format.',
+        'If valid, the key may permit billed API calls. This scan has not tested the credential '
+        'or established access to an account.',
+        'Check whether the value is synthetic. Revoke an exposed real key and store its '
+        'replacement outside the repository.',
     ),
-    "private-key-block": (
-        "A private cryptographic key is committed inside the repository.",
-        "Private keys are the master secret behind encryption or server "
-        "access. Anyone with your code can decrypt what it protects or "
-        "log in to what it opens.",
-        "Remove it from the repository, rotate the key, and store keys "
-        "outside the codebase.",
+    'telegram-bot-token': (
+        'A value matches a Telegram bot token format.',
+        'If valid, a token may allow bot API operations. Its validity and the scope of '
+        'accessible messages have not been checked.',
+        'Check whether this is a fixture. Revoke an exposed real token through BotFather and '
+        'store the replacement outside the repository.',
     ),
-    "jwt-in-code": (
-        "A login token (JWT) is committed inside the repository.",
-        "Depending on the token's power, someone could act as a logged-in "
-        "user — or as an administrator — of your app without a password.",
-        "Remove it, invalidate the session it belongs to, and never "
-        "commit real tokens.",
+    'private-key-block': (
+        'A private-key marker appears in the source.',
+        'The marker may be a test string or part of a usable private key. Completeness, '
+        'validity and deployment use have not been checked.',
+        'Inspect the surrounding material without publishing it. Rotate an exposed real key and '
+        'keep its replacement outside the repository.',
     ),
-    "sql-secret-assignment": (
-        "A password or secret is written inside a database migration file.",
-        "Migration files live in your code forever — everyone with the "
-        "code gets the secret, and 'deleting' it later doesn't remove it "
-        "from the project's history.",
-        "Move the secret to server-side configuration and rotate it; the "
-        "migration should read it from settings, not contain it.",
+    'jwt-in-code': (
+        'A value resembles a JWT in the source.',
+        'A valid, unexpired token may grant its associated permissions. This scan has not '
+        'verified its signature, expiry or acceptance by a service.',
+        'Check whether this is a test token. Invalidate an exposed real session token and avoid '
+        'committing replacements.',
     ),
-    "generic-assignment": (
-        "A password or secret appears to be written directly in your code.",
-        "Anything committed to code ends up in backups, on GitHub, and on "
-        "every laptop that clones the project. It's like taping the "
-        "office key to the front door.",
-        "Move it to environment variables and rotate the leaked value.",
+    'sql-secret-assignment': (
+        'A SQL-style assignment contains a credential-like value.',
+        'This may be SQL code, a quoted example or a test fixture. The scan has not established '
+        'that the value is real or used by a deployed database.',
+        'Check the context and use of the value. Rotate an exposed real secret and read its '
+        'replacement from server configuration.',
     ),
-    "connection-string-password": (
-        "Your database connection string, password included, is written "
-        "into the code.",
-        "A connection string is everything needed to open the database: "
-        "the address, the username and the password, in one line. Anyone "
-        "who reads this code can connect to it directly — read every "
-        "table, change it, or delete it — without going through your app "
-        "or its login at all.",
-        "Change that user's password at your database provider, then keep "
-        "the connection string in an environment variable instead of in "
-        "the code. Removing the line does not help on its own: Git keeps "
-        "every past version.",
+    'generic-assignment': (
+        'An assignment contains a credential-like value.',
+        'The name and value match a secret pattern. This does not establish that the value is a '
+        'live credential or that a service accepts it.',
+        'Check the value and context. Rotate an exposed real credential; synthetic test data '
+        'does not require account-level rotation.',
+    ),
+    'connection-string-password': (
+        'A connection URI contains a password-like value.',
+        'If it names a reachable database and valid credentials, it may permit access within '
+        "that database account's permissions. Reachability, validity and grants are not "
+        'checked.',
+        'Check whether this is a fixture. If real database credentials were exposed, change the '
+        'password and move configuration outside the repository.',
     ),
     "connection-string-dev-password": (
         "A connection string in your project uses a default password like "
@@ -114,31 +109,19 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "uses it, give it a proper password and move the connection string "
         "to an environment variable.",
     ),
-    "env-file-committed": (
-        # Deliberately says nothing about what is inside. The rule grades
-        # itself on the contents now, and this headline sits above both
-        # verdicts: "the file that holds ALL your secrets" reads as a lie
-        # over a .env that holds a build path.
-        "Your .env file is inside the repository.",
-        "The .env file usually contains database passwords and API keys "
-        "in one place. Committing it hands your entire keychain to "
-        "anyone who ever sees the code.",
-        "Remove it from the repository, add .env to .gitignore, and "
-        "rotate every secret that was inside.",
+    'env-file-committed': (
+        'An environment configuration file is included in the archive.',
+        'Such files may contain configuration or credentials. File presence alone does not '
+        'establish that a real secret was exposed.',
+        'Inspect the contents. Keep private environment files outside version control and '
+        'rotate any exposed real credentials.',
     ),
-    "connection-string-local-host": (
-        "A connection string in your code points at a database on the "
-        "machine running the code, with a password in it.",
-        "The address is localhost (or a docker-compose service name), so "
-        "this is almost certainly your development database and not "
-        "something anyone can reach from outside. What is worth a moment is "
-        "the password itself: unlike the tutorial defaults, this one looks "
-        "chosen — and if it is a password you also use somewhere real, it "
-        "is now published wherever this code is.",
-        "There is no provider dashboard to change this in — nothing is "
-        "hosting it. If that password is used anywhere that matters, change "
-        "it there. Then move the connection string into an environment "
-        "variable so the next one does not follow it into the repository.",
+    'connection-string-local-host': (
+        'A local or development connection URI contains a password-like value.',
+        'The hostname suggests a local or container service, but deployment and password reuse '
+        'have not been checked. This is not evidence of public database access.',
+        'Check whether this value is synthetic or reused on a real service. Rotate exposed real '
+        'credentials where they are used.',
     ),
     "supabase-demo-key": (
         "This is Supabase's local-development demo key, which ships with "
@@ -194,12 +177,12 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "`git rm -r --cached <folder>`. Your local copy stays; anyone "
         "cloning reinstalls from your lockfile, which is what it is for.",
     ),
-    "no-dockerfile": (
-        "The app isn't packaged to run on a server (no Dockerfile).",
-        "It runs on the builder's platform, but moving to your own "
-        "hosting — often needed for cost or control — will be a wall.",
-        "Add a Dockerfile; our Deploy Pack generates a working one "
-        "automatically.",
+    'no-dockerfile': (
+        'No Dockerfile was found in the supplied archive.',
+        'A Dockerfile is one deployment option. Its absence does not establish that the app '
+        'cannot run on a server; systemd and managed platforms are other options.',
+        'Review the existing deployment instructions. Add a Dockerfile only if container '
+        'deployment is needed.',
     ),
     "missing-error-boundary": (
         "Your app has no error boundary above its pages.",
@@ -221,6 +204,21 @@ PLAIN: dict[str, tuple[str, str, str]] = {
 }
 
 
+CREDENTIAL_RULES = frozenset({
+    'anthropic-api-key',
+    'aws-access-key-id',
+    'connection-string-local-host',
+    'connection-string-password',
+    'generic-assignment',
+    'github-pat',
+    'jwt-in-code',
+    'private-key-block',
+    'sql-secret-assignment',
+    'stripe-live-key',
+    'telegram-bot-token',
+})
+
+
 def plain_fields(finding: dict) -> tuple[str, str, str]:
     """(what, risk, fix) for any finding.
 
@@ -232,6 +230,23 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
     rid = str(finding.get("rule_id", ""))
     own_risk = str(finding.get("explanation", "")).strip()
     own_fix = str(finding.get("fix_hint", "")).strip()
+    if rid in PLAIN and rid in CREDENTIAL_RULES:
+        what, risk, fix = PLAIN[rid]
+        context = finding.get("context")
+        example = (context in NON_PRODUCTION_CONTEXTS if context
+                   else is_non_production_path(str(finding.get("file", ""))))
+        if example:
+            risk = "Found in a test, example or comment context. " + risk
+            fix = "Verify that this value is synthetic. " + fix
+        count = finding.get("occurrence_count")
+        if count and count > 1:
+            risk += f" {count} occurrences are recorded; inspect each location."
+            files = finding.get("occurrence_files", [])
+            if files:
+                risk += " Files: " + ", ".join(files) + "."
+        return what, risk, fix
+    if rid == "no-dockerfile":
+        return PLAIN[rid]
     if rid in PLAIN:
         what, risk, fix = PLAIN[rid]
         # The finding's own text wins where it has any.

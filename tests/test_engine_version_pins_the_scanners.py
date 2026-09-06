@@ -49,6 +49,7 @@ from app.scan.error_boundary import BoundaryScan
 # called by. Sorted, so a diff reads as one added or removed line.
 WIRED_SCANNERS = (
     "run_checks",
+    "scan_auth_read",
     "scan_ci_deploy_source",
     "scan_error_boundary",
     "scan_rls",
@@ -80,6 +81,7 @@ EMITTED_RULE_IDS = (
     "no-dockerfile",
     "no-tests",
     "private-key-block",
+    "python-route-read-auth-consistency",
     "sql-secret-assignment",
     "stripe-live-key",
     "supabase-anon-key",
@@ -96,7 +98,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-06-1"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-06-3"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

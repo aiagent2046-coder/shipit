@@ -7,7 +7,7 @@ once per rubric, double-penalizing the score. (In union-of-N mode the
 same issue also repeats across passes.) We keep the single most-severe
 instance per location and, when a *different* rubric also flagged it,
 record that on the survivor instead of dropping it silently — a second
-rubric independently confirming an issue is signal, not noise.
+rubric repeating a claim is provenance, not independent confirmation.
 
 Grouping is on file + nearby line + title similarity — NOT rule_id — so
 a medium from one rubric and a high from the other collapse into one.
@@ -128,11 +128,12 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
         others = sorted({f.rule_id for f in members} - {rep.rule_id})
         if others:
             labels = ", ".join(_RUBRIC_LABEL.get(r, r) for r in others)
-            # Say "at a nearby line" only when the confirmation was actually
+            # Say "at a nearby line" only when the other observation was actually
             # at a different line, so the note stays accurate for both the
             # same-line and widened cases.
             where = " at a nearby line" if any(m.line != rep.line for m in members) else ""
-            note = f" Also independently flagged by the {labels}{where}."
+            note = (f" Also reported by the {labels}{where}; "
+                    "this is not independent confirmation.")
             # The other wording, kept. Merging on position alone can join two
             # genuinely different issues that share a line, so the survivor
             # has to carry what the other one said or the second issue leaves
@@ -145,7 +146,7 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
             ]
             if extra:
                 note += " Reported there as: " + "; ".join(sorted(set(extra))) + "."
-            rep = replace(rep, explanation=(rep.explanation + note).strip()[:600])
+            rep = replace(rep, explanation=(rep.explanation + note).strip())
         out[slot] = rep
 
     return out

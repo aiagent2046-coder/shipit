@@ -363,5 +363,5 @@ def test_finding_count_is_not_changed_by_display_grouping():
     f = dict(_finding(), rule_id=RULE_ID)
     # Count both records even though the table combines them into one row.
     html = render_report(result([f, dict(f, file="second.sql")]))
-    assert '<div class="noring">2<small>findings</small>' in html
+    assert '<div class="noring">2<small>source observations</small>' in html
     assert html.count('class="title"') == 1

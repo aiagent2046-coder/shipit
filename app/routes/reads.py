@@ -172,6 +172,7 @@ async def get_audit_report(
 @router.get("/v1/audits/{audit_id}/fixpack-status")
 async def get_fixpack_status(
     audit_id: str,
+    token: str | None = None,
     audit_repo: AuditRepository = Depends(get_audit_repo),
     fixpack_repo: FixpackJobRepository = Depends(get_fixpack_repo),
 ) -> dict:
@@ -183,7 +184,7 @@ async def get_fixpack_status(
     (PR opened, pr_url set), 'no_fix_needed', or 'failed'. When no Fix Pack
     has been purchased yet (or persistence isn't configured), status is null
     so the frontend can poll a stable shape rather than treat "no job" as an
-    error. 404 only when the audit itself doesn't exist.
+    error. Missing, wrong or another audit's token returns 404, as does an unknown id.
 
     On 'failed', failure_kind says whose fault it was: 'infrastructure' when the
     job was reaped after never completing (a sandbox-runner outage or a crashed
@@ -192,12 +193,12 @@ async def get_fixpack_status(
     schema change; null for every non-failed status.
     """
     set_log_context(audit_id=audit_id)
-    audit = await audit_repo.get(audit_id)
+    audit = await audit_repo.get_authorized(audit_id, token)
     if audit is None:
         raise HTTPException(
             status_code=404,
-            detail={"reason": "audit_not_found",
-                    "detail": "no audit with this id, or persistence isn't "
+            detail={"reason": "not_found",
+                    "detail": "no audit with this id and token, or persistence isn't "
                               "configured on this deployment (see app/db.py)"},
         )
     job = await fixpack_repo.get_by_audit(audit_id)

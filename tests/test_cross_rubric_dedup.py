@@ -35,6 +35,8 @@ def test_same_location_two_rubrics_collapses_to_most_severe_with_note():
     assert rep.rule_id == "llm-auth"
     # the other rubric is recorded, not silently dropped
     assert "security review" in rep.explanation
+    assert "not independent confirmation" in rep.explanation
+    assert "independently flagged" not in rep.explanation
     assert rep.explanation.startswith("A login token is trusted")
 
 

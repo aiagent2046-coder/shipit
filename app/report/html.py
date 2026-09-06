@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from html import escape
 
-from app.report.evidence import coverage_rows, evidence_label
+from app.report.evidence import coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows
 from app.report.grouping import group_for_display
 from app.report.plain_language import plain_fields, tier
-from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 _SEVERITY_COLOR = {
@@ -66,20 +65,7 @@ NON_PRODUCTION_NOTE = (
 )
 
 
-def _is_non_production(f: dict) -> bool:
-    """Whether a finding is about test, example or documentation material.
-
-    Two sources because there are two producers. Secrets findings carry an
-    explicit `context` set by the damping rules; LLM findings carry none, so
-    they fall back to the path. Trusting `context` first matters: it is the
-    scanner's own decision, and re-deriving it from the path here would let
-    the two answers drift.
-    """
-    context = f.get("context")
-    if context:
-        return context in NON_PRODUCTION_CONTEXTS
-    return is_non_production_path(str(f.get("file", "")))
-
+_is_non_production = is_non_production
 
 def _findings_table(findings: list[dict]) -> str:
     rows = "".join(_finding_row(f) for f in findings)
@@ -101,11 +87,13 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # No tier currently has a validated measure of production readiness.
     heading = f"Project audit — {escape(project_name)}"
     og_title = f"Project audit — {project_name}"
+    source_count, example_count = finding_counts(raw_findings)
     header_left = (
-        f'<div class="noring">{len(raw_findings)}'
-        f'<small>{"finding" if len(raw_findings) == 1 else "findings"}'
+        f'<div class="noring">{source_count}'
+        f'<small>source observations'
         '</small></div>'
     )
+    header_left += f'<p>{example_count} test/example observations, listed separately.</p>'
     cats = "".join(
         f'<div class="cat"><span class="cat-name">{escape(name)}</span>'
         f'<span class="cat-skip">{escape(label)}</span></div>'
@@ -145,6 +133,16 @@ def render_report(result: dict, project_name: str = "your app") -> str:
             + _findings_table(non_production)
         )
 
+    record = "".join(
+        f"<dt>{escape(label)}</dt><dd>{escape(value)}</dd>"
+        for label, value in manifest_rows(score)
+    )
+    body += (
+        '<section><h2 class="sechead">Scan record</h2><dl style="overflow-wrap:anywhere">'
+        + record + '</dl><p class="secnote">File presence is not a deployment check. '
+        'Submitted files may be excerpted; submission does not prove full review. '
+        'Model cost is not recorded in this report.</p></section>'
+    )
     coverage_note = (
         '<section><h2 class="sechead">Limits of this audit</h2>'
         '<p class="secnote">No finding is independently confirmed by this '
@@ -157,6 +155,8 @@ def render_report(result: dict, project_name: str = "your app") -> str:
 
     counts = {}
     for f in raw_findings:
+        if is_non_production(f):
+            continue
         counts[f.get("severity")] = counts.get(f.get("severity"), 0) + 1
     summary = " · ".join(
         f"{counts[s]} {s}" for s in ("critical", "high", "medium", "low")

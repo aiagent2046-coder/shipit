@@ -174,7 +174,7 @@ export function FixpackPurchase({
         </div>
       </InstallGate>
 
-      <FixpackStatusArea auditId={auditId} />
+      <FixpackStatusArea auditId={auditId} accessToken={accessToken} />
     </section>
   );
 }
@@ -443,7 +443,7 @@ function SupportContact() {
   );
 }
 
-function FixpackStatusArea({ auditId }: { auditId: string }) {
+function FixpackStatusArea({ auditId, accessToken }: { auditId: string; accessToken?: string | null }) {
   const [status, setStatus] = useState<FixpackStatus | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -455,11 +455,14 @@ function FixpackStatusArea({ auditId }: { auditId: string }) {
   }, []);
 
   useEffect(() => {
+    setStatus(null);
+    if (!accessToken) return;
+    const token = accessToken;
     let cancelled = false;
 
     async function check() {
       try {
-        const s = await getFixpackStatus(auditId);
+        const s = await getFixpackStatus(auditId, token);
         if (cancelled) return;
         setStatus(s);
         if (s.status && TERMINAL.has(s.status)) stop();
@@ -474,7 +477,7 @@ function FixpackStatusArea({ auditId }: { auditId: string }) {
       cancelled = true;
       stop();
     };
-  }, [auditId, stop]);
+  }, [auditId, accessToken, stop]);
 
   // Nothing purchased yet — keep the area quiet rather than show an empty box.
   if (!status || status.status === null) return null;
