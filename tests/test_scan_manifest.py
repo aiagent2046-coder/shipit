@@ -23,7 +23,7 @@ def test_static_scan_records_input_and_skip_without_inventing_a_git_commit():
     assert m["runtime_verified"] is False
     assert m["model_calls"] == 0
     assert "no_providers_configured" in m["limitations"]
-    assert "local Python route comparison" in dict(coverage_rows(score, []))["Auth"]
+    assert "broader auth not checked" in dict(coverage_rows(score, []))["Auth"]
     assert dict(manifest_rows({}))["Scan record"] == "Not recorded for this older audit"
 
 

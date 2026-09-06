@@ -50,9 +50,9 @@ def coverage_rows(score: dict, findings: list[dict]) -> list[tuple[str, str]]:
             label = "Not surveyed — see findings" if count else "Not checked"
         else:
             label = "Partly checked"
-        if name == "Auth" and "auth_read_consistency" in (
+        if name == "Auth" and name in skipped and "auth_read_consistency" in (
                 score.get("scan_manifest", {}).get("static_checks", [])):
-            label = "Partly checked — local Python route comparison"
+            label = "Local Python route check ran — broader auth not checked"
         elsewhere = (score.get("reported_elsewhere") or {}).get(name)
         if elsewhere:
             label += " — findings reported under " + ", ".join(elsewhere)

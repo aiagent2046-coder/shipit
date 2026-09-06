@@ -47,8 +47,8 @@ export function coverageRows(score: Score, findings: Finding[]): [string, string
     const { source: count, examples } = findingCounts(findings.filter((f) => f.category === name));
     let label = !recorded ? "Coverage not recorded" : skipped.has(name)
       ? (count ? "Not surveyed — see findings" : "Not checked") : "Partly checked";
-    if (name === "Auth" && score.scan_manifest?.static_checks.includes("auth_read_consistency")) {
-      label = "Partly checked — local Python route comparison";
+    if (name === "Auth" && skipped.has(name) && score.scan_manifest?.static_checks.includes("auth_read_consistency")) {
+      label = "Local Python route check ran — broader auth not checked";
     }
     const elsewhere = score.reported_elsewhere?.[name];
     if (elsewhere?.length) label += ` — findings reported under ${elsewhere.join(", ")}`;
