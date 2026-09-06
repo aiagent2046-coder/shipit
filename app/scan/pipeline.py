@@ -110,7 +110,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # rows move; the mean is deliberately unchanged, because admitting such a
 # category to it RAISES a weak repository's total
 # (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
-AUDIT_ENGINE_VERSION = "2026-09-06-3"
+AUDIT_ENGINE_VERSION = "2026-09-06-4"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
@@ -403,6 +403,7 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
         try:
             llm_findings, stats = run_llm_scan(
                 io.BytesIO(data), llm_client, passes=llm_passes, stats=spend,
+                source_facts=static.get("source_facts"),
                 **({} if llm_rubrics is None else {"rubrics": llm_rubrics}))
         except LLMError as exc:
             # A provider failure mid-audit silently degrades the score to
@@ -502,7 +503,8 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # A run that lost a rubric to a provider failure reports
             # BASIS_PARTIAL instead of `depth`, which keeps it out of the
             # cache slot a full audit reads from -- see BASIS_PARTIAL.
-            "basis": ((BASIS_PARTIAL if llm_summary.get("failure") else depth)
+            "basis": ((BASIS_PARTIAL if any(llm_summary.get(k) for k in
+                                           ("failure", "cost_cap_exceeded", "input_truncated")) else depth)
                       if llm_ran else BASIS_STATIC_ONLY),
         },
         "findings": findings,

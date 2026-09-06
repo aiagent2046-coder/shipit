@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { AuditCoverage } from "./AuditCoverage";
-import { FindingsList } from "./FindingsList";
-import type { Finding, Score } from "@/lib/types";
+import { FindingsList, SeveritySummary } from "./FindingsList";
+import type { Finding, Score, ScanManifest } from "@/lib/types";
 
 afterEach(cleanup);
 
@@ -11,7 +11,52 @@ const finding: Finding = {
   severity: "critical", confidence: 1, source: "llm",
 };
 
+const manifest: ScanManifest = {
+  archive_sha256: "a".repeat(64), commit_sha: null, engine_version: "test", archive_files: 2,
+  static_checks: [], static_limits: {}, inventory: {}, model: null, model_calls: 0,
+  rubrics_completed: [], llm_candidate_files: 2, llm_submitted_files: 1, llm_files_not_submitted: 1,
+  limitations: [], runtime_verified: false,
+};
+
 describe("audit evidence", () => {
+  it.each([
+    ["billing", 0, "Model review unavailable", "billing or quota"],
+    ["provider", 2, "Model review incomplete", "request failed"],
+    ["cost_cap_exceeded", 1, "Model review incomplete", "spending limit"],
+    ["input_truncated", 1, "Model review incomplete", "truncated input"],
+  ] as const)("shows %s outside collapsed scan details", (reason, calls, title, detail) => {
+    render(<AuditCoverage score={{ total: 0, categories: {}, basis: calls ? "static+llm" : "static_only",
+      scan_manifest: { ...manifest, model_calls: calls, limitations: [reason] } }} findings={[]} />);
+    const notice = screen.getByRole("complementary", { name: "Model review status" });
+    expect(notice.textContent).toContain(title);
+    expect(notice.textContent).toContain(detail);
+    expect(notice.closest("details")).toBeNull();
+  });
+
+  it.each(["static+preview", "static+llm"] as const)("does not report a failure for successful %s", (basis) => {
+    render(<AuditCoverage score={{ total: 0, categories: {}, basis,
+      scan_manifest: { ...manifest, model_calls: 1 } }} findings={[]} />);
+    expect(screen.queryByRole("complementary", { name: "Model review status" })).toBeNull();
+    expect(screen.getByText(manifest.archive_sha256).getAttribute("translate")).toBe("no");
+  });
+
+  it("counts the paid report's 26 source observations separately from its 49 examples", () => {
+    const source = (["high", "medium", "low"] as const).flatMap((severity, i) =>
+      Array.from({ length: [4, 10, 12][i] }, () => ({ ...finding, severity, file: "app.py" })));
+    const examples = Array.from({ length: 49 }, () => ({ ...finding, file: "tests/a.py" }));
+    render(<SeveritySummary findings={[...source, ...examples]} />);
+    expect(screen.getByText("4 high")).toBeTruthy();
+    expect(screen.getByText("10 medium")).toBeTruthy();
+    expect(screen.getByText("12 low")).toBeTruthy();
+    expect(screen.queryByText(/critical/)).toBeNull();
+  });
+
+  it("does not turn a grouped row's highest severity into every member's severity", () => {
+    render(<SeveritySummary findings={[{ ...finding, severity: "high",
+      occurrence_titles: ["A", "B"], occurrence_severities: ["high", "medium"] }]} />);
+    expect(screen.getByText("1 high")).toBeTruthy();
+    expect(screen.getByText("1 medium")).toBeTruthy();
+  });
   it.each(["static_only", "static+preview", "static+llm", "static+partial", undefined] as const)(
     "does not publish readiness or confirmation for %s", (basis) => {
       const score: Score = { total: 4.9, categories: { Auth: 8.9 }, basis };

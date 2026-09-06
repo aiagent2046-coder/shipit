@@ -1,8 +1,11 @@
 """Scan passport records available facts and explicit gaps, including failures."""
 import hashlib
 
+import pytest
+
 from app.llm.client import LLMClient
 from app.report.evidence import coverage_rows, finding_counts, manifest_rows
+from app.report.evidence import model_status_notice, source_severity_counts
 from app.report.html import render_report
 from app.report.plain_language import plain_fields
 from app.scan.manifest import scan_manifest
@@ -70,3 +73,53 @@ def test_display_grouping_preserves_source_and_example_counts():
     grouped = group_for_display(findings)
     assert len(grouped) == 2
     assert finding_counts(grouped) == finding_counts(findings) == (2, 1)
+
+
+def test_mixed_severity_display_group_retains_the_original_source_summary():
+    from app.report.grouping import group_for_display
+    from app.scan.rls import RULE_ID
+    common = {"rule_id": RULE_ID, "category": "Security", "title": "RLS", "file": "schema.sql"}
+    findings = [{**common, "severity": "high"}, {**common, "severity": "medium"},
+                {**common, "severity": "critical", "file": "tests/schema.sql"}]
+    grouped = group_for_display(findings)
+    assert source_severity_counts(grouped) == source_severity_counts(findings) == {
+        "critical": 0, "high": 1, "medium": 1, "low": 0,
+    }
+
+
+@pytest.mark.parametrize("reason,calls,basis,title,detail", [
+    ("billing", 0, "static_only", "Model review unavailable", "billing or quota"),
+    ("provider", 2, "static+partial", "Model review incomplete", "request failed"),
+    ("cost_cap_exceeded", 1, "static+llm", "Model review incomplete", "spending limit"),
+    ("input_truncated", 1, "static+llm", "Model review incomplete", "truncated input"),
+    ("no_providers_configured", 0, "static_only", "Model review unavailable", "No model response"),
+])
+def test_limited_model_status_is_visible_before_findings(reason, calls, basis, title, detail):
+    score = {"basis": basis, "categories": {}, "scan_manifest": {"model_calls": calls, "limitations": [reason]}}
+    notice = model_status_notice(score)
+    assert notice[0] == title
+    assert detail in notice[1]
+    html = render_report({"score": score, "findings": []})
+    assert html.index('aria-label="Model review status"') < html.index("No issues found by the current checks")
+    assert detail in html
+
+
+def test_successful_preview_and_full_reviews_have_no_failure_notice():
+    for basis in ("static+preview", "static+llm"):
+        assert model_status_notice({"basis": basis, "scan_manifest": {"model_calls": 1, "limitations": []}}) is None
+    assert model_status_notice({}) is None
+    assert "details were not recorded" in model_status_notice({"basis": "static+partial"})[1]
+
+
+@pytest.mark.parametrize("flag", ["cost_cap_exceeded", "input_truncated"])
+def test_limited_model_review_cannot_be_cached_as_full(monkeypatch, flag):
+    from app.scan import pipeline
+    from app.scan.llm_scan import LLMScanStats
+
+    def limited(*args, **kwargs):
+        return [], LLMScanStats(calls=1, rubrics_ran=("auth",), **{flag: True})
+
+    monkeypatch.setattr(pipeline, "run_llm_scan", limited)
+    scan = run_scan(make_zip(AUTH_ZIP).getvalue(), FakeLLM(response="[]"))
+    assert scan["score"]["basis"] == "static+partial"
+    assert flag in scan["score"]["scan_manifest"]["limitations"]

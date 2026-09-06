@@ -27,6 +27,43 @@ def finding_counts(findings: list[dict]) -> tuple[int, int]:
     return source, examples
 
 
+def source_severity_counts(findings: list[dict]) -> dict[str, int]:
+    counts = dict.fromkeys(("critical", "high", "medium", "low"), 0)
+    for finding in findings:
+        if is_non_production(finding):
+            continue
+        for severity in finding.get("occurrence_severities") or [finding.get("severity")]:
+            if severity in counts:
+                counts[severity] += 1
+    return counts
+
+
+def model_status_notice(score: dict) -> tuple[str, str] | None:
+    """Describe recorded execution, never infer a payment tier or a project defect."""
+    manifest = score.get("scan_manifest") or {}
+    reasons = manifest.get("limitations", [])
+    limited = bool(reasons) or score.get("basis") == "static+partial"
+    if not limited and score.get("basis") != "static_only":
+        return None
+    responded = bool(manifest.get("model_calls", 0))
+    title = ("Model review incomplete" if responded or score.get("basis") == "static+partial"
+             else "Model review unavailable")
+    detail = ("Model responses are available, but review limits were recorded."
+              if responded else "No model response is recorded. Only static observations are available.")
+    if "billing" in reasons:
+        detail += " The model provider reported a billing or quota limit."
+    elif ("provider" in reasons or "provider_failure" in reasons
+          or any(r.startswith("rubric_failed:") for r in reasons)):
+        detail += " A model request failed."
+    if "cost_cap_exceeded" in reasons or "daily_spend_cap" in reasons:
+        detail += " A review spending limit was reached."
+    if "input_truncated" in reasons:
+        detail += " The provider reported truncated input."
+    if not manifest:
+        detail = "The review is recorded as limited. The reason and model execution details were not recorded."
+    return title, detail + " This is a limit of the audit, not evidence of a defect in your project."
+
+
 def evidence_label(finding: dict) -> str:
     source = finding.get("source")
     if source == "llm" or str(finding.get("rule_id", "")).startswith("llm-"):
@@ -87,6 +124,15 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
     rows.append(("Model limits / skip reasons", ", ".join(limitations) or "None recorded"))
     for check, status in manifest.get("static_limits", {}).items():
         rows.append((f"Static scope: {check}", str(status)))
+    facts = manifest.get("source_facts")
+    if isinstance(facts, dict):
+        rows.append(("Source fact scope", facts.get("scope", "Not recorded")))
+        rows.append(("Python files parsed for source facts", str(facts.get("parsed_files", 0))))
+        rows.append(("Source fact limits", ", ".join(facts.get("limitations", [])) or "None recorded"))
+        for i, fact in enumerate(facts.get("facts", []), 1):
+            rows.append((f"Source syntax fact {i}",
+                         f"{fact['file']}:{fact['line']} — {fact['scope']}: call {fact['call']}; "
+                         f"matching {fact['import_module']} import at line {fact['import_line']}"))
     for kind, paths in manifest.get("inventory", {}).items():
         shown = ", ".join(paths[:5])
         if len(paths) > 5:

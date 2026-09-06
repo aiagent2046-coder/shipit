@@ -1,4 +1,4 @@
-import type { Finding, Score } from "./types";
+import type { Finding, Score, Severity } from "./types";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -66,6 +66,40 @@ export function findingCounts(findings: Finding[]): { source: number; examples: 
   }, { source: 0, examples: 0 });
 }
 
+export function sourceSeverityCounts(findings: Finding[]): Record<Severity, number> {
+  const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const finding of findings) {
+    if (isNonProductionFinding(finding)) continue;
+    const severities = finding.occurrence_severities?.length
+      ? finding.occurrence_severities : [finding.severity];
+    for (const severity of severities) if (Object.hasOwn(counts, severity)) counts[severity] += 1;
+  }
+  return counts;
+}
+
+// Mirrors model_status_notice: reasons describe the audit service, not the project.
+export function modelStatusNotice(score: Score): [string, string] | null {
+  const manifest = score.scan_manifest;
+  const reasons = manifest?.limitations ?? [];
+  const limited = reasons.length > 0 || score.basis === "static+partial";
+  if (!limited && score.basis !== "static_only") return null;
+  const responded = (manifest?.model_calls ?? 0) > 0;
+  const title = responded || score.basis === "static+partial" ? "Model review incomplete" : "Model review unavailable";
+  let detail = responded
+    ? "Model responses are available, but review limits were recorded."
+    : "No model response is recorded. Only static observations are available.";
+  if (reasons.includes("billing")) detail += " The model provider reported a billing or quota limit.";
+  else if (reasons.includes("provider") || reasons.includes("provider_failure") || reasons.some((r) => r.startsWith("rubric_failed:"))) {
+    detail += " A model request failed.";
+  }
+  if (reasons.includes("cost_cap_exceeded") || reasons.includes("daily_spend_cap")) {
+    detail += " A review spending limit was reached.";
+  }
+  if (reasons.includes("input_truncated")) detail += " The provider reported truncated input.";
+  if (!manifest) detail = "The review is recorded as limited. The reason and model execution details were not recorded.";
+  return [title, detail + " This is a limit of the audit, not evidence of a defect in your project."];
+}
+
 export function manifestRows(score: Score): [string, string][] {
   const m = score.scan_manifest;
   if (!m) return [["Scan record", "Not recorded for this older audit"]];
@@ -84,6 +118,14 @@ export function manifestRows(score: Score): [string, string][] {
     ["Model limits / skip reasons", m.limitations.join(", ") || "None recorded"],
   ];
   for (const [check, status] of Object.entries(m.static_limits)) rows.push([`Static scope: ${check}`, status]);
+  const facts = m.source_facts;
+  if (facts) {
+    rows.push(["Source fact scope", facts.scope]);
+    rows.push(["Python files parsed for source facts", String(facts.parsed_files)]);
+    rows.push(["Source fact limits", facts.limitations.join(", ") || "None recorded"]);
+    facts.facts.forEach((fact, i) => rows.push([`Source syntax fact ${i + 1}`,
+      `${fact.file}:${fact.line} — ${fact.scope}: call ${fact.call}; matching ${fact.import_module} import at line ${fact.import_line}`]));
+  }
   for (const [kind, paths] of Object.entries(m.inventory)) {
     const shown = paths.slice(0, 5).join(", ") + (paths.length > 5 ? ` (+${paths.length - 5} more)` : "");
     rows.push([kind, `${paths.length} found` + (shown ? `: ${shown}` : "")]);

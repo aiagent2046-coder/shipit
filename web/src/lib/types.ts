@@ -38,6 +38,14 @@ export interface GateReason {
 }
 
 export interface ScanManifest {
+  source_facts?: {
+    scope: string;
+    parsed_files: number;
+    excluded_files: number;
+    limitations: string[];
+    facts: { kind: string; file: string; line: number; scope: string; call: string;
+      import_module: string; import_line: number }[];
+  } | null;
   archive_sha256: string;
   commit_sha: string | null;
   engine_version: string;
@@ -93,6 +101,7 @@ export interface Finding {
   occurrence_count?: number;
   occurrence_files?: string[];
   occurrence_titles?: string[];
+  occurrence_severities?: Severity[];
   rule_id: string;
   title: string;
   severity: Severity;

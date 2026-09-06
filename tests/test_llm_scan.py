@@ -17,7 +17,7 @@ import pytest
 
 from app.llm import client as client_mod
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan import llm_scan
+from app.scan import llm_scan, source_facts
 from app.scan import pipeline as pipeline_mod
 from app.scan.secrets import damp_for_non_production_path
 from app.scan.llm_scan import (
@@ -41,7 +41,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "a2a19d5d15e464a8"
+PROMPT_FINGERPRINT = "14c18ec89cb64e2a"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1077,6 +1077,9 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         # prompt's size; this decides which files survive when the prediction
         # was optimistic, so it removes characters the model would have seen.
         inspect.getsource(llm_scan.fit_to_window),
+        inspect.getsource(llm_scan.build_prompt),
+        # The deterministic helper index also changes what the model sees.
+        inspect.getsource(source_facts),
         inspect.getsource(llm_scan.request_limit_for),
         str(llm_scan._PROMPT_OVERHEAD),
         repr(sorted(client_mod.MODEL_INPUT_TOKENS.items())),

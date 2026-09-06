@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from html import escape
 
-from app.report.evidence import coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows
+from app.report.evidence import (
+    coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
+    model_status_notice, source_severity_counts,
+)
 from app.report.grouping import group_for_display
 from app.report.plain_language import plain_fields, tier
 
@@ -100,6 +103,12 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         for name, label in coverage_rows(score, raw_findings)
     )
     basis = str(score.get("basis") or "unknown")
+    notice = model_status_notice(score)
+    status_note = (
+        '<aside aria-label="Model review status" style="border:1px solid #d9a441;padding:16px;margin:16px 0">'
+        f'<strong>{escape(notice[0])}</strong><p>{escape(notice[1])}</p></aside>'
+        if notice else ""
+    )
     tier_note = (
         '<section><p class="secnote">No readiness score out of 10. '
         'Severity describes the claimed consequence, not how well it is '
@@ -134,7 +143,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         )
 
     record = "".join(
-        f"<dt>{escape(label)}</dt><dd>{escape(value)}</dd>"
+        f'<dt>{escape(label)}</dt><dd translate="no">{escape(value)}</dd>'
         for label, value in manifest_rows(score)
     )
     body += (
@@ -153,15 +162,11 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         'isolated test environment before applying a suggested fix.</p></section>'
     )
 
-    counts = {}
-    for f in raw_findings:
-        if is_non_production(f):
-            continue
-        counts[f.get("severity")] = counts.get(f.get("severity"), 0) + 1
+    counts = source_severity_counts(raw_findings)
     summary = " · ".join(
         f"{counts[s]} {s}" for s in ("critical", "high", "medium", "low")
-        if s in counts
-    ) or "No findings from the checks that ran"
+        if counts[s]
+    ) or "No source observations recorded"
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -210,6 +215,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
   </div>
 </header>
 {tier_note}
+{status_note}
 <section>{cats}</section>
 {body}
 {coverage_note}

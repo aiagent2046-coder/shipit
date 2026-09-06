@@ -58,3 +58,40 @@ produce findings. Fixture credentials also remain visible.
 The next stage is independent, isolated verification of payment replay,
 concurrent delivery, crash recovery and user isolation using synthetic data.
 Those capabilities are not part of this change.
+
+## Execution limits and source facts (engine 2026-09-06-4)
+
+The headline severity summary counts source observations, excluding the
+separately listed tests and examples. Display-only RLS groups carry each
+member's original severity, so grouping cannot change the totals.
+
+Both the web page and HTML export show a notice above the findings when model
+review was unavailable or limited. Provider billing failures describe the
+audit service, not a defect in the submitted project. Missing historical
+execution records remain unknown. Cost-cap and input-truncation results use
+`static+partial`, keeping them out of the full-audit cache slot.
+
+`scan_manifest.source_facts` is a first, deliberately narrow fact index. It
+records Python AST calls whose spelling matches a module-level import of
+`hmac.compare_digest` or `secrets.compare_digest`, with import/call locations
+and lexical scope. It does not resolve shadowing or imports at runtime, prove
+which branch executes, or validate the operands. It never imports or executes
+uploaded code, extracts it to disk, or makes a network request. Source string
+literals are not included in the index. Tests/vendor files are excluded.
+
+Collection is capped at 500 attempted files, 512 KB per file, 8 MB total and
+64 facts; parse failures and exhausted limits are recorded. Free and paid
+audits use the same collector. A bounded index is supplied to existing model
+requests (at most 16,000 characters and one fifth of the request budget), so
+helpers outside the selected source excerpts can be located. This adds no
+model calls, but is not a claim that token costs have decreased. The index
+itself may be shortened for the prompt; file submission counts still describe
+source excerpts, not index entries. Missing facts never establish absence of
+protection, and facts do not automatically suppress or confirm findings.
+
+The September 6 regression cases exercise Drydock's own comparison-helper
+location, React state across URL changes, the quoted 990.00/990.07 price
+examples and the quoted dot-segment ZIP path, using synthetic inputs. These
+tests are not general-purpose verifiers for arbitrary customer applications.
+Giving the model only findings and evidence for final interpretation remains
+a later architectural step; it still reviews selected source excerpts today.

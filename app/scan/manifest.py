@@ -39,6 +39,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object, failure_k
         "inventory": inventory,
         "static_checks": static.get("checks_run", []),
         "static_limits": static.get("coverage", {}),
+        "source_facts": static.get("source_facts"),
         "model": stats.get("model"),
         "model_calls": stats.get("calls", 0),
         "rubrics_completed": list(stats.get("rubrics_ran", ())),

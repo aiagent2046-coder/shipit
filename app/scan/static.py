@@ -13,6 +13,7 @@ from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
+from app.scan.source_facts import collect_source_facts
 
 
 def run_static_scan(fileobj: BinaryIO) -> dict:
@@ -97,7 +98,10 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             line=b.line, explanation=b.explanation, fix_hint=b.fix_hint,
         ))
 
+    fileobj.seek(0)
+    source_facts = collect_source_facts(fileobj)
     return {
+        "source_facts": source_facts,
         # llm_ran=False, not the default: no LLM stage runs inside this
         # function, so Auth and Money & Data sit at 10.0 for want of a
         # producer. Taking the default let those two vote on this mean --
