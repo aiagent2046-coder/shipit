@@ -41,7 +41,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "14c18ec89cb64e2a"
+PROMPT_FINGERPRINT = "b5e5a93d34f718eb"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -860,23 +860,12 @@ def test_fixtures_alone_no_longer_zero_the_security_score():
 # ground-truth bugs, and two things it got wrong are pinned below so a later
 # prompt edit cannot quietly undo them.
 
-def test_the_money_rubric_calls_a_missing_idempotency_guard_critical():
-    """It rated it `high`, and the score said the repo was fine.
-
-    vercel/nextjs-subscription-payments has a webhook that re-provisions a
-    subscription on Stripe's own retry. The rubric found it -- correctly, with
-    the mechanism -- and graded it high, which put Money & Data at 7.1: one
-    tenth above the gate. A repository that double-charges on a routine
-    provider retry presented a passing headline.
-
-    The provider's retry is not a risk, it is a scheduled event, so the
-    duplicate is certain rather than possible. That is what critical means
-    here, and saying so in the prompt is what moves the verdict.
-    """
+def test_the_money_rubric_requires_recovery_context_before_alleging_loss():
+    """A missing local guard alone is not proof of a duplicate grant."""
     instructions = RUBRICS["money"]["instructions"]
-
-    assert "idempotency guard is CRITICAL" in instructions
-    assert "not high" in instructions
+    assert "inspect idempotency guards" in instructions
+    assert "inspect write order and recovery" in instructions
+    assert "idempotency guard is CRITICAL" not in instructions
 
 
 def test_the_money_rubric_excludes_costs_that_land_in_the_browser():
@@ -901,23 +890,13 @@ def test_the_money_rubric_still_refuses_attacker_findings():
     assert "Do NOT report attacker-driven vulnerabilities" in instructions
 
 
-def test_the_money_rubric_grades_low_by_size_not_by_how_long_it_takes():
-    """The first wording cost a real finding its severity.
-
-    "Reserve low for something that costs the owner real money only after a
-    year of growth" reads as "anything that accrues over a year is low" --
-    and the model applied it exactly: blitz-blueprint's match_events, an
-    append-only table taking every shot and kill in every match, fell from
-    high to low. It gathers millions of rows a MONTH; the bill is real, it
-    just arrives gradually.
-
-    Low is for a cost that stays small even after that year, not for one
-    that merely takes a year to add up.
-    """
+def test_the_money_rubric_does_not_invent_volume_or_money_loss_from_patterns():
+    """The paid report inferred hosting costs and refused payments without inputs."""
     instructions = RUBRICS["money"]["instructions"]
-
-    assert "stays SMALL even after a year" in instructions
-    assert "not when it merely takes a year to add up" in instructions
+    assert "Do not invent production volume" in instructions
+    assert "give an input that yields the wrong result" in instructions
+    assert "evidence establishes harmful volume or query cost" in instructions
+    assert "do not invent a minimum budget" in instructions
 
 
 # --- clipping long model output ---

@@ -1,6 +1,6 @@
 import type { Finding, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
-import { evidenceLabel, isNonProductionFinding, sourceSeverityCounts } from "@/lib/evidence";
+import { claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -55,6 +55,12 @@ function FindingCard({ finding }: { finding: Finding }) {
     ? `${finding.file}${finding.line ? `:${finding.line}` : ""}`
     : "";
   const tech = [finding.title, loc, finding.masked].filter(Boolean).join(" · ");
+  const model = finding.source === "llm" || finding.rule_id?.startsWith("llm-");
+  const evidence = <dl className="my-3 space-y-2 whitespace-pre-line text-sm">
+    {claimEvidenceRows(finding).map(([label, value]) => (
+      <div key={label}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
+    ))}
+  </dl>;
   return (
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
@@ -62,11 +68,15 @@ function FindingCard({ finding }: { finding: Finding }) {
         <SeverityBadge severity={finding.severity} />
       </div>
       <p className="mb-2 text-sm text-muted">{evidenceLabel(finding)}</p>
-      {risk && <p className="mb-2 text-sm text-muted">{risk}</p>}
+      {risk && <p className="mb-2 text-sm text-muted">
+        {model && <strong>Possible consequence — unverified: </strong>}{risk}
+      </p>}
+      {model ? evidence : <details className="my-3 text-sm"><summary>Evidence and conditions</summary>{evidence}</details>}
       {fix && (
         <p className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-accent">
           <span>
             <span aria-hidden="true">→ </span>
+            {model && <strong>Suggested verification / fix: </strong>}
             {fix}
           </span>
           {ENTERPRISE_FIX_RULES.has(finding.rule_id) && <EnterpriseBadge />}

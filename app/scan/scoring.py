@@ -174,6 +174,7 @@ class ScoredFinding:
     source: str = "unknown"
     verification_status: str = "unverified"
     verification_method: str = "not_run"
+    claim_evidence: dict | None = None
 
 
 def _score(findings: list[ScoredFinding]) -> float:

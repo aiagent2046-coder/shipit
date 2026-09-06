@@ -19,6 +19,7 @@ from typing import BinaryIO
 
 from app.llm import pricing
 from app.llm.client import LLMClient, LLMError
+from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
@@ -320,9 +321,9 @@ RUBRICS: dict[str, dict] = {
         ),
         "instructions": (
             "Review for ways this app loses its owner money, loses user data, "
-            "or runs up a bill -- WITHOUT an attacker. Assume every user "
-            "behaves normally and the code still runs in production for a "
-            "year. Report only concrete issues you can point at a line for.\n"
+            "or runs up a bill -- WITHOUT an attacker. Review normal usage, "
+            "retries and failures. Do not invent production volume, prices, "
+            "deployment settings or a year of growth.\n"
             "\n"
             "Money taken or lost wrongly: a price, amount or currency read "
             "from the client request instead of looked up on the server; a "
@@ -332,14 +333,16 @@ RUBRICS: dict[str, dict] = {
             "that grants the item without deducting the price; a refund, "
             "discount or credit computed client-side; a balance updated by "
             "read-modify-write from client state, so concurrent grants "
-            "overwrite each other; money held in a float instead of a decimal "
-            "or integer minor units; a paid feature gated only in the UI.\n"
+            "overwrite each other; a paid feature gated only in the UI. "
+            "For money held in a float, trace the actual formatting and comparison "
+            "and give an input that yields the wrong result. A float alone does "
+            "not demonstrate a lost or refused payment.\n"
             "\n"
-            "Data lost for good: destructive SQL in a migration (DROP TABLE, "
+            "Potential data-integrity issues: destructive SQL in a migration (DROP TABLE, "
             "TRUNCATE, DELETE or UPDATE with no WHERE) with nothing guarding "
             "it; ON DELETE CASCADE reaching user-created content or content "
             "other users depend on; a multi-step write with no transaction, "
-            "so a mid-way failure leaves half-written state; a delete path "
+            "where a mid-way failure can leave half-written state; a delete path "
             "with no soft delete, no backup and no confirmation.\n"
             "\n"
             "A bill nobody expects: a paid API, LLM or third-party call "
@@ -351,17 +354,15 @@ RUBRICS: dict[str, dict] = {
             "logic with no maximum attempts or backoff; an LLM call with no "
             "token ceiling.\n"
             "\n"
-            "Severity, for the cases that are not judgement calls. A payment "
-            "or webhook handler with no idempotency guard is CRITICAL, not "
-            "high: the provider's own retry is routine, so the duplicate "
-            "charge or duplicate grant is not a risk but a scheduled event. "
-            "So is a purchase that grants before it deducts, and a "
-            "destructive migration with nothing guarding it. Use low only "
-            "when the cost stays SMALL even after a year of growth -- not "
-            "when it merely takes a year to add up. A table gathering "
-            "millions of rows a month is a bill the owner will actually "
-            "receive, so judge it by the size it reaches, not by how long it "
-            "takes to get there.\n"
+            "Severity describes potential impact under stated conditions. "
+            "Before alleging a duplicate grant, inspect idempotency guards, "
+            "unique constraints and retry behaviour. Before alleging permanent "
+            "loss from a multi-step write, inspect write order and recovery. "
+            "An append-only table without retention is a maintenance observation "
+            "unless evidence establishes harmful volume or query cost. "
+            "A configurable spending cap is a control, not itself a defect; "
+            "do not invent a minimum budget or infer current settings from "
+            "historical comments.\n"
             "\n"
             "Point at the line that PROVES the claim, not the line where you "
             "assume the problem is. If the code that would settle the "
@@ -634,6 +635,8 @@ SYSTEM_PROMPT = (
     "\"evidence\": str (verbatim substring of ONE line inside the range, "
     "max 120 chars), \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\", "
     "\"confidence\": float 0..1, \"title\": str, \"explanation\": str, "
+    "\"observation\": str (your reading of the cited code, without claiming harm), "
+    "\"required_conditions\": array of strings (conditions needed for the claimed harm), "
     "\"fix_hint\": str, \"category\": one of "
     + "|".join(f"\"{c}\"" for c in RUBRIC_CATEGORIES)
     + "}. Set \"category\" from what the FINDING IS, not from the review you "
@@ -642,11 +645,17 @@ SYSTEM_PROMPT = (
     "are \"Security\" even when you find "
     "them while reviewing authentication. Use \"Auth\" only for who may sign "
     "in and who may reach whose data. Write \"explanation\" for a "
-    "non-technical founder: "
-    "no jargon, one or two sentences, and a CONCRETE harm scenario -- what "
-    "a malicious visitor could actually do (e.g. 'anyone who finds this "
-    "link can unsubscribe other people\'s accounts'). Write \"fix_hint\" "
-    "as a plain action, not a term of art. Report at most 20 findings. If the SAME issue "
+    "non-technical founder: a conditional potential consequence, separate from "
+    "the observation. State what has not been checked; do not claim a breach, "
+    "lost payment or live configuration from a pattern match. Required conditions "
+    "are hypotheses, not verified facts. A matching quote does not verify your "
+    "interpretation. Use a neutral title that does not assert unproven harm. "
+    "A public API URL or NEXT_PUBLIC_ prefix alone is not a secret leak. "
+    "For access control, distinguish intended operator privileges from user "
+    "ownership; show how an unauthorized caller could cross that boundary. "
+    "Write \"fix_hint\" as a verification step followed by a conditional fix. "
+    "Never recommend weakening a guard or removing a public setting solely "
+    "because it is visible. Report at most 20 findings. If the SAME issue "
     "pattern occurs in multiple files (e.g. the same kind of hardcoded "
     "secret in several migration files), report it ONCE using the most "
     "representative instance as file/line/evidence (representative = the "
@@ -1127,22 +1136,6 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
         return False
     if f["severity"] not in _SEVERITIES:
         return False
-    try:
-        text = files.get(f["file"])
-    except TypeError:
-        # f["file"] came back as a list/dict instead of a string -- unhashable,
-        # so dict.get() itself raises. Same "the model's JSON can be anything"
-        # trust boundary as the line_start/line_end conversion below.
-        return False
-    if text is None:
-        return False
-    lines = text.splitlines()
-    try:
-        start, end = int(f["line_start"]), int(f["line_end"])
-    except (TypeError, ValueError):
-        return False
-    if not (1 <= start <= end <= len(lines)):
-        return False
     # confidence is only *used* downstream (float(f["confidence"]) in
     # run_llm_scan), but it must be validated here: this is the one gate a
     # finding passes through before that conversion runs unguarded. A model
@@ -1153,12 +1146,7 @@ def verify_finding(f: dict, files: dict[str, str]) -> bool:
         float(f["confidence"])
     except (TypeError, ValueError):
         return False
-    evidence = str(f["evidence"]).strip()
-    if len(evidence) < 4:
-        return False
-    lo, hi = max(0, start - 3), min(len(lines), end + 2)
-    window = "\n".join(lines[lo:hi])
-    return evidence in window
+    return quote_match_window(f, files) is not None
 
 
 # A finding that says, in its own words, that there is nothing to fix.
@@ -1412,6 +1400,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   origin_category=origin,
                   source="llm",
                   verification_method="model_review",
+                  claim_evidence=model_claim_evidence(f, files_by_name),
               ))
           # After the findings are in, not before the call: a rubric counts as
           # examined once its answer has been read, so a category is never

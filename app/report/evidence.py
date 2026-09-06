@@ -75,6 +75,28 @@ def evidence_label(finding: dict) -> str:
     return "Legacy finding — verification not recorded"
 
 
+def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
+    """A recorded source check is separate from the model's reading of it."""
+    record = finding.get("claim_evidence")
+    record = record if isinstance(record, dict) and record.get("version") == 1 else {}
+    check = record.get("source_check") or {}
+    if check.get("kind") == "quote_match":
+        checked = (f"Quoted text matched in source lines {check['line_start']}–{check['line_end']}. "
+                   "This does not verify the interpretation.")
+    elif check.get("kind") == "static_rule":
+        checked = "A static rule emitted this observation. Its consequence was not tested."
+    else:
+        checked = "Not recorded for this finding; do not assume the cited code was verified."
+    rows = [("Source check", checked)]
+    if record.get("observation"):
+        rows.append(("Model interpretation — unverified", record["observation"]))
+    conditions = record.get("required_conditions")
+    rows.append(("Required conditions — not checked", "\n".join(conditions) if conditions else
+                 "Not recorded; do not assume the conditions for harm are satisfied."))
+    rows.append(("Consequence check", "No independent verification recorded."))
+    return rows
+
+
 def coverage_rows(score: dict, findings: list[dict]) -> list[tuple[str, str]]:
     basis = score.get("basis")
     recorded = "unexamined" in score or basis in ("static_only", "static+preview")
