@@ -96,6 +96,7 @@ def _one_row(members: list[dict]) -> dict:
     # sentence the detector wrote, so nothing has to parse one back out — and
     # a parser here would be a second copy of the one in the Fix Pack.
     rep["occurrence_titles"] = titles
+    rep["occurrence_severities"] = [str(f.get("severity", "low")) for f in members]
 
     base = str(rep.get("title", ""))
     rep["title"] = f"{base} — and {len(members) - 1} more like it"

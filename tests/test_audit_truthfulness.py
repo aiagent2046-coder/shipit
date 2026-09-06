@@ -70,6 +70,21 @@ def test_static_matches_are_retained_with_provenance_including_test_secrets():
         assert f["verification_method"] == "source_pattern"
 
 
-def test_reported_money_examples_do_not_reproduce_the_claim():
+def test_reported_money_examples_do_not_reproduce_the_claim(monkeypatch):
+    from app.billing.bank_transfer import _price_from_env
+
     for amount in ("990.00", "990.07"):
-        assert f"{float(amount):.2f}" == amount
+        monkeypatch.setenv("TEST_AUDIT_PRICE", amount)
+        assert _price_from_env("TEST_AUDIT_PRICE", "1.00") == amount
+
+
+def test_reported_dot_segment_zip_path_does_not_escape_extraction(tmp_path):
+    from app.fixpack.semantic_check import _extract_repo_relative
+
+    dest = tmp_path / "extracted"
+    dest.mkdir()
+    data = make_zip({"repo/safe.txt": b"synthetic", "repo/foo/./../../outside.txt": b"synthetic"})
+    _extract_repo_relative(data.getvalue(), str(dest))
+    assert (dest / "safe.txt").read_bytes() == b"synthetic"
+    assert not (tmp_path / "outside.txt").exists()
+    assert sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*")) == ["safe.txt"]

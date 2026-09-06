@@ -1,6 +1,6 @@
 import type { Finding, Severity } from "@/lib/types";
-import { SEVERITY_META, sortFindings, severityCounts } from "@/lib/format";
-import { evidenceLabel, isNonProductionFinding } from "@/lib/evidence";
+import { SEVERITY_META, sortFindings } from "@/lib/format";
+import { evidenceLabel, isNonProductionFinding, sourceSeverityCounts } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -29,11 +29,11 @@ function EnterpriseBadge() {
 }
 
 export function SeveritySummary({ findings }: { findings: Finding[] }) {
-  const counts = severityCounts(findings);
+  const counts = sourceSeverityCounts(findings);
   const order: Severity[] = ["critical", "high", "medium", "low"];
   const present = order.filter((s) => counts[s] > 0);
   if (present.length === 0) {
-    return <span className="text-sm text-accent">No issues found</span>;
+    return <span className="text-sm text-muted">No source observations recorded</span>;
   }
   return (
     <div className="flex flex-wrap gap-2">

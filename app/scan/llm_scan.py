@@ -22,6 +22,7 @@ from app.llm.client import LLMClient, LLMError
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
+from app.scan.source_facts import facts_prompt
 
 # Per-file cap in the prompt, ~5% of MAX_TOTAL_CHARS: no single file may take
 # more than about a nineteenth of a rubric's budget.
@@ -1015,7 +1016,7 @@ def select_files(files: list[tuple[str, str]], rubric: str,
     return selected
 
 
-def build_prompt(selected: list[tuple[str, str]], rubric: str) -> str:
+def build_prompt(selected: list[tuple[str, str]], rubric: str, source_context: str = "") -> str:
     tree = "\n".join(n for n, _ in selected)
     parts = [
         f"Rubric: {RUBRICS[rubric]['instructions']}",
@@ -1026,11 +1027,11 @@ def build_prompt(selected: list[tuple[str, str]], rubric: str) -> str:
             f"{i}\t{line}" for i, line in enumerate(t.splitlines(), start=1)
         )
         parts.append(f'<file path="{n}">\n{numbered}\n</file>')
-    return "\n\n".join(parts)
+    return "\n\n".join(parts) + (source_context if selected else "")
 
 
 def fit_to_window(selected: list[tuple[str, str]], rubric: str,
-                  limit: int) -> tuple[list[tuple[str, str]], str]:
+                  limit: int, source_context: str = "") -> tuple[list[tuple[str, str]], str]:
     """Trim `selected` until the built prompt fits `limit` characters.
 
     The last line of defence, and the only one that is a bound. content_budget
@@ -1051,7 +1052,7 @@ def fit_to_window(selected: list[tuple[str, str]], rubric: str,
     exact string this measured -- rebuilding it would be a second chance to
     disagree.
     """
-    prompt = build_prompt(selected, rubric)
+    prompt = build_prompt(selected, rubric, source_context)
     while selected and len(prompt) > limit:
         # Proportional first, then one at a time. Dropping singly from a
         # 300-file selection rebuilds a megabyte three hundred times; jumping
@@ -1060,7 +1061,7 @@ def fit_to_window(selected: list[tuple[str, str]], rubric: str,
         over = 1 - limit / len(prompt)
         drop = max(1, int(len(selected) * over * 0.75))
         selected = selected[:-drop]
-        prompt = build_prompt(selected, rubric)
+        prompt = build_prompt(selected, rubric, source_context)
     return selected, prompt
 
 
@@ -1221,6 +1222,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                  rubrics: tuple[str, ...] = ALL_RUBRICS,
                  passes: int = 1,
                  stats: LLMScanStats | None = None,
+                 source_facts: dict | None = None,
                  ) -> tuple[list[ScoredFinding], LLMScanStats]:
     """`passes` > 1 = union-of-N mode: repeat every rubric prompt N
     times and merge findings via the same (file, line) dedup. Measured
@@ -1295,8 +1297,10 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
           usage = None
           for _shrink in range(_MAX_SHRINKS + 1):
               stats.prompts += 1
+              source_context = facts_prompt(
+                  source_facts, min(16_000, max(0, (request_limit - len(SYSTEM_PROMPT)) // 5)))
               selected, prompt = fit_to_window(
-                  selected, rubric, request_limit - len(SYSTEM_PROMPT))
+                  selected, rubric, request_limit - len(SYSTEM_PROMPT), source_context)
               sent = len(SYSTEM_PROMPT) + len(prompt)
               try:
                   stats.submitted_files = tuple(sorted(set(stats.submitted_files) | {n for n, _ in selected}))
