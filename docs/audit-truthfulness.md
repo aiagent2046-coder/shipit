@@ -69,7 +69,9 @@ Both the web page and HTML export show a notice above the findings when model
 review was unavailable or limited. Provider billing failures describe the
 audit service, not a defect in the submitted project. Missing historical
 execution records remain unknown. Cost-cap and input-truncation results use
-`static+partial`, keeping them out of the full-audit cache slot.
+`static+partial`, keeping them out of the full-audit cache slot. The truncation
+flag is a token-accounting heuristic, so the notice describes possible
+truncation, not an independently confirmed provider action.
 
 `scan_manifest.source_facts` is a first, deliberately narrow fact index. It
 records Python AST calls whose spelling matches a module-level import of

@@ -23,7 +23,7 @@ describe("audit evidence", () => {
     ["billing", 0, "Model review unavailable", "billing or quota"],
     ["provider", 2, "Model review incomplete", "request failed"],
     ["cost_cap_exceeded", 1, "Model review incomplete", "spending limit"],
-    ["input_truncated", 1, "Model review incomplete", "truncated input"],
+    ["input_truncated", 1, "Model review may be incomplete", "possible input truncation"],
   ] as const)("shows %s outside collapsed scan details", (reason, calls, title, detail) => {
     render(<AuditCoverage score={{ total: 0, categories: {}, basis: calls ? "static+llm" : "static_only",
       scan_manifest: { ...manifest, model_calls: calls, limitations: [reason] } }} findings={[]} />);

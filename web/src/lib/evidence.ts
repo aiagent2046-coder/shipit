@@ -84,7 +84,8 @@ export function modelStatusNotice(score: Score): [string, string] | null {
   const limited = reasons.length > 0 || score.basis === "static+partial";
   if (!limited && score.basis !== "static_only") return null;
   const responded = (manifest?.model_calls ?? 0) > 0;
-  const title = responded || score.basis === "static+partial" ? "Model review incomplete" : "Model review unavailable";
+  let title = responded || score.basis === "static+partial" ? "Model review incomplete" : "Model review unavailable";
+  if (responded && reasons.length === 1 && reasons[0] === "input_truncated") title = "Model review may be incomplete";
   let detail = responded
     ? "Model responses are available, but review limits were recorded."
     : "No model response is recorded. Only static observations are available.";
@@ -95,7 +96,9 @@ export function modelStatusNotice(score: Score): [string, string] | null {
   if (reasons.includes("cost_cap_exceeded") || reasons.includes("daily_spend_cap")) {
     detail += " A review spending limit was reached.";
   }
-  if (reasons.includes("input_truncated")) detail += " The provider reported truncated input.";
+  if (reasons.includes("input_truncated")) {
+    detail += " Token accounting suggests possible input truncation; this is not independently verified.";
+  }
   if (!manifest) detail = "The review is recorded as limited. The reason and model execution details were not recorded.";
   return [title, detail + " This is a limit of the audit, not evidence of a defect in your project."];
 }

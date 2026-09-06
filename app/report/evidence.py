@@ -48,6 +48,8 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
     responded = bool(manifest.get("model_calls", 0))
     title = ("Model review incomplete" if responded or score.get("basis") == "static+partial"
              else "Model review unavailable")
+    if responded and reasons == ["input_truncated"]:
+        title = "Model review may be incomplete"
     detail = ("Model responses are available, but review limits were recorded."
               if responded else "No model response is recorded. Only static observations are available.")
     if "billing" in reasons:
@@ -58,7 +60,7 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
     if "cost_cap_exceeded" in reasons or "daily_spend_cap" in reasons:
         detail += " A review spending limit was reached."
     if "input_truncated" in reasons:
-        detail += " The provider reported truncated input."
+        detail += " Token accounting suggests possible input truncation; this is not independently verified."
     if not manifest:
         detail = "The review is recorded as limited. The reason and model execution details were not recorded."
     return title, detail + " This is a limit of the audit, not evidence of a defect in your project."

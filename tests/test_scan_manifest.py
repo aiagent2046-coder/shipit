@@ -91,7 +91,7 @@ def test_mixed_severity_display_group_retains_the_original_source_summary():
     ("billing", 0, "static_only", "Model review unavailable", "billing or quota"),
     ("provider", 2, "static+partial", "Model review incomplete", "request failed"),
     ("cost_cap_exceeded", 1, "static+llm", "Model review incomplete", "spending limit"),
-    ("input_truncated", 1, "static+llm", "Model review incomplete", "truncated input"),
+    ("input_truncated", 1, "static+llm", "Model review may be incomplete", "possible input truncation"),
     ("no_providers_configured", 0, "static_only", "Model review unavailable", "No model response"),
 ])
 def test_limited_model_status_is_visible_before_findings(reason, calls, basis, title, detail):
