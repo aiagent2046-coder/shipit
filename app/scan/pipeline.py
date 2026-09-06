@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 # against compute_scores still passing.
 _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
                   "category", "file", "line", "masked", "explanation",
-                  "fix_hint", "context", "origin_category")
+                  "fix_hint", "context", "origin_category", "source",
+                  "verification_status", "verification_method")
 
 
 # Bump when any part of the audit engine changes in a way that should
@@ -108,7 +109,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # rows move; the mean is deliberately unchanged, because admitting such a
 # category to it RAISES a weak repository's total
 # (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
-AUDIT_ENGINE_VERSION = "2026-09-04-4"
+AUDIT_ENGINE_VERSION = "2026-09-06-1"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

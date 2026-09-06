@@ -59,7 +59,7 @@ const FREE_OMITS = [
 // rather than folded into FIXPACK_INCLUDES: those items are all things the diff
 // does, this one is a separate deliverable that arrives as a link.
 const FIXPACK_REVIEW = [
-  "A readiness score out of 10",
+  "Findings with source references and verification limits",
   "Authentication and access rules reviewed",
   "Injection risk in your queries reviewed",
 ];

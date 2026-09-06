@@ -169,6 +169,11 @@ class ScoredFinding:
     # "the auth rubric found two holes and filed them under Security", and the
     # second one must never print as a clean bar. See compute_scores.
     origin_category: str | None = None
+    # Set by the producer, never by model output. A match or model review
+    # alone is not independent confirmation of the claimed consequence.
+    source: str = "unknown"
+    verification_status: str = "unverified"
+    verification_method: str = "not_run"
 
 
 def _score(findings: list[ScoredFinding]) -> float:
@@ -571,6 +576,7 @@ def compute_scores(findings: list[ScoredFinding],
     unexamined_with_findings = [c for c in unexamined
                                 if any(f.category == c for f in findings)]
     return {"total": total, "categories": by_cat, "gated_by": reasons,
+            "readiness_score_validated": False,
             "unexamined": unexamined,
             "unexamined_with_findings": unexamined_with_findings,
             "reported_elsewhere": reported_elsewhere}

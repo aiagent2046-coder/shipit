@@ -15,10 +15,10 @@ reason they are kept apart rather than merged into one set of names:
                    the table. It does not prove the table is there. A call left
                    behind after the table was dropped looks exactly the same.
 
-  generated types  `supabase gen types typescript` writes its file FROM THE
-                   LIVE PROJECT, so a name in it is evidence the table EXISTED
-                   IN THE DATABASE at generation time -- the only thing
-                   readable from a repository that outruns the migrations.
+  generated types  A type-shaped declaration names an expected table. This
+                   matcher cannot establish which project generated it, or
+                   whether it was generated at all. Copied, handwritten and
+                   stale declarations have the same shape.
 
 Anything built on top must keep them apart in what it tells a customer, since
 one supports a claim about their database and the other does not.
@@ -36,7 +36,7 @@ import zipfile
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
-from app.scan.secrets import _iter_text_files
+from app.scan.secrets import _iter_text_files, is_non_production_path
 
 # `.from('table')` / `.from("table")`, the one call every supabase-js read goes
 # through. Deliberately narrow: `.from(` with a variable inside is not a name
@@ -57,8 +57,11 @@ _FROM_CALL = re.compile(
 # where its origin is still known beats validating it deep in a request builder.
 _TABLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$", re.IGNORECASE)
 
+# `.from(...)` is not valid Python syntax (`from` is a keyword). Matches
+# inside Python files are quoted examples, including this scanner's own
+# docstrings, not calls. Python client's `.table(...)` needs its own parser.
 _SOURCE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte",
-                ".py", ".dart", ".kt", ".swift")
+                ".dart", ".kt", ".swift")
 
 # Every table entry in a generated types file is an identifier whose object
 # opens with `Row:`. Matched on that shape rather than on the file's name,
@@ -108,7 +111,8 @@ def read_named_tables(fileobj: BinaryIO) -> NamedTables:
     found = NamedTables()
     with zipfile.ZipFile(fileobj) as zf:
         for name, text in _iter_text_files(zf):
-            if not name.lower().endswith(_SOURCE_EXTS):
+            if (not name.lower().endswith(_SOURCE_EXTS)
+                    or is_non_production_path(name)):
                 continue
             for match in _FROM_CALL.finditer(text):
                 found.from_code.add(match.group(1).lower())

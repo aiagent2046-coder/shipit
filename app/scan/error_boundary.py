@@ -91,6 +91,7 @@ from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding, archive_root
+from app.scan.secrets import is_non_production_path
 
 # Matched on PATH SEGMENTS, never as substrings. `"build/" in name` also
 # excludes `src/rebuild/`, which is ordinary source, and excluding it silently
@@ -336,6 +337,8 @@ def _workspace_packages(zf: zipfile.ZipFile, files: list[str],
     out: list[tuple[str, dict]] = []
     for name in sorted(files):
         if not name.endswith("/package.json") or name.count("/") > 3:
+            continue
+        if is_non_production_path(name):
             continue
         if any(p in _SKIP_DIRS for p in name.split("/")[:-1]):
             continue
