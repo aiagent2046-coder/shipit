@@ -91,6 +91,7 @@ from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding, archive_root
+from app.scan.secrets import is_non_production_path
 
 # Matched on PATH SEGMENTS, never as substrings. `"build/" in name` also
 # excludes `src/rebuild/`, which is ordinary source, and excluding it silently
@@ -99,8 +100,24 @@ from app.scan.checks import CheckFinding, archive_root
 _SKIP_DIRS = frozenset((
     "node_modules", ".git", "dist", ".next", "build", "out",
     "venv", ".venv", "coverage", "storybook-static", "__pycache__",
+    # A boundary declared in a test or a story does not stand between a
+    # visitor and a blank page. MEASURED 2026-09-04: khuepm/GeniusQA's desktop
+    # package was silenced by
+    # `packages/desktop/src/__tests__/utils/TestErrorBoundary.tsx` -- a fixture
+    # built to be rendered BY a test, holding the app's only boundary token.
+    "__tests__", "__mocks__", ".storybook", "cypress", "e2e",
 ))
 _SOURCE_SUFFIXES = (".tsx", ".jsx", ".ts", ".js", ".mjs", ".cjs")
+
+# THE DIRECTION OF THIS ERROR IS THE OPPOSITE OF THE SKIP LIST'S USUAL ONE, so
+# the list is short on purpose. Skipping a file removes its power to SILENCE,
+# which means a repository can start firing -- and a false finding costs more
+# than a missed one for something a customer pays for. Only names where a
+# boundary is almost certainly a fixture qualify: `Boundary.test.tsx` is a test
+# OF a boundary, never the boundary an app mounts. A plain `test/` or `tests/`
+# directory is deliberately NOT here -- some repositories keep real helpers
+# there, and being wrong in that direction is the expensive one.
+_TEST_FILE_MARKERS = (".test.", ".spec.", ".stories.")
 
 # Any one of these, anywhere in source, means a boundary exists.
 _BOUNDARY_TOKENS = (
@@ -183,11 +200,28 @@ _ROOT_PAGES_APP = re.compile(r"^(src/)?pages/(_app|index)\.(t|j)sx?$")
 # is what keeps this from re-opening the library false positive: a package that
 # merely depends on @tanstack/react-router is a consumer of it, while one that
 # also carries a routes/ tree is an application built with it.
+# MEASURED, 2026-09-04: `GC-CODER1/Karuna-Android` and
+# `LuckyYaduvanshi5/Failed_Taska` carry `app/_layout.tsx` and no render call
+# anywhere -- Expo Router writes the mount, exactly as the three above do. Both
+# were classified `undetermined` and dropped out of the incidence denominator,
+# which is the same defect that once cost `Moscow2260/ai-productivity-hub` its
+# place. Note the underscore: `_ROOT_APP_LAYOUT` matches Next's `app/layout.tsx`
+# and cannot match Expo's `app/_layout.tsx`, so the two conventions do not
+# collide and the dependency gates this one anyway.
+#
+# NOT ADDED HERE, and deliberately: Expo Router has its OWN boundary
+# convention -- a route file exporting `ErrorBoundary` -- which none of
+# _BOUNDARY_TOKENS matches. All three Expo repositories in the corpus happen to
+# be silenced by an existing token in their root layout, so recognising the
+# mount does not make them fire, but an Expo app protected ONLY by that export
+# would now be a false positive. How often that happens is unmeasured, so the
+# token stays unwritten until it is measured rather than guessed.
 _FRAMEWORK_MOUNTS = (
     ("@tanstack/react-start", re.compile(r"^(src/)?routes/"), "TanStack Start"),
     ("@tanstack/react-router", re.compile(r"^(src/)?routes/"), "TanStack Router"),
     ("@remix-run/react", re.compile(r"^app/routes/"), "Remix"),
     ("gatsby", re.compile(r"^src/pages/"), "Gatsby"),
+    ("expo-router", re.compile(r"^(src/)?app/_layout\.(t|j)sx?$"), "Expo Router"),
 )
 
 # A ROOT-level app-router error boundary, anchored exactly like
@@ -251,6 +285,8 @@ def _is_source(name: str) -> bool:
     parts = name.split("/")
     if any(p in _SKIP_DIRS for p in parts[:-1]):
         return False
+    if any(marker in parts[-1] for marker in _TEST_FILE_MARKERS):
+        return False
     return name.endswith(_SOURCE_SUFFIXES)
 
 
@@ -301,6 +337,8 @@ def _workspace_packages(zf: zipfile.ZipFile, files: list[str],
     out: list[tuple[str, dict]] = []
     for name in sorted(files):
         if not name.endswith("/package.json") or name.count("/") > 3:
+            continue
+        if is_non_production_path(name):
             continue
         if any(p in _SKIP_DIRS for p in name.split("/")[:-1]):
             continue

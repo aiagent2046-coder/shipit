@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 # against compute_scores still passing.
 _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
                   "category", "file", "line", "masked", "explanation",
-                  "fix_hint", "context", "origin_category")
+                  "fix_hint", "context", "origin_category", "source",
+                  "verification_status", "verification_method")
 
 
 # Bump when any part of the audit engine changes in a way that should
@@ -89,7 +90,26 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # differently (a nested-only boundary that read as covered now fires), so
 # cached audits must not serve the pre-change verdict. Measured floors that
 # motivated it: DRYDOCK_LENS_PLAN.md, 2026-09-03/04.
-AUDIT_ENGINE_VERSION = "2026-09-04-1"
+# 2026-09-04-2: Expo Router joins _FRAMEWORK_MOUNTS. An `app/_layout.tsx` app
+# with the `expo-router` dependency was `undetermined` -- no createRoot, because
+# the framework writes the mount -- so it produced no finding and left the
+# incidence denominator. It can now both mount and fire, which is a different
+# verdict for the same repository.
+# 2026-09-04-3: a boundary token in a test file or a story no longer silences
+# the finding. A fixture built to be rendered BY a test does not stand between
+# a visitor and a blank page, and one was holding a real repository's only
+# boundary token. Repositories protected only that way now fire.
+# 2026-09-04-4: a confident critical gates from whatever category it sits in.
+# The gate used to read only categories an examiner had covered, on the premise
+# that nothing could produce an Auth or Money & Data finding without one --
+# false since #299 (a static Auth producer) and since #10 (a rubric that ran
+# files its finding by what it IS, so a preview's Security rubric can return a
+# CRITICAL categorised Auth). Measured: the same critical scored 6.6 with the
+# gate firing on a full audit and 9.9 with it silent on a preview. 0 stored
+# rows move; the mean is deliberately unchanged, because admitting such a
+# category to it RAISES a weak repository's total
+# (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
+AUDIT_ENGINE_VERSION = "2026-09-06-1"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
@@ -458,6 +478,11 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
                     if static.get("coverage", {}).get("error_boundary")
                     == "budget_exhausted" else set()),
             ),
+            # Carried through from the static stage, which decided it. Without
+            # this line a PAID row would be blind to the same question a
+            # static-only row can answer, and the paid rows are the ones a
+            # calibration decision costs money to get wrong.
+            "frontend_scan": static.get("score", {}).get("frontend_scan", {}),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0
             # with the LLM stage present scored 9.2 without it (seen in

@@ -1,5 +1,5 @@
 import { DEMO_AUDIT } from "@/lib/demo";
-import { ScoreRing, CategoryBars } from "./ScoreRing";
+import { AuditCoverage } from "./AuditCoverage";
 import { FindingsList, SeveritySummary } from "./FindingsList";
 
 export function DemoReport() {
@@ -16,7 +16,7 @@ export function DemoReport() {
       </div>
 
       <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-        <ScoreRing total={score.total} />
+        <p className="text-3xl font-semibold">{findings.length} findings</p>
         <div className="text-sm text-muted">
           <p>
             stack: <span className="font-mono text-text">{stack}</span>
@@ -32,7 +32,7 @@ export function DemoReport() {
       </div>
 
       <div className="my-6 border-t border-border" />
-      <CategoryBars categories={score.categories} />
+      <AuditCoverage score={score} findings={findings} />
       <div className="my-6 border-t border-border" />
       <FindingsList findings={findings} />
     </div>

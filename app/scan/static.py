@@ -95,8 +95,27 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # 42% of the weight pinned at "clean" because nothing had looked --
         # which is the exact defect LLM_ONLY_CATEGORIES exists to prevent,
         # reached by leaving an argument out rather than by passing it wrong.
-        "score": compute_scores(findings, llm_ran=False),
-        "findings": [vars(f) for f in findings],
+        "score": {
+            **compute_scores(findings, llm_ran=False),
+            # PERSISTED FOR THE SAME REASON `basis` IS (see pipeline.py): it
+            # travels inside score_json so it reaches the DB, and every
+            # consumer of the score, rather than being decided during a scan
+            # and thrown away.
+            #
+            # MEASURED COST OF NOT HAVING IT, 2026-09-04: "should a repository
+            # with no frontend at all have Frontend excluded rather than
+            # counted at 10.0" is a calibration question about the stored rows,
+            # and it could not be asked of them -- `mount` was computed for
+            # every audit and kept for none, so answering meant re-fetching and
+            # re-scanning every repository. score_json already carries
+            # `unexamined` and `reported_elsewhere`, which are facts about what
+            # was looked at rather than scores; this belongs beside them, and
+            # in jsonb it needs no migration.
+            "frontend_scan": {"mount": boundary.mount,
+                              "coverage": boundary.coverage},
+        },
+        "findings": [dict(vars(f), source="static",
+                          verification_method="source_pattern") for f in findings],
         # Carried, not folded into a finding: `budget_exhausted` means the
         # boundary scan stopped before it could say a boundary is absent, so
         # no finding was emitted AND Frontend's clean read is unearned for this

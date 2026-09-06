@@ -37,7 +37,7 @@ Live on [drydock.co](https://drydock.co) with:
 |------|--------|
 | Public GitHub + ZIP intake | Live (SSRF-safe, hostile-archive checks) |
 | Stacks | Next.js, Vite + React, FastAPI |
-| Audit | Deterministic rules + LLM review; scores and findings |
+| Audit | Deterministic rules + LLM review; findings, provenance and verification limits |
 | Fix Pack | Secrets / config / selected static security rewrites → PR via GitHub App |
 | Card payments | **ЮKassa** (webhook is a hint; status/amount confirmed by server-side API) |
 | Manual payments | Bank transfer (operator-confirmed oracle) |
@@ -74,7 +74,7 @@ Read this before you pay — same boundaries the product enforces in code:
 
 ```text
 public repo or ZIP
-  → audit queue → static + LLM scan → findings + score
+  → audit queue → static + LLM scan → findings + verification limits
   → (optional) paid Fix Pack → generate plan → sandbox / proof
   → GitHub App opens PR → customer notification
 ```

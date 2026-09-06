@@ -102,21 +102,28 @@ assert abs(sum(CATEGORY_WEIGHT.values()) - 1.0) < 1e-9
 # was its only producer and no static check emitted it, so a static-only audit
 # would have read a perfect 10.0 for the reason this set exists. Then question
 # 1 of that rubric -- no error boundary above the routes -- was lifted into
-# app/scan/error_boundary.py and measured. First on 2026-09-01 (11 of 12
-# mounted apps), then reproduced 2026-09-03/04 with the analyzer that SHIPS,
-# over both corpora (DRYDOCK_LENS_PLAN.md): 72 of 83 mounted apps = 87% on the
-# three-strata discovery corpus in scripts/data/ (`--strata`), and 16 of 17 =
-# 94% on the repositories that actually came through the product
-# (`--from-file`). The reputable hits -- Vercel's own subscription template,
-# Blazity's enterprise starter, chatbot-ui -- reappear in both runs, read by
-# hand and real. Both numbers are FLOORS, because a boundary token found in
-# ANY source file silences the finding wherever it sits -- a component inside
-# one route reads as covering the whole app. (The file rule was tightened to
-# root-only on 2026-09-04; replayed on identical commits it changed no verdict,
-# so it is not what holds these numbers down. That is recorded in the plan, not
-# assumed here.) The earlier "61-94% until the workspace re-run lands" is now
-# closed, and the stray "72 of 103 (70%)" framing is superseded by the
-# mounted-app denominator above. That is a static producer,
+# app/scan/error_boundary.py and measured, on the analyzer that SHIPS, over the
+# three-strata discovery corpus in scripts/data/ (DRYDOCK_LENS_PLAN.md,
+# 2026-09-04): 72 of 92 mounted apps = 78%, in a band of 75-79%. The
+# repositories that came through the product agree on a much smaller n
+# (`--from-file`, 16 of 17), and the reputable hits -- Vercel's own
+# subscription template, Blazity's enterprise starter, chatbot-ui -- are in
+# both runs, read by hand and real.
+#
+# AN EARLIER 87% IS SUPERSEDED and the reason belongs next to the figure: a
+# repository silenced by a boundary token stops the walk before its mount is
+# established, so it left the denominator -- while an unprotected repository
+# always reaches its mount and always stayed in. The exclusion was
+# one-directional and could only push the rate up. Corrected by asking each
+# excluded repository whether it mounts an app after all; the measurement
+# reports the corrected denominator on every run.
+#
+# The band's low end (75%) counts every excluded repository as an app, which is
+# closer to right than it looks: a framework that writes the mount for the
+# author (Next, and Expo -- not yet in _FRAMEWORK_MOUNTS) leaves no createRoot
+# to find. The rate remains a floor for a second, separate reason: a boundary
+# token in ANY source file silences the finding wherever it sits. That is a
+# static producer,
 # and a category with a static producer is examined on a static-only audit by
 # the same rule that lets Security vote on the strength of the secrets scan:
 # neither is exhaustive, both actually looked.
@@ -162,6 +169,11 @@ class ScoredFinding:
     # "the auth rubric found two holes and filed them under Security", and the
     # second one must never print as a clean bar. See compute_scores.
     origin_category: str | None = None
+    # Set by the producer, never by model output. A match or model review
+    # alone is not independent confirmation of the claimed consequence.
+    source: str = "unknown"
+    verification_status: str = "unverified"
+    verification_method: str = "not_run"
 
 
 def _score(findings: list[ScoredFinding]) -> float:
@@ -298,19 +310,42 @@ GATE_ON_CRITICAL = True
 CRITICAL_GATE_MIN_CONFIDENCE = 0.7
 
 
-def _gating_criticals(findings: list[ScoredFinding],
-                      counted: list[str]) -> list[ScoredFinding]:
-    """Criticals confident enough, and in a category examined enough, to gate.
+def _gating_criticals(findings: list[ScoredFinding]) -> list[ScoredFinding]:
+    """Criticals confident enough to gate, from whatever category they sit in.
 
-    Restricted to `counted` for the same reason the subscore test is: on a
-    static-only audit nothing ran that could have produced an Auth or
-    Money & Data finding, so their absence is not evidence of anything.
+    NOT restricted to `counted`, and that restriction is what this docstring
+    used to justify: "on a static-only audit nothing ran that could have
+    produced an Auth or Money & Data finding". Two producers contradict it.
+    app/scan/service_role.py has filed statically under Auth since #299. And a
+    rubric that DID run files its finding by what the finding IS (#10), so a
+    preview whose one rubric is Security can return a confident CRITICAL
+    categorised Auth -- into a category `llm_categories` does not cover.
+
+    MEASURED 2026-09-04, the same critical through compute_scores:
+
+        full audit                 total 6.6  Auth 5.6  gated_by ['critical']
+        preview (one rubric ran)   total 9.9  Auth 8.1  gated_by []
+
+    9.9 over "endpoint runs shell commands with no login" at 0.95 confidence.
+    That is #22, #27 and #35 arriving again through the recategorisation door.
+
+    The subscore route keeps its `counted` filter, because the two say
+    different things. A category's clean SUBSCORE is only evidence if someone
+    looked -- absence of evidence. A critical sitting in it is evidence
+    already, whoever produced it, and no examination of the rest of the
+    category makes it less true.
+
+    Symmetry was considered for the mean and REFUSED on its own measurement
+    (scripts/measure_unexamined_evidence.py, route A): admitting a category to
+    the mean because it holds a finding RAISES a weak repository's total,
+    since Auth at 9.3 sits above it -- so finding a vulnerability would
+    improve the score, 3.4 -> 4.0 on a constructed pair. A gate only ever
+    compresses downward, which is why this half ships and that one does not.
     """
     return [f for f in findings
             if f.severity == "critical"
             and f.confidence >= CRITICAL_GATE_MIN_CONFIDENCE
-            and f.category in GATED_CATEGORIES
-            and f.category in counted]
+            and f.category in GATED_CATEGORIES]
 
 
 def _gate_reasons(by_cat: dict[str, float], counted: list[str],
@@ -337,7 +372,7 @@ def _gate_reasons(by_cat: dict[str, float], counted: list[str],
     reasons += [
         {"kind": "critical", "category": f.category, "rule_id": f.rule_id,
          "title": f.title}
-        for f in _gating_criticals(findings, counted)
+        for f in _gating_criticals(findings)
     ]
     reasons += [
         {"kind": "unaudited_deployment", "category": f.category,
@@ -519,5 +554,29 @@ def compute_scores(findings: list[ScoredFinding],
     # sends someone hunting for an audit that already happened.
     unexamined = [c for c in CATEGORIES
                   if c not in counted and c not in reported_elsewhere]
+    # The fourth state, and the one that made a live report contradict itself.
+    #
+    # MEASURED 2026-09-04 on a real repository: Auth printed "not checked"
+    # while the findings table two inches below listed, under Auth, "request
+    # handler runs with the service-role key, bypassing Row Level Security --
+    # found in 21 places". Both came off the same score. Nobody surveyed Auth,
+    # which is why it does not vote; but a producer did put something in it,
+    # so "nothing here examined Auth" is false on its face to the one reader
+    # who scrolls.
+    #
+    # A SEPARATE KEY rather than removing the category from `unexamined`.
+    # Dropping it there would leave it in none of the three lists, and every
+    # surface reads that as "ordinary category" and draws its number -- a
+    # figure that did not vote on the total, published as though it had. The
+    # category's number is still unearned; only the WORDS were wrong.
+    #
+    # Same argument, same shape as `reported_elsewhere`: derived here so the
+    # surfaces do not each grow their own copy, additive so a stored row that
+    # predates it simply has no key, and read through .get() everywhere.
+    unexamined_with_findings = [c for c in unexamined
+                                if any(f.category == c for f in findings)]
     return {"total": total, "categories": by_cat, "gated_by": reasons,
-            "unexamined": unexamined, "reported_elsewhere": reported_elsewhere}
+            "readiness_score_validated": False,
+            "unexamined": unexamined,
+            "unexamined_with_findings": unexamined_with_findings,
+            "reported_elsewhere": reported_elsewhere}

@@ -1401,6 +1401,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   fix_hint=clip(str(f.get("fix_hint", "")), 300),
                   context=context,
                   origin_category=origin,
+                  source="llm",
+                  verification_method="model_review",
               ))
           # After the findings are in, not before the call: a rubric counts as
           # examined once its answer has been read, so a category is never

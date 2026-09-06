@@ -90,7 +90,10 @@ async def test_llm_findings_merged_when_providers_configured():
     )
     # The provider chain the worker was handed reached the merge, and the
     # merged finding is in the row a user will read -- not just in scan output.
-    assert any(f["rule_id"] == "llm-auth" for f in row["findings_json"])
+    finding = next(f for f in row["findings_json"] if f["rule_id"] == "llm-auth")
+    assert finding["source"] == "llm"
+    assert finding["verification_status"] == "unverified"
+    assert finding["verification_method"] == "model_review"
 
 
 async def test_a_paid_audit_runs_two_passes_and_the_preview_runs_one():

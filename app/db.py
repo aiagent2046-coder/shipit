@@ -3874,6 +3874,12 @@ class McpKeyRepository:
         Joined rather than selected by id list so the answer cannot include an
         audit that was deleted out from under the link, and bounded because an
         MCP response goes into a context window somebody is paying for.
+
+        `basis` is extracted in SQL rather than by selecting score_json: the
+        listing needs one string out of that blob, and shipping every row's
+        findings-shaped jsonb into Python to read it would cost the same
+        response its bound. The tool used to reach for `score_json` on these
+        rows anyway -- a key this query has never returned -- and printed null.
         """
         try:
             pool = await get_pool()
@@ -3882,7 +3888,8 @@ class McpKeyRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select a.id, a.repo_url, a.stack, a.score_total, a.created_at
+                select a.id, a.repo_url, a.stack, a.score_total, a.created_at,
+                       a.score_json->>'basis' as basis
                 from mcp_key_audits k
                 join audits a on a.id = k.audit_id
                 where k.mcp_key_id = %s

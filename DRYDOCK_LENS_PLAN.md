@@ -582,9 +582,18 @@ whether a repository with no frontend at all (`mount = not_react`) should have
 Frontend *excluded* as not-applicable rather than counted at 10.0. The `mount`
 field carries exactly that signal. It would also change paid audits, where the
 web rubric already counts an empty Frontend at 10.0 today, so it is its own
-measurement against the stored rows.
+measurement against the stored rows. **That measurement was attempted on
+2026-09-04 and the stored rows cannot carry it — see the section at the end of
+this document.**
 
 ## Result, 2026-09-03/04 — the interval closes to two floors, on the shipping analyzer
+
+> **SUPERSEDED IN PART, 2026-09-04. The 87% below is an artefact, not a
+> result.** The denominator silently excluded protected apps, one-directionally.
+> The corrected discovery figure is **72/92 = 78%, in a band of 75–79%** — see
+> "The denominator excluded the apps it should have counted" at the end of this
+> document. The per-stratum split and the product-corpus figure are unaffected;
+> the run output below is kept verbatim because it is what the run said.
 
 The 61–94% interval was a confession, not a measurement. Both corpora were
 re-run with the analyzer that ships (workspaces analyzed per package), and the
@@ -605,12 +614,14 @@ interval closes to two agreeing floors.
 ```
 
 The discovery corpus (three strata in `scripts/data/`) and the product corpus
-(repositories that actually came through drydock.co, dumped from `audits`)
-agree: **~87–94% of mounted react/next apps ship no error boundary.** The
-vibe-coded strata (Lovable 91%, bolt 89%) run higher than hand-written (78%),
-which is now a number rather than an impression. The plan's question — would a
-free deterministic tier have something to say about most apps it sees — is
-answered yes on both corpora, not just the discovery list.
+(repositories that actually came through drydock.co, dumped from `audits`) both
+say most mounted react/next apps ship no error boundary. **The rate stated here
+as "~87–94%" was wrong on its discovery half** (corrected below to 75–79%); the
+product half stands, on a small n. The vibe-coded strata (Lovable 91%, bolt 89%)
+run higher than hand-written (78%), which is now a number rather than an
+impression. The plan's question — would a free deterministic tier have something
+to say about most apps it sees — is answered yes on both corpora at either
+figure, and that answer is what did not depend on the error.
 
 ### Both numbers are FLOORS, and this belongs beside any quote of them
 
@@ -672,6 +683,12 @@ Byte-identical inputs, byte-identical outcome: **zero verdicts changed**, two
 reason strings changed (the table above). The tightening forbids a class of
 false negative that this corpus does not happen to contain.
 
+(That `72/83` is the artefact denominator, corrected to `72/92` at the end of
+this document. It is identical on both sides of this comparison, which is all
+this section claims — the tightening changed nothing, and it changed nothing
+under the wrong denominator and the right one alike. The `undetermined=13`
+sitting in the line below is the defect itself, unread at the time.)
+
 That is a reason to keep the rule — a nested `error.tsx` genuinely does not
 cover the root, and the negative control confirms legitimate root boundaries
 (`Next-js-Boilerplate`'s `src/app/global-error.tsx`) are still credited — but
@@ -699,7 +716,10 @@ the analyzer's hits, not its mistakes.
   `ai-co-founder-matching`, both `devtools-aggregator` forks, and the
   `donjonson-hash` dev account. `--from-file` is a real denominator but a small
   and self-contaminated one (n=17), so 94% is a floor with a wide interval; the
-  discovery corpus's 87% on n=83 is the sturdier number.
+  discovery corpus is the sturdier one — at **78% on n=92**, not the 87% on
+  n=83 this line first named. Its denominator was wrong, and by the time it was
+  corrected the correction was larger than the difference between the two
+  corpora.
 * **`dubinc/dub` is UNDETERMINED, not clean.** A 3587-file `apps/web` exhausted
   the shared 4000-file read budget, so it is reported as budget-exhausted and
   excluded from the denominator — the separate signal, never counted as "has a
@@ -737,7 +757,253 @@ lenient rule, so the true incidence is at or above them, exactly as recorded.
 A re-run on the tightened rule would raise them; it is not re-run here because
 the floors already carry that "≥" honestly.
 
+## The denominator excluded the apps it should have counted, 2026-09-04
+
+**The published 87% was an artefact of the measurement, not a property of the
+market.** The corrected discovery figure is **72/92 = 78%**, in a band of
+**75–79%**.
+
+### The defect
+
+Two things silence this finding, and one of them also decides the mount. A
+repository silenced by a boundary TOKEN stops the walk right there — and for a
+Vite/CRA app the mount is only learned when the walk reaches its `createRoot`.
+If the boundary file sorts before the mount file, the mount is never
+established, the repository is classified `undetermined`, and it leaves the
+incidence denominator.
+
+An UNPROTECTED repository never stops early. It always reaches its mount, and
+always stays in the denominator. So the exclusion removes only protected apps,
+and the rate can only be pushed **up**. Reproduced on three fixtures identical
+but for where the boundary lives:
+
+```
+protected, token in src/App.tsx     -> mount=undetermined  (leaves)
+unprotected, same layout            -> mount=mounted       (stays, fires)
+protected, token in src/zBoundary   -> mount=mounted       (stays, silent)
+```
+
+Whether a protected SPA counted came down to alphabetical order.
+
+### What the 13 excluded repositories actually are
+
+All 13 were silenced by a token — not one by a dependency, not one by an error
+file. Asked directly whether a render call exists further in (`--strata` replay
+on the same pinned commits, 2026-09-04):
+
+| verdict | n | repositories |
+|---|---|---|
+| mounts at `src/main.tsx` / `frontend/src/main.tsx` — unambiguous apps | 8 | djzeneyer, spares_client, careconnect, FitFi, semkat-hub, gpt-for-kids, HomeSchool, nido-phase-4 |
+| render call found, but in a design archive — **doubtful** | 1 | oxv-coach-app (`design-retours/refonte-v1/support.js`) |
+| no render call — **not proof of "not an app"** | 4 | Elevate-lms, Karuna-Android, Failed_Taska, CookMate-AI |
+
+`72/92 = 78%` counts the 9. The band's other end counts all 13 (`72/96 = 75%`),
+and that end is closer than it looks, because **the probe only sees SPA-style
+mounts**: a framework that writes the mount for the author leaves no
+`createRoot` at all.
+
+* `elevate-for-humanity/Elevate-lms` is a Next.js monorepo. Next owns the mount;
+  the absence of a render call there means nothing. It is an app.
+* `Karuna-Android` and `Failed_Taska` carry `app/_layout.tsx` — **Expo Router**,
+  which owns the mount exactly as TanStack Start, Remix and Gatsby do in
+  `_FRAMEWORK_MOUNTS`. Expo is simply missing from that tuple. Same class of
+  gap that once cost `Moscow2260/ai-productivity-hub` its place in the
+  denominator, and it is recorded below as its own change rather than folded in
+  here.
+
+So `78%` is the measured point and `75%` the honest low end; `87%` is not a
+defensible reading of this corpus under any of them.
+
+### What did not change
+
+The per-stratum ordering (Lovable 91% > bolt 89% > hand-written 78%) is
+unaffected: the exclusion applies across strata, and the comparison was always
+between like and like. The product corpus (`--from-file`, 16/17) had exactly one
+`undetermined`, and it was a budget exhaustion rather than this defect, so that
+figure stands — on n=17, which was always its real limit.
+
+And the plan's actual question is untouched. At 75%, at 78%, at 87%, a free
+deterministic tier has something to say about most apps it sees. The error
+changed the number quoted in a sentence, never the decision the number was
+gathered to make.
+
+### How it was found, which is the part worth keeping
+
+Not by a failing test — the suite was green and the fixtures agreed with the
+code. By printing `mount=` per repository after a correction to an unrelated
+claim, then noticing that the aggregate had been hiding a population, then
+asking the excluded repositories directly instead of inferring from their reason
+strings. The two inferences made from reason strings earlier the same day were
+both wrong (see the correction above). The measurement is in
+`scripts/measure_error_boundary.py` and reports the corrected denominator on
+every run, so this cannot silently return.
+
 ### Still open, carried forward
 
-* **`mount = not_react` Frontend exclusion** — the calibration question recorded
-  in the section above, unchanged by this run.
+* ~~**Expo Router is not in `_FRAMEWORK_MOUNTS`**~~ — **done 2026-09-04**
+  (`AUDIT_ENGINE_VERSION` 2026-09-04-2). `app/_layout.tsx` paired with the
+  `expo-router` dependency is a mount now, so those apps enter the denominator
+  whether they fire or stay silent. **Not** done in the same change, and it is
+  the risk this one carries: Expo Router's own boundary convention is a route
+  file exporting `ErrorBoundary`, which no entry in `_BOUNDARY_TOKENS` matches.
+  All three Expo repositories in the corpus happen to be silenced by an existing
+  token in their root layout, so nothing fires falsely today — but an Expo app
+  protected only by that export would. How common that is has not been measured,
+  so the token stays unwritten rather than guessed.
+* **The token rule's leniency — narrowed once, and the rest is now a decision
+  rather than an omission.** A boundary token in a TEST file or a story no
+  longer silences (`AUDIT_ENGINE_VERSION` 2026-09-04-3): `khuepm/GeniusQA`'s
+  desktop package was silent on a fixture built to be rendered by a test, which
+  stands between nobody and a blank page. The skip list is short on purpose,
+  because this tightening runs in the EXPENSIVE direction — removing a file's
+  power to silence can invent a finding, and a false one costs more than a
+  missed one on something a customer pays for. A plain `test/` directory is
+  deliberately excluded from the exclusion for that reason.
+
+  **What stays lenient, and why it is a choice:** a boundary token in ordinary
+  source silences wherever it sits, so an app protected in one route still reads
+  as covered. Proving a component is actually mounted above the routes needs an
+  import graph, which is a different order of cost; and the error it would trade
+  into is the one that damages a paid finding. So the rate stays a floor, which
+  is recorded beside every quote of it.
+  `test_a_class_boundary_anywhere_silences_it` is where that answer is written
+  down deliberately rather than by omission.
+* **`mount = not_react` Frontend exclusion** — attempted 2026-09-04 and
+  **deferred on the data, not on nerve**; see the section below.
+
+## The `not_react` calibration cannot be measured yet, 2026-09-04
+
+The question — should a repository with no frontend have Frontend excluded
+rather than counted at 10.0 — was put to the stored rows and **they cannot
+answer it**. Recorded because "we did not get to it" and "the data to answer it
+does not exist" are different states, and only one of them is a schedule.
+
+### What the rows actually contain
+
+34 static-only rows carry a Security score. **8 of them carry a Frontend score,
+and every one is exactly 10.0** (`min = max = 10.0`). The other 26 have no
+`Frontend` key at all.
+
+And the 8 are all older than the producer:
+
+```
+engine_version   rows   first        Frontend
+2026-08-11-1        1   2026-08-11   10.0
+2026-08-11-4        1   2026-08-12   10.0
+2026-08-12-1        2   2026-08-12   10.0
+2026-08-14-1        1   2026-08-14   10.0
+2026-08-14-5        2   2026-08-14   10.0
+2026-08-28-1        1   2026-08-28   10.0
+```
+
+The error-boundary scanner landed in `2026-09-01-1`. Every stored Frontend
+score predates it by days, so each 10.0 was assigned by an engine with **no
+producer for Frontend** — the exact condition `LLM_ONLY_CATEGORIES` exists to
+prevent, preserved in rows written before the fix. They are placeholders, not
+measurements. **No static-only row scored by an engine that can measure
+Frontend exists yet.**
+
+### Demonstrated, not argued
+
+The 8 rows resolve to 6 repositories. Re-run on the shipping analyzer:
+
+| repository | mount | today's verdict | stored Frontend |
+|---|---|---|---|
+| `dgero22/digital-rolecraft` | mounted | **MISSING** | 10.0 |
+| `vercel/nextjs-subscription-payments` | mounted | **MISSING** | 10.0 |
+| `aiagent2046-coder/ai-co-founder-matching` | mounted | **MISSING** | 10.0 |
+| `aiagent2046-coder/shipit` | mounted | **MISSING** | 10.0 |
+| `dubinc/dub` | mounted | UNDETERMINED (budget) | 10.0 |
+| `megadose/holehe` | not_react | ok | 10.0 |
+
+`vercel/nextjs-subscription-payments` was hand-checked on 2026-09-01 and
+genuinely has no boundary. Its stored row says 10.0. One row is enough to show
+the stored value carries no information; here there are four.
+
+### The hypothesis this refuted, and why it is written down
+
+The reasonable guess was that 8 clean tens meant 8 repositories with no
+frontend — plausible, since the measured incidence is ~78% among mounted apps
+and eight clean in a row would be unlikely otherwise. **Five of the six are
+mounted.** The guess was wrong, and it was tested before it was acted on. Three
+inferences drawn from indirect evidence were wrong on this one day; the
+difference in this case is only that the check came first.
+
+### What is NOT wrong
+
+Customers never see these rows. The audit cache is keyed on
+`(content_hash, engine_version, basis)`, so a re-audit under the current engine
+cannot return a row written by `2026-08-28-1`. The blindness is in the
+measurement, not in what anyone is served.
+
+### What would make the question answerable
+
+Static-only rows scored by an engine that has the Frontend producer AND stores
+`mount` — the second half landed as `frontend_scan` in the same day's work, the
+first half needs audits that have not happened yet. Then the question is one
+query with no guessing about proportions, and no re-fetching of anybody's
+repository. Until such rows exist, changing the scoring would be a decision
+taken on a number that does not exist.
+
+## The number exists now, and it is n = 1, 2026-09-04
+
+The stale-Frontend obstacle above was removed by deploying `2026-09-04-3`, so
+the question was put to the ledger a second way: classify every static-only
+repository by running the shipping analyzer over it **read-only**, and join that
+classification back to the stored scores. No rows were written.
+
+**Re-auditing was considered first and rejected.** Re-running these repositories
+through the product would have written fresh rows for repositories already in
+the corpus — contaminating the very population the calibration is measured on,
+which is the mistake this document already records once, as the thing that
+killed the 56.5% figure. The question needed reading, not writing, and reading
+was enough.
+
+### What the ledger's own repositories are
+
+18 unique repositories behind 34 static-only rows; **1 row arrived as a zip
+upload and is permanently unanswerable** (the content is not kept), and one
+repository has since 404'd. Of the 17 that resolved:
+
+| class | n | which |
+|---|---|---|
+| `mounted` | 13 | 12 fire, 1 budget-exhausted (`dubinc/dub`) |
+| `not_react` | 2 | `shipit-fixpack-canary-…` (**ours**), `megadose/holehe` |
+| `no_mount` | 2 | `drydock-fixpack-e2e-test` (**ours**), `drydock-vite-react-fixture` (**ours**) |
+
+**Three of the four repositories the change would affect are our own test
+fixtures.** One is third-party.
+
+### The measurement, with its contamination in a column rather than hidden
+
+| population | rows | Frontend at 10.0 | Frontend excluded | shift |
+|---|---|---|---|---|
+| **affected, third-party** | **2** | **9.65** | **9.55** | **−0.10** |
+| affected, ours | 7 | 8.25 | 7.77 | −0.48 |
+| unaffected, third-party | 13 | 9.38 | 9.21 | — |
+| unaffected, ours | 11 | 8.98 | 8.71 | — |
+
+The first row is the whole honest result, and its two rows are **one
+repository** audited twice. **n = 1.** The `ours` row moves further only because
+our fixtures score low on the other categories; calibrating on it would be
+measuring our own test inventory.
+
+### The decision
+
+**The scoring is not changed.** Not out of caution — the effect is about a tenth
+of a point, which is small enough that either answer is defensible — but because
+a single third-party repository cannot support a change to how every audit is
+scored. The exclusion is probably right and definitely cheap; what is missing is
+anyone to check it against.
+
+The obstacle has moved twice and is worth naming precisely each time: first the
+stored Frontend scores were placeholders from an engine with no producer
+(fixed); now the population the change would touch is 3/4 our own fixtures. The
+next move is not a code change but arrivals — third-party repositories with no
+frontend, audited under an engine that measures Frontend. When a handful exist,
+this is one query.
+
+Recorded also because it is a real fact about the market we serve: **12 of 12
+mounted repositories in our own ledger ship no error boundary.** Consistent with
+the 75–79% measured on the discovery corpus, on far too small an n to quote as
+anything else.

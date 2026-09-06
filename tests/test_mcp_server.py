@@ -83,9 +83,20 @@ class FakeKeyRepo:
         return (key_id, str(audit_id)) in self.links
 
     async def list_audits(self, key_id, *, limit=20):
+        """Projects exactly the columns AuditRepository.list_audits selects.
+
+        It used to hand back the whole stored row, which is how a listing that
+        read `score_json` passed its test and returned null in production: the
+        real query has never selected that column. A fake that is more
+        generous than the query it stands in for cannot fail this way.
+        """
         mine = [self.audits[a] for (k, a) in self.links
                 if k == key_id and a in self.audits]
-        return mine[:limit]
+        return [{"id": r["id"], "repo_url": r.get("repo_url"),
+                 "stack": r.get("stack"), "score_total": r.get("score_total"),
+                 "created_at": r.get("created_at"),
+                 "basis": (r.get("score_json") or {}).get("basis")}
+                for r in mine[:limit]]
 
 
 class FakeAuditRepo:
@@ -97,8 +108,14 @@ class FakeAuditRepo:
         audit_id = str(uuid.uuid4())
         self.rows[audit_id] = {
             "id": audit_id, "access_token": token, "stack": "next",
-            "file_count": 12, "repo_url": repo_url,
-            "score_json": {"basis": basis, "score": 7.1},
+            "file_count": 12, "repo_url": repo_url, "score_total": 7.1,
+            # The shape compute_scores actually returns. The old fixture put
+            # the number under a key called `score`, which the product has
+            # never written -- so the tool read a key that only existed in
+            # this file, and every real answer carried score=null.
+            "score_json": {"basis": basis, "total": 7.1, "categories": {},
+                           "gated_by": [], "unexamined": [],
+                           "reported_elsewhere": []},
             "findings_json": findings if findings is not None else [],
             "created_at": "2026-08-26T00:00:00Z",
         }
@@ -430,6 +447,37 @@ def test_list_recent_shows_only_this_keys_audits(mcp):
     payload = _payload(mcp.call("drydock_list_recent"))
 
     assert [a["audit_id"] for a in payload["audits"]] == [mine]
+
+
+def test_list_recent_carries_the_number_the_listing_exists_to_show(mcp):
+    """MEASURED 2026-09-04: both fields were null on every row ever listed.
+
+    They were read out of `score_json`, and AuditRepository.list_audits does
+    not select that column -- it selects `score_total`, which the tool ignored.
+    A listing of audits whose scores are all null is not a listing anybody can
+    use; it reads as "these audits have no result".
+    """
+    audit_id = mcp.audits.add()
+    mcp.keys.audits = mcp.audits.rows
+    mcp.keys.links.add((mcp.key_id, audit_id))
+
+    row = _payload(mcp.call("drydock_list_recent"))["audits"][0]
+
+    assert row["score"] == 7.1
+    assert row["basis"] == "static+preview"
+
+
+def test_get_audit_answers_with_the_score_the_engine_computed(mcp):
+    """The same defect on the single-audit tool: compute_scores emits `total`
+    and this asked for `score`, so an editor that had just paid for an audit
+    was told it had none."""
+    audit_id = mcp.audits.add()
+    mcp.keys.links.add((mcp.key_id, audit_id))
+
+    payload = _payload(mcp.call("drydock_get_audit", {"audit_id": audit_id}))
+
+    assert payload["score"] == 7.1
+    assert payload["basis"] == "static+preview"
 
 
 def test_fixpack_status_needs_the_same_ownership(mcp):

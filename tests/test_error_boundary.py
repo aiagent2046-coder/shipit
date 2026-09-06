@@ -52,6 +52,21 @@ ROUTED_SPA = {
 }
 
 
+def test_smoke_apps_do_not_describe_the_deployed_web_app():
+    files = {"repo/pyproject.toml": "[project]\nname='backend'"}
+    for prefix in ("web/", "smoke/next_sample/", "examples/demo/"):
+        files.update({"repo/" + prefix + k: v for k, v in ROUTED_NEXT.items()})
+    files["repo/web/app/error.tsx"] = "export default function Error(){return <div/>}"
+    files["repo/web/app/global-error.tsx"] = "export default function Error(){return <html/>}"
+    assert scan_error_boundary(_zip(files)).findings == []
+    # The same real app must still be reported when its boundaries are removed.
+    del files["repo/web/app/error.tsx"]
+    del files["repo/web/app/global-error.tsx"]
+    findings = scan_error_boundary(_zip(files)).findings
+    assert len(findings) == 1
+    assert findings[0].file.startswith("web/")
+
+
 # --------------------------------------------------------------------------- #
 # it fires where it should
 # --------------------------------------------------------------------------- #
@@ -666,6 +681,97 @@ def test_a_wrapped_archive_still_finds_its_boundary():
     wrapped["myapp-abc123/app/error.tsx"] = "export default ()=> null"
 
     assert scan_error_boundary(_zip(wrapped)).findings == []
+
+
+def test_a_boundary_that_only_a_test_renders_does_not_silence_it():
+    """MEASURED 2026-09-04: khuepm/GeniusQA's desktop package was silent on
+    `packages/desktop/src/__tests__/utils/TestErrorBoundary.tsx` -- a fixture
+    built to be rendered BY a test, and the app's only boundary token. Nothing
+    stands between a visitor and a blank page there."""
+    scan = scan_error_boundary(_zip({
+        **ROUTED_SPA,
+        "src/__tests__/utils/TestErrorBoundary.tsx": (
+            "class B extends React.Component{componentDidCatch(e){}}"),
+    }))
+
+    assert [f.rule_id for f in scan.findings] == ["missing-error-boundary"]
+
+
+def test_a_boundary_in_a_test_or_story_FILE_does_not_silence_it():
+    """The same fixture by naming rather than by directory. `Boundary.test.tsx`
+    is a test OF a boundary; `Boundary.stories.tsx` is a catalogue entry."""
+    for name in ("src/Boundary.test.tsx", "src/Boundary.spec.tsx",
+                 "src/Boundary.stories.tsx"):
+        scan = scan_error_boundary(_zip({
+            **ROUTED_SPA,
+            name: "class B extends React.Component{componentDidCatch(e){}}",
+        }))
+
+        assert scan.findings, f"{name} must not buy silence"
+
+
+def test_a_real_boundary_beside_a_test_still_silences_it():
+    """The guard rail on the guard. Skipping a file removes its power to
+    silence, so the list is short on purpose: a repository that has BOTH a
+    fixture and a real boundary must stay silent, or the tightening would
+    invent findings -- the expensive direction for something a customer pays
+    for."""
+    scan = scan_error_boundary(_zip({
+        **ROUTED_SPA,
+        "src/__tests__/utils/TestErrorBoundary.tsx": (
+            "class T extends React.Component{componentDidCatch(e){}}"),
+        "src/components/ErrorBoundary.tsx": (
+            "class B extends React.Component{componentDidCatch(e){}}"),
+    }))
+
+    assert scan.findings == []
+    assert "src/components/ErrorBoundary.tsx" in scan.reason
+
+
+EXPO_ROUTER = {
+    "package.json": ('{"dependencies":{"expo":"52","expo-router":"4",'
+                     '"react":"18","react-native":"0.76"}}'),
+    "app/_layout.tsx": "export default function L(){return null}",
+    "app/index.tsx": "export default function Home(){return null}",
+}
+
+
+def test_an_expo_router_app_mounts_even_with_no_render_call():
+    """MEASURED 2026-09-04: `Karuna-Android` and `Failed_Taska` carry
+    `app/_layout.tsx` and no createRoot anywhere, because Expo Router writes the
+    mount. Both were classified `undetermined` and left the incidence
+    denominator -- the same defect that once cost `ai-productivity-hub` its
+    place. An app that can blank must be counted whether or not its author typed
+    the mount."""
+    scan = scan_error_boundary(_zip(EXPO_ROUTER))
+
+    assert scan.mount == MOUNT_YES
+    assert "Expo Router" in scan.reason
+    assert [f.rule_id for f in scan.findings] == ["missing-error-boundary"]
+
+
+def test_a_protected_expo_router_app_is_silent_but_still_counted():
+    """The other half, and the one that decides the denominator: recognising the
+    mount must put a PROTECTED Expo app into it too. Counting only the ones that
+    fire is how the rate got inflated in the first place."""
+    scan = scan_error_boundary(_zip({
+        **EXPO_ROUTER,
+        "app/_layout.tsx": ("class B extends React.Component{"
+                            "componentDidCatch(e){}}"),
+    }))
+
+    assert scan.findings == []
+    assert scan.mount == MOUNT_YES, "silent, but in the denominator"
+
+
+def test_expo_router_needs_the_dependency_not_just_the_directory():
+    """A repository can carry `app/_layout.tsx` without being an Expo app, and
+    the dependency is what tells them apart -- the same pairing every other
+    entry in _FRAMEWORK_MOUNTS uses, for the same reason."""
+    no_dep = {k: v for k, v in EXPO_ROUTER.items()}
+    no_dep["package.json"] = '{"dependencies":{"react":"18"}}'
+
+    assert scan_error_boundary(_zip(no_dep)).mount != MOUNT_YES
 
 
 def test_a_wide_workspace_names_whole_packages_and_counts_what_it_omits():

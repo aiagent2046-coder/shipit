@@ -1385,7 +1385,8 @@ async def test_foreign_key_delete_actions_are_what_we_decided(real_db):
 async def _mcp_audit(audit_repo: AuditRepository, run: str) -> str:
     audit = await audit_repo.create(
         stack="vite-react", file_count=1, score_total=7.0,
-        score_json={"total": 7.0, "categories": {}}, findings_json=[],
+        score_json={"total": 7.0, "categories": {}, "basis": "static+preview"},
+        findings_json=[],
         repo_url="https://github.com/acme/app",
         content_hash=f"mcp-{run}", engine_version="smoke-engine-1",
     )
@@ -1528,9 +1529,18 @@ async def test_list_audits_returns_only_this_keys_audits(real_db):
         await keys.link_audit(ids[0], audit_id)
     await keys.link_audit(ids[1], theirs[0])
 
-    listed = {row["id"] for row in await keys.list_audits(ids[0])}
+    rows = await keys.list_audits(ids[0])
+    listed = {row["id"] for row in rows}
     assert listed == set(mine)
     assert theirs[0] not in listed
+
+    # The columns drydock_list_recent prints, asserted against the real query
+    # rather than against a fake that hands back the whole stored row. The
+    # tool used to read `score_json` from these rows -- a column this SELECT
+    # has never returned -- and printed null for every audit in every list.
+    for row in rows:
+        assert row["score_total"] == 7.0
+        assert row["basis"] == "static+preview"
 
 
 async def test_the_mcp_endpoint_refuses_a_stranger_audit_over_real_sql(

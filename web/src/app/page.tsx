@@ -146,10 +146,9 @@ export default function LandingPage() {
                 it yourself.
               </p>
               <p className="mt-3 text-sm text-muted">
-                It gives no score out of 10, on purpose. Two of the four scored
-                categories depend on checks the free scan doesn&apos;t run, and a
-                score computed from the rest climbs as fewer things are
-                examined — it would tell you the opposite of the truth.
+                Every report shows findings and verification limits. Neither the
+                free scan nor the deeper review provides a validated readiness
+                score out of 10. Absence of findings does not establish safety.
               </p>
             </div>
 
@@ -192,8 +191,8 @@ export default function LandingPage() {
             <p className="mt-3 text-sm text-muted">
               Whether your routes verify who is calling them, whether passwords
               are hashed, whether row-level security is on, whether user input
-              reaches somewhere dangerous. It is also what the score out of 10
-              is computed from, which is why a free scan carries no score. You
+              reaches somewhere dangerous. Model findings are hypotheses to verify,
+              with source references and stated limitations. You
               can&apos;t buy it on its own — buy a Fix Pack and the pull request
               arrives with a link to the full review of the same code.
             </p>
@@ -215,8 +214,8 @@ export default function LandingPage() {
           </h2>
           <p className="mt-2 text-muted">
             A sample report, rendered exactly as a real one is. This one is the
-            full review, so it carries a score; the free scan shows the same
-            per-finding detail without it.
+            full review; both tiers show the source and verification limits
+            alongside each finding.
           </p>
         </div>
         <DemoReport />

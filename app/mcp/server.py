@@ -463,7 +463,12 @@ async def _tool_get_audit(args: dict, ctx: dict) -> dict:
         "audit_id": str(row["id"]),
         "status": "completed",
         "basis": score.get("basis"),
-        "score": score.get("score"),
+        # `total`, not `score`: compute_scores has never emitted a key called
+        # `score`, so this field was null on every audit this tool ever
+        # answered. It read as "this audit has no score" to an editor that had
+        # just paid for one. The test that covered it built its own row with a
+        # `score` key in it -- a shape the product does not write.
+        "score": score.get("total"),
         "stack": row.get("stack"),
         "file_count": row.get("file_count"),
         "repo_url": row.get("repo_url"),
@@ -515,8 +520,13 @@ async def _tool_list_recent(args: dict, ctx: dict) -> dict:
             {
                 "audit_id": str(row["id"]),
                 "repo_url": row.get("repo_url"),
-                "basis": (row.get("score_json") or {}).get("basis"),
-                "score": (row.get("score_json") or {}).get("score"),
+                # Both read from columns the listing query actually selects.
+                # They used to be dug out of `score_json`, which list_audits
+                # does not select at all -- so every row in every listing
+                # carried basis=null and score=null, and the score_total
+                # column sat one key away, selected and unused.
+                "basis": row.get("basis"),
+                "score": row.get("score_total"),
                 "created_at": row.get("created_at"),
             }
             for row in rows
