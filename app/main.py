@@ -46,6 +46,7 @@ from app.routes.bank_transfer import router as bank_transfer_router
 from app.routes.billing import router as billing_router
 from app.routes.operator import router as operator_router
 from app.routes.reads import router as reads_router
+from app.routes.bundle_check import router as bundle_check_router
 from app.routes.rls_check import router as rls_check_router
 from app.routes.session import router as session_router
 from app.routes.storefront import router as storefront_router
@@ -2414,6 +2415,7 @@ app.include_router(billing_router)
 app.include_router(operator_router)
 app.include_router(reads_router)
 app.include_router(rls_check_router)
+app.include_router(bundle_check_router)
 app.include_router(session_router)
 app.include_router(storefront_router)
 app.include_router(yookassa_router)

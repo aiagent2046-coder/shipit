@@ -23,7 +23,8 @@ from app.scan.llm_scan import ALL_RUBRICS, RUBRICS, run_llm_scan
 from app.scan.pipeline import (BASIS_FULL, BASIS_PARTIAL, BASIS_STATIC_ONLY,
                                LLM_FAILURE_BILLING, LLM_FAILURE_PROVIDER,
                                _SCORED_FIELDS, llm_failure_kind, run_scan)
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.scoring import (LLM_ONLY_CATEGORIES, ScoredFinding,
+                               compute_scores)
 
 # Matches every rubric's keywords, so the order calls arrive in is the rubric
 # declaration order and a test can say "fail on the third" and mean it.
@@ -140,9 +141,22 @@ def test_a_partial_audit_does_not_claim_the_full_basis():
 
 
 def test_the_failed_rubrics_category_is_unexamined_rather_than_perfect():
-    result = scan(nth=len(ALL_RUBRICS))
+    """The rubric lost is the LAST one whose category has no static producer.
 
-    lost = RUBRICS[ALL_RUBRICS[-1]]["category"]
+    It used to be simply the last rubric, which is "web" -> Frontend. That
+    stopped being a lost category on 2026-09-01: app/scan/error_boundary.py
+    examines Frontend at every depth, so a failed web rubric leaves Frontend
+    honestly in the mean and this test's premise -- "nothing looked" -- false
+    for it. The premise still holds for every category in LLM_ONLY_CATEGORIES,
+    and the test now picks one of those rather than a position in the list,
+    so the next producer that moves a category out does not silently turn it
+    into a test of the wrong thing.
+    """
+    lose = max(i for i, r in enumerate(ALL_RUBRICS)
+               if RUBRICS[r]["category"] in LLM_ONLY_CATEGORIES)
+    result = scan(nth=lose + 1)
+
+    lost = RUBRICS[ALL_RUBRICS[lose]]["category"]
     score = result["score"]
 
     assert lost in score["unexamined"]
@@ -151,7 +165,7 @@ def test_the_failed_rubrics_category_is_unexamined_rather_than_perfect():
     # lower the score -- it RAISES it, which is the direction that matters.
     scored = [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
               for f in result["findings"]]
-    examined = frozenset(RUBRICS[r]["category"] for r in ALL_RUBRICS[:-1])
+    examined = frozenset(RUBRICS[r]["category"] for r in ALL_RUBRICS[:lose])
 
     honest = compute_scores(scored, llm_categories=examined)["total"]
     as_if_it_had_run = compute_scores(

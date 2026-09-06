@@ -1,5 +1,6 @@
 import type { Finding, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings, severityCounts } from "@/lib/format";
+import { evidenceLabel, isNonProductionFinding } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -9,7 +10,7 @@ function SeverityBadge({ severity }: { severity: Severity }) {
       className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-semibold ${meta.badgeClass}`}
     >
       <span aria-hidden="true">{meta.emoji}</span>
-      {meta.label}
+      Potential {severity} impact
     </span>
   );
 }
@@ -60,6 +61,7 @@ function FindingCard({ finding }: { finding: Finding }) {
         <p className="font-medium">{what}</p>
         <SeverityBadge severity={finding.severity} />
       </div>
+      <p className="mb-2 text-sm text-muted">{evidenceLabel(finding)}</p>
       {risk && <p className="mb-2 text-sm text-muted">{risk}</p>}
       {fix && (
         <p className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-accent">
@@ -83,16 +85,37 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
       <div className="rounded-lg border border-border bg-surface p-6 text-center">
         <p className="text-accent">No issues found by the current checks.</p>
         <p className="mt-1 text-sm text-muted">
-          That&apos;s a clean bill from the static + LLM scan — nice work.
+          Absence of findings does not establish safety. See the audit scope and unchecked areas.
         </p>
       </div>
     );
   }
+  const sorted = sortFindings(findings);
+  const production = sorted.filter((f) => !isNonProductionFinding(f));
+  const examples = sorted.filter(isNonProductionFinding);
   return (
-    <ul className="flex flex-col gap-3">
-      {sortFindings(findings).map((f, i) => (
-        <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />
-      ))}
-    </ul>
+    <>
+      <ul className="flex flex-col gap-3">
+        {production.map((f, i) => (
+          <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />
+        ))}
+      </ul>
+      {examples.length > 0 && (
+        <section className="mt-6" aria-label="In tests, examples and scaffolding">
+          <h3 className="font-semibold">In tests, examples and scaffolding</h3>
+          <p className="my-2 text-sm text-muted">
+            These paths or contexts suggest tests, examples or scaffolding;
+            deployment has not been checked. Confirm whether a credential is
+            synthetic. A real secret still requires action even when it is
+            committed in a test.
+          </p>
+          <ul className="flex flex-col gap-3">
+            {examples.map((f, i) => (
+              <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
   );
 }

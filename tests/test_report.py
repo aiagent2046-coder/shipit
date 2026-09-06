@@ -2,7 +2,7 @@
 names and titles come from a hostile archive and from the LLM.
 """
 
-import re
+import pytest
 
 from app.report.html import NON_PRODUCTION_HEADING, render_report
 
@@ -26,13 +26,13 @@ def _finding() -> dict:
     }
 
 
-def test_report_contains_score_stack_and_findings():
+def test_report_contains_stack_and_findings_without_score():
     html = render_report(result([{
         "severity": "critical", "confidence": 0.9,
         "title": "AWS key in code", "file": "src/config.ts", "line": 3,
         "masked": "AKIA****(20 chars)",
     }]), project_name="demo")
-    assert "6.4" in html
+    assert ">6.4<" not in html
     assert "nextjs" in html
     assert "AWS key in code" in html
     assert "src/config.ts:3" in html
@@ -101,7 +101,7 @@ def test_report_endpoint_renders_persisted_audit():
         r = client.get("/v1/audits/known-id/report?token=t0k")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/html")
-        assert "Fix before launch" in r.text
+        assert "Potential critical impact" in r.text
         # Right id, no/wrong token -> 404 (doesn't confirm the id exists).
         assert client.get("/v1/audits/known-id/report").status_code == 404
         assert client.get(
@@ -211,7 +211,7 @@ def test_the_section_does_not_tell_the_reader_these_files_never_run():
     assert ".github/workflows/playwright.yaml" in section
     assert "run in production" not in NON_PRODUCTION_NOTE
     # ...and the reassurance the section exists to give is still given.
-    assert "not worth blocking a launch" in NON_PRODUCTION_NOTE
+    assert "A real secret still requires action" in NON_PRODUCTION_NOTE
 
 
 def test_test_findings_go_under_their_own_heading():
@@ -233,7 +233,7 @@ def test_clean_production_code_is_said_out_loud():
     app, findings only in fixtures. Silence there reads as "we found problems"
     when the truth is the opposite."""
     html = render_report(result([_TEST_FILE]))
-    assert "Nothing found in the code your app runs." in html
+    assert "No findings outside the test and example section." in html
     assert NON_PRODUCTION_HEADING in html
     assert "tests/test_secrets.py" in html
 
@@ -247,7 +247,7 @@ def test_llm_findings_without_context_are_split_by_path():
         "title": "Webhook mutates database without authentication",
         "file": "tests/fixtures/unauthenticated_webhook.ts", "line": 11,
     }]))
-    assert "Nothing found in the code your app runs." in html
+    assert "No findings outside the test and example section." in html
     assert NON_PRODUCTION_HEADING in html
 
 
@@ -261,266 +261,6 @@ def test_migration_findings_stay_in_the_production_section():
     }]))
     assert NON_PRODUCTION_HEADING not in html
 
-
-def test_free_scan_publishes_no_mark_out_of_ten():
-    """This test asserted the opposite until a second repository settled it.
-
-    The free tier first published no number, because the score ROSE when
-    fewer checks ran: 7.2 with the auth and injection rubrics on audit
-    ed402e63, 9.1 without them. The number came back once unexamined
-    categories stopped voting and one confident critical could cap the total
-    -- recomputed on that same audit, 5.4 full against 6.1 static-only: a 0.7
-    gap, both failing.
-
-    That reasoning rested on one repository. On kristina_agent_center the same
-    comparison is 9.9 static-only against 4.7 full, a gap of 5.2, with the
-    free number reading as a clean bill of health on a codebase that lets an
-    unauthenticated caller run commands as root over SSH. The protection
-    covers Auth, Money & Data and Frontend; it cannot cover Security, which
-    both tiers fill -- with the static rules finding only "no Dockerfile",
-    Security read 10.0 and carried the mean.
-
-    So: no mark out of ten from a scan that cannot earn one. What the free
-    report shows is what it looked at and what it found. The scope
-    requirement did not go away -- it is asserted below exactly as before.
-    """
-    r = result([_finding()])
-    r["score"]["basis"] = "static_only"
-    r["score"]["unexamined"] = ["Auth", "Money & Data"]
-    html = render_report(r)
-
-    assert 'class="ring"' not in html, "the headline score ring is back"
-    assert 'class="noring"' in html
-    # The whole claim, not a fragment of it: asserting "out of ten" passed
-    # against a mutation that flipped the sentence to "produces a summary out
-    # of ten". A substring is not a statement.
-    assert "does not produce a mark out of ten" in html
-    # Scope still travels with the report, which is what mattered all along.
-    assert "Auth" in html and "Money &amp; Data" in html
-    assert "Nothing here examined" in html
-
-
-def test_an_unexamined_category_is_never_drawn_as_a_passing_bar():
-    """The reason the score was withheld in the first place, kept as an
-    invariant rather than as a blanket ban on the number.
-
-    An unexamined category sits at 10.0 for want of a producer. Rendering
-    that as a full bar answers "is my auth safe?" with a confident yes that
-    nothing checked -- which is worse than any headline, because it is
-    specific.
-    """
-    r = result([_finding()])
-    r["score"]["basis"] = "static_only"
-    r["score"]["categories"] = {"Security": 5.0, "Auth": 10.0,
-                                "Testing": 9.6, "Deploy": 9.8}
-    r["score"]["unexamined"] = ["Auth"]
-    html = render_report(r)
-
-    # Matched on the label span, not on the word: "Auth" also appears in the
-    # scope note above the bars, and splitting on it picked up the preamble.
-    auth_row = next(row for row in html.split('<div class="cat">')
-                    if row.startswith('<span class="cat-name">Auth</span>'))
-    assert "not checked" in auth_row
-    assert "10.0" not in auth_row
-    assert "fill" not in auth_row, "an unexamined category must draw no bar"
-
-
-def test_a_stored_audit_without_the_unexamined_key_says_something_honest():
-    """Rows written before the scorer recorded `unexamined` cannot name the
-    categories. They still must not imply the scan covered everything."""
-    r = result([_finding()])
-    r["score"]["basis"] = "static_only"
-    r["score"].pop("unexamined", None)
-    html = render_report(r)
-
-    assert "does not review your authentication" in html
-
-
-def test_full_report_is_unchanged_and_missing_basis_keeps_its_score():
-    """The paid shape still scores, and so does an audit from before `basis`.
-
-    Rows written before the field existed must keep rendering as they always
-    did rather than silently losing their score to a policy they predate.
-    """
-    scored = result([_finding()])
-    scored["score"]["basis"] = "static+llm"
-    html = render_report(scored)
-    assert 'class="ring"' in html and "6.4" in html
-
-    legacy = result([_finding()])          # no basis key at all
-    html2 = render_report(legacy)
-    assert 'class="ring"' in html2 and "6.4" in html2
-
-
-def test_a_full_audit_says_its_findings_are_two_passes_not_a_census():
-    """The paid tier's honesty note: a full audit is passes=2 (union-of-N) and
-    a model's findings are a sample, so the list is "the strongest issues we
-    can confirm", never a proof the rest is clean. Measured on four
-    same-engine runs of unchanged code -- highs reproduced 65-84%, one real
-    critical in 2 of 4 -- which is why the page must not imply exhaustiveness.
-
-    Anchored on the asymmetry sentence, not a stray word: the whole point is
-    that absence is weaker evidence than presence, and a note that lost that
-    clause would still contain "audit" and "findings"."""
-    scored = result([_finding()])
-    scored["score"]["basis"] = "static+llm"
-    html = render_report(scored)
-    assert "How complete is this list" in html
-    assert "the absence of one is weaker evidence than its presence" in html
-
-
-def test_a_free_scan_makes_no_two_pass_claim():
-    """The note is basis-specific like the free scope note above it: a free
-    scan is one pass of the cheapest model and may not promise it read the
-    code twice. static_only and static+preview both count as unscored."""
-    for basis in ("static_only", "static+preview"):
-        r = result([_finding()])
-        r["score"]["basis"] = basis
-        r["score"]["unexamined"] = ["Auth", "Money & Data"]
-        html = render_report(r)
-        assert "How complete is this list" not in html, basis
-        assert "reads your code with a language model twice" not in html, basis
-
-
-# --- why a score was capped -------------------------------------------------
-
-def _gated(reasons: list[dict], basis: str = "static+llm") -> dict:
-    return {
-        "stack": "nextjs",
-        "score": {"total": 6.5, "basis": basis,
-                  "categories": {"Security": 8.2, "Auth": 10.0,
-                                 "Testing": 9.6, "Deploy": 9.8},
-                  "gated_by": reasons},
-        "findings": [_finding()],
-    }
-
-
-def test_capped_score_says_a_critical_caused_it():
-    """The case with no visual tell: every bar above 7.0, headline 6.5.
-
-    Without this line the breakdown appears to contradict the headline, and a
-    reader who cannot reconcile the two has no reason to trust either.
-    """
-    html = render_report(_gated([
-        {"kind": "critical", "category": "Security",
-         "rule_id": "env-file-committed", "title": "Committed .env file"},
-    ]))
-    assert "cannot exceed" in html
-    assert "Committed .env file" in html
-
-
-def test_capped_score_names_the_failing_category():
-    html = render_report(_gated([
-        {"kind": "subscore", "category": "Security", "value": 5.9},
-    ]))
-    assert "Security" in html
-
-
-def test_the_cap_note_names_the_category_without_its_number():
-    """Measured on a real report: audit b504326, Drydock auditing itself.
-
-    The bars had just stopped publishing category numbers, because three
-    byte-identical runs of the same repository moved Security by 1.3. Three
-    lines below them this paragraph printed "a safety category below 7.0
-    (Security 5.3, Money & Data 3.9)" -- the numbers back, in a place nobody
-    re-read when the bars changed. The threshold stays: it is the boundary
-    the rows are already drawn against, so naming a category here says what
-    its row says and no more.
-
-    Two categories, because one would let a bare category name pass by
-    accident from the joining comma.
-    """
-    html = render_report(_gated([
-        {"kind": "subscore", "category": "Security", "value": 5.3},
-        {"kind": "subscore", "category": "Money & Data", "value": 3.9},
-    ]))
-    assert "below 7.0 (Money &amp; Data, Security)" in html
-    assert "5.3" not in html
-    assert "3.9" not in html
-
-
-def test_the_note_describes_compression_not_a_flat_ceiling():
-    """The gate scales the mean; it does not clip it.
-
-    The sentence said "capped at 6.9" -- the flat ceiling _apply_gate tried
-    first and rejected for flattening 40% of failing repos onto one number.
-    A real audit (ai-co-founder-matching) then published 5.1 directly above
-    those words, with 6.9 appearing nowhere else on the page: its category
-    mean was 7.4 and the gate compressed it. A reader who tries to reconcile
-    5.1 with "capped at 6.9" cannot, which is the headline contradicting the
-    text beside it -- the exact defect the gate exists to remove.
-
-    The total is set below GATED_MAX deliberately: at 6.5 the old wording
-    looked close enough to pass, and only a value that is plainly not the
-    cap can tell the two explanations apart.
-    """
-    row = _gated([{"kind": "subscore", "category": "Security", "value": 5.9}])
-    row["score"]["total"] = 5.1
-    html = render_report(row)
-
-    assert "cannot exceed 6.9" in html
-    assert "compressed" in html
-    assert "capped at 6.9" not in html, (
-        "describes the flat ceiling that was measured and rejected")
-
-
-def test_a_page_with_no_score_does_not_explain_the_score():
-    """Measured on a real free report, audit 544b91bd.
-
-    The page opened "A free scan does not produce a mark out of ten, because
-    it does not look at enough to earn one", marked Security "partly checked"
-    rather than giving it a number, and then printed:
-
-        This score cannot exceed 6.9 because the audit found a safety
-        category below 7.0 (Security 5.5).
-
-    Three things wrong at once. It says "this score" where there is none. It
-    publishes the exact category number the page two paragraphs above had
-    declined to publish. And 6.9 appears nowhere else on a free page, so the
-    reader has nothing to reconcile it against.
-
-    Withholding a number in one section and printing it in the next is not a
-    smaller claim than publishing it. It is the same claim, made where nobody
-    thought to look for it.
-    """
-    reasons = [{"kind": "subscore", "category": "Security", "value": 5.5}]
-
-    for basis in ("static+preview", "static_only"):
-        html = render_report(_gated(reasons, basis=basis))
-        assert "cannot exceed" not in html, basis
-        assert "Security 5.5" not in html, basis
-
-    # ...and the paid page still carries it, which is the whole point of the
-    # paragraph: a headline that contradicts every bar above it needs saying.
-    # It names the category; the number stayed withheld everywhere, which is
-    # what the free page was originally wrong about.
-    paid = render_report(_gated(reasons))
-    assert "cannot exceed" in paid and "Security" in paid
-    assert "5.5" not in paid
-
-
-def test_hostile_gate_reason_title_is_escaped():
-    """gated_by carries an LLM-authored title straight from the finding."""
-    html = render_report(_gated([
-        {"kind": "critical", "category": "Security", "rule_id": "llm-security",
-         "title": "<script>alert(1)</script>"},
-    ]))
-    assert "<script>alert(1)</script>" not in html
-    assert "&lt;script&gt;" in html
-
-
-def test_ungated_and_legacy_rows_print_no_cap_note():
-    """Empty means the gate did not fire; absent means an audit stored before
-    the scorer recorded reasons. Neither may print an explanation -- and the
-    legacy row must not be described as ungated either, so it says nothing.
-    """
-    assert "cannot exceed" not in render_report(_gated([]))
-    legacy = _gated([])
-    del legacy["score"]["gated_by"]
-    assert "cannot exceed" not in render_report(legacy)
-
-
-# --- joining the bars to the table ------------------------------------------
 
 def test_a_finding_names_the_bar_it_scored_in():
     """The page draws six category bars and a table, and nothing joined them.
@@ -569,390 +309,59 @@ def test_a_hostile_category_is_escaped():
     assert "<script>alert(1)</script>" not in render_report(result([f]))
 
 
-def test_a_capped_free_scan_names_nothing_it_did_not_publish():
-    """The counterpart of the test above, on the case that reads worst.
-
-    A committed .env is a static rule, so a lone critical capping a free scan
-    is the common case rather than the exotic one -- which is exactly why the
-    paragraph must not print here. The finding is in the table, at its own
-    severity, where a free scan is entitled to put it. What the free page
-    cannot do is explain the effect of that finding on a number it withheld.
-    """
-    html = render_report(_gated(
-        [{"kind": "critical", "category": "Security",
-          "rule_id": "env-file-committed", "title": "Committed .env file"}],
-        basis="static_only"))
+@pytest.mark.parametrize("basis", [None, "static_only", "static+preview", "static+llm", "static+partial"])
+def test_every_tier_and_legacy_audit_withholds_unvalidated_scores(basis):
+    row = result([dict(_finding(), rule_id="llm-auth", confidence=1.0)])
+    row["score"].update(basis=basis, gated_by=[{
+        "kind": "critical", "title": "Unverified model claim", "category": "Auth",
+    }])
+    html = render_report(row)
+    assert 'class="ring"' not in html
+    assert ">6.4<" not in html
+    assert "Production Readiness Score" not in html
     assert "cannot exceed" not in html
-
-
-def test_a_stored_row_predating_the_key_still_marks_auth_unchecked():
-    """The dangerous edge of publishing the free tier's score.
-
-    Rows written before the scorer recorded `unexamined` arrive without it.
-    Treating absent as "everything was examined" would draw Auth as a full
-    10.0 bar on every cached free audit -- the exact claim (issue #181) that
-    keeping the score hidden used to prevent. The basis is enough to work it
-    out, and it is worked out from the same constant compute_scores uses.
-    """
-    r = result([_finding()])
-    r["score"]["basis"] = "static_only"
-    r["score"].pop("unexamined", None)
-    r["score"]["categories"] = {"Security": 5.0, "Auth": 10.0,
-                                "Testing": 9.6, "Deploy": 9.8}
-    html = render_report(r)
-
-    auth_row = next(row for row in html.split('<div class="cat">')
-                    if row.startswith('<span class="cat-name">Auth</span>'))
-    assert "not checked" in auth_row
-    assert "10.0" not in auth_row
-
-
-def test_a_full_audit_never_marks_anything_unchecked():
-    """The backfill keys on the basis, so it must not reach a paid audit --
-    every category there really was examined."""
-    r = result([_finding()])
-    r["score"]["basis"] = "static+llm"
-    r["score"].pop("unexamined", None)
-    html = render_report(r)
-
-    assert "not checked" not in html
-
-
-def test_a_category_that_exported_its_findings_draws_no_bar():
-    """Auth read 10.0 as a full green bar on a repository whose endpoint runs
-    shell commands with no login check — because the model correctly filed
-    that as Security, leaving Auth holding nothing.
-
-    The row must say where the findings went. "not checked" would be a second
-    falsehood: the rubric ran, and it found something.
-    """
-    row = _gated([])
-    row["score"]["reported_elsewhere"] = {"Auth": ["Security"]}
-    html = render_report(row)
-
-    assert "reported under Security" in html
-    # The number and its bar are what lied; both must be gone for this row.
-    assert ">10.0<" not in html.split("Auth")[1].split("</div></div>")[0]
-    # And it must not be described as unexamined.
-    assert "not checked" not in html
-
-
-def test_the_two_blanked_rows_do_not_borrow_each_others_wording():
-    """`unexamined` and `reported_elsewhere` both blank a number, for opposite
-    reasons. A report that renders them alike tells the reader the wrong thing
-    in one of the two cases, and the wrong thing is the one that sends someone
-    hunting for an audit that already happened."""
-    row = _gated([], basis="static_only")
-    # Both names must exist in `categories`, or no row is rendered for them
-    # and the assertions below pass by measuring nothing.
-    assert {"Testing", "Auth"} <= set(row["score"]["categories"])
-    row["score"]["unexamined"] = ["Testing"]
-    row["score"]["reported_elsewhere"] = {"Auth": ["Security"]}
-    html = render_report(row)
-
-    assert "not checked" in html
-    assert "reported under Security" in html
-
-
-def test_a_row_stored_before_the_key_existed_renders_unchanged():
-    """Absent must read as "nothing was handed away" — the answer those rows
-    already give — not as an error and not as a blanked row."""
-    row = _gated([])
-    assert "reported_elsewhere" not in row["score"]
-    html = render_report(row)
-
-    assert "reported under" not in html
-    # Auth still draws its ordinary bar. Checked by the band it lands in
-    # rather than by ">10.0<": categories publish a band now, because three
-    # runs of one repository on one revision swung Security by 1.3 and a
-    # decimal place claims a precision of 0.05.
-    assert "nothing serious found" in html
-
-
-# --- a category publishes a band, because a number is more than we measured ---
-#
-# Three audits of Avisafety-1/blank-slate, one revision, one model, and input
-# identical to the byte (prompt_chars 4,161,116 and input_tokens 1,463,735 on
-# all three):
-#
-#     Security       3.1   1.8   2.2      swing 1.3
-#     Money & Data   0.0   0.3   1.1      swing 1.1
-#     Auth           6.9   7.5   6.8      swing 0.7
-#     total          4.1   4.0   4.1      swing 0.1
-#
-# A decimal place claims +/-0.05. The categories carry +/-1.3, so the decimal
-# is a precision claim the engine cannot support. The TOTAL can: the static
-# categories are constant and damp it.
-
-
-def _scored(value: float, findings: list[dict] | None = None) -> str:
-    # A LOW finding, deliberately. The first fixture here reused _finding() --
-    # a critical at 0.9 in Security -- so test_a_category_says_which_band_it_is
-    # asserted "nothing serious found" over a confident critical, enshrining
-    # the exact sentence #35 exists to remove. These tests are about the
-    # value->band mapping alone; the serious-finding override has its own.
-    quiet = {"severity": "low", "confidence": 0.9, "category": "Security",
-             "title": "quiet", "file": "a.py", "line": 1}
-    row = result(findings if findings is not None else [quiet])
-    row["score"]["basis"] = "static+llm"
-    row["score"]["categories"] = {"Security": value}
-    return render_report(row)
-
-
-def test_a_category_says_which_band_it_is_in():
-    assert "serious problems" in _scored(2.2)
-    assert "problems found" in _scored(5.0)
-    assert "nothing serious found" in _scored(8.0)
-
-
-def test_the_band_does_not_move_with_the_measured_swing():
-    """The point of the change in one assertion. Security read 3.1, 1.8 and
-    2.2 across three runs of the same bytes; all three must say the same
-    thing, or the coarsening has bought nothing."""
-    assert len({_band_text(v) for v in (3.1, 1.8, 2.2)}) == 1
-
-
-def _band_text(value: float) -> str:
-    from app.report.html import _band
-    return _band(value)[0]
-
-
-def test_the_boundary_is_the_one_the_scorer_already_acts_on():
-    """GATE_THRESHOLD, not a number chosen for looks: below it the scorer
-    treats a safety category as failing and caps the total."""
-    from app.scan.scoring import GATE_THRESHOLD
-
-    assert _band_text(GATE_THRESHOLD) == "nothing serious found"
-    assert _band_text(GATE_THRESHOLD - 0.1) != "nothing serious found"
-
-
-# --- a confident serious finding forbids the top band -----------------------
-#
-# Measured twice, on different repositories, two days apart. Audit ba360e21:
-# Auth held "Unauthenticated chat endpoint accepts caller-supplied user_id"
-# and unsalted SHA-256 passwords -- two highs -- and banded "nothing serious
-# found", because one high costs 1.0 x confidence against a threshold of 7.0,
-# so a category needs FOUR confident highs to leave the top band. Audit
-# b4bf9c07: Auth banded "nothing serious found" over "No authentication on
-# any API endpoint". The page contradicts itself: the row says nothing
-# serious, the table directly below it says "⚠️ Important".
-#
-# Render-side, not scorer-side, on purpose. The scorer's critical ceiling
-# already keeps a critical-holding category out of the top band, but doing
-# the same for highs in the scorer would push gated categories below
-# GATE_THRESHOLD and fire the total's gate -- a fleet-wide scoring change,
-# not a wording fix. The band is the only thing lying here, so the band is
-# what changes; stored audits are fixed retroactively because the renderer
-# recomputes from findings it already has.
-
-
-def _high(category: str = "Security", confidence: float = 0.9) -> dict:
-    return {"severity": "high", "confidence": confidence,
-            "category": category, "title": "unauthenticated endpoint",
-            "file": "api.py", "line": 10}
-
-
-def test_a_confident_high_forbids_nothing_serious_found():
-    html = _scored(8.6, [_high()])
-
     assert "nothing serious found" not in html
-    assert 'cat-band">problems found<' in html
+    assert "So a finding here is real" not in html
+    assert "Model hypothesis — unverified" in html
+    assert "Potential critical impact" in html
+    assert "No readiness score out of 10" in html
+    assert "Limits of this audit" in html
 
 
-def test_an_unconfident_high_does_not_cap_the_band():
-    """Same floor as the critical gate, same reasoning: severity is a claim
-    about impact, confidence about certainty, and a categorical statement --
-    which a band is -- needs its own floor. A producer that says "high if
-    real, but I am guessing" must not rewrite the row by itself."""
-    from app.scan.scoring import CRITICAL_GATE_MIN_CONFIDENCE
-
-    html = _scored(8.6, [_high(confidence=CRITICAL_GATE_MIN_CONFIDENCE - 0.1)])
-
-    assert "nothing serious found" in html
-
-
-def test_mediums_alone_do_not_cap_the_band():
-    """The rule is about serious findings, not any findings: a category at
-    8.6 over two mediums has earned its band arithmetically."""
-    medium = {"severity": "medium", "confidence": 0.95, "category": "Security",
-              "title": "verbose errors", "file": "api.py", "line": 3}
-
-    assert "nothing serious found" in _scored(8.6, [medium])
+@pytest.mark.parametrize("source,rule,label", [
+    ("static", "aws-access-key-id", "Static signal — unverified"),
+    ("llm", "llm-auth", "Model hypothesis — unverified"),
+    (None, "llm-auth", "Model hypothesis — unverified"),
+    (None, "aws-access-key-id", "Legacy finding — verification not recorded"),
+])
+def test_producer_confidence_never_becomes_confirmation(source, rule, label):
+    f = dict(_finding(), source=source, rule_id=rule, confidence=1.0)
+    assert label in render_report(result([f]))
 
 
-def test_the_cap_lands_on_the_finding_category_not_its_neighbours():
-    """Category-scoped: a high filed under Security must not strip the top
-    band from Auth. Both categories rendered, one high in Security."""
-    row = result([_high("Security")])
-    row["score"]["basis"] = "static+llm"
-    row["score"]["categories"] = {"Security": 8.6, "Auth": 9.0}
-    html = render_report(row)
+def test_coverage_distinguishes_skipped_partial_and_legacy():
+    from app.report.evidence import coverage_rows
 
-    assert re.search(r'Auth</span>.*?cat-band">nothing serious found<', html)
-    assert re.search(r'Security</span>.*?cat-band">problems found<', html)
-
-
-def test_a_low_band_is_not_raised_by_the_cap():
-    """The override forbids the top band; it must never LIFT a row. A
-    category at 2.2 holding a high stays "serious problems"."""
-    assert "serious problems" in _scored(2.2, [_high()])
+    f = dict(_finding(), category="Auth")
+    score = {"basis": "static_only", "categories": {}}
+    rows = dict(coverage_rows(score, [f]))
+    assert rows["Auth"] == "Not surveyed — see findings · 1 unverified finding"
+    assert rows["Money & Data"] == "Not checked"
+    assert rows["Security"] == "Partly checked"
+    assert dict(coverage_rows({"categories": {}}, []))["Auth"] == "Coverage not recorded"
 
 
-def test_an_old_critical_holding_audit_is_capped_render_side():
-    """Stored audits from before the scorer's critical ceiling carry a
-    category at 8+ with a critical inside -- the kristina_agent_center shape
-    (Auth 8.1 over a root-shell endpoint). The renderer must not repeat the
-    number's claim just because the score predates the rule."""
-    crit = {"severity": "critical", "confidence": 0.95, "category": "Auth",
-            "title": "root shell, no auth", "file": "svc.py", "line": 128}
-    row = result([crit])
-    row["score"]["basis"] = "static+llm"
-    row["score"]["categories"] = {"Auth": 8.1}
-    html = render_report(row)
-
-    assert "nothing serious found" not in html
+def test_zero_findings_is_not_a_safety_verdict():
+    html = render_report(result([]))
+    assert "Absence of a finding does not establish safety" in html
+    assert "have not been verified here" in html
 
 
-def test_the_bar_width_does_not_republish_the_number():
-    """A proportional fill would state the exact value in pixels -- the same
-    claim, made where nobody thought to look for it.
+def test_finding_count_is_not_changed_by_display_grouping():
+    from app.scan.rls import RULE_ID
 
-    Read out of the RENDERED page, not out of _band: the helper returning one
-    width for a band proves nothing about the renderer using it, and the
-    mutation that made the fill proportional again left this green while it
-    asked _band directly."""
-    widths = {_rendered_width(v) for v in (1.0, 2.2, 3.4)}
-
-    assert len(widths) == 1, widths
-
-
-def _rendered_width(value: float) -> str:
-    match = re.search(r'class="fill" style="width:(\d+)%', _scored(value))
-    assert match, "no category bar was drawn"
-    return match.group(1)
-
-
-def test_the_bar_colour_does_not_republish_the_number():
-    """The third channel, and the one that shipped broken.
-
-    Text and width snapped to the band; the colour kept _score_color, whose
-    boundaries are 8 and 5 where the bands' are 7.0 and 3.5. On a real report
-    (audit b504326) Security 5.3 drew yellow and Money & Data 3.9 drew red
-    under identical text and identical width -- the reader can see the two
-    rows differ and the page never says by what.
-
-    Rendered page again, for the reason above _rendered_width: asking _band
-    for a colour would leave the renderer free to ignore it.
-    """
-    same_band = {_rendered_colour(v) for v in (3.6, 5.3, 6.9)}
-    assert len(same_band) == 1, same_band
-
-    # ...and the bands are still told apart, or one flat colour would pass.
-    assert len({_rendered_colour(v) for v in (2.2, 5.3, 8.0)}) == 3
-
-
-def _rendered_colour(value: float) -> str:
-    match = re.search(r'class="fill" style="width:\d+%;background:(#\w+)',
-                      _scored(value))
-    assert match, "no category bar was drawn"
-    return match.group(1)
-
-
-def test_the_total_keeps_its_number():
-    """Coarsening the headline too would throw away precision the engine does
-    have: the same three runs moved it 4.1 / 4.0 / 4.1."""
-    row = result([_finding()])
-    row["score"]["basis"] = "static+llm"
-
-    assert ">6.4<" in render_report(row)
-
-
-# --- the free tier publishes findings, not numbers ---------------------------
-#
-# Two browser tabs on the same repository made this visible. The paid report
-# found an SSRF, a service-role key used as an HMAC secret, hardcoded bot
-# credentials and a rate limiter that fails open; the free report on the same
-# code drew Security as a full green 10.0 bar and reported one low finding.
-# The prose disclaimer was honest and nobody reads prose next to a green bar.
-
-
-def _preview(categories: dict | None = None) -> dict:
-    return {
-        "stack": "nextjs",
-        "score": {
-            "total": 9.9, "basis": "static+preview",
-            "categories": categories or {
-                "Security": 10.0, "Auth": 10.0, "Testing": 10.0,
-                "Deploy": 9.9, "Money & Data": 10.0, "Frontend": 10.0},
-            "unexamined": ["Auth", "Money & Data", "Frontend"],
-            "gated_by": [],
-        },
-        "findings": [_finding()],
-    }
-
-
-def test_a_preview_publishes_no_mark_out_of_ten():
-    html = render_report(_preview())
-
-    assert "Free scan" in html
-    assert "does not produce a mark out of ten" in html
-    # The headline number must be absent, not merely small. 9.9 is what this
-    # repository scored on the free tier while its paid audit read 4.7.
-    assert ">9.9<" not in html
-
-
-def test_a_preview_marks_what_it_looked_at_as_partly_checked():
-    """Neither a number nor "not checked".
-
-    Security WAS examined -- by regexes and one rubric on the cheapest model --
-    so calling it unchecked is false. But a 10.0 renders identically to a 10.0
-    a full audit produced, and the visitor cannot tell which they are reading.
-    """
-    html = render_report(_preview())
-
-    assert "partly checked" in html
-    assert "not checked" in html          # Auth / Money & Data / Frontend
-    # No category number survives anywhere on a free report.
-    for value in ("10.0", "9.9"):
-        assert f'class="cat-val">{value}<' not in html
-
-
-def test_a_preview_says_it_ran_a_security_review_and_static_only_does_not():
-    """The two free depths are different scans and must not share a claim.
-
-    A static-only result reached no model at all -- the spend cap, or a
-    provider failure. Printing the preview's wider scope over it would
-    overstate the thinnest audit the product produces.
-    """
-    preview = render_report(_preview())
-    row = _preview()
-    row["score"]["basis"] = "static_only"
-    static_only = render_report(row)
-
-    assert "one quick security review" in preview
-    assert "one quick security review" not in static_only
-    assert "does not produce a mark out of ten" in static_only
-
-
-def test_a_paid_audit_publishes_a_band_and_keeps_its_headline():
-    """This test used to say a paid report is the one place a category number
-    is earned. It is not, and the measurement is why.
-
-    Three audits of Avisafety-1/blank-slate on one revision, one model and
-    byte-identical input swung Security 3.1 / 1.8 / 2.2 and Money & Data
-    0.0 / 0.3 / 1.1. A decimal place on a category claims a precision of
-    0.05 against a measurement carrying 1.3 -- so the category publishes the
-    band it lands in.
-
-    The TOTAL keeps its number: the same three runs moved it 4.1 / 4.0 / 4.1,
-    because the static categories are constant and damp it. Coarsening it too
-    would throw away precision the engine does have."""
-    row = _preview()
-    row["score"]["basis"] = "static+llm"
-    row["score"]["unexamined"] = []
-    html = render_report(row)
-
-    assert "partly checked" not in html
-    assert 'class="cat-val cat-band">nothing serious found<' in html
-    assert 'class="cat-val">9.9<' not in html
-    assert ">9.9<" in html   # ...and the headline ring keeps its number
+    f = dict(_finding(), rule_id=RULE_ID)
+    # Count both records even though the table combines them into one row.
+    html = render_report(result([f, dict(f, file="second.sql")]))
+    assert '<div class="noring">2<small>findings</small>' in html
+    assert html.count('class="title"') == 1

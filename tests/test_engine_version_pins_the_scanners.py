@@ -43,12 +43,14 @@ import io
 import zipfile
 
 from app.scan import pipeline, static
+from app.scan.error_boundary import BoundaryScan
 
 # Every scanner run_static_scan feeds into the findings list, by the name it is
 # called by. Sorted, so a diff reads as one added or removed line.
 WIRED_SCANNERS = (
     "run_checks",
     "scan_ci_deploy_source",
+    "scan_error_boundary",
     "scan_rls",
     "scan_schema_drift",
     "scan_secrets",
@@ -73,6 +75,7 @@ EMITTED_RULE_IDS = (
     "github-pat",
     "gitignore-missing-secrets",
     "jwt-in-code",
+    "missing-error-boundary",
     "no-ci",
     "no-dockerfile",
     "no-tests",
@@ -93,7 +96,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-08-28-1"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-06-1"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:
@@ -115,9 +118,14 @@ def _called_scanners(monkeypatch) -> tuple[str, ...]:
             continue
         if name == "run_static_scan" or not callable(getattr(static, name)):
             continue
+        # Every scanner yields a list of findings -- except the error-boundary
+        # one, which returns a BoundaryScan so it can say how much it READ
+        # beside what it found. The stub has to honour that shape, or this
+        # test crashes on the very scanner it was updated to pin.
+        empty = (BoundaryScan() if name == "scan_error_boundary" else [])
         monkeypatch.setattr(
             static, name,
-            (lambda n: lambda *_a, **_k: called.append(n) or [])(name),
+            (lambda n, e: lambda *_a, **_k: called.append(n) or e)(name, empty),
         )
 
     buf = io.BytesIO()

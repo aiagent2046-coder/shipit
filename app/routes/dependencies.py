@@ -26,6 +26,7 @@ from app.db import (
     MonitoringRunRepository,
     PaymentRepository,
     RlsLiveCheckRepository,
+    ServedBundleCheckRepository,
     ServiceFlagsRepository,
     SubscriptionRepository,
 )
@@ -85,6 +86,7 @@ _audit_job_repo = AuditJobRepository()
 _fixpack_repo = FixpackJobRepository()
 _fix_outcome_repo = FixOutcomeRepository()
 _rls_live_check_repo = RlsLiveCheckRepository()
+_served_bundle_check_repo = ServedBundleCheckRepository()
 _account_repo = AccountRepository()
 _payment_repo = PaymentRepository()
 _subscription_repo = SubscriptionRepository()
@@ -145,6 +147,23 @@ def get_fix_outcome_repo() -> FixOutcomeRepository:
 def get_rls_live_check_repo() -> RlsLiveCheckRepository:
     """Same as get_audit_repo, for the live-RLS-check consent ledger."""
     return _rls_live_check_repo
+
+
+def get_served_bundle_check_repo() -> ServedBundleCheckRepository:
+    """Same as get_audit_repo, for the served-bundle consent ledger."""
+    return _served_bundle_check_repo
+
+
+def get_bundle_fetch():
+    """Outbound transport for the served-bundle check. None -> the module's own
+    IP-pinned httpx call in production; overridden in tests so the suite never
+    fetches a real deployment.
+
+    Load-bearing for the same reason get_rls_fetch is, and one step more so:
+    the default fetch is where the SSRF guard's IP pinning lives, and a test
+    that forgot to override this would send a request to whatever host the test
+    data names."""
+    return None
 
 
 def get_rls_fetch():

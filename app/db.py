@@ -47,7 +47,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.scan.pipeline import BASIS_STATIC_ONLY
-from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
+from app.scan.scoring import CATEGORIES
 
 import psycopg
 from psycopg.rows import dict_row
@@ -378,16 +378,36 @@ def _backfill_unexamined(score: Any) -> Any:
     full green 10.0, which is precisely the claim (issue #181) the key exists
     to prevent. Absent must not read as "everything was examined".
 
-    Derived from LLM_ONLY_CATEGORIES rather than a literal list: it is the
-    same constant compute_scores excludes from the mean, so the backfilled
-    answer cannot disagree with the one a fresh audit produces.
+    A FROZEN LIST, AND NO LONGER THE LIVE CONSTANT. This used to derive from
+    LLM_ONLY_CATEGORIES on the argument that the backfill must agree with a
+    fresh audit. That argument inverted the day Frontend left that set: a row
+    with no `unexamined` key predates the key itself, so it predates
+    app/scan/error_boundary.py by weeks, and on the engine that produced it
+    nothing looked at Frontend at all. Its 10.0 there is as unearned as its
+    Auth 10.0. Reading today's constant would have those old rows start
+    claiming a Frontend examination that never happened -- the exact defect
+    this function exists to prevent, arriving through the fix for it.
+
+    The set is what LLM-only meant for every engine that stored a row without
+    this key. It does not track the constant, by design, and is asserted in
+    tests/test_db.py as the historical fact it is.
     """
     if not isinstance(score, dict) or "unexamined" in score:
         return score
     if str(score.get("basis") or "") != BASIS_STATIC_ONLY:
         return score
     return {**score,
-            "unexamined": [c for c in CATEGORIES if c in LLM_ONLY_CATEGORIES]}
+            "unexamined": [c for c in CATEGORIES
+                           if c in _LLM_ONLY_BEFORE_UNEXAMINED_WAS_STORED]}
+
+
+# What LLM_ONLY_CATEGORIES contained on every engine that stored a score
+# without an `unexamined` key. Frontend joined the live set on 2026-08-2x with
+# only the web rubric producing it, and left on 2026-09-01 when the
+# error-boundary scan became a static producer; every row this backfill
+# touches was scored while it was in. See _backfill_unexamined.
+_LLM_ONLY_BEFORE_UNEXAMINED_WAS_STORED = frozenset(
+    {"Auth", "Money & Data", "Frontend"})
 
 
 # Marks a fixpack_jobs.detail written by the stale-lease reaper rather than by the
@@ -3488,10 +3508,15 @@ class RlsLiveCheckRepository:
     """The consent ledger for the live RLS check (migration 0031).
 
     Every other stage of an audit reads a copy of the customer's code. This one
-    sends a request to a database that belongs to somebody, and it is the only
-    thing this product does that reaches outside our infrastructure and touches
-    a third party's system. If it is ever questioned, the answer has to be a
-    row rather than a log line that rotated out.
+    sends a request to a database that belongs to somebody. If it is ever
+    questioned, the answer has to be a row rather than a log line that rotated
+    out.
+
+    It was the ONLY path out to a third party's system until the served-bundle
+    check (migration 0037, ServedBundleCheckRepository below) added a second.
+    That sentence is corrected here rather than left standing, because a
+    docstring asserting uniqueness is exactly the kind of claim someone later
+    reasons from.
 
     THE ROW IS WRITTEN BEFORE THE REQUESTS GO OUT. A ledger that only records
     completed checks cannot show the one that crashed halfway, which is exactly
@@ -3559,6 +3584,133 @@ class RlsLiveCheckRepository:
                           created_at, completed_at
                 """,
                 (project_ref or None, outcome, json.dumps(tables_asked),
+                 json.dumps(result), uuid.UUID(str(check_id))),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+class ServedBundleCheckRepository:
+    """The consent ledger for the served-bundle check (migration 0037).
+
+    The second path this product has out to somebody else's system, and the
+    first that fetches an ARBITRARY customer-supplied URL rather than a
+    shape-constrained one. Same accounting as RlsLiveCheckRepository above and
+    for the same reason: if it is ever questioned, the answer has to be a row.
+
+    THE ROW IS WRITTEN BEFORE THE REQUEST GOES OUT, so a check that crashed
+    halfway is visible as a NULL outcome rather than absent — the case somebody
+    would actually ask about.
+
+    NO TOKEN AND NO FETCHED BYTES REACH THIS CLASS. It has no parameter for
+    either. What `complete()` stores is the redacted evidence the registry
+    already produced plus the asset URLs read; a leaked service_role key is
+    abused within minutes, so keeping one to prove we found it would repeat the
+    defect being reported.
+    """
+
+    async def start(
+        self, *, audit_id: str | None, client_key: str, consent_phrase: str,
+    ) -> dict[str, Any] | None:
+        """Record the intent to fetch, before anything leaves the process."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        parsed_audit_id = uuid.UUID(audit_id) if audit_id else None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                insert into served_bundle_checks
+                    (audit_id, client_key, consent_phrase)
+                values (%s, %s, %s)
+                returning id, audit_id, client_key, deployment_url,
+                          consent_phrase, assets_read, outcome, result_json,
+                          created_at, completed_at
+                """,
+                (parsed_audit_id, client_key, consent_phrase),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def latest_completed_for(
+        self, *, audit_id: str, deployment_url: str,
+    ) -> dict[str, Any] | None:
+        """The most recent SUCCESSFUL check of this deployment, or None.
+
+        The baseline a rotation verdict compares against. Three filters carry
+        the meaning:
+
+        * `completed_at is not null` — an open row is a check that started and
+          may never have read anything. Comparing against one would produce
+          "the credential is gone" from a run that simply crashed, which is the
+          worst possible direction for this verdict to be wrong in.
+        * `outcome = 'checked'` — a row that finished as 'skipped' (URL
+          refused) or 'error' (the deployment would not answer) also carries an
+          empty finding list, and it means we never looked. Since an empty
+          baseline now reads as "this deployment was clean at the last check",
+          admitting those rows would turn a failed fetch into evidence of
+          cleanliness. The literal matches ServedBundleResult.status in
+          app/proof/served_bundle.py, spelled out rather than imported so this
+          module keeps no dependency on the fetch layer.
+        * the SAME deployment_url — a customer with a staging and a production
+          URL under one audit gets two independent baselines, because they are
+          two different exposures. The caller passes the NORMALIZED url
+          (app/proof/served_bundle.validate_deployment_url), so that split
+          happens on genuinely different deployments and not on whether
+          somebody typed a trailing slash. Migration 0037 already describes
+          this column as "the URL as validated, not as typed"; that was the
+          intent and it only became true in the route on 2026-09-01 — the
+          comment is left alone because the file is checksummed in the
+          migration ledger, and the correction lives here instead.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, audit_id, client_key, deployment_url,
+                       consent_phrase, assets_read, outcome, result_json,
+                       created_at, completed_at
+                from served_bundle_checks
+                where audit_id = %s
+                  and deployment_url = %s
+                  and completed_at is not null
+                  and outcome = 'checked'
+                order by completed_at desc
+                limit 1
+                """,
+                (uuid.UUID(audit_id), deployment_url),
+            )
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def complete(
+        self, check_id: str, *, deployment_url: str, outcome: str,
+        assets_read: list[str], result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Close the row out with what actually happened."""
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                update served_bundle_checks
+                   set deployment_url = %s,
+                       outcome        = %s,
+                       assets_read    = %s::jsonb,
+                       result_json    = %s::jsonb,
+                       completed_at   = now()
+                 where id = %s
+                returning id, audit_id, client_key, deployment_url,
+                          consent_phrase, assets_read, outcome, result_json,
+                          created_at, completed_at
+                """,
+                (deployment_url or None, outcome, json.dumps(assets_read),
                  json.dumps(result), uuid.UUID(str(check_id))),
             )
             row = await cur.fetchone()
@@ -3722,6 +3874,12 @@ class McpKeyRepository:
         Joined rather than selected by id list so the answer cannot include an
         audit that was deleted out from under the link, and bounded because an
         MCP response goes into a context window somebody is paying for.
+
+        `basis` is extracted in SQL rather than by selecting score_json: the
+        listing needs one string out of that blob, and shipping every row's
+        findings-shaped jsonb into Python to read it would cost the same
+        response its bound. The tool used to reach for `score_json` on these
+        rows anyway -- a key this query has never returned -- and printed null.
         """
         try:
             pool = await get_pool()
@@ -3730,7 +3888,8 @@ class McpKeyRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select a.id, a.repo_url, a.stack, a.score_total, a.created_at
+                select a.id, a.repo_url, a.stack, a.score_total, a.created_at,
+                       a.score_json->>'basis' as basis
                 from mcp_key_audits k
                 join audits a on a.id = k.audit_id
                 where k.mcp_key_id = %s

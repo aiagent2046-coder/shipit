@@ -72,9 +72,9 @@ corpus (n=226): of 82 repositories carrying both a schema and a types file, 44%
 
 TWO SOURCES, TWO CLAIMS, AND THE DIFFERENCE IS THE POINT.
 
-  generated types  `supabase gen types typescript` writes its file FROM THE
-                   LIVE PROJECT. A name there is evidence the table EXISTED IN
-                   THE DATABASE when the file was generated.
+  generated types  A type-shaped declaration names an expected table. The
+                   matcher does not establish its generation history or
+                   database of origin; it may be copied or stale.
 
   client code      `supabase.from('x')` is evidence the APPLICATION EXPECTS the
                    table -- nothing more. A call left behind after the table
@@ -162,10 +162,10 @@ def scan_schema_drift(fileobj: BinaryIO) -> list[CheckFinding]:
         file=paths[0] if paths else "",
         explanation=_explain(from_types, from_code, named.has_dynamic_from),
         fix_hint=(
-            "Run `supabase db pull` to bring the live schema into a migration, "
-            "then check that every table it adds has RLS enabled and a policy. "
-            "A table created outside migrations is not reviewed by anything: "
-            "not this scan, not a pull request, not your own schema file."
+            "Compare these references with the deployed schema. If migrations "
+            "are missing, use `supabase db pull` to capture the schema, then "
+            "review the access policies. If references are stale or examples, "
+            "correct them instead. This scan has not queried the live database."
         ),
     )]
 
@@ -192,17 +192,13 @@ def _explain(from_types: set[str], from_code: set[str], dynamic: bool) -> str:
     parts: list[str] = []
 
     if from_types:
-        # The strong claim, and the only one licensed to speak about the
-        # database: `supabase gen types typescript` reads the live project.
-        pronoun, was = _them(from_types)
-        plural = "these tables" if len(from_types) > 1 else "this table"
+        # A matching type shape does not prove which database generated it,
+        # or even that it was generated rather than copied or handwritten.
         parts.append(
-            f"Your generated Supabase types name {_listed(from_types)}, which "
-            f"no migration in this repository creates. That file is generated "
-            f"from the live project, so {plural} {was} in your database when "
-            f"it was written -- {pronoun} exists outside your migrations, "
-            f"which means no review, no pull request and no static scan has "
-            f"ever looked at the access rules."
+            f"Your Supabase-shaped type declarations name {_listed(from_types)}, "
+            f"which no parsed migration in this repository creates. These "
+            f"declarations may be generated, copied, handwritten or stale; "
+            f"they do not establish what is in your live database."
         )
 
     if from_code:

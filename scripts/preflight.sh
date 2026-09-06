@@ -78,6 +78,37 @@ fi
 gate "whitespace"    git diff --check "$BASE_SHA" "$HEAD_SHA"
 gate "added secrets" "$PY" .github/scripts/scan-added-secrets.py "$BASE_SHA" "$HEAD_SHA"
 
+# The two shell gates, in CI's order and with CI's exact flags. Their absence
+# here contradicted this file's own first line and cost a red build on
+# 2026-08-31: a `# shellcheck disable=SC1091` sat above
+# `set -a; source keys.env; set +a`, where it bound to `set -a` (a directive
+# attaches to the NEXT COMMAND) and suppressed nothing. Seconds to catch here,
+# two minutes and a push to catch there -- the same lesson this script's header
+# was written for, in the one language it did not cover.
+check_shell_syntax() {
+    local script
+    while IFS= read -r -d '' script; do
+        bash -n "$script" || return 1
+    done < <(git ls-files -z '*.sh')
+}
+
+run_shellcheck() {
+    git ls-files -z '*.sh' | xargs -0 shellcheck \
+        --severity=info --enable=check-set-e-suppressed
+}
+
+gate "shell syntax"  check_shell_syntax
+
+# Not installed everywhere, and a missing linter must not read as a pass. Same
+# posture as the ruff-version notice below: say so, do not pretend.
+if command -v shellcheck >/dev/null 2>&1; then
+    gate "shellcheck"  run_shellcheck
+else
+    printf '%-28s%s\n' "shellcheck" \
+        "NOT INSTALLED — CI runs it; a green here says nothing about it"
+    echo "preflight: to match CI: apt-get install shellcheck" >&2
+fi
+
 # CI lints with the ruff pinned in requirements-dev.txt; this script lints with
 # whatever ruff is on the machine. When those differ, a green line here says
 # nothing about the remote one -- a newer ruff carries rules the local one has
