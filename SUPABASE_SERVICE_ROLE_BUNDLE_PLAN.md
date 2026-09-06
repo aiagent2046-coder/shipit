@@ -325,83 +325,471 @@ first.
 
 ---
 
----
+## Part A result, measured 2026-08-29 on n = 495 — committed bundles are a dead end
 
-## Decisions taken 2026-08-28, before any of it is built
+`scripts/measure_service_role_bundle_yield.py`, the same three strata as the
+route and blind-spot runs, 494 of 495 reachable.
 
-Recorded here rather than in a chat log so tomorrow starts from them.
+| stratum | uses Supabase | commits a readable bundle | bundle ships service_role |
+|---|---|---|---|
+| Lovable | 76 | **6 = 8%** [4–16%] | 0/6 |
+| bolt | 73 | **2 = 3%** [1–9%] | 0/2 |
+| control (no marker) | 78 | **8 = 10%** [5–19%] | 0/8 |
+| **pooled** | 227 | **16 = 7%** | **0/16** |
 
-### 1. Part A starts with a probe cheaper than Part A
+**Blind spot: 211/227 = 93% [89–96%] of Supabase repos commit no bundle at
+all.** The committed-bundle denominator is 16 across the entire corpus, and
+zero of those 16 shipped a real service_role key. No demo keys in bundles
+either (0 carved out); 8 other JWTs seen — anon keys, correctly not counted.
 
-The plan's own go/no-go (above, "The go/no-go decision A produces") already
-anticipates that committed bundles may be almost never present. If that is
-true, a full `measure_service_role_bundle_yield.py` — bundle walk, JWT decode,
-demo-signed carve-out, two-denominator funnel — is a day spent to discover an
-empty denominator.
+### What this decides
 
-So the first thing run is one pass over the same 495-repo corpus asking a
-single question, with no JWT parsing and no network:
+This is a **blind-spot result, not a coverage result**, exactly as the script
+was built to report. Generators emit source and build on a CI we cannot see —
+93% of the market commits no build output, so static analysis over committed
+bundles structurally cannot see this class. The 7% that do commit a bundle are
+too few to carry a rate (0 of 16 has a 95% interval of roughly 0–20%), and are
+plausibly not representative — a repo that commits its `dist/` is doing
+something unusual.
+
+So the corpus-wide committed-bundle path is **closed as uninformative**, and it
+closed cheaply: a day of static JS parsing, no live contact. This is NOT the
+same shape as the RLS Part A, which came back 2 of 4 measurable and said "go".
+Here the measurable denominator itself is the finding.
+
+### Where the signal actually is, and what it costs
+
+The class is not disproven — it is **relocated**. A `service_role` key reaches
+the browser at **runtime**, from a `VITE_`/`NEXT_PUBLIC_`-prefixed env var baked
+in at build, whether or not the build is committed. The only way to see that is
+to fetch the **served** `https://<app>/assets/*.js` — which the plan already
+scoped to owned/consented targets only (a third-party asset fetch at survey
+scale is its own consent question).
+
+Two honest routes forward, both smaller-n than a repo survey:
+
+1. **Part B on an owned stand** (unchanged): build the two-variant Vite bundle,
+   extract the key from the *served* `dist/`, prove the before/after through
+   `build_proof_report` with `NEGATIVE_CONTROL=1`. This validates the prover
+   regardless of the Part A miss — the prover was never going to get its inputs
+   from committed bundles.
+2. **A served-asset prevalence pass on consented customers only.** When a
+   customer runs an audit and consents, fetch their deployed JS and apply the
+   same oracle. That is the real denominator, and it accrues one deployment at a
+   time rather than from a corpus.
+
+### The comparison that matters
+
+The route class (`supabase-service-role-route`) fires on ~35% of Supabase repos
+*that have a server*. This bundle class fires on 0% of committed bundles because
+there are almost no committed bundles. **The route finding is where the shipped,
+static, no-consent coverage of "service_role bypasses RLS" lives.** The bundle
+class is a live-only proof that rides on top of it for consented deployments —
+valuable as *proof* (the differentiator), not as *prevalence*. The plan's claim
+at the top is still reachable; it is reached in B/C, never in a corpus survey.
+
+## Part B result, measured 2026-08-29 — half 1 proven, half 2 harness ready
+
+The stand is `smoke/service_role_bundle/` (one source, two builds) and the e2e
+is `scripts/e2e_proof_bundle_probe.py`. Zero production code changed — the
+script only imports `run_rls_probe`, `build_proof_report`, and the secrets
+oracle.
+
+### Half 1 — the leak survives a real production build (no Docker, proven here)
+
+`build_variants.sh` builds the same `src/main.ts` twice, differing only in the
+key bound to `VITE_SUPABASE_KEY`. Extracted from the emitted, minified bundle
+and classified by production's `_jwt_severity` / `_is_demo_jwt`:
 
 ```
-for repo in corpus:
-    does a committed dist/ | build/ | .next/ | out/ contain any *.js?
-→ N of 495 have a readable bundle
+dist_vulnerable/  role=service_role  real  sev=critical  (full RLS bypass)
+dist_patched/     role=anon          real  sev=low       (public by design)
 ```
 
-An hour, and it decides whether the corpus-wide path exists at all. If N is
-near zero the corpus number is dead on arrival, the honest headline becomes a
-blind-spot statement, and the signal moves entirely to the consented
-live-fetch path — which is a valid outcome the plan already names, reached a
-day earlier and for an hour's work.
+The service_role key survived esbuild minification into `dist_vulnerable/assets/*.js`;
+the patched build carries only the anon key. This is the class's core claim —
+a service-role credential reaches the browser through an ordinary Vite build —
+and it is checked against the actual bundle, not asserted.
 
-### 2. Part C consent: the RLS model, plus read-only enforced in code
+### Half 2 — the bypass, wired and proven through the injected fetch
 
-Same typed consent phrase the RLS live check uses (`app/routes/rls_check.py`
-— `consent` is a phrase, not a boolean, and there is no default), and the
-probe emits exactly one request shape. `INSERT` / `UPDATE` / `DELETE` / `rpc`
-are not parameters defaulting to off; no code path constructs them. That is
-the plan's own rule (see "NEW — read-only, enforced in code") adopted as the
-decision rather than left as a proposal.
+The pair reuses `run_rls_probe` verbatim, passing the EXTRACTED keys. The table
+is RLS-**on** and correct throughout — unlike the RLS e2e, nothing about the
+table changes; what changes is the key the bundle ships:
 
-Ownership proof beyond the consent phrase was considered and NOT added. It
-would be a second gate on a class that already refuses to run without a phrase
-a human typed, and the write ban removes the failure mode that would justify
-it. Revisit if a write probe is ever proposed.
+```
+BEFORE (service_role key from dist_vulnerable): status=success  (read a row — RLS bypassed)
+AFTER  (anon key from dist_patched):            status=failure  (200 [], policy denied)
+verified=True  exploit succeeded before, failed after
+```
 
-### 3. A correction to what this class can prove, and when
+The `200 []` ambiguity resolves inside the pair: BEFORE read a real row out of
+that same table, so AFTER returning none is a change, not an empty table —
+`build_proof_report` enforces exactly that shape, same as RLS.
 
-The plan says a key in the bundle is reachable with no auth in front of it "by
-construction", and that is right about the BEFORE half. It does not carry the
-AFTER half, and the difference decides what can be sold and when.
+### The negative control goes red, as required
 
-The live probe reads the customer's DEPLOYED bundle. "After" only becomes
-clean once they have merged, rotated the key, and redeployed. Until then the
-same `dist/*.js` serves the same key, so **a verified pair cannot exist before
-the customer acts** — and therefore cannot exist before payment, unless we
-change something in their infrastructure, which we do not.
+`NEGATIVE_CONTROL=1` keeps the service_role key for the AFTER probe — the
+developer who never removed it from the bundle. The exploit still succeeds,
+the pair does NOT verify, and the run reports the control as correctly caught:
 
-This is not an objection to the class. It is the same structural fact the RLS
-class has, stated once so no funnel gets designed around a verified-before-pay
-moment that cannot happen. What this class CAN do, and RLS cannot, is make the
-after-half cheap: once the key is rotated the old one 401s, provable by us in
-a single request with no build and no redeploy of theirs. The confirmation
-loop closes in seconds rather than waiting on their release.
+```
+AFTER (service_role, control): status=success
+verified=False  exploit still succeeds after patch
+```
 
-### 4. The measured fact that should govern expectations for Part A
+A green that has never been red proves only that it ran; this one has a red
+direction that is exercised on every run.
 
-From this project's own RLS run (`SUPABASE_RLS_YIELD_PLAN.md`, Part C,
-2026-08-18): **the migrations in the repository do not describe the
-deployment.** The one real exposure sat in a table absent from the migrations
-entirely, and static analysis was wrong in BOTH directions on the other two.
+### What is proven, and what still needs Don's Docker
 
-Committed build output is the same kind of artifact as committed migrations —
-generators emit source, not builds. Expect the bundle-presence probe in (1) to
-come back low, and treat a high number as the surprise rather than the
-baseline.
+Proven here, for real: the leak (half 1), and that the extraction produces two
+keys the probe tells apart and that the compare/oracle/negative-control wiring
+turns them into `verified` (half 2, injected fetch). **Not yet run:** the live
+PostgREST half — `python scripts/e2e_proof_bundle_probe.py` (no flag) needs
+Docker to confirm PostgREST actually assigns `service_role` → BYPASSRLS →
+rows and `anon` → `200 []` from the signed JWTs. The harness is written and
+mirrors `e2e_proof_rls_probe.py`; it is one `docker`-available run from closing.
 
----
+The distinction the RLS plan drew holds here: this proves the **prover**, on
+fabricated data, our own throwaway build — no customer's key, no live project.
+The end-to-end yield on real deployments is Part C, gated on consent.
 
-## Part A result — TODO (bundle-presence probe first, then, only if it clears,
-`measure_service_role_bundle_yield.py`)
-## Part B result — TODO (stand up owned Supabase + two-variant Vite bundle)
-## Part C result — TODO (owned project, typed consent, read-only)
+## Part C result, measured 2026-08-29 — the served-bundle path, guard-first
+
+Part A closed the committed-bundle survey; the key lives in the SERVED bundle,
+so Part C is the fetch that reads it. New production module
+`app/proof/served_bundle.py`; e2e `scripts/e2e_proof_served_bundle.py`, all
+runnable without Docker (the live-DB confirmation stays with Part B's harness).
+
+### The guard came first, because it is the whole risk
+
+This is the first primitive in the codebase that fetches an ARBITRARY
+customer-supplied URL — `fetch_repo_zip` is locked to github.com, `rls_probe`
+to `<ref>.supabase.co`. A deployment is on any domain, so the guard cannot be a
+shape; it is IP vetting: resolve the host and refuse every private, loopback,
+link-local, reserved, multicast or unspecified address, on EVERY resolved
+record (a dual-record rebind is refused because any one private address rejects
+the host). Exercised through a fake resolver:
+
+```
+metadata.evil -> 169.254.169.254   refused (link-local / cloud metadata)
+internal.evil -> 10.0.0.5          refused (RFC-1918)
+loop.evil     -> 127.0.0.1         refused (loopback)
+ula.evil      -> fd00::1           refused (IPv6 unique-local)
+rebind.evil   -> public + private  refused (any private rejects)
+app.example   -> 93.184.216.34     passes
+```
+
+Plus URL-shape refusals (http without loopback, non-http schemes,
+`user:pass@host` credential-smuggling, missing host), same-origin-only asset
+following, no auto-redirects, read-only GET, and a body that yields only the
+SHAPE of a service_role token — never the fetched bytes. The residual
+resolve-then-connect TOCTOU is closed in the default fetch by pinning to the
+vetted IP (original Host + SNI), documented in the module.
+
+### The fetch reads the key from the SERVED bundle
+
+A real loopback HTTP server serves `dist_vulnerable/`; `fetch_served_bundle`
+follows the served `index.html` to its `/assets/*.js` and extracts the
+service_role key, classified by production's oracle:
+
+```
+status=checked  leaked=True  assets_read=[…/assets/index-*.js]
+evidence={reason: service_role_in_bundle, refs: [egoprezwkjaqacxtjwfl], …}
+```
+
+The extracted key is asserted **equal to the one the stand baked in** — proof
+we read the served bundle, not something on disk — and the raw token never
+enters evidence (only the `ref` and a mask). The served `dist_patched/` yields
+`leaked=False`, as it must. No-consent and a metadata URL both return
+`skipped`.
+
+### The full path, end to end
+
+```
+URL -> served index.html -> /assets/*.js -> service_role key
+    -> run_rls_probe(before=service_role) -> success
+    -> run_rls_probe(after=anon)          -> failure
+    -> build_proof_report                 -> verified
+```
+
+The claim at the top of this document is now demonstrated on the served-asset
+path, on our own throwaway deployment: we read the service_role key out of the
+served JavaScript, and the same key that read the rows is refused once it is
+gone.
+
+### What is proven, and the honest remainder
+
+Proven here: the guard refuses every internal address; the fetch reads the key
+from a real served bundle and matches it to the baked-in key; the extracted key
+carries through to a `verified` before/after. Two things remain, both by
+design:
+
+* **Live PostgREST** — `e2e_proof_bundle_probe.py` under Docker confirms a real
+  PostgREST assigns `service_role -> BYPASSRLS -> rows` from the signed JWT.
+  The served-bundle path here uses the injected probe fetch for the DB half.
+* **Real deployments** — this ran on our own loopback deployment. The
+  served-asset prevalence pass on CONSENTED customer deployments is the real
+  denominator, and it accrues one deployment at a time. The guard is what makes
+  that safe to offer; nothing here quotes a rate from a deployment we do not
+  own.
+
+## BLOCKING PRECONDITION for Part C — the HTTPS transport smoke
+
+```
+python scripts/smoke_served_bundle_https.py     # must exit 0
+```
+
+**Part C does not point at a customer deployment until this passes.** It is a
+gate, not a nicety, because of a gap the rest of the suite cannot close:
+`tests/test_proof_served_bundle.py` proves the guard against every address
+class we care about — metadata, RFC-1918, loopback, IPv6, dual-record rebind —
+and every one of those tests injects a fake `fetch`. **Nothing exercises
+`_default_fetch_text`**, the function that will carry every real request. The
+guard is tested; the transport is not.
+
+The specific doubt is `_default_fetch_text`'s own TOCTOU fix. It connects to a
+vetted IP literal while carrying the original name in `Host` and
+`sni_hostname`. Whether httpx then verifies the certificate against that SNI
+name or against the IP in the URL is a property of the installed
+httpx/httpcore, not of our code. If it verifies against the IP, every fetch of
+a real deployment fails verification — and it fails CLOSED, as an `error`
+result, indistinguishable from an unreachable site. The path would be dead and
+look merely unlucky.
+
+The smoke has two halves and **the second is the one that matters**:
+
+1. a pinned fetch against a valid certificate must return 200 — the transport
+   works;
+2. the same code path pointed at a certificate that does not cover the name
+   must be REJECTED — because half 1 passing is equally consistent with
+   verification being off entirely, and that would trade the TOCTOU for a
+   silent downgrade to unverified TLS.
+
+`UNDETERMINED` (exit 78) is not a pass. Talking to the public internet means a
+refusal can be a correct TLS rejection or a blocked network, and the script
+refuses to collapse the two — the same disjoint-population rule Part A applies
+to an unreadable bundle. Run it somewhere with outbound HTTPS; from a sandboxed
+agent session it returns 78, which leaves Part C blocked, correctly.
+
+### Result, measured 2026-08-31 on the production host — PASSED
+
+```
+HALF 1  connecting to 104.20.23.154  (Host + SNI = example.com)
+        OK: status=200, 559 chars read over verified TLS
+HALF 2  https://wrong.host.badssl.com/
+        OK: rejected by certificate verification (ConnectError)
+exit=0
+```
+
+**The doubt is resolved, in the good direction: httpx verifies the certificate
+against the SNI hostname, not against the connected IP.** So
+`_default_fetch_text` closes the resolve-then-connect TOCTOU *without* paying
+for it in verification — the bytes come from the address the guard vetted, and
+the certificate still has to be valid for the name. Half 2 is what establishes
+the second clause; on its own, half 1 would have been equally consistent with
+verification being off entirely.
+
+Part C's transport precondition is met. What remains before a customer
+deployment is wiring and a decision, not a transport unknown.
+
+### The crawl is transitive, measured 2026-08-31 — and where it still stops
+
+Three runs against our own deployment closed two defects the suite could not
+show (an `assets_read` that only recorded files WITH a secret, and a duplicate
+chunk spending the cap), and then a third fact: the served HTML names 8
+scripts, and that is the ENTRY POINT, not the application. Next.js and Vite
+load route chunks by dynamic import, named inside JavaScript and never in the
+HTML — so a one-pass walk reads the shell and calls the app clean.
+
+Fine for a claim about our own landing page. Not fine for a claim about
+somebody else's application, which is what this endpoint exists to support. So
+a fetched chunk's own same-origin `.js` references now join the queue, bounded
+by MAX_ASSETS (40, a courtesy limit on the customer's server as much as ours).
+No browser, no build, no container — the three blockers that ended the
+runtime-CORS detector at 0 of 26 stay avoided.
+
+**Where it still stops, and this belongs beside any published result.** The
+walk follows references that are WRITTEN DOWN — quoted filenames, which is
+what a chunk manifest is made of. A URL the code assembles at runtime from
+pieces (`base + hash + ".js"`) is not written down anywhere and is not reached.
+`assets_truncated` says when the CAP stopped us; nothing can say when a
+computed name did. So the supportable sentence is "every script we could find
+from what is written down", never "every script the app can load".
+
+### The four phantom chunks are gone, measured 2026-09-01 on drydock.co
+
+The transitive walk shipped in `v2026.08.31-5` and the first run after it says:
+
+| | 2026-08-31, before | 2026-09-01, after |
+|---|---|---|
+| `assets_found` | 12 | **8** |
+| JS actually read | 8 | **8** |
+| `assets_unread` | (field not yet shipped) | **`[]`** |
+| `assets_truncated` | false | false |
+
+Twelve minus the four doubled turbopack manifest paths is eight, and the set of
+chunks actually read did not change. So the fix removed phantoms rather than
+narrowing the walk — which is the reading the numbers had to distinguish,
+because a walk that found fewer things and read the same number of things looks
+identical to a walk that broke.
+
+**What this does NOT show.** `assets_unread` is empty here because nothing
+failed, and that is only legible because the empty list is now written on every
+run. A NON-empty `assets_unread` on a live deployment has still never been
+observed — the reasons (`budget_exhausted`, `refused: …`, `fetch_failed: …`,
+`http_<n>`) are covered by fixtures only. And drydock.co is a landing page: the
+route-level chunk splitting that would exercise the transitive walk's real
+purpose is not present on it, so the boundary described above is still
+unmeasured, not disproved.
+
+### The rotation verdict was unreachable on a clean deployment, found 2026-09-01
+
+Six consented runs against drydock.co, and every one reported
+`rotation: no_baseline`. Read as a fluke of ordering for a day; it was
+structural, and the ledger says so plainly — five completed rows, all
+`outcome = checked`, all with `jsonb_array_length(result_json->'findings') = 0`.
+
+`compare_findings` inferred "no baseline" from an EMPTY baseline finding list.
+Three unrelated situations produce that list, and they had one answer between
+them:
+
+* no earlier check of this deployment — genuinely `no_baseline`;
+* an earlier check that found no credentials — the baseline exists and is clean;
+* an earlier check whose findings carry no fingerprint (no pepper) — not
+  comparable, which is a gap in OUR configuration, not a fact about theirs.
+
+The consequence is not cosmetic. A credential appearing on a deployment that
+was clean at the last check is the most valuable sentence this table can
+produce, and it was being rendered as "nothing to compare against" — on the
+class of deployment most likely to be re-checked on a schedule, since a clean
+one is exactly the one a customer re-runs.
+
+The caller now states `had_baseline` (a required keyword, no default: only the
+caller knows whether a prior row exists), and two verdicts were added,
+`still_clean` and `newly_exposed`, plus `not_comparable` for the missing
+fingerprint. Two adjacent holes closed with it, both of which would have turned
+"we never looked" into "it was clean": `latest_completed_for` accepted a
+baseline row with `outcome` of `skipped` or `error`, and the ledger was keyed
+on the URL as typed rather than as normalized, so `https://app.example` and
+`https://app.example/` wrote two separate histories.
+
+**Confirmed live on `v2026.09.01-1`**, the first rotation verdict that is not a
+fixture:
+
+```
+"rotation": {"verdict": "still_clean",
+             "detail": "no credentials in the previous check of this deployment
+                        and none now, in the assets we were able to read —
+                        unchanged, not audited clean"}
+```
+
+That single line exercises the whole chain in production: the baseline row was
+found, `result_json.findings` came back out of jsonb as `[]`, `had_baseline`
+reached `compare_findings`, and the answer was "clean then, clean now" instead
+of "nothing to compare against". Six earlier runs could not produce it.
+
+**And what that run did NOT prove, because two of the three fixes were not
+reachable by it.** Every prior row was already `outcome = checked`, so the new
+filter never had a failed row to exclude; and the URL was typed with its
+trailing slash both times, so normalization changed nothing. Both are covered
+against real Postgres in `tests/test_db_postgres_smoke.py`, which is a
+different claim from "seen in production" and is written here as the weaker
+one. The remaining five verdicts — `newly_exposed`, `unchanged`,
+`replaced_still_shipped`, `gone_from_bundle`, `not_comparable` — need a
+deployment that actually serves a credential, and are fixture-only.
+
+**Where it was found matters more than what it was.** Not by a failing test —
+the suite was green, and the fixtures asserted `no_baseline` as correct. By
+looking at six identical live results and asking why they could not be anything
+else. Same shape as the three defects before it: the fixture agreed with the
+code, and reality did not.
+
+### The transitive walk reached a real finding, 2026-09-01
+
+Shipped 2026-08-31, and until now shown only against fixtures and against
+drydock.co, where it read 8 chunks and found nothing because there is nothing
+there. Those two together could not distinguish a walk that works from a walk
+that runs.
+
+The rotation stand is deliberately two hops deep — `index.html` names an entry
+chunk, that chunk names a client chunk by quoted filename, and the credential
+is only in the second. Against the live host, measured with
+`scripts/preflight_bundle_check.py` (free, no ledger row):
+
+```
+status     : checked        leaked: True
+findings   : supabase_service_role  eyJhbGci••••K6T8  fp f88114460498
+             at .../assets/client-7ee9d42c.js
+assets_read: ["(served html)",
+              ".../assets/entry-bba46b16.js",
+              ".../assets/client-7ee9d42c.js"]
+assets_found: 2   assets_truncated: false   assets_unread: []
+```
+
+Three hops, and the finding is in the third. The fingerprint matches what the
+minter reported for `SERVICE_ROLE_A`, so the chain holds from mint through
+crawl to classification.
+
+**This does not move the boundary described above.** The walk still follows only
+names that are WRITTEN DOWN; a URL assembled at runtime from pieces is still not
+reached, and nothing can report when a computed name was missed. What changed is
+narrower and was worth having: "the walk finds a credential two hops from the
+HTML" is now measured rather than assumed.
+
+Measured with `scripts/preflight_bundle_check.py`, which runs the same fetch
+without calling the endpoint — so this cost none of the five daily requests, and
+the four that remain to spend are the ones that buy ledger rows.
+
+### The class, assembled
+
+Part A (repo static) is blind to this class by ~93%. Part B proved the leak
+survives a production build and the bypass verifies. Part C built the only
+thing that reaches the class in the wild — an SSRF-guarded fetch of the served
+bundle — and showed the whole path resolve to `verified` without pointing at
+anyone. What ships next is a decision, not a measurement: pass the transport
+smoke above, then wire the served-bundle fetch behind consent into the audit,
+give it its own `service_role_bundle_runtime` template id (so a stored
+`proof_json` row is unambiguous), and run the first consented customer
+deployment.
+
+### The four rotation verdicts, measured live 2026-09-02 — three leave the fixtures
+
+`scripts/run_rotation_sequence.sh` against the sslip.io stand, audit
+`4e738001-2a1d-4749-9ac5-f6289c49b8cd`, four real requests spent from the day's
+five. The `current` symlink was set per step and the served entry-chunk hash
+confirmed before each request, so no verdict was compared against a variant that
+was not live when it was checked — the failure mode the script exists to
+prevent. Rehearsed first with `preflight_bundle_check.py` (a fifth, free fetch)
+to confirm the URL was readable before spending anything.
+
+| run | served variant | verdict | findings | `rot-N.json` |
+|---|---|---|---|---|
+| 1 | `dist_key_a` — no prior check | `no_baseline` | 1 (`service_role`) | `/root/rot-1.json` |
+| 2 | `dist_key_a` — same key, unchanged | `unchanged` | 1 | `/root/rot-2.json` |
+| 3 | `dist_key_b` — new key, same class | `replaced_still_shipped` | 1 | `/root/rot-3.json` |
+| 4 | `dist_clean` — credential removed | `gone_from_bundle` | 0 | `/root/rot-4.json` |
+
+Every verdict matched the expected successor; the script halts on the first
+mismatch, so a clean finish is the assertion. The entry-chunk hash advanced with
+each variant (`bba46b16` → `bba46b16` → `76cba4b2` → `a389f865`), which is the
+served proof that the deployment was the one the comparison assumed.
+
+**What this moves out of the fixtures.** Before this run, five rotation verdicts
+were fixture-only (`SUPABASE_SERVICE_ROLE_BUNDLE_PLAN.md`, "what that run did NOT
+prove"): `newly_exposed`, `unchanged`, `replaced_still_shipped`,
+`gone_from_bundle`, `not_comparable`. Three are now measured against the live
+endpoint: **`unchanged`, `replaced_still_shipped`, `gone_from_bundle`**.
+`no_baseline` and `still_clean` were already live (six clean drydock.co runs and
+`v2026.09.01-1` respectively). Two remain fixture-only and this sequence does not
+reach them: **`newly_exposed`** (needs a clean baseline followed by a credential
+appearing — the sequence's first step is always the baseline, so it never
+produces it) and **`not_comparable`** (the missing-fingerprint / no-pepper case,
+a gap in our configuration rather than a deployment shape).
+
+The synthetic credential is inert (random ref, secret discarded at mint), so
+nothing was rotated or revoked afterward; the stand is left serving `dist_clean`,
+which carries no key. With the four verdicts recorded, the temporary
+`rotation-stand.45-10-40-169.sslip.io` block in `deploy/caddy/Caddyfile` is
+removed in the same change that adds this section.

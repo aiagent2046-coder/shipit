@@ -201,6 +201,17 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Add a Dockerfile; our Deploy Pack generates a working one "
         "automatically.",
     ),
+    "missing-error-boundary": (
+        "Your app has no error boundary above its pages.",
+        "When any single component hits an error while rendering, there is "
+        "nothing to contain it: the whole screen goes blank and the person "
+        "using it can only reload and hope. One small bug anywhere becomes a "
+        "total outage of the page.",
+        "Add an error boundary above your routes. In the Next.js app router, "
+        "create app/error.tsx and app/global-error.tsx; in a plain React app, "
+        "wrap the top-level component in an <ErrorBoundary> with a small "
+        "fallback that offers a reload.",
+    ),
     "no-ci": (
         "No automated checks run when the code changes (no CI).",
         "Broken changes reach your live app with nothing in the way.",

@@ -113,7 +113,7 @@ _TEST_PATH_SEGMENTS = frozenset((
     "spec", "e2e", "cypress", "playwright",
     # msw and hand-rolled fakes; __mocks__ was already here, these are the
     # same thing without the jest-specific underscores.
-    "mock", "mocks",
+    "mock", "mocks", "fixtures", "__fixtures__", "smoke",
 ))
 _TEST_SETUP_FILENAMES = frozenset(("jest.setup.ts", "jest.setup.js"))
 _TEST_FILE_SUFFIXES = (

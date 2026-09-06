@@ -101,31 +101,24 @@ def test_the_deploy_category_is_not_charged_twice() -> None:
 
 # --- what the reader is told -----------------------------------------------
 
-def test_the_report_explains_the_cap_in_its_own_terms() -> None:
-    """"The audit found a critical finding" is the wrong sentence for this:
-    nothing dangerous was found. What happened is that we may have read the
-    wrong repository, and the paragraph beside the number has to say so."""
+def test_report_preserves_scope_finding_without_a_readiness_cap() -> None:
     html = render_report({
         "score": compute_scores([deploy_finding()]),
         "findings": [vars(deploy_finding())],
         "stack": "nextjs",
     })
-    assert "may not describe the code you actually run" in html
-    assert "critical finding" not in html
+    assert deploy_finding().title in html
+    assert "verification not recorded" in html
+    assert "cannot exceed" not in html
 
 
-def test_both_routes_can_be_named_at_once() -> None:
-    """A repository can be dangerous AND audited in the wrong place. The
-    sentence must carry both rather than letting one hide the other."""
+def test_scope_warning_and_model_hypothesis_both_remain_visible() -> None:
+    findings = [deploy_finding(), ScoredFinding(
+        rule_id="llm-auth", title="Root RCE", severity="critical",
+        confidence=0.95, category="Security", source="llm")]
     html = render_report({
-        "score": compute_scores([
-            deploy_finding(),
-            ScoredFinding(rule_id="llm-auth", title="Root RCE",
-                          severity="critical", confidence=0.95,
-                          category="Security"),
-        ]),
-        "findings": [vars(deploy_finding())],
-        "stack": "nextjs",
+        "score": compute_scores(findings), "findings": [vars(f) for f in findings],
     })
-    assert "critical finding" in html
-    assert "second reason" in html
+    assert "Root RCE" in html and deploy_finding().title in html
+    assert "Model hypothesis — unverified" in html
+    assert "cannot exceed" not in html
