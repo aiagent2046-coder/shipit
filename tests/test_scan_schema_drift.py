@@ -39,6 +39,23 @@ export type Database = {
 """
 
 
+def test_test_strings_and_python_scanner_examples_are_not_application_tables():
+    files = {
+        "repo/migrations/0001.sql": SCHEMA,
+        "repo/tests/test_tables.py": TYPES + "supabase.from('ghost_table')",
+        "repo/tests/fixtures/client.ts": "supabase.from('ghost_table')",
+        "repo/smoke/sample/src/client.ts": "supabase.from('ghost_table')",
+        "repo/app/scan/table_names.py": '\"\"\"Example: supabase.from(\'profiles\')\"\"\"',
+        "repo/src/client.ts": "supabase.from('users')",
+    }
+    assert scan_schema_drift(make_zip(files)) == []
+    files["repo/src/client.ts"] = "supabase.from('real_missing_table')"
+    findings = scan_schema_drift(make_zip(files))
+    assert len(findings) == 1
+    assert "real_missing_table" in findings[0].explanation
+    assert "ghost_table" not in findings[0].explanation
+
+
 def test_reports_a_table_the_client_calls_and_no_migration_declares():
     findings = scan_schema_drift(make_zip({
         "repo/supabase/migrations/0001.sql": SCHEMA,

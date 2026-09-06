@@ -89,7 +89,7 @@ def test_report_renders_plain_text_and_tiers():
         "llm": {"prompts": 2},
     }
     html = render_report(result, "demo")
-    assert "Fix before launch" in html          # tier, not raw "critical"
+    assert "Potential critical impact" in html
     assert ".env file is inside the repository" in html  # plain-language what
     assert "rotate every secret" in html        # plain-language fix
 

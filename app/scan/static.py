@@ -114,7 +114,8 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             "frontend_scan": {"mount": boundary.mount,
                               "coverage": boundary.coverage},
         },
-        "findings": [vars(f) for f in findings],
+        "findings": [dict(vars(f), source="static",
+                          verification_method="source_pattern") for f in findings],
         # Carried, not folded into a finding: `budget_exhausted` means the
         # boundary scan stopped before it could say a boundary is absent, so
         # no finding was emitted AND Frontend's clean read is unearned for this

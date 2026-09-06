@@ -38,6 +38,8 @@ export interface GateReason {
 }
 
 export interface Score {
+  // Numeric fields remain for older API consumers; they are not a readiness verdict.
+  readiness_score_validated?: false;
   total: number;
   categories: Record<string, number>;
   // Every value app/scan/pipeline.py can emit: BASIS_FULL, BASIS_PREVIEW,
@@ -48,9 +50,7 @@ export interface Score {
   // written correctly even by someone looking straight at it. A type that
   // under-describes the wire makes the honest branch unwriteable.
   //
-  // "static+partial" is a full audit whose rubric run was cut short. It is
-  // NOT free, and it must keep its score -- it is listed here so the union
-  // matches the backend, not so it joins the free tier.
+  // Numeric scores are legacy diagnostic fields, not validated readiness.
   basis?: "static+llm" | "static+partial" | "static+preview" | "static_only";
   // Optional because audits stored before this key existed have none, which
   // means "unknown", not "ungated" — an empty array is the ungated case.
@@ -67,6 +67,7 @@ export interface Score {
   // places. Absent on audits stored before the key existed, and a renderer
   // then falls back to intersecting `unexamined` with the findings it has.
   unexamined_with_findings?: string[];
+  reported_elsewhere?: Record<string, string[]>;
 }
 
 export interface Finding {
@@ -80,6 +81,11 @@ export interface Finding {
   masked?: string;
   explanation?: string;
   fix_hint?: string;
+  source?: "static" | "llm" | "unknown";
+  verification_status?: "unverified";
+  verification_method?: "source_pattern" | "model_review" | "not_run";
+  context?: string | null;
+
 }
 
 // POST /v1/audits, cache hit — byte-identical content was audited before, so

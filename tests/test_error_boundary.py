@@ -52,6 +52,21 @@ ROUTED_SPA = {
 }
 
 
+def test_smoke_apps_do_not_describe_the_deployed_web_app():
+    files = {"repo/pyproject.toml": "[project]\nname='backend'"}
+    for prefix in ("web/", "smoke/next_sample/", "examples/demo/"):
+        files.update({"repo/" + prefix + k: v for k, v in ROUTED_NEXT.items()})
+    files["repo/web/app/error.tsx"] = "export default function Error(){return <div/>}"
+    files["repo/web/app/global-error.tsx"] = "export default function Error(){return <html/>}"
+    assert scan_error_boundary(_zip(files)).findings == []
+    # The same real app must still be reported when its boundaries are removed.
+    del files["repo/web/app/error.tsx"]
+    del files["repo/web/app/global-error.tsx"]
+    findings = scan_error_boundary(_zip(files)).findings
+    assert len(findings) == 1
+    assert findings[0].file.startswith("web/")
+
+
 # --------------------------------------------------------------------------- #
 # it fires where it should
 # --------------------------------------------------------------------------- #

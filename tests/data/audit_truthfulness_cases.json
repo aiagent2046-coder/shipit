@@ -1,0 +1,50 @@
+[
+  {
+    "id": "hooks-before-return",
+    "file": "web/src/components/RlsCheck.tsx",
+    "title": "Hooks called after an early return",
+    "severity": "medium",
+    "review": "refuted",
+    "reason": "All five useState calls precede the conditional return; moving that return above them would be unsafe."
+  },
+  {
+    "id": "telegram-constant-time",
+    "file": "app/routes/_shared.py",
+    "title": "Telegram webhook uses non-constant-time comparison",
+    "severity": "medium",
+    "review": "refuted",
+    "reason": "The imported helper calls hmac.compare_digest on encoded bytes."
+  },
+  {
+    "id": "fixpack-crash-recovery",
+    "file": "app/billing/__init__.py",
+    "title": "Crash between job creation and payment completion loses money forever",
+    "severity": "high",
+    "review": "refuted",
+    "reason": "The retry skips the completed-payment return for a pending payment, reuses the job and completes the payment. This does not prove all concurrent scenarios."
+  },
+  {
+    "id": "webhook-double-grant",
+    "file": "app/routes/yookassa.py",
+    "title": "Provider retries can double-grant Fix Packs",
+    "severity": "critical",
+    "review": "unsubstantiated",
+    "reason": "The report itself acknowledges grant idempotency. A possible duplicate notification does not prove a duplicate grant."
+  },
+  {
+    "id": "public-api-address",
+    "file": "web/src/lib/api.ts",
+    "title": "NEXT_PUBLIC_API_BASE_URL exposes API endpoint to client",
+    "severity": "high",
+    "review": "refuted-as-vulnerability",
+    "reason": "The browser calls this API. Visibility of its URL alone is not a credential leak or an authorization bypass."
+  },
+  {
+    "id": "float-example",
+    "file": "app/routes/yookassa.py",
+    "title": "990.00 becomes 989.999 and rejects a paid order",
+    "severity": "high",
+    "review": "refuted-example",
+    "reason": "The cited two-decimal formatting returns 990.00 and 990.07 for those inputs. Broader money handling still needs its own tests."
+  }
+]
