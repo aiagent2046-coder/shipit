@@ -302,9 +302,9 @@ export async function reportBankTransferPaid(
   return parse<BankTransferPaidResult>(res);
 }
 
-export async function getFixpackStatus(auditId: string): Promise<FixpackStatus> {
+export async function getFixpackStatus(auditId: string, token: string): Promise<FixpackStatus> {
   const res = await request(
-    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack-status`,
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack-status?token=${encodeURIComponent(token)}`,
   );
   return parse<FixpackStatus>(res);
 }

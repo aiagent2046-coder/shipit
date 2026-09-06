@@ -18,6 +18,7 @@ import zipfile
 from app.llm.client import LLMClient, LLMError
 from app.fixpack.generate import mark_unfixable_findings
 from app.scan.collapse import collapse_repeats
+from app.scan.manifest import scan_manifest
 from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
@@ -109,7 +110,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # rows move; the mean is deliberately unchanged, because admitting such a
 # category to it RAISES a weak repository's total
 # (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
-AUDIT_ENGINE_VERSION = "2026-09-06-1"
+AUDIT_ENGINE_VERSION = "2026-09-06-3"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
@@ -482,6 +483,9 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # this line a PAID row would be blind to the same question a
             # static-only row can answer, and the paid rows are the ones a
             # calibration decision costs money to get wrong.
+            "scan_manifest": scan_manifest(data, AUDIT_ENGINE_VERSION, static,
+                                           llm_summary if isinstance(llm_summary, dict) else vars(spend),
+                                           llm_failure_kind(llm_summary)),
             "frontend_scan": static.get("score", {}).get("frontend_scan", {}),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0

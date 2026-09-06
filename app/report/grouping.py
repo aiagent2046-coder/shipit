@@ -32,6 +32,7 @@ an unmeasured calibration is the thing this project distrusts most.
 
 from __future__ import annotations
 
+from app.report.evidence import is_non_production
 from app.scan.rls import RULE_ID as RLS_READ_RULE_ID
 from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
 
@@ -49,20 +50,21 @@ def group_for_display(findings: list[dict]) -> list[dict]:
     Order is preserved: a group takes the position of its first member, so a
     report does not reshuffle because two of its rows merged.
     """
-    groups: dict[str, list[dict]] = {}
+    groups: dict[tuple[str, bool], list[dict]] = {}
     out: list[dict | None] = []
-    slots: dict[str, int] = {}
+    slots: dict[tuple[str, bool], int] = {}
 
     for finding in findings:
         rule_id = str(finding.get("rule_id", ""))
         if rule_id not in GROUPABLE:
             out.append(finding)
             continue
-        if rule_id not in groups:
-            slots[rule_id] = len(out)
-            groups[rule_id] = []
+        key = (rule_id, is_non_production(finding))
+        if key not in groups:
+            slots[key] = len(out)
+            groups[key] = []
             out.append(None)      # reserved, filled below
-        groups[rule_id].append(finding)
+        groups[key].append(finding)
 
     for rule_id, members in groups.items():
         out[slots[rule_id]] = _one_row(members)

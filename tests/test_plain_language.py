@@ -1,5 +1,4 @@
-"""The plain-language layer is the conversion surface of the report:
-a finding the reader doesn't understand doesn't scare, share, or sell."""
+"""Plain-language reports explain observations and their evidence limits."""
 from app.report.html import render_report
 from app.report.plain_language import PLAIN, plain_fields, tier
 from app.scan.checks import run_checks  # noqa: F401 (import sanity)
@@ -90,8 +89,8 @@ def test_report_renders_plain_text_and_tiers():
     }
     html = render_report(result, "demo")
     assert "Potential critical impact" in html
-    assert ".env file is inside the repository" in html  # plain-language what
-    assert "rotate every secret" in html        # plain-language fix
+    assert "environment configuration file is included in the archive" in html  # plain-language what
+    assert "rotate any exposed real credentials" in html        # plain-language fix
 
 
 def test_tier_mapping_total():
@@ -124,18 +123,16 @@ def test_a_findings_own_text_beats_the_dictionary():
 
 
 def test_the_occurrence_note_still_reaches_the_report():
-    """collapse_repeats writes "This appears in N files" into `explanation`.
-    It used to be surfaced by a branch that treated explanation as nothing
-    but that note; now it rides along inside the text, which only works if
-    the text is the thing being printed.
-    """
+    """Keep structured occurrence evidence when replacing categorical prose."""
     collapsed = {
         "rule_id": "generic-assignment", "title": "Hardcoded credential",
         "severity": "high", "confidence": 0.5, "category": "Security",
+        "occurrence_count": 4, "occurrence_files": ["a.ts", "b.ts", "c.ts"],
         "explanation": "A secret is written into the code. "
                        "This appears in 4 files: a.ts, b.ts, c.ts.",
         "fix_hint": "Move it to an environment variable.",
     }
     _, risk, _ = plain_fields(collapsed)
 
-    assert "This appears in 4 files" in risk
+    assert "4 occurrences are recorded" in risk
+    assert "a.ts, b.ts, c.ts" in risk

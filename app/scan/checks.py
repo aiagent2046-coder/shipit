@@ -410,21 +410,14 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
 
     if not any(n.rsplit("/", 1)[-1] == "Dockerfile" for n in files):
         findings.append(CheckFinding(
-            "no-dockerfile", "No Dockerfile — app is not containerized",
+            "no-dockerfile", "No Dockerfile found in the archive",
             severity="low", confidence=0.9, category="Deploy",
             explanation=(
-                "Your app has no recipe describing how to run it, so it runs "
-                "with whatever versions happen to be installed wherever it is "
-                "deployed. That is why an app can work on your machine and "
-                "fail on the server. It also makes moving to another host a "
-                "manual reconstruction rather than a copy."
+                "A Dockerfile is one deployment option. Its absence does not "
+                "establish that the app cannot run on a server; systemd and "
+                "managed platforms are other options."
             ),
-            fix_hint=(
-                "Not urgent if your host builds the app for you (Vercel, "
-                "Netlify and similar do). Worth adding when you move to your "
-                "own server, or when 'works locally, breaks in production' "
-                "starts costing you time."
-            ),
+            fix_hint="Review existing deployment instructions; add a Dockerfile only if containers are needed.",
         ))
 
     if not any(n.startswith(".github/workflows/") for n in files):

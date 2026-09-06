@@ -73,9 +73,8 @@ class FakeAuditRepo:
         return self.by_id.get(audit_id)
 
     async def get_authorized(self, audit_id: str, token):
-        # The real one checks the per-row access token; these tests are about
-        # the payload, not the ownership check, which has its own coverage.
-        return self.by_id.get(audit_id)
+        row = self.by_id.get(audit_id)
+        return row if row and token and row["access_token"] == token else None
 
     async def get_access_token(self, audit_id: str):
         row = self.by_id.get(audit_id)
@@ -351,7 +350,8 @@ def test_fixpack_status_no_job_returns_null_status():
     audit = audits.add(repo_url=REPO_URL)
     _override_status(audits=audits, fixpacks=fixpacks)
     try:
-        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status",
+                       params={"token": audit["access_token"]})
         assert r.status_code == 200
         assert r.json() == {"audit_id": audit["id"], "status": None,
                             "pr_url": None, "failure_kind": None}
@@ -366,13 +366,15 @@ async def test_fixpack_status_reports_paid_then_delivered():
     job = fixpacks.stored(created["id"])
     _override_status(audits=audits, fixpacks=fixpacks)
     try:
-        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status",
+                       params={"token": audit["access_token"]})
         assert r.json() == {"audit_id": audit["id"], "status": "paid",
                             "pr_url": None, "failure_kind": None}
 
         job["status"] = "delivered"
         job["pr_url"] = "https://github.com/acme/widget/pull/7"
-        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status",
+                       params={"token": audit["access_token"]})
         assert r.json() == {
             "audit_id": audit["id"], "status": "delivered",
             "pr_url": "https://github.com/acme/widget/pull/7",
@@ -394,7 +396,8 @@ async def test_fixpack_status_marks_a_reaped_failure_as_infrastructure():
         job["status"] = "failed"
         job["detail"] = (f"{STALE_LEASE_DETAIL_PREFIX} no completion after 3 "
                          f"attempt(s), last lease older than 15m")
-        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status",
+                       params={"token": audit["access_token"]})
         assert r.json()["failure_kind"] == "infrastructure"
     finally:
         _clear()
@@ -409,7 +412,8 @@ async def test_fixpack_status_leaves_a_generation_failure_unlabelled():
     try:
         job["status"] = "failed"
         job["detail"] = "could not open pull request: 403"
-        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status")
+        r = client.get(f"/v1/audits/{audit['id']}/fixpack-status",
+                       params={"token": audit["access_token"]})
         assert r.json()["failure_kind"] is None
     finally:
         _clear()
@@ -421,7 +425,32 @@ def test_fixpack_status_unknown_audit_is_404():
     try:
         r = client.get(f"/v1/audits/{uuid.uuid4()}/fixpack-status")
         assert r.status_code == 404
-        assert r.json()["detail"]["reason"] == "audit_not_found"
+        assert r.json()["detail"]["reason"] == "not_found"
+    finally:
+        _clear()
+
+
+async def test_fixpack_status_requires_the_audits_own_token():
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    owner = audits.add(access_token="synthetic-owner-token")
+    other = audits.add(access_token="synthetic-other-token")
+    created = await fixpacks.create_paid(audit_id=owner["id"], stack="fastapi")
+    fixpacks.stored(created["id"]).update(
+        status="delivered", pr_url="https://github.com/acme/private/pull/7")
+    _override_status(audits=audits, fixpacks=fixpacks)
+    try:
+        unknown = client.get(f"/v1/audits/{uuid.uuid4()}/fixpack-status")
+        for token in (None, "", "wrong", other["access_token"]):
+            params = {} if token is None else {"token": token}
+            response = client.get(
+                f"/v1/audits/{owner['id']}/fixpack-status", params=params)
+            assert response.status_code == 404
+            assert response.json() == unknown.json()
+            assert "pr_url" not in response.text
+        allowed = client.get(f"/v1/audits/{owner['id']}/fixpack-status",
+                             params={"token": owner["access_token"]})
+        assert allowed.status_code == 200
+        assert allowed.json()["pr_url"] == "https://github.com/acme/private/pull/7"
     finally:
         _clear()
 
@@ -454,10 +483,10 @@ def test_the_audit_response_tells_the_page_whether_to_offer_a_fix_pack():
     _override(audits=audits, payments=FakePaymentRepo())
     try:
         assert client.get(
-            f"/v1/audits/{sellable['id']}?token=t"
+            f"/v1/audits/{sellable['id']}?token={sellable['access_token']}"
         ).json()["fixpack_auto_fixable"] is True
         assert client.get(
-            f"/v1/audits/{nothing['id']}?token=t"
+            f"/v1/audits/{nothing['id']}?token={nothing['access_token']}"
         ).json()["fixpack_auto_fixable"] is False
     finally:
         _clear()

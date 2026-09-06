@@ -44,12 +44,49 @@ export function coverageRows(score: Score, findings: Finding[]): [string, string
     ...Object.keys(score.categories),
   ]);
   return [...names].map((name) => {
-    const count = findings.filter((f) => f.category === name).length;
+    const { source: count, examples } = findingCounts(findings.filter((f) => f.category === name));
     let label = !recorded ? "Coverage not recorded" : skipped.has(name)
       ? (count ? "Not surveyed — see findings" : "Not checked") : "Partly checked";
+    if (name === "Auth" && score.scan_manifest?.static_checks.includes("auth_read_consistency")) {
+      label = "Partly checked — local Python route comparison";
+    }
     const elsewhere = score.reported_elsewhere?.[name];
     if (elsewhere?.length) label += ` — findings reported under ${elsewhere.join(", ")}`;
     if (count) label += ` · ${count} unverified finding${count === 1 ? "" : "s"}`;
+    if (examples) label += ` · ${examples} test/example observations`;
     return [name, label];
   });
+}
+
+export function findingCounts(findings: Finding[]): { source: number; examples: number } {
+  return findings.reduce((counts, finding) => {
+    const key = isNonProductionFinding(finding) ? "examples" : "source";
+    counts[key] += finding.occurrence_titles?.length || 1;
+    return counts;
+  }, { source: 0, examples: 0 });
+}
+
+export function manifestRows(score: Score): [string, string][] {
+  const m = score.scan_manifest;
+  if (!m) return [["Scan record", "Not recorded for this older audit"]];
+  const rows: [string, string][] = [
+    ["Archive SHA-256", m.archive_sha256 || "Not recorded"],
+    ["Git commit", m.commit_sha || "Not recorded for this archive"],
+    ["Scan engine", m.engine_version || "Not recorded"],
+    ["Files in archive", String(m.archive_files)],
+    ["Static checks run", m.static_checks.join(", ") || "Not recorded"],
+    ["Last responding model", m.model || "No model response recorded"],
+    ["Model responses", String(m.model_calls)],
+    ["Review areas applied", m.rubrics_completed.join(", ") || "None"],
+    ["Files eligible for model review", String(m.llm_candidate_files ?? "Not recorded")],
+    ["Unique files submitted to model", String(m.llm_submitted_files ?? "Not recorded")],
+    ["Eligible files not submitted", String(m.llm_files_not_submitted ?? "Not recorded")],
+    ["Model limits / skip reasons", m.limitations.join(", ") || "None recorded"],
+  ];
+  for (const [check, status] of Object.entries(m.static_limits)) rows.push([`Static scope: ${check}`, status]);
+  for (const [kind, paths] of Object.entries(m.inventory)) {
+    const shown = paths.slice(0, 5).join(", ") + (paths.length > 5 ? ` (+${paths.length - 5} more)` : "");
+    rows.push([kind, `${paths.length} found` + (shown ? `: ${shown}` : "")]);
+  }
+  return rows;
 }

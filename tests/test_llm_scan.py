@@ -330,6 +330,7 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
     findings, stats = run_llm_scan(buf, llm, rubrics=("auth",))
 
     assert stats == LLMScanStats(
+        candidate_files=1, submitted_files=("src/auth.ts",),
         prompts=1, raw_findings=2, verified=1, discarded=1,
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
         prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]),
@@ -977,9 +978,8 @@ def test_the_real_critical_explanation_now_reads_as_cut():
     assert len(clipped) <= 600
 
 
-def test_a_long_explanation_is_already_clipped_on_the_finding(monkeypatch):
-    """End to end: the clip has to happen where the ScoredFinding is built, or
-    every consumer downstream -- report, HTML, database -- gets the raw cut."""
+def test_explanation_and_remediation_survive_without_silent_truncation():
+    """Keep the full rationale and remediation; only the heading is clipped."""
     buf = make_zip({"src/auth.ts": VULN_TS.encode()})
     response = json.dumps([valid_finding(
         explanation="word " * 400, fix_hint="fix " * 200, title="head " * 100)])
@@ -987,8 +987,8 @@ def test_a_long_explanation_is_already_clipped_on_the_finding(monkeypatch):
     findings, _ = run_llm_scan(buf, FakeLLM(response), rubrics=("auth",))
 
     f = findings[0]
-    assert len(f.explanation) <= 600 and f.explanation.endswith("…")
-    assert len(f.fix_hint) <= 300 and f.fix_hint.endswith("…")
+    assert f.explanation == "word " * 400
+    assert f.fix_hint == "fix " * 200
     assert len(f.title) <= 200 and f.title.endswith("…")
 
 

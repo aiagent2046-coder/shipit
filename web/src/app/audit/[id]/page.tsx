@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { AuditResult, Finding, Score } from "@/lib/types";
 import { getAudit, reportUrl, ApiError } from "@/lib/api";
 import { RESULT_PREFIX } from "@/components/AuditForm";
+import { findingCounts } from "@/lib/evidence";
 import { AuditCoverage } from "@/components/AuditCoverage";
 import { FindingsList, SeveritySummary } from "@/components/FindingsList";
 import { Spinner } from "@/components/Spinner";
@@ -161,10 +162,11 @@ function AuditPageInner() {
             <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-3xl font-semibold">
-                  {view.findings.length}
-                  <span className="ml-2 text-sm font-normal text-muted">findings</span>
+                  {findingCounts(view.findings).source}
+                  <span className="ml-2 text-sm font-normal text-muted">source observations</span>
                 </p>
                 <p className="mt-2 text-sm text-muted">
+                  {findingCounts(view.findings).examples} test/example observations, listed separately.
                   Project audit — no readiness score out of 10.
                   Findings require verification; severity describes potential impact.
                 </p>
@@ -176,7 +178,7 @@ function AuditPageInner() {
                 </p>
                 {view.fileCount != null && (
                   <p>
-                    files scanned:{" "}
+                    files in archive:{" "}
                     <span className="font-mono text-text">
                       {view.fileCount}
                     </span>
@@ -229,7 +231,7 @@ function AuditPageInner() {
 
           <div className="mt-8">
             <h2 className="mb-3 text-lg font-semibold">
-              Findings ({view.findings.length})
+              All observations ({findingCounts(view.findings).source + findingCounts(view.findings).examples})
             </h2>
             <FindingsList findings={view.findings} />
           </div>
