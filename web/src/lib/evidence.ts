@@ -35,6 +35,22 @@ export function evidenceLabel(finding: Finding): string {
   return "Legacy finding — verification not recorded";
 }
 
+export function claimEvidenceRows(finding: Finding): [string, string][] {
+  const record = finding.claim_evidence?.version === 1 ? finding.claim_evidence : undefined;
+  const check = record?.source_check;
+  const checked = check?.kind === "quote_match"
+    ? `Quoted text matched in source lines ${check.line_start}–${check.line_end}. This does not verify the interpretation.`
+    : check?.kind === "static_rule"
+      ? "A static rule emitted this observation. Its consequence was not tested."
+      : "Not recorded for this finding; do not assume the cited code was verified.";
+  const rows: [string, string][] = [["Source check", checked]];
+  if (record?.observation) rows.push(["Model interpretation — unverified", record.observation]);
+  rows.push(["Required conditions — not checked", record?.required_conditions?.length
+    ? record.required_conditions.join("\n") : "Not recorded; do not assume the conditions for harm are satisfied."]);
+  rows.push(["Consequence check", "No independent verification recorded."]);
+  return rows;
+}
+
 export function coverageRows(score: Score, findings: Finding[]): [string, string][] {
   const recorded = score.unexamined !== undefined ||
     score.basis === "static_only" || score.basis === "static+preview";

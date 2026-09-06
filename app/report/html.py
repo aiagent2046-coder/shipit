@@ -11,7 +11,7 @@ from html import escape
 
 from app.report.evidence import (
     coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
-    model_status_notice, source_severity_counts,
+    model_status_notice, source_severity_counts, claim_evidence_rows,
 )
 from app.report.grouping import group_for_display
 from app.report.plain_language import plain_fields, tier
@@ -43,6 +43,18 @@ def _finding_row(f: dict) -> str:
     tier_label = f"Potential {sev} impact"
     risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
     fix_html = f'<div class="fix">→ {escape(fix)}</div>' if fix else ""
+    model = f.get("source") == "llm" or str(f.get("rule_id", "")).startswith("llm-")
+    if model:
+        if risk:
+            risk_html = ('<div class="risk"><strong>Possible consequence — unverified:</strong> '
+                         + escape(risk) + '</div>')
+        if fix:
+            fix_html = '<div class="fix"><strong>Suggested verification / fix:</strong> ' + escape(fix) + '</div>'
+    evidence = '<dl style="white-space:pre-line">' + "".join(
+        f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f)
+    ) + '</dl>'
+    if not model:
+        evidence = '<details><summary>Evidence and conditions</summary>' + evidence + '</details>'
     tech_bits = " · ".join(x for x in (
         _category_label(f),
         escape(str(f.get("title", ""))), loc,
@@ -53,7 +65,7 @@ def _finding_row(f: dict) -> str:
         f'{emoji} {escape(tier_label)}</span></td>'
         f'<td class="title"><div class="what">{escape(what)}</div>'
         f'<div class="tech">{escape(evidence_label(f))}</div>'
-        f'{risk_html}{fix_html}'
+        f'{risk_html}{evidence}{fix_html}'
         f'<div class="tech">{tech_bits}</div></td>'
         '</tr>'
     )

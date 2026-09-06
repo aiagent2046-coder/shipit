@@ -19,6 +19,30 @@ const manifest: ScanManifest = {
 };
 
 describe("audit evidence", () => {
+  it("keeps quote checks separate from model conditions and consequences", () => {
+    const { container } = render(<FindingsList findings={[{ ...finding,
+      explanation: "Another account might be readable.",
+      claim_evidence: { version: 1,
+        source_check: { kind: "quote_match", line_start: 10, line_end: 14 },
+        observation: "The handler reads a row by ID.",
+        required_conditions: ["<script>not executable</script>", "An unauthorized caller can reach the handler."],
+        conditions_status: "not_checked", consequence_status: "not_checked" },
+    }]} />);
+    expect(screen.getByText(/Quoted text matched in source lines 10–14/)).toBeTruthy();
+    expect(screen.getByText("Model interpretation — unverified")).toBeTruthy();
+    expect(screen.getByText("Required conditions — not checked")).toBeTruthy();
+    expect(screen.getByText(/An unauthorized caller/).closest("details")).toBeNull();
+    expect(screen.getByText("No independent verification recorded.")).toBeTruthy();
+    expect(screen.getByText("Possible consequence — unverified:")).toBeTruthy();
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it("does not invent checks or satisfied conditions for an older finding", () => {
+    render(<FindingsList findings={[finding]} />);
+    expect(screen.getByText("Not recorded for this finding; do not assume the cited code was verified.")).toBeTruthy();
+    expect(screen.getByText("Not recorded; do not assume the conditions for harm are satisfied.")).toBeTruthy();
+  });
+
   it.each([
     ["billing", 0, "Model review unavailable", "billing or quota"],
     ["provider", 2, "Model review incomplete", "request failed"],

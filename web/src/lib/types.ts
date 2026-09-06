@@ -98,6 +98,15 @@ export interface Score {
 }
 
 export interface Finding {
+  claim_evidence?: {
+    version: 1;
+    source_check: { kind: "quote_match"; line_start: number; line_end: number }
+      | { kind: "static_rule" | "not_recorded" };
+    observation: string | null;
+    required_conditions: string[] | null;
+    conditions_status: "not_checked";
+    consequence_status: "not_checked";
+  } | null;
   occurrence_count?: number;
   occurrence_files?: string[];
   occurrence_titles?: string[];

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import BinaryIO
 
 from app.scan.auth_read import scan_auth_read
+from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
@@ -128,6 +129,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                               "coverage": boundary.coverage},
         },
         "findings": [dict(vars(f), source="static",
+                          claim_evidence=static_claim_evidence(),
                           verification_method="source_pattern") for f in findings],
         # Carried, not folded into a finding: `budget_exhausted` means the
         # boundary scan stopped before it could say a boundary is absent, so
