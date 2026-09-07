@@ -8,7 +8,7 @@ import { getAudit, reportUrl, ApiError } from "@/lib/api";
 import { RESULT_PREFIX } from "@/components/AuditForm";
 import { findingCounts } from "@/lib/evidence";
 import { AuditCoverage } from "@/components/AuditCoverage";
-import { FindingsList, SeveritySummary } from "@/components/FindingsList";
+import { FindingsList, PreviewHistory, SeveritySummary } from "@/components/FindingsList";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
 import { RlsCheck } from "@/components/RlsCheck";
@@ -170,6 +170,10 @@ function AuditPageInner() {
                   Project audit — no readiness score out of 10.
                   Findings require verification; severity describes potential impact.
                 </p>
+                {view.score.preview_history && <p className="mt-2 text-sm text-muted">
+                  {view.score.preview_history.retained_findings.length} additional preview observations
+                  retained in Free audit history.
+                </p>}
               </div>
               <div className="text-sm text-muted">
                 <p>
@@ -229,9 +233,11 @@ function AuditPageInner() {
 
           <RlsCheck auditId={view.id} token={token} repoUrl={view.repoUrl} />
 
+          <PreviewHistory score={view.score} />
+
           <div className="mt-8">
             <h2 className="mb-3 text-lg font-semibold">
-              All observations ({findingCounts(view.findings).source + findingCounts(view.findings).examples})
+              Current scan observations ({findingCounts(view.findings).source + findingCounts(view.findings).examples})
             </h2>
             <FindingsList findings={view.findings} />
           </div>

@@ -64,6 +64,18 @@ export interface ScanManifest {
 }
 
 export interface Score {
+  preview_history?: {
+    version: 1;
+    preview_audit_id: string;
+    content_hash: string;
+    engine_version: string;
+    model: string | null;
+    total: number;
+    matched_count: number;
+    retained_findings: Finding[];
+    status: "not_reassessed";
+  };
+  analysis_reused_from?: string;
   scan_manifest?: ScanManifest;
   // Numeric fields remain for older API consumers; they are not a readiness verdict.
   readiness_score_validated?: false;

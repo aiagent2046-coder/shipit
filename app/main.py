@@ -67,6 +67,7 @@ from app.db import (
     fixpack_processor_lock,
     monitoring_processor_lock,
 )
+from app.audit_history import refresh_cached_preview_history, score_with_preview_history
 from app.deploypack import github_app
 from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
 from app.deploypack.delivery import DeliveryError, render_pr_body
@@ -538,6 +539,7 @@ async def run_repo_audit(
     cached = await audit_repo.get_by_content_hash(
         digest, AUDIT_ENGINE_VERSION, BASIS_FULL)
     if cached is not None:
+        cached = await refresh_cached_preview_history(audit_repo, cached)
         return {
             "audit_id": cached["id"],
             "findings": cached["findings_json"] or [],
@@ -562,6 +564,8 @@ async def run_repo_audit(
     # audit_repo.create does next -- including raise, which is why this is a
     # try/except/else rather than a line after the call.
     try:
+        scan["score"] = await score_with_preview_history(
+            audit_repo, scan["score"], scan["findings"], digest, AUDIT_ENGINE_VERSION)
         persisted = await audit_repo.create(
             stack=stack.value, file_count=report.file_count,
             score_total=scan["score"]["total"], score_json=scan["score"],
@@ -2045,6 +2049,8 @@ async def create_audit(
     cached = await audit_repo.get_by_content_hash(
         digest, AUDIT_ENGINE_VERSION,
         basis_for_account(account["id"] if account else None))
+    if cached is not None and account:
+        cached = await refresh_cached_preview_history(audit_repo, cached)
     logger.info(
         "audit intake: cache %s for digest %s",
         "hit" if cached is not None else "miss", digest[:12],

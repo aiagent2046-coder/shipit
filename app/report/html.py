@@ -33,7 +33,7 @@ def _category_label(f: dict) -> str:
     return f"{cat} (moved from {origin})" if origin and origin != cat else cat
 
 
-def _finding_row(f: dict) -> str:
+def _finding_row(f: dict, *, historical: bool = False) -> str:
     sev = str(f.get("severity", "low"))
     color = _SEVERITY_COLOR.get(sev, "#8b8d98")
     loc = escape(str(f.get("file", "")))
@@ -45,6 +45,8 @@ def _finding_row(f: dict) -> str:
     contradicted = syntax_contradicted(f.get("claim_evidence"))
     if contradicted:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
+    if historical:
+        emoji, tier_label, color = "", "Previous preview — not reassessed", "#8b8d98"
     risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
     fix_html = f'<div class="fix">→ {escape(fix)}</div>' if fix else ""
     model = f.get("source") == "llm" or str(f.get("rule_id", "")).startswith("llm-")
@@ -56,6 +58,9 @@ def _finding_row(f: dict) -> str:
             fix_html = '<div class="fix"><strong>Suggested verification / fix:</strong> ' + escape(fix) + '</div>'
     if contradicted:
         fix_html = ('<details><summary>Original model suggestion — premise contradicted</summary>'
+                    + escape(fix) + '</details>') if fix else ""
+    if historical:
+        fix_html = ('<details><summary>Original preview suggestion — not reassessed</summary>'
                     + escape(fix) + '</details>') if fix else ""
     evidence = '<dl style="white-space:pre-line">' + "".join(
         f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f)
@@ -89,11 +94,34 @@ NON_PRODUCTION_NOTE = (
 
 _is_non_production = is_non_production
 
-def _findings_table(findings: list[dict]) -> str:
-    rows = "".join(_finding_row(f) for f in findings)
+def _findings_table(findings: list[dict], *, historical: bool = False) -> str:
+    rows = "".join(_finding_row(f, historical=historical) for f in findings)
     return (
         '<table><thead><tr><th></th><th>Finding</th></tr></thead>'
         f'<tbody>{rows}</tbody></table>'
+    )
+
+
+def _preview_history(score: dict) -> str:
+    history = score.get("preview_history") or {}
+    if history.get("version") != 1:
+        return ""
+    retained = history.get("retained_findings") or []
+    source = escape(str(history.get("preview_audit_id", "")))
+    engine = escape(str(history.get("engine_version", "")))
+    model = escape(str(history.get("model") or "not recorded"))
+    reused = ('<p>The model analysis was reused from an existing audit; adding this '
+              'history made no new LLM calls.</p>' if score.get("analysis_reused_from") else "")
+    return (
+        '<section aria-label="Free audit history"><h2 class="sechead">Free audit history</h2>'
+        f'<p>Preview {source} · engine {engine} · model {model}.</p>'
+        '<p>Matched by identical archive content and audit engine. '
+        f'{int(history.get("matched_count", 0))} unchanged observations already appear in this scan; '
+        f'{len(retained)} other preview observations are retained below.</p>'
+        '<p>Not repeated does not mean fixed, disproved or confirmed. These are original '
+        'preview records, not reassessed findings. They are excluded from current scan '
+        'counts, scores and automatic fixes. Repetition is not independent evidence.</p>'
+        + reused + (_findings_table(retained, historical=True) if retained else "") + '</section>'
     )
 
 
@@ -116,6 +144,9 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         '</small></div>'
     )
     header_left += f'<p>{example_count} test/example observations, listed separately.</p>'
+    if (score.get("preview_history") or {}).get("version") == 1:
+        count = len(score["preview_history"].get("retained_findings") or [])
+        header_left += f'<p>{count} additional preview observations retained in Free audit history.</p>'
     cats = "".join(
         f'<div class="cat"><span class="cat-name">{escape(name)}</span>'
         f'<span class="cat-skip">{escape(label)}</span></div>'
@@ -168,6 +199,10 @@ def render_report(result: dict, project_name: str = "your app") -> str:
                  'They are retained for traceability and excluded from unresolved finding counts '
                  'and score penalties. This does not establish that the surrounding code is safe.</p>'
                  + _findings_table(contradicted))
+
+    history_html = _preview_history(score)
+    if history_html:
+        body = history_html + '<h2 class="sechead">Current scan observations</h2>' + body
 
     record = "".join(
         f'<dt>{escape(label)}</dt><dd translate="no">{escape(value)}</dd>'
