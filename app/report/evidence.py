@@ -5,6 +5,8 @@ finding's consequence. Keep that limit visible regardless of confidence,
 severity, tier, or how many model passes repeated the same claim.
 """
 
+import json
+
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 from app.scan.claim_evidence import syntax_contradicted
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
@@ -184,6 +186,19 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
                 rows.append((f"Operation context {i}",
                              f"{fact['file']}:{fact['line']} — {fact['scope']}: {fact['call']}\n"
                              + fact["detail"]))
+        functions = facts.get("functions")
+        if isinstance(functions, dict):
+            rows.extend([
+                ("Function evidence scope", functions.get("scope", "Not recorded")),
+                ("Functions indexed", str(functions.get("indexed_functions", 0))),
+                ("Function evidence limits", ", ".join(functions.get("limitations", [])) or "None recorded"),
+            ])
+            for i, fact in enumerate(functions.get("records", []), 1):
+                detail = [f"{fact['file']}:{fact['line']}–{fact['line_end']} — {fact['scope']}"]
+                detail.extend(json.dumps(c, ensure_ascii=False) for c in fact["checks"])
+                detail.extend("Candidate (binding not resolved): " + json.dumps(c, ensure_ascii=False)
+                              for c in fact["candidates"])
+                rows.append((f"Function evidence {i}", "\n".join(detail)))
     for kind, paths in manifest.get("inventory", {}).items():
         shown = ", ".join(paths[:5])
         if len(paths) > 5:

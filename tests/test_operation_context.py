@@ -92,8 +92,8 @@ def test_numeric_examples_rebut_exact_binary_claim_without_asserting_application
 '''
     fact, = context.collect_operation_context(archive({"payment.py": source}))["records"]
     assert fact["kind"] == "numeric_examples"
-    assert "990.07 -> 990.07 (binary exact: False)" in fact["detail"]
-    assert "490.00 -> 490.00 (binary exact: True)" in fact["detail"]
+    assert "990.07 -> 990.07 (amount changed: False; difference: 0.00)" in fact["detail"]
+    assert "490.00 -> 490.00 (amount changed: False; difference: 0.00)" in fact["detail"]
     assert "do not execute the uploaded expression" in fact["detail"]
     assert "cover all numeric inputs" in fact["detail"]
 

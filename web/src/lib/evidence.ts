@@ -159,6 +159,16 @@ export function manifestRows(score: Score): [string, string][] {
     rows.push(["Source fact limits", facts.limitations.join(", ") || "None recorded"]);
     facts.facts.forEach((fact, i) => rows.push([`Source syntax fact ${i + 1}`,
       `${fact.file}:${fact.line} — ${fact.scope}: call ${fact.call}; matching ${fact.import_module} import at line ${fact.import_line}`]));
+    const functions = facts.functions;
+    if (functions) {
+      rows.push(["Function evidence scope", functions.scope],
+        ["Functions indexed", String(functions.indexed_functions)],
+        ["Function evidence limits", functions.limitations.join(", ") || "None recorded"]);
+      functions.records.forEach((fact, i) => rows.push([`Function evidence ${i + 1}`,
+        [`${fact.file}:${fact.line}–${fact.line_end} — ${fact.scope}`,
+          ...fact.checks.map(c => JSON.stringify(c)),
+          ...fact.candidates.map(c => `Candidate (binding not resolved): ${JSON.stringify(c)}`)].join("\n")]));
+    }
     const operations = facts.operations;
     if (operations) {
       rows.push(["Operation context scope", operations.scope],

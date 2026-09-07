@@ -14,6 +14,7 @@ from typing import BinaryIO
 
 from app.scan.secrets import is_non_production_path
 from app.scan.operation_context import collect_operation_context
+from app.scan.function_context import collect_function_context
 
 MAX_FILE_BYTES = 512_000
 MAX_TOTAL_BYTES = 8_000_000
@@ -109,12 +110,14 @@ def collect_source_facts(fileobj: BinaryIO) -> dict:
                 limits.add("fact_limit_reached")
                 break
     operations = collect_operation_context(fileobj)
-    return {"facts": facts, "operations": operations, "parsed_files": parsed, "excluded_files": excluded,
+    return {"facts": facts, "operations": operations, "functions": collect_function_context(fileobj),
+            "parsed_files": parsed, "excluded_files": excluded,
             "limitations": sorted(limits), "scope": SCOPE}
 
 
 def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
-    if not record or not (record.get("facts") or (record.get("operations") or {}).get("records")):
+    if not record or not (record.get("facts") or (record.get("operations") or {}).get("records")
+                          or (record.get("functions") or {}).get("records")):
         return ""
     # JSON encodes archive-controlled names as data. No source literals,
     # credentials, or alleged verification supplied by the model enter here.
@@ -122,19 +125,41 @@ def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
             + SCOPE + "\nInspect the listed helper before alleging that a comparison is missing. "
             "Inspect operation arguments and caller locations before alleging untrusted input. "
             "Fixed numeric examples are not tests of uploaded code or production values. "
+            "Function candidates carry full-file observations beyond model file-prefix limits; "
+            "they do not establish runtime bindings. Missing candidates do not prove missing protection. "
             "These facts do not confirm or dismiss a vulnerability.\n")
     subset = {**record, "facts": list(record["facts"]), "limitations": list(record.get("limitations", []))}
     operations = {**(record.get("operations") or {}),
                   "records": list((record.get("operations") or {}).get("records", []))}
     subset["operations"] = operations
-    while subset["facts"] or operations["records"]:
+    functions = {**(record.get("functions") or {}),
+                 "records": list((record.get("functions") or {}).get("records", []))}
+    # The stored report retains prose limitations; the prompt already has the
+    # inventory scope. Avoid repeating the same prose for every candidate.
+    def compact_checks(checks):
+        return [{k: v for k, v in check.items() if k != "detail"} for check in checks]
+    functions["records"] = [
+        {**{k: v for k, v in item.items() if k != "call_names"},
+         "checks": compact_checks(item["checks"]),
+         "candidates": [{**candidate, "checks": compact_checks(candidate["checks"])}
+                        for candidate in item["candidates"]]}
+        for item in functions["records"]]
+    subset["functions"] = functions
+    # Keep a bounded share for function evidence without growing the prompt.
+    while len(json.dumps(functions, ensure_ascii=True)) > max_chars // 2 and functions["records"]:
+        functions["records"].pop()
+        if "prompt_function_limit" not in subset["limitations"]:
+            subset["limitations"].append("prompt_function_limit")
+    while subset["facts"] or operations["records"] or functions["records"]:
         text = prefix + json.dumps(subset, ensure_ascii=True)
         if len(text) <= max_chars:
             return text
         if operations["records"]:
             operations["records"].pop()
-        else:
+        elif subset["facts"]:
             subset["facts"].pop()
+        else:
+            functions["records"].pop()
         if "prompt_fact_limit" not in subset["limitations"]:
             subset["limitations"].append("prompt_fact_limit")
     return ""

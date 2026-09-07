@@ -20,6 +20,25 @@ const manifest: ScanManifest = {
 };
 
 describe("audit evidence", () => {
+  it("shows automatic function evidence with unresolved candidate limits", () => {
+    const source_facts: NonNullable<ScanManifest["source_facts"]> = {
+      scope: "Syntax only", facts: [], parsed_files: 1, excluded_files: 0, limitations: [],
+      functions: { scope: "Name candidates; runtime binding not verified", indexed_functions: 2,
+        parsed_files: 1, excluded_files: 0, limitations: ["record_limit_reached"],
+        records: [{ file: "<unsafe>.py", line: 3, line_end: 7, scope: "grant",
+          checks: [{ kind: "completed_status_return", result: "observed" }],
+          candidates: [{ file: "db.py", line: 2000, binding: "name_candidate_not_resolved" }],
+          call_names: [] }] },
+    };
+    const { container } = render(<AuditCoverage score={{ total: 0, categories: {}, basis: "static_only",
+      scan_manifest: { ...manifest, source_facts } }} findings={[]} />);
+    expect(screen.getByText("Function evidence 1")).toBeTruthy();
+    expect(container.textContent).toContain("Candidate (binding not resolved)");
+    expect(container.textContent).toContain("record_limit_reached");
+    expect(container.querySelector("unsafe")).toBeNull();
+    expect(findingCounts([])).toEqual({ source: 0, examples: 0 });
+  });
+
   it("retains contradicted premises separately without critical badges or actionable fixes", () => {
     const contradicted: Finding = { ...finding, title: "UPDATE without WHERE",
       fix_hint: "<script>old advice</script>",

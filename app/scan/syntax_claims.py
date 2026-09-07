@@ -108,7 +108,16 @@ def _completed_notification(source: str, start: int, end: int) -> dict:
                  and n.lineno <= start <= end <= n.end_lineno]
     if len(functions) != 1 or functions[0].decorator_list:
         return unknown("Range must identify one undecorated module-level Python function.")
-    fn = functions[0]
+    return completed_notification_function(functions[0])
+
+
+def completed_notification_function(fn) -> dict:
+    """Shared AST premise check, also used by the pre-model inventory."""
+    kind = "python_completed_notification"
+    def unknown(detail):
+        return _result(kind, "not_checked", detail)
+    if fn.decorator_list:
+        return unknown("Decorated functions are outside this check.")
     nodes = list(py_ast.walk(fn))
     if any(isinstance(n, (py_ast.Try, py_ast.TryStar, py_ast.With, py_ast.AsyncWith,
                           py_ast.Lambda, py_ast.ClassDef, py_ast.Yield, py_ast.YieldFrom))
