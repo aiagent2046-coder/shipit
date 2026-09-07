@@ -690,6 +690,7 @@ SYSTEM_PROMPT = (
 class LLMScanStats:
     candidate_files: int | None = None
     submitted_files: tuple[str, ...] = ()
+    selection_exclusions: dict[str, int] | None = None
     prompts: int = 0
     raw_findings: int = 0
     verified: int = 0
@@ -1282,6 +1283,13 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     ran: set[str] = set()
 
     stats.candidate_files = len(files)
+    rubric_matches = {
+        rubric: {n for n, t in files
+                 if RUBRICS[rubric]["keywords"].search(n) or RUBRICS[rubric]["keywords"].search(t)}
+        for rubric in rubrics
+    }
+    considered_names: set[str] = set()
+    selected_names: set[str] = set()
 
     def _record_ran(rubric: str) -> None:
         # In declaration order, deduplicated across passes, so the value is a
@@ -1294,7 +1302,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
       if stats.cost_cap_exceeded or stats.failure:
           break
       for rubric in rubrics:
+          considered_names.update(rubric_matches[rubric])
           selected = select_files(files, rubric, budget)
+          selected_names.update(n for n, _ in selected)
           if not selected:
               # No prompt is sent, but the rubric was applied and its keywords
               # matched nothing. That is a rubric that looked, which is what
@@ -1461,6 +1471,16 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     # combined, so same-location collisions arise and are resolved here.
     # See app/scan/cross_rubric_dedup.py for why provenance is recorded
     # rather than the duplicate silently dropped.
+    # Exclusive counts over files never submitted in any pass or rubric.
+    # A submitted file may still be excerpted or its request may have failed.
+    unmatched = set(files_by_name) - set(stats.submitted_files)
+    matched_names = set().union(*rubric_matches.values())
+    stats.selection_exclusions = {
+        "no_rubric_match": len(unmatched - matched_names),
+        "rubric_not_reached": len((unmatched & matched_names) - considered_names),
+        "selection_budget": len((unmatched & considered_names) - selected_names),
+        "request_window": len(unmatched & selected_names),
+    }
     grouped = dedup_cross_rubric(findings)
     for row in stats.model_findings:
         row["saved"] = sum((f.claim_evidence or {}).get("producer", {}).get("model") == row["model"]

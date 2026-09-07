@@ -36,6 +36,38 @@ def finding_counts(findings: list[dict]) -> tuple[int, int]:
     return source, examples
 
 
+def observation_summary(findings: list[dict]) -> str:
+    source, examples = finding_counts(findings)
+    informational = contradicted = 0
+    for finding in findings:
+        count = len(finding.get("occurrence_titles") or []) or 1
+        if syntax_contradicted(finding.get("claim_evidence")):
+            contradicted += count
+        elif is_informational(finding):
+            informational += count
+    return (f"{source + examples + informational + contradicted} observations: "
+            f"{source} in source, {examples} in tests/examples, {informational} informational, "
+            f"{contradicted} with contradicted syntax premises.")
+
+
+def review_contribution_rows(score: dict) -> list[tuple[str, str, str]]:
+    baseline = score.get("free_baseline") or {}
+    if baseline.get("version") != 1:
+        return []
+
+    def values(stage: dict) -> list[str]:
+        manifest = stage.get("scan_manifest") or {}
+        processing = manifest.get("model_findings")
+        saved = (sum(r["saved"] for r in processing)
+                 if processing and all(isinstance(r.get("saved"), int) for r in processing) else None)
+        recorded = [manifest.get("llm_submitted_files"), manifest.get("model_calls"), saved]
+        return [str(v) if v is not None else "Not recorded" for v in recorded]
+
+    free = values(baseline.get("score") or {})
+    paid = values(score)
+    return list(zip(("Files submitted to model", "Model responses", "Retained model hypotheses"), free, paid))
+
+
 def source_severity_counts(findings: list[dict]) -> dict[str, int]:
     counts = dict.fromkeys(("critical", "high", "medium", "low"), 0)
     for finding in findings:
@@ -199,6 +231,18 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
                        ("llm_files_not_submitted", "Eligible files not submitted")):
         value = manifest.get(key)
         rows.append((label, str(value) if value is not None else "Not recorded"))
+    exclusions = manifest.get("llm_selection_exclusions")
+    labels = {
+        "no_rubric_match": "No keyword match in configured review areas",
+        "rubric_not_reached": "Matching review areas were not reached",
+        "selection_budget": "Outside file-selection budgets of attempted areas",
+        "request_window": "Removed to fit the request window",
+    }
+    if isinstance(exclusions, dict):
+        rows.extend(("Files not submitted: " + label, str(exclusions.get(key, 0)))
+                    for key, label in labels.items())
+    elif manifest.get("llm_files_not_submitted"):
+        rows.append(("File exclusion reasons", "Not recorded for this audit"))
     limitations = manifest.get("limitations", [])
     rows.append(("Model limits / skip reasons", ", ".join(limitations) or "None recorded"))
     for check, status in manifest.get("static_limits", {}).items():

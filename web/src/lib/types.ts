@@ -76,6 +76,7 @@ export interface ScanManifest {
   llm_candidate_files: number | null;
   llm_submitted_files: number | null;
   llm_files_not_submitted: number | null;
+  llm_selection_exclusions?: Record<string, number> | null;
   limitations: string[];
   runtime_verified: false;
 }

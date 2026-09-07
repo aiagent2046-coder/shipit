@@ -237,7 +237,7 @@ function AuditPageInner() {
 
           <div className="mt-8">
             <h2 className="mb-3 text-lg font-semibold">
-              Current scan observations ({findingCounts(view.findings).source + findingCounts(view.findings).examples})
+              Current scan observations
             </h2>
             <FindingsList findings={view.findings} />
           </div>

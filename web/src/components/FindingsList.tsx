@@ -67,7 +67,7 @@ function FindingCard({ finding, historical = false, included = false }: { findin
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
         <p className="font-medium">{what}</p>
-        {historical ? <span className="text-sm text-muted">{included ? "Free-model result — included in this audit" : "Previous preview — not reassessed"}
+        {historical ? <span className="text-sm text-muted">{included ? "Free audit observation — included in this audit" : "Previous preview — not reassessed"}
           {isNonProductionFinding(finding) && " · Test/example context"}</span>
           : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
           : isInformational(finding) ? <span className="text-sm text-muted">Informational</span>
@@ -79,7 +79,7 @@ function FindingCard({ finding, historical = false, included = false }: { findin
       </p>}
       {model ? evidence : <details className="my-3 text-sm"><summary>Evidence and conditions</summary>{evidence}</details>}
       {fix && (contradicted || historical) && <details className="my-3 text-sm text-muted">
-        <summary>{historical ? (included ? "Free-model suggestion — unverified" : "Original preview suggestion — not reassessed")
+        <summary>{historical ? (included ? "Free audit suggestion — unverified" : "Original preview suggestion — not reassessed")
           : "Original model suggestion — premise contradicted"}</summary>{fix}
       </details>}
       {fix && !contradicted && !historical && (
@@ -103,17 +103,17 @@ export function PreviewHistory({ score }: { score: Score }) {
   const history = score.preview_history;
   const baseline = score.free_baseline;
   const full = baseline?.version === 1 ? (
-    <section aria-label="Included free-model report" className="my-6 space-y-3 rounded-lg border border-border p-4">
-      <h2 className="text-lg font-semibold">Included free-model report</h2>
+    <section aria-label="Included free audit" className="my-6 space-y-3 rounded-lg border border-border p-4">
+      <h2 className="text-lg font-semibold">Included free audit</h2>
       <p>{baseline.origin === "reused" ? "Reused same-archive free audit" : "Included in this paid audit"}.
         {" "}Status: {baseline.status}.</p>
       <p>The complete baseline is preserved below, including observations repeated in the paid review.
-        It is a separate model result, not independent confirmation or additional current-scan findings.</p>
+        It includes static observations and any model hypotheses; repeated observations are not independent confirmation or additional current-scan findings.</p>
       {baseline.score ? <details><summary>Full baseline findings and scope</summary>
         <AuditCoverage score={baseline.score} findings={baseline.findings} />
         <ul className="space-y-3">{baseline.findings.map((finding, index) =>
           <FindingCard key={index} finding={finding} historical included={baseline.origin === "included"} />)}</ul>
-      </details> : <p>Free-model stage unavailable: {baseline.reason ?? "not recorded"}.</p>}
+      </details> : <p>Free audit unavailable: {baseline.reason ?? "not recorded"}.</p>}
     </section>
   ) : null;
   if (history?.version !== 1) return full;

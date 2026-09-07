@@ -60,7 +60,7 @@ def test_fixture_counts_and_old_credential_claims_cannot_inflate_the_headline():
     html = render_report({"score": {"basis": "static_only", "categories": {}},
                           "findings": [source, fixture]})
     assert "An attacker controls" not in html
-    assert "1 test/example observations" in html
+    assert "1 in tests/examples" in html
     assert "Not recorded for this older audit" in html
 
 
