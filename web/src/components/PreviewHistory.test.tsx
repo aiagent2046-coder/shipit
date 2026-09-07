@@ -58,3 +58,23 @@ describe("free audit history", () => {
     expect(screen.getByText(/adding this history made no new LLM calls/)).toBeTruthy();
   });
 });
+
+
+it("includes the complete free-model result without prior public audit history", () => {
+  render(<PreviewHistory score={{ total: 0, categories: {}, free_baseline: {
+    version: 1, origin: "included", status: "completed", findings: [prior],
+    score: { total: 0, categories: {}, basis: "static+preview" },
+  } }} />);
+  const section = screen.getByRole("region", { name: "Included free-model report" });
+  expect(section.textContent).toContain("Included in this paid audit");
+  expect(section.textContent).toContain("Original interpretation");
+  expect(section.textContent).toContain("Full baseline findings and scope");
+  expect(section.querySelector("script")).toBeNull();
+});
+
+it("shows an unavailable free-model stage explicitly", () => {
+  render(<PreviewHistory score={{ total: 0, categories: {}, free_baseline: {
+    version: 1, origin: "included", status: "unavailable", reason: "paid_job_cost_cap", score: null, findings: [],
+  } }} />);
+  expect(screen.getByText(/Free-model stage unavailable: paid_job_cost_cap/)).toBeTruthy();
+});

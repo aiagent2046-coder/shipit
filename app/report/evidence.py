@@ -106,6 +106,8 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
         if syntax.get("line_start"):
             detail += f" Checked source lines {syntax['line_start']}–{syntax['line_end']}."
         rows.append((label, detail))
+    for context in record.get("context_checks", []):
+        rows.append(("Deterministic context check", json.dumps(context, ensure_ascii=False)))
     if record.get("observation"):
         rows.append(("Model interpretation — unverified", record["observation"]))
     conditions = record.get("required_conditions")

@@ -78,6 +78,11 @@ export interface ScanManifest {
 }
 
 export interface Score {
+  free_baseline?: {
+    version: 1; origin: "reused" | "included"; audit_id?: string | null;
+    status: "completed" | "incomplete" | "unavailable"; reason?: string;
+    score: Score | null; findings: Finding[];
+  };
   preview_history?: {
     version: 1;
     preview_audit_id: string;
@@ -132,6 +137,7 @@ export interface Finding {
     required_conditions: string[] | null;
     conditions_status: "not_checked";
     consequence_status: "not_checked";
+    context_checks?: Record<string, unknown>[];
     syntax_check?: {
       kind: "react_hook_order" | "sql_update_where" | "python_completed_notification" | "unsupported";
       result: "contradicted" | "observed" | "not_checked";
