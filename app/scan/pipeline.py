@@ -111,9 +111,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # rows move; the mean is deliberately unchanged, because admitting such a
 # category to it RAISES a weak repository's total
 # (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
-# 2026-09-07-5: paid reports include a complete free-model baseline; bounded
-# SQL predicates, transaction templates and numeric context accompany claims.
-AUDIT_ENGINE_VERSION = "2026-09-07-5"
+# 2026-09-07-6: per-model finding processing and invalid-response limits;
+# operator guard context and function-scoped duplicate provenance.
+AUDIT_ENGINE_VERSION = "2026-09-07-6"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
@@ -508,7 +508,7 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # BASIS_PARTIAL instead of `depth`, which keeps it out of the
             # cache slot a full audit reads from -- see BASIS_PARTIAL.
             "basis": ((BASIS_PARTIAL if any(llm_summary.get(k) for k in
-                                           ("failure", "cost_cap_exceeded", "input_truncated")) else depth)
+                                           ("failure", "cost_cap_exceeded", "input_truncated", "invalid_responses")) else depth)
                       if llm_ran else BASIS_STATIC_ONLY),
         },
         "findings": findings,

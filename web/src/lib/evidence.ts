@@ -60,6 +60,9 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
   for (const context of record?.context_checks ?? []) {
     rows.push(["Deterministic context check", JSON.stringify(context)]);
   }
+  for (const [i, original] of (record?.grouped_originals ?? []).entries()) {
+    rows.push([`Grouped original ${i + 1} — not independent confirmation`, JSON.stringify(original)]);
+  }
   if (record?.observation) rows.push(["Model interpretation — unverified", record.observation]);
   rows.push(["Required conditions — not checked", record?.required_conditions?.length
     ? record.required_conditions.join("\n") : "Not recorded; do not assume the conditions for harm are satisfied."]);
@@ -154,6 +157,18 @@ export function manifestRows(score: Score): [string, string][] {
     ["Eligible files not submitted", String(m.llm_files_not_submitted ?? "Not recorded")],
     ["Model limits / skip reasons", m.limitations.join(", ") || "None recorded"],
   ];
+  if (m.model_findings == null) {
+    rows.push(["Model finding processing", "Not recorded for this audit"]);
+  } else if (!m.model_findings.length) {
+    rows.push(["Model finding processing", "No model response processed"]);
+  } else for (const row of m.model_findings) {
+    rows.push([`Finding processing: ${row.model || "unknown model"}`,
+      `Responses: ${row.responses}; unreadable: ${row.invalid_responses}; valid empty: ${row.empty_responses}. ` +
+      `Received entries: ${row.received}; rejected: ${row.rejected}; accepted before grouping: ${row.accepted}; ` +
+      `merged: ${row.merged}; saved representatives: ${row.saved}. ` +
+      "Merged originals are retained. These counts do not verify conclusions."]);
+    rows.push(["Rejection reasons", JSON.stringify(row.rejection_reasons)]);
+  }
   for (const [check, status] of Object.entries(m.static_limits)) rows.push([`Static scope: ${check}`, status]);
   const facts = m.source_facts;
   if (facts) {

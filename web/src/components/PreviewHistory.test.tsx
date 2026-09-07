@@ -67,6 +67,9 @@ it("includes the complete free-model result without prior public audit history",
   } }} />);
   const section = screen.getByRole("region", { name: "Included free-model report" });
   expect(section.textContent).toContain("Included in this paid audit");
+  expect(section.textContent).toContain("Free-model result — included in this audit");
+  expect(section.textContent).not.toContain("Previous preview — not reassessed");
+  expect(section.textContent).toContain("Free-model suggestion — unverified");
   expect(section.textContent).toContain("Original interpretation");
   expect(section.textContent).toContain("Full baseline findings and scope");
   expect(section.querySelector("script")).toBeNull();

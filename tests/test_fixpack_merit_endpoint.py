@@ -263,13 +263,26 @@ def test_asking_twice_changes_nothing() -> None:
 def test_it_needs_the_operator_credential() -> None:
     """It reads one customer's purchase history."""
     payment_id = str(uuid.uuid4())
-    _wire(Payments({payment_id: _fixpack_payment(str(uuid.uuid4()), payment_id)}))
+    class NoReads(Payments):
+        async def get(self, payment_id):
+            raise AssertionError("Unauthorized request reached payment data")
+    _wire(NoReads({payment_id: _fixpack_payment(str(uuid.uuid4()), payment_id)}))
 
     assert client.get(
         f"/internal/payments/{payment_id}/fixpack-merit").status_code == 401
     assert client.get(
         f"/internal/payments/{payment_id}/fixpack-merit",
         headers={"authorization": "Bearer wrong"}).status_code == 401
+
+
+
+def test_missing_operator_configuration_prevents_payment_reads(monkeypatch):
+    monkeypatch.delenv("SERVICE_FLAGS_TOKEN", raising=False)
+    class NoReads(Payments):
+        async def get(self, payment_id):
+            raise AssertionError("Unconfigured route reached payment data")
+    _wire(NoReads({}))
+    assert client.get(f"/internal/payments/{uuid.uuid4()}/fixpack-merit", headers=AUTH).status_code == 503
 
 
 def test_an_unknown_payment_is_404() -> None:

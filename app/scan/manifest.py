@@ -24,7 +24,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object, failure_k
         reasons.append(str(stats["skipped_reason"]))
     if failure_kind:
         reasons.append(failure_kind)
-    for flag in ("cost_cap_exceeded", "input_truncated"):
+    for flag in ("cost_cap_exceeded", "input_truncated", "invalid_responses"):
         if stats.get(flag):
             reasons.append(flag)
     if stats.get("failed_rubric"):
@@ -42,6 +42,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object, failure_k
         "source_facts": static.get("source_facts"),
         "model": stats.get("model"),
         "model_calls": stats.get("calls", 0),
+        "model_findings": stats.get("model_findings"),
         "rubrics_completed": list(stats.get("rubrics_ran", ())),
         "llm_candidate_files": candidates,
         "llm_submitted_files": len(submitted) if submitted is not None else None,

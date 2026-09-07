@@ -14,6 +14,7 @@ import zipfile
 from pglast import scan
 from pglast.parser import ParseError
 
+from app.scan.operator_context import operator_guard_context
 from app.scan.premise_context import update_predicates, transaction_templates
 from app.scan.secrets import is_non_production_path
 from app.scan.syntax_claims import completed_notification_function
@@ -85,6 +86,9 @@ def _summary(fn, path, qualified):
                     queries[-1]["updates"] = predicates
     guard = completed_notification_function(fn) if any(c[0] == "notify_operator" for c in calls) else None
     checks = transaction_templates(fn)
+    operator = operator_guard_context(fn)
+    if operator:
+        checks.append(operator)
     for stmt in fn.body:
         if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Compare):
             names = sorted({n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)})
@@ -201,7 +205,8 @@ def collect_function_context(fileobj) -> dict:
         kinds = {c["kind"] for c in record["checks"]}
         target_tokens = {token for link in record["candidates"] for c in link["checks"]
                          for q in c.get("queries", []) for token in q["tokens"]}
-        rank = (-1 if "transaction_template" in kinds else
+        rank = (-2 if "operator_guard_order" in kinds else
+                -1 if "transaction_template" in kinds else
                 0 if "return_comparison" in kinds and record["candidates"] else
                 1 if "completed_status_return" in kinds else
                 2 if any("status_literal" in str(c) for c in record["candidates"]) else

@@ -69,6 +69,9 @@ export interface ScanManifest {
   inventory: Record<string, string[]>;
   model: string | null;
   model_calls: number;
+  model_findings?: { model: string | null; responses: number; invalid_responses: number;
+    empty_responses: number; received: number; rejected: number; accepted: number;
+    merged: number; saved: number; rejection_reasons: Record<string, number> }[] | null;
   rubrics_completed: string[];
   llm_candidate_files: number | null;
   llm_submitted_files: number | null;
@@ -137,6 +140,8 @@ export interface Finding {
     required_conditions: string[] | null;
     conditions_status: "not_checked";
     consequence_status: "not_checked";
+    grouped_originals?: Record<string, unknown>[];
+    producer?: { model: string; response: number; rubric: string };
     context_checks?: Record<string, unknown>[];
     syntax_check?: {
       kind: "react_hook_order" | "sql_update_where" | "python_completed_notification" | "unsupported";
