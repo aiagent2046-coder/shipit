@@ -140,12 +140,18 @@ def _javascript(data: bytes, path: str) -> list[dict]:
         if _text(call.child_by_field_name("function")) != "fetch":
             continue
         fn = call.parent
-        while fn and fn.type not in {"function_declaration", "arrow_function", "function_expression"}:
+        while fn and fn.type not in {"function_declaration", "arrow_function", "function_expression",
+                                     "method_definition"}:
             fn = fn.parent
         name = fn.child_by_field_name("name") if fn else None
         if fn and fn.type == "arrow_function" and fn.parent.type == "variable_declarator":
             name = fn.parent.child_by_field_name("name")
-        scope = _text(name) or "<anonymous/module>"
+        # Patterns and computed/string method names may contain credentials.
+        # Only a bare identifier is eligible for name-based caller lookup.
+        if name and name.type != "identifier":
+            name = None
+        scope = _text(name) or ("<method>" if fn and fn.type == "method_definition"
+                                else "<anonymous/module>")
         args = call.child_by_field_name("arguments")
         first = args.named_children[0] if args and args.named_children else None
         detail = ["First argument: " + _js_shape(first)]

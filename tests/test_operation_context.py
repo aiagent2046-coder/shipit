@@ -68,6 +68,24 @@ def test_arrow_fetch_and_shadowed_names_remain_syntax_only():
     assert "browser/server execution" in fact["detail"]
 
 
+@pytest.mark.parametrize("source", [
+    'const {token = "private-literal"} = () => fetch(url);',
+    'class Client { ["private-literal"](){return fetch(url);} }',
+    'class Client { "private-literal"(){return fetch(url);} }',
+])
+def test_js_non_identifier_names_never_copy_source_literals(source):
+    record = context.collect_operation_context(archive({"a.ts": source}))
+    assert len(record["records"]) == 1
+    assert "private-literal" not in json.dumps(record)
+
+
+def test_js_method_does_not_inherit_enclosing_function_identity():
+    source = 'function outer(){ class Client { send(){return fetch(url);} } } outer(secret);'
+    fact, = context.collect_operation_context(archive({"a.ts": source}))["records"]
+    assert fact["scope"] == "<method>"
+    assert "Same-file call spelling" not in fact["detail"]
+
+
 def test_numeric_examples_rebut_exact_binary_claim_without_asserting_application_safety():
     source = '''def expected(row):
     return f"{float(row.get('amount') or 0):.2f}"
