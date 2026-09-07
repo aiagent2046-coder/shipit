@@ -1,4 +1,4 @@
-"""Bounded checks of two syntax premises, not verification of harmful outcomes.
+"""Bounded syntax checks, not verification of harmful outcomes.
 
 English title patterns only select a check. The parsers decide its result.
 Files come from the supplied archive, never the model's excerpts or filesystem.
@@ -7,6 +7,7 @@ remain unknown. Neither parser executes or imports the submitted code.
 """
 from __future__ import annotations
 
+import ast as py_ast
 import re
 import zipfile
 from bisect import bisect_right
@@ -25,9 +26,14 @@ _SKIP = _FUNCTIONS | {"class_declaration", "class", "comment"}
 _HOOK_CLAIM = re.compile(
     r"\b(?:hooks?|useState|useEffect)\b.*\b(?:after|follow|below)\b.*\b(?:return|exit)\b", re.I)
 _SQL_CLAIM = re.compile(r"\bupdate\b.*\b(?:without|missing|no)\b.*\bwhere\b", re.I)
+_NOTIFY_CLAIM = re.compile(
+    r"(?:a |the )?completed invoice still (?:calls|reaches|triggers) "
+    r"(?:the direct call to )?notify_operator[.!]?", re.I)
 _CLAIMS = {
     "react_hook_order": "A React hook call follows an early return in the cited function.",
     "sql_update_where": "The cited PostgreSQL UPDATE has no WHERE clause of its own.",
+    "python_completed_notification": ("The completed-status branch reaches a direct notify_operator call "
+                                      "in this function."),
 }
 
 
@@ -47,14 +53,17 @@ class SyntaxVerifier:
     def check(self, finding: dict) -> dict:
         title = str(finding.get("title", ""))
         kind = ("react_hook_order" if _HOOK_CLAIM.search(title) else
-                "sql_update_where" if _SQL_CLAIM.search(title) else "unsupported")
+                "sql_update_where" if _SQL_CLAIM.search(title) else
+                "python_completed_notification" if _NOTIFY_CLAIM.fullmatch(title) else "unsupported")
         def unknown(detail):
             return _result(kind, "not_checked", detail)
         if (kind == "unsupported" or re.search(r"\b(?:not|never|and|or)\b|[;\n]", title, re.I)
                 or (_HOOK_CLAIM.search(title) and _SQL_CLAIM.search(title))):
             return unknown("No supported, unambiguous syntax premise recognized in the title.")
         path = finding.get("file")
-        suffixes = (".tsx", ".jsx", ".ts", ".js") if kind == "react_hook_order" else (".sql",)
+        suffixes = {"react_hook_order": (".tsx", ".jsx", ".ts", ".js"),
+                    "sql_update_where": (".sql",),
+                    "python_completed_notification": (".py",)}[kind]
         if not isinstance(path, str) or not path.endswith(suffixes):
             return unknown("File type outside this check's scope.")
         if self.checks >= MAX_CHECKS:
@@ -76,10 +85,65 @@ class SyntaxVerifier:
                 return unknown("Invalid source coordinates.")
             if kind == "react_hook_order":
                 return _react(data, start, end, path)
+            if kind == "python_completed_notification":
+                return _completed_notification(source, start, end)
             return _sql(source, start, end)
         except (UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError,
-                zipfile.BadZipFile, ParseError):
+                zipfile.BadZipFile, ParseError, SyntaxError):
             return unknown("Source could not be parsed within this check's scope.")
+
+
+def _completed_notification(source: str, start: int, end: int) -> dict:
+    """Only direct calls after a top-level literal completed-status return.
+
+    No runtime object/binding proof, interprocedural effects or delivery proof.
+    Compound titles are deliberately unsupported: disproving one premise must
+    not dismiss a different claim about state writes or concurrency.
+    """
+    kind = "python_completed_notification"
+    def unknown(detail):
+        return _result(kind, "not_checked", detail)
+    root = py_ast.parse(source)
+    functions = [n for n in root.body if isinstance(n, (py_ast.FunctionDef, py_ast.AsyncFunctionDef))
+                 and n.lineno <= start <= end <= n.end_lineno]
+    if len(functions) != 1 or functions[0].decorator_list:
+        return unknown("Range must identify one undecorated module-level Python function.")
+    fn = functions[0]
+    nodes = list(py_ast.walk(fn))
+    if any(isinstance(n, (py_ast.Try, py_ast.TryStar, py_ast.With, py_ast.AsyncWith,
+                          py_ast.Lambda, py_ast.ClassDef, py_ast.Yield, py_ast.YieldFrom))
+           or (n is not fn and isinstance(n, (py_ast.FunctionDef, py_ast.AsyncFunctionDef)))
+           for n in nodes):
+        return unknown("Nested scopes, deferred execution or cleanup paths are outside this check.")
+    calls = [n for n in nodes if isinstance(n, py_ast.Call)
+             and isinstance(n.func, py_ast.Name) and n.func.id == "notify_operator"]
+    if not calls:
+        return unknown("No direct notify_operator call found; aliases and wrappers are not resolved.")
+    for guard in fn.body:
+        if not isinstance(guard, py_ast.If) or guard.orelse or len(guard.body) != 1:
+            continue
+        test = guard.test
+        if not (isinstance(test, py_ast.Compare) and len(test.ops) == 1
+                and isinstance(test.ops[0], py_ast.Eq)
+                and isinstance(test.left, py_ast.Subscript)
+                and isinstance(test.left.value, py_ast.Name)
+                and isinstance(test.left.slice, py_ast.Constant) and test.left.slice.value == "status"
+                and isinstance(test.comparators[0], py_ast.Constant)
+                and test.comparators[0].value == "completed"):
+            continue
+        ret = guard.body[0]
+        if not isinstance(ret, py_ast.Return):
+            continue
+        # The return expression cannot call notification code itself.
+        safe = (py_ast.Constant, py_ast.Name, py_ast.Load, py_ast.Dict, py_ast.Tuple, py_ast.List)
+        if ret.value is not None and any(not isinstance(n, safe) for n in py_ast.walk(ret.value)):
+            continue
+        if all(n.lineno > guard.end_lineno for n in calls):
+            return _result(kind, "contradicted", "When the top-level status == 'completed' condition "
+                           "is true, its immediate return precedes every direct notify_operator call "
+                           "in this function. Runtime bindings, callees, concurrency and delivery were not tested.",
+                           line_start=guard.lineno, line_end=guard.end_lineno)
+    return unknown("No supported completed-status return preceding all direct notification calls.")
 
 
 def _walk(node, *, skip=frozenset()):

@@ -623,44 +623,68 @@ async def test_the_payer_is_told_after_the_notification_is_answered(
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="Known race: concurrent pending snapshots schedule two payer notifications")
 async def test_concurrent_notifications_should_tell_payer_once(anyio_backend, monkeypatch):
-    """Reproducer, not a claim of real double charging or a deployed incident.
+    """Exercise the handler guard; PostgreSQL lock semantics have a live DB test."""
+    from contextlib import asynccontextmanager
+    from app.routes import yookassa as route
 
-    Hold both handlers after their pending-status reads. Real handler and grant
-    code run; storage and provider/notification transports are isolated fakes.
-    A strict XPASS requires removing this marker when delivery is made atomic.
-    """
-    entered = 0
-    both = asyncio.Event()
+    mutex = asyncio.Lock()
+    barrier = asyncio.Barrier(2)
 
-    class ConcurrentJobs(FakeFixpackRepo):
+    @asynccontextmanager
+    async def serialized(*args):
+        await barrier.wait()  # Both requests enter before either gets the lock.
+        async with mutex:
+            yield
+
+    class SlowJobs(FakeFixpackRepo):
         async def create_paid(self, **kwargs):
-            nonlocal entered
-            entered += 1
-            if entered == 2:
-                both.set()
-            await asyncio.wait_for(both.wait(), timeout=2)
+            await asyncio.sleep(0.01)  # Give an unguarded peer time to read pending.
             return await super().create_paid(**kwargs)
 
-    payments, jobs = FakePaymentRepo(), ConcurrentJobs()
+    monkeypatch.setattr(route, "payment_confirmation_lock", serialized)
+    payments, jobs = FakePaymentRepo(), SlowJobs()
     audits, audit_id = _audit_with_findings()
     await _seed(payments, audit_id)
     told = []
     monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
     backgrounds = [BackgroundTasks(), BackgroundTasks()]
     body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
-    await asyncio.wait_for(asyncio.gather(*[
+    results = await asyncio.wait_for(asyncio.gather(*[
         receive_notification(_request(body), bg, payment_repo=payments,
                              fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
         for bg in backgrounds
     ]), timeout=5)
-    if len(jobs.rows) != 1:
-        raise RuntimeError("The fake must preserve the live-job uniqueness contract")
+    assert results == [{"ok": True}, {"ok": True}]
+    assert len(jobs.rows) == 1
     for bg in backgrounds:
         await bg()
-    assert len(told) == 1, f"Concurrent handlers delivered {len(told)} confirmations"
+    assert len(told) == 1
+
+
+@pytest.mark.anyio
+async def test_busy_confirmation_retries_without_grant_or_notification(anyio_backend, monkeypatch):
+    from contextlib import asynccontextmanager
+    from app.routes import yookassa as route
+
+    @asynccontextmanager
+    async def busy(*args):
+        raise route.PaymentConfirmationBusy()
+        yield
+
+    monkeypatch.setattr(route, "payment_confirmation_lock", busy)
+    payments, jobs = FakePaymentRepo(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    row = await _seed(payments, audit_id)
+    background = BackgroundTasks()
+    body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
+    with pytest.raises(route.HTTPException) as exc:
+        await receive_notification(_request(body), background, payment_repo=payments,
+                                   fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
+    assert exc.value.status_code == 503
+    assert exc.value.headers == {"Retry-After": "5"}
+    assert row["status"] == "pending"
+    assert not jobs.rows and not background.tasks
 
 
 @pytest.mark.anyio

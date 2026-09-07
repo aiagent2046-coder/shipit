@@ -84,8 +84,8 @@ MAX_TOTAL_CHARS = 900_000
 # the running cost estimate (summed from each call's returned usage, priced by
 # app/llm/pricing.py) crosses this, the loop stops and returns whatever it has
 # with stats.cost_cap_exceeded = True -- an honest partial result, never a 500.
-# A degenerate cap (<=0 from a bad env value) is ignored so a typo can't wedge
-# the loop to zero calls; the intended off-switch is a large number, not 0.
+# Invalid, nonfinite and nonpositive caps fail at startup. This estimate is
+# checked after a call; a single response can overshoot it.
 #
 # Raised from 3.00 together with MAX_TOTAL_CHARS, because otherwise that raise
 # defeats itself on the one product that is paid for. Priced at Sonnet 4.6 list
@@ -136,7 +136,18 @@ MAX_TOTAL_CHARS = 900_000
 # came to $1.06 of that. The number that matters for pricing is the measured
 # one; the number that matters here is the one that must never be hit by a
 # scan that is behaving.
-JOB_COST_CAP_USD = Decimal(os.environ.get("JOB_COST_CAP_USD", "13.00"))
+def parse_job_cost_cap(value: str) -> Decimal:
+    """Reject a broken spend guard at startup without echoing its value."""
+    try:
+        cap = Decimal(value)
+        if cap.is_finite() and cap > 0:
+            return cap
+    except (ArithmeticError, ValueError):
+        pass
+    raise ValueError("JOB_COST_CAP_USD must be a finite number greater than zero")
+
+
+JOB_COST_CAP_USD = parse_job_cost_cap(os.environ.get("JOB_COST_CAP_USD", "13.00"))
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "venv/")
 # .pipe is Tinybird's query definition format. It earned its place: on a real
 # paid audit the money rubric reported getWebhookEvents as an unbounded query
@@ -1412,8 +1423,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
           # Cost cap: price the tokens accumulated so far (all calls this scan
           # used the same served model) and stop before the NEXT call if we've
           # crossed the ceiling. Checked after the call, not before: the cap
-          # bounds total spend, and a job is allowed its first call regardless.
-          if JOB_COST_CAP_USD > 0 and pricing.cost_usd(
+          # stops subsequent calls; one response can overshoot the estimate.
+          if pricing.cost_usd(
                   stats.model, stats.input_tokens,
                   stats.output_tokens) >= JOB_COST_CAP_USD:
               stats.cost_cap_exceeded = True

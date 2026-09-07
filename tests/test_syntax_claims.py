@@ -146,12 +146,18 @@ def test_duplicate_archive_paths_are_ambiguous():
                                           "line_start": 1, "line_end": 1})["result"] == "not_checked"
 
 
-async def test_storage_reports_counts_and_scores_keep_contradictions_separate():
-    raw = {"file": "migration.sql", "line_start": 1, "line_end": 1,
-           "evidence": "UPDATE payments", "title": SQL_TITLE, "severity": "critical", "confidence": 1,
+@pytest.mark.parametrize(("path", "source", "title", "evidence"), [
+    ("migration.sql", "UPDATE payments SET n=1 WHERE id=2;", SQL_TITLE, "UPDATE payments"),
+    ("billing.py", 'async def report_paid(row):\n    if row["status"] == "completed":\n'
+     '        return None\n    await notify_operator(row)\n',
+     "Completed invoice still calls notify_operator", 'row["status"] == "completed"'),
+])
+async def test_storage_reports_counts_and_scores_keep_contradictions_separate(path, source, title, evidence):
+    raw = {"file": path, "line_start": 1, "line_end": len(source.splitlines()),
+           "evidence": evidence, "title": title, "severity": "critical", "confidence": 1,
            "explanation": "All rows might change.", "fix_hint": "<script>original suggestion</script>",
            "claim_evidence": {"syntax_check": {"result": "observed"}}}
-    archive = make_zip({"migration.sql": b"UPDATE payments SET n=1 WHERE id=2;"})
+    archive = make_zip({path: source.encode()})
     row = await run_audit_job(archive.getvalue(), llm_client=FakeLLM(response=json.dumps([raw])),
                              account_id="44444444-4444-4444-4444-444444444444")
     model = next(f for f in row["findings_json"] if f["source"] == "llm")

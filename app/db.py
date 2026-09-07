@@ -42,6 +42,7 @@ import logging
 import json
 import os
 import uuid
+import weakref
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
@@ -242,6 +243,63 @@ async def grant_lock(provider: str, external_ref: str):
                 "select pg_advisory_unlock(%s, %s)",
                 (_GRANT_LOCK_NAMESPACE, key2),
             )
+
+
+_confirmation_slots: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+class PaymentConfirmationBusy(TimeoutError):
+    """Retry the webhook; no confirmation was processed without the lock."""
+
+
+@asynccontextmanager
+async def payment_confirmation_lock(provider: str, external_ref: str):
+    """Serialize notification decisions across workers, failing closed on timeout.
+
+    Waiting callers return their pooled connection before sleeping. Only the
+    winner holds one while repository calls use other connections. Transaction
+    scope releases the advisory lock on exceptions/cancellation as well.
+    Unconfigured storage keeps the repository contract used by isolated fakes.
+    """
+    try:
+        pool = await get_pool()
+    except DatabaseNotConfigured:
+        yield
+        return
+    # Repository operations need another connection from the five-slot pool.
+    # Bound holders even for DIFFERENT charges; try-lock alone only protects
+    # same-charge contention from pool starvation. Per-pool state also respects
+    # shutdown/reopen and the event loop that owns that pool.
+    slots = _confirmation_slots.setdefault(pool, asyncio.Semaphore(2))
+    try:
+        async with asyncio.timeout(GRANT_LOCK_TIMEOUT_MS / 1000):
+            await slots.acquire()
+    except TimeoutError as exc:
+        raise PaymentConfirmationBusy("Payment confirmation capacity is busy") from exc
+    try:
+        async with _locked_payment_confirmation(pool, provider, external_ref):
+            yield
+    finally:
+        slots.release()
+
+
+@asynccontextmanager
+async def _locked_payment_confirmation(pool, provider: str, external_ref: str):
+    deadline = asyncio.get_running_loop().time() + GRANT_LOCK_TIMEOUT_MS / 1000
+    while True:
+        async with pool.connection() as conn:
+            async with conn.transaction():
+                cur = await conn.execute(
+                    "select pg_try_advisory_xact_lock(%s, %s) as acquired",
+                    (_GRANT_LOCK_NAMESPACE, _grant_lock_key(provider, external_ref)),
+                )
+                row = await cur.fetchone()
+                if row["acquired"]:
+                    yield
+                    return
+        if asyncio.get_running_loop().time() >= deadline:
+            raise PaymentConfirmationBusy("Payment confirmation is busy; retry later")
+        await asyncio.sleep(0.05)
 
 
 def fixpack_processor_lock():
