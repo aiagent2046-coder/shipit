@@ -71,7 +71,7 @@ async def test_exact_matches_not_duplicated_and_changed_advice_is_preserved():
     assert history["status"] == "not_reassessed"
     assert history["preview_audit_id"] == preview["id"]
     assert history["model"] == "preview-model"
-    assert {k: v for k, v in score.items() if k != "preview_history"} == paid["score_json"]
+    assert {k: v for k, v in score.items() if k not in {"preview_history", "free_baseline"}} == paid["score_json"]
     assert preview == original
     assert preview["access_token"] not in json.dumps(score)
     history["retained_findings"][0]["title"] = "changed locally"
@@ -206,3 +206,109 @@ async def test_history_lookup_failure_after_scan_still_records_paid_usage(monkey
     record.assert_awaited_once()
     assert record.call_args.kwargs["job_id"] is None
     assert record.call_args.kwargs["llm_stats"]["calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_paid_worker_includes_free_model_when_no_free_audit_exists(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    paid_scan = {"score": row("static+llm", [STATIC])["score_json"], "findings": [STATIC],
+                 "llm": {}, "llm_usage": {"calls": 1, "model": "claude-sonnet-4.6",
+                                            "input_tokens": 100, "output_tokens": 20}}
+    free_score = row("static+preview", [STATIC, PREVIEW])["score_json"]
+    preview_scan = {"score": free_score, "findings": [STATIC, PREVIEW], "llm": {},
+                    "llm_usage": {"calls": 1, "model": "claude-haiku-4.5", "input_tokens": 80, "output_tokens": 10}}
+    free_client = object()
+    client = SimpleNamespace(providers=[True], with_model=Mock(return_value=free_client))
+    runner = AsyncMock(side_effect=[paid_scan, preview_scan])
+    monkeypatch.setattr(worker, "_anon_daily_cap_exceeded",
+                        AsyncMock(side_effect=AssertionError("Paid baseline must not consume anonymous quota")))
+    record = AsyncMock()
+    monkeypatch.setattr(worker, "_run_scan_offthread", runner)
+    monkeypatch.setattr(worker, "_record_llm_usage", record)
+    repo = Repo()
+    result = await run_audit_job(RAW, llm_client=client, audit_repo=repo, account_id="paid-account")
+    baseline = result['score_json']['free_baseline']
+    assert baseline['status'] == 'completed' and baseline['origin'] == 'included'
+    assert baseline['findings'] == [STATIC, PREVIEW]  # Includes even exact paid matches.
+    assert baseline['score'] == free_score
+    assert runner.await_count == 2
+    assert runner.call_args.args[1] is free_client
+    assert runner.call_args.kwargs['depth'] == 'static+preview'
+    assert runner.call_args.kwargs['llm_passes'] == 1
+    assert 0 < runner.call_args.kwargs['llm_cost_cap'] < 13
+    assert record.await_count == 2
+    assert {c.kwargs['llm_stats']['model'] for c in record.call_args_list} == {
+        'claude-sonnet-4.6', 'claude-haiku-4.5'}
+    runner.reset_mock()
+    again = await run_audit_job(RAW, llm_client=client, audit_repo=repo, account_id="paid-account")
+    assert again['id'] == result['id']
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_full_free_snapshot_reuses_original_model_and_scope():
+    preview = row('static+preview', [STATIC, PREVIEW])
+    score = await score_with_preview_history(Repo(preview), row('static+llm', [STATIC])['score_json'],
+                                            [STATIC], DIGEST, AUDIT_ENGINE_VERSION)
+    baseline = score['free_baseline']
+    assert baseline['origin'] == 'reused'
+    assert baseline['findings'] == preview['findings_json']
+    assert baseline['score'] == preview['score_json']
+    assert preview['access_token'] not in json.dumps(baseline)
+    html = render_report({'score': score, 'findings': [STATIC], 'stack': 'nextjs'})
+    assert 'Included free-model report' in html and 'Full baseline findings and scope' in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reason', ['provider', 'budget'])
+async def test_baseline_unavailable_is_visible_and_does_not_call_model(reason):
+    from types import SimpleNamespace
+    from app.audit_history import ensure_paid_baseline
+    scan = {'score': row('static+llm', [])['score_json'], 'findings': [],
+            'llm_usage': {'calls': 1, 'model': 'claude-sonnet-4.6',
+                          'input_tokens': 100_000_000 if reason == 'budget' else 0, 'output_tokens': 0}}
+    runner, record = AsyncMock(), AsyncMock()
+    client = SimpleNamespace(providers=[] if reason == 'provider' else [1])
+    score = await ensure_paid_baseline(Repo(), scan, RAW, client,
+                                      DIGEST, AUDIT_ENGINE_VERSION, runner=runner, record_usage=record)
+    assert score['free_baseline']['status'] == 'unavailable'
+    assert 'Free-model stage unavailable' in render_report({'score': score, 'findings': [], 'stack': 'nextjs'})
+    runner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_partial_free_stage_keeps_findings_and_records_usage_before_paid_persistence():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from app.audit_history import ensure_paid_baseline
+    preview = {'score': row('static+partial', [PREVIEW])['score_json'], 'findings': [PREVIEW],
+               'llm_usage': {'calls': 1}, 'llm': {'failure': 'provider'}}
+    record = AsyncMock()
+    score = await ensure_paid_baseline(Repo(), {'score': {}, 'findings': [], 'llm_usage': {}}, RAW,
+                                      SimpleNamespace(providers=[1], with_model=Mock()), DIGEST, AUDIT_ENGINE_VERSION,
+                                      runner=AsyncMock(return_value=preview), record_usage=record)
+    assert score['free_baseline']['status'] == 'incomplete'
+    assert score['free_baseline']['findings'] == [PREVIEW]
+    record.assert_awaited_once_with({'calls': 1})
+
+
+@pytest.mark.asyncio
+async def test_cached_paid_result_missing_baseline_runs_only_free_model(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    paid = row('static+llm', [STATIC])
+    repo = Repo(paid)
+    preview = {'score': row('static+preview', [PREVIEW])['score_json'], 'findings': [PREVIEW],
+               'llm': {}, 'llm_usage': {'calls': 0}}
+    runner = AsyncMock(return_value=preview)
+    monkeypatch.setattr(worker, '_run_scan_offthread', runner)
+    client = SimpleNamespace(providers=[1], with_model=Mock())
+    result = await run_audit_job(RAW, llm_client=client, audit_repo=repo, account_id='paid-account')
+    runner.assert_awaited_once()
+    assert runner.call_args.kwargs['depth'] == 'static+preview'
+    assert result['id'] != paid['id']
+    assert result['score_json']['analysis_reused_from'] == paid['id']
+    assert result['score_json']['free_baseline']['findings'] == [PREVIEW]
+    assert result['findings_json'] == [STATIC]
+    assert 'free_baseline' not in paid['score_json']

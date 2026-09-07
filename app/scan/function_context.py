@@ -6,6 +6,7 @@ No uploaded code is executed. Source literals are omitted from the output.
 from __future__ import annotations
 
 import ast
+import builtins
 from collections import Counter, defaultdict
 import stat
 import zipfile
@@ -13,6 +14,7 @@ import zipfile
 from pglast import scan
 from pglast.parser import ParseError
 
+from app.scan.premise_context import update_predicates, transaction_templates
 from app.scan.secrets import is_non_production_path
 from app.scan.syntax_claims import completed_notification_function
 
@@ -28,7 +30,8 @@ SCOPE = (
     "completed-status return checks run before model review, independently of finding titles. "
     "Cross-file links are name candidates within the bounded index, not runtime binding proof. Dynamic SQL, "
     "indirect effects, lock effectiveness, input trust and harmful outcomes are not verified. "
-    "Source literals omitted; test/vendor files excluded."
+    "UPDATE predicate shapes do not prove runtime parameter binding, affected rows or concurrency. "
+    "Values redacted except fixed pending/completed status labels; test/vendor files excluded."
 )
 _LOCKS = {"pg_advisory_lock", "pg_try_advisory_lock", "pg_advisory_xact_lock",
           "pg_try_advisory_xact_lock", "pg_advisory_unlock"}
@@ -68,14 +71,20 @@ def _summary(fn, path, qualified):
         name = node.func.id if isinstance(node.func, ast.Name) else (
             node.func.attr if isinstance(node.func, ast.Attribute) else None)
         if name and len(name) <= 128:
-            calls.append((name, node.lineno))
+            # Bare builtins are not candidates for unrelated class methods.
+            # Shadowed builtins remain unresolved, not claimed to be builtin.
+            if not (isinstance(node.func, ast.Name) and name in vars(builtins)):
+                calls.append((name, node.lineno))
         if (name == "execute" and node.args and isinstance(node.args[0], ast.Constant)
                 and isinstance(node.args[0].value, str)):
             tokens = _sql_tokens(node.args[0].value)
             if tokens:
                 queries.append({"line": node.lineno, "tokens": tokens})
+                predicates = update_predicates(node.args[0].value)
+                if predicates:
+                    queries[-1]["updates"] = predicates
     guard = completed_notification_function(fn) if any(c[0] == "notify_operator" for c in calls) else None
-    checks = []
+    checks = transaction_templates(fn)
     for stmt in fn.body:
         if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Compare):
             names = sorted({n.id for n in ast.walk(stmt.value) if isinstance(n, ast.Name)})
@@ -192,10 +201,12 @@ def collect_function_context(fileobj) -> dict:
         kinds = {c["kind"] for c in record["checks"]}
         target_tokens = {token for link in record["candidates"] for c in link["checks"]
                          for q in c.get("queries", []) for token in q["tokens"]}
-        rank = (0 if "return_comparison" in kinds and record["candidates"] else
+        rank = (-1 if "transaction_template" in kinds else
+                0 if "return_comparison" in kinds and record["candidates"] else
                 1 if "completed_status_return" in kinds else
-                2 if target_tokens & _LOCKS else 3 if "UPDATE" in target_tokens else
-                4 if record["candidates"] else 5)
+                2 if any("status_literal" in str(c) for c in record["candidates"]) else
+                3 if target_tokens & _LOCKS else 4 if "UPDATE" in target_tokens else
+                5 if record["candidates"] else 6)
         return rank, record["file"], record["line"]
     records.sort(key=priority)
     if len(records) > MAX_RECORDS:

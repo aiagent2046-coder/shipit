@@ -354,3 +354,46 @@ and difference_decimal. For 990.07 the result is 990.07, false, 0.00. Binary flo
 representation error is not used as evidence of changed cents. These are our four
 public examples, not tests of uploaded expressions, production prices or all
 possible inputs. They are attached automatically to supported float(...):.2f syntax.
+
+## Included free-model report and premise context (engine 2026-09-07-5)
+
+Full-depth worker and repository audits now include `score.free_baseline`: the
+complete findings and score/coverage snapshot of the free-model stage, including
+observations identical to paid findings. Existing `preview_history` keeps its
+prior unmatched-history semantics. No access token is copied into either field.
+The web report and HTML export show the baseline separately, without adding its
+findings to paid counts, scores or automatic fix eligibility.
+
+A completed preview with identical archive content and engine is reused. When
+none exists, one pass using FREE_TIER_MODEL / FREE_TIER_MODEL_BY_KIND and
+FREE_TIER_RUBRICS runs inside the full-depth request, after its paid analysis.
+It does not use the anonymous quota or anonymous daily-spend gate. This costs
+an additional free-model stage only when no reusable baseline exists; the label
+"free" describes the product tier, not zero provider cost. Each model's tokens
+are recorded separately under the audit job, before report persistence.
+The per-job spend aggregate reads the attempt count from the queue job, since
+one attempt can write two model-stage rows. For a job with spend, that count
+includes retries that failed before spending; an entirely unspent job returns zero.
+
+The included stage receives the remaining JOB_COST_CAP_USD budget, rather than
+a new full budget. This remains a post-response cost estimate: one response can
+overshoot, just as in the paid stage. No providers or no remaining budget is
+explicitly `unavailable`; provider failure/partial review preserves available
+findings and scope as `incomplete`. Failed baseline attempts are not silently
+retried on every paid cache hit. Cached full audits lacking a baseline complete
+that stage in the worker and produce a new snapshot; old reports are not edited.
+
+Function evidence now skips bare builtin names as cross-file method candidates
+(shadowing remains unresolved). Literal UPDATE queries carry a bounded expression
+shape for their own WHERE, preserving AND/OR, columns and positional parameters.
+Values are redacted except the fixed status labels pending/completed; parameter
+bindings and affected rows are not established. A subquery WHERE cannot stand
+in for an absent outer UPDATE WHERE.
+
+Supported numeric findings receive adjacent checks of the public examples they
+mention, only when the cited source includes float(...):.2f. Unchanged cents are
+not proof that arbitrary inputs are safe, nor a reason to suppress a compound
+finding. A Python template containing BEGIN, a psql include placeholder and
+COMMIT supplies transaction context beside migration claims, explicitly without
+claiming the include target, runner binding or runtime execution was verified.
+These checks use no model calls and do not execute uploaded source.

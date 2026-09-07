@@ -441,7 +441,8 @@ def test_paid_fixpack_delivers_the_deep_review_link(monkeypatch):
 
     # Spend is recorded under its own job_type so the journal can tell this
     # paid depth apart from free traffic (see #184).
-    assert [r["job_type"] for r in usage.rows] == ["fixpack_review"]
+    assert [r["job_type"] for r in usage.rows] == ["fixpack_review", "fixpack_review"]
+    assert review["score_json"]["free_baseline"]["status"] == "completed"
 
 
 def test_deep_review_reuses_a_full_audit_of_identical_bytes(monkeypatch):
@@ -460,7 +461,9 @@ def test_deep_review_reuses_a_full_audit_of_identical_bytes(monkeypatch):
         "id": "already-there", "status": "completed",
         "content_hash": content_digest(zip_bytes),
         "engine_version": AUDIT_ENGINE_VERSION,
-        "score_json": {"basis": "static+llm", "total": 7.0},
+        "score_json": {"basis": "static+llm", "total": 7.0, "free_baseline": {
+            "version": 1, "status": "completed", "origin": "included",
+            "score": {"basis": "static+preview", "total": 7.0}, "findings": []}},
         "findings_json": [], "repo_url": "https://github.com/acme/app",
         "access_token": "seededtok",
     })

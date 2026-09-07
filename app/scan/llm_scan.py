@@ -21,6 +21,7 @@ from app.llm import pricing
 from app.llm.client import LLMClient, LLMError
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.premise_context import finding_context
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
@@ -1223,6 +1224,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                  passes: int = 1,
                  stats: LLMScanStats | None = None,
                  source_facts: dict | None = None,
+                 cost_cap_usd: Decimal | None = None,
                  ) -> tuple[list[ScoredFinding], LLMScanStats]:
     """`passes` > 1 = union-of-N mode: repeat every rubric prompt N
     times and merge findings via the same (file, line) dedup. Measured
@@ -1414,7 +1416,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   source="llm",
                   verification_method="model_review",
                   claim_evidence={**model_claim_evidence(f, files_by_name),
-                                  "syntax_check": syntax_verifier.check(f)},
+                                  "syntax_check": syntax_verifier.check(f),
+                                  "context_checks": finding_context(f, source_facts)},
               ))
           # After the findings are in, not before the call: a rubric counts as
           # examined once its answer has been read, so a category is never
@@ -1426,7 +1429,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
           # stops subsequent calls; one response can overshoot the estimate.
           if pricing.cost_usd(
                   stats.model, stats.input_tokens,
-                  stats.output_tokens) >= JOB_COST_CAP_USD:
+                  stats.output_tokens) >= (JOB_COST_CAP_USD if cost_cap_usd is None else cost_cap_usd):
               stats.cost_cap_exceeded = True
               break
     # Dedup here (not in the pipeline): this is the seam where the two

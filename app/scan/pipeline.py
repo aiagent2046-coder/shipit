@@ -8,6 +8,7 @@ caller can still see what happened via the `llm` field ("failed: ...").
 
 from __future__ import annotations
 
+from decimal import Decimal
 import hashlib
 import io
 import logging
@@ -110,9 +111,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # rows move; the mean is deliberately unchanged, because admitting such a
 # category to it RAISES a weak repository's total
 # (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
-# 2026-09-07-4: full-file function candidates and automatic syntax observations
-# reach the bounded model context; numeric examples compare formatted amounts.
-AUDIT_ENGINE_VERSION = "2026-09-07-4"
+# 2026-09-07-5: paid reports include a complete free-model baseline; bounded
+# SQL predicates, transaction templates and numeric context accompany claims.
+AUDIT_ENGINE_VERSION = "2026-09-07-5"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
@@ -360,7 +361,7 @@ def content_digest(data: bytes) -> str:
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
              llm_skip_reason: str | None = None,
              llm_rubrics: tuple[str, ...] | None = None,
-             depth: str = BASIS_FULL) -> dict:
+             depth: str = BASIS_FULL, llm_cost_cap: Decimal | None = None) -> dict:
     """Returns {"score", "findings", "llm": <stats | status>, "llm_usage"}.
 
     `llm` is a stats dict when the stage ran, and also a stats-shaped dict
@@ -406,6 +407,7 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             llm_findings, stats = run_llm_scan(
                 io.BytesIO(data), llm_client, passes=llm_passes, stats=spend,
                 source_facts=static.get("source_facts"),
+                **({} if llm_cost_cap is None else {"cost_cap_usd": llm_cost_cap}),
                 **({} if llm_rubrics is None else {"rubrics": llm_rubrics}))
         except LLMError as exc:
             # A provider failure mid-audit silently degrades the score to

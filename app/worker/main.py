@@ -57,7 +57,7 @@ from app.db import (
 )
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import detect_stack
-from app.audit_history import refresh_cached_preview_history, score_with_preview_history
+from app.audit_history import refresh_cached_preview_history, ensure_paid_baseline
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
 from app.log_context import log_context, set_log_context
@@ -309,7 +309,8 @@ async def _execute_job(
         # twice -- the same reuse create_audit does, just later in the timeline.
         if job.get("account_id"):
             cached = await refresh_cached_preview_history(audit_repo, cached)
-        return str(cached["id"])
+        if not job.get("account_id") or cached["score_json"].get("free_baseline"):
+            return str(cached["id"])
 
     # The free tier is static-only by policy, not by accident. The static rules
     # and secret scanning cost nothing to run and are what find committed
@@ -345,7 +346,8 @@ async def _execute_job(
         if await _anon_daily_cap_exceeded(llm_usage_repo):
             llm_skip_reason = "daily_spend_cap"
 
-    scan = await _run_scan_offthread(
+    scan = ({"score": cached["score_json"], "findings": cached["findings_json"] or [],
+             "llm": {}, "llm_usage": {"calls": 0}} if cached else await _run_scan_offthread(
         raw,
         llm_client.with_model(FREE_TIER_MODEL,
                               by_kind=FREE_TIER_MODEL_BY_KIND)
@@ -353,7 +355,7 @@ async def _execute_job(
         llm_passes=llm_passes,
         llm_skip_reason=llm_skip_reason,
         llm_rubrics=FREE_TIER_RUBRICS if depth == BASIS_PREVIEW else None,
-        depth=depth)
+        depth=depth))
 
     # The audit still finalises as succeeded; the operator is the only one
     # who can act, and until now nothing told them. See _alert_llm_stage_failed.
@@ -366,8 +368,16 @@ async def _execute_job(
     # cost went unrecorded is an attempt nobody can bill or explain.
     try:
         if job.get("account_id"):
-            scan["score"] = await score_with_preview_history(
-                audit_repo, scan["score"], scan["findings"], digest, AUDIT_ENGINE_VERSION)
+            async def record_preview(usage):
+                await _record_llm_usage(llm_usage_repo, job_type="audit", job_id=None,
+                                       account_id=job.get("account_id"), llm_stats=usage,
+                                       audit_job_id=str(job["id"]))
+            scan["score"] = await ensure_paid_baseline(
+                audit_repo, scan, raw, llm_client, digest, AUDIT_ENGINE_VERSION,
+                runner=_run_scan_offthread, record_usage=record_preview)
+            if cached:
+                scan["score"] = {**scan["score"], "analysis_reused_from":
+                                 scan["score"].get("analysis_reused_from") or str(cached["id"])}
         persisted = await audit_repo.create(
             stack=stack.value, file_count=report.file_count,
             score_total=scan["score"]["total"], score_json=scan["score"],

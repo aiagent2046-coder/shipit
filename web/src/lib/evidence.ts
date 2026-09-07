@@ -57,6 +57,9 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
     const location = syntax.line_start ? ` Checked source lines ${syntax.line_start}–${syntax.line_end}.` : "";
     rows.push([labels[syntax.result] ?? labels.not_checked, `${syntax.claim} ${syntax.detail}${location}`]);
   }
+  for (const context of record?.context_checks ?? []) {
+    rows.push(["Deterministic context check", JSON.stringify(context)]);
+  }
   if (record?.observation) rows.push(["Model interpretation — unverified", record.observation]);
   rows.push(["Required conditions — not checked", record?.required_conditions?.length
     ? record.required_conditions.join("\n") : "Not recorded; do not assume the conditions for harm are satisfied."]);

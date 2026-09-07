@@ -1,3 +1,4 @@
+import { AuditCoverage } from "@/components/AuditCoverage";
 import type { Finding, Score, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
 import { claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts, syntaxContradicted } from "@/lib/evidence";
@@ -58,8 +59,8 @@ function FindingCard({ finding, historical = false }: { finding: Finding; histor
   const model = finding.source === "llm" || finding.rule_id?.startsWith("llm-");
   const contradicted = syntaxContradicted(finding);
   const evidence = <dl className="my-3 space-y-2 whitespace-pre-line text-sm">
-    {claimEvidenceRows(finding).map(([label, value]) => (
-      <div key={label}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
+    {claimEvidenceRows(finding).map(([label, value], index) => (
+      <div key={`${label}-${index}`}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
     ))}
   </dl>;
   return (
@@ -99,9 +100,24 @@ function FindingCard({ finding, historical = false }: { finding: Finding; histor
 
 export function PreviewHistory({ score }: { score: Score }) {
   const history = score.preview_history;
-  if (history?.version !== 1) return null;
+  const baseline = score.free_baseline;
+  const full = baseline?.version === 1 ? (
+    <section aria-label="Included free-model report" className="my-6 space-y-3 rounded-lg border border-border p-4">
+      <h2 className="text-lg font-semibold">Included free-model report</h2>
+      <p>{baseline.origin === "reused" ? "Reused same-archive free audit" : "Included in this paid audit"}.
+        {" "}Status: {baseline.status}.</p>
+      <p>The complete baseline is preserved below, including observations repeated in the paid review.
+        It is a separate model result, not independent confirmation or additional current-scan findings.</p>
+      {baseline.score ? <details><summary>Full baseline findings and scope</summary>
+        <AuditCoverage score={baseline.score} findings={baseline.findings} />
+        <ul className="space-y-3">{baseline.findings.map((finding, index) =>
+          <FindingCard key={index} finding={finding} historical />)}</ul>
+      </details> : <p>Free-model stage unavailable: {baseline.reason ?? "not recorded"}.</p>}
+    </section>
+  ) : null;
+  if (history?.version !== 1) return full;
   return (
-    <section aria-label="Free audit history" className="my-6 space-y-3 rounded-lg border border-border p-4">
+    <>{full}<section aria-label="Free audit history" className="my-6 space-y-3 rounded-lg border border-border p-4">
       <h2 className="text-lg font-semibold">Free audit history</h2>
       <p className="break-all text-sm text-muted">
         Preview {history.preview_audit_id} · engine {history.engine_version} · model {history.model ?? "not recorded"}.
@@ -122,7 +138,7 @@ export function PreviewHistory({ score }: { score: Score }) {
         {history.retained_findings.map((finding, index) =>
           <FindingCard key={index} finding={finding} historical />)}
       </ul>
-    </section>
+    </section></>
   );
 }
 

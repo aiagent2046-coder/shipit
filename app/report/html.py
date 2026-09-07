@@ -127,6 +127,28 @@ def _preview_history(score: dict) -> str:
     )
 
 
+def _free_baseline(score: dict) -> str:
+    baseline = score.get("free_baseline") or {}
+    if baseline.get("version") != 1:
+        return ""
+    status = escape(str(baseline.get("status", "unavailable")))
+    origin = "Reused same-archive free audit" if baseline.get("origin") == "reused" else "Included in this paid audit"
+    result = ('<section aria-label="Included free-model report"><h2 class="sechead">Included free-model report</h2>'
+              f'<p>{origin}. Status: {status}.</p>'
+              '<p>The complete baseline is preserved below, including observations repeated in the paid review. '
+              'It is a separate model result, not independent confirmation or additional current-scan findings.</p>')
+    prior = baseline.get("score")
+    if not prior:
+        return (result + '<p>Free-model stage unavailable: '
+                + escape(str(baseline.get("reason", "not recorded"))) + '.</p></section>')
+    findings = baseline.get("findings") or []
+    rows = coverage_rows(prior, findings) + manifest_rows(prior)
+    record = ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in rows)
+    return (result + '<details><summary>Full baseline findings and scope</summary>'
+            + _findings_table(findings, historical=True) + '<dl style="overflow-wrap:anywhere">'
+            + record + '</dl></details></section>')
+
+
 def render_report(result: dict, project_name: str = "your app") -> str:
     score = result["score"]
     raw_findings = result.get("findings", [])
@@ -202,7 +224,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
                  'and score penalties. This does not establish that the surrounding code is safe.</p>'
                  + _findings_table(contradicted))
 
-    history_html = _preview_history(score)
+    history_html = _free_baseline(score) + _preview_history(score)
     if history_html:
         body = history_html + '<h2 class="sechead">Current scan observations</h2>' + body
 
