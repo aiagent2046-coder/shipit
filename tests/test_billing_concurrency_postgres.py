@@ -384,11 +384,16 @@ async def test_yookassa_concurrent_callbacks_schedule_one_notification(live_db, 
         for bg in backgrounds
     ]), timeout=10)
     assert results == [{"ok": True}] * 8
-    assert (await payments.get(str(row["id"])))["status"] == "completed"
+    completed = await payments.get(str(row["id"]))
+    assert completed["status"] == "completed"
     assert await _count(live_db, "select count(*) from fixpack_jobs where audit_id = %s", (audit_id,)) == 1
     for bg in backgrounds:
         await bg()
     assert len(told) == 1
+    # Later smoke tests claim the oldest paid job globally. Leave no live
+    # test-owned job behind after the concurrency assertions.
+    await db.FixpackJobRepository().mark_status(
+        str(completed["fixpack_job_id"]), "no_fix_needed", "concurrency test cleanup")
 
 
 async def test_confirmation_lock_timeout_and_cancellation_release(live_db, monkeypatch):

@@ -67,6 +67,7 @@ def test_unsupported_shapes_are_not_dismissed(source):
     "Completed invoice never calls notify_operator",
     "mark_awaiting_confirmation writes no state, so a payer still triggers the notify path",
     "Completed invoice still sends an email",
+    "other_function: Completed invoice still calls notify_operator",
 ])
 def test_compound_or_broader_claims_remain_unknown(title):
     assert check(title=title)["result"] == "not_checked"

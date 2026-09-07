@@ -27,7 +27,7 @@ _HOOK_CLAIM = re.compile(
     r"\b(?:hooks?|useState|useEffect)\b.*\b(?:after|follow|below)\b.*\b(?:return|exit)\b", re.I)
 _SQL_CLAIM = re.compile(r"\bupdate\b.*\b(?:without|missing|no)\b.*\bwhere\b", re.I)
 _NOTIFY_CLAIM = re.compile(
-    r"(?:\w+: )?(?:a |the )?completed invoice still (?:calls|reaches|triggers) "
+    r"(?:a |the )?completed invoice still (?:calls|reaches|triggers) "
     r"(?:the direct call to )?notify_operator[.!]?", re.I)
 _CLAIMS = {
     "react_hook_order": "A React hook call follows an early return in the cited function.",
