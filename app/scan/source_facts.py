@@ -15,6 +15,7 @@ from typing import BinaryIO
 from app.scan.secrets import is_non_production_path
 from app.scan.operation_context import collect_operation_context
 from app.scan.function_context import collect_function_context
+from app.scan.react_async_context import collect_react_async_context
 
 MAX_FILE_BYTES = 512_000
 MAX_TOTAL_BYTES = 8_000_000
@@ -111,13 +112,15 @@ def collect_source_facts(fileobj: BinaryIO) -> dict:
                 break
     operations = collect_operation_context(fileobj)
     return {"facts": facts, "operations": operations, "functions": collect_function_context(fileobj),
+            "react_async": collect_react_async_context(fileobj),
             "parsed_files": parsed, "excluded_files": excluded,
             "limitations": sorted(limits), "scope": SCOPE}
 
 
 def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
     if not record or not (record.get("facts") or (record.get("operations") or {}).get("records")
-                          or (record.get("functions") or {}).get("records")):
+                          or (record.get("functions") or {}).get("records")
+                          or (record.get("react_async") or {}).get("records")):
         return ""
     # JSON encodes archive-controlled names as data. No source literals,
     # credentials, or alleged verification supplied by the model enter here.
@@ -127,6 +130,8 @@ def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
             "Fixed numeric examples are not tests of uploaded code or production values. "
             "Function candidates carry full-file observations beyond model file-prefix limits; "
             "they do not establish runtime bindings. Missing candidates do not prove missing protection. "
+            "React async observations include existing state resets and input/disabled restrictions; "
+            "inspect these before alleging stuck loading or repeat submission. They are not concurrency proofs. "
             "These facts do not confirm or dismiss a vulnerability.\n")
     subset = {**record, "facts": list(record["facts"]), "limitations": list(record.get("limitations", []))}
     operations = {**(record.get("operations") or {}),
@@ -145,12 +150,20 @@ def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
                         for candidate in item["candidates"]]}
         for item in functions["records"]]
     subset["functions"] = functions
+    react = {**(record.get("react_async") or {}), "records": [
+        {**item, "checks": compact_checks(item["checks"])}
+        for item in (record.get("react_async") or {}).get("records", [])]}
+    subset["react_async"] = react
+    while len(json.dumps(react, ensure_ascii=True)) > max_chars // 4 and react["records"]:
+        react["records"].pop()
+        if "prompt_react_async_limit" not in subset["limitations"]:
+            subset["limitations"].append("prompt_react_async_limit")
     # Keep a bounded share for function evidence without growing the prompt.
     while len(json.dumps(functions, ensure_ascii=True)) > max_chars // 2 and functions["records"]:
         functions["records"].pop()
         if "prompt_function_limit" not in subset["limitations"]:
             subset["limitations"].append("prompt_function_limit")
-    while subset["facts"] or operations["records"] or functions["records"]:
+    while subset["facts"] or operations["records"] or functions["records"] or react["records"]:
         text = prefix + json.dumps(subset, ensure_ascii=True)
         if len(text) <= max_chars:
             return text
@@ -158,8 +171,10 @@ def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
             operations["records"].pop()
         elif subset["facts"]:
             subset["facts"].pop()
-        else:
+        elif functions["records"]:
             functions["records"].pop()
+        else:
+            react["records"].pop()
         if "prompt_fact_limit" not in subset["limitations"]:
             subset["limitations"].append("prompt_fact_limit")
     return ""

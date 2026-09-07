@@ -267,6 +267,19 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
                 rows.append((f"Operation context {i}",
                              f"{fact['file']}:{fact['line']} — {fact['scope']}: {fact['call']}\n"
                              + fact["detail"]))
+        react = facts.get("react_async")
+        if isinstance(react, dict):
+            rows.extend([
+                ("React async scope", react.get("scope", "Not recorded")),
+                ("Files parsed for React async context", str(react.get("parsed_files", 0))),
+                ("React async limits", ", ".join(react.get("limitations", [])) or "None recorded"),
+            ])
+            for i, fact in enumerate(react.get("records", []), 1):
+                detail = [f"{fact['file']}:{fact['line']}–{fact['line_end']} — {fact['scope']}",
+                          "Await lines: " + ", ".join(map(str, fact["await_lines"]))]
+                detail.extend(json.dumps(c, ensure_ascii=False) for c in fact["checks"])
+                detail.extend("Button syntax: " + json.dumps(c, ensure_ascii=False) for c in fact["controls"])
+                rows.append((f"React async context {i}", "\n".join(detail)))
         functions = facts.get("functions")
         if isinstance(functions, dict):
             rows.extend([

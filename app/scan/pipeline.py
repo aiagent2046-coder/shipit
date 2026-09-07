@@ -115,7 +115,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # alternative deployment configuration is retained as inventory.
 # 2026-09-07-8: record why eligible files were not submitted to the model.
 # 2026-09-07-10: avoid native Point.row corruption on JS/TS files with large line numbers.
-AUDIT_ENGINE_VERSION = "2026-09-07-10"
+# 2026-09-07-11: pre-model React async state and button syntax evidence.
+AUDIT_ENGINE_VERSION = "2026-09-07-11"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

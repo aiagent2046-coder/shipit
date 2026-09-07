@@ -80,7 +80,9 @@ def finding_context(finding, source_facts):
     facts = source_facts or {}
     text = ' '.join(str(finding.get(k, '')) for k in ('title', 'explanation', 'observation'))[:16000]
     from app.scan.operator_context import operator_finding_context
+    from app.scan.react_async_context import react_async_finding_context
     records = operator_finding_context(finding, facts)
+    records.extend(react_async_finding_context(finding, facts))
     if re.search(r'\bfloat\b', text, re.I):
         supported = any(r['file'] == finding.get('file') and r['kind'] == 'numeric_examples'
                         and int(finding['line_start']) <= r['line'] <= int(finding['line_end'])

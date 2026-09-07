@@ -203,6 +203,17 @@ export function manifestRows(score: Score): [string, string][] {
     rows.push(["Source fact limits", facts.limitations.join(", ") || "None recorded"]);
     facts.facts.forEach((fact, i) => rows.push([`Source syntax fact ${i + 1}`,
       `${fact.file}:${fact.line} — ${fact.scope}: call ${fact.call}; matching ${fact.import_module} import at line ${fact.import_line}`]));
+    const react = facts.react_async;
+    if (react) {
+      rows.push(["React async scope", react.scope],
+        ["Files parsed for React async context", String(react.parsed_files)],
+        ["React async limits", react.limitations.join(", ") || "None recorded"]);
+      react.records.forEach((fact, i) => rows.push([`React async context ${i + 1}`,
+        [`${fact.file}:${fact.line}–${fact.line_end} — ${fact.scope}`,
+          `Await lines: ${fact.await_lines.join(", ")}`,
+          ...fact.checks.map(c => JSON.stringify(c)),
+          ...fact.controls.map(c => `Button syntax: ${JSON.stringify(c)}`)].join("\n")]));
+    }
     const functions = facts.functions;
     if (functions) {
       rows.push(["Function evidence scope", functions.scope],

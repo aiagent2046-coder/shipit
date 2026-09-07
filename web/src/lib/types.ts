@@ -39,6 +39,11 @@ export interface GateReason {
 
 export interface ScanManifest {
   source_facts?: {
+    react_async?: {
+      scope: string; parsed_files: number; excluded_files: number; limitations: string[];
+      records: { file: string; line: number; line_end: number; scope: string;
+        await_lines: number[]; checks: Record<string, unknown>[]; controls: Record<string, unknown>[] }[];
+    };
     functions?: {
       scope: string; indexed_functions: number; parsed_files: number;
       excluded_files: number; limitations: string[];
