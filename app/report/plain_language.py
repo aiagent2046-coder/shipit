@@ -91,23 +91,19 @@ PLAIN: dict[str, tuple[str, str, str]] = {
     ),
     'connection-string-password': (
         'A connection URI contains a password-like value.',
-        'If it names a reachable database and valid credentials, it may permit access within '
-        "that database account's permissions. Reachability, validity and grants are not "
+        'If it names a reachable service and valid credentials, it may permit access within '
+        "that account's permissions. Reachability, validity and grants are not "
         'checked.',
-        'Check whether this is a fixture. If real database credentials were exposed, change the '
+        'Check whether this is a fixture. If real service credentials were exposed, change the '
         'password and move configuration outside the repository.',
     ),
     "connection-string-dev-password": (
-        "A connection string in your project uses a default password like "
-        "`postgres` or `change_me`.",
-        "This is the value tutorials and docker-compose files ship with, "
-        "so it is almost certainly your local development database and not "
-        "a leak. It is worth knowing about for one reason: if that same "
-        "default is ever pointed at a real database, the password is "
-        "already public knowledge.",
-        "Nothing to do if this is your local setup. If anything real ever "
-        "uses it, give it a proper password and move the connection string "
-        "to an environment variable.",
+        "A URI contains a conventional password or placeholder.",
+        "Values such as postgres or change_me are commonly used in examples. The value alone "
+        "does not establish whether this is a template, local setup or live configuration. "
+        "If a real service accepts it, the password is predictable.",
+        "Check where the URI is used. Replace a default used by a real service; "
+        "a synthetic example does not require credential rotation.",
     ),
     'env-file-committed': (
         'An environment configuration file is included in the archive.',
@@ -208,6 +204,7 @@ CREDENTIAL_RULES = frozenset({
     'anthropic-api-key',
     'aws-access-key-id',
     'connection-string-local-host',
+    'connection-string-dev-password',
     'connection-string-password',
     'generic-assignment',
     'github-pat',
@@ -246,6 +243,9 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
                 risk += " Files: " + ", ".join(files) + "."
         return what, risk, fix
     if rid == "no-dockerfile":
+        what, risk, fix = PLAIN[rid]
+        if finding.get("context") == "deployment_inventory":
+            return what, own_risk or risk, own_fix or fix
         return PLAIN[rid]
     if rid in PLAIN:
         what, risk, fix = PLAIN[rid]

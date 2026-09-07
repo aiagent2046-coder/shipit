@@ -140,6 +140,7 @@ export interface Finding {
     required_conditions: string[] | null;
     conditions_status: "not_checked";
     consequence_status: "not_checked";
+    source_context?: { kind: string; uri_scheme: string; uri_kind: string } | null;
     grouped_originals?: Record<string, unknown>[];
     producer?: { model: string; response: number; rubric: string };
     context_checks?: Record<string, unknown>[];

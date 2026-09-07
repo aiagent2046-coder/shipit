@@ -440,7 +440,8 @@ def compute_scores(findings: list[ScoredFinding],
     as None and must not be conflated: it means the stage ran and covered none
     of these categories.
     """
-    findings = [f for f in findings if not syntax_contradicted(f.claim_evidence)]
+    findings = [f for f in findings if not syntax_contradicted(f.claim_evidence)
+                and not (f.rule_id == "no-dockerfile" and f.context == "deployment_inventory")]
     by_cat = {
         cat: _score([f for f in findings if f.category == cat])
         for cat in CATEGORIES

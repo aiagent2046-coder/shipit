@@ -1,7 +1,7 @@
 import { AuditCoverage } from "@/components/AuditCoverage";
 import type { Finding, Score, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
-import { claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts, syntaxContradicted } from "@/lib/evidence";
+import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts, syntaxContradicted } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -70,6 +70,7 @@ function FindingCard({ finding, historical = false, included = false }: { findin
         {historical ? <span className="text-sm text-muted">{included ? "Free-model result — included in this audit" : "Previous preview — not reassessed"}
           {isNonProductionFinding(finding) && " · Test/example context"}</span>
           : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
+          : isInformational(finding) ? <span className="text-sm text-muted">Informational</span>
           : <SeverityBadge severity={finding.severity} />}
       </div>
       <p className="mb-2 text-sm text-muted">{evidenceLabel(finding)}</p>
@@ -88,7 +89,7 @@ function FindingCard({ finding, historical = false, included = false }: { findin
             {model && <strong>Suggested verification / fix: </strong>}
             {fix}
           </span>
-          {ENTERPRISE_FIX_RULES.has(finding.rule_id) && <EnterpriseBadge />}
+          {!isInformational(finding) && ENTERPRISE_FIX_RULES.has(finding.rule_id) && <EnterpriseBadge />}
         </p>
       )}
       {tech && (
@@ -155,7 +156,8 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
   }
   const sorted = sortFindings(findings);
   const contradicted = sorted.filter(syntaxContradicted);
-  const unresolved = sorted.filter((f) => !syntaxContradicted(f));
+  const informational = sorted.filter(isInformational);
+  const unresolved = sorted.filter((f) => !syntaxContradicted(f) && !isInformational(f));
   const production = unresolved.filter((f) => !isNonProductionFinding(f));
   const examples = unresolved.filter(isNonProductionFinding);
   return (
@@ -181,6 +183,12 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
           </ul>
         </section>
       )}
+      {informational.length > 0 && <section className="mt-6" aria-label="Deployment inventory">
+        <h3 className="font-semibold">Deployment inventory</h3>
+        <ul className="flex flex-col gap-3">
+          {informational.map((f, i) => <FindingCard key={i} finding={f} />)}
+        </ul>
+      </section>}
       {contradicted.length > 0 && <section className="mt-6" aria-label="Contradicted syntax premises">
         <h3 className="font-semibold">Contradicted syntax premises</h3>
         <p className="my-2 text-sm text-muted">
