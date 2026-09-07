@@ -188,6 +188,7 @@ def configure_cors(target: FastAPI) -> None:
         allow_credentials=bool(origins) or allow_previews,
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type", CSRF_HEADER],
+        expose_headers=["Retry-After"],
     )
 
 
