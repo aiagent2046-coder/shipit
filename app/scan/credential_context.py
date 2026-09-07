@@ -6,7 +6,7 @@ MAX_PYTHON_BYTES = 256_000
 MAX_TOTAL_PYTHON_BYTES = 2_000_000
 
 
-def python_regions(text: str) -> list[tuple[int, int, str]]:
+def python_regions(text: str) -> list[tuple[int, int, int, int, str]]:
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError):
@@ -18,10 +18,11 @@ def python_regions(text: str) -> list[tuple[int, int, str]]:
                     and isinstance(node.body[0].value, ast.Constant)
                     and isinstance(node.body[0].value.value, str)):
                 doc = node.body[0]
-                regions.append((doc.lineno, doc.end_lineno, 'docstring'))
+                regions.append((doc.lineno, doc.col_offset, doc.end_lineno, doc.end_col_offset, 'docstring'))
         if (isinstance(node, ast.Constant) and isinstance(node.value, str)
                 and 'DATABASE_URL=' in node.value and 'POSTGRES_PASSWORD=change_me' in node.value):
-            regions.append((node.lineno, node.end_lineno, 'configuration_template'))
+            regions.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset,
+                            'configuration_template'))
     return regions
 
 

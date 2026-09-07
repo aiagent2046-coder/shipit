@@ -63,6 +63,29 @@ def test_docstrings_and_configuration_text_have_separate_roles():
     assert 'not verified' in rows['URI protocol']
 
 
+def test_source_roles_do_not_extend_to_an_assignment_on_the_same_line():
+    value = uri(password='unique-' + 'credential-8732', host='live.customer.org')
+    for prefix in ('"""Module docs"""', '"""Описание модуля"""',
+                   'template = "POSTGRES_PASSWORD=change_me;DATABASE_URL="'):
+        f = scan('app/config.py', prefix + '; DATABASE_URL = ' + repr(value))
+        assert f.context is None
+        assert f.severity == 'critical'
+        assert f.source_context['kind'] == 'source_literal'
+
+
+def test_docstring_boundaries_handle_unicode_and_closing_lines():
+    value = uri(password='unique-' + 'credential-8732', host='live.customer.org')
+    for body in ('"""Описание: ' + value + '"""',
+                 'def example():\n    """Описание: ' + value + '"""\n',
+                 '"""Описание:\n' + value + '\n"""'):
+        f = scan('app/config.py', body)
+        assert f.context == 'doc_example'
+        assert f.source_context['kind'] == 'docstring'
+    f = scan('app/config.py', '"""Описание\nконец"""; DATABASE_URL = ' + repr(value))
+    assert f.context is None
+    assert f.severity == 'critical'
+
+
 def test_web_uri_is_not_described_as_a_database_and_metadata_has_no_credentials():
     f = scan('scripts/proof.py', 'url = ' + repr(uri('https', host='example.com')))
     assert f.source_context['uri_kind'] == 'web'

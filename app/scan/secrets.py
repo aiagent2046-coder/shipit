@@ -767,7 +767,11 @@ def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]
                             if name.endswith(".py") and size <= min(MAX_PYTHON_BYTES, remaining):
                                 remaining -= size
                                 regions = python_regions(text)
-                        source_role = next((role for lo, hi, role in regions if lo <= lineno <= hi), None)
+                        # AST columns are UTF-8 byte offsets; regex offsets are characters.
+                        start = (lineno, len(line[:m.start()].encode("utf-8")))
+                        end = (lineno, len(line[:m.end()].encode("utf-8")))
+                        source_role = next((role for lo, col, hi, end_col, role in regions
+                                            if (lo, col) <= start and end <= (hi, end_col)), None)
                     yield (
                         _classify_match(name, lineno, rule, m.group(0), line, source_role),
                         m.group(0),
