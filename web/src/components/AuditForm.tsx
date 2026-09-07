@@ -68,10 +68,18 @@ export function AuditForm() {
         `/audit/${encodeURIComponent(result.audit_id)}${tokenQuery}`,
       );
     } catch (e) {
-      const msg =
+      let msg =
         e instanceof ApiError
           ? e.message
           : "Something went wrong submitting the audit.";
+      if (e instanceof ApiError && e.status === 429 && e.reason === "rate_limited") {
+        msg += e.retryAt !== undefined
+          ? ` Try again after ${new Date(e.retryAt).toLocaleString(undefined, {
+              year: "numeric", month: "short", day: "numeric",
+              hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short",
+            })} (your local time).`
+          : " The next available time was not provided. Please try again later.";
+      }
       setError(msg);
       setSubmitting(false);
     }
