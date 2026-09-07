@@ -1195,8 +1195,12 @@ async def test_confirming_a_second_payment_warns_the_operator(monkeypatch):
         fixpack_repo=fixpacks, payment_id=second_invoice["payment_id"],
         transport=_no_network())
 
-    # Both payments went through and both report granted -- that part is
-    # unchanged and correct, the Fix Pack IS queued.
+    # A deterministic control case for the audit: two distinct confirmed
+    # payments can fund one job. A warning is not prevention or a refund,
+    # and an LLM failing to mention this scenario does not make it fixed.
+    assert len(payments.rows) == 2
+    assert {row["status"] for row in payments.rows.values()} == {"completed"}
+    assert {row["audit_id"] for row in payments.rows.values()} == {audit["id"]}
     assert first["granted"] is True and second["granted"] is True
     assert len(fixpacks.rows) == 1
 

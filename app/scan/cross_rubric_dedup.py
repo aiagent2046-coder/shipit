@@ -96,6 +96,13 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     if ((anchor.claim_evidence or {}).get("syntax_check")
             != (f.claim_evidence or {}).get("syntax_check")):
         return False
+    def function_key(item):
+        return {(c["file"], c["function_line_start"], c["function_line_end"],
+                 tuple(c["read_lines"]), c["equivalence"])
+                for c in (item.claim_evidence or {}).get("context_checks", [])
+                if c.get("kind") == "operator_guard_order" and c.get("equivalence")}
+    if function_key(anchor) & function_key(f):
+        return True
     distance = abs(anchor.line - f.line)
     if distance == 0:
         return True
@@ -152,6 +159,16 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
             if extra:
                 note += " Reported there as: " + "; ".join(sorted(set(extra))) + "."
             rep = replace(rep, explanation=(rep.explanation + note).strip())
+        if len(members) > 1:
+            # Keep all original interpretations, including same-rubric repeats.
+            # Source excerpts are intentionally absent (they may contain secrets).
+            originals = [{"rule_id": m.rule_id, "file": m.file, "line": m.line,
+                          "title": m.title, "explanation": m.explanation,
+                          "fix_hint": m.fix_hint, "severity": m.severity, "confidence": m.confidence,
+                          "category": m.category, "claim_evidence": m.claim_evidence}
+                         for m in members]
+            rep = replace(rep, claim_evidence={"version": 1, **(rep.claim_evidence or {}),
+                                              "grouped_originals": originals})
         out[slot] = rep
 
     return out

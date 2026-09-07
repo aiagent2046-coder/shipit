@@ -17,7 +17,8 @@ import pytest
 
 from app.llm import client as client_mod
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan import llm_scan, source_facts, operation_context, function_context, syntax_claims, premise_context
+from app.scan import (llm_scan, source_facts, operation_context, function_context,
+                      syntax_claims, premise_context, operator_context)
 from app.scan import pipeline as pipeline_mod
 from app.scan.secrets import damp_for_non_production_path
 from app.scan.llm_scan import (
@@ -41,7 +42,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "d627612e8de18ba3"
+PROMPT_FINGERPRINT = "563b6940605e7dae"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -334,7 +335,10 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
         prompts=1, raw_findings=2, verified=1, discarded=1,
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
         prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]),
-        rubrics_ran=("auth",))
+        rubrics_ran=("auth",),
+        model_findings=[dict(model="fake-model", responses=1, invalid_responses=0,
+                             empty_responses=0, received=2, rejected=1, accepted=1, merged=0, saved=1,
+                             rejection_reasons={"source_quote_or_location_mismatch": 1})])
     assert len(findings) == 1
     f = findings[0]
     assert f.rule_id == "llm-auth" and f.category == "Auth"
@@ -1062,6 +1066,7 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         inspect.getsource(operation_context),
         inspect.getsource(function_context),
         inspect.getsource(premise_context),
+        inspect.getsource(operator_context),
         inspect.getsource(syntax_claims.completed_notification_function),
         inspect.getsource(llm_scan.request_limit_for),
         str(llm_scan._PROMPT_OVERHEAD),
@@ -1849,3 +1854,15 @@ def test_a_blanked_free_tier_override_is_not_a_model_named_nothing(monkeypatch):
     monkeypatch.delenv("FREE_TIER_LLM_MODEL_AITUNNEL", raising=False)
 
     assert pipeline_mod.free_tier_models_by_kind() == {}
+
+
+def test_unreadable_model_response_is_partial_and_not_cached_as_complete():
+    llm = FakeLLM("This response contains no findings array")
+    llm.providers = [Provider("openai_compat", "http://unused", "test", "fake-model")]
+    scan = pipeline_mod.run_scan(make_zip({"src/auth.ts": VULN_TS.encode()}).getvalue(),
+                                 llm, llm_rubrics=("auth",))
+    assert scan["score"]["basis"] == pipeline_mod.BASIS_PARTIAL
+    assert "invalid_responses" in scan["score"]["scan_manifest"]["limitations"]
+    assert scan["score"]["scan_manifest"]["model_findings"][0]["invalid_responses"] == 1
+    assert scan["llm_usage"]["calls"] == 1
+    assert "Auth" in scan["score"]["unexamined"]

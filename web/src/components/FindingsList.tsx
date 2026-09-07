@@ -50,7 +50,7 @@ export function SeveritySummary({ findings }: { findings: Finding[] }) {
   );
 }
 
-function FindingCard({ finding, historical = false }: { finding: Finding; historical?: boolean }) {
+function FindingCard({ finding, historical = false, included = false }: { finding: Finding; historical?: boolean; included?: boolean }) {
   const { what, risk, fix } = plainFields(finding);
   const loc = finding.file
     ? `${finding.file}${finding.line ? `:${finding.line}` : ""}`
@@ -67,7 +67,7 @@ function FindingCard({ finding, historical = false }: { finding: Finding; histor
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
         <p className="font-medium">{what}</p>
-        {historical ? <span className="text-sm text-muted">Previous preview — not reassessed
+        {historical ? <span className="text-sm text-muted">{included ? "Free-model result — included in this audit" : "Previous preview — not reassessed"}
           {isNonProductionFinding(finding) && " · Test/example context"}</span>
           : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
           : <SeverityBadge severity={finding.severity} />}
@@ -78,7 +78,7 @@ function FindingCard({ finding, historical = false }: { finding: Finding; histor
       </p>}
       {model ? evidence : <details className="my-3 text-sm"><summary>Evidence and conditions</summary>{evidence}</details>}
       {fix && (contradicted || historical) && <details className="my-3 text-sm text-muted">
-        <summary>{historical ? "Original preview suggestion — not reassessed"
+        <summary>{historical ? (included ? "Free-model suggestion — unverified" : "Original preview suggestion — not reassessed")
           : "Original model suggestion — premise contradicted"}</summary>{fix}
       </details>}
       {fix && !contradicted && !historical && (
@@ -111,7 +111,7 @@ export function PreviewHistory({ score }: { score: Score }) {
       {baseline.score ? <details><summary>Full baseline findings and scope</summary>
         <AuditCoverage score={baseline.score} findings={baseline.findings} />
         <ul className="space-y-3">{baseline.findings.map((finding, index) =>
-          <FindingCard key={index} finding={finding} historical />)}</ul>
+          <FindingCard key={index} finding={finding} historical included={baseline.origin === "included"} />)}</ul>
       </details> : <p>Free-model stage unavailable: {baseline.reason ?? "not recorded"}.</p>}
     </section>
   ) : null;

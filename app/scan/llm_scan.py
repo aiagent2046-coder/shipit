@@ -9,11 +9,12 @@ findings are discarded, never shown.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import stat
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import BinaryIO
 
@@ -692,6 +693,8 @@ class LLMScanStats:
     prompts: int = 0
     raw_findings: int = 0
     verified: int = 0
+    invalid_responses: int = 0
+    model_findings: list[dict] = field(default_factory=list)
     # Findings rejected by verify_finding, which measures ONE thing: whether
     # the code the model quoted exists as quoted. File present, line range
     # sane, evidence verbatim inside the cited window, severity and confidence
@@ -1116,18 +1119,23 @@ def clip(text: str, limit: int) -> str:
     return (spaced or head).rstrip(" ,;:.—-") + "…"
 
 
-def parse_findings(raw: str) -> list[dict]:
-    """Tolerate markdown fences and stray prose around the JSON array."""
+def parse_response(raw: str) -> list | None:
+    """None means an unreadable response; [] means a valid empty array."""
     text = raw.strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     start, end = text.find("["), text.rfind("]")
-    if start == -1 or end == -1 or end < start:
-        return []
+    if start == -1 or end < start:
+        return None
     try:
         data = json.loads(text[start:end + 1])
-    except json.JSONDecodeError:
-        return []
-    return [d for d in data if isinstance(d, dict)]
+    except (json.JSONDecodeError, RecursionError):
+        return None
+    return data if isinstance(data, list) else None
+
+
+def parse_findings(raw: str) -> list[dict]:
+    """Compatibility API; processing accounting uses parse_response directly."""
+    return [d for d in (parse_response(raw) or []) if isinstance(d, dict)]
 
 
 REQUIRED = {"file", "line_start", "line_end", "evidence", "severity",
@@ -1135,31 +1143,28 @@ REQUIRED = {"file", "line_start", "line_end", "evidence", "severity",
 _SEVERITIES = {"critical", "high", "medium", "low"}
 
 
-def verify_finding(f: dict, files: dict[str, str]) -> bool:
-    """Anti-hallucination gate: file must exist, range must be sane,
-    evidence must appear verbatim within the cited range (±2 lines).
-
-    Checked against the whole window joined by "\n", not line-by-line:
-    the prompt asks for evidence from a single line, but models
-    sometimes return a multi-line snippet anyway for a genuinely real
-    finding — that's still real code, not a hallucination, and a
-    line-by-line check would silently discard it.
-    """
+def rejection_reason(f: object, files: dict[str, str]) -> str | None:
+    """Check response shape and quoted source, not the claim's consequence."""
+    if not isinstance(f, dict):
+        return "not_an_object"
     if not REQUIRED <= f.keys():
-        return False
-    if f["severity"] not in _SEVERITIES:
-        return False
-    # confidence is only *used* downstream (float(f["confidence"]) in
-    # run_llm_scan), but it must be validated here: this is the one gate a
-    # finding passes through before that conversion runs unguarded. A model
-    # returning "high" or null instead of a number must be discarded like any
-    # other malformed finding, not crash the whole scan after money was
-    # already spent on the call that produced it.
+        return "missing_fields"
+    if not isinstance(f["severity"], str) or f["severity"] not in _SEVERITIES:
+        return "invalid_severity"
     try:
-        float(f["confidence"])
-    except (TypeError, ValueError):
-        return False
-    return quote_match_window(f, files) is not None
+        if not math.isfinite(float(f["confidence"])):
+            return "invalid_confidence"
+    except (TypeError, ValueError, OverflowError):
+        return "invalid_confidence"
+    if not isinstance(f["title"], str) or not isinstance(f["explanation"], str):
+        return "invalid_text"
+    if quote_match_window(f, files) is None:
+        return "source_quote_or_location_mismatch"
+    return None
+
+
+def verify_finding(f: dict, files: dict[str, str]) -> bool:
+    return rejection_reason(f, files) is None
 
 
 # A finding that says, in its own words, that there is nothing to fix.
@@ -1362,19 +1367,36 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
           if (sent >= _TRUNCATION_MIN_CHARS and usage.input_tokens
                   and sent / usage.input_tokens > _TRUNCATION_RATIO):
               stats.input_truncated = True
-          for f in parse_findings(raw):
-              stats.raw_findings += 1
-              if not verify_finding(f, files_by_name):
-                  stats.discarded += 1
-                  continue
-              # Counted apart from `discarded`: the verifier rejects a claim
-              # about code that is not there, this rejects a claim the model
-              # itself withdrew. Two different things going wrong, and a
-              # single counter would hide whichever is rarer.
-              if self_cancelling(f):
-                  stats.self_cancelled += 1
+          processing = next((r for r in stats.model_findings if r["model"] == usage.model), None)
+          if processing is None:
+              processing = dict(model=usage.model, responses=0, invalid_responses=0,
+                                empty_responses=0, received=0, rejected=0, rejection_reasons={},
+                                accepted=0, merged=0, saved=0)
+              stats.model_findings.append(processing)
+          processing["responses"] += 1
+          parsed = parse_response(raw)
+          if parsed is None:
+              stats.invalid_responses += 1
+              processing["invalid_responses"] += 1
+          elif not parsed:
+              processing["empty_responses"] += 1
+          for f in parsed or []:
+              processing["received"] += 1
+              stats.raw_findings += isinstance(f, dict)
+              reason = rejection_reason(f, files_by_name)
+              if reason is None and self_cancelling(f):
+                  reason = "self_cancelled"
+              if reason:
+                  processing["rejected"] += 1
+                  reasons = processing["rejection_reasons"]
+                  reasons[reason] = reasons.get(reason, 0) + 1
+                  if reason == "self_cancelled":
+                      stats.self_cancelled += 1
+                  else:
+                      stats.discarded += 1
                   continue
               stats.verified += 1
+              processing["accepted"] += 1
               # Same context damping the static rules apply. Without it the
               # model rates a fixture in tests/ critical while _classify_match
               # rates the identical line medium, and both reach the report --
@@ -1416,13 +1438,15 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   source="llm",
                   verification_method="model_review",
                   claim_evidence={**model_claim_evidence(f, files_by_name),
+                                  "producer": {"model": usage.model, "response": stats.calls, "rubric": rubric},
                                   "syntax_check": syntax_verifier.check(f),
                                   "context_checks": finding_context(f, source_facts)},
               ))
           # After the findings are in, not before the call: a rubric counts as
           # examined once its answer has been read, so a category is never
           # scored on the strength of a prompt whose reply never arrived.
-          _record_ran(rubric)
+          if parsed is not None:
+              _record_ran(rubric)
           # Cost cap: price the tokens accumulated so far (all calls this scan
           # used the same served model) and stop before the NEXT call if we've
           # crossed the ceiling. Checked after the call, not before: the cap
@@ -1437,4 +1461,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     # combined, so same-location collisions arise and are resolved here.
     # See app/scan/cross_rubric_dedup.py for why provenance is recorded
     # rather than the duplicate silently dropped.
-    return dedup_cross_rubric(findings), stats
+    grouped = dedup_cross_rubric(findings)
+    for row in stats.model_findings:
+        row["saved"] = sum((f.claim_evidence or {}).get("producer", {}).get("model") == row["model"]
+                           for f in grouped)
+        row["merged"] = row["accepted"] - row["saved"]
+    return grouped, stats

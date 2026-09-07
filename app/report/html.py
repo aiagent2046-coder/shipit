@@ -33,7 +33,7 @@ def _category_label(f: dict) -> str:
     return f"{cat} (moved from {origin})" if origin and origin != cat else cat
 
 
-def _finding_row(f: dict, *, historical: bool = False) -> str:
+def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -> str:
     sev = str(f.get("severity", "low"))
     color = _SEVERITY_COLOR.get(sev, "#8b8d98")
     loc = escape(str(f.get("file", "")))
@@ -46,7 +46,9 @@ def _finding_row(f: dict, *, historical: bool = False) -> str:
     if contradicted:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
     if historical:
-        emoji, tier_label, color = "", "Previous preview — not reassessed", "#8b8d98"
+        emoji, color = "", "#8b8d98"
+        tier_label = ("Free-model result — included in this audit" if included
+                      else "Previous preview — not reassessed")
         if is_non_production(f):
             tier_label += " · Test/example context"
     risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
@@ -62,7 +64,10 @@ def _finding_row(f: dict, *, historical: bool = False) -> str:
         fix_html = ('<details><summary>Original model suggestion — premise contradicted</summary>'
                     + escape(fix) + '</details>') if fix else ""
     if historical:
-        fix_html = ('<details><summary>Original preview suggestion — not reassessed</summary>'
+        fix_html = ('<details><summary>'
+                    + ('Free-model suggestion — unverified' if included
+                       else 'Original preview suggestion — not reassessed')
+                    + '</summary>'
                     + escape(fix) + '</details>') if fix else ""
     evidence = '<dl style="white-space:pre-line">' + "".join(
         f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f)
@@ -96,8 +101,8 @@ NON_PRODUCTION_NOTE = (
 
 _is_non_production = is_non_production
 
-def _findings_table(findings: list[dict], *, historical: bool = False) -> str:
-    rows = "".join(_finding_row(f, historical=historical) for f in findings)
+def _findings_table(findings: list[dict], *, historical: bool = False, included: bool = False) -> str:
+    rows = "".join(_finding_row(f, historical=historical, included=included) for f in findings)
     return (
         '<table><thead><tr><th></th><th>Finding</th></tr></thead>'
         f'<tbody>{rows}</tbody></table>'
@@ -145,7 +150,8 @@ def _free_baseline(score: dict) -> str:
     rows = coverage_rows(prior, findings) + manifest_rows(prior)
     record = ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in rows)
     return (result + '<details><summary>Full baseline findings and scope</summary>'
-            + _findings_table(findings, historical=True) + '<dl style="overflow-wrap:anywhere">'
+            + _findings_table(findings, historical=True, included=baseline.get("origin") == "included")
+            + '<dl style="overflow-wrap:anywhere">'
             + record + '</dl></details></section>')
 
 

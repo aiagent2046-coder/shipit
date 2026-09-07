@@ -108,6 +108,9 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
         rows.append((label, detail))
     for context in record.get("context_checks", []):
         rows.append(("Deterministic context check", json.dumps(context, ensure_ascii=False)))
+    for i, original in enumerate(record.get("grouped_originals", []), 1):
+        rows.append((f"Grouped original {i} — not independent confirmation",
+                     json.dumps(original, ensure_ascii=False)))
     if record.get("observation"):
         rows.append(("Model interpretation — unverified", record["observation"]))
     conditions = record.get("required_conditions")
@@ -159,6 +162,21 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Model responses", str(manifest.get("model_calls", 0))),
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),
     ]
+    accounting = manifest.get("model_findings")
+    if accounting is None:
+        rows.append(("Model finding processing", "Not recorded for this audit"))
+    elif not accounting:
+        rows.append(("Model finding processing", "No model response processed"))
+    else:
+        for row in accounting:
+            rows.append(("Finding processing: " + str(row.get("model") or "unknown model"),
+                         f"Responses: {row['responses']}; unreadable: {row['invalid_responses']}; "
+                         f"valid empty: {row['empty_responses']}. "
+                         f"Received entries: {row['received']}; rejected: {row['rejected']}; "
+                         f"accepted before grouping: {row['accepted']}; merged: {row['merged']}; "
+                         f"saved representatives: {row['saved']}. "
+                         "Merged originals are retained. These counts do not verify conclusions."))
+            rows.append(("Rejection reasons", json.dumps(row["rejection_reasons"], ensure_ascii=False)))
     for key, label in (("llm_candidate_files", "Files eligible for model review"),
                        ("llm_submitted_files", "Unique files submitted to model"),
                        ("llm_files_not_submitted", "Eligible files not submitted")):

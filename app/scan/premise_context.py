@@ -79,7 +79,8 @@ def finding_context(finding, source_facts):
     """Attach bounded counterexamples/context without dismissing a compound claim."""
     facts = source_facts or {}
     text = ' '.join(str(finding.get(k, '')) for k in ('title', 'explanation', 'observation'))[:16000]
-    records = []
+    from app.scan.operator_context import operator_finding_context
+    records = operator_finding_context(finding, facts)
     if re.search(r'\bfloat\b', text, re.I):
         supported = any(r['file'] == finding.get('file') and r['kind'] == 'numeric_examples'
                         and int(finding['line_start']) <= r['line'] <= int(finding['line_end'])

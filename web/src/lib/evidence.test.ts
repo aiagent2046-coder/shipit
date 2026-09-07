@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { coverageRows, findingCounts, manifestRows } from "./evidence";
+import { claimEvidenceRows, coverageRows, findingCounts, manifestRows } from "./evidence";
 import { plainFields } from "./plain";
 import type { Finding, ScanManifest } from "./types";
 
@@ -48,4 +48,36 @@ it("shows operation evidence and limits without assigning finding severity", () 
   const rows = Object.fromEntries(manifestRows({ total: 0, categories: {}, scan_manifest: manifest }));
   expect(rows["Operation context 1"]).toBe("api.ts:4 — request: fetch\nInput trust not checked");
   expect(rows["Operation context limits"]).toBe("record_limit_reached");
+});
+
+
+it("distinguishes model processing states and missing older accounting", () => {
+  const manifest: ScanManifest = {
+    archive_sha256: "digest", commit_sha: null, engine_version: "test", archive_files: 1,
+    static_checks: [], static_limits: {}, inventory: {}, model: "paid", model_calls: 2,
+    rubrics_completed: [], llm_candidate_files: 1, llm_submitted_files: 1,
+    llm_files_not_submitted: 0, limitations: ["invalid_responses"], runtime_verified: false,
+    model_findings: [{ model: "paid", responses: 2, invalid_responses: 1, empty_responses: 0,
+      received: 4, rejected: 2, accepted: 2, merged: 1, saved: 1,
+      rejection_reasons: { missing_fields: 2 } }],
+  };
+  const rows = Object.fromEntries(manifestRows({ total: 0, categories: {}, scan_manifest: manifest }));
+  expect(rows["Finding processing: paid"]).toContain("unreadable: 1; valid empty: 0");
+  expect(rows["Finding processing: paid"]).toContain("merged: 1; saved representatives: 1");
+  expect(rows["Rejection reasons"]).toContain("missing_fields");
+  delete manifest.model_findings;
+  expect(Object.fromEntries(manifestRows({ total: 0, categories: {}, scan_manifest: manifest }))[
+    "Model finding processing"]).toBe("Not recorded for this audit");
+});
+
+it("retains grouped original interpretations without treating repeats as confirmation", () => {
+  const rows = Object.fromEntries(claimEvidenceRows({ ...source, claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked",
+    grouped_originals: [{ title: "First hypothesis", explanation: "Original reasoning" },
+      { title: "Other wording", explanation: "Other reasoning" }],
+  } }));
+  expect(rows["Grouped original 1 — not independent confirmation"]).toContain("Original reasoning");
+  expect(rows["Grouped original 2 — not independent confirmation"]).toContain("Other reasoning");
+  expect(rows["Consequence check"]).toBe("No independent verification recorded.");
 });
