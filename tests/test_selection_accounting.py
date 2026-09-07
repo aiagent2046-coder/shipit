@@ -58,7 +58,7 @@ def test_request_window_removal_and_other_rubric_submission(monkeypatch):
         return original(selected, rubric, 1 if rubric == 'auth' else limit, context)
 
     monkeypatch.setattr(llm_scan, 'fit_to_window', fit)
-    files = {'auth.py': 'token = 1', 'shared.py': 'token = payment = 1'}
+    files = {'auth.py': 'token = 1', 'shared.py': 'token = webhook = 1'}
     _, stats = llm_scan.run_llm_scan(archive(files), Empty(), rubrics=('auth',))
     assert stats.selection_exclusions['request_window'] == 2
     check_partition(stats)
