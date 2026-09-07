@@ -143,3 +143,47 @@ Next: bounded verifiers for specific claim mechanisms, followed by a project
 coverage map and interpretation from collected evidence. This contract alone
 does not automatically refute public-URL, operator-access or rounding claims,
 and the model still receives selected source excerpts.
+
+## Bounded syntax checks (engine 2026-09-07-1)
+
+`claim_evidence.syntax_check` records a scanner-owned result for two narrow
+premises. An English title pattern selects the check; it is not the evidence.
+Unknown phrasing, other languages and unsupported mechanisms remain
+`not_checked`. The fields supplied by the model cannot set this result.
+
+- `react_hook_order`: Tree-sitter parses the complete TypeScript/JSX file.
+  For a named component or hook with resolved React imports and direct hook
+  statements/initializers, compare calls with returns in that function.
+  Nested functions, comments and literals cannot supply its returns. All
+  resolved calls before every return contradict the selected premise; a
+  direct call after a simple top-level conditional return observes the
+  syntax pattern. Custom hooks, indirect aliases, shadowed imports, complex
+  control flow and ambiguous locations may remain unknown. React `use` is
+  not treated as an order-constrained hook. No renders are executed.
+- `sql_update_where`: pglast parses PostgreSQL SQL and binds the cited range
+  to one top-level UPDATE. Its own `whereClause` determines presence, not a
+  WHERE in a comment, string, CTE, subquery or neighbouring statement.
+  Procedural/dynamic SQL, multiple possible UPDATE targets and syntax outside
+  this PostgreSQL parser remain unknown. `WHERE true` still has a WHERE; the
+  check says nothing about selectivity, intent, authorization or safety.
+
+Both read strict UTF-8 from the uploaded archive, with a 256,000-byte file
+limit, a 2,000,000-byte aggregate parsing budget and at most 40 selected
+checks per audit. Budget exhaustion is recorded as `not_checked`. Source
+files are never executed, imported as application code or sent to another
+LLM. Parsers and grammars are pinned in both dependency locks.
+
+`observed` means the syntax premise was seen, not that its claimed harm was
+verified. Conditions and consequences remain `not_checked`. `contradicted`
+means only the displayed syntax premise was contradicted. Those model rows
+are retained in storage and in a separate section of both reports, excluded
+from unresolved counts and legacy score penalties. Original model advice is
+retained as collapsed historical wording. Deduplication cannot merge claims
+with differing syntax-check results at the same line. Old audits are not
+reinterpreted and have no invented check result.
+
+This is post-processing of model hypotheses, not yet a whole-project syntax
+inventory or the planned LLM-only-final-interpretation architecture. It adds
+no model calls and does not verify production behaviour. Tests cover the
+actual RlsCheck and migration 0035 false claims plus synthetic positive,
+negative, ambiguous, malformed, Unicode and budget-limit cases.

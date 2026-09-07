@@ -12,6 +12,9 @@ dependencies = [
     "pyjwt[crypto]>=2.8",
     "psycopg[binary,pool]>=3.1",
     "redis[hiredis]>=8.1.0",
+    "tree-sitter==0.25.2",
+    "tree-sitter-typescript==0.23.2",
+    "pglast==7.7",
 ]
 
 [project.optional-dependencies]

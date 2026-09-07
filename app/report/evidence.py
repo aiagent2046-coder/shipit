@@ -6,6 +6,7 @@ severity, tier, or how many model passes repeated the same claim.
 """
 
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
+from app.scan.claim_evidence import syntax_contradicted
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
 
 
@@ -18,6 +19,8 @@ def is_non_production(finding: dict) -> bool:
 def finding_counts(findings: list[dict]) -> tuple[int, int]:
     source = examples = 0
     for finding in findings:
+        if syntax_contradicted(finding.get("claim_evidence")):
+            continue
         # Display-only RLS groups retain one title for each stored observation.
         count = len(finding.get("occurrence_titles") or []) or 1
         if is_non_production(finding):
@@ -30,6 +33,8 @@ def finding_counts(findings: list[dict]) -> tuple[int, int]:
 def source_severity_counts(findings: list[dict]) -> dict[str, int]:
     counts = dict.fromkeys(("critical", "high", "medium", "low"), 0)
     for finding in findings:
+        if syntax_contradicted(finding.get("claim_evidence")):
+            continue
         if is_non_production(finding):
             continue
         for severity in finding.get("occurrence_severities") or [finding.get("severity")]:
@@ -67,6 +72,8 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
 
 
 def evidence_label(finding: dict) -> str:
+    if syntax_contradicted(finding.get("claim_evidence")):
+        return "Model syntax premise contradicted — see bounded check"
     source = finding.get("source")
     if source == "llm" or str(finding.get("rule_id", "")).startswith("llm-"):
         return "Model hypothesis — unverified"
@@ -88,6 +95,15 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
+    syntax = record.get("syntax_check")
+    if syntax:
+        labels = {"contradicted": "Syntax premise contradicted", "observed": "Syntax pattern observed",
+                  "not_checked": "Syntax premise not checked"}
+        label = labels.get(syntax.get("result"), "Syntax premise not checked")
+        detail = syntax["claim"] + " " + syntax["detail"]
+        if syntax.get("line_start"):
+            detail += f" Checked source lines {syntax['line_start']}–{syntax['line_end']}."
+        rows.append((label, detail))
     if record.get("observation"):
         rows.append(("Model interpretation — unverified", record["observation"]))
     conditions = record.get("required_conditions")

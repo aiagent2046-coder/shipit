@@ -27,7 +27,13 @@ export function isNonProductionFinding(finding: Finding): boolean {
 }
 
 // Mirrors app/report/evidence.py, including the conservative legacy fallback.
+export function syntaxContradicted(finding: Finding): boolean {
+  return finding.claim_evidence?.version === 1
+    && finding.claim_evidence.syntax_check?.result === "contradicted";
+}
+
 export function evidenceLabel(finding: Finding): string {
+  if (syntaxContradicted(finding)) return "Model syntax premise contradicted — see bounded check";
   if (finding.source === "llm" || finding.rule_id?.startsWith("llm-")) {
     return "Model hypothesis — unverified";
   }
@@ -44,6 +50,13 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
       ? "A static rule emitted this observation. Its consequence was not tested."
       : "Not recorded for this finding; do not assume the cited code was verified.";
   const rows: [string, string][] = [["Source check", checked]];
+  const syntax = record?.syntax_check;
+  if (syntax) {
+    const labels = { contradicted: "Syntax premise contradicted", observed: "Syntax pattern observed",
+      not_checked: "Syntax premise not checked" };
+    const location = syntax.line_start ? ` Checked source lines ${syntax.line_start}–${syntax.line_end}.` : "";
+    rows.push([labels[syntax.result] ?? labels.not_checked, `${syntax.claim} ${syntax.detail}${location}`]);
+  }
   if (record?.observation) rows.push(["Model interpretation — unverified", record.observation]);
   rows.push(["Required conditions — not checked", record?.required_conditions?.length
     ? record.required_conditions.join("\n") : "Not recorded; do not assume the conditions for harm are satisfied."]);
@@ -76,6 +89,7 @@ export function coverageRows(score: Score, findings: Finding[]): [string, string
 
 export function findingCounts(findings: Finding[]): { source: number; examples: number } {
   return findings.reduce((counts, finding) => {
+    if (syntaxContradicted(finding)) return counts;
     const key = isNonProductionFinding(finding) ? "examples" : "source";
     counts[key] += finding.occurrence_titles?.length || 1;
     return counts;
@@ -85,6 +99,7 @@ export function findingCounts(findings: Finding[]): { source: number; examples: 
 export function sourceSeverityCounts(findings: Finding[]): Record<Severity, number> {
   const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const finding of findings) {
+    if (syntaxContradicted(finding)) continue;
     if (isNonProductionFinding(finding)) continue;
     const severities = finding.occurrence_severities?.length
       ? finding.occurrence_severities : [finding.severity];

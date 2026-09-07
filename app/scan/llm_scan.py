@@ -20,6 +20,7 @@ from typing import BinaryIO
 from app.llm import pricing
 from app.llm.client import LLMClient, LLMError
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
+from app.scan.syntax_claims import SyntaxVerifier
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
@@ -1257,6 +1258,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     with zipfile.ZipFile(fileobj) as zf:
         files = _iter_code_files(zf)
     files_by_name = dict(files)
+    syntax_verifier = SyntaxVerifier(fileobj)
 
     findings: list[ScoredFinding] = []
     ran: set[str] = set()
@@ -1400,7 +1402,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   origin_category=origin,
                   source="llm",
                   verification_method="model_review",
-                  claim_evidence=model_claim_evidence(f, files_by_name),
+                  claim_evidence={**model_claim_evidence(f, files_by_name),
+                                  "syntax_check": syntax_verifier.check(f)},
               ))
           # After the findings are in, not before the call: a rubric counts as
           # examined once its answer has been read, so a category is never

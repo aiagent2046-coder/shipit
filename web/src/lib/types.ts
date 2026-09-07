@@ -106,6 +106,14 @@ export interface Finding {
     required_conditions: string[] | null;
     conditions_status: "not_checked";
     consequence_status: "not_checked";
+    syntax_check?: {
+      kind: "react_hook_order" | "sql_update_where" | "unsupported";
+      result: "contradicted" | "observed" | "not_checked";
+      claim: string;
+      detail: string;
+      line_start?: number;
+      line_end?: number;
+    };
   } | null;
   occurrence_count?: number;
   occurrence_files?: string[];
