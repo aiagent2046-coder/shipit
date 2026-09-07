@@ -110,3 +110,29 @@ def test_real_shared_helper_is_located_without_importing_it():
     fact = next(f for f in record["facts"] if f["scope"] == "_secret_equals")
     assert fact["call"] == "hmac.compare_digest"
     assert "hmac.compare_digest" in path.read_text().splitlines()[fact["line"] - 1]
+
+
+def test_react_async_facts_survive_free_paid_and_unavailable_model_paths():
+    from app.llm.client import LLMError
+    from tests.test_react_async_context import component
+
+    data = make_zip({'src/Page.tsx': component('setBusy(true); await request(); setBusy(false);').encode()}).getvalue()
+    class RecordingLLM(FakeLLM):
+        def __init__(self):
+            super().__init__(response='[]')
+            self.calls = []
+
+        def complete(self, system, user, **kwargs):
+            self.calls.append(user)
+            return super().complete(system, user, **kwargs)
+
+    client = RecordingLLM()
+    free = run_scan(data, LLMClient(providers=[]))
+    paid = run_scan(data, client, llm_rubrics=('web',))
+    failed = run_scan(data, FakeLLM(error=LLMError('provider unavailable')), llm_rubrics=('web',))
+    facts = free['score']['scan_manifest']['source_facts']['react_async']
+    assert facts['records'][0]['checks'][0]['kind'] == 'react_async_state_reset'
+    assert facts == paid['score']['scan_manifest']['source_facts']['react_async']
+    assert facts == failed['score']['scan_manifest']['source_facts']['react_async']
+    assert free['score']['scan_manifest']['model_calls'] == 0
+    assert len(client.calls) == 1 and 'react_async_state_reset' in client.calls[0]

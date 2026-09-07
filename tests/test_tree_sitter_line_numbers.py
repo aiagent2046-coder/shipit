@@ -7,7 +7,7 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("scanner", ["operations", "react"])
+@pytest.mark.parametrize("scanner", ["operations", "react", "react_async"])
 @pytest.mark.parametrize("padding", [300, 1000])
 def test_scanners_preserve_large_line_numbers_without_corrupting_memory(scanner, padding):
     # In tree-sitter 0.26.0 Point.row returns a borrowed PyLong reference.
@@ -35,6 +35,16 @@ if scanner == "operations":
         "async function request(input: string) { return fetch(input); }\n"
         "request(`${API_BASE_URL}/private-path-must-not-appear`);\n"
     )
+elif scanner == "react_async":
+    source = 'import {useState} from "react";\n' + "\n" * (padding - 1) + (
+        "export function Component() {\n"
+        "  const [busy, setBusy] = useState(false);\n"
+        "  const send = async () => {\n"
+        "    setBusy(true); await request('private-must-not-appear'); setBusy(false);\n"
+        "  };\n"
+        "  return <button onClick={send} disabled={busy}>Send</button>;\n"
+        "}\n"
+    )
 else:
     source = 'import {useState} from "react";\n' + "\n" * (padding - 1) + (
         "export function Component({ok}) {\n"
@@ -57,6 +67,14 @@ for _ in range(20):
         assert record["scope"] == "request", record
         assert f"Same-file call spelling at line {padding + 2}:" in record["detail"], record
         assert "template_string; names: API_BASE_URL" in record["detail"], record
+        assert "must-not-appear" not in json.dumps(facts)
+    elif scanner == "react_async":
+        facts = collect_source_facts(archive)
+        record, = facts["react_async"]["records"]
+        assert (record["line"], record["line_end"]) == (padding + 3, padding + 5), record
+        assert record["await_lines"] == [padding + 4], record
+        assert record["checks"][0]["direct_reset_line"] == padding + 4, record
+        assert record["controls"][0]["line"] == padding + 6, record
         assert "must-not-appear" not in json.dumps(facts)
     else:
         result = SyntaxVerifier(archive).check({

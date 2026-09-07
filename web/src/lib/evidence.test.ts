@@ -50,6 +50,27 @@ it("shows operation evidence and limits without assigning finding severity", () 
   expect(rows["Operation context limits"]).toBe("record_limit_reached");
 });
 
+it("shows React async evidence without model calls and preserves syntax limits", () => {
+  const manifest: ScanManifest = {
+    archive_sha256: "digest", commit_sha: null, engine_version: "test", archive_files: 1,
+    static_checks: [], static_limits: {}, inventory: {}, model: null, model_calls: 0,
+    rubrics_completed: [], llm_candidate_files: null, llm_submitted_files: null,
+    llm_files_not_submitted: null, limitations: [], runtime_verified: false,
+    source_facts: { scope: "Syntax only", parsed_files: 0, excluded_files: 0, limitations: [], facts: [],
+      react_async: { scope: "No runtime or concurrency proof", parsed_files: 1, excluded_files: 0,
+        limitations: ["ambiguous_state_binding"], records: [{ file: "page.tsx", line: 10, line_end: 20,
+          scope: "Page.send", await_lines: [13], checks: [{ kind: "react_async_state_reset",
+            result: "observed", direct_reset_line: 14, finally_reset_line: null }],
+          controls: [{ line: 30, line_end: 30, event: "onClick", disabled: "state_truthy", state: "busy" }] }] } },
+  };
+  const rows = Object.fromEntries(manifestRows({ total: 0, categories: {}, basis: "static_only", scan_manifest: manifest }));
+  expect(rows["React async context 1"]).toContain("page.tsx:10–20 — Page.send\nAwait lines: 13");
+  expect(rows["React async context 1"]).toContain('"finally_reset_line":null');
+  expect(rows["React async context 1"]).toContain('Button syntax: {"line":30');
+  expect(rows["React async limits"]).toBe("ambiguous_state_binding");
+  expect(rows["React async scope"]).toBe("No runtime or concurrency proof");
+});
+
 
 it("distinguishes model processing states and missing older accounting", () => {
   const manifest: ScanManifest = {
