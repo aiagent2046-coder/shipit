@@ -145,12 +145,15 @@ def collect_function_context(fileobj) -> dict:
     by_name = defaultdict(list)
     for fn in functions:
         by_name[fn["name"]].append(fn)
+    if any(len(by_name[name]) > MAX_NAME_MATCHES for fn in functions for name, _ in fn["calls"]):
+        limits.add("ambiguous_name_matches")
     interesting = {id(fn) for fn in functions if fn["checks"]}
     # Add the direct callers of observed mechanisms (e.g. a budget helper
     # calling sum_anon_spend_today), then their callers (the worker).
     for _ in range(2):
         extra = {id(fn) for fn in functions if any(
-            any(id(target) in interesting for target in by_name[name]) for name, _ in fn["calls"])}
+            len(by_name[name]) <= MAX_NAME_MATCHES
+            and any(id(target) in interesting for target in by_name[name]) for name, _ in fn["calls"])}
         interesting |= extra
     records = []
     for fn in functions:
