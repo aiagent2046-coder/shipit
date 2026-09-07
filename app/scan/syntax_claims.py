@@ -174,11 +174,13 @@ def _react(data: bytes, start: int, end: int, path: str) -> dict:
         return _result(kind, "not_checked", detail)
     language = (tree_sitter_typescript.language_typescript() if path.endswith(".ts")
                 else tree_sitter_typescript.language_tsx())
+    # tree-sitter 0.26.0 Point.row/column return borrowed references.
+    # Use tuple indexing below: attribute access can corrupt memory past row 256.
     root = Parser(Language(language)).parse(data).root_node
     if root.has_error:
         return unknown("TypeScript/JSX parser reported an error or incomplete syntax.")
     functions = [n for n in _walk(root) if n.type in _FUNCTIONS
-                 and n.start_point.row + 1 <= start <= end <= n.end_point.row + 1]
+                 and n.start_point[0] + 1 <= start <= end <= n.end_point[0] + 1]
     if not functions:
         return unknown("The cited range does not identify a complete function.")
     fn = min(functions, key=lambda n: n.end_byte - n.start_byte)
@@ -264,7 +266,7 @@ def _react(data: bytes, start: int, end: int, path: str) -> dict:
     returns = [n for n in nodes if n.type == "return_statement"]
     if not calls or not returns:
         return unknown("No resolved React hook calls and returns to compare.")
-    location = {"line_start": fn.start_point.row + 1, "line_end": fn.end_point.row + 1}
+    location = {"line_start": fn.start_point[0] + 1, "line_end": fn.end_point[0] + 1}
     if max(c.end_byte for c in calls) <= min(r.start_byte for r in returns):
         return _result(kind, "contradicted", "All resolved direct React hook calls precede every return "
                        "in this function; nested functions are excluded.", **location)
