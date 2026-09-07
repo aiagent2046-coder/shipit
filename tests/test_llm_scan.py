@@ -17,7 +17,8 @@ import pytest
 
 from app.llm import client as client_mod
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan import llm_scan, source_facts, operation_context, function_context, syntax_claims, premise_context, operator_context
+from app.scan import (llm_scan, source_facts, operation_context, function_context,
+                      syntax_claims, premise_context, operator_context)
 from app.scan import pipeline as pipeline_mod
 from app.scan.secrets import damp_for_non_production_path
 from app.scan.llm_scan import (

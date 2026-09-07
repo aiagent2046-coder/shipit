@@ -46,7 +46,9 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
     if contradicted:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
     if historical:
-        emoji, tier_label, color = "", ("Free-model result — included in this audit" if included else "Previous preview — not reassessed"), "#8b8d98"
+        emoji, color = "", "#8b8d98"
+        tier_label = ("Free-model result — included in this audit" if included
+                      else "Previous preview — not reassessed")
         if is_non_production(f):
             tier_label += " · Test/example context"
     risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
@@ -63,7 +65,8 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
                     + escape(fix) + '</details>') if fix else ""
     if historical:
         fix_html = ('<details><summary>'
-                    + ('Free-model suggestion — unverified' if included else 'Original preview suggestion — not reassessed')
+                    + ('Free-model suggestion — unverified' if included
+                       else 'Original preview suggestion — not reassessed')
                     + '</summary>'
                     + escape(fix) + '</details>') if fix else ""
     evidence = '<dl style="white-space:pre-line">' + "".join(
@@ -147,7 +150,8 @@ def _free_baseline(score: dict) -> str:
     rows = coverage_rows(prior, findings) + manifest_rows(prior)
     record = ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in rows)
     return (result + '<details><summary>Full baseline findings and scope</summary>'
-            + _findings_table(findings, historical=True, included=baseline.get("origin") == "included") + '<dl style="overflow-wrap:anywhere">'
+            + _findings_table(findings, historical=True, included=baseline.get("origin") == "included")
+            + '<dl style="overflow-wrap:anywhere">'
             + record + '</dl></details></section>')
 
 

@@ -508,7 +508,8 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # BASIS_PARTIAL instead of `depth`, which keeps it out of the
             # cache slot a full audit reads from -- see BASIS_PARTIAL.
             "basis": ((BASIS_PARTIAL if any(llm_summary.get(k) for k in
-                                           ("failure", "cost_cap_exceeded", "input_truncated", "invalid_responses")) else depth)
+                                           ("failure", "cost_cap_exceeded", "input_truncated",
+                                            "invalid_responses")) else depth)
                       if llm_ran else BASIS_STATIC_ONLY),
         },
         "findings": findings,

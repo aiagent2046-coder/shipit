@@ -77,7 +77,8 @@ def test_group_counts_follow_the_representative_model_and_keep_other_model():
         ('first', json.dumps([FINDING])),
         ('fallback', json.dumps([{**FINDING, 'severity': 'high'}]))]), rubrics=('auth',), passes=2)
     assert [(r['merged'], r['saved']) for r in stats.model_findings] == [(1, 0), (0, 1)]
-    assert {x['claim_evidence']['producer']['model'] for x in result[0].claim_evidence['grouped_originals']} == {'first', 'fallback'}
+    originals = result[0].claim_evidence['grouped_originals']
+    assert {x['claim_evidence']['producer']['model'] for x in originals} == {'first', 'fallback'}
 
 
 def test_actual_operator_route_context_and_equivalent_claims():
@@ -109,9 +110,12 @@ def test_source_order_does_not_claim_runtime_authorization():
     from app.scan.operator_context import operator_guard_context
     import ast
     for source, expected in [
-        ('async def route():\n    _require_bearer_token(request, token)\n    return await payment_repo.get(id)', 'observed'),
-        ('async def route():\n    row = await payment_repo.get(id)\n    _require_bearer_token(request, token)\n    return row', 'not_checked'),
-        ('async def route():\n    if ok:\n        _require_bearer_token(request, token)\n    return await payment_repo.get(id)', None),
+        ('async def route():\n    _require_bearer_token(request, token)\n'
+         '    return await payment_repo.get(id)', 'observed'),
+        ('async def route():\n    row = await payment_repo.get(id)\n'
+         '    _require_bearer_token(request, token)\n    return row', 'not_checked'),
+        ('async def route():\n    if ok:\n        _require_bearer_token(request, token)\n'
+         '    return await payment_repo.get(id)', None),
     ]:
         check = operator_guard_context(ast.parse(source).body[0])
         assert (check['result'] if check else None) == expected
