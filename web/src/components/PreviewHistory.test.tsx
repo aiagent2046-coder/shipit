@@ -39,6 +39,13 @@ describe("free audit history", () => {
     expect(container.textContent).toBe("");
   });
 
+  it("keeps the test context visible in retained history", () => {
+    render(<PreviewHistory score={{ ...score, preview_history: { ...score.preview_history!,
+      retained_findings: [{ ...prior, file: "repo/tests/fixtures/shell_injection.py" }] } }} />);
+    expect(screen.getByText(/Previous preview — not reassessed · Test\/example context/)).toBeTruthy();
+    expect(screen.queryByText("Potential high impact")).toBeNull();
+  });
+
   it("shows matching observations without duplicating their cards", () => {
     render(<PreviewHistory score={{ ...score, preview_history: { ...score.preview_history!,
       matched_count: 2, retained_findings: [] } }} />);

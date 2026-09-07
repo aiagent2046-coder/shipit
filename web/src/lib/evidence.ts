@@ -159,6 +159,14 @@ export function manifestRows(score: Score): [string, string][] {
     rows.push(["Source fact limits", facts.limitations.join(", ") || "None recorded"]);
     facts.facts.forEach((fact, i) => rows.push([`Source syntax fact ${i + 1}`,
       `${fact.file}:${fact.line} — ${fact.scope}: call ${fact.call}; matching ${fact.import_module} import at line ${fact.import_line}`]));
+    const operations = facts.operations;
+    if (operations) {
+      rows.push(["Operation context scope", operations.scope],
+        ["Files parsed for operation context", String(operations.parsed_files)],
+        ["Operation context limits", operations.limitations.join(", ") || "None recorded"]);
+      operations.records.forEach((fact, i) => rows.push([`Operation context ${i + 1}`,
+        `${fact.file}:${fact.line} — ${fact.scope}: ${fact.call}\n${fact.detail}`]));
+    }
   }
   for (const [kind, paths] of Object.entries(m.inventory)) {
     const shown = paths.slice(0, 5).join(", ") + (paths.length > 5 ? ` (+${paths.length - 5} more)` : "");

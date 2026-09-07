@@ -39,6 +39,13 @@ export interface GateReason {
 
 export interface ScanManifest {
   source_facts?: {
+    operations?: {
+      scope: string;
+      parsed_files: number;
+      excluded_files: number;
+      limitations: string[];
+      records: { kind: string; file: string; line: number; scope: string; call: string; detail: string }[];
+    };
     scope: string;
     parsed_files: number;
     excluded_files: number;

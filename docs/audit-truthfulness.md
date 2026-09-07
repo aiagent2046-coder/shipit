@@ -144,6 +144,55 @@ coverage map and interpretation from collected evidence. This contract alone
 does not automatically refute public-URL, operator-access or rounding claims,
 and the model still receives selected source excerpts.
 
+## Operation context before model review (engine 2026-09-07-2)
+
+The static source index now includes `source_facts.operations` for both free
+and paid audits. It records Python calls spelled `subprocess.run`, `call`,
+`check_output` or `Popen`, JS/TS calls spelled `fetch`, and Python f-string
+expressions shaped as `float(...):.2f`. Records contain file/line, enclosing
+function, argument AST shapes, and up to eight same-file caller spellings.
+Python records also list earlier direct assignments of the first argument
+and up to four preceding top-level if statements containing return/raise.
+
+This is a navigation index, **not** source-to-sink verification. It does not
+resolve imports, aliases, reassignment, shadowing or cross-file calls. An
+earlier if/return does not prove that a guard dominates a sink or is effective.
+Caller arguments are not automatically classified as trusted/untrusted.
+`fetch` alone does not establish server execution or SSRF; passing SQL to an
+executor alone does not establish SQL injection. No severity or automatic fix
+is assigned by this index, and model hypotheses are not silently dismissed.
+
+Source literals are omitted. Numeric records run only four fixed public
+examples (490.00, 990.00, 990.07, 333.33) through our built-in float/.2f
+expression and record binary exactness separately from formatted output.
+They do not evaluate uploaded code, prove the binding of `float`, inspect live
+prices, or establish correctness for other values. They are counterexamples
+to a universal claim that binary inexactness necessarily changes cents.
+
+The collector parses at most 250 files, 256 KB per file and 8 MB total; it
+keeps at most 64 records. Tests, vendor files and symlinks are excluded;
+duplicate archive names are ambiguous. Parse failures and budget limits are
+reported. Records reach the HTML/web scan record and the existing bounded
+model context; prompt truncation is marked in the context, not hidden as a
+complete index. Fetch wrappers and subprocess stdin contexts precede numeric
+examples and routine tool calls when only a prefix fits. No new model request
+is added. The engine bump invalidates
+old cache entries; preview history still requires matching engine versions.
+
+Retained preview records now preserve the visible test/example classification.
+
+### Isolated payment observations
+
+The notification tests add a fault between job creation and payment completion
+and a controlled overlap of two pending-status reads. They use fake storage,
+mock provider responses and captured notifications; no external messages or
+payments occur. The live-job retry case must recover with one job. Concurrent
+confirmation delivery has a strict expected-failure regression: the current
+handler can schedule two confirmations after two pending snapshots. This is a
+known notification race, not proof of double charging or an observed incident.
+Removing the race requires a separate delivery/idempotency change; this audit
+context change does not modify payment behaviour or claim to fix it.
+
 ## Bounded syntax checks (engine 2026-09-07-1)
 
 `claim_evidence.syntax_check` records a scanner-owned result for two narrow
