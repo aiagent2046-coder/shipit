@@ -1,4 +1,4 @@
-import type { Finding, Severity } from "@/lib/types";
+import type { Finding, Score, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
 import { claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts, syntaxContradicted } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
@@ -49,7 +49,7 @@ export function SeveritySummary({ findings }: { findings: Finding[] }) {
   );
 }
 
-function FindingCard({ finding }: { finding: Finding }) {
+function FindingCard({ finding, historical = false }: { finding: Finding; historical?: boolean }) {
   const { what, risk, fix } = plainFields(finding);
   const loc = finding.file
     ? `${finding.file}${finding.line ? `:${finding.line}` : ""}`
@@ -66,7 +66,8 @@ function FindingCard({ finding }: { finding: Finding }) {
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
         <p className="font-medium">{what}</p>
-        {contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
+        {historical ? <span className="text-sm text-muted">Previous preview — not reassessed</span>
+          : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
           : <SeverityBadge severity={finding.severity} />}
       </div>
       <p className="mb-2 text-sm text-muted">{evidenceLabel(finding)}</p>
@@ -74,10 +75,11 @@ function FindingCard({ finding }: { finding: Finding }) {
         {model && <strong>Possible consequence — unverified: </strong>}{risk}
       </p>}
       {model ? evidence : <details className="my-3 text-sm"><summary>Evidence and conditions</summary>{evidence}</details>}
-      {fix && contradicted && <details className="my-3 text-sm text-muted">
-        <summary>Original model suggestion — premise contradicted</summary>{fix}
+      {fix && (contradicted || historical) && <details className="my-3 text-sm text-muted">
+        <summary>{historical ? "Original preview suggestion — not reassessed"
+          : "Original model suggestion — premise contradicted"}</summary>{fix}
       </details>}
-      {fix && !contradicted && (
+      {fix && !contradicted && !historical && (
         <p className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-accent">
           <span>
             <span aria-hidden="true">→ </span>
@@ -91,6 +93,35 @@ function FindingCard({ finding }: { finding: Finding }) {
         <p className="break-all font-mono text-xs text-muted">{tech}</p>
       )}
     </li>
+  );
+}
+
+export function PreviewHistory({ score }: { score: Score }) {
+  const history = score.preview_history;
+  if (history?.version !== 1) return null;
+  return (
+    <section aria-label="Free audit history" className="my-6 space-y-3 rounded-lg border border-border p-4">
+      <h2 className="text-lg font-semibold">Free audit history</h2>
+      <p className="break-all text-sm text-muted">
+        Preview {history.preview_audit_id} · engine {history.engine_version} · model {history.model ?? "not recorded"}.
+      </p>
+      <p className="text-sm text-muted">
+        Matched by identical archive content and audit engine. {history.matched_count} unchanged observations
+        already appear in this scan; {history.retained_findings.length} other preview observations are retained below.
+      </p>
+      <p className="text-sm text-muted">
+        Not repeated does not mean fixed, disproved or confirmed. These are original preview records,
+        not reassessed findings. They are excluded from current scan counts, scores and automatic fixes.
+        Repetition is not independent evidence.
+      </p>
+      {score.analysis_reused_from && <p className="text-sm text-muted">
+        The model analysis was reused from an existing audit; adding this history made no new LLM calls.
+      </p>}
+      <ul className="space-y-3">
+        {history.retained_findings.map((finding, index) =>
+          <FindingCard key={index} finding={finding} historical />)}
+      </ul>
+    </section>
   );
 }
 

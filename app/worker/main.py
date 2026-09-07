@@ -57,6 +57,7 @@ from app.db import (
 )
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import detect_stack
+from app.audit_history import refresh_cached_preview_history, score_with_preview_history
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
 from app.log_context import log_context, set_log_context
@@ -306,6 +307,8 @@ async def _execute_job(
         # Someone audited identical content while this job waited in the queue.
         # Point the job at that result instead of paying for the same scan
         # twice -- the same reuse create_audit does, just later in the timeline.
+        if job.get("account_id"):
+            cached = await refresh_cached_preview_history(audit_repo, cached)
         return str(cached["id"])
 
     # The free tier is static-only by policy, not by accident. The static rules
@@ -362,6 +365,9 @@ async def _execute_job(
     # what the row can point AT, never whether it is written -- an attempt whose
     # cost went unrecorded is an attempt nobody can bill or explain.
     try:
+        if job.get("account_id"):
+            scan["score"] = await score_with_preview_history(
+                audit_repo, scan["score"], scan["findings"], digest, AUDIT_ENGINE_VERSION)
         persisted = await audit_repo.create(
             stack=stack.value, file_count=report.file_count,
             score_total=scan["score"]["total"], score_json=scan["score"],

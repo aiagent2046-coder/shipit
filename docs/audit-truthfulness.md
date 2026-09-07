@@ -204,3 +204,38 @@ meaning of a replacement. Unsupported grammar features can therefore lead
 to a skipped edit. Python/JSON parsing and other languages' existing
 delimiter checks remain unchanged. A clean parse does not replace the
 separate build and verification gates.
+
+## Preserving the free preview in a paid report
+
+Full-depth audit requests also look up the most recent completed
+`static+preview` record with the identical content digest and audit engine
+version. The URL alone is never sufficient. Older-engine previews and
+static-only rows (which do not identify a free model preview) are not
+automatically associated. No engine bump is needed: this adds historical
+context without changing scanners, prompts, findings or scoring.
+
+`score_json.preview_history` stores the source preview id, content digest,
+engine, recorded model, observation counts and original findings that are
+not byte-for-byte equivalent as JSON objects to current findings. Object
+key ordering does not matter. The preview's access token is never copied.
+Exact duplicates are represented by `matched_count`; differences in wording,
+evidence, severity, advice or grouped occurrences remain visible as history.
+
+The web page and downloaded HTML render this history separately. Original
+evidence and advice survive, but advice is collapsed and historical rows
+have no current severity badge. `not_reassessed` means no new assessment was
+made of those records: absence in a paid model response is neither a fix nor
+an independent contradiction. History does not affect current counts,
+coverage, legacy numeric scores or automatic fix eligibility. The current
+findings and their evidence remain unchanged, including any independently
+recorded syntax contradiction; differing records are not heuristically merged.
+
+Paid workers (including partial/failed model scans), repository deep reviews
+and paid intake cache hits share this behaviour. A cached paid analysis can
+be enriched without model calls: a new audit snapshot receives a new access
+token and `analysis_reused_from` identifies the original analysis. Model
+coverage still describes that analysis, not a new run. Original rows stay
+unchanged; subsequent cache hits reuse the enriched snapshot. Free cache
+lookups remain at free depth and never import paid findings. Reports created
+before this change remain unchanged until a new paid request creates an
+enriched snapshot. No migration or additional LLM budget is required.
