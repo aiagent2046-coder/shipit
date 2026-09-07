@@ -71,6 +71,15 @@ def test_react_unknown_binding_or_location(source):
     assert check(source, start=2)["result"] == "not_checked"
 
 
+@pytest.mark.parametrize(("binding", "callee"), [("useState", "useState"), ("React", "React.useState")])
+def test_enclosing_function_parameter_can_shadow_react_import(binding, callee):
+    source = ('import React, {useState} from "react";\n'
+              f'function wrapper({binding}) {{\n'
+              f'  function Component() {{const [x]={callee}(0); return x;}}\n'
+              '  return Component;\n}')
+    assert check(source, start=3, end=3)["result"] == "not_checked"
+
+
 @pytest.mark.parametrize(("source", "expected"), [
     ("UPDATE payments SET amount=1 WHERE id=2;", "contradicted"),
     ("UPDATE payments SET amount=1;", "observed"),

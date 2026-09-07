@@ -138,10 +138,13 @@ def _react(data: bytes, start: int, end: int, path: str) -> dict:
     # Imported names shadowed by parameters/declarations or reassigned anywhere
     # are not a resolved React binding. Give up instead of claiming certainty.
     bindings = hooks | namespaces
-    params = fn.child_by_field_name("parameters")
-    if params and any(_text(n) in bindings for n in _walk(params)
-                      if n.type in ("identifier", "shorthand_property_identifier_pattern")):
-        return unknown("A parameter may shadow the React import.")
+    scope = fn
+    while scope is not None:
+        params = scope.child_by_field_name("parameters") if scope.type in _FUNCTIONS else None
+        if params and any(_text(n) in bindings for n in _walk(params)
+                          if n.type in ("identifier", "shorthand_property_identifier_pattern")):
+            return unknown("A parameter in this or an enclosing function may shadow the React import.")
+        scope = scope.parent
     for n in _walk(root):
         if n.type in _FUNCTIONS | {"class_declaration"} and _text(n.child_by_field_name("name")) in bindings:
             return unknown("A declaration may shadow the React import.")
