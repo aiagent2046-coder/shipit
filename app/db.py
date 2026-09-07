@@ -1696,9 +1696,9 @@ class LlmUsageRepository:
 
         A job is allowed max_attempts tries and each one re-runs the scan, so
         the cost of the job is the sum of its rows, not the cost of the attempt
-        that happened to succeed. `attempts` is the number of rows, i.e. how
-        many attempts reached the provider -- not audit_jobs.attempts, which
-        also counts attempts that failed before spending anything.
+        that happened to succeed. `attempts` comes from the queue job: a paid
+        attempt can now write two model-stage rows. It includes attempts that
+        failed before spending; an entirely unspent job still returns zero.
 
         Zeros (not None) for an unknown or unspent job: "this job cost nothing"
         is the truthful answer for a job whose scans never reached the LLM, and
@@ -1719,9 +1719,10 @@ class LlmUsageRepository:
                        coalesce(sum(input_tokens), 0) as input_tokens,
                        coalesce(sum(output_tokens), 0) as output_tokens,
                        coalesce(sum(cost_usd), 0) as cost_usd,
-                       count(*) as attempts
-                from llm_usage
-                where audit_job_id = %s
+                       coalesce(max(j.attempts), 0) as attempts
+                from llm_usage u
+                left join audit_jobs j on j.id = u.audit_job_id
+                where u.audit_job_id = %s
                 """,
                 (parsed,),
             )

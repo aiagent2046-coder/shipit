@@ -135,7 +135,6 @@ async def test_a_paid_audit_runs_two_passes_and_the_preview_runs_one():
     paid: list = []
     await run_audit_job(make_zip(fixture).getvalue(),
                         llm_client=CountingLLM(paid), account_id=_ACCOUNT_ID)
-    assert len(paid) == 2 * len(baseline)
 
     # The preview stays a single pass of its narrowed rubric set -- fewer
     # calls than even one full pass, and certainly no doubling.
@@ -143,6 +142,7 @@ async def test_a_paid_audit_runs_two_passes_and_the_preview_runs_one():
     await run_audit_job(make_zip(fixture).getvalue(),
                         llm_client=CountingLLM(anon), account_id=None)
     assert 0 < len(anon) <= len(baseline)
+    assert len(paid) == 2 * len(baseline) + len(anon)  # Paid passes plus included free stage.
 
 
 async def test_llm_failure_degrades_to_static_only_not_500():

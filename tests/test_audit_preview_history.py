@@ -221,6 +221,8 @@ async def test_paid_worker_includes_free_model_when_no_free_audit_exists(monkeyp
     free_client = object()
     client = SimpleNamespace(providers=[True], with_model=Mock(return_value=free_client))
     runner = AsyncMock(side_effect=[paid_scan, preview_scan])
+    monkeypatch.setattr(worker, "_anon_daily_cap_exceeded",
+                        AsyncMock(side_effect=AssertionError("Paid baseline must not consume anonymous quota")))
     record = AsyncMock()
     monkeypatch.setattr(worker, "_run_scan_offthread", runner)
     monkeypatch.setattr(worker, "_record_llm_usage", record)
@@ -289,3 +291,24 @@ async def test_partial_free_stage_keeps_findings_and_records_usage_before_paid_p
     assert score['free_baseline']['status'] == 'incomplete'
     assert score['free_baseline']['findings'] == [PREVIEW]
     record.assert_awaited_once_with({'calls': 1})
+
+
+@pytest.mark.asyncio
+async def test_cached_paid_result_missing_baseline_runs_only_free_model(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    paid = row('static+llm', [STATIC])
+    repo = Repo(paid)
+    preview = {'score': row('static+preview', [PREVIEW])['score_json'], 'findings': [PREVIEW],
+               'llm': {}, 'llm_usage': {'calls': 0}}
+    runner = AsyncMock(return_value=preview)
+    monkeypatch.setattr(worker, '_run_scan_offthread', runner)
+    client = SimpleNamespace(providers=[1], with_model=Mock())
+    result = await run_audit_job(RAW, llm_client=client, audit_repo=repo, account_id='paid-account')
+    runner.assert_awaited_once()
+    assert runner.call_args.kwargs['depth'] == 'static+preview'
+    assert result['id'] != paid['id']
+    assert result['score_json']['analysis_reused_from'] == paid['id']
+    assert result['score_json']['free_baseline']['findings'] == [PREVIEW]
+    assert result['findings_json'] == [STATIC]
+    assert 'free_baseline' not in paid['score_json']

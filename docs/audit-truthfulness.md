@@ -371,6 +371,9 @@ It does not use the anonymous quota or anonymous daily-spend gate. This costs
 an additional free-model stage only when no reusable baseline exists; the label
 "free" describes the product tier, not zero provider cost. Each model's tokens
 are recorded separately under the audit job, before report persistence.
+The per-job spend aggregate reads the attempt count from the queue job, since
+one attempt can write two model-stage rows. For a job with spend, that count
+includes retries that failed before spending; an entirely unspent job returns zero.
 
 The included stage receives the remaining JOB_COST_CAP_USD budget, rather than
 a new full budget. This remains a post-response cost estimate: one response can
