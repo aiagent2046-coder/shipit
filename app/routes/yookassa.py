@@ -322,6 +322,7 @@ async def create_fixpack_payment(
 
 async def _tell_the_payer_after_answering(
     payment_repo: PaymentRepository, *, payment_id: str, transport=None,
+    funding_review_required: bool = False,
 ) -> None:
     """Send the confirmation once the notification has already been answered.
 
@@ -348,7 +349,8 @@ async def _tell_the_payer_after_answering(
         logger.warning("could not re-read a confirmed payment to announce it")
         return
     await _tell_the_payer(
-        row, product=bank_transfer.PRODUCT_FIXPACK, transport=transport)
+        row, product=bank_transfer.PRODUCT_FIXPACK, transport=transport,
+        funding_review_required=funding_review_required)
 
 
 @router.post("/v1/billing/yookassa/notifications")
@@ -491,7 +493,8 @@ async def receive_notification(
             if not already_confirmed:
                 background.add_task(
                     _tell_the_payer_after_answering, payment_repo,
-                    payment_id=str(row["id"]), transport=transport)
+                    payment_id=str(row["id"]), transport=transport,
+                    funding_review_required=bool(granted.get("funding_review_required")))
 
     except PaymentConfirmationBusy as exc:
         raise HTTPException(status_code=503, detail="Payment confirmation busy",

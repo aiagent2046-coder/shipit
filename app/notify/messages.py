@@ -158,6 +158,25 @@ def confirmation_body(
     )
 
 
+def funding_review_message(*, reference: str, locale: str | None) -> tuple[str, str]:
+    """Money received, but no separate job promised and no refund claimed."""
+    if normalize(locale) == RU:
+        return ("Платёж Drydock требует сверки", (
+            "Платёж получен. Для этого аудита уже существует задача Fix Pack; "
+            "отдельная новая задача по этому платежу не создана. "
+            "Нужно сверить оплату и определить, требуется ли возврат. "
+            "Возврат ещё не выполнен. Обратитесь в поддержку с номером "
+            f"платежа: {reference}."
+        ))
+    return ("Your Drydock payment needs review", (
+        "Payment received. This audit already has a Fix Pack job; "
+        "no separate new job was created for this payment. "
+        "The payment needs reconciliation to determine whether a refund is due. "
+        "No refund has been issued. Please contact support with payment reference: "
+        f"{reference}."
+    ))
+
+
 # --- a refund the operator has sent -----------------------------------------
 
 _REFUND_SUBJECT = {

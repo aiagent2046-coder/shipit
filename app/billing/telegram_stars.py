@@ -648,9 +648,9 @@ def _confirmed_text(result: dict[str, Any]) -> str:
         # audit. Nothing downstream can undo that -- only the operator can.
         lines += [
             "",
-            "WARNING: this audit already had a Fix Pack job in progress, so "
-            "this payment funded no additional work. One pull request will be "
-            "opened, not two. Reconcile by hand — a refund is likely owed.",
+            "WARNING: no separate job was created for this payment. It funded no additional work "
+            "or the original funding is unknown. Reconcile by hand and determine whether "
+            "a refund is owed; no refund has been issued.",
         ]
     return "\n".join(lines)
 
@@ -1022,6 +1022,15 @@ async def _handle_fixpack_payment(
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "fixpack_payment", "persisted": False}
+    if job.get("funding_review_required"):
+        from app.notify.messages import funding_review_message
+        _, body = funding_review_message(
+            reference=sp["telegram_payment_charge_id"],
+            locale=(message.get("from") or {}).get("language_code"),
+        )
+        await send_message(chat_id, body, token=token, transport=transport)
+        return {"ok": True, "handled": "fixpack_payment", "persisted": True,
+                "funding_review_required": True}
     # A Fix Pack IS bought for one specific audit, so link that audit's report
     # directly (the /audit/{id} route), not the bare site root. The token is
     # NOT optional: GET /v1/audits/{id} authorises on the row's own token, so

@@ -284,7 +284,13 @@ function TransferCheckout({ auditId }: { auditId: string }) {
       createInvoice={(payer) =>
         createFixpackBankTransferInvoice(auditId, payer)
       }
-      renderCompleted={() => (
+      renderCompleted={(completed) => completed.product === "fixpack" && completed.funding_review_required ? (
+        <p role="alert" className="mt-4 text-sm">
+          Payment received. No separate Fix Pack job was created for this payment.
+          Please contact support with reference {completed.reference} to reconcile the
+          payment and determine whether a refund is due. No refund has been issued.
+        </p>
+      ) : (
         <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
           <p className="font-semibold text-accent">
             Transfer confirmed — generating your Fix Pack.

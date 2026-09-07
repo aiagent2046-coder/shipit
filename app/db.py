@@ -861,62 +861,53 @@ class FixpackJobRepository:
         return _row_to_fixpack_job(row)
 
     async def create_paid(
-        self, *, audit_id: str | None, stack: str
+        self, *, audit_id: str | None, stack: str, funding_key: str | None = None,
     ) -> dict[str, Any] | None:
-        """Insert a Fix Pack job in the 'paid' state: purchased, not yet
-        generated. Distinct from create() (the Deploy Pack flow's already-
-        generated rows, which default to status 'generated') -- a separate
-        follow-up step picks up 'paid' rows and generates the fix PR.
-        pack='fixpack' names the product; the other generation outputs
-        (verified, detail, preview_*) stay null until that step runs.
+        """Reserve one job for a payment, retaining its identity after completion.
 
-        IDEMPOTENT per audit, which is what lets grant_fixpack retry safely.
-        grant_fixpack creates the job BEFORE completing the payment, so a crash
-        between the two leaves the payment 'pending' and therefore retryable
-        (the older order left it 'completed' with no job, and the early-return on
-        a completed payment made that permanent). The retry then arrives here a
-        second time for the same audit, and must NOT open a second fix PR for one
-        payment.
-
-        The ON CONFLICT arbiter names fixpack_jobs_audit_live_idx (migration
-        0025) by repeating its predicate, so a second call collides only with a
-        job that is still live -- once the earlier one is terminal ('failed',
-        'delivered', ...) the same audit inserts a fresh row, which is what keeps
-        re-purchase after a failure working. DO UPDATE rather than DO NOTHING
-        because only DO UPDATE returns the conflicting row; the assignment is a
-        deliberate no-op (audit_id to its own value). Same shape as
-        AuditJobRepository.enqueue.
-
-        Because the row is not re-inserted, access_token keeps its original value
-        (the column default in migration 0012 is evaluated per INSERT, and this
-        path performs none) -- so a retry hands back the SAME job and the SAME
-        ownership token the first call did, and a link already given out stays
-        valid.
-
-        `inserted` says which happened, via the xmax idiom: on a real INSERT the
-        new tuple has no updating transaction, so xmax is 0. False means "joined
-        the job an earlier call already created"."""
+        Another payment can join a live audit job, but cannot replace its funding
+        key. The caller must reconcile that payment rather than promise new work.
+        A retry of the original payment returns its job even if it is terminal.
+        """
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
             return None
         parsed_audit_id = uuid.UUID(audit_id) if audit_id else None
+        columns = """id, audit_id, pack, stack, verified, detail,
+                     preview_local_url, preview_expires_at, pr_url, pr_delivered,
+                     status, access_token, created_at, funding_key"""
         async with pool.connection() as conn:
-            cur = await conn.execute(
-                """
-                insert into fixpack_jobs (audit_id, pack, stack, status)
-                values (%s, 'fixpack', %s, 'paid')
-                on conflict (audit_id) where status in ('paid', 'running')
-                do update set audit_id = fixpack_jobs.audit_id
-                returning id, audit_id, pack, stack, verified, detail,
-                          preview_local_url, preview_expires_at,
-                          pr_url, pr_delivered, status, access_token, created_at,
-                          (xmax = 0) as inserted
-                """,
-                (parsed_audit_id, stack),
-            )
-            row = await cur.fetchone()
-        return _row_to_fixpack_job(row)
+            for _ in range(3):
+                if funding_key is not None:
+                    cur = await conn.execute(
+                        f"select {columns}, false as inserted from fixpack_jobs "
+                        "where funding_key = %s", (funding_key,),
+                    )
+                    row = await cur.fetchone()
+                    if row:
+                        return _row_to_fixpack_job(row)
+                cur = await conn.execute(
+                    "insert into fixpack_jobs (audit_id, pack, stack, status, funding_key) "
+                    "values (%s, 'fixpack', %s, 'paid', %s) on conflict do nothing "
+                    f"returning {columns}, true as inserted",
+                    (parsed_audit_id, stack, funding_key),
+                )
+                row = await cur.fetchone()
+                if row:
+                    return _row_to_fixpack_job(row)
+                cur = await conn.execute(
+                    f"select {columns}, false as inserted from fixpack_jobs "
+                    "where funding_key = %s or (audit_id = %s "
+                    "and status in ('paid', 'running')) "
+                    "order by (funding_key = %s) desc nulls last limit 1",
+                    (funding_key, parsed_audit_id, funding_key),
+                )
+                row = await cur.fetchone()
+                if row:
+                    return _row_to_fixpack_job(row)
+                # The conflicting job became terminal before the SELECT.
+            raise RuntimeError("Fix Pack reservation changed repeatedly; retry payment confirmation")
 
     async def mark_delivered(self, job_id: str, pr_url: str) -> None:
         try:
@@ -1218,7 +1209,7 @@ class FixpackJobRepository:
                 """
                 select id, audit_id, pack, stack, verified, detail,
                        preview_local_url, preview_expires_at,
-                       pr_url, pr_delivered, status, created_at
+                       pr_url, pr_delivered, status, created_at, funding_key
                 from fixpack_jobs where id = %s
                 """,
                 (parsed_id,),
@@ -1989,32 +1980,13 @@ class PaymentRepository:
     async def get_completed_fixpack_for_job(
         self, fixpack_job_id: str
     ) -> dict[str, Any] | None:
-        """The order that paid for one Fix Pack job, or None.
+        """Find the funding payment, never the newest additional payment.
 
-        THE ONE LINK FROM A JOB BACK TO ITS BUYER. app/main.py's processor is
-        handed a fixpack_jobs row, and when a job ends with nothing to fix the
-        person who paid has to be told -- but their name, address, language and
-        order number all live on the payment.
-
-        AN EARLIER VERSION OF THIS LOOKED THE PAYER UP BY AUDIT and took the
-        newest order, and that was wrong in a way worth naming. One audit can
-        hold several jobs and several orders: migration 0025 allows one LIVE
-        job per audit, but re-buying after a terminal one is supported and
-        inserts a fresh row. On 2026-08-25 a single audit ended the day with
-        four jobs and five orders, and the by-audit lookup would have told one
-        buyer twice, told the other not at all, and paged the operator twice
-        with one order number -- leaving the second refund unsent.
-
-        Migration 0035 records the pairing instead of inferring it. Rows
-        written before it are linked only where the pairing was unambiguous, so
-        None here means "this cannot be known", not "there was no payment", and
-        callers must not fall back to guessing by audit -- the rows where a
-        guess is possible are exactly the rows where it is wrong.
-
-        `product = 'fixpack'` remains, though the join now implies it: a
-        defensive predicate on a column that decides whose money is discussed
-        costs nothing and refuses a mislinked row rather than describing it.
+        Legacy jobs without a key are usable only with one unambiguous linked
+        completed payment. Missing/ambiguous ownership requires reconciliation.
         """
+        from app.fixpack_funding import funding_key
+
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -2022,21 +1994,21 @@ class PaymentRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select id, account_id, provider, external_ref, amount,
-                       currency, status, tier_granted, telegram_chat_id,
-                       product, audit_id, paypal_order_id, payer_name,
-                       payer_email, payer_x, payer_locale,
-                       provider_payment_id, fixpack_job_id, created_at
-                from payments
-                where fixpack_job_id = %s and product = 'fixpack'
-                  and status = 'completed'
-                order by created_at desc
-                limit 1
-                """,
-                (fixpack_job_id,),
+                select p.*, j.funding_key
+                from payments p join fixpack_jobs j on j.id = p.fixpack_job_id
+                where p.fixpack_job_id = %s and p.product = 'fixpack'
+                  and p.status = 'completed'
+                """, (fixpack_job_id,),
             )
-            row = await cur.fetchone()
-        return _row_to_payment(row) if row else None
+            rows = await cur.fetchall()
+        for row in rows:
+            if row.get("funding_key") and row.get("external_ref") and (
+                funding_key(row["provider"], row["external_ref"]) == row["funding_key"]
+            ):
+                return _row_to_payment(row)
+        if len(rows) == 1 and not rows[0].get("funding_key"):
+            return _row_to_payment(rows[0])
+        return None
 
     async def list_pending(
         self, provider: str, *, created_after: datetime.datetime | None = None

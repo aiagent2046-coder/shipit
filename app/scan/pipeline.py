@@ -114,7 +114,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-07-7: preserve credential source roles and URI protocols;
 # alternative deployment configuration is retained as inventory.
 # 2026-09-07-8: record why eligible files were not submitted to the model.
-AUDIT_ENGINE_VERSION = "2026-09-07-8"
+AUDIT_ENGINE_VERSION = "2026-09-07-9"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
