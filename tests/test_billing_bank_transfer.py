@@ -790,6 +790,7 @@ async def test_operator_confirm_creates_one_fixpack_job(monkeypatch):
     assert status == {
         "reference": invoice["reference"], "status": "completed",
         "product": "fixpack", "audit_id": audit["id"],
+        "funding_review_required": False,
     }
 
 

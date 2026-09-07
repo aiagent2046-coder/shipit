@@ -69,7 +69,7 @@ def test_funding_identity_separates_providers_and_delimiters():
 
 def test_review_message_never_claims_a_job_or_refund_was_issued():
     _, text = funding_review_message(reference="TEST-REF", locale="en")
-    assert "no separate new job" in text and "No refund has been issued" in text
+    assert "has not been confirmed" in text and "No refund has been issued" in text
     assert "TEST-REF" in text
     _, russian = funding_review_message(reference="TEST-REF", locale="ru")
     assert "Возврат ещё не выполнен" in russian
@@ -85,6 +85,6 @@ async def test_customer_notification_does_not_promise_work_for_second_payment():
     )
     notify.assert_awaited_once()
     text = notify.await_args.kwargs["body"]
-    assert "no separate new job" in text and "No refund has been issued" in text
+    assert "has not been confirmed" in text and "No refund has been issued" in text
     assert "TEST-SECOND" in text
     assert "queued" not in text

@@ -286,7 +286,7 @@ function TransferCheckout({ auditId }: { auditId: string }) {
       }
       renderCompleted={(completed) => completed.product === "fixpack" && completed.funding_review_required ? (
         <p role="alert" className="mt-4 text-sm">
-          Payment received. No separate Fix Pack job was created for this payment.
+          Payment received. A separate Fix Pack job for this payment has not been confirmed.
           Please contact support with reference {completed.reference} to reconcile the
           payment and determine whether a refund is due. No refund has been issued.
         </p>

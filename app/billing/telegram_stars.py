@@ -1331,8 +1331,16 @@ async def _handle_link(
         # Fix Pack row carrying this chat cannot shadow a Pro purchase from
         # /mykey the way it once did.
         await payment_repo.link_telegram_chat_id(row["id"], str(chat_id))
+        text = _no_key_for_this_payment_text(row)
+        if row.get("product") == "fixpack" and row.get("fixpack_job_id"):
+            funding = await payment_repo.get_completed_fixpack_for_job(row["fixpack_job_id"])
+            if funding is None or str(funding["id"]) != str(row["id"]):
+                from app.notify.messages import funding_review_message
+                _, text = funding_review_message(
+                    reference=str(row.get("external_ref") or ""), locale=row.get("payer_locale"),
+                )
         await send_message(
-            chat_id, _no_key_for_this_payment_text(row),
+            chat_id, text,
             token=token, transport=transport,
         )
         return {"ok": True, "handled": "link", "result": "no_account"}

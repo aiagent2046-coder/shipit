@@ -213,8 +213,8 @@ function Found({
       return <ProCompleted completed={status} copy={copy} copied={copied} />;
     }
     if (status.funding_review_required) {
-      return <p role="alert">Payment received. No separate Fix Pack job was created
-        for this payment. Contact support with reference {status.reference} to
+      return <p role="alert">Payment received. A separate Fix Pack job for this payment
+        has not been confirmed. Contact support with reference {status.reference} to
         reconcile the payment and determine whether a refund is due.
         No refund has been issued.</p>;
     }

@@ -496,3 +496,18 @@ def test_the_audit_response_tells_the_page_whether_to_offer_a_fix_pack():
         ).json()["fixpack_auto_fixable"] is False
     finally:
         _clear()
+
+
+async def test_second_stars_payment_is_not_announced_as_new_work():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(repo_url=REPO_URL)
+    for charge in ("first-charge", "second-charge", "second-charge"):
+        result = await _send(_fixpack_payment_update(charge, audit["id"]),
+                             audits=audits, payments=payments, fixpacks=fixpacks,
+                             accounts=accounts, calls=calls)
+    assert result["funding_review_required"] is True
+    assert len(fixpacks.rows) == 1 and len(payments.rows) == 2
+    text = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+    assert "has not been confirmed" in text and "No refund has been issued" in text
+    assert "queued" not in text
