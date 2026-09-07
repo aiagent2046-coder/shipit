@@ -392,8 +392,10 @@ async def test_yookassa_concurrent_callbacks_schedule_one_notification(live_db, 
     assert len(told) == 1
     # Later smoke tests claim the oldest paid job globally. Leave no live
     # test-owned job behind after the concurrency assertions.
-    await db.FixpackJobRepository().mark_status(
-        str(completed["fixpack_job_id"]), "no_fix_needed", "concurrency test cleanup")
+    jobs = db.FixpackJobRepository()
+    created_job = await jobs.get_by_audit(audit_id)
+    assert created_job is not None
+    await jobs.mark_status(created_job["id"], "no_fix_needed", "concurrency test cleanup")
 
 
 async def test_confirmation_lock_timeout_and_cancellation_release(live_db, monkeypatch):
