@@ -50,3 +50,8 @@ def static_claim_evidence() -> dict:
         "observation": None, "required_conditions": None,
         "conditions_status": "not_checked", "consequence_status": "not_checked",
     }
+
+
+def syntax_contradicted(record: dict | None) -> bool:
+    return bool(record and record.get("version") == 1
+                and (record.get("syntax_check") or {}).get("result") == "contradicted")

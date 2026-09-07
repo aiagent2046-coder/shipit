@@ -15,6 +15,8 @@ still gets credit for the others. See shipit-architecture.md 2.2 C.
 
 from __future__ import annotations
 
+from app.scan.claim_evidence import syntax_contradicted
+
 from dataclasses import dataclass
 
 from app.scan.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
@@ -438,6 +440,7 @@ def compute_scores(findings: list[ScoredFinding],
     as None and must not be conflated: it means the stage ran and covered none
     of these categories.
     """
+    findings = [f for f in findings if not syntax_contradicted(f.claim_evidence)]
     by_cat = {
         cat: _score([f for f in findings if f.category == cat])
         for cat in CATEGORIES

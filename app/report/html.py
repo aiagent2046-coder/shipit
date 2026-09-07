@@ -8,6 +8,7 @@ assets: the report is a single file that can be shared as-is.
 from __future__ import annotations
 
 from html import escape
+from app.scan.claim_evidence import syntax_contradicted
 
 from app.report.evidence import (
     coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
@@ -41,6 +42,9 @@ def _finding_row(f: dict) -> str:
     what, risk, fix = plain_fields(f)
     emoji, _ = tier(sev)
     tier_label = f"Potential {sev} impact"
+    contradicted = syntax_contradicted(f.get("claim_evidence"))
+    if contradicted:
+        emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
     risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
     fix_html = f'<div class="fix">→ {escape(fix)}</div>' if fix else ""
     model = f.get("source") == "llm" or str(f.get("rule_id", "")).startswith("llm-")
@@ -50,6 +54,9 @@ def _finding_row(f: dict) -> str:
                          + escape(risk) + '</div>')
         if fix:
             fix_html = '<div class="fix"><strong>Suggested verification / fix:</strong> ' + escape(fix) + '</div>'
+    if contradicted:
+        fix_html = ('<details><summary>Original model suggestion — premise contradicted</summary>'
+                    + escape(fix) + '</details>') if fix else ""
     evidence = '<dl style="white-space:pre-line">' + "".join(
         f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f)
     ) + '</dl>'
@@ -136,8 +143,10 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # the reader to tell them apart from the file path. Readers don't; they
     # either treat every row as urgent or, after the first false alarm, none
     # of them.
-    production = [f for f in findings if not _is_non_production(f)]
-    non_production = [f for f in findings if _is_non_production(f)]
+    contradicted = [f for f in findings if syntax_contradicted(f.get("claim_evidence"))]
+    unresolved = [f for f in findings if not syntax_contradicted(f.get("claim_evidence"))]
+    production = [f for f in unresolved if not _is_non_production(f)]
+    non_production = [f for f in unresolved if _is_non_production(f)]
 
     if production:
         body = _findings_table(production)
@@ -153,6 +162,12 @@ def render_report(result: dict, project_name: str = "your app") -> str:
             f'<p class="secnote">{NON_PRODUCTION_NOTE}</p>'
             + _findings_table(non_production)
         )
+    if contradicted:
+        body += ('<h2 class="sechead">Contradicted syntax premises</h2>'
+                 '<p class="secnote">These model claims contradict the bounded syntax check. '
+                 'They are retained for traceability and excluded from unresolved finding counts '
+                 'and score penalties. This does not establish that the surrounding code is safe.</p>'
+                 + _findings_table(contradicted))
 
     record = "".join(
         f'<dt>{escape(label)}</dt><dd translate="no">{escape(value)}</dd>'

@@ -3,6 +3,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { AuditCoverage } from "./AuditCoverage";
 import { FindingsList, SeveritySummary } from "./FindingsList";
 import type { Finding, Score, ScanManifest } from "@/lib/types";
+import { findingCounts, sourceSeverityCounts } from "@/lib/evidence";
 
 afterEach(cleanup);
 
@@ -19,6 +20,37 @@ const manifest: ScanManifest = {
 };
 
 describe("audit evidence", () => {
+  it("retains contradicted premises separately without critical badges or actionable fixes", () => {
+    const contradicted: Finding = { ...finding, title: "UPDATE without WHERE",
+      fix_hint: "<script>old advice</script>",
+      claim_evidence: { version: 1, source_check: { kind: "quote_match", line_start: 1, line_end: 3 },
+        observation: null, required_conditions: null, conditions_status: "not_checked",
+        consequence_status: "not_checked", syntax_check: { kind: "sql_update_where", result: "contradicted",
+          claim: "The cited UPDATE has no WHERE.", detail: "Its own WHERE is present; safety was not tested.",
+          line_start: 1, line_end: 3 } },
+    };
+    const { container } = render(<FindingsList findings={[contradicted]} />);
+    const section = screen.getByRole("region", { name: "Contradicted syntax premises" });
+    expect(within(section).getAllByText("UPDATE without WHERE").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Potential critical impact")).toBeNull();
+    expect(screen.getByText("<script>old advice</script>").closest("details")).not.toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+    expect(findingCounts([contradicted])).toEqual({ source: 0, examples: 0 });
+    expect(sourceSeverityCounts([contradicted]).critical).toBe(0);
+  });
+
+  it("does not turn an observed syntax pattern into confirmed harm", () => {
+    render(<FindingsList findings={[{ ...finding,
+      claim_evidence: { version: 1, source_check: { kind: "quote_match", line_start: 1, line_end: 3 },
+        observation: null, required_conditions: null, conditions_status: "not_checked",
+        consequence_status: "not_checked", syntax_check: { kind: "react_hook_order", result: "observed",
+          claim: "A hook follows a conditional return.", detail: "Render paths were not tested." } },
+    }]} />);
+    expect(screen.getByText("Syntax pattern observed")).toBeTruthy();
+    expect(screen.getByText("No independent verification recorded.")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Contradicted syntax premises" })).toBeNull();
+  });
+
   it("keeps quote checks separate from model conditions and consequences", () => {
     const { container } = render(<FindingsList findings={[{ ...finding,
       explanation: "Another account might be readable.",

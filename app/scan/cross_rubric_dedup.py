@@ -91,6 +91,11 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     """
     if anchor.file != f.file:
         return False
+    # A contradicted premise must not swallow a different, unresolved claim
+    # at the same line (or acquire its severity/wording through deduplication).
+    if ((anchor.claim_evidence or {}).get("syntax_check")
+            != (f.claim_evidence or {}).get("syntax_check")):
+        return False
     distance = abs(anchor.line - f.line)
     if distance == 0:
         return True

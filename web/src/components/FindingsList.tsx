@@ -1,6 +1,6 @@
 import type { Finding, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
-import { claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts } from "@/lib/evidence";
+import { claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts, syntaxContradicted } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -56,6 +56,7 @@ function FindingCard({ finding }: { finding: Finding }) {
     : "";
   const tech = [finding.title, loc, finding.masked].filter(Boolean).join(" · ");
   const model = finding.source === "llm" || finding.rule_id?.startsWith("llm-");
+  const contradicted = syntaxContradicted(finding);
   const evidence = <dl className="my-3 space-y-2 whitespace-pre-line text-sm">
     {claimEvidenceRows(finding).map(([label, value]) => (
       <div key={label}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
@@ -65,14 +66,18 @@ function FindingCard({ finding }: { finding: Finding }) {
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
         <p className="font-medium">{what}</p>
-        <SeverityBadge severity={finding.severity} />
+        {contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
+          : <SeverityBadge severity={finding.severity} />}
       </div>
       <p className="mb-2 text-sm text-muted">{evidenceLabel(finding)}</p>
       {risk && <p className="mb-2 text-sm text-muted">
         {model && <strong>Possible consequence — unverified: </strong>}{risk}
       </p>}
       {model ? evidence : <details className="my-3 text-sm"><summary>Evidence and conditions</summary>{evidence}</details>}
-      {fix && (
+      {fix && contradicted && <details className="my-3 text-sm text-muted">
+        <summary>Original model suggestion — premise contradicted</summary>{fix}
+      </details>}
+      {fix && !contradicted && (
         <p className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-accent">
           <span>
             <span aria-hidden="true">→ </span>
@@ -101,8 +106,10 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
     );
   }
   const sorted = sortFindings(findings);
-  const production = sorted.filter((f) => !isNonProductionFinding(f));
-  const examples = sorted.filter(isNonProductionFinding);
+  const contradicted = sorted.filter(syntaxContradicted);
+  const unresolved = sorted.filter((f) => !syntaxContradicted(f));
+  const production = unresolved.filter((f) => !isNonProductionFinding(f));
+  const examples = unresolved.filter(isNonProductionFinding);
   return (
     <>
       <ul className="flex flex-col gap-3">
@@ -126,6 +133,17 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
           </ul>
         </section>
       )}
+      {contradicted.length > 0 && <section className="mt-6" aria-label="Contradicted syntax premises">
+        <h3 className="font-semibold">Contradicted syntax premises</h3>
+        <p className="my-2 text-sm text-muted">
+          These model claims contradict the bounded syntax check. They are retained for traceability
+          and excluded from unresolved finding counts and score penalties. This does not establish
+          that the surrounding code is safe.
+        </p>
+        <ul className="flex flex-col gap-3">
+          {contradicted.map((f, i) => <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />)}
+        </ul>
+      </section>}
     </>
   );
 }
