@@ -21,6 +21,8 @@ import zipfile
 from dataclasses import dataclass
 from typing import BinaryIO, Iterator
 
+from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
+
 MAX_SCANNED_FILE_BYTES = 1 * 1024 * 1024  # skip huge files: minified bundles etc.
 
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", "venv/", ".venv/")
@@ -369,7 +371,7 @@ RULES: tuple[SecretRule, ...] = (
         # cannot drive the engine into backtracking.
         "connection-string-password", "Password embedded in a connection string",
         re.compile(
-            r"(?i)\b[a-z][a-z0-9+.-]{1,15}://"      # scheme
+            r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}://"      # scheme
             r"[^:/?#@\s\"']{1,64}"                  # user
             r":[^@/?#\s\"'${}<>%]{3,128}"           # password, no interpolation
             r"@[A-Za-z0-9._-]{1,253}"               # host
@@ -426,6 +428,7 @@ class SecretFinding:
     # finding is undamped production code. Escalated migration findings stay
     # None: they are production context, more so than anything else here.
     context: str | None = None
+    source_context: dict | None = None
 
 
 def _mask(value: str) -> str:
@@ -621,7 +624,7 @@ def _dsn_severity(matched: str) -> tuple[str, float, str]:
 
 
 def _classify_match(name: str, lineno: int, rule: SecretRule,
-                    matched: str, line_text: str = "") -> SecretFinding:
+                    matched: str, line_text: str = "", source_role: str | None = None) -> SecretFinding:
     """Turn one rule hit into a SecretFinding, applying the same
     context-damping and effective-rule-id logic scan_secrets has always
     used. Extracted so iter_secret_matches and scan_secrets share one
@@ -678,9 +681,9 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
             and not is_local_dsn):
         confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
         title = f"{title} (committed database migration)"
-    elif is_anon or is_dev_dsn or is_demo_jwt:
+    elif is_anon or is_demo_jwt:
         pass
-    elif is_local_dsn and _is_ci_workflow_path(name):
+    elif (is_local_dsn or (is_dev_dsn and dsn_host_is_local(matched))) and _is_ci_workflow_path(name):
         # A connection string to localhost inside a CI workflow is the
         # password of a service container that exists for the length of one
         # job. Measured on dubinc/dub (audit a5fcb681):
@@ -711,11 +714,17 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
         title = f"{title} (commented-out line)"
         context = "comment"
-    elif _is_doc_context(name):
+    elif _is_doc_context(name) or source_role == "docstring":
         severity = _DOC_SEVERITY_CAP.get(severity, severity)
         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
         title = f"{title} (documentation/example context)"
         context = "doc_example"
+    role = source_role or context or "source_literal"
+    if is_dev_dsn and context is None and source_role is None:
+        parts = _DSN_SPLIT_RE.search(matched)
+        host = parts["host"].lower() if parts else ""
+        if host in {"example.com", "example.org", "example.net"} or host.endswith(".example"):
+            context, role = "doc_example", "placeholder_uri"
     return SecretFinding(
         rule_id=effective_rule_id,
         title=title,
@@ -725,6 +734,7 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
         line=lineno,
         masked=_mask(matched),
         context=context,
+        source_context=uri_context(matched, role) if rule.id == "connection-string-password" else None,
     )
 
 
@@ -740,15 +750,30 @@ def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]
     source. Callers MUST NOT persist, log, or echo the raw value; it may
     only be written OUT of a file, never back into any artifact.
     """
+    remaining = MAX_TOTAL_PYTHON_BYTES
     with zipfile.ZipFile(fileobj) as zf:
         for name, text in _iter_text_files(zf):
+            regions = None
             for lineno, line in enumerate(text.splitlines(), start=1):
                 for rule in RULES:
                     m = rule.pattern.search(line)
                     if not m:
                         continue
+                    source_role = None
+                    if rule.id == "connection-string-password":
+                        if regions is None:
+                            regions = []
+                            size = len(text.encode("utf-8"))
+                            if name.endswith(".py") and size <= min(MAX_PYTHON_BYTES, remaining):
+                                remaining -= size
+                                regions = python_regions(text)
+                        # AST columns are UTF-8 byte offsets; regex offsets are characters.
+                        start = (lineno, len(line[:m.start()].encode("utf-8")))
+                        end = (lineno, len(line[:m.end()].encode("utf-8")))
+                        source_role = next((role for lo, col, hi, end_col, role in regions
+                                            if (lo, col) <= start and end <= (hi, end_col)), None)
                     yield (
-                        _classify_match(name, lineno, rule, m.group(0), line),
+                        _classify_match(name, lineno, rule, m.group(0), line, source_role),
                         m.group(0),
                     )
 

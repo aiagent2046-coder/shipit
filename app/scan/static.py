@@ -34,6 +34,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=s.rule_id, title=s.title, severity=s.severity,
             confidence=s.confidence, category="Security",
             file=s.file, line=s.line, masked=s.masked, context=s.context,
+            claim_evidence={**static_claim_evidence(), "source_context": s.source_context},
         ))
 
     fileobj.seek(0)
@@ -57,7 +58,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         findings.append(ScoredFinding(
             rule_id=c.rule_id, title=c.title, severity=c.severity,
             confidence=c.confidence, category=c.category, file=c.file,
-            line=c.line, explanation=c.explanation, fix_hint=c.fix_hint,
+            line=c.line, explanation=c.explanation, fix_hint=c.fix_hint, context=c.context,
         ))
 
     fileobj.seek(0)
@@ -129,7 +130,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                               "coverage": boundary.coverage},
         },
         "findings": [dict(vars(f), source="static",
-                          claim_evidence=static_claim_evidence(),
+                          claim_evidence=f.claim_evidence or static_claim_evidence(),
                           verification_method="source_pattern") for f in findings],
         # Carried, not folded into a finding: `budget_exhausted` means the
         # boundary scan stopped before it could say a boundary is absent, so

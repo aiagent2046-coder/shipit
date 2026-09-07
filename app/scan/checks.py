@@ -40,6 +40,7 @@ class CheckFinding:
     # "Environment file committed to repository" with nothing underneath.
     explanation: str = ""
     fix_hint: str = ""
+    context: str | None = None
 
 
 def archive_root(names: list[str]) -> str:
@@ -409,10 +410,17 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
         ))
 
     if not any(n.rsplit("/", 1)[-1] == "Dockerfile" for n in files):
+        alternatives = sorted(n for n in files if n.endswith(".service")
+                              or n.rsplit("/", 1)[-1] in {"vercel.json", "netlify.toml", "fly.toml", "Procfile"})
         findings.append(CheckFinding(
             "no-dockerfile", "No Dockerfile found in the archive",
             severity="low", confidence=0.9, category="Deploy",
+            context="deployment_inventory" if alternatives else None,
             explanation=(
+                "Deployment configuration files found: " + ", ".join(alternatives[:8])
+                + (f" (+{len(alternatives) - 8} more)" if len(alternatives) > 8 else "")
+                + ". This is file inventory only; configuration validity and live deployment are not checked."
+                if alternatives else
                 "A Dockerfile is one deployment option. Its absence does not "
                 "establish that the app cannot run on a server; systemd and "
                 "managed platforms are other options."

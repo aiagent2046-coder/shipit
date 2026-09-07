@@ -51,13 +51,13 @@ const PLAIN: Record<string, { what: string; risk: string; fix: string }> = {
   },
   "connection-string-password": {
     "what": "A connection URI contains a password-like value.",
-    "risk": "If it names a reachable database and valid credentials, it may permit access within that database account's permissions. Reachability, validity and grants are not checked.",
-    "fix": "Check whether this is a fixture. If real database credentials were exposed, change the password and move configuration outside the repository."
+    "risk": "If it names a reachable service and valid credentials, it may permit access within that account's permissions. Reachability, validity and grants are not checked.",
+    "fix": "Check whether this is a fixture. If real service credentials were exposed, change the password and move configuration outside the repository."
   },
   "connection-string-dev-password": {
-    "what": "A connection string in your project uses a default password like `postgres` or `change_me`.",
-    "risk": "This is the value tutorials and docker-compose files ship with, so it is almost certainly your local development database and not a leak. It is worth knowing about for one reason: if that same default is ever pointed at a real database, the password is already public knowledge.",
-    "fix": "Nothing to do if this is your local setup. If anything real ever uses it, give it a proper password and move the connection string to an environment variable."
+    "what": "A URI contains a conventional password or placeholder.",
+    "risk": "Values such as postgres or change_me are commonly used in examples. The value alone does not establish whether this is a template, local setup or live configuration. If a real service accepts it, the password is predictable.",
+    "fix": "Check where the URI is used. Replace a default used by a real service; a synthetic example does not require credential rotation."
   },
   "env-file-committed": {
     "what": "An environment configuration file is included in the archive.",
@@ -110,7 +110,7 @@ const PLAIN: Record<string, { what: string; risk: string; fix: string }> = {
     "fix": "Add a simple GitHub Actions workflow that runs the tests on every change."
   }
 };
-const CREDENTIAL_RULES = new Set(["telegram-bot-token", "aws-access-key-id", "stripe-live-key", "private-key-block", "connection-string-password", "github-pat", "jwt-in-code", "connection-string-local-host", "anthropic-api-key", "generic-assignment", "sql-secret-assignment"]);
+const CREDENTIAL_RULES = new Set(["connection-string-dev-password", "telegram-bot-token", "aws-access-key-id", "stripe-live-key", "private-key-block", "connection-string-password", "github-pat", "jwt-in-code", "connection-string-local-host", "anthropic-api-key", "generic-assignment", "sql-secret-assignment"]);
 
 export function plainFields(finding: Finding): { what: string; risk: string; fix: string } {
   const rid = finding.rule_id || "";
@@ -127,7 +127,8 @@ export function plainFields(finding: Finding): { what: string; risk: string; fix
     }
     return { ...base, risk, fix };
   }
-  if (rid === "no-dockerfile") return base;
+  if (rid === "no-dockerfile") return finding.context === "deployment_inventory"
+    ? { ...base, risk: finding.explanation || base.risk, fix: finding.fix_hint || base.fix } : base;
   if (base) return { ...base, risk: finding.explanation || base.risk, fix: finding.fix_hint || base.fix };
   return { what: finding.title || "", risk: finding.explanation || "", fix: finding.fix_hint || "" };
 }

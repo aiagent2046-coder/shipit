@@ -18,10 +18,14 @@ def is_non_production(finding: dict) -> bool:
             else is_non_production_path(str(finding.get("file", ""))))
 
 
+def is_informational(finding: dict) -> bool:
+    return finding.get("rule_id") == "no-dockerfile" and finding.get("context") == "deployment_inventory"
+
+
 def finding_counts(findings: list[dict]) -> tuple[int, int]:
     source = examples = 0
     for finding in findings:
-        if syntax_contradicted(finding.get("claim_evidence")):
+        if is_informational(finding) or syntax_contradicted(finding.get("claim_evidence")):
             continue
         # Display-only RLS groups retain one title for each stored observation.
         count = len(finding.get("occurrence_titles") or []) or 1
@@ -35,7 +39,7 @@ def finding_counts(findings: list[dict]) -> tuple[int, int]:
 def source_severity_counts(findings: list[dict]) -> dict[str, int]:
     counts = dict.fromkeys(("critical", "high", "medium", "low"), 0)
     for finding in findings:
-        if syntax_contradicted(finding.get("claim_evidence")):
+        if is_informational(finding) or syntax_contradicted(finding.get("claim_evidence")):
             continue
         if is_non_production(finding):
             continue
@@ -76,6 +80,8 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
 def evidence_label(finding: dict) -> str:
     if syntax_contradicted(finding.get("claim_evidence")):
         return "Model syntax premise contradicted — see bounded check"
+    if is_informational(finding):
+        return "Deployment inventory — informational"
     source = finding.get("source")
     if source == "llm" or str(finding.get("rule_id", "")).startswith("llm-"):
         return "Model hypothesis — unverified"
@@ -97,6 +103,17 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
+    context = record.get("source_context") or {}
+    if context:
+        labels = {"comment": "Comment", "docstring": "Python docstring", "doc_example": "Documentation/example",
+                  "test_file": "Test file", "test_fixture": "Test fixture/placeholder",
+                  "ci_service": "CI configuration with a local host", "placeholder_uri": "Example URI",
+                  "configuration_template": "Configuration text containing change_me",
+                  "source_literal": "Source text; runtime use not established"}
+        rows.append(("Source context", labels.get(context.get("kind"), "Not recorded")))
+        rows.append(("URI protocol", str(context.get("uri_scheme", "Not recorded")) + " — "
+                     + str(context.get("uri_kind", "other_or_unknown"))
+                     + "; URI use, credential validity and deployment are not verified."))
     syntax = record.get("syntax_check")
     if syntax:
         labels = {"contradicted": "Syntax premise contradicted", "observed": "Syntax pattern observed",

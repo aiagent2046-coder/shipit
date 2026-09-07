@@ -26,6 +26,10 @@ export function isNonProductionFinding(finding: Finding): boolean {
     || envTemplate;
 }
 
+export function isInformational(finding: Finding): boolean {
+  return finding.rule_id === "no-dockerfile" && finding.context === "deployment_inventory";
+}
+
 // Mirrors app/report/evidence.py, including the conservative legacy fallback.
 export function syntaxContradicted(finding: Finding): boolean {
   return finding.claim_evidence?.version === 1
@@ -33,6 +37,7 @@ export function syntaxContradicted(finding: Finding): boolean {
 }
 
 export function evidenceLabel(finding: Finding): string {
+  if (isInformational(finding)) return "Deployment inventory — informational";
   if (syntaxContradicted(finding)) return "Model syntax premise contradicted — see bounded check";
   if (finding.source === "llm" || finding.rule_id?.startsWith("llm-")) {
     return "Model hypothesis — unverified";
@@ -50,6 +55,17 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
       ? "A static rule emitted this observation. Its consequence was not tested."
       : "Not recorded for this finding; do not assume the cited code was verified.";
   const rows: [string, string][] = [["Source check", checked]];
+  const context = record?.source_context;
+  if (context) {
+    const labels: Record<string, string> = { comment: "Comment", docstring: "Python docstring",
+      doc_example: "Documentation/example", test_file: "Test file", test_fixture: "Test fixture/placeholder",
+      ci_service: "CI configuration with a local host", placeholder_uri: "Example URI",
+      configuration_template: "Configuration text containing change_me",
+      source_literal: "Source text; runtime use not established" };
+    rows.push(["Source context", labels[context.kind] ?? "Not recorded"]);
+    rows.push(["URI protocol", `${context.uri_scheme} — ${context.uri_kind}; ` +
+      "URI use, credential validity and deployment are not verified."]);
+  }
   const syntax = record?.syntax_check;
   if (syntax) {
     const labels = { contradicted: "Syntax premise contradicted", observed: "Syntax pattern observed",
@@ -95,7 +111,7 @@ export function coverageRows(score: Score, findings: Finding[]): [string, string
 
 export function findingCounts(findings: Finding[]): { source: number; examples: number } {
   return findings.reduce((counts, finding) => {
-    if (syntaxContradicted(finding)) return counts;
+    if (isInformational(finding) || syntaxContradicted(finding)) return counts;
     const key = isNonProductionFinding(finding) ? "examples" : "source";
     counts[key] += finding.occurrence_titles?.length || 1;
     return counts;
@@ -105,7 +121,7 @@ export function findingCounts(findings: Finding[]): { source: number; examples: 
 export function sourceSeverityCounts(findings: Finding[]): Record<Severity, number> {
   const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const finding of findings) {
-    if (syntaxContradicted(finding)) continue;
+    if (isInformational(finding) || syntaxContradicted(finding)) continue;
     if (isNonProductionFinding(finding)) continue;
     const severities = finding.occurrence_severities?.length
       ? finding.occurrence_severities : [finding.severity];

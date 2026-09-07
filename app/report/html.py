@@ -11,7 +11,7 @@ from html import escape
 from app.scan.claim_evidence import syntax_contradicted
 
 from app.report.evidence import (
-    coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
+    is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
     model_status_notice, source_severity_counts, claim_evidence_rows,
 )
 from app.report.grouping import group_for_display
@@ -45,6 +45,8 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
     contradicted = syntax_contradicted(f.get("claim_evidence"))
     if contradicted:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
+    if is_informational(f):
+        emoji, tier_label, color = "", "Informational", "#8b8d98"
     if historical:
         emoji, color = "", "#8b8d98"
         tier_label = ("Free-model result — included in this audit" if included
@@ -206,6 +208,8 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # of them.
     contradicted = [f for f in findings if syntax_contradicted(f.get("claim_evidence"))]
     unresolved = [f for f in findings if not syntax_contradicted(f.get("claim_evidence"))]
+    informational = [f for f in unresolved if is_informational(f)]
+    unresolved = [f for f in unresolved if not is_informational(f)]
     production = [f for f in unresolved if not _is_non_production(f)]
     non_production = [f for f in unresolved if _is_non_production(f)]
 
@@ -223,6 +227,8 @@ def render_report(result: dict, project_name: str = "your app") -> str:
             f'<p class="secnote">{NON_PRODUCTION_NOTE}</p>'
             + _findings_table(non_production)
         )
+    if informational:
+        body += '<h2 class="sechead">Deployment inventory</h2>' + _findings_table(informational)
     if contradicted:
         body += ('<h2 class="sechead">Contradicted syntax premises</h2>'
                  '<p class="secnote">These model claims contradict the bounded syntax check. '
