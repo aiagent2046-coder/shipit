@@ -126,7 +126,7 @@ export interface Finding {
     conditions_status: "not_checked";
     consequence_status: "not_checked";
     syntax_check?: {
-      kind: "react_hook_order" | "sql_update_where" | "unsupported";
+      kind: "react_hook_order" | "sql_update_where" | "python_completed_notification" | "unsupported";
       result: "contradicted" | "observed" | "not_checked";
       claim: string;
       detail: string;

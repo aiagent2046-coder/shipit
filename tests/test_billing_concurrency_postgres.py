@@ -355,3 +355,72 @@ async def test_the_newest_pro_payment_still_wins(live_db):
 
     found = await payments.get_completed_by_telegram_chat_id(chat)
     assert str(found["account_id"]) == str(second["id"])
+
+
+async def test_yookassa_concurrent_callbacks_schedule_one_notification(live_db, monkeypatch):
+    from fastapi import BackgroundTasks
+    from app.billing import bank_transfer
+    from app.routes.yookassa import receive_notification
+    from tests.test_routes_yookassa import (
+        _request, _seed, _succeeded, _record_told, PAYMENT_ID,
+    )
+    from tests.test_db_postgres_smoke import _fixpack_audit
+
+    monkeypatch.setenv("YOOKASSA_SHOP_ID", "test-shop")
+    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "test-shop-secret")
+    audits = db.AuditRepository()
+    audit_id = await _fixpack_audit(audits, "concurrent-yookassa")
+    payments = _BarrierAtTheRead(2, deadline=0.1)
+    row = await _seed(payments, audit_id)
+    told = []
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+    # More contenders than pool slots: waiters must release their connections.
+    backgrounds = [BackgroundTasks() for _ in range(8)]
+    body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
+    results = await asyncio.wait_for(asyncio.gather(*[
+        receive_notification(_request(body), bg, payment_repo=payments,
+                             fixpack_repo=db.FixpackJobRepository(), audit_repo=audits,
+                             transport=_succeeded())
+        for bg in backgrounds
+    ]), timeout=10)
+    assert results == [{"ok": True}] * 8
+    assert (await payments.get(str(row["id"])))["status"] == "completed"
+    assert await _count(live_db, "select count(*) from fixpack_jobs where audit_id = %s", (audit_id,)) == 1
+    for bg in backgrounds:
+        await bg()
+    assert len(told) == 1
+
+
+async def test_confirmation_lock_timeout_and_cancellation_release(live_db, monkeypatch):
+    monkeypatch.setattr(db, "GRANT_LOCK_TIMEOUT_MS", 50)
+    entered = asyncio.Event()
+
+    async def holder():
+        async with db.payment_confirmation_lock("test", "charge"):
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(holder())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        with pytest.raises(db.PaymentConfirmationBusy):
+            async with db.payment_confirmation_lock("test", "charge"):
+                pytest.fail("A timed-out handler must never enter the grant section")
+        async with db.payment_confirmation_lock("test", "different-charge"):
+            pass
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    async with db.payment_confirmation_lock("test", "charge"):
+        pass  # Cancellation released the transaction lock.
+
+
+async def test_confirmation_locks_leave_pool_capacity_for_different_charges(live_db):
+    async def confirm(number):
+        async with db.payment_confirmation_lock("test", f"charge-{number}"):
+            # Hold concurrent locks long enough to exhaust an unbounded pool.
+            await asyncio.sleep(0.05)
+            return await _count(live_db, "select 1")
+
+    assert await asyncio.wait_for(asyncio.gather(*[confirm(n) for n in range(8)]), timeout=5) == [1] * 8

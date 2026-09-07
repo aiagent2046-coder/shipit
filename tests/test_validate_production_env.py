@@ -635,3 +635,27 @@ def test_no_provider_configured_is_not_an_error(tmp_path, monkeypatch):
     by configuration -- and must not be told to pin a model for a provider it
     does not have."""
     assert _run(tmp_path, monkeypatch, COMPLETE_ENV) == 0
+
+
+@pytest.mark.parametrize("value", ["", "nonsense", "0", "-1", "NaN", "sNaN", "Infinity", "-Infinity"])
+def test_invalid_cost_cap_fails_preflight_and_runtime(value, tmp_path, monkeypatch, capsys):
+    from app.scan.llm_scan import parse_job_cost_cap
+
+    assert _run(tmp_path, monkeypatch, {**COMPLETE_ENV, "JOB_COST_CAP_USD": value}) == 78
+    assert "JOB_COST_CAP_USD must be a finite number greater than zero" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="JOB_COST_CAP_USD must"):
+        parse_job_cost_cap(value)
+
+
+@pytest.mark.parametrize("value", ["0.001", "13.00", "1e2", " 2.5 "])
+def test_positive_cost_cap_passes_preflight_and_runtime(value, tmp_path, monkeypatch):
+    from decimal import Decimal
+    from app.scan.llm_scan import parse_job_cost_cap
+
+    assert _run(tmp_path, monkeypatch, {**COMPLETE_ENV, "JOB_COST_CAP_USD": value}) == 0
+    assert parse_job_cost_cap(value) == Decimal(value)
+
+
+def test_cost_cap_preflight_uses_file_not_ambient_value(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_COST_CAP_USD", "NaN")
+    assert _run(tmp_path, monkeypatch, COMPLETE_ENV) == 0

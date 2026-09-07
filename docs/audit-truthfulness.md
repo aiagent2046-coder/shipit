@@ -183,19 +183,31 @@ Retained preview records now preserve the visible test/example classification.
 
 ### Isolated payment observations
 
-The notification tests add a fault between job creation and payment completion
-and a controlled overlap of two pending-status reads. They use fake storage,
-mock provider responses and captured notifications; no external messages or
-payments occur. The live-job retry case must recover with one job. Concurrent
-confirmation delivery has a strict expected-failure regression: the current
-handler can schedule two confirmations after two pending snapshots. This is a
-known notification race, not proof of double charging or an observed incident.
-Removing the race requires a separate delivery/idempotency change; this audit
-context change does not modify payment behaviour or claim to fix it.
+The notification tests inject a fault between job creation and payment completion
+and overlap concurrent callbacks. The retry must recover with one live job.
+YooKassa callbacks now serialize the payment-status read, grant and notification
+scheduling with a PostgreSQL transaction-scoped advisory lock. Waiting callbacks
+release their pooled connection; a timeout returns HTTP 503 for a retry, never an
+unlocked grant. Provider verification happens before the lock and notification
+transport still runs after answering. The former strict expected failure is now
+a passing regression, with a real-Postgres test using eight concurrent callbacks
+and a separate timeout/cancellation test. Provider and message transports are
+mocked; no real charge or external message is sent by these tests.
+
+This prevents duplicate scheduling by concurrent YooKassa callbacks. It is not a
+durable delivery outbox: a crash after payment completion but before sending can
+still lose a notification, and independent operator notification paths are not
+serialized by this handler lock. No exactly-once delivery guarantee is claimed.
+
+`JOB_COST_CAP_USD` defaults to 13.00; invalid, nonfinite and nonpositive values
+fail both runtime import and production preflight (exit 78). The standalone
+preflight remains stdlib-only and reads the specified environment file alone.
+The cap is an estimate checked after each model response, so one call can exceed
+it. This change does not assert that production was misconfigured.
 
 ## Bounded syntax checks (engine 2026-09-07-1)
 
-`claim_evidence.syntax_check` records a scanner-owned result for two narrow
+`claim_evidence.syntax_check` records a scanner-owned result for three narrow
 premises. An English title pattern selects the check; it is not the evidence.
 Unknown phrasing, other languages and unsupported mechanisms remain
 `not_checked`. The fields supplied by the model cannot set this result.
@@ -216,7 +228,19 @@ Unknown phrasing, other languages and unsupported mechanisms remain
   this PostgreSQL parser remain unknown. `WHERE true` still has a WHERE; the
   check says nothing about selectivity, intent, authorization or safety.
 
-Both read strict UTF-8 from the uploaded archive, with a 256,000-byte file
+- `python_completed_notification` (engine 2026-09-07-3): Python AST checks a
+  narrowly phrased claim such as "Completed invoice still calls notify_operator".
+  In one undecorated module-level function, a top-level completed-status branch
+  with an immediate side-effect-free return before every direct notify_operator
+  call contradicts that control-flow premise. Nested scopes, cleanup paths,
+  decorators, indirect calls and compound claims remain unknown. The displayed
+  result specifies the checked branch and does not establish runtime bindings,
+  callees' effects, concurrency safety or delivery. The previous broad claim
+  about both state writes and notifications is deliberately not dismissed by
+  this single-premise check. It appears beside supported findings through the
+  existing scanner-owned syntax_check field; no LLM call is added.
+
+All checks read strict UTF-8 from the uploaded archive, with a 256,000-byte file
 limit, a 2,000,000-byte aggregate parsing budget and at most 40 selected
 checks per audit. Budget exhaustion is recorded as `not_checked`. Source
 files are never executed, imported as application code or sent to another

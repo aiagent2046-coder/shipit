@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 import argparse
 import os
 import re
@@ -153,6 +155,15 @@ def main() -> int:
         return 0
 
     errors: list[str] = []
+    # Kept stdlib-only: this script runs before the application can be imported.
+    # Contract tests exercise the same cases against the runtime parser.
+    try:
+        cost_cap = Decimal(values.get("JOB_COST_CAP_USD", "13.00"))
+        valid_cost_cap = cost_cap.is_finite() and cost_cap > 0
+    except (InvalidOperation, ValueError):
+        valid_cost_cap = False
+    if not valid_cost_cap:
+        errors.append("JOB_COST_CAP_USD must be a finite number greater than zero")
     # Two severities on purpose. An `errors` entry exits 78, which fails the
     # ExecStartPre and so refuses to start shipit.service -- correct for a value
     # whose absence breaks the service, wrong for one whose absence only costs
