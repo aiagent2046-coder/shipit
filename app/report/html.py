@@ -12,7 +12,7 @@ from app.scan.claim_evidence import syntax_contradicted
 
 from app.report.evidence import (
     is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
-    model_status_notice, source_severity_counts, claim_evidence_rows,
+    model_status_notice, source_severity_counts, claim_evidence_rows, observation_summary, review_contribution_rows,
 )
 from app.report.grouping import group_for_display
 from app.report.plain_language import plain_fields, tier
@@ -49,7 +49,7 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         emoji, tier_label, color = "", "Informational", "#8b8d98"
     if historical:
         emoji, color = "", "#8b8d98"
-        tier_label = ("Free-model result — included in this audit" if included
+        tier_label = ("Free audit observation — included in this audit" if included
                       else "Previous preview — not reassessed")
         if is_non_production(f):
             tier_label += " · Test/example context"
@@ -67,7 +67,7 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
                     + escape(fix) + '</details>') if fix else ""
     if historical:
         fix_html = ('<details><summary>'
-                    + ('Free-model suggestion — unverified' if included
+                    + ('Free audit suggestion — unverified' if included
                        else 'Original preview suggestion — not reassessed')
                     + '</summary>'
                     + escape(fix) + '</details>') if fix else ""
@@ -140,13 +140,14 @@ def _free_baseline(score: dict) -> str:
         return ""
     status = escape(str(baseline.get("status", "unavailable")))
     origin = "Reused same-archive free audit" if baseline.get("origin") == "reused" else "Included in this paid audit"
-    result = ('<section aria-label="Included free-model report"><h2 class="sechead">Included free-model report</h2>'
+    result = ('<section aria-label="Included free audit"><h2 class="sechead">Included free audit</h2>'
               f'<p>{origin}. Status: {status}.</p>'
               '<p>The complete baseline is preserved below, including observations repeated in the paid review. '
-              'It is a separate model result, not independent confirmation or additional current-scan findings.</p>')
+              'It includes static observations and any model hypotheses; repeated observations are not '
+              'independent confirmation or additional current-scan findings.</p>')
     prior = baseline.get("score")
     if not prior:
-        return (result + '<p>Free-model stage unavailable: '
+        return (result + '<p>Free audit unavailable: '
                 + escape(str(baseline.get("reason", "not recorded"))) + '.</p></section>')
     findings = baseline.get("findings") or []
     rows = coverage_rows(prior, findings) + manifest_rows(prior)
@@ -169,13 +170,13 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # No tier currently has a validated measure of production readiness.
     heading = f"Project audit — {escape(project_name)}"
     og_title = f"Project audit — {project_name}"
-    source_count, example_count = finding_counts(raw_findings)
+    source_count, _ = finding_counts(raw_findings)
     header_left = (
         f'<div class="noring">{source_count}'
         f'<small>source observations'
         '</small></div>'
     )
-    header_left += f'<p>{example_count} test/example observations, listed separately.</p>'
+    header_left += f'<p>{escape(observation_summary(raw_findings))}</p>'
     if (score.get("preview_history") or {}).get("version") == 1:
         count = len(score["preview_history"].get("retained_findings") or [])
         header_left += f'<p>{count} additional preview observations retained in Free audit history.</p>'
@@ -235,6 +236,18 @@ def render_report(result: dict, project_name: str = "your app") -> str:
                  'They are retained for traceability and excluded from unresolved finding counts '
                  'and score penalties. This does not establish that the surrounding code is safe.</p>'
                  + _findings_table(contradicted))
+
+    contribution = review_contribution_rows(score)
+    if contribution:
+        rows = "".join(f'<tr><th scope="row">{escape(label)}</th><td>{escape(free)}</td>'
+                       f'<td>{escape(paid)}</td></tr>' for label, free, paid in contribution)
+        body = ('<section aria-label="Model review contribution"><h2 class="sechead">Model review contribution</h2>'
+                '<table><thead><tr><th scope="col">Recorded work</th><th scope="col">Free audit</th>'
+                '<th scope="col">Paid review</th></tr></thead><tbody>' + rows + '</tbody></table>'
+                '<p>Model hypotheses may repeat the free audit; these are not counts of new or confirmed problems. '
+                'Zero retained hypotheses does not establish safety. Submitted files may be excerpted.</p>'
+                + ('<p>Paid analysis was reused; these counts describe the stored review.</p>'
+                   if score.get("analysis_reused_from") else '') + '</section>') + body
 
     history_html = _free_baseline(score) + _preview_history(score)
     if history_html:

@@ -130,8 +130,8 @@ def test_fresh_baseline_labels_and_retained_originals_in_html():
     baseline = dict(version=1, origin='included', status='completed', findings=[grouped],
                     score=dict(total=0, categories={}, basis='static+preview'))
     html = render_report(dict(score=dict(total=0, categories={}, free_baseline=baseline), findings=[]))
-    assert 'Free-model result — included in this audit' in html
+    assert 'Free audit observation — included in this audit' in html
     assert 'Previous preview — not reassessed' not in html
     assert 'Other reasoning' in html
     assert '<script>original</script>' not in html
-    assert 'Free-model suggestion — unverified' in html
+    assert 'Free audit suggestion — unverified' in html

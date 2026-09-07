@@ -185,6 +185,16 @@ export function manifestRows(score: Score): [string, string][] {
       "Merged originals are retained. These counts do not verify conclusions."]);
     rows.push(["Rejection reasons", JSON.stringify(row.rejection_reasons)]);
   }
+  const exclusionLabels: Record<string, string> = {
+    no_rubric_match: "No keyword match in configured review areas",
+    rubric_not_reached: "Matching review areas were not reached",
+    selection_budget: "Outside file-selection budgets of attempted areas",
+    request_window: "Removed to fit the request window",
+  };
+  if (m.llm_selection_exclusions) {
+    for (const [key, label] of Object.entries(exclusionLabels))
+      rows.push([`Files not submitted: ${label}`, String(m.llm_selection_exclusions[key] ?? 0)]);
+  } else if (m.llm_files_not_submitted) rows.push(["File exclusion reasons", "Not recorded for this audit"]);
   for (const [check, status] of Object.entries(m.static_limits)) rows.push([`Static scope: ${check}`, status]);
   const facts = m.source_facts;
   if (facts) {
@@ -217,4 +227,32 @@ export function manifestRows(score: Score): [string, string][] {
     rows.push([kind, `${paths.length} found` + (shown ? `: ${shown}` : "")]);
   }
   return rows;
+}
+
+
+export function observationSummary(findings: Finding[]): string {
+  const { source, examples } = findingCounts(findings);
+  let informational = 0, contradicted = 0;
+  for (const f of findings) {
+    const count = f.occurrence_titles?.length || 1;
+    if (syntaxContradicted(f)) contradicted += count;
+    else if (isInformational(f)) informational += count;
+  }
+  return `${source + examples + informational + contradicted} observations: ${source} in source, `
+    + `${examples} in tests/examples, ${informational} informational, `
+    + `${contradicted} with contradicted syntax premises.`;
+}
+
+export function reviewContributionRows(score: Score): [string, string, string][] {
+  if (score.free_baseline?.version !== 1) return [];
+  function values(stage?: Score | null): string[] {
+    const m = stage?.scan_manifest;
+    const processing = m?.model_findings;
+    const saved = processing?.length && processing.every((r) => Number.isInteger(r.saved))
+      ? processing.reduce((total, r) => total + r.saved, 0) : null;
+    return [m?.llm_submitted_files, m?.model_calls, saved].map((v) => v == null ? "Not recorded" : String(v));
+  }
+  const free = values(score.free_baseline.score), paid = values(score);
+  return ["Files submitted to model", "Model responses", "Retained model hypotheses"]
+    .map((label, i) => [label, free[i], paid[i]]);
 }

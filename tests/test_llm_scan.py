@@ -332,6 +332,7 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
 
     assert stats == LLMScanStats(
         candidate_files=1, submitted_files=("src/auth.ts",),
+        selection_exclusions=dict(no_rubric_match=0, rubric_not_reached=0, selection_budget=0, request_window=0),
         prompts=1, raw_findings=2, verified=1, discarded=1,
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
         prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]),

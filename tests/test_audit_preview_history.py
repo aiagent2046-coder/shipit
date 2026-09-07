@@ -257,7 +257,7 @@ async def test_full_free_snapshot_reuses_original_model_and_scope():
     assert baseline['score'] == preview['score_json']
     assert preview['access_token'] not in json.dumps(baseline)
     html = render_report({'score': score, 'findings': [STATIC], 'stack': 'nextjs'})
-    assert 'Included free-model report' in html and 'Full baseline findings and scope' in html
+    assert 'Included free audit' in html and 'Full baseline findings and scope' in html
 
 
 @pytest.mark.asyncio
@@ -273,7 +273,7 @@ async def test_baseline_unavailable_is_visible_and_does_not_call_model(reason):
     score = await ensure_paid_baseline(Repo(), scan, RAW, client,
                                       DIGEST, AUDIT_ENGINE_VERSION, runner=runner, record_usage=record)
     assert score['free_baseline']['status'] == 'unavailable'
-    assert 'Free-model stage unavailable' in render_report({'score': score, 'findings': [], 'stack': 'nextjs'})
+    assert 'Free audit unavailable' in render_report({'score': score, 'findings': [], 'stack': 'nextjs'})
     runner.assert_not_awaited()
 
 
