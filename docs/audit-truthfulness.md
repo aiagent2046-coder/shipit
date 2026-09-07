@@ -187,3 +187,20 @@ inventory or the planned LLM-only-final-interpretation architecture. It adds
 no model calls and does not verify production behaviour. Tests cover the
 actual RlsCheck and migration 0035 false claims plus synthetic positive,
 negative, ambiguous, malformed, Unicode and budget-limit cases.
+
+## Fix Pack JavaScript/TypeScript syntax gate
+
+Before emitting a secret edit, the planner parses the complete changed file:
+JS/JSX/MJS/CJS with the JavaScript grammar, TS with TypeScript, and TSX with
+TSX. Both an error node and a missing token cause rejection, even when
+Tree-sitter recovered a tree. Files above 256,000 UTF-8 bytes are excluded
+from these edits, with a syntax/limit reason in the skipped findings. Other
+valid file edits can still be delivered; the rejected file contributes no
+successful secret fix or new environment placeholder.
+
+This gate runs locally without LLM calls, executing project code, or reading
+production data. It checks syntax only, not types, runtime behaviour or the
+meaning of a replacement. Unsupported grammar features can therefore lead
+to a skipped edit. Python/JSON parsing and other languages' existing
+delimiter checks remain unchanged. A clean parse does not replace the
+separate build and verification gates.

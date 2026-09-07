@@ -37,6 +37,10 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 
+from tree_sitter import Language, Parser
+import tree_sitter_javascript
+import tree_sitter_typescript
+
 from app.scan.checks import find_committed_env_files, gitignore_covers_env
 from app.fixpack.rls_policy import PolicyProposal, migration_filename, propose_read_policy
 from app.scan.rls import RULE_ID as RLS_RULE_ID
@@ -351,6 +355,9 @@ def _brackets_balanced(text: str) -> bool:
     return not stack
 
 
+_MAX_JS_SYNTAX_BYTES = 256_000
+
+
 def _validate_syntax(path: str, original: str, new: str) -> bool:
     """Best-effort guard that our edit left the file syntactically valid.
 
@@ -364,15 +371,33 @@ def _validate_syntax(path: str, original: str, new: str) -> bool:
       * .py            -> ast.parse
       * .json / .jsonc -> json.loads
 
-    For every other language there is NO zero-dependency parser available,
-    and we deliberately do not invent one. We fall back to a conservative
-    delimiter check: reject only when our edit turned a bracket-balanced
-    file into an unbalanced one. Anything we cannot judge, we accept — the
-    never-leak post-check (`_verify_scrubbed`) has already run, so the worst
-    case for an unparseable-language file is a semantically-odd but
-    non-secret-leaking edit, not a broken secret removal.
+    JS/JSX and TS/TSX use their respective Tree-sitter grammars. Reject
+    recovered parse errors too: getting a tree does not mean valid syntax.
+    Oversized or unparseable edits are excluded, never passed to the weaker
+    delimiter check. Parsing does not execute code, resolve imports or check
+    types/behaviour; a clean syntax tree is not proof that an edit is correct.
+
+    Other languages retain the relative delimiter check: reject only when
+    our edit turned a bracket-balanced file into an unbalanced one.
     """
     lower = path.lower()
+    if lower.endswith(_JS_SUFFIXES):
+        if len(new) > _MAX_JS_SYNTAX_BYTES:
+            return False
+        try:
+            data = new.encode("utf-8")
+            if len(data) > _MAX_JS_SYNTAX_BYTES:
+                return False
+            if lower.endswith(".tsx"):
+                language = tree_sitter_typescript.language_tsx()
+            elif lower.endswith(".ts"):
+                language = tree_sitter_typescript.language_typescript()
+            else:
+                language = tree_sitter_javascript.language()
+            tree = Parser(Language(language)).parse(data)
+            return tree is not None and not tree.root_node.has_error
+        except (ValueError, OverflowError):
+            return False
     if lower.endswith(".py"):
         try:
             ast.parse(new)
@@ -784,7 +809,7 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
         if not _validate_syntax(repo_rel, text, new_text):
             for f, _ in applied:
                 plan.skipped.append(_skipped(
-                    f, "edit produced invalid syntax; file excluded from "
+                    f, "invalid syntax or syntax-check limit; file excluded from "
                     "Fix Pack", file=repo_rel))
             logger.warning(
                 "fixpack: syntax validation failed for %s after applying "
