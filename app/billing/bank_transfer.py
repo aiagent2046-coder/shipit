@@ -443,11 +443,15 @@ async def invoice_status(
 
     if row["status"] == "completed":
         if row.get("product") == PRODUCT_FIXPACK:
+            job_id = row.get("fixpack_job_id")
+            funding = await payment_repo.get_completed_fixpack_for_job(job_id) if job_id else None
             return {
                 "reference": reference,
                 "status": "completed",
                 "product": PRODUCT_FIXPACK,
                 "audit_id": row.get("audit_id"),
+                "funding_review_required": (not funding or not funding.get("funding_key")
+                                            or str(funding["id"]) != str(row["id"])),
             }
         api_key = await deliver_key_once(
             account_repo=account_repo, payment_repo=payment_repo, payment=row,
@@ -648,23 +652,14 @@ async def confirm(
             amount=row.get("amount"), currency=row.get("currency") or CURRENCY,
             invoice_payment_id=str(row["id"]),
         )
-    # create_paid is idempotent per audit, so a second CONFIRMED payment for an
-    # audit that already has a live job silently joins that job: one fix PR,
-    # two payments taken, and every layer reporting success. The sell-side 409
-    # in main._reject_if_fixpack_already_live is the real defence, but it cannot
-    # cover an invoice opened BEFORE the first one was confirmed -- with a
-    # 7-day TTL and manual confirmation, that window is a normal week.
-    #
-    # So when it happens anyway, say so. The operator is the only one who can
-    # refund, and they cannot refund money they were told was fine.
-    joined_existing_job = (
-        product == PRODUCT_FIXPACK
-        and isinstance(granted, dict)
-        and granted.get("inserted") is False
+    joined_existing_job = bool(
+        product == PRODUCT_FIXPACK and granted
+        and granted.get("funding_review_required")
     )
     if granted is not None:
         await _tell_the_payer(
-            row, product=product, notify=notify, transport=transport)
+            row, product=product, notify=notify, transport=transport,
+            funding_review_required=joined_existing_job)
 
     return {
         "payment_id": str(row["id"]),
@@ -672,9 +667,6 @@ async def confirm(
         "product": product,
         "audit_id": row.get("audit_id"),
         "granted": granted is not None,
-        # `is False`, not falsy: grant_fixpack's already-processed branch
-        # returns a payments row with no `inserted` key at all, and "we don't
-        # know" must not read as "we double-charged".
         "joined_existing_job": joined_existing_job,
     }
 
@@ -712,7 +704,7 @@ def _confirmation_body(
 
 async def _tell_the_payer(
     row: dict[str, Any], *, product: str, notify: Any = None,
-    transport: Any = None,
+    transport: Any = None, funding_review_required: bool = False,
 ) -> None:
     """Best-effort, and wrapped. The grant has already happened; an exception
     escaping here would report a completed confirmation as a failure and
@@ -723,10 +715,14 @@ async def _tell_the_payer(
 
     try:
         locale = row.get("payer_locale")
+        from app.notify.messages import funding_review_message
+        review_subject, review_body = funding_review_message(
+            reference=str(row.get("external_ref") or ""), locale=locale,
+        )
         await notify(
             contact=Contact.from_payment(row),
-            subject=_confirmation_subject(product, locale),
-            body=_confirmation_body(row, product=product, locale=locale),
+            subject=review_subject if funding_review_required else _confirmation_subject(product, locale),
+            body=review_body if funding_review_required else _confirmation_body(row, product=product, locale=locale),
             reference=str(row.get("external_ref") or ""),
             locale=locale,
             transport=transport,

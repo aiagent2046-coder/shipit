@@ -102,6 +102,15 @@ def finding_context(finding, source_facts):
                                 "were not executed or verified."})
     if re.search(r'\bmigration\b.*\btransaction\b', text, re.I):
         for record in (facts.get('functions') or {}).get('records', []):
+            # A runner template says nothing about a payment helper or a SQL
+            # migration unless their execution relationship has been proven.
+            if record['file'] != finding.get('file'):
+                continue
+            start, end = finding.get('line_start'), finding.get('line_end')
+            if not isinstance(start, int) or not isinstance(end, int):
+                continue
+            if not record['line'] <= start <= end <= record['line_end']:
+                continue
             for check in record['checks']:
                 if check['kind'] == 'transaction_template':
                     records.append({**check, "file": record['file'], "scope": record['scope']})

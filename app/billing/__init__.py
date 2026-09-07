@@ -45,7 +45,7 @@ class _PaymentStore(Protocol):
         self, payment_id: str, *, account_id: str, external_ref: str
     ) -> dict[str, Any] | None: ...
     async def mark_completed_fixpack(
-        self, payment_id: str, *, external_ref: str
+        self, payment_id: str, *, external_ref: str, fixpack_job_id: str | None = None
     ) -> dict[str, Any] | None: ...
     async def claim_key_delivery(self, payment_id: str) -> bool: ...
     async def release_key_delivery(self, payment_id: str) -> None: ...
@@ -262,57 +262,28 @@ async def grant_fixpack(
     audit_id: str | None,
     invoice_payment_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """The Fix Pack counterpart to grant_pro_tier: idempotently turn a
-    confirmed Fix Pack payment into a paid `fixpack_jobs` row for its
-    audit, and return that row. Deliberately does NOT touch accounts or
-    tiers -- a Fix Pack is a one-off per-audit product, not an account
-    upgrade -- so it never calls grant_pro_tier and mints no API key.
+    """Record a confirmed payment and reserve its work before completing it.
 
-    Idempotency mirrors grant_pro_tier: `external_ref` (the Stars charge id,
-    or the reference on a bank transfer) is the key. A retried Telegram webhook
-    or an operator tapping Confirm twice finds the already-completed payment
-    and returns without creating a second job (migration 0004's partial unique
-    index is the DB-level backstop for the check-then-write race).
-
-    `invoice_payment_id` distinguishes the two bookkeeping shapes, same as in
-    grant_pro_tier: an invoice flow passes it (a pending row already exists ->
-    transition it to completed), a charge with no invoice behind it omits it
-    (no pre-existing row -> insert a completed one).
-
-    THE JOB IS CREATED BEFORE THE PAYMENT IS COMPLETED, and the order is the
-    whole point rather than an accident. There is no transaction around the two
-    writes -- nothing in app/db.py uses one -- so a crash, a lost connection or
-    a redeploy can always land between them, and the order decides which
-    half-done state that leaves:
-
-      * payment completed, no job (the OLD order) is unrecoverable. The retry
-        hits the early-return above, because the payment is already 'completed',
-        and never reaches the job creation. Money taken, no Fix Pack, forever.
-      * job created, payment still 'pending' (THIS order) self-heals. The retry
-        skips the early-return, calls create_paid again, gets the SAME job back
-        (idempotent per audit via migration 0025), completes the payment, and
-        finishes what the first attempt started.
-
-    The cost of this order is the mirror-image window -- a job exists for a
-    payment that never completed -- and it is the cheap one: nothing bills off
-    fixpack_jobs, so an orphan job is at worst one fix PR generated for a
-    payment that has to be reconciled by hand, never a paying customer left with
-    nothing. Neither window closes without a real transaction.
-
-    Returns None when nothing could be persisted (DATABASE_URL not configured);
-    callers surface that as "couldn't queue", not a crash. Generation of the
-    actual fix PR is a separate follow-up step that picks up the 'paid' row this
-    creates.
+    The immutable funding key distinguishes a crash retry from another payment
+    joining the same live job. A completed replay retains that distinction.
+    Review-required means money was recorded but no additional work was funded;
+    it is not a refund and must not be announced as a new queued Fix Pack.
     """
+    from app.fixpack_funding import funding_key
+
+    key = funding_key(provider, external_ref)
     existing = await payment_repo.get_by_external_ref(provider, external_ref)
     if existing is not None and existing.get("status") == "completed":
-        # Already processed this charge/tx -- don't create a second job.
-        return existing
+        job_id = existing.get("fixpack_job_id")
+        job = await fixpack_repo.get(job_id) if job_id else None
+        return {**existing, "funding_review_required": (
+            job is None or job.get("funding_key") != key
+        )}
 
     audit = await audit_repo.get(audit_id) if (audit_repo and audit_id) else None
     stack = (audit or {}).get("stack") or "unknown"
 
-    job = await fixpack_repo.create_paid(audit_id=audit_id, stack=stack)
+    job = await fixpack_repo.create_paid(audit_id=audit_id, stack=stack, funding_key=key)
     if job is None:
         return None  # DATABASE_URL not configured -- nothing persisted.
 
@@ -322,19 +293,8 @@ async def grant_fixpack(
             fixpack_job_id=str(job["id"]),
         )
         if completed is None:
-            # The CAS gate refused: the invoice is already completed under a
-            # DIFFERENT charge. A second distinct payment against one invoice is
-            # a bookkeeping anomaly for a human, but the delivery outcome is
-            # still correct and complete -- create_paid is idempotent per audit,
-            # so `job` is the one job that audit has, and the earlier charge's
-            # row is left untouched. Report it loudly and return the job, since
-            # the caller's only question is whether the Fix Pack is queued.
-            logger.error(
-                "fixpack invoice %s already completed under another charge; "
-                "leaving it as is and not recording %s/%s against it (job %s "
-                "stands)",
-                invoice_payment_id, provider, external_ref, job["id"],
-            )
+            logger.error("Fix Pack invoice completion refused for job %s", job["id"])
+            return None
     else:
         created = await payment_repo.create(
             account_id=None, provider=provider, external_ref=external_ref,
@@ -345,7 +305,7 @@ async def grant_fixpack(
         if created is None:
             return None  # DATABASE_URL not configured -- nothing persisted.
 
-    return job
+    return {**job, "funding_review_required": job.get("funding_key") != key}
 
 
 # Product label for the `payments.product` column on a subscription charge --

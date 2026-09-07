@@ -305,8 +305,8 @@ def _record_told(into: list):
     lower than what these tests are about, which is whether the customer is
     written to at all and when.
     """
-    async def telling(row, *, product, notify=None, transport=None) -> None:
-        into.append(row)
+    async def telling(row, *, product, notify=None, transport=None, funding_review_required=False) -> None:
+        into.append({**row, "funding_review_required": funding_review_required})
     return telling
 
 
@@ -746,3 +746,23 @@ def test_a_receipt_is_sent_when_the_shop_is_configured_for_one(monkeypatch) -> N
     assert receipt["customer"]["email"] == "ada@example.invalid"
     assert receipt["tax_system_code"] == 2
     assert receipt["items"][0]["amount"]["value"] == "990.00"
+
+
+@pytest.mark.anyio
+async def test_second_payment_is_announced_as_review_required(anyio_backend, monkeypatch):
+    payments, jobs = FakePaymentRepo(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    told = []
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+    for reference in ("DRY-ABC123", "DRY-DEF456"):
+        await _seed(payments, audit_id, reference=reference)
+        background = BackgroundTasks()
+        await receive_notification(
+            _request({"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}),
+            background, payment_repo=payments, fixpack_repo=jobs, audit_repo=audits,
+            transport=_succeeded(reference=reference),
+        )
+        await background()
+    assert len(jobs.rows) == 1
+    assert [r["funding_review_required"] for r in told] == [False, True]
+    assert {r["status"] for r in payments.rows.values()} == {"completed"}

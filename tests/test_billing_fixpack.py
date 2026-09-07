@@ -85,13 +85,19 @@ class FakeFixpackRepo:
     def __init__(self):
         self.rows: list[dict] = []
 
-    async def create_paid(self, *, audit_id, stack):
+    async def get(self, job_id):
+        return next((r for r in self.rows if r["id"] == job_id), None)
+
+    async def create_paid(self, *, audit_id, stack, funding_key=None):
+        owned = next((r for r in self.rows if funding_key and r.get("funding_key") == funding_key), None)
+        if owned:
+            return {**owned, "inserted": False}
         live = fixpack_live_job(self.rows, audit_id)
         if live is not None:
             return {**live, "inserted": False}
         row = {
             "id": str(uuid.uuid4()), "audit_id": audit_id, "pack": "fixpack",
-            "stack": stack, "status": "paid", "verified": None, "detail": None,
+            "funding_key": funding_key, "stack": stack, "status": "paid", "verified": None, "detail": None,
             "pr_url": None, "pr_delivered": False,
             "created_at": datetime.datetime.now(datetime.timezone.utc),
         }
@@ -490,3 +496,18 @@ def test_the_audit_response_tells_the_page_whether_to_offer_a_fix_pack():
         ).json()["fixpack_auto_fixable"] is False
     finally:
         _clear()
+
+
+async def test_second_stars_payment_is_not_announced_as_new_work():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(repo_url=REPO_URL)
+    for charge in ("first-charge", "second-charge", "second-charge"):
+        result = await _send(_fixpack_payment_update(charge, audit["id"]),
+                             audits=audits, payments=payments, fixpacks=fixpacks,
+                             accounts=accounts, calls=calls)
+    assert result["funding_review_required"] is True
+    assert len(fixpacks.rows) == 1 and len(payments.rows) == 2
+    text = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+    assert "has not been confirmed" in text and "No refund has been issued" in text
+    assert "queued" not in text

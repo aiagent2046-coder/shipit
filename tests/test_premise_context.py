@@ -56,7 +56,8 @@ def test_transaction_template_observed_without_claiming_runner_execution():
     changed = ast.parse('def run(path):\n sql=f"SELECT 1; {path}"').body[0]
     assert transaction_templates(changed) == []
     facts = collect_source_facts(archive({'scripts/migration_manager.py': source}))
-    attached, = finding_context({'title': 'Migration UPDATE runs outside a transaction'}, facts)
+    attached, = finding_context({'title': 'Migration UPDATE runs outside a transaction',
+        'file': 'scripts/migration_manager.py', 'line_start': fn.lineno, 'line_end': fn.end_lineno}, facts)
     assert attached['scope'] == 'apply_one'
     assert 'transaction_template' in facts_prompt(facts)
 
@@ -69,3 +70,12 @@ def test_expanded_actual_repository_prompt_retains_payment_predicates():
     assert len(prompt) <= 16000
     assert 'mark_completed_fixpack' in prompt and 'status_literal' in prompt
     assert 'transaction_template' in prompt and '_anon_daily_cap_exceeded' in prompt
+
+
+def test_payment_claim_does_not_inherit_unrelated_migration_transaction():
+    source = Path('scripts/migration_manager.py').read_text()
+    facts = collect_source_facts(archive({'scripts/migration_manager.py': source}))
+    claim = {'title': 'Migration 0025 permits retry but grant lacks a transaction',
+             'file': 'app/billing/__init__.py', 'line_start': 253, 'line_end': 320}
+    assert finding_context(claim, facts) == []
+    assert finding_context({'title': claim['title']}, facts) == []

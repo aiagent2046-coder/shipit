@@ -374,6 +374,7 @@ export type BankTransferStatus =
       status: "completed";
       product: "fixpack";
       audit_id?: string;
+      funding_review_required?: boolean;
     }
   | { reference: string; status: "expired" };
 
