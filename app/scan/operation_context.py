@@ -28,14 +28,24 @@ SCOPE = (
 )
 
 
-def numeric_examples() -> str:
-    results = []
+def numeric_cases() -> list[dict]:
+    """A fixed public corpus, independent of uploaded values and model titles."""
+    cases = []
     for value in ("490.00", "990.00", "990.07", "333.33"):
-        number = float(Decimal(value))
-        results.append(f"{value} -> {number:.2f} (binary exact: "
-                       f"{Decimal.from_float(number) == Decimal(value)})")
+        formatted = f"{float(Decimal(value)):.2f}"
+        delta = Decimal(formatted) - Decimal(value)
+        cases.append({"input_decimal": value, "formatted_decimal": formatted,
+                      "amount_changed": delta != 0, "difference_decimal": str(delta)})
+    return cases
+
+
+def numeric_examples() -> str:
+    results = [f"{c['input_decimal']} -> {c['formatted_decimal']} "
+               f"(amount changed: {c['amount_changed']}; difference: {c['difference_decimal']})"
+               for c in numeric_cases()]
     return ("Fixed public examples for built-in float formatted as .2f: " + "; ".join(results)
-            + ". These examples do not execute the uploaded expression, establish its bindings, "
+            + ". Binary representation error alone does not establish a changed formatted amount. "
+            "These examples do not execute the uploaded expression, establish its bindings, "
             "test production prices or cover all numeric inputs.")
 
 
@@ -102,7 +112,8 @@ def _python(data: bytes) -> list[dict]:
         records.append({"kind": "numeric_examples" if numeric else "python_subprocess_context",
                         "line": node.lineno, "scope": fn.name[:128] if fn else "<module>",
                         "call": "float(...):.2f" if numeric else _name(call.func),
-                        "detail": "\n".join(detail)[:4000]})
+                        "detail": "\n".join(detail)[:4000],
+                        **({"numeric_cases": numeric_cases()} if numeric else {})})
         if len(records) > MAX_RECORDS:
             break
     return records

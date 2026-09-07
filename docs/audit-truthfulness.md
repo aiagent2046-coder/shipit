@@ -312,3 +312,45 @@ unchanged; subsequent cache hits reuse the enriched snapshot. Free cache
 lookups remain at free depth and never import paid findings. Reports created
 before this change remain unchanged until a new paid request creates an
 enriched snapshot. No migration or additional LLM budget is required.
+
+
+## Function evidence before model review (engine 2026-09-07-4)
+
+`source_facts.functions` indexes module-level Python functions and direct class
+methods from full files (512 KB/file, 8 MB total, 300 files, 4,000 functions).
+It retains at most 64 evidence records and four cross-file candidates per record.
+The collector runs for both free and paid scans before any model response, with
+no uploaded code execution and no additional model calls. It also runs when no
+supported English finding title is ever produced.
+
+Supported observations are deliberately narrow: SQL lexer tokens in literal
+`execute` arguments, direct return comparisons, and the existing completed-status
+immediate return premise. SQL comments and string contents cannot supply lock
+function names. `WHERE` is only a token observation, not proof of ownership,
+selectivity, atomicity or effective authorization. Dynamic SQL is outside scope.
+
+Cross-file matching uses function/method name spelling in the bounded index;
+up to three matches are retained as candidates with the match count. More common
+names are skipped with ambiguous_name_matches, to avoid presenting arbitrary
+repository methods as the implementation of dictionary/environment get calls. These are not
+resolved Python bindings. Protocols, wrappers, aliases, inheritance and runtime
+objects can make a candidate inapplicable. Missing candidates never establish
+missing protection. Source literals are not copied into this inventory.
+
+Callers receive candidate locations, end lines and target observations, including
+method bodies beyond the LLM's per-file prefix. Write/lock candidates are preferred
+within each record. Return comparisons linked to database reads, completed-status
+returns and callers of UPDATE/lock functions get prompt priority. The function
+inventory gets at most half of the existing 16,000-character facts prompt; no
+prompt budget or model call count is increased. Both inventory and prompt limits
+are recorded, and prompt trimming never mutates the stored complete inventory.
+
+The HTML and web scan record display these observations and candidate limitations.
+They do not create scored findings, mark model claims verified or rewrite history.
+Title-selected syntax counterevidence continues separately for supported claims.
+
+Fixed numeric examples now record input decimal, formatted decimal, amount_changed
+and difference_decimal. For 990.07 the result is 990.07, false, 0.00. Binary float
+representation error is not used as evidence of changed cents. These are our four
+public examples, not tests of uploaded expressions, production prices or all
+possible inputs. They are attached automatically to supported float(...):.2f syntax.

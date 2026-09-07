@@ -110,9 +110,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # rows move; the mean is deliberately unchanged, because admitting such a
 # category to it RAISES a weak repository's total
 # (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
-# 2026-09-07-3: bounded Python completed-status return checks can now attach
-# scanner-owned counterevidence to supported notification claims.
-AUDIT_ENGINE_VERSION = "2026-09-07-3"
+# 2026-09-07-4: full-file function candidates and automatic syntax observations
+# reach the bounded model context; numeric examples compare formatted amounts.
+AUDIT_ENGINE_VERSION = "2026-09-07-4"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
