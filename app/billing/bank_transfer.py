@@ -450,7 +450,8 @@ async def invoice_status(
                 "status": "completed",
                 "product": PRODUCT_FIXPACK,
                 "audit_id": row.get("audit_id"),
-                "funding_review_required": funding is None or str(funding["id"]) != str(row["id"]),
+                "funding_review_required": (not funding or not funding.get("funding_key")
+                                            or str(funding["id"]) != str(row["id"])),
             }
         api_key = await deliver_key_once(
             account_repo=account_repo, payment_repo=payment_repo, payment=row,

@@ -311,8 +311,10 @@ class FakeCompletionCasMixin:
 
     async def get_completed_fixpack_for_job(self, job_id):
         # Fake jobs are funded in invoice creation order in checkout fixtures.
-        return next((r for r in self.rows.values()
-                     if r.get("fixpack_job_id") == job_id and r.get("status") == "completed"), None)
+        from app.fixpack_funding import funding_key
+        row = next((r for r in self.rows.values()
+                    if r.get("fixpack_job_id") == job_id and r.get("status") == "completed"), None)
+        return {**row, "funding_key": funding_key(row["provider"], row["external_ref"])} if row else None
 
     async def mark_completed_fixpack(self, payment_id, *, external_ref,
                                      fixpack_job_id=None):

@@ -1943,7 +1943,7 @@ class PaymentRepository:
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
                        payer_email, payer_x, payer_locale, refunded_at,
-                       provider_payment_id, created_at
+                       provider_payment_id, fixpack_job_id, created_at
                 from payments where id = %s
                 """,
                 (parsed_id,),
@@ -1969,7 +1969,7 @@ class PaymentRepository:
                        currency, status, tier_granted, telegram_chat_id,
                        product, audit_id, paypal_order_id, payer_name,
                        payer_email, payer_x, payer_locale,
-                       provider_payment_id, created_at
+                       provider_payment_id, fixpack_job_id, created_at
                 from payments where provider = %s and external_ref = %s
                 """,
                 (provider, external_ref),
@@ -1994,7 +1994,12 @@ class PaymentRepository:
         async with pool.connection() as conn:
             cur = await conn.execute(
                 """
-                select p.*, j.funding_key
+                select p.id, p.account_id, p.provider, p.external_ref, p.amount,
+                       p.currency, p.status, p.tier_granted, p.telegram_chat_id,
+                       p.product, p.audit_id, p.paypal_order_id, p.payer_name,
+                       p.payer_email, p.payer_x, p.payer_locale,
+                       p.provider_payment_id, p.fixpack_job_id, p.created_at,
+                       j.funding_key
                 from payments p join fixpack_jobs j on j.id = p.fixpack_job_id
                 where p.fixpack_job_id = %s and p.product = 'fixpack'
                   and p.status = 'completed'

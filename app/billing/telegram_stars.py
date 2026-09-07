@@ -1334,7 +1334,7 @@ async def _handle_link(
         text = _no_key_for_this_payment_text(row)
         if row.get("product") == "fixpack" and row.get("fixpack_job_id"):
             funding = await payment_repo.get_completed_fixpack_for_job(row["fixpack_job_id"])
-            if funding is None or str(funding["id"]) != str(row["id"]):
+            if not funding or not funding.get("funding_key") or str(funding["id"]) != str(row["id"]):
                 from app.notify.messages import funding_review_message
                 _, text = funding_review_message(
                     reference=str(row.get("external_ref") or ""), locale=row.get("payer_locale"),
