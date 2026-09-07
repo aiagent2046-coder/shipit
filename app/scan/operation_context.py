@@ -142,6 +142,8 @@ def _js_shape(node):
 def _javascript(data: bytes, path: str) -> list[dict]:
     language = (tree_sitter_typescript.language_tsx() if path.endswith((".jsx", ".tsx"))
                 else tree_sitter_typescript.language_typescript())
+    # tree-sitter 0.26.0 Point.row/column return borrowed references.
+    # Use tuple indexing below: attribute access can corrupt memory past row 256.
     root = Parser(Language(language)).parse(data).root_node
     if root.has_error:
         raise ValueError("unparseable JS/TS")
@@ -171,10 +173,10 @@ def _javascript(data: bytes, path: str) -> list[dict]:
             for c in callers[:8]:
                 args = c.child_by_field_name("arguments")
                 arg = args.named_children[0] if args and args.named_children else None
-                detail.append(f"Same-file call spelling at line {c.start_point.row + 1}: {_js_shape(arg)}")
+                detail.append(f"Same-file call spelling at line {c.start_point[0] + 1}: {_js_shape(arg)}")
         detail.append("Caller list limited to 8 spellings in this file; binding, browser/server execution "
                       "and URL trust not checked. A fetch parameter alone does not establish SSRF.")
-        records.append({"kind": "javascript_fetch_context", "line": call.start_point.row + 1,
+        records.append({"kind": "javascript_fetch_context", "line": call.start_point[0] + 1,
                         "scope": scope, "call": "fetch", "detail": "\n".join(detail)})
         if len(records) > MAX_RECORDS:
             break
