@@ -66,7 +66,8 @@ function FindingCard({ finding, historical = false }: { finding: Finding; histor
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
         <p className="font-medium">{what}</p>
-        {historical ? <span className="text-sm text-muted">Previous preview — not reassessed</span>
+        {historical ? <span className="text-sm text-muted">Previous preview — not reassessed
+          {isNonProductionFinding(finding) && " · Test/example context"}</span>
           : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
           : <SeverityBadge severity={finding.severity} />}
       </div>

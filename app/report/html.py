@@ -47,6 +47,8 @@ def _finding_row(f: dict, *, historical: bool = False) -> str:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
     if historical:
         emoji, tier_label, color = "", "Previous preview — not reassessed", "#8b8d98"
+        if is_non_production(f):
+            tier_label += " · Test/example context"
     risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
     fix_html = f'<div class="fix">→ {escape(fix)}</div>' if fix else ""
     model = f.get("source") == "llm" or str(f.get("rule_id", "")).startswith("llm-")

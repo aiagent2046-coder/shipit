@@ -18,6 +18,7 @@ httpx.MockTransport, and the repositories are the in-memory fakes.
 from __future__ import annotations
 
 import json
+import asyncio
 import uuid
 
 import httpx
@@ -619,6 +620,81 @@ async def test_the_payer_is_told_after_the_notification_is_answered(
 
 
 # --- the receipt ------------------------------------------------------------
+
+
+@pytest.mark.anyio
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="Known race: concurrent pending snapshots schedule two payer notifications")
+async def test_concurrent_notifications_should_tell_payer_once(anyio_backend, monkeypatch):
+    """Reproducer, not a claim of real double charging or a deployed incident.
+
+    Hold both handlers after their pending-status reads. Real handler and grant
+    code run; storage and provider/notification transports are isolated fakes.
+    A strict XPASS requires removing this marker when delivery is made atomic.
+    """
+    entered = 0
+    both = asyncio.Event()
+
+    class ConcurrentJobs(FakeFixpackRepo):
+        async def create_paid(self, **kwargs):
+            nonlocal entered
+            entered += 1
+            if entered == 2:
+                both.set()
+            await asyncio.wait_for(both.wait(), timeout=2)
+            return await super().create_paid(**kwargs)
+
+    payments, jobs = FakePaymentRepo(), ConcurrentJobs()
+    audits, audit_id = _audit_with_findings()
+    await _seed(payments, audit_id)
+    told = []
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+    backgrounds = [BackgroundTasks(), BackgroundTasks()]
+    body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
+    await asyncio.wait_for(asyncio.gather(*[
+        receive_notification(_request(body), bg, payment_repo=payments,
+                             fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
+        for bg in backgrounds
+    ]), timeout=5)
+    if len(jobs.rows) != 1:
+        raise RuntimeError("The fake must preserve the live-job uniqueness contract")
+    for bg in backgrounds:
+        await bg()
+    assert len(told) == 1, f"Concurrent handlers delivered {len(told)} confirmations"
+
+
+@pytest.mark.anyio
+async def test_retry_after_payment_write_failure_reuses_live_job(anyio_backend, monkeypatch):
+    """Inject the crash window in memory; no payment provider or real DB writes."""
+    class InterruptedPayment(FakePaymentRepo):
+        fail_once = True
+
+        async def mark_completed_fixpack(self, *args, **kwargs):
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("injected loss after job creation")
+            return await super().mark_completed_fixpack(*args, **kwargs)
+
+    payments, jobs = InterruptedPayment(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    row = await _seed(payments, audit_id)
+    told = []
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+    body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
+    failed_background = BackgroundTasks()
+    with pytest.raises(RuntimeError, match="injected loss"):
+        await receive_notification(_request(body), failed_background, payment_repo=payments,
+                                   fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
+    assert row["status"] == "pending" and len(jobs.rows) == 1
+    assert failed_background.tasks == []
+    original_job = next(iter(jobs.rows))
+    background = BackgroundTasks()
+    await receive_notification(_request(body), background, payment_repo=payments,
+                               fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
+    assert row["status"] == "completed" and len(jobs.rows) == 1
+    assert next(iter(jobs.rows)) == original_job
+    await background()
+    assert len(told) == 1
 
 def test_no_receipt_is_sent_when_the_shop_has_no_tax_position(monkeypatch) -> None:
     """A guessed VAT rate is a fiscal document making a false statement about

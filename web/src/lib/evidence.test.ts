@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { coverageRows, findingCounts, manifestRows } from "./evidence";
 import { plainFields } from "./plain";
-import type { Finding } from "./types";
+import type { Finding, ScanManifest } from "./types";
 
 const source: Finding = { rule_id: "aws-access-key-id", title: "AWS match",
   category: "Security", severity: "high", confidence: 1, file: "app/config.py" };
@@ -32,4 +32,20 @@ it("does not invent execution records for old audits", () => {
 it("counts underlying observations in display-only schema groups", () => {
   expect(findingCounts([{ ...source, occurrence_titles: ["Table A", "Table B"] },
     { ...source, file: "tests/schema.sql" }])).toEqual({ source: 2, examples: 1 });
+});
+
+it("shows operation evidence and limits without assigning finding severity", () => {
+  const manifest: ScanManifest = {
+    archive_sha256: "test-digest", commit_sha: null, engine_version: "test", archive_files: 1,
+    static_checks: [], static_limits: {}, inventory: {}, model: null, model_calls: 0,
+    rubrics_completed: [], llm_candidate_files: null, llm_submitted_files: null,
+    llm_files_not_submitted: null, limitations: [], runtime_verified: false,
+    source_facts: { scope: "Syntax only", parsed_files: 0, excluded_files: 0, limitations: [], facts: [],
+      operations: { scope: "Names are not resolved", parsed_files: 1, excluded_files: 0,
+        limitations: ["record_limit_reached"], records: [{ kind: "javascript_fetch_context",
+          file: "api.ts", line: 4, scope: "request", call: "fetch", detail: "Input trust not checked" }] } },
+  };
+  const rows = Object.fromEntries(manifestRows({ total: 0, categories: {}, scan_manifest: manifest }));
+  expect(rows["Operation context 1"]).toBe("api.ts:4 — request: fetch\nInput trust not checked");
+  expect(rows["Operation context limits"]).toBe("record_limit_reached");
 });

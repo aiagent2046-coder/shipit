@@ -173,6 +173,17 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
             rows.append((f"Source syntax fact {i}",
                          f"{fact['file']}:{fact['line']} — {fact['scope']}: call {fact['call']}; "
                          f"matching {fact['import_module']} import at line {fact['import_line']}"))
+        operations = facts.get("operations")
+        if isinstance(operations, dict):
+            rows.extend([
+                ("Operation context scope", operations.get("scope", "Not recorded")),
+                ("Files parsed for operation context", str(operations.get("parsed_files", 0))),
+                ("Operation context limits", ", ".join(operations.get("limitations", [])) or "None recorded"),
+            ])
+            for i, fact in enumerate(operations.get("records", []), 1):
+                rows.append((f"Operation context {i}",
+                             f"{fact['file']}:{fact['line']} — {fact['scope']}: {fact['call']}\n"
+                             + fact["detail"]))
     for kind, paths in manifest.get("inventory", {}).items():
         shown = ", ".join(paths[:5])
         if len(paths) > 5:

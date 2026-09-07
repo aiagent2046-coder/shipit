@@ -83,7 +83,8 @@ def test_fact_and_prompt_budgets_preserve_valid_records(monkeypatch):
 
 
 def test_same_static_fact_record_in_free_and_paid_scan_and_model_receives_index():
-    data = make_zip({"repo/shared.py": HELPER, "repo/auth.py": b"from shared import _secret_equals\n"}).getvalue()
+    data = make_zip({"repo/shared.py": HELPER, "repo/auth.py": b"from shared import _secret_equals\n",
+                     "repo/runner.py": b"import subprocess\nsubprocess.run(command, input=sql)\n"}).getvalue()
     class RecordingLLM(FakeLLM):
         calls = []
 
@@ -99,6 +100,8 @@ def test_same_static_fact_record_in_free_and_paid_scan_and_model_receives_index(
     assert len(client.calls) == 1  # No new model call for fact collection.
     assert "Source syntax index" in client.calls[0][1]
     assert "_secret_equals" in client.calls[0][1]
+    assert "python_subprocess_context" in client.calls[0][1]
+    assert "Keyword input: Name; names: sql" in client.calls[0][1]
 
 
 def test_real_shared_helper_is_located_without_importing_it():
