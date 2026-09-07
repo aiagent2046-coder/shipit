@@ -98,6 +98,31 @@ def test_clear_after_await_or_in_nested_callback_is_not_before_await():
         assert not r['checks']
 
 
+def test_async_iteration_precedes_later_input_clear():
+    source = component("for await (const item of stream) {}\nsetInput('');\nawait request();")
+    r, = scan(source)['records']
+    assert r['await_lines'] == [8, 10]
+    assert not r['checks']
+
+
+def test_finally_reset_encloses_async_iteration_without_await_expressions():
+    source = component('setBusy(true);\ntry { for await (const item of stream) {} } finally { setBusy(false); }')
+    r, = scan(source)['records']
+    assert r['await_lines'] == [9]
+    assert r['checks'][0]['finally_reset_line'] == 9
+
+
+@pytest.mark.parametrize('definition', [
+    'const nested = async function* () { await unrelated(); };',
+    'async function* nested() { await unrelated(); }',
+])
+def test_uninvoked_generator_await_is_not_part_of_the_handler(definition):
+    source = component('setBusy(true);\n' + definition + '\ntry { await request(); } finally { setBusy(false); }')
+    r, = scan(source)['records']
+    assert r['await_lines'] == [10]
+    assert r['checks'][0]['finally_reset_line'] == 10
+
+
 def test_direct_wrapper_and_busy_button_are_supported():
     r, = scan(component('setBusy(true); await request(); setBusy(false);',
                         '<button onClick={() => send()} disabled={busy}>Send</button>'))['records']
@@ -112,6 +137,8 @@ def test_direct_wrapper_and_busy_button_are_supported():
     'setInput = unrelated;',
     'const nested = () => { const setInput = custom; };',
     'const nested = function setInput() {};',
+    'function* setInput() {}',
+    'const nested = function* setInput() {};',
 ])
 def test_shadowed_or_reassigned_setter_is_not_linked(extra):
     r = scan(component("setInput(''); await request();", extra=extra))

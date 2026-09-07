@@ -31,7 +31,8 @@ SCOPE = (
     "request idempotency and harmful outcomes are not verified. Missing observations do not prove "
     "missing protection. String values redacted; tests/vendor files excluded."
 )
-_FUNCTIONS = {"function_declaration", "function_expression", "arrow_function", "method_definition"}
+_FUNCTIONS = {"function_declaration", "function_expression", "arrow_function", "method_definition",
+              "generator_function_declaration", "generator_function"}
 _SKIP = _FUNCTIONS | {"class_declaration", "class"}
 
 
@@ -80,7 +81,8 @@ def _bound_names(pattern):
 def _bindings(nodes):
     names = []
     for node in nodes:
-        if node.type in {"variable_declarator", "function_declaration", "function_expression", "class_declaration"}:
+        if node.type in {"variable_declarator", "function_declaration", "function_expression", "class_declaration",
+                         "generator_function_declaration", "generator_function"}:
             names.extend(_bound_names(node.child_by_field_name("name")))
         if node.type in _FUNCTIONS:
             names.extend(_bound_names(node.child_by_field_name("parameters")
@@ -212,7 +214,8 @@ def _handler_record(fn, name, component, path, states, controls, limits):
         limits.add("unsupported_async_body")
         return None
     nodes = list(_walk(body, _SKIP))
-    awaits = [n for n in nodes if n.type == "await_expression"]
+    awaits = [n for n in nodes if n.type == "await_expression"
+              or (n.type == "for_in_statement" and any(c.type == "await" for c in n.children))]
     if not awaits:
         return None
     first = min(n.start_byte for n in awaits)
