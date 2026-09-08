@@ -25,6 +25,8 @@ from app.scan.syntax_claims import SyntaxVerifier
 from app.scan.premise_context import finding_context
 from app.scan.rls_recommendations import prepare_recommendation
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.issue_identity import SourceIssueResolver
+from app.scan.react_async_context import react_async_premise_checks
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
 from app.scan.source_facts import facts_prompt
@@ -679,8 +681,11 @@ SYSTEM_PROMPT = (
     "Keep each finding about one cause; separate independent causes even at the same line. "
     "Use premises to identify specific source claims separately from the narrative. Supported kinds: "
     "http_status_guard_absent, json_rejection_uncaught, intl_catch_absent, "
-    "required_nested_objects_absent, query_limit_unbounded. Supply the response/schema/clamped "
-    "binding and its source coordinates; use an empty array for unsupported premises. "
+    "required_nested_objects_absent, query_limit_unbounded, sql_update_where, ownership_guard_absent. "
+    "Supply the response/schema/clamped binding, SQL table or inserted resource and its source coordinates; "
+    "sql_update_where selects a claim that an UPDATE lacks WHERE, not that its business effect is wrong. "
+    "ownership_guard_absent selects a missing participant check before a message insert, not RLS or race safety. "
+    "Use an empty array for unsupported premises. "
     "These selectors do not verify anything; never assign a premise a verification status. "
     "Write \"fix_hint\" as a verification step followed by a conditional fix. "
     "Existing checks are evidence: trace the guarded operation, clamp, schema rejection "
@@ -1304,6 +1309,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
         files = _iter_code_files(zf)
     files_by_name = dict(files)
     syntax_verifier = SyntaxVerifier(fileobj, source_facts)
+    issue_resolver = SourceIssueResolver(fileobj)
 
     findings: list[ScoredFinding] = []
     ran: set[str] = set()
@@ -1476,7 +1482,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   claim_evidence={**model_claim_evidence(f, files_by_name),
                                   "producer": {"model": usage.model, "response": stats.calls, "rubric": rubric},
                                   "syntax_check": syntax_verifier.check(f),
-                                  "premise_checks": syntax_verifier.premise_checks(f),
+                                  "premise_checks": (syntax_verifier.premise_checks(f)
+                                                     + react_async_premise_checks(f, source_facts)),
+                                  "source_issue_identity": issue_resolver.identity(f),
                                   "context_checks": finding_context(f, source_facts)},
               ), source_facts))
           # After the findings are in, not before the call: a rubric counts as

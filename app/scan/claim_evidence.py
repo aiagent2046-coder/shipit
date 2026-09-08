@@ -55,3 +55,14 @@ def static_claim_evidence() -> dict:
 def syntax_contradicted(record: dict | None) -> bool:
     return bool(record and record.get("version") == 1
                 and (record.get("syntax_check") or {}).get("result") == "contradicted")
+
+
+def partial_contradicted(record: dict | None) -> bool:
+    """A source counterexample does not settle a compound finding's other claims.
+
+    Only scanner-owned premise results count. Model observations and words such
+    as 'actually safe' never determine this disposition or the score.
+    """
+    return bool(record and record.get("version") == 1 and not syntax_contradicted(record)
+                and any(isinstance(check, dict) and check.get("result") == "contradicted"
+                        for check in (record.get("premise_checks") or [])))

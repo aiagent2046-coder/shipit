@@ -106,6 +106,14 @@ class SyntaxVerifier:
                          str(finding.get("explanation", ""))[:16000], re.I):
                 return _result(kind, "not_checked", "The narrative mentions a separate concern; "
                                "only individual premise checks are applied.")
+            narrative = " ".join(str(finding.get(key) or "")[:8000] for key in
+                                 ("explanation", "observation", "required_conditions"))
+            if kind in {"http_status_guard_absent", "json_rejection_uncaught"} and re.search(
+                    r"\b(?:network|transport|fetch)\s+(?:errors?|failures?|reject\w*)\b|"
+                    r"\b(?:content[ -]type|response schema|response shape|saving|busy|spinner|disabled|navigation)\b",
+                    narrative, re.I):
+                return _result(kind, "not_checked", "The narrative also concerns transport, response shape or UI "
+                               "behavior; the local response check is only partial counterevidence.")
             # Whole-finding disposition uses the finding's own coordinates;
             # model-selected targets elsewhere cannot dismiss its narrative.
             request = {"kind": kind, "target": "", "line_start": finding.get("line_start"),
@@ -352,7 +360,7 @@ def _react(data: bytes, start: int, end: int, path: str) -> dict:
     return unknown("Return/control-flow shape outside this bounded order check.")
 
 
-def _sql(source: str, start: int, end: int) -> dict:
+def _sql(source: str, start: int, end: int, *, target: str = "") -> dict:
     kind = "sql_update_where"
     # pglast exposes character offsets. Use the next statement's location:
     # stmt_len is not reliable after multibyte text in pglast 7.7.
@@ -378,6 +386,8 @@ def _sql(source: str, start: int, end: int) -> dict:
     if len(candidates) != 1 or not isinstance(candidates[0][0], ast.UpdateStmt):
         return _result(kind, "not_checked", "The cited range does not identify one top-level PostgreSQL UPDATE.")
     update, a, b = candidates[0]
+    if target and (update.relation is None or update.relation.relname != target):
+        return _result(kind, "not_checked", "The selected UPDATE has a different relation target.")
     # An UPDATE inside a CTE or nested statement needs its own location binding.
     todo = [update]
     updates = 0

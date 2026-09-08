@@ -36,9 +36,15 @@ export function syntaxContradicted(finding: Finding): boolean {
     && finding.claim_evidence.syntax_check?.result === "contradicted";
 }
 
+export function partialContradicted(finding: Finding): boolean {
+  return finding.claim_evidence?.version === 1 && !syntaxContradicted(finding)
+    && (finding.claim_evidence.premise_checks ?? []).some(check => check.result === "contradicted");
+}
+
 export function evidenceLabel(finding: Finding): string {
   if (isInformational(finding)) return "Deployment inventory — informational";
   if (syntaxContradicted(finding)) return "Model syntax premise contradicted — see bounded check";
+  if (partialContradicted(finding)) return "Part of the model claim is contradicted — remaining claims need review";
   if (finding.source === "llm" || finding.rule_id?.startsWith("llm-")) {
     return "Model hypothesis — unverified";
   }
@@ -55,6 +61,10 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
       ? "A static rule emitted this observation. Its consequence was not tested."
       : "Not recorded for this finding; do not assume the cited code was verified.";
   const rows: [string, string][] = [["Source check", checked]];
+  if (partialContradicted(finding)) rows.push(["Assessment needs review",
+    "A bounded source check contradicts part of this finding. The original model severity "
+    + "remains in the score because the other claims have not been resolved; it is not "
+    + "independent confirmation of their impact. Review the source checks before acting."]);
   const context = record?.source_context;
   if (context) {
     const labels: Record<string, string> = { comment: "Comment", docstring: "Python docstring",

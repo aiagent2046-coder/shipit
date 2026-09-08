@@ -1,13 +1,16 @@
-"""Conservative cross-rubric grouping by location and a shared cause.
+"""Conservative grouping by source operation and compatible claim status.
 
-A shared line is not an issue identity. Unknown paraphrases stay separate;
-recognized single mechanisms can merge, with every original retained.
+New observations require a trusted source identity; unsupported ones stay
+separate. Legacy reports retain their location/cause fallback. All original
+interpretations and statuses survive grouping, including pre-grouped input.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
+from collections import Counter
 from difflib import SequenceMatcher
 import re
+import json
 
 from app.scan.scoring import ScoredFinding
 
@@ -60,15 +63,29 @@ def _mechanisms(title: str) -> frozenset[str]:
 def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     if anchor.file != f.file:
         return False
-    # A contradicted or partially checked claim cannot absorb an unresolved one.
+    ea, eb = anchor.claim_evidence or {}, f.claim_evidence or {}
+    has_source = "source_issue_identity" in ea or "source_issue_identity" in eb
+    identity_a, identity_b = ea.get("source_issue_identity"), eb.get("source_issue_identity")
+    if has_source and (not identity_a or identity_a != identity_b):
+        return False
+    # The source operation, not the model's selector coordinates, establishes
+    # identity. Different check kinds/dispositions still retain separate rows.
     for key in ("syntax_check", "premise_checks"):
-        if (anchor.claim_evidence or {}).get(key) != (f.claim_evidence or {}).get(key):
+        a, b = ea.get(key), eb.get(key)
+        if has_source:
+            a, b = _check_status(a), _check_status(b)
+        if a != b:
+            return False
+    for key in ("conditions_status", "consequence_status"):
+        if ea.get(key) != eb.get(key):
             return False
 
     def recommendation_status(item):
         return ((item.claim_evidence or {}).get("recommendation_check") or {}).get("result")
     if recommendation_status(anchor) != recommendation_status(f):
         return False
+    if has_source:
+        return True
 
     def function_key(item):
         return {(c["file"], c["function_line_start"], c["function_line_end"],
@@ -91,61 +108,118 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     return anchor.line == f.line or _title_ratio(a, b) >= _TITLE_SIMILARITY_THRESHOLD
 
 
+def _check_status(value):
+    """Keep semantic status, excluding selector coordinates and prose."""
+    if isinstance(value, list):
+        return sorted({_check_status(item) for item in value}, key=repr)
+    if not isinstance(value, dict):
+        return value
+    return tuple((key, json.dumps(value[key], sort_keys=True)) for key in (
+        "kind", "result", "target", "source_entities", "scope", "claim_scope", "disposition", "whole_finding"
+    ) if key in value)
+
+
+_FINDING_FIELDS = {field.name for field in fields(ScoredFinding)}
+_REQUIRED_FIELDS = {"rule_id", "title", "severity", "confidence", "category"}
+
+
+def _original(finding):
+    # Retain origin_category, provenance and verification statuses as well as
+    # all original evidence. Never nest a grouping inside another grouping.
+    values = {key: getattr(finding, key) for key in _FINDING_FIELDS}
+    if values["claim_evidence"]:
+        values["claim_evidence"] = {key: value for key, value in values["claim_evidence"].items()
+                                    if key != "grouped_originals"}
+    return values
+
+
+def _flatten(finding, depth=0):
+    originals = (finding.claim_evidence or {}).get("grouped_originals")
+    if not isinstance(originals, list) or not originals or depth >= 8:
+        yield finding
+        return
+    # Malformed history cannot silently erase the displayed representative.
+    if any(not isinstance(item, dict) or not _REQUIRED_FIELDS <= item.keys() for item in originals):
+        yield finding
+        return
+    for item in originals:
+        original = ScoredFinding(**{key: value for key, value in item.items() if key in _FINDING_FIELDS})
+        yield from _flatten(original, depth + 1)
+
+
 def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
-    """Keep one finding per same-issue group across LLM rubrics, most
-    severe (then most confident) wins; ties keep the first seen. A group
-    is findings in the same file, within a small line window, with
-    similar titles (see _same_issue). Non-LLM findings are returned
-    untouched, in their original positions."""
-    groups: list[list[ScoredFinding]] = []
-    slot_of: list[int] = []  # parallel to groups: each group's out index
-    out: list[ScoredFinding | None] = []
+    """Group source-identical LLM hypotheses with compatible evidence status.
 
-    for f in findings:
-        if not f.rule_id.startswith("llm-"):
-            out.append(f)  # static scan — never merged with LLM findings
+    Historical findings without source identities retain the conservative
+    legacy matcher. Representatives are selected before grouping, so choosing
+    a more severe row cannot leave two representatives that should join. Every
+    original is retained, and pre-grouped input is flattened before regrouping.
+    """
+    entries = []
+    seen = Counter()
+    seen_groups = set()
+    for position, finding in enumerate(findings):
+        if not finding.rule_id.startswith("llm-"):
+            entries.append((position, finding))
             continue
-        # First group whose anchor (first seen, per tie rule) is the same
-        # issue. Adjacency is judged against that anchor, matching the old
-        # "first seen wins" semantics.
-        gi = next((i for i, m in enumerate(groups) if _same_issue(m[0], f)), None)
-        if gi is None:
-            slot_of.append(len(out))
-            groups.append([f])
-            out.append(None)  # reserve this group's slot, filled below
-        else:
-            groups[gi].append(f)
+        from_group = bool((finding.claim_evidence or {}).get("grouped_originals"))
+        represented_before = seen.copy() if from_group else None
+        group_counts = Counter()
+        for leaf in _flatten(finding):
+            fingerprint = json.dumps(_original(leaf), sort_keys=True, ensure_ascii=False, default=str)
+            # Pre-grouped input can overlap with another group or an original.
+            # Such overlap is not an additional observation/model response.
+            if from_group:
+                seen_groups.add(fingerprint)
+                group_counts[fingerprint] += 1
+                if group_counts[fingerprint] <= represented_before[fingerprint]:
+                    continue
+            elif fingerprint in seen_groups:
+                continue
+            seen[fingerprint] += 1
+            entries.append((position, leaf))
 
-    for members, slot in zip(groups, slot_of):
-        rep = min(members, key=lambda f: (_SEV_RANK[f.severity], -f.confidence))
-        others = sorted({f.rule_id for f in members} - {rep.rule_id})
+    groups = []
+    static = []
+    def priority(item):
+        finding = item[1][1]
+        # Input positions change when old groups are flattened. A stable
+        # source/origin tie-break keeps group membership unchanged on replay.
+        return (_SEV_RANK.get(finding.severity, 4), -finding.confidence,
+                finding.file, finding.line,
+                json.dumps(_original(finding), sort_keys=True, ensure_ascii=False, default=str))
+
+    ordered = sorted(enumerate(entries), key=priority)
+    for original_order, (position, finding) in ordered:
+        if not finding.rule_id.startswith("llm-"):
+            static.append((position, original_order, finding))
+            continue
+        match = next((members for members in groups if _same_issue(members[0][2], finding)), None)
+        if match is None:
+            groups.append([(position, original_order, finding)])
+        else:
+            match.append((position, original_order, finding))
+
+    out = list(static)
+    for members in groups:
+        rep = members[0][2]
+        origins = [item[2] for item in sorted(members, key=lambda item: item[1])]
+        others = sorted({finding.rule_id for finding in origins} - {rep.rule_id})
         if others:
-            labels = ", ".join(_RUBRIC_LABEL.get(r, r) for r in others)
-            # Say "at a nearby line" only when the other observation was actually
-            # at a different line, so the note stays accurate for both the
-            # same-line and widened cases.
-            where = " at a nearby line" if any(m.line != rep.line for m in members) else ""
+            labels = ", ".join(_RUBRIC_LABEL.get(rule, rule) for rule in others)
+            distance = max(abs(finding.line - rep.line) for finding in origins)
+            where = (" at another source location" if distance > _NEARBY_LINE_WINDOW else
+                     " at a nearby line" if distance else "")
             note = (f" Also reported by the {labels}{where}; "
                     "this is not independent confirmation.")
-            # Preserve recognized paraphrases as provenance, not confirmation.
-            extra = [
-                m.title for m in members
-                if m is not rep
-                and _title_ratio(m.title, rep.title) < _TITLE_SIMILARITY_THRESHOLD
-            ]
+            extra = [finding.title for finding in origins if finding is not rep
+                     and _title_ratio(finding.title, rep.title) < _TITLE_SIMILARITY_THRESHOLD]
             if extra:
                 note += " Reported there as: " + "; ".join(sorted(set(extra))) + "."
             rep = replace(rep, explanation=(rep.explanation + note).strip())
-        if len(members) > 1:
-            # Keep all original interpretations, including same-rubric repeats.
-            # Source excerpts are intentionally absent (they may contain secrets).
-            originals = [{"rule_id": m.rule_id, "file": m.file, "line": m.line,
-                          "title": m.title, "explanation": m.explanation,
-                          "fix_hint": m.fix_hint, "severity": m.severity, "confidence": m.confidence,
-                          "category": m.category, "claim_evidence": m.claim_evidence}
-                         for m in members]
+        if len(origins) > 1:
             rep = replace(rep, claim_evidence={"version": 1, **(rep.claim_evidence or {}),
-                                              "grouped_originals": originals})
-        out[slot] = rep
-
-    return out
+                                              "grouped_originals": [_original(item) for item in origins]})
+        first = min((position, order) for position, order, _ in members)
+        out.append((*first, rep))
+    return [finding for _, _, finding in sorted(out, key=lambda item: (item[0], item[1]))]

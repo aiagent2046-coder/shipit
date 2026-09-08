@@ -8,7 +8,7 @@ severity, tier, or how many model passes repeated the same claim.
 import json
 
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
-from app.scan.claim_evidence import syntax_contradicted
+from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
 
 
@@ -112,6 +112,8 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
 def evidence_label(finding: dict) -> str:
     if syntax_contradicted(finding.get("claim_evidence")):
         return "Model syntax premise contradicted — see bounded check"
+    if partial_contradicted(finding.get("claim_evidence")):
+        return "Part of the model claim is contradicted — remaining claims need review"
     if is_informational(finding):
         return "Deployment inventory — informational"
     source = finding.get("source")
@@ -135,6 +137,11 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
+    if partial_contradicted(record):
+        rows.append(("Assessment needs review",
+                     "A bounded source check contradicts part of this finding. The original model severity "
+                     "remains in the score because the other claims have not been resolved; it is not "
+                     "independent confirmation of their impact. Review the source checks before acting."))
     context = record.get("source_context") or {}
     if context:
         labels = {"comment": "Comment", "docstring": "Python docstring", "doc_example": "Documentation/example",

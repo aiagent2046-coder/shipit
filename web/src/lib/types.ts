@@ -160,6 +160,7 @@ export interface Finding {
     source_context?: { kind: string; uri_scheme: string; uri_kind: string } | null;
     grouped_originals?: Record<string, unknown>[];
     producer?: { model: string; response: number; rubric: string };
+    source_issue_identity?: Record<string, unknown> | null;
     context_checks?: Record<string, unknown>[];
     premise_checks?: { kind: string; target: string; line_start?: number; line_end?: number;
       source_line_start?: number; source_line_end?: number;
@@ -169,6 +170,7 @@ export interface Finding {
       kind: "react_hook_order" | "sql_update_where" | "python_completed_notification" | "react_async_catch_reset"
         | "http_status_guard_absent" | "json_rejection_uncaught" | "intl_catch_absent"
         | "required_nested_objects_absent" | "query_limit_unbounded"
+        | "ownership_guard_absent" | "react_async_fetch_unawaited" | "react_async_network_reset_absent"
         | "domain_suffix_argument" | "finite_limit_clamp" | "intl_try_catch" | "unsupported";
       result: "contradicted" | "observed" | "not_checked";
       claim: string;

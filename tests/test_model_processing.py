@@ -35,9 +35,11 @@ class Responses(LLMClient):
         return text, LLMUsage(model=model, input_tokens=10, output_tokens=10)
 
 
-SOURCE = 'def login(token):\n    return token\n'
-FINDING = dict(file='auth.py', line_start=1, line_end=2, evidence='return token',
-               severity='low', confidence=.8, title='Unchecked token', explanation='Check input trust')
+SOURCE = ('function login(userId) {\n'
+          "  return crypto.createHmac('sha256', process.env.KEY).update(userId);\n}")
+FINDING = dict(file='auth.ts', line_start=2, line_end=2, evidence='return crypto.createHmac',
+               severity='low', confidence=.8, title='HMAC used for password derivation',
+               explanation='Check input trust')
 
 
 def test_accounting_distinguishes_empty_unreadable_rejected_and_grouped():
@@ -45,7 +47,7 @@ def test_accounting_distinguishes_empty_unreadable_rejected_and_grouped():
     payload = [good, {**good, 'explanation': 'A second reading of this token claim'}, {}, None,
                {**good, 'evidence': 'absent source'}, {**good, 'confidence': 'nan'},
                {**good, 'severity': []}, {**good, 'fix_hint': 'No action needed'}]
-    result, stats = run_llm_scan(archive({'auth.py': SOURCE}), Responses([
+    result, stats = run_llm_scan(archive({'auth.ts': SOURCE}), Responses([
         ('free', '[]'), ('paid', 'not JSON'), ('paid', json.dumps(payload))]),
         rubrics=('auth',), passes=3)
     assert len(result) == 1
@@ -56,10 +58,10 @@ def test_accounting_distinguishes_empty_unreadable_rejected_and_grouped():
     assert paid['rejection_reasons'] == dict(missing_fields=1, not_an_object=1,
         source_quote_or_location_mismatch=1, invalid_confidence=1, invalid_severity=1, self_cancelled=1)
     originals = result[0].claim_evidence['grouped_originals']
-    assert [x['title'] for x in originals] == ['Unchecked token', 'Unchecked token']
+    assert [x['title'] for x in originals] == [FINDING['title'], FINDING['title']]
     assert originals[1]['explanation'] == 'A second reading of this token claim'
     assert all('evidence' not in x for x in originals)
-    manifest = scan_manifest(archive({'auth.py': SOURCE}).getvalue(), 'test', {}, vars(stats), None)
+    manifest = scan_manifest(archive({'auth.ts': SOURCE}).getvalue(), 'test', {}, vars(stats), None)
     assert 'invalid_responses' in manifest['limitations']
     rows = dict(manifest_rows({'scan_manifest': manifest}))
     assert 'valid empty: 1' in rows['Finding processing: free']
@@ -67,14 +69,14 @@ def test_accounting_distinguishes_empty_unreadable_rejected_and_grouped():
 
 
 def test_invalid_response_does_not_claim_rubric_was_applied():
-    _, stats = run_llm_scan(archive({'auth.py': SOURCE}), Responses([('free', 'oops')]), rubrics=('auth',))
+    _, stats = run_llm_scan(archive({'auth.ts': SOURCE}), Responses([('free', 'oops')]), rubrics=('auth',))
     assert stats.rubrics_ran == ()
     assert stats.invalid_responses == 1
     assert stats.calls == 1
 
 
 def test_group_counts_follow_the_representative_model_and_keep_other_model():
-    result, stats = run_llm_scan(archive({'auth.py': SOURCE}), Responses([
+    result, stats = run_llm_scan(archive({'auth.ts': SOURCE}), Responses([
         ('first', json.dumps([FINDING])),
         ('fallback', json.dumps([{**FINDING, 'severity': 'high'}]))]), rubrics=('auth',), passes=2)
     assert [(r['merged'], r['saved']) for r in stats.model_findings] == [(1, 0), (0, 1)]
