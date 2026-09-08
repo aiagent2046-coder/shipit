@@ -1,0 +1,7 @@
+{
+  "description": "Dependencies installed, not committed.",
+  "expect": [],
+  "forbid": [
+    "dependency-dir-committed"
+  ]
+}

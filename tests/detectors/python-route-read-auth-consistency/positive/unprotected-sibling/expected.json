@@ -1,0 +1,11 @@
+{
+  "description": "Local sibling uses an unprotected read; static evidence remains unverified.",
+  "expect": [
+    {
+      "rule_id": "python-route-read-auth-consistency",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}

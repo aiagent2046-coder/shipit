@@ -1,0 +1,10 @@
+{
+  "description": "A secret default baked into DDL.",
+  "expect": [
+    {
+      "rule_id": "sql-secret-assignment",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

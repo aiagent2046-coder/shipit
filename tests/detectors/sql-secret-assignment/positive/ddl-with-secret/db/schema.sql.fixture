@@ -1,0 +1,1 @@
+ALTER TABLE cfg ADD api_secret text := 'abcdefgh12345';

@@ -1,0 +1,10 @@
+{
+  "description": "A connection string carrying a literal password.",
+  "expect": [
+    {
+      "rule_id": "connection-string-password",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

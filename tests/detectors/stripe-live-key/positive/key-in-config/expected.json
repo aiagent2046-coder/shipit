@@ -1,0 +1,11 @@
+{
+  "description": "A live Stripe secret committed as a string literal.",
+  "expect": [
+    {
+      "rule_id": "stripe-live-key",
+      "severity": "critical",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

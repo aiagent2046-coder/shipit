@@ -80,6 +80,9 @@ async function parse<T>(res: Response): Promise<T> {
             "and nothing was started. Try again shortly, or email " +
             "support@drydock.co if it stays paused."
           : d.detail || d.reason || message;
+      if (d.reason === "duplicate_path") {
+        message = "The archive contains repeated file paths. Please create a fresh ZIP and try again.";
+      }
     } else if (typeof detail === "string") {
       message = detail;
     }

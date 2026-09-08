@@ -1,0 +1,7 @@
+{
+  "description": "app/global-error.tsx covers the root.",
+  "expect": [],
+  "forbid": [
+    "missing-error-boundary"
+  ]
+}

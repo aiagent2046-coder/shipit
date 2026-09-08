@@ -1,0 +1,10 @@
+{
+  "description": "Generic secret-shaped assignment of a long literal.",
+  "expect": [
+    {
+      "rule_id": "generic-assignment",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

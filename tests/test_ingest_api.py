@@ -183,6 +183,15 @@ def test_audit_intake_rejects_traversal_zip_with_reason():
     assert resp.json()["detail"]["reason"] == "unsafe_path"
 
 
+def test_audit_intake_rejects_duplicate_paths_before_queueing(audit_queue):
+    buf = make_zip({"package.json": NEXT_PKG, "src/config.ts": b"const x = 1",
+                    "src/./config.ts": b"const x = 2"})
+    resp = client.post("/v1/audits", files={"archive": ("app.zip", buf, "application/zip")})
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["reason"] == "duplicate_path"
+    assert audit_queue.rows == {}
+
+
 def test_audit_intake_accepts_a_stack_the_detector_does_not_recognise():
     """A repository outside Next.js / Vite / FastAPI is audited, not refused.
 

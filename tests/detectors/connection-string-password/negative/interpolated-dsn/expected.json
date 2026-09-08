@@ -1,0 +1,7 @@
+{
+  "description": "An interpolated DSN has no credential in the file -- by design it must NOT match (the pattern excludes $ { } < > %).",
+  "expect": [],
+  "forbid": [
+    "connection-string-password"
+  ]
+}

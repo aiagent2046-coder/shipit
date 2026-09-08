@@ -1,0 +1,7 @@
+{
+  "description": "The other authority/signature must not receive this classification.",
+  "expect": [],
+  "forbid": [
+    "supabase-anon-key"
+  ]
+}

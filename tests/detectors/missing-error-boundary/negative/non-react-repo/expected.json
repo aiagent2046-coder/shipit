@@ -1,0 +1,7 @@
+{
+  "description": "A non-React repo is out of scope, not 'clean'.",
+  "expect": [],
+  "forbid": [
+    "missing-error-boundary"
+  ]
+}

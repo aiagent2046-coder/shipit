@@ -1,0 +1,12 @@
+{
+  "description": "A committed .env holding a real DSN is the flagship critical.",
+  "expect": [
+    {
+      "rule_id": "env-file-committed",
+      "severity": "critical",
+      "file_endswith": ".env",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

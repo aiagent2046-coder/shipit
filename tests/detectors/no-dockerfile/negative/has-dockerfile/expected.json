@@ -1,0 +1,7 @@
+{
+  "description": "A Dockerfile exists.",
+  "expect": [],
+  "forbid": [
+    "no-dockerfile"
+  ]
+}

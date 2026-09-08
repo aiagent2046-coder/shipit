@@ -1,0 +1,10 @@
+{
+  "description": "The archive root identifies acme/project; compare with the deployed source.",
+  "expect": [
+    {
+      "rule_id": "ci-deploys-a-different-repository",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -435,21 +435,44 @@ def _mask(value: str) -> str:
     return f"{value[:4]}****({len(value)} chars)"
 
 
-def _iter_text_files(zf: zipfile.ZipFile) -> Iterator[tuple[str, str]]:
+def _iter_text_files(zf: zipfile.ZipFile, coverage: dict | None = None) -> Iterator[tuple[str, str]]:
+    if coverage is None:
+        coverage = {}
+    coverage.update(files_total=0, files_read=0, files_scanned=0, lossy_decoded_files=0, exclusions={})
+
+    def skip(reason: str) -> None:
+        counts = coverage["exclusions"]
+        counts[reason] = counts.get(reason, 0) + 1
+
     for info in zf.infolist():
         name = info.filename
-        if info.is_dir() or info.file_size > MAX_SCANNED_FILE_BYTES:
+        if info.is_dir():
+            continue
+        coverage["files_total"] += 1
+        if info.file_size > MAX_SCANNED_FILE_BYTES:
+            skip("file_size_limit")
             continue
         if stat.S_ISLNK(info.external_attr >> 16):
+            skip("symlink")
             continue
         if any(part in name for part in _SKIP_DIRS):
+            skip("excluded_directory")
             continue
         if name.lower().endswith(_SKIP_SUFFIXES):
+            skip("excluded_extension")
             continue
         data = zf.read(info)
+        coverage["files_read"] += 1
         if b"\x00" in data[:4096]:  # binary sniff
+            skip("binary_content")
             continue
-        yield name, data.decode("utf-8", errors="ignore")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            coverage["lossy_decoded_files"] += 1
+            text = data.decode("utf-8", errors="ignore")
+        coverage["files_scanned"] += 1
+        yield name, text
 
 
 # The Supabase CLI's local stack signs its tokens with the SAME secret for
@@ -738,7 +761,7 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     )
 
 
-def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]]:
+def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> Iterator[tuple[SecretFinding, str]]:
     """Like scan_secrets, but also yields the RAW matched text alongside
     each finding.
 
@@ -752,7 +775,7 @@ def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]
     """
     remaining = MAX_TOTAL_PYTHON_BYTES
     with zipfile.ZipFile(fileobj) as zf:
-        for name, text in _iter_text_files(zf):
+        for name, text in _iter_text_files(zf, coverage):
             regions = None
             for lineno, line in enumerate(text.splitlines(), start=1):
                 for rule in RULES:
@@ -778,5 +801,5 @@ def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]
                     )
 
 
-def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
-    return [finding for finding, _ in iter_secret_matches(fileobj)]
+def scan_secrets(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[SecretFinding]:
+    return [finding for finding, _ in iter_secret_matches(fileobj, coverage=coverage)]

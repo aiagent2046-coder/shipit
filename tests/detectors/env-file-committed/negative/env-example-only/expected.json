@@ -1,0 +1,7 @@
+{
+  "description": ".env.example with placeholders is documentation, not a leak.",
+  "expect": [],
+  "forbid": [
+    "env-file-committed"
+  ]
+}

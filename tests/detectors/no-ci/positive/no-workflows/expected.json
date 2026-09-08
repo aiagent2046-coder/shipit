@@ -1,0 +1,10 @@
+{
+  "description": "No CI workflow anywhere.",
+  "expect": [
+    {
+      "rule_id": "no-ci",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

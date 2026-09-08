@@ -1,0 +1,7 @@
+{
+  "description": "A short digit:colon string must not match the token pattern.",
+  "expect": [],
+  "forbid": [
+    "telegram-bot-token"
+  ]
+}

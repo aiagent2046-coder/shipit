@@ -1,0 +1,10 @@
+{
+  "description": "A JWT (not signed with a public demo secret) committed in source.",
+  "expect": [
+    {
+      "rule_id": "jwt-in-code",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

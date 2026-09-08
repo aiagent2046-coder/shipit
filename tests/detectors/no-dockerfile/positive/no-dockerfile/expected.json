@@ -1,0 +1,10 @@
+{
+  "description": "No Dockerfile or deploy manifest.",
+  "expect": [
+    {
+      "rule_id": "no-dockerfile",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

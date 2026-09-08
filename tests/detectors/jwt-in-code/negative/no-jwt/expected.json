@@ -1,0 +1,7 @@
+{
+  "description": "No token-shaped literal.",
+  "expect": [],
+  "forbid": [
+    "jwt-in-code"
+  ]
+}
