@@ -5,6 +5,7 @@ linked. This is source evidence, not a control-flow or concurrency proof.
 Never execute uploaded code or retain its string literals.
 """
 from collections import Counter
+import re
 import stat
 import zipfile
 
@@ -26,7 +27,8 @@ SCOPE = (
     "React async syntax, collected without LLM or code execution. Direct named async handlers in "
     "top-level named components; direct imported useState bindings; literal boolean setters, "
     "empty-string setters, simple state/empty-input return guards and native button onClick/disabled syntax only. "
-    "Source order and finally placement are observations, not full control-flow proofs. "
+    "Direct catch resets, awaited fetch calls and same-binding Response.ok branches are recorded. "
+    "Source order and try/catch/finally placement are observations, not full control-flow proofs. "
     "Indirect handlers, custom hooks/components, refs, all event entry points, runtime bindings, "
     "request idempotency and harmful outcomes are not verified. Missing observations do not prove "
     "missing protection. String values redacted; tests/vendor files excluded."
@@ -89,9 +91,11 @@ def _bindings(nodes):
                                       or node.child_by_field_name("parameter")))
         if node.type == "catch_clause":
             names.extend(_bound_names(node.child_by_field_name("parameter")))
-        if node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression"}:
+        if node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression",
+                         "for_in_statement"}:
             target = node.child_by_field_name("left") or node.child_by_field_name("argument")
-            # An assignment (including a namespace member write) makes linking unsafe.
+            # Loop targets can declare a shadow or write an existing binding.
+            # A namespace member write also makes linking unsafe.
             while target and target.type in {"member_expression", "subscript_expression"}:
                 target = target.child_by_field_name("object")
             names.extend(_bound_names(target))
@@ -208,7 +212,101 @@ def _controls(buttons, handler, valid_states, limits):
     return records
 
 
-def _handler_record(fn, name, component, path, states, controls, limits):
+def _catch_resets(nodes, setter, limits):
+    records = []
+    for stmt in nodes:
+        if stmt.type != "try_statement":
+            continue
+        caught = stmt.child_by_field_name("handler")
+        body = stmt.child_by_field_name("body")
+        parts = _children(caught.child_by_field_name("body")) if caught else []
+        for index, reset in enumerate(parts):
+            if not _literal_setter(reset, setter, "false"):
+                continue
+            records.append({"try_line": _line(body), "try_line_end": body.end_point[0] + 1,
+                            "catch_line": _line(caught), "reset_line": _line(reset),
+                            "first_statement": index == 0})
+            if len(records) >= MAX_ITEMS:
+                limits.add("items_per_handler_limit")
+                return records
+    return records
+
+
+def _http_checks(nodes, bindings, limits):
+    """Link direct awaited fetch results only; no aliases, wrappers or URL text."""
+    checks = []
+    for node in nodes:
+        if node.type != "await_expression":
+            continue
+        parts = _children(node)
+        if len(parts) != 1 or _call(parts[0])[0] != "fetch":
+            continue
+        parent = node.parent
+        response = (_name(parent.child_by_field_name("name"))
+                    if parent.type == "variable_declarator" else "")
+        if response and bindings[response] != 1:
+            limits.add("ambiguous_response_binding")
+            continue
+        stmt = parent.parent if response else parent
+        if (stmt.type not in {"lexical_declaration", "expression_statement"}
+                or stmt.parent.type != "statement_block"):
+            continue
+        branches = []
+        for sibling in _children(stmt.parent):
+            if not response or sibling.start_byte < stmt.end_byte or sibling.type != "if_statement":
+                continue
+            condition = _children(sibling.child_by_field_name("condition"))
+            expr = condition[0] if len(condition) == 1 else None
+            negated = (expr is not None and expr.type == "unary_expression"
+                       and _text(expr.child_by_field_name("operator")) == "!")
+            member = expr.child_by_field_name("argument") if negated else expr
+            if (member is None or member.type != "member_expression"
+                    or member.child_by_field_name("optional_chain")
+                    or _name(member.child_by_field_name("object")) != response
+                    or _text(member.child_by_field_name("property")) != "ok"):
+                continue
+            branch = sibling.child_by_field_name("consequence")
+            statements = _children(branch) if branch.type == "statement_block" else [branch]
+            exits = [s.type.removesuffix("_statement") for s in statements
+                     if s.type in {"throw_statement", "return_statement"}]
+            branches.append({"line": _line(sibling), "path": "http_error" if negated else "http_success",
+                             "direct_exits": exits[:MAX_ITEMS]})
+            if len(branches) >= MAX_ITEMS:
+                limits.add("items_per_handler_limit")
+                break
+        caught = None
+        ancestor = node.parent
+        while ancestor is not None and ancestor.type not in _SKIP:
+            if ancestor.type == "try_statement":
+                body = ancestor.child_by_field_name("body")
+                handler = ancestor.child_by_field_name("handler")
+                if handler and body.start_byte < node.start_byte < body.end_byte:
+                    caught = handler
+                    break
+            ancestor = ancestor.parent
+        checks.append({"kind": "react_async_http_response", "result": "observed", "line": _line(node),
+                       "response": response or None, "branches": branches,
+                       "rejection_catch_line": _line(caught) if caught else None,
+                       "summary": (f"Awaited fetch at line {_line(node)}. " +
+                                   (f"Response stored as {response}. " if response else
+                                    "Response is not assigned to a variable here. ") +
+                                   (f"Request rejection is inside try/catch at line {_line(caught)}. "
+                                    if caught else "No enclosing catch observed for this await. ") +
+                                   ("Response.ok branches: " + ", ".join(
+                                       f"{b['path']} at line {b['line']}" for b in branches) + ". "
+                                    if branches else "No supported same-response HTTP status branch observed. ")),
+                       "detail": "For standard fetch, request rejection can enter "
+                       "an enclosing catch; an HTTP error response does not itself reject. Response.ok separates "
+                       "2xx from other statuses. Missing branches mean not observed in this bounded check, "
+                       "not missing protection. Wrappers, global fetch replacement, response-body errors, "
+                       "branch reachability and UI success effects are not verified."})
+        if len(checks) >= MAX_ITEMS:
+            limits.add("items_per_handler_limit")
+            break
+    return checks
+
+
+def _handler_record(fn, name, component, path, states, controls, limits, fetch_unbound):
     body = fn.child_by_field_name("body")
     if not body or body.type != "statement_block":
         limits.add("unsupported_async_body")
@@ -239,11 +337,12 @@ def _handler_record(fn, name, component, path, states, controls, limits):
     for state, setter in states.items():
         before = [s for s in stmts if s.end_byte < first]
         raised = next((s for s in before if _literal_setter(s, setter, "true")), None)
-        if raised:
+        catches = _catch_resets(nodes, setter, limits)
+        if raised or catches:
             reset = next((s for s in stmts if s.start_byte > first and _literal_setter(s, setter, "false")), None)
             final_reset = None
             for stmt in stmts:
-                if stmt.type != "try_statement" or stmt.start_byte < raised.end_byte:
+                if not raised or stmt.type != "try_statement" or stmt.start_byte < raised.end_byte:
                     continue
                 final = stmt.child_by_field_name("finalizer")
                 final_body = final.child_by_field_name("body") if final else None
@@ -252,16 +351,27 @@ def _handler_record(fn, name, component, path, states, controls, limits):
                         and all(stmt.start_byte < a.start_byte < final.start_byte for a in awaits)):
                     final_reset = parts[0]
             checks.append({"kind": "react_async_state_reset", "result": "observed", "state": state,
-                           "set_true_line": _line(raised),
+                           "set_true_line": _line(raised) if raised else None,
                            "direct_reset_line": _line(reset) if reset else None,
                            "finally_reset_line": _line(final_reset) if final_reset else None,
-                           "detail": ("State is set true before await. " +
+                           "catch_resets": catches,
+                           "summary": " ".join(
+                               f"Catch at line {r['catch_line']} encloses try lines "
+                               f"{r['try_line']}–{r['try_line_end']} and contains a {state}=false setter "
+                               f"at line {r['reset_line']} "
+                               + ("as its first statement." if r['first_statement'] else
+                                  "after earlier statements that may throw.") for r in catches) +
+                               (" A missing finally alone does not establish missing error cleanup."
+                                if catches else ""),
+                           "detail": (("State is set true before await. " if raised else "") +
                                       ("A direct false reset follows await; a propagating rejection may bypass it. "
                                        if reset and not final_reset else "") +
                                       ("A try/finally encloses the recorded awaits and starts its finally "
                                        "with a false reset. " if final_reset else
                                        "No supported finally reset enclosing all recorded awaits observed. ") +
-                                      "Other exits, catches, setter effects and UI consequences not verified.")})
+                                      "Catch reset locations describe only direct statements in the listed catch, "
+                                      "not all error paths. Earlier catch statements may throw; nested or conditional "
+                                      "cleanup, setter effects and UI consequences are not verified.")})
         cleared = next((s for s in before if _call(s)[0] == setter and len(_call(s)[1]) == 1
                         and _call(s)[1][0].type == "string" and _text(_call(s)[1][0]) in {"''", '""'}), None)
         if cleared:
@@ -272,6 +382,8 @@ def _handler_record(fn, name, component, path, states, controls, limits):
                            "detail": "Direct empty-string setter before await; listed buttons use the same state's "
                            "empty check and handler spelling. React rendering, other entry points and "
                            "duplicate request prevention are not verified."})
+    if fetch_unbound:
+        checks.extend(_http_checks(nodes, _bindings(list(_walk(fn))), limits))
     if not checks and not controls:
         return None
     if len(checks) > MAX_ITEMS or len(awaits) > MAX_ITEMS:
@@ -282,7 +394,11 @@ def _handler_record(fn, name, component, path, states, controls, limits):
 
 
 def _file_records(root, path, nodes, limits):
-    hooks, namespaces = _imports(root, _bindings(nodes))
+    file_bindings = _bindings(nodes)
+    hooks, namespaces = _imports(root, file_bindings)
+    fetch_unbound = not file_bindings["fetch"] and not any(
+        n.type == "identifier" and _name(n) == "fetch"
+        for stmt in root.named_children if stmt.type == "import_statement" for n in _walk(stmt))
     attempted = 0
     for component, fn in _definitions(root):
         body = fn.child_by_field_name("body")
@@ -332,7 +448,7 @@ def _file_records(root, path, nodes, limits):
                 limits.add("ambiguous_handler_binding")
                 continue
             controls = _controls(buttons[:MAX_BUTTONS], name, states, limits)
-            record = _handler_record(handler, name, component, path, states, controls, limits)
+            record = _handler_record(handler, name, component, path, states, controls, limits, fetch_unbound)
             if record:
                 yield record
 
@@ -409,3 +525,30 @@ def react_async_finding_context(finding, facts):
     if len(matches) != 1:
         return []
     return [{"kind": "react_async_context", "result": "observed", **matches[0], "detail": SCOPE}]
+
+
+def react_async_syntax_check(finding, facts):
+    """Only a complete, atomic absence title can be dismissed by presence.
+
+    A catch reset does not refute stuck-state, navigation or concurrency claims.
+    Model prose and fix suggestions never supply the evidence for this verdict.
+    """
+    match = re.fullmatch(r"([A-Za-z_$][\w$]*)(?:\(\))? has no catch reset for ([A-Za-z_$][\w$]*)[.]?",
+                         str(finding.get("title", "")))
+    if not match:
+        return None
+    result = {"kind": "react_async_catch_reset", "result": "not_checked",
+              "claim": "The named handler contains no direct catch reset for the named state.",
+              "detail": "No unambiguous supported catch reset observed; absence is not established."}
+    contexts = react_async_finding_context(finding, facts or {})
+    if not contexts or contexts[0]["scope"].rsplit(".", 1)[-1] != match[1]:
+        return result
+    resets = [r for c in contexts[0]["checks"] if c.get("kind") == "react_async_state_reset"
+              and c.get("state") == match[2] for r in c.get("catch_resets", [])]
+    if resets:
+        reset = resets[0]
+        result.update(result="contradicted", line_start=reset["catch_line"], line_end=reset["reset_line"],
+                      detail="A direct false setter for that state is present in this handler's catch. "
+                      "This contradicts absence only. Earlier catch statements may throw; reaching the reset, "
+                      "other error paths and UI recovery are not proven.")
+    return result

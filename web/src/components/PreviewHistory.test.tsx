@@ -81,3 +81,28 @@ it("shows an unavailable free-model stage explicitly", () => {
   } }} />);
   expect(screen.getByText(/Free audit unavailable: paid_job_cost_cap/)).toBeTruthy();
 });
+
+it("keeps the free original alongside readable counterevidence and a contradicted absence", () => {
+  const original: Finding = { rule_id: "llm-web", source: "llm", title: "send() has no catch reset for busy",
+    file: "src/Page.tsx", line: 5, category: "Frontend", severity: "medium", confidence: .8,
+    explanation: "Original free claim <script>unsafe</script>", fix_hint: "Original free fix",
+    claim_evidence: { version: 1, source_check: { kind: "not_recorded" }, observation: null,
+      required_conditions: null, conditions_status: "not_checked", consequence_status: "not_checked",
+      syntax_check: { kind: "react_async_catch_reset", result: "contradicted",
+      claim: "The handler has no catch reset.", detail: "A direct reset is present. UI recovery is not proven." },
+    context_checks: [{ kind: "react_async_context", scope: "Page.send", checks: [{
+      summary: "Catch at line 10 contains a busy=false setter at line 12.",
+      detail: "Earlier statements may throw." }] }] } };
+  const before = JSON.stringify(original);
+  render(<PreviewHistory score={{ total: 0, categories: {}, free_baseline: {
+    version: 1, origin: "included", status: "completed", findings: [original],
+    score: { total: 0, categories: {}, basis: "static+preview" },
+  } }} />);
+  const section = screen.getByRole("region", { name: "Included free audit" });
+  expect(section.textContent).toContain("Original free claim <script>unsafe</script>");
+  expect(section.textContent).toContain("Original free fix");
+  expect(section.textContent).toContain("Catch at line 10 contains a busy=false setter");
+  expect(section.textContent).toContain("Syntax premise contradicted");
+  expect(section.querySelector("script")).toBeNull();
+  expect(JSON.stringify(original)).toBe(before);
+});

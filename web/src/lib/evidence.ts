@@ -74,6 +74,14 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
     rows.push([labels[syntax.result] ?? labels.not_checked, `${syntax.claim} ${syntax.detail}${location}`]);
   }
   for (const context of record?.context_checks ?? []) {
+    if (context.kind === "react_async_context" && Array.isArray(context.checks)) {
+      for (const item of context.checks) {
+        if (item && typeof item.summary === "string" && item.summary) {
+          rows.push(["React error-path evidence — compare with the model claim",
+            `${context.scope ?? ""}: ${item.summary} ${item.detail ?? ""}`]);
+        }
+      }
+    }
     rows.push(["Deterministic context check", JSON.stringify(context)]);
   }
   for (const [i, original] of (record?.grouped_originals ?? []).entries()) {
