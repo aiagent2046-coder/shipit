@@ -1,0 +1,7 @@
+{
+  "description": "A remote distinct password must not receive the local/demo classification.",
+  "expect": [],
+  "forbid": [
+    "connection-string-dev-password"
+  ]
+}

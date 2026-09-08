@@ -1,0 +1,10 @@
+{
+  "description": "A virtualenv committed to the repo (>= 20 tracked files threshold).",
+  "expect": [
+    {
+      "rule_id": "dependency-dir-committed",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

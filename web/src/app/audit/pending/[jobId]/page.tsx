@@ -30,6 +30,8 @@ function humanError(code: string | null): string {
     // the scan does depends on the value. Left unmapped rather than reworded,
     // so if it ever reappears it gets the generic message above instead of a
     // sentence that is no longer true.
+    case "duplicate_path":
+      return "The archive contains repeated file paths. Please create a fresh ZIP and try again.";
     case "zip_bomb":
     case "too_large":
     case "bad_archive":

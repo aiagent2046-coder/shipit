@@ -1,0 +1,10 @@
+{
+  "description": "No test file anywhere in the tree.",
+  "expect": [
+    {
+      "rule_id": "no-tests",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

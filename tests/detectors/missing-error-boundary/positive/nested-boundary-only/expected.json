@@ -1,0 +1,10 @@
+{
+  "description": "An error.tsx buried in a route segment does NOT cover the root (tightened 2026-09-04).",
+  "expect": [
+    {
+      "rule_id": "missing-error-boundary",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

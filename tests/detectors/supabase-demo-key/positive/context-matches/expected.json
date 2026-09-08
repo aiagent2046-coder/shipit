@@ -1,0 +1,10 @@
+{
+  "description": "Synthetic token with the role/signature required by this classification.",
+  "expect": [
+    {
+      "rule_id": "supabase-demo-key",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

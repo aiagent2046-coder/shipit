@@ -1,0 +1,11 @@
+{
+  "description": "Next.js app router with no error boundary above the routes.",
+  "expect": [
+    {
+      "rule_id": "missing-error-boundary",
+      "severity": "high",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,11 @@
+{
+  "description": "A committed .env with no credential-shaped value is medium, not critical -- the contents contradict the exposure claim.",
+  "expect": [
+    {
+      "rule_id": "env-file-committed",
+      "severity": "medium",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

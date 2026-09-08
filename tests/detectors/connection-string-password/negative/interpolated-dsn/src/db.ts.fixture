@@ -1,0 +1,1 @@
+const url = "postgres://u:${DB_PASSWORD}@db.example.com:5432/prod" // scan-allow: interpolation, no password literal

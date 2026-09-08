@@ -1,0 +1,10 @@
+{
+  "description": "Telegram bot token committed in source.",
+  "expect": [
+    {
+      "rule_id": "telegram-bot-token",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

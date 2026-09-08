@@ -150,7 +150,7 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
     """Validate an uploaded ZIP without extracting it.
 
     Raises ArchiveValidationError with one of the reasons:
-      too_large, not_a_zip, too_many_files, unsafe_path, zip_bomb.
+      too_large, not_a_zip, too_many_files, unsafe_path, duplicate_path, zip_bomb.
     Symlink entries are skipped and counted, never extracted.
     """
     if size_bytes > MAX_ARCHIVE_BYTES:
@@ -198,7 +198,15 @@ def validate_zip(fileobj: BinaryIO, size_bytes: int) -> ArchiveReport:
 
         total_uncompressed = 0
         symlink_count = 0
+        paths: dict[str, bool] = {}
         for info in infos:
+            # Different readers can select different entries with the same
+            # path. Reject ambiguity before any scanner or extractor chooses
+            # one; identical duplicates also inflate findings and scores.
+            path = str(PurePosixPath(info.filename.replace("\\", "/")))
+            if path in paths and not (info.is_dir() and paths[path]):
+                raise ArchiveValidationError("duplicate_path", info.filename)
+            paths[path] = info.is_dir()
             if _is_symlink(info):
                 # Legit repos contain symlinks (seen in real GitHub zipballs).
                 # We never extract to disk, so skipping is safe; extraction

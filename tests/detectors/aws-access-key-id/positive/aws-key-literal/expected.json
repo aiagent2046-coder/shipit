@@ -1,0 +1,11 @@
+{
+  "description": "AWS access key id committed in source.",
+  "expect": [
+    {
+      "rule_id": "aws-access-key-id",
+      "severity": "critical",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

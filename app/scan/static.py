@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import BinaryIO
 
+from app.ingest.validators import validate_zip
 from app.scan.auth_read import scan_auth_read
 from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import run_checks
@@ -26,10 +27,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     that use it directly (the tests, and anything added later) must not be
     handed a number computed on a premise this function contradicts.
     """
+    # Direct callers must meet the same input contract as uploads and jobs.
+    # Otherwise repeated ZIP entries can create repeated score penalties.
+    size = fileobj.seek(0, 2)
+    validate_zip(fileobj, size_bytes=size)
     findings: list[ScoredFinding] = []
 
     fileobj.seek(0)
-    for s in scan_secrets(fileobj):
+    secrets_coverage: dict = {}
+    for s in scan_secrets(fileobj, coverage=secrets_coverage):
         findings.append(ScoredFinding(
             rule_id=s.rule_id, title=s.title, severity=s.severity,
             confidence=s.confidence, category="Security",
@@ -102,7 +108,19 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
 
     fileobj.seek(0)
     source_facts = collect_source_facts(fileobj)
+    exclusion_labels = {"file_size_limit": "over the 1 MiB file limit", "symlink": "symbolic links",
+                        "excluded_directory": "dependency/build directories",
+                        "excluded_extension": "excluded file types", "binary_content": "binary content"}
+    excluded = ", ".join(f"{count} {exclusion_labels[reason]}"
+                         for reason, count in sorted(secrets_coverage.get("exclusions", {}).items())) or "none"
+    secrets_scope = (
+        f"{secrets_coverage.get('files_scanned', 0)}/{secrets_coverage.get('files_total', 0)} files scanned; "
+        f"excluded: {excluded}; "
+        f"files with invalid UTF-8 bytes omitted: {secrets_coverage.get('lossy_decoded_files', 0)}. "
+        "Exclusions are outside this check; no finding does not establish that excluded content is safe."
+    )
     return {
+        "secrets_coverage": secrets_coverage,
         "source_facts": source_facts,
         # llm_ran=False, not the default: no LLM stage runs inside this
         # function, so Auth and Money & Data sit at 10.0 for want of a
@@ -140,7 +158,8 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # the follow-up; here it is preserved so it can be.
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency"],
-        "coverage": {"error_boundary": boundary.coverage,
+        "coverage": {"secrets": secrets_scope,
+                     "error_boundary": boundary.coverage,
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
                      "test/vendor files excluded; middleware and runtime access not resolved"},
     }

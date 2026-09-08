@@ -43,3 +43,10 @@ it("does not attach quota advice to a different error", async () => {
   submitWithResponse(503, "600", "service_unavailable");
   expect((await screen.findByRole("alert")).textContent).not.toContain("Try again after");
 });
+
+it("explains a duplicate-path rejection without retrying the upload", async () => {
+  submitWithResponse(422, undefined, "duplicate_path");
+  expect((await screen.findByRole("alert")).textContent).toContain("archive contains repeated file paths");
+  expect(push).not.toHaveBeenCalled();
+  expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+});

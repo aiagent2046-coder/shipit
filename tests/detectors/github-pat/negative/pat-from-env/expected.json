@@ -1,0 +1,7 @@
+{
+  "description": "Env read, no literal.",
+  "expect": [],
+  "forbid": [
+    "github-pat"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "description": "A GitHub Actions workflow exists.",
+  "expect": [],
+  "forbid": [
+    "no-ci"
+  ]
+}
