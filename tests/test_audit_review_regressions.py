@@ -93,7 +93,8 @@ def test_policy_prerequisites_are_visible_before_original_client_change_advice()
     policy = next(c for c in checks if c["kind"] == "rls_recommendation_context")
     assert policy["required_commands"] == ["INSERT"]
     assert policy["missing_command_declarations"] == ["INSERT"]
-    assert finding["fix_hint"] == claim["fix_hint"]
+    assert finding["fix_hint"].startswith("Before changing")
+    assert finding["claim_evidence"]["recommendation_check"]["original_fix_hint"] == claim["fix_hint"]
     html = render_report(result)
     assert html.index("SELECT policies alone do not authorize writes") < html.index(claim["fix_hint"])
     assert "Policy prerequisites — review before changing clients" in html

@@ -73,6 +73,13 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
     const location = syntax.line_start ? ` Checked source lines ${syntax.line_start}–${syntax.line_end}.` : "";
     rows.push([labels[syntax.result] ?? labels.not_checked, `${syntax.claim} ${syntax.detail}${location}`]);
   }
+  for (const premise of record?.premise_checks ?? []) {
+    const location = premise.source_line_start
+      ? ` Target ${premise.target}, source lines ${premise.source_line_start}–${premise.source_line_end}.` : "";
+    rows.push([premise.result === "contradicted"
+      ? "Atomic premise contradicted — other claims remain unverified" : "Atomic premise not checked",
+    `${premise.claim} ${premise.detail}${location}`]);
+  }
   const contextLabels: Record<string, string> = {
     guard_context: "Existing guard evidence — compare with the model claim",
     cost_context: "Cost and ordering evidence — compare with the model claim",
@@ -99,6 +106,11 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
       }
     }
     rows.push(["Deterministic context check", JSON.stringify(context)]);
+  }
+  const recommendation = record?.recommendation_check;
+  if (recommendation) {
+    rows.push(["Recommendation prerequisites", recommendation.detail]);
+    rows.push(["Superseded original recommendation — do not apply without review", recommendation.original_fix_hint]);
   }
   for (const [i, original] of (record?.grouped_originals ?? []).entries()) {
     rows.push([`Grouped original ${i + 1} — not independent confirmation`, JSON.stringify(original)]);

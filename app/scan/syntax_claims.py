@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast as py_ast
 import re
+import stat
 import zipfile
 from bisect import bisect_right
 from typing import BinaryIO
@@ -38,7 +39,8 @@ _CLAIMS = {
 
 
 def _result(kind: str, result: str, detail: str, **location) -> dict:
-    return {"kind": kind, "result": result, "claim": _CLAIMS.get(kind, "Unsupported syntax claim."),
+    from app.scan.atomic_claims import KINDS
+    return {"kind": kind, "result": result, "claim": _CLAIMS.get(kind, KINDS.get(kind, "Unsupported syntax claim.")),
             "detail": detail, **location}
 
 
@@ -50,8 +52,66 @@ class SyntaxVerifier:
         self.source_facts = source_facts
         self.remaining = MAX_PARSE_BYTES
         self.checks = 0
+        self._premise_cache = {}
+
+    def premise_checks(self, finding: dict) -> list[dict]:
+        from app.scan.atomic_claims import requests
+        return [self._premise_check(finding.get("file"), {
+            **request, "anchor_line_start": finding.get("line_start"), "anchor_line_end": finding.get("line_end")
+        }) for request in requests(finding)]
+
+    def _premise_check(self, path, request):
+        from app.scan.atomic_claims import check_source, unknown
+        if (not isinstance(path, str) or type(request.get("line_start")) is not int
+                or type(request.get("line_end")) is not int
+                or type(request.get("anchor_line_start", 1)) is not int
+                or type(request.get("anchor_line_end", 1)) is not int):
+            return unknown(request, "Invalid path or coordinates.")
+        key = (path, request["kind"], request.get("target"), request.get("line_start"), request.get("line_end"),
+               request.get("anchor_line_start"), request.get("anchor_line_end"))
+        if key in self._premise_cache:
+            return self._premise_cache[key]
+        result = unknown(request)
+        if (not isinstance(path, str) or self.checks >= MAX_CHECKS):
+            return unknown(request, "Unsupported path or per-audit check budget exhausted.")
+        self.checks += 1
+        try:
+            with zipfile.ZipFile(self.archive) as archive:
+                matches = [i for i in archive.infolist() if i.filename == path]
+                if (len(matches) != 1 or matches[0].is_dir()
+                        or stat.S_ISLNK(matches[0].external_attr >> 16)):
+                    return unknown(request, "Source file missing or ambiguous.")
+                info = matches[0]
+                if info.file_size > min(MAX_FILE_BYTES, self.remaining):
+                    return unknown(request, "Source byte budget exhausted.")
+                self.remaining -= info.file_size
+                data = archive.read(info)
+            data.decode("utf-8", errors="strict")
+            result = check_source(data, path, request)
+        except (UnicodeError, ValueError, TypeError, RecursionError, RuntimeError, OSError, zipfile.BadZipFile):
+            result = unknown(request, "Source could not be parsed within this check's scope.")
+        self._premise_cache[key] = result
+        return result
 
     def check(self, finding: dict) -> dict:
+        from app.scan.atomic_claims import title_kind
+        kind = title_kind(str(finding.get("title", "")))
+        if kind:
+            raw_premises = finding.get("premises")
+            if (isinstance(raw_premises, list) and (len(raw_premises) > 1 or any(
+                    isinstance(p, dict) and p.get("kind") != kind for p in raw_premises))):
+                return _result(kind, "not_checked", "Multiple or different premises are attached; "
+                               "a partial counterexample does not dismiss the narrative.")
+            if re.search(r"\b(?:separately|additionally|another issue|independent(?:ly)? of)\b",
+                         str(finding.get("explanation", ""))[:16000], re.I):
+                return _result(kind, "not_checked", "The narrative mentions a separate concern; "
+                               "only individual premise checks are applied.")
+            # Whole-finding disposition uses the finding's own coordinates;
+            # model-selected targets elsewhere cannot dismiss its narrative.
+            request = {"kind": kind, "target": "", "line_start": finding.get("line_start"),
+                       "line_end": finding.get("line_end"), "anchor_line_start": finding.get("line_start"),
+                       "anchor_line_end": finding.get("line_end")}
+            return self._premise_check(finding.get("file"), request)
         from app.scan.react_async_context import react_async_syntax_check
         from app.scan.guard_context import guard_syntax_check
         async_check = react_async_syntax_check(finding, self.source_facts)

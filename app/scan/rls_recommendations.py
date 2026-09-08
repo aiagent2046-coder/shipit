@@ -4,6 +4,7 @@ Migration text is evidence about committed declarations, never deployed policy
 state or authorization. No SQL, JavaScript, or uploaded expression is executed.
 """
 from bisect import bisect_left
+from dataclasses import replace
 from collections import defaultdict
 import re
 import stat
@@ -15,6 +16,8 @@ from tree_sitter import Language, Parser
 import tree_sitter_typescript
 
 from app.scan.secrets import is_non_production_path
+from app.scan.claim_evidence import static_claim_evidence
+from app.scan.checks import archive_root
 
 MAX_FILE_BYTES = 512_000
 MAX_TOTAL_BYTES = 4_000_000
@@ -34,6 +37,7 @@ SCOPE = (
 )
 _WRITE_COMMANDS = {"insert": ("INSERT",), "update": ("UPDATE",), "delete": ("DELETE",),
                    "upsert": ("INSERT", "UPDATE")}
+_QUERY_COMMANDS = {**_WRITE_COMMANDS, "select": ("SELECT",)}
 _ALL_COMMANDS = {"SELECT", "INSERT", "UPDATE", "DELETE"}
 _EXCLUDED = {"vendor", "node_modules", "venv", ".venv", "archive", "archived", "test", "tests",
              "__tests__", "fixtures", "__fixtures__", "examples", "example", "docs", "spec", "specs"}
@@ -160,7 +164,7 @@ def _operations(source, path, limits):
             limits.add("js_node_budget_reached")
             break
         call = _member_call(node)
-        if not call or call[0] not in _WRITE_COMMANDS:
+        if not call or call[0] not in _QUERY_COMMANDS:
             continue
         operation, receiver, _ = call
         # Only direct .from(literal).write() chains, not aliased builders.
@@ -179,7 +183,7 @@ def _operations(source, path, limits):
         result.append({"file": path, "line": node.start_point[0] + 1,
                        "line_end": node.end_point[0] + 1, "table": table, "schema": schema,
                        "schema_basis": "explicit_schema_call" if schema_call else "conditional_default_public",
-                       "operation": operation.upper(), "required_commands": list(_WRITE_COMMANDS[operation])})
+                       "operation": operation.upper(), "required_commands": list(_QUERY_COMMANDS[operation])})
         if len(result) >= MAX_RECORDS:
             limits.add("operation_limit_reached")
             break
@@ -192,6 +196,7 @@ def collect_rls_recommendations(fileobj):
     limits = set()
     used = attempted = parsed = excluded = 0
     with zipfile.ZipFile(fileobj) as archive:
+        export_root = archive_root(archive.namelist())
         for info in sorted(archive.infolist(), key=lambda i: i.filename):
             path = info.filename
             parts = path.split("/")
@@ -276,31 +281,31 @@ def collect_rls_recommendations(fileobj):
         evidence = history + unqualified
         if len(evidence) > MAX_REFERENCES:
             record_limits.append("policy_reference_limit")
-        records.append({"kind": "rls_write_recommendation", **operation,
+        records.append({"kind": "rls_operation_recommendation", **operation,
                         "sequence_status": "declared_filename_sequence" if complete else "incomplete_or_ambiguous",
                         "commands_in_declared_sequence": sorted(commands) if complete else None,
                         "missing_command_declarations": sorted(set(operation["required_commands"]) - commands)
                         if complete else None,
                         "policy_history": evidence[-MAX_REFERENCES:], "limitations": record_limits})
-    return {"scope": SCOPE, "records": records, "parsed_files": parsed, "checked_files": attempted,
+    return {"scope": SCOPE, "archive_root": export_root, "records": records, "parsed_files": parsed,
+            "checked_files": attempted,
             "migration_files": len(migrations), "excluded_files": excluded, "limitations": sorted(limits)}
 
 
 def rls_recommendation_context(finding, facts):
     """Contextualize a client-change suggestion; never dismiss the finding."""
-    advice = str(finding.get("fix_hint", ""))[:16000]
-    text = " ".join(str(finding.get(k, "")) for k in ("title", "explanation", "observation", "fix_hint"))[:32000]
-    if (not re.search(r"service[\s_-]*role", text, re.I)
-            or not re.search(r"\b(?:anon(?:ymous)?(?:[ -]key)?|user[ -]scoped)\b", advice, re.I)
-            or not re.search(r"\b(?:use|switch|replace|client|jwt|bearer)\b", advice, re.I)):
+    if not is_client_change(finding):
         return []
     contexts = []
-    for record in (facts.get("rls_recommendations") or {}).get("records", []):
-        if record["file"] != finding.get("file"):
+    index = facts.get("rls_recommendations") or {}
+    export_root = index.get("archive_root", "")
+    for record in index.get("records", []):
+        relative = record["file"][len(export_root):] if export_root else record["file"]
+        if finding.get("file") not in {record["file"], relative}:
             continue
         contexts.append({"kind": "rls_recommendation_context", "result": "observed", **{
             k: v for k, v in record.items() if k != "kind"},
-            "summary": "A literal-table write chain is present in the cited file. Before replacing a "
+            "summary": "A literal-table query chain is present in the cited file. Before replacing a "
             "service-role client with a caller-scoped client, check applicable INSERT/UPDATE/DELETE policies "
             "for the recorded operation. SELECT policies alone do not authorize writes. Declarations for "
             "a command do not prove that their roles, predicates or grants permit this request.",
@@ -308,3 +313,44 @@ def rls_recommendation_context(finding, facts):
         if len(contexts) >= 8:
             break
     return contexts
+
+
+def is_client_change(finding):
+    advice = str(finding.get("fix_hint", ""))[:16000]
+    text = " ".join(str(finding.get(k, "")) for k in ("title", "explanation", "observation", "fix_hint"))[:32000]
+    return bool(re.search(r"service[\s_-]*role", text, re.I)
+                and re.search(r"\b(?:anon(?:ymous)?(?:[ -]key)?|user[ -]scoped|caller[ -]scoped)\b", advice, re.I)
+                and re.search(r"\b(?:use|switch|replace|client|jwt|bearer)\b", advice, re.I))
+
+
+def prepare_recommendation(finding, facts):
+    """Replace client-switch advice with explicit prerequisites for either producer.
+
+    The original stays in evidence, labelled as superseded. Even complete SQL
+    declarations are insufficient to authorize a request in the deployed DB.
+    """
+    raw = vars(finding)
+    if not is_client_change(raw):
+        return finding
+    contexts = rls_recommendation_context(raw, facts)
+    operations = sorted({(c["schema"], c["table"], c["operation"]) for c in contexts})
+    targets = "; ".join(f"{schema}.{table}: {operation}" for schema, table, operation in operations)
+    hint = ("Before changing the database client, verify caller authentication, intended ownership and "
+            "every affected SELECT/INSERT/UPDATE/DELETE operation. ")
+    if targets:
+        hint += "Recorded operation targets: " + targets + ". "
+    else:
+        hint += "Affected operation targets were not resolved by this bounded source check. "
+    hint += ("Check applied migrations, grants, policy commands, roles and USING/WITH CHECK predicates "
+             "with the caller's JWT. SELECT policies alone do not authorize writes, and source declarations "
+             "do not prove deployed permissions. Add or adjust the required policies and verify both allowed "
+             "and denied requests before switching user-owned operations to an anon-key client with the "
+             "caller's JWT. Keep intentional cross-user operations in authenticated, explicitly authorized "
+             "administrative handlers.")
+    evidence = finding.claim_evidence or static_claim_evidence()
+    existing = list(evidence.get("context_checks", []))
+    existing.extend(c for c in contexts if c not in existing)
+    return replace(finding, fix_hint=hint, claim_evidence={**evidence, "context_checks": existing,
+        "recommendation_check": {"result": "prerequisites_required", "original_fix_hint": finding.fix_hint,
+                                 "detail": "Original client-change advice is superseded by the conditional "
+                                           "recommendation below. Deployed authorization is not verified."}})

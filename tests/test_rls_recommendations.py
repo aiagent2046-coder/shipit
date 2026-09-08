@@ -183,7 +183,7 @@ db.from(`agent_context`).delete();
 db.from('agent_context').select('*');
 '''
     facts = collect_rls_recommendations(archive({"app/route.ts": code}))
-    assert facts["records"] == []
+    assert [r["operation"] for r in facts["records"]] == ["SELECT"]
     assert "dynamic_or_unsupported_table" in facts["limitations"]
 
 
@@ -223,3 +223,32 @@ def test_budget_is_reported_and_not_silent(monkeypatch):
     facts = collect(policy("SELECT"))
     assert "scan_budget_reached" in facts["limitations"]
     assert facts["records"][0]["missing_command_declarations"] is None
+
+
+def test_select_operation_records_read_command_without_write_permission_claim():
+    result = collect(policy("SELECT"), "select")["records"][0]
+    assert result["required_commands"] == ["SELECT"]
+    assert result["missing_command_declarations"] == []
+
+
+def test_client_switch_advice_is_replaced_and_original_retained():
+    from app.scan.rls_recommendations import prepare_recommendation
+    from app.scan.scoring import ScoredFinding
+    raw = recommendation()
+    original = ScoredFinding(rule_id="llm-auth", category="Auth", severity="high", confidence=1,
+                             **raw)
+    fixed = prepare_recommendation(original, {"rls_recommendations": collect(policy("SELECT"))})
+    assert fixed.fix_hint.startswith("Before changing")
+    assert "public.agent_context: INSERT" in fixed.fix_hint
+    assert "SELECT policies alone do not authorize writes" in fixed.fix_hint
+    assert fixed.claim_evidence["recommendation_check"]["original_fix_hint"] == original.fix_hint
+
+
+def test_unresolved_operations_still_require_validation_before_switch():
+    from app.scan.rls_recommendations import prepare_recommendation
+    from app.scan.scoring import ScoredFinding
+    original = ScoredFinding(rule_id="service-role", category="Auth", severity="high", confidence=1,
+                             **recommendation())
+    fixed = prepare_recommendation(original, {})
+    assert "targets were not resolved" in fixed.fix_hint
+    assert fixed.claim_evidence["source_check"] == {"kind": "static_rule"}

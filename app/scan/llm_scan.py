@@ -23,6 +23,7 @@ from app.llm.client import LLMClient, LLMError
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan.syntax_claims import SyntaxVerifier
 from app.scan.premise_context import finding_context
+from app.scan.rls_recommendations import prepare_recommendation
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
@@ -657,6 +658,8 @@ SYSTEM_PROMPT = (
     "\"confidence\": float 0..1, \"title\": str, \"explanation\": str, "
     "\"observation\": str (your reading of the cited code, without claiming harm), "
     "\"required_conditions\": array of strings (conditions needed for the claimed harm), "
+    "\"premises\": array of {\"kind\": str, \"target\": local identifier, "
+    "\"line_start\": int, \"line_end\": int}, "
     "\"fix_hint\": str, \"category\": one of "
     + "|".join(f"\"{c}\"" for c in RUBRIC_CATEGORIES)
     + "}. Set \"category\" from what the FINDING IS, not from the review you "
@@ -673,6 +676,12 @@ SYSTEM_PROMPT = (
     "A public API URL or NEXT_PUBLIC_ prefix alone is not a secret leak. "
     "For access control, distinguish intended operator privileges from user "
     "ownership; show how an unauthorized caller could cross that boundary. "
+    "Keep each finding about one cause; separate independent causes even at the same line. "
+    "Use premises to identify specific source claims separately from the narrative. Supported kinds: "
+    "http_status_guard_absent, json_rejection_uncaught, intl_catch_absent, "
+    "required_nested_objects_absent, query_limit_unbounded. Supply the response/schema/clamped "
+    "binding and its source coordinates; use an empty array for unsupported premises. "
+    "These selectors do not verify anything; never assign a premise a verification status. "
     "Write \"fix_hint\" as a verification step followed by a conditional fix. "
     "Existing checks are evidence: trace the guarded operation, clamp, schema rejection "
     "and imported helper before reporting a missing control. Do not infer weak entropy "
@@ -1450,7 +1459,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                       stats.recategorised += 1
                       origin = category
                   category = declared
-              findings.append(ScoredFinding(
+              findings.append(prepare_recommendation(ScoredFinding(
                   rule_id=f"llm-{rubric}",
                   title=clip(str(f["title"]), 200),
                   severity=severity,
@@ -1467,8 +1476,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   claim_evidence={**model_claim_evidence(f, files_by_name),
                                   "producer": {"model": usage.model, "response": stats.calls, "rubric": rubric},
                                   "syntax_check": syntax_verifier.check(f),
+                                  "premise_checks": syntax_verifier.premise_checks(f),
                                   "context_checks": finding_context(f, source_facts)},
-              ))
+              ), source_facts))
           # After the findings are in, not before the call: a rubric counts as
           # examined once its answer has been read, so a category is never
           # scored on the strength of a prompt whose reply never arrived.
