@@ -171,7 +171,7 @@ def _f(**kw):
     return ScoredFinding(**base)
 
 
-def test_two_rubrics_on_the_same_line_collapse_however_they_word_it():
+def test_same_line_authentication_paraphrases_merge():
     out = dedup_cross_rubric([
         _f(rule_id="llm-security", line=128, severity="high",
            title="No authentication on action execution endpoint"),
@@ -183,7 +183,7 @@ def test_two_rubrics_on_the_same_line_collapse_however_they_word_it():
     assert out[0].severity == "critical"      # most severe survives
 
 
-def test_the_merged_finding_carries_the_other_wording():
+def test_independent_causes_at_same_line_keep_their_own_rows():
     """Merging on position alone can join two different issues that share a
     line. The survivor must carry what the other said, or the second issue
     leaves no trace at all."""
@@ -194,9 +194,9 @@ def test_the_merged_finding_carries_the_other_wording():
            title="No rate limit on the action endpoint"),
     ])
 
-    assert len(out) == 1
-    assert "No rate limit on the action endpoint" in out[0].explanation
-    assert "security review" in out[0].explanation
+    assert len(out) == 2
+    assert out[1].title == "No rate limit on the action endpoint"
+    assert "security review" not in out[0].explanation
 
 
 def test_a_nearby_line_still_needs_the_titles_to_agree():
@@ -209,3 +209,29 @@ def test_a_nearby_line_still_needs_the_titles_to_agree():
     ])
 
     assert len(out) == 2
+
+
+def test_v3_rls_and_fail_open_limiter_do_not_merge():
+    out = dedup_cross_rubric([
+        _f(title="Agent chat route uses service-role client; reads are not owner-scoped by RLS"),
+        _f(rule_id="llm-money", title="Rate limiter is fail-open: Redis outage removes all Claude call protection"),
+    ])
+    assert len(out) == 2
+
+
+def test_unknown_similar_and_compound_causes_remain_separate():
+    for a, b in [
+        ("Missing protection on the same endpoint", "Missing validation on the same endpoint"),
+        ("No authentication and no rate limiting", "No authentication on endpoint"),
+        ("No authentication and no rate limiting", "No rate limiting on endpoint"),
+    ]:
+        assert len(dedup_cross_rubric([_f(title=a), _f(title=b)])) == 2
+
+
+def test_command_injection_paraphrases_keep_all_originals():
+    out = dedup_cross_rubric([
+        _f(title="Command injection via unsanitised user-controlled parameter"),
+        _f(rule_id="llm-security", title="User-controlled input interpolated into SSH shell commands"),
+    ])
+    assert len(out) == 1
+    assert len(out[0].claim_evidence["grouped_originals"]) == 2

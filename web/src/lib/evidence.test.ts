@@ -146,3 +146,24 @@ it("shows source counterevidence and policy prerequisites without turning them i
   expect(rows["Policy prerequisites — review before changing clients"]).toContain("SELECT policies alone");
   expect(rows["Consequence check"]).toBe("No independent verification recorded.");
 });
+
+
+it("preserves a compound finding while exposing a contradicted atom and superseded recommendation", () => {
+  const finding: Finding = { ...source, rule_id: "llm-web", source: "llm", claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked", observation: null,
+    premise_checks: [{ kind: "json_rejection_uncaught", target: "res", result: "contradicted",
+      claim: "JSON parsing lacks a rejection fallback.", detail: "A local fallback exists; fetch rejection is separate." }],
+    recommendation_check: { result: "prerequisites_required", detail: "Verify write policies before changing clients.",
+      original_fix_hint: "Switch clients; policies already exist." },
+  } };
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Atomic premise contradicted — other claims remain unverified"]).toContain("fetch rejection is separate");
+  expect(rows["Superseded original recommendation — do not apply without review"]).toContain("policies already exist");
+  expect(rows["Recommendation prerequisites"]).toContain("Verify write policies");
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  const contradicted = { ...finding, claim_evidence: { ...finding.claim_evidence!,
+    syntax_check: { kind: "http_status_guard_absent" as const, result: "contradicted" as const,
+      claim: "No HTTP status guard", detail: "The same response has a return guard." } } };
+  expect(findingCounts([contradicted])).toEqual({ source: 0, examples: 0 });
+});

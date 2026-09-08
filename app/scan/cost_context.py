@@ -7,6 +7,8 @@ loop state separately. Uploaded source is parsed, never imported or executed.
 from collections import Counter
 import ast
 import json
+import math
+import re
 import posixpath
 import stat
 import zipfile
@@ -25,13 +27,17 @@ MAX_FILES = 200
 MAX_NODES = 80_000
 MAX_RECORDS = 64
 MAX_CHECKS = 12
+MAX_FUNCTIONS = 128
+MAX_FUNCTION_WORK = 160_000
 SCOPE = (
     "Cost-related source syntax only. One direct named import, literal slice bounds in a helper's "
     "returned expression, awaited database call order, returned-id branch syntax, and Python loops "
     "refreshing their length condition from another call. Only local relative imports or explicit "
     "nearest tsconfig.json @/* paths are resolved. Source order is not execution order across callbacks. "
     "Runtime bindings, built-in methods, transactions, database guarantees, retries, total prompt size, "
-    "prices and duplicate charges are not verified. Missing observations do not prove missing limits. "
+    "prices and duplicate charges are not verified. Request roles and conditional retry gates are source "
+    "observations; correcting a public arithmetic expression does not establish a call-count bound. "
+    "Missing observations do not prove missing limits. "
     "String values redacted; tests and vendor files excluded."
 )
 
@@ -314,6 +320,103 @@ def _query_checks(fn, nodes, limits):
     return checks[:MAX_CHECKS]
 
 
+def _request_roles(nodes):
+    """Public endpoint/method syntax, not pricing or actual request execution."""
+    checks = []
+    for node in nodes:
+        if node.type != 'call_expression' or _name(node.child_by_field_name('function')) not in {
+                'fetch', 'fetchWithTimeout'}:
+            continue
+        args = _children(node.child_by_field_name('arguments'))
+        if not args or args[0].type not in {'string', 'template_string'}:
+            continue
+        parts = _children(args[0])
+        prefix = _text(parts[0]) if parts and parts[0].type == 'string_fragment' else ''
+        role = ('model_metadata' if prefix.startswith('https://api.replicate.com/v1/models/') else
+                'prediction' if re.match(r'https://api\.replicate\.com/v1/predictions(?:/|$)', prefix) else None)
+        if not role:
+            continue
+        options = args[1] if len(args) == 2 else None
+        method = 'GET' if len(args) == 1 else None
+        if options and options.type == 'object' and all(p.type == 'pair' for p in _children(options)):
+            methods = [p.child_by_field_name('value') for p in _children(options)
+                       if _text(p.child_by_field_name('key')) == 'method']
+            if not methods:
+                method = 'GET'
+            elif len(methods) == 1 and _literal(methods[0]) in {'GET', 'POST'}:
+                method = _literal(methods[0])
+        if method is None or (role == 'model_metadata' and method != 'GET'):
+            continue
+        operation = ('metadata GET' if role == 'model_metadata' else
+                     'prediction creation POST' if method == 'POST' else 'prediction status GET')
+        checks.append({'kind': 'request_operation_role', 'result': 'observed', 'line': _line(node),
+                       'operation': operation,
+                       'summary': f'Line {_line(node)} contains {operation} syntax. '
+                       'HTTP request count is not a count of billable inference runs.',
+                       'detail': 'Public endpoint and explicit/default method syntax only. Callee bindings, '
+                       'request execution, provider pricing, latency and charges are not verified.'})
+    return checks[:MAX_CHECKS]
+
+
+def _retry_checks(nodes):
+    """Record a conditional retry gate, without evaluating arbitrary errors."""
+    from app.scan import guard_context as g
+    checks = []
+    for handler in nodes:
+        if handler.type != 'catch_clause':
+            continue
+        own = list(g._walk(handler.child_by_field_name('body'), g._SKIP))
+        constants = g._consts(handler.child_by_field_name('body'))
+        for branch in own:
+            if branch.type != 'if_statement':
+                continue
+            terms = g._or_terms(branch.child_by_field_name('condition'))
+            flags = [g._name(t.child_by_field_name('argument')) for t in terms
+                     if t and t.type == 'unary_expression' and g._text(t.child_by_field_name('operator')) == '!']
+            for flag in flags:
+                dec = constants.get(flag)
+                if not dec or dec.end_byte >= branch.start_byte:
+                    continue
+                dependencies = g._or_terms(dec.child_by_field_name('value'))
+                if len(dependencies) < 2 or not all(g._name(n) in constants for n in dependencies):
+                    continue
+                body = g._children(branch.child_by_field_name('consequence'))
+                if not body or body[-1].type != 'throw_statement':
+                    continue
+                # A terminal throw branch is evidence that retry is conditional.
+                # Dynamic error messages may match abort detection even for Error.
+                checks.append({'kind': 'conditional_retry_gate', 'result': 'observed',
+                    'line': g._line(branch),
+                    'summary': f'Catch at line {g._line(handler)} has a retry predicate; '
+                    f'a negated-predicate branch at line {g._line(branch)} ends by throwing. '
+                    'A thrown error does not by itself establish a full-flow retry.',
+                    'detail': 'Named local predicates and a terminal throw are present. Check the actual error '
+                    'type, status and message against every predicate, including abort-message matching. '
+                    'Retry count, callback execution and duplicate paid work remain unverified.'})
+    return checks[:MAX_CHECKS]
+
+
+def arithmetic_context(finding):
+    """Evaluate a tiny public arithmetic form, never eval model or source code."""
+    text = str(finding.get('explanation', ''))[:16000]
+    pattern = r'C\((\d{1,3}),\s*(\d{1,3})\)\s*[×*]\s*(\d{1,3})(?: teams)?\s*[×*]\s*(\d{1,3})(?: turns)?\s*=\s*(\d{1,9})'
+    result = []
+    for match in re.finditer(pattern, text):
+        n, k, groups, turns, claimed = map(int, match.groups())
+        if not 0 <= k <= n <= 100 or groups > 100 or turns > 100:
+            continue
+        value = math.comb(n, k) * groups * turns
+        if value > 1_000_000_000 or value == claimed:
+            continue
+        result.append({'kind': 'cost_context', 'result': 'observed', 'checks': [{
+            'kind': 'arithmetic_mismatch', 'result': 'contradicted', 'claimed': claimed, 'computed': value,
+            'summary': f'The stated C({n},{k}) × {groups} × {turns} equals {value}, not {claimed}. '
+            'This corrects only arithmetic; it does not establish a maximum call count or billable cost.'}]})
+        if len(result) >= 2:
+            break
+    return result
+
+
 def _python_records(data, path, limits):
     try:
         tree = ast.parse(data)
@@ -337,8 +440,14 @@ def _python_records(data, path, limits):
                      and isinstance(n.value, ast.Call)]
         ignored = [n for n in loop.body if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)]
         if refreshes and ignored:
+            called = {n.func.id for n in ast.walk(loop) if isinstance(n, ast.Call)
+                      and isinstance(n.func, ast.Name)}
             records.append({'file': path, 'line': loop.lineno, 'line_end': loop.end_lineno,
-                'scope': '<while>', 'checks': [{'kind': 'python_external_loop_progress', 'result': 'observed',
+                'scope': '<while>',
+                'helper_candidates': [{'line': fn.lineno, 'line_end': fn.end_lineno}
+                    for fn in tree.body if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and fn.name in called][:MAX_CHECKS],
+                'checks': [{'kind': 'python_external_loop_progress', 'result': 'observed',
                     'refresh_lines': [n.lineno for n in refreshes[:MAX_CHECKS]],
                     'ignored_call_result_lines': [n.lineno for n in ignored[:MAX_CHECKS]],
                     'summary': f'While condition at line {loop.lineno} depends on externally refreshed length. '
@@ -420,11 +529,36 @@ def collect_cost_context(fileobj):
     helper_cache = {}
     for path, (root, nodes) in sources.items():
         imports = _imports(root, _bindings(nodes), path, sources, configs, limits)
-        for scope, fn in _definitions(root):
-            if not scope:
+        local_helpers, function_nodes = {}, {}
+        bindings = _bindings(nodes)
+        definitions = list(_definitions(root))
+        if len(definitions) > MAX_FUNCTIONS:
+            limits.add('function_limit_reached')
+            definitions = definitions[:MAX_FUNCTIONS]
+        work = 0
+        for name, definition in definitions:
+            helper_nodes = list(_walk(definition))
+            work += len(helper_nodes)
+            if work > MAX_FUNCTION_WORK:
+                limits.add('function_work_limit_reached')
+                break
+            function_nodes[(definition.start_byte, definition.end_byte)] = helper_nodes
+            if bindings[name] == 1:
+                local_helpers[name] = _request_roles(helper_nodes) + _retry_checks(helper_nodes)
+        for scope, fn in definitions:
+            if not scope or (fn.start_byte, fn.end_byte) not in function_nodes:
                 continue
-            fn_nodes = list(_walk(fn))
+            fn_nodes = function_nodes[(fn.start_byte, fn.end_byte)]
             checks = _query_checks(fn, fn_nodes, limits)
+            checks.extend(local_helpers.get(scope, []))
+            for call in fn_nodes:
+                if call.type == 'call_expression':
+                    for check in local_helpers.get(_name(call.child_by_field_name('function')), []):
+                        linked = {**check, 'helper_call_line': _line(call),
+                                  'detail': check['detail'] + ' Same-file named-call candidate only; '
+                                  'runtime binding and execution order are not established.'}
+                        if len(checks) < MAX_CHECKS:
+                            checks.append(linked)
             for call in fn_nodes:
                 if call.type != 'call_expression' or _name(call.child_by_field_name('function')) not in imports:
                     continue
@@ -468,6 +602,10 @@ def cost_finding_context(finding, facts):
     start, end = finding.get('line_start'), finding.get('line_end')
     if type(start) is not int or type(end) is not int or start < 1 or end < start:
         return []
-    return [{'kind': 'cost_context', 'result': 'observed', **record}
-            for record in (facts.get('cost_context') or {}).get('records', [])
-            if record['file'] == finding.get('file') and record['line'] <= start <= end <= record['line_end']][:4]
+    contexts = [{'kind': 'cost_context', 'result': 'observed', **record}
+                for record in (facts.get('cost_context') or {}).get('records', [])
+                if record['file'] == finding.get('file') and (
+                    record['line'] <= start <= end <= record['line_end'] or
+                    any(c['line'] <= start <= end <= c['line_end']
+                        for c in record.get('helper_candidates', [])))][:4]
+    return contexts + arithmetic_context(finding)

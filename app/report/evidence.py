@@ -155,6 +155,13 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
         if syntax.get("line_start"):
             detail += f" Checked source lines {syntax['line_start']}–{syntax['line_end']}."
         rows.append((label, detail))
+    for premise in record.get("premise_checks", []):
+        label = ("Atomic premise contradicted — other claims remain unverified"
+                 if premise.get("result") == "contradicted" else "Atomic premise not checked")
+        location = (f" Target {premise['target']}, source lines "
+                    f"{premise['source_line_start']}–{premise['source_line_end']}."
+                    if premise.get("source_line_start") else "")
+        rows.append((label, premise["claim"] + " " + premise["detail"] + location))
     context_labels = {
         "guard_context": "Existing guard evidence — compare with the model claim",
         "cost_context": "Cost and ordering evidence — compare with the model claim",
@@ -177,6 +184,11 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
                     rows.append(("React error-path evidence — compare with the model claim",
                                  str(context.get("scope", "")) + ": " + item["summary"] + " " + item["detail"]))
         rows.append(("Deterministic context check", json.dumps(context, ensure_ascii=False)))
+    recommendation = record.get("recommendation_check")
+    if recommendation:
+        rows.append(("Recommendation prerequisites", recommendation["detail"]))
+        rows.append(("Superseded original recommendation — do not apply without review",
+                     recommendation["original_fix_hint"]))
     for i, original in enumerate(record.get("grouped_originals", []), 1):
         rows.append((f"Grouped original {i} — not independent confirmation",
                      json.dumps(original, ensure_ascii=False)))

@@ -43,7 +43,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "a94da9f3f47b57cf"
+PROMPT_FINGERPRINT = "f872944dd15f267f"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -706,9 +706,11 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     findings, stats = run_llm_scan(io.BytesIO(buf.getvalue()), FakeClient(),
                                    rubrics=("auth", "security"), passes=2)
     assert stats.prompts == 4          # 2 рубрики × 2 прохода
-    # оба ответа указывают на одну (file, line): дедуп оставил тяжёлую
-    assert len(findings) == 1
+    # Identical repeats collapse; the pass-specific cause keeps its own row,
+    # even though it shares the source line with the stable finding.
+    assert len(findings) == 2
     assert findings[0].severity == "high"
+    assert findings[1].title == "pass-2-only finding"
 
 
 # --- non-production context damping ---

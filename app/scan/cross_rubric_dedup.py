@@ -1,31 +1,13 @@
-"""Collapse the same LLM finding reported by more than one rubric.
+"""Conservative cross-rubric grouping by location and a shared cause.
 
-The auth and security rubrics run as two independent prompts over
-overlapping file sets, so both can flag the SAME issue at the same
-(file, line) — seen in production: one hardcoded cron secret reported
-once per rubric, double-penalizing the score. (In union-of-N mode the
-same issue also repeats across passes.) We keep the single most-severe
-instance per location and, when a *different* rubric also flagged it,
-record that on the survivor instead of dropping it silently — a second
-rubric repeating a claim is provenance, not independent confirmation.
-
-Grouping is on file + nearby line + title similarity — NOT rule_id — so
-a medium from one rubric and a high from the other collapse into one.
-Two rubrics often anchor the same issue to different lines of one
-multi-line statement (seen in production: an HMAC-derived-password call
-spanning four lines, flagged at line 46 by one rubric and 47 by the
-other), so exact-line grouping under-merged. We now group within a small
-line window AND require the titles to be about the same thing, so
-genuinely distinct issues that merely sit near each other are not merged.
-Only LLM findings (rule_id "llm-*") are grouped: static-scan findings
-pass through untouched even when they share a location with an LLM
-finding, because the two scanners detect genuinely different things (a
-regex secret hit vs. a semantic auth flaw) and are not the same issue.
+A shared line is not an issue identity. Unknown paraphrases stay separate;
+recognized single mechanisms can merge, with every original retained.
 """
 from __future__ import annotations
 
 from dataclasses import replace
 from difflib import SequenceMatcher
+import re
 
 from app.scan.scoring import ScoredFinding
 
@@ -57,57 +39,56 @@ def _title_ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
-def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
-    """Same line is enough. A nearby line additionally needs similar titles.
+def _mechanisms(title: str) -> frozenset[str]:
+    """Small, conservative cause vocabulary; categories/rubrics are not causes.
 
-    Requiring title similarity everywhere was measured and does not work. On a
-    paying customer's report two pairs reached the reader twice each, and the
-    ratios explain why the gate never fired:
-
-        0.317  "Command injection via unsanitised user-controlled parameter"
-               vs "User-controlled input interpolated into SSH shell commands"
-        0.352  "Unauthenticated endpoint executes arbitrary SSH commands"
-               vs "No authentication on action execution endpoint"
-        0.535  the pair this threshold was calibrated to MERGE
-        0.588  a same-place-but-distinct pair that must NOT merge
-
-    The classes are interleaved: the pair that must stay apart scores higher
-    than both that must join. No threshold separates them, so the signal is
-    wrong rather than the constant, and lowering it would only merge more of
-    the wrong things.
-
-    What does separate them is position. Two rubrics anchoring to the SAME
-    line are looking at one place in one file, and two prompts over
-    overlapping files reaching the same line is the ordinary way one issue
-    gets reported twice. The line window exists for a different case -- one
-    statement spanning several lines, where the titles genuinely are alike --
-    so it keeps the similarity test it was calibrated with.
-
-    The cost is named: two genuinely distinct issues anchored to the same line
-    (a decorator attracts "no auth" and "no rate limit" alike) now merge. That
-    is why the merge carries the other title into the survivor's explanation
-    instead of discarding it -- the finding loses its own row, not its
-    existence.
+    Compound titles are never reduced to one of their constituent mechanisms.
+    This is grouping of hypotheses, not verification of their source claims.
     """
+    patterns = {
+        "authentication": r"unauthenticated|(?:no|missing|without) (?:server.side )?(?:authentication|auth check)",
+        "rate_limit": r"rate[ -]limit",
+        "service_role_access": r"service[ _-]*role.*(?:client|database|reads|writes|RLS)|"
+                               r"(?:client|RLS).*service[ _-]*role",
+        "derived_password": r"password.*(?:derived|service.role)|(?:deterministic|derived).*password",
+        "shell_interpolation": r"command injection|(?:input|parameter).*interpolat.*(?:shell|SSH)|"
+                               r"(?:shell|SSH).*interpolat.*input",
+    }
+    return frozenset(key for key, pattern in patterns.items() if re.search(pattern, title, re.I))
+
+
+def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     if anchor.file != f.file:
         return False
-    # A contradicted premise must not swallow a different, unresolved claim
-    # at the same line (or acquire its severity/wording through deduplication).
-    if ((anchor.claim_evidence or {}).get("syntax_check")
-            != (f.claim_evidence or {}).get("syntax_check")):
+    # A contradicted or partially checked claim cannot absorb an unresolved one.
+    for key in ("syntax_check", "premise_checks"):
+        if (anchor.claim_evidence or {}).get(key) != (f.claim_evidence or {}).get(key):
+            return False
+
+    def recommendation_status(item):
+        return ((item.claim_evidence or {}).get("recommendation_check") or {}).get("result")
+    if recommendation_status(anchor) != recommendation_status(f):
         return False
+
     def function_key(item):
         return {(c["file"], c["function_line_start"], c["function_line_end"],
                  tuple(c["read_lines"]), c["equivalence"])
                 for c in (item.claim_evidence or {}).get("context_checks", [])
                 if c.get("kind") == "operator_guard_order" and c.get("equivalence")}
+
     if function_key(anchor) & function_key(f):
         return True
-    distance = abs(anchor.line - f.line)
-    if distance == 0:
+    if abs(anchor.line - f.line) > _NEARBY_LINE_WINDOW:
+        return False
+    a, b = anchor.title.casefold().strip(), f.title.casefold().strip()
+    if a == b:
         return True
-    return (distance <= _NEARBY_LINE_WINDOW
-            and _title_ratio(anchor.title, f.title) >= _TITLE_SIMILARITY_THRESHOLD)
+    causes_a, causes_b = _mechanisms(a), _mechanisms(b)
+    if len(causes_a) != 1 or causes_a != causes_b:
+        return False
+    # Recognized paraphrases at the same line share one mechanism. Nearby
+    # statements still need similar wording to limit accidental joining.
+    return anchor.line == f.line or _title_ratio(a, b) >= _TITLE_SIMILARITY_THRESHOLD
 
 
 def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
@@ -146,11 +127,7 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
             where = " at a nearby line" if any(m.line != rep.line for m in members) else ""
             note = (f" Also reported by the {labels}{where}; "
                     "this is not independent confirmation.")
-            # The other wording, kept. Merging on position alone can join two
-            # genuinely different issues that share a line, so the survivor
-            # has to carry what the other one said or the second issue leaves
-            # no trace at all. Dissimilar titles are exactly the ones worth
-            # repeating; near-identical ones would only pad the explanation.
+            # Preserve recognized paraphrases as provenance, not confirmation.
             extra = [
                 m.title for m in members
                 if m is not rep

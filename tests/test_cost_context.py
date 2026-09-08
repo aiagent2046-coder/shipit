@@ -237,3 +237,73 @@ def test_python_only_record_budget_reports_truncation_and_parsed_files():
     assert len(result['records']) == context.MAX_RECORDS
     assert 'record_limit_reached' in result['limitations']
     assert result['parsed_files'] == 1
+
+
+REQUESTS = """async function metadata() {
+ return fetch('https://api.replicate.com/v1/models/public/model', {headers: {Authorization: 'private-token'}});
+}
+async function retry(fn) {
+ for (;;) {
+  try { return await fn(); } catch (err) {
+   const isAbort = err.name === 'AbortError';
+   const isRateLimit = err.status === 429;
+   const allowed = isAbort || isRateLimit;
+   if (!allowed) { throw err; }
+  }
+ }
+}
+export async function embedding() {
+ return retry(async () => {
+  const version = await metadata();
+  const create = await fetch('https://api.replicate.com/v1/predictions', {method:'POST', body: payload});
+  const poll = await fetch(`https://api.replicate.com/v1/predictions/${id}`);
+  return poll;
+ });
+}"""
+
+
+def test_metadata_creation_polling_and_conditional_retry_are_separate_source_facts():
+    facts = context.collect_cost_context(archive({'src/embedding.ts': REQUESTS}))
+    result = context.cost_finding_context({'file': 'src/embedding.ts', 'line_start': 17, 'line_end': 17},
+                                         {'cost_context': facts})
+    roles = {c['operation'] for r in result for c in r['checks'] if c['kind'] == 'request_operation_role'}
+    assert roles == {'metadata GET', 'prediction creation POST', 'prediction status GET'}
+    assert any(c['kind'] == 'conditional_retry_gate' for r in result for c in r['checks'])
+    encoded = json.dumps(result)
+    assert 'private-token' not in encoded
+    assert 'not a count of billable inference runs' in encoded
+    assert 'actual error type, status and message' in encoded
+
+
+def test_unknown_request_method_and_unconditional_retry_are_not_guessed():
+    source = REQUESTS.replace("method:'POST', body: payload", "...options")
+    source = source.replace('if (!allowed) { throw err; }', 'wait();')
+    facts = context.collect_cost_context(archive({'src/embedding.ts': source}))
+    assert not checks(facts, 'conditional_retry_gate')
+    assert 'prediction creation POST' not in {c['operation'] for c in checks(facts, 'request_operation_role')}
+
+
+def test_arithmetic_correction_does_not_establish_a_cost_bound():
+    result = context.arithmetic_context({'explanation': 'C(5,2)×3 teams×6 turns = 90 Claude calls.'})
+    record = result[0]['checks'][0]
+    assert record['computed'] == 180 and record['claimed'] == 90
+    assert 'does not establish a maximum' in record['summary']
+    assert not context.arithmetic_context({'explanation': 'C(5,2)*3*6 = 180'})
+    assert not context.arithmetic_context({'explanation': 'C(999,2)*999*999 = 90'})
+
+
+def test_external_loop_progress_attaches_to_called_helper_as_a_candidate():
+    source = """def claude(prompt):
+ return provider(prompt)
+def run():
+ msgs = history()
+ while len(msgs) < TURNS:
+  reply = claude(msgs)
+  send(reply)
+  msgs = history()
+"""
+    facts = context.collect_cost_context(archive({'agents/run.py': source}))
+    result = context.cost_finding_context({'file': 'agents/run.py', 'line_start': 1, 'line_end': 1},
+                                         {'cost_context': facts})
+    assert result[0]['checks'][0]['kind'] == 'python_external_loop_progress'
+    assert 'not establish an infinite loop or charges' in result[0]['checks'][0]['detail']

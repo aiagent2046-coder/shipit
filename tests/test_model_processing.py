@@ -42,7 +42,7 @@ FINDING = dict(file='auth.py', line_start=1, line_end=2, evidence='return token'
 
 def test_accounting_distinguishes_empty_unreadable_rejected_and_grouped():
     good = FINDING
-    payload = [good, {**good, 'title': 'Repeated token claim'}, {}, None,
+    payload = [good, {**good, 'explanation': 'A second reading of this token claim'}, {}, None,
                {**good, 'evidence': 'absent source'}, {**good, 'confidence': 'nan'},
                {**good, 'severity': []}, {**good, 'fix_hint': 'No action needed'}]
     result, stats = run_llm_scan(archive({'auth.py': SOURCE}), Responses([
@@ -56,7 +56,8 @@ def test_accounting_distinguishes_empty_unreadable_rejected_and_grouped():
     assert paid['rejection_reasons'] == dict(missing_fields=1, not_an_object=1,
         source_quote_or_location_mismatch=1, invalid_confidence=1, invalid_severity=1, self_cancelled=1)
     originals = result[0].claim_evidence['grouped_originals']
-    assert [x['title'] for x in originals] == ['Unchecked token', 'Repeated token claim']
+    assert [x['title'] for x in originals] == ['Unchecked token', 'Unchecked token']
+    assert originals[1]['explanation'] == 'A second reading of this token claim'
     assert all('evidence' not in x for x in originals)
     manifest = scan_manifest(archive({'auth.py': SOURCE}).getvalue(), 'test', {}, vars(stats), None)
     assert 'invalid_responses' in manifest['limitations']
