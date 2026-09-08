@@ -34,8 +34,8 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     findings: list[ScoredFinding] = []
 
     fileobj.seek(0)
-    secrets_coverage: dict = {}
-    for s in scan_secrets(fileobj, coverage=secrets_coverage):
+    file_coverage: dict = {}
+    for s in scan_secrets(fileobj, coverage=file_coverage):
         findings.append(ScoredFinding(
             rule_id=s.rule_id, title=s.title, severity=s.severity,
             confidence=s.confidence, category="Security",
@@ -112,15 +112,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                         "excluded_directory": "dependency/build directories",
                         "excluded_extension": "excluded file types", "binary_content": "binary content"}
     excluded = ", ".join(f"{count} {exclusion_labels[reason]}"
-                         for reason, count in sorted(secrets_coverage.get("exclusions", {}).items())) or "none"
-    secrets_scope = (
-        f"{secrets_coverage.get('files_scanned', 0)}/{secrets_coverage.get('files_total', 0)} files scanned; "
+                         for reason, count in sorted(file_coverage.get("exclusions", {}).items())) or "none"
+    scope_description = (
+        f"{file_coverage.get('files_scanned', 0)}/{file_coverage.get('files_total', 0)} files scanned; "
         f"excluded: {excluded}; "
-        f"files with invalid UTF-8 bytes omitted: {secrets_coverage.get('lossy_decoded_files', 0)}. "
+        f"files with invalid UTF-8 bytes omitted: {file_coverage.get('lossy_decoded_files', 0)}. "
         "Exclusions are outside this check; no finding does not establish that excluded content is safe."
     )
     return {
-        "secrets_coverage": secrets_coverage,
+        "secrets_coverage": file_coverage,
         "source_facts": source_facts,
         # llm_ran=False, not the default: no LLM stage runs inside this
         # function, so Auth and Money & Data sit at 10.0 for want of a
@@ -158,7 +158,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # the follow-up; here it is preserved so it can be.
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency"],
-        "coverage": {"secrets": secrets_scope,
+        "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
                      "test/vendor files excluded; middleware and runtime access not resolved"},
