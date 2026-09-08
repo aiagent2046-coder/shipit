@@ -101,3 +101,32 @@ jobs:
       uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
+
+    # Keep data-flow locations available in job logs for report-leak reviews.
+    # Print source positions only, never snippets or potentially secret values.
+    - name: Summarize Python report-leak paths
+      if: matrix.language == 'python'
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        report = json.loads(Path("../results/python.sarif").read_text())
+        for run in report.get("runs", []):
+            for result in run.get("results", []):
+                if result.get("ruleId") not in {
+                    "py/clear-text-storage-sensitive-data",
+                    "py/clear-text-logging-sensitive-data",
+                }:
+                    continue
+                print(result["ruleId"])
+                locations = list(result.get("locations", []))
+                for flow in result.get("codeFlows", []):
+                    for thread in flow.get("threadFlows", []):
+                        locations.extend(item.get("location", {}) for item in thread.get("locations", []))
+                for location in locations:
+                    physical = location.get("physicalLocation", {})
+                    print(physical.get("artifactLocation", {}).get("uri"),
+                          physical.get("region", {}).get("startLine"))
+        PY
