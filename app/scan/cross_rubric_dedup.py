@@ -1,8 +1,9 @@
 """Conservative grouping by source operation and compatible claim status.
 
-New observations require a trusted source identity; unsupported ones stay
-separate. Legacy reports retain their location/cause fallback. All original
-interpretations and statuses survive grouping, including pre-grouped input.
+New interpretations require a trusted source identity. Exact repeats of one
+quote-checked observation can also share a row when that identity is unresolved.
+Legacy reports retain their location/cause fallback. All original interpretations
+and statuses survive grouping, including pre-grouped input.
 """
 from __future__ import annotations
 
@@ -60,6 +61,40 @@ def _mechanisms(title: str) -> frozenset[str]:
     return frozenset(key for key, pattern in patterns.items() if re.search(pattern, title, re.I))
 
 
+def _exact_observation(finding: ScoredFinding) -> str | None:
+    """An identical observation is not a new penalty for another model response.
+
+    Only scanner-accepted, quote-bound LLM rows with an explicitly unresolved
+    identity qualify. Do not infer semantic equivalence from similar text or
+    erase any substantive field, status, or producer metadata. The original
+    response numbers stay in grouped_originals; this key is only for matching.
+    """
+    record = finding.claim_evidence or {}
+    if ("source_issue_identity" not in record or record["source_issue_identity"] is not None
+            or finding.source != "llm" or finding.verification_method != "model_review"
+            or not isinstance(finding.file, str) or not finding.file.strip()
+            or type(finding.line) is not int or finding.line < 1):
+        return None
+    check, producer = record.get("source_check"), record.get("producer")
+    if not isinstance(check, dict) or not isinstance(producer, dict):
+        return None
+    start, end = check.get("line_start"), check.get("line_end")
+    if (check.get("kind") != "quote_match" or type(start) is not int or type(end) is not int
+            or not 1 <= start <= finding.line <= end
+            or any(not isinstance(producer.get(key), str) or not producer[key].strip()
+                   for key in ("model", "rubric"))
+            or type(producer.get("response")) is not int or producer["response"] < 1):
+        return None
+    payload = {key: getattr(finding, key) for key in _FINDING_FIELDS}
+    payload["claim_evidence"] = {
+        **record, "producer": {key: value for key, value in producer.items() if key != "response"},
+    }
+    try:
+        return json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        return None  # Malformed evidence cannot establish an exact repeat.
+
+
 def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     if anchor.file != f.file:
         return False
@@ -67,7 +102,8 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     has_source = "source_issue_identity" in ea or "source_issue_identity" in eb
     identity_a, identity_b = ea.get("source_issue_identity"), eb.get("source_issue_identity")
     if has_source and (not identity_a or identity_a != identity_b):
-        return False
+        exact = _exact_observation(anchor)
+        return exact is not None and exact == _exact_observation(f)
     # The source operation, not the model's selector coordinates, establishes
     # identity. Different check kinds/dispositions still retain separate rows.
     for key in ("syntax_check", "premise_checks"):
