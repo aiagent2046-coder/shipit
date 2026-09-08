@@ -191,6 +191,13 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "wrap the top-level component in an <ErrorBoundary> with a small "
         "fallback that offers a reload.",
     ),
+    "react-unchecked-http-success": (
+        "A handler continues to a success state or navigation without checking its HTTP response.",
+        "Standard fetch resolves even on HTTP 4xx/5xx. On the observed path a rejected save could "
+        "therefore appear successful. A real server failure and runtime bindings were not tested.",
+        "Check response.ok before showing success or navigating. Handle failed HTTP responses "
+        "and reset loading state when a network request rejects.",
+    ),
     "no-ci": (
         "No automated checks run when the code changes (no CI).",
         "Broken changes reach your live app with nothing in the way.",

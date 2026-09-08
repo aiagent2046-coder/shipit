@@ -118,7 +118,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-07-11: pre-model React async state and button syntax evidence.
 # 2026-09-08-1: catch resets, HTTP response branches and bounded absence checks.
 # 2026-09-08-2: reject ambiguous archives and record secret-scan exclusions.
-AUDIT_ENGINE_VERSION = "2026-09-08-2"
+# 2026-09-08-3: guard/cost/policy evidence and unchecked HTTP success observations.
+AUDIT_ENGINE_VERSION = "2026-09-08-3"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

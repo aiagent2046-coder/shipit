@@ -73,7 +73,23 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
     const location = syntax.line_start ? ` Checked source lines ${syntax.line_start}–${syntax.line_end}.` : "";
     rows.push([labels[syntax.result] ?? labels.not_checked, `${syntax.claim} ${syntax.detail}${location}`]);
   }
+  const contextLabels: Record<string, string> = {
+    guard_context: "Existing guard evidence — compare with the model claim",
+    cost_context: "Cost and ordering evidence — compare with the model claim",
+    rls_recommendation_context: "Policy prerequisites — review before changing clients",
+  };
   for (const context of record?.context_checks ?? []) {
+    const label = typeof context.kind === "string" ? contextLabels[context.kind] : undefined;
+    if (label) {
+      const summaries = context.summary ? [context.summary] : (Array.isArray(context.checks)
+        ? context.checks.map(item => item?.summary) : []);
+      for (const summary of summaries) {
+        if (typeof summary !== "string" || !summary) continue;
+        const location = typeof context.file === "string"
+          ? context.file + (context.line ? `:${context.line}` : "") : "";
+        rows.push([label, (location ? `${location} — ` : "") + summary]);
+      }
+    }
     if (context.kind === "react_async_context" && Array.isArray(context.checks)) {
       for (const item of context.checks) {
         if (item && typeof item.summary === "string" && item.summary) {
@@ -206,6 +222,16 @@ export function manifestRows(score: Score): [string, string][] {
   for (const [check, status] of Object.entries(m.static_limits)) rows.push([`Static scope: ${check}`, status]);
   const facts = m.source_facts;
   if (facts) {
+    const indexes = [["guards", "Guard evidence"], ["cost_context", "Cost evidence"],
+      ["rls_recommendations", "Policy recommendation evidence"]] as const;
+    for (const [key, label] of indexes) {
+      const index = facts[key];
+      if (!index) continue;
+      rows.push([`${label} scope`, index.scope],
+        [`${label} limits`, index.limitations.join(", ") || "None recorded"],
+        [`${label} records`, String(index.records.length)]);
+      index.records.forEach((item, i) => rows.push([`${label} ${i + 1}`, JSON.stringify(item)]));
+    }
     rows.push(["Source fact scope", facts.scope]);
     rows.push(["Python files parsed for source facts", String(facts.parsed_files)]);
     rows.push(["Source fact limits", facts.limitations.join(", ") || "None recorded"]);

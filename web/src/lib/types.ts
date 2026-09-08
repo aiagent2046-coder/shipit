@@ -37,8 +37,19 @@ export interface GateReason {
   title?: string; // critical only
 }
 
+export interface ReviewContextIndex {
+  scope: string;
+  parsed_files?: number;
+  excluded_files?: number;
+  limitations: string[];
+  records: Record<string, unknown>[];
+}
+
 export interface ScanManifest {
   source_facts?: {
+    guards?: ReviewContextIndex;
+    cost_context?: ReviewContextIndex;
+    rls_recommendations?: ReviewContextIndex;
     react_async?: {
       scope: string; parsed_files: number; excluded_files: number; limitations: string[];
       records: { file: string; line: number; line_end: number; scope: string;
@@ -151,7 +162,8 @@ export interface Finding {
     producer?: { model: string; response: number; rubric: string };
     context_checks?: Record<string, unknown>[];
     syntax_check?: {
-      kind: "react_hook_order" | "sql_update_where" | "python_completed_notification" | "react_async_catch_reset" | "unsupported";
+      kind: "react_hook_order" | "sql_update_where" | "python_completed_notification" | "react_async_catch_reset"
+        | "domain_suffix_argument" | "finite_limit_clamp" | "intl_try_catch" | "unsupported";
       result: "contradicted" | "observed" | "not_checked";
       claim: string;
       detail: string;

@@ -1,0 +1,11 @@
+import { useState } from 'react';
+
+export default function Editor() {
+  const [saved, setSaved] = useState(false);
+  const save = async () => {
+    const response = await fetch('/api/profile', { method: 'POST' });
+    if (!response.ok) return;
+    setSaved(true);
+  };
+  return <><button onClick={save}>Save</button>{saved && <p>Saved</p>}</>;
+}
