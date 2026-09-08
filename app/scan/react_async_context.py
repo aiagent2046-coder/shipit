@@ -28,6 +28,8 @@ SCOPE = (
     "top-level named components; direct imported useState bindings; literal boolean setters, "
     "empty-string setters, simple state/empty-input return guards and native button onClick/disabled syntax only. "
     "Direct catch resets, awaited fetch calls and same-binding Response.ok branches are recorded. "
+    "Separate narrow counterexamples link a sole awaited fetch and all handler awaits to a catch "
+    "whose sole statement resets the same state, with no later statement or finally. "
     "A narrow unchecked-HTTP check links discarded/unused fetch responses to a following visible saved "
     "state or imported Next router navigation in a straight-line block. Status-aware and opaque flows "
     "are left unresolved; catch alone handles rejection, not HTTP error responses. "
@@ -591,6 +593,76 @@ def _http_checks(nodes, bindings, limits, handler_body, states, visible, routers
     return checks
 
 
+def _enclosing_rejection_catch(node):
+    """Nearest catch whose try body contains this syntax node."""
+    ancestor = node.parent
+    while ancestor is not None and ancestor.type not in _SKIP:
+        if ancestor.type == "try_statement":
+            body = ancestor.child_by_field_name("body")
+            handler = ancestor.child_by_field_name("handler")
+            if handler and body.start_byte < node.start_byte < body.end_byte:
+                return ancestor, handler
+        ancestor = ancestor.parent
+    return None, None
+
+
+def _rejection_counterevidence(body, awaits, states):
+    """Small positive counterexamples, separate from the inventory's non-proofs.
+
+    One direct standard fetch is required, including no competing fetch inside
+    nested callbacks. A network-reset counterexample additionally requires all
+    awaits to share the same catch, whose only statement resets the same React
+    state. This deliberately leaves indirect, competing and opaque flows open.
+    """
+    uses = [n for n in _walk(body) if n.type in {"identifier", "shorthand_property_identifier"}
+            and _text(n) == "fetch"]
+    if len(uses) != 1:
+        return []  # Includes optional calls, aliases and competing nested fetches.
+    fetch = uses[0].parent
+    if fetch is None or fetch.type != "call_expression" or _call(fetch)[0] != "fetch":
+        return []
+    awaited = fetch.parent
+    if (awaited is None or awaited.type != "await_expression" or awaited not in awaits
+            or len(_call(fetch)[1]) not in {1, 2}):
+        return []
+    checks = [{"kind": "react_async_fetch_await", "result": "observed", "line": _line(awaited),
+               "detail": "The only direct fetch call in this handler is the operand of await. "
+               "This contradicts an unawaited-fetch premise only; HTTP status handling and "
+               "successful navigation are separate questions."}]
+    tried, caught = _enclosing_rejection_catch(awaited)
+    if not caught or tried.child_by_field_name("finalizer"):
+        return checks
+    parameter = caught.child_by_field_name("parameter")
+    if parameter and parameter.type != "identifier":
+        return checks  # A destructuring catch binding can throw before reset.
+    parts = _children(caught.child_by_field_name("body"))
+    if len(parts) != 1 or any(_enclosing_rejection_catch(a)[1] != caught for a in awaits):
+        return checks
+    # The supported catch is a top-level handler statement. Following code can
+    # restore the busy state or invoke an unknown callback, so remain unknown.
+    if tried.parent != body or _children(body)[-1] != tried:
+        return checks
+    for state, setter in states.items():
+        if not _literal_setter(parts[0], setter, "false"):
+            continue
+        # Link a real busy-state write; an arbitrary reset of an unrelated state
+        # must not be offered as evidence for the claimed flag.
+        raised = [s for s in _children(body) if s.end_byte < tried.start_byte
+                  and _literal_setter(s, setter, "true")]
+        if len(raised) != 1:
+            continue
+        checks.append({"kind": "react_async_network_reset", "result": "observed", "state": state,
+                       "fetch_line": _line(awaited), "catch_line": _line(caught),
+                       "reset_line": _line(parts[0]), "set_true_line": _line(raised[0]),
+                       "detail": "The same React state is set true before the try. The awaited fetch "
+                       "and all other recorded awaits enter the same catch, whose sole statement "
+                       "directly resets that state to false. No following handler statement or finally "
+                       "can overwrite this reset in the supported syntax. This counters the asserted "
+                       "missing reset on request rejection; HTTP error responses, runtime bindings, "
+                       "concurrent invocations and successful-navigation behavior are not established."})
+    return checks
+
+
 def _handler_record(fn, name, component, path, states, controls, limits, fetch_unbound, visible, routers):
     body = fn.child_by_field_name("body")
     if not body or body.type != "statement_block":
@@ -668,7 +740,10 @@ def _handler_record(fn, name, component, path, states, controls, limits, fetch_u
                            "empty check and handler spelling. React rendering, other entry points and "
                            "duplicate request prevention are not verified."})
     if fetch_unbound:
-        checks.extend(_http_checks(nodes, _bindings(list(_walk(fn))), limits, body, states, visible, routers))
+        http_checks = _http_checks(nodes, _bindings(list(_walk(fn))), limits, body, states, visible, routers)
+        checks.extend(http_checks)
+        if any(c["kind"] == "react_async_http_response" for c in http_checks):
+            checks.extend(_rejection_counterevidence(body, awaits, states))
     if not checks and not controls:
         return None
     if len(checks) > MAX_ITEMS or len(awaits) > MAX_ITEMS:
@@ -820,16 +895,119 @@ def react_async_finding_context(finding, facts):
     return [{"kind": "react_async_context", "result": "observed", **matches[0], "detail": SCOPE}]
 
 
+_IDENTIFIER = r"[A-Za-z_$][\w$]*"
+_NETWORK_CLAIM = re.compile(
+    r"(?P<handler>" + _IDENTIFIER + r")(?:\(\))?(?:\s+handler)?\s+"
+    r"(?:leaves|keeps)\s+(?P<state>" + _IDENTIFIER + r")"
+    r"(?:\s*=\s*true)?\s+(?:stuck\s+)?(?:on|after)\s+(?:a\s+)?"
+    r"network\s+(?:error|failure|rejection)", re.I)
+_AWAIT_ABSENCE = re.compile(
+    r"\bfetch(?:\s*\([^)]{0,160}\))?[^.\n]{0,120}\b(?:is|was|remains)\s+"
+    r"(?:entirely\s+)?(?:not\s+awaited|unawaited)\b|"
+    r"\b(?:unawaited|fire\s+and\s+forget)\s+fetch\b|"
+    r"\b(?:no|missing)\s+await(?:\s+keyword)?\s+before\s+fetch\b|"
+    r"\bfetch\b[^.\n]{0,100}\bwithout\s+(?:being\s+)?awaited\b|"
+    r"\b(?:does\s+not|fails\s+to)\s+await\s+(?:the\s+)?fetch\b", re.I)
+_REACT_PREMISE_CLAIMS = {
+    "react_async_fetch_unawaited": "The fetch request in the cited handler is not awaited.",
+    "react_async_network_reset_absent": "The cited handler leaves the named React state true on request rejection.",
+}
+
+
+def _claim_text(value):
+    # Markdown and typographic hyphens are presentation, not different claims.
+    return re.sub(r"[-‐‑‒–—]", " ", str(value or "")[:16000].replace("`", ""))
+
+
+def _react_claim_requests(finding):
+    title = _claim_text(finding.get("title"))
+    network = _NETWORK_CLAIM.search(title)
+    requests = []
+    if network:
+        requests.append({"kind": "react_async_network_reset_absent", "target": network["state"],
+                         "handler": network["handler"]})
+    narrative = title + "\n" + _claim_text(finding.get("explanation"))
+    if _AWAIT_ABSENCE.search(narrative):
+        requests.append({"kind": "react_async_fetch_unawaited", "target": "fetch"})
+    return requests
+
+
+def react_async_premise_checks(finding, source_facts):
+    """Return partial source counterexamples without trusting model evidence.
+
+    Title/explanation select claims only. Every positive result comes from the
+    source-facts collector; claim_evidence and model-supplied premises/results
+    are never accepted as evidence. A compound HTTP or success-path concern is
+    not dismissed by counterevidence about fetch rejection.
+    """
+    contexts = react_async_finding_context(finding, source_facts or {})
+    context = contexts[0] if len(contexts) == 1 else None
+    result = []
+    for request in _react_claim_requests(finding):
+        check = {"kind": request["kind"], "target": request["target"],
+                 "claim": _REACT_PREMISE_CLAIMS[request["kind"]], "result": "not_checked",
+                 "detail": "No unambiguous source counterexample within this React handler check's scope."}
+        result.append(check)
+        if context is None:
+            continue
+        handler = context["scope"].rsplit(".", 1)[-1]
+        if request.get("handler", handler) != handler:
+            continue
+        observed_kind = ("react_async_fetch_await" if request["kind"] == "react_async_fetch_unawaited"
+                         else "react_async_network_reset")
+        matches = [c for c in context["checks"] if c.get("kind") == observed_kind
+                   and c.get("result") == "observed"
+                   and (observed_kind == "react_async_fetch_await" or c.get("state") == request["target"])]
+        if len(matches) != 1:
+            continue
+        observed = matches[0]
+        check.update(result="contradicted", line_start=observed.get("fetch_line", observed.get("line")),
+                     line_end=observed.get("reset_line", observed.get("line")),
+                     anchor_line_start=context["line"], anchor_line_end=context["line_end"],
+                     detail=observed["detail"] + " This is a partial premise check, not a verdict on "
+                     "other claims in the finding.")
+    return result
+
+
+def _network_syntax_check(finding, facts):
+    title = _claim_text(finding.get("title"))
+    match = _NETWORK_CLAIM.search(title)
+    if not match:
+        return None
+    unknown = {"kind": "react_async_network_reset_absent", "result": "not_checked",
+               "claim": _REACT_PREMISE_CLAIMS["react_async_network_reset_absent"],
+               "detail": "Only a complete single network-rejection claim can be dismissed by this check."}
+    contexts = react_async_finding_context(finding, facts or {})
+    component = contexts[0]["scope"].rsplit(".", 1)[0] if contexts else ""
+    if (title[:match.start()].strip() not in {"", "The", "the", component}
+            or title[match.end():].strip() not in {"", "."}):
+        return unknown
+    # Presence of prose can hide another concern without a recognizable marker.
+    # Whole disposition therefore requires no narrative beyond a literal repeat
+    # of the same atomic title. Other narratives receive partial checks only.
+    narrative = [finding.get(k) for k in ("explanation", "observation", "required_conditions")]
+    if finding.get("premises") or any(value and _claim_text(value).strip().rstrip(".")
+                                     != title.strip().rstrip(".") for value in narrative):
+        return unknown
+    checks = react_async_premise_checks(finding, facts)
+    result = next((c for c in checks if c["kind"] == "react_async_network_reset_absent"), unknown)
+    if result["result"] == "contradicted":
+        result = {**result, "detail": result["detail"].split(" This is a partial premise check", 1)[0]
+                  + " Only the complete network-rejection premise is contradicted."}
+    return result
+
+
 def react_async_syntax_check(finding, facts):
     """Only a complete, atomic absence title can be dismissed by presence.
 
-    A catch reset does not refute stuck-state, navigation or concurrency claims.
-    Model prose and fix suggestions never supply the evidence for this verdict.
+    Catch presence alone does not refute outcome claims. A stronger source
+    counterexample can refute only a complete network-rejection premise; other
+    narratives receive partial checks. Model prose never supplies the proof.
     """
     match = re.fullmatch(r"([A-Za-z_$][\w$]*)(?:\(\))? has no catch reset for ([A-Za-z_$][\w$]*)[.]?",
                          str(finding.get("title", "")))
     if not match:
-        return None
+        return _network_syntax_check(finding, facts)
     result = {"kind": "react_async_catch_reset", "result": "not_checked",
               "claim": "The named handler contains no direct catch reset for the named state.",
               "detail": "No unambiguous supported catch reset observed; absence is not established."}

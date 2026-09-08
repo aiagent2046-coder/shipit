@@ -352,7 +352,7 @@ def _react(data: bytes, start: int, end: int, path: str) -> dict:
     return unknown("Return/control-flow shape outside this bounded order check.")
 
 
-def _sql(source: str, start: int, end: int) -> dict:
+def _sql(source: str, start: int, end: int, *, target: str = "") -> dict:
     kind = "sql_update_where"
     # pglast exposes character offsets. Use the next statement's location:
     # stmt_len is not reliable after multibyte text in pglast 7.7.
@@ -378,6 +378,8 @@ def _sql(source: str, start: int, end: int) -> dict:
     if len(candidates) != 1 or not isinstance(candidates[0][0], ast.UpdateStmt):
         return _result(kind, "not_checked", "The cited range does not identify one top-level PostgreSQL UPDATE.")
     update, a, b = candidates[0]
+    if target and (update.relation is None or update.relation.relname != target):
+        return _result(kind, "not_checked", "The selected UPDATE has a different relation target.")
     # An UPDATE inside a CTE or nested statement needs its own location binding.
     todo = [update]
     updates = 0

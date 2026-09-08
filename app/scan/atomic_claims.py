@@ -14,32 +14,49 @@ from app.scan import guard_context as g
 
 MAX_PREMISES = 6
 KINDS = {
-    "http_status_guard_absent": "The response has no !ok return before its JSON body is parsed.",
-    "json_rejection_uncaught": "The JSON parsing promise has no local rejection fallback.",
+    "http_status_guard_absent": "The response has no local HTTP status guard before its JSON body is parsed.",
+    "json_rejection_uncaught": "The JSON parsing promise has no local rejection fallback or safe enclosing catch.",
     "intl_catch_absent": "The Intl.DateTimeFormat constructor has no enclosing catch.",
     "required_nested_objects_absent": "The parsed Zod schema does not require its nested objects.",
     "query_limit_unbounded": "The query receives the raw limit without a finite bounded clamp.",
+    "sql_update_where": "The cited PostgreSQL UPDATE has no WHERE clause of its own.",
+    "ownership_guard_absent": "The cited write has no local ownership guard for its target.",
 }
 # These complete titles state one premise. Broad risk/validation titles only
 # request a partial check below; their other interpretations are not dismissed.
 _ATOMIC = {
-    "http_status_guard_absent": r"Missing HTTP status check(?: before parsing (?:the )?"
-                                r"(?:API |OAuth token )?response| in auto-reply generation)?",
+    "http_status_guard_absent": r"(?:Missing HTTP status (?:check|validation)(?: before parsing (?:the )?"
+                                r"(?:API |OAuth token )?response| in [\w ()'-]{1,160})?|"
+                                r"[\w ()'-]{1,120} (?:does not|fails to) (?:check|validate) HTTP status"
+                                r" before (?:JSON parsing|parsing (?:the )?(?:JSON|response)))",
     "json_rejection_uncaught": r"(?:The )?(?:response )?JSON parsing promise has no (?:catch|rejection fallback)",
     "intl_catch_absent": r"Time zone validation relies on Intl API without error handling",
     "required_nested_objects_absent": r"Zod schema validation does not enforce required nested object structure",
     "query_limit_unbounded": r"The query receives an unclamped limit",
 }
 _PARTIAL = {
-    "http_status_guard_absent": r"(?:Incomplete error handling for .*API response|Missing HTTP status check)",
-    "json_rejection_uncaught": r"(?:JSON|parsing).*(?:throw|reject|uncaught|crash)",
+    "http_status_guard_absent": r"(?:Incomplete error handling for .{0,120}API response|"
+                                r"\b(?:missing|absent|unvalidated|unchecked|no)\b.{0,100}\bHTTP (?:status|response)|"
+                                r"\b(?:does not|fails to|not) (?:check(?:ed)?|validat(?:e|ed))\b"
+                                r".{0,100}\bHTTP (?:status|errors)|"
+                                r"\bHTTP (?:status|response)\b.{0,100}\b"
+                                r"(?:unchecked|unvalidated|not checked|not validated))",
+    "json_rejection_uncaught": r"(?:JSON|parsing).{0,160}(?:throw|reject|uncaught|crash|try.catch)|"
+                              r"(?:uncaught|unhandled)\b.{0,80}\bJSON",
     "intl_catch_absent": r"(?:time.?zone|Intl).*(?:without error handling|no catch|uncaught)",
     "required_nested_objects_absent": r"Zod.*required nested object",
     "query_limit_unbounded": r"(?:Integer overflow risk in limit parameter parsing|negative.*limit|limit.*negative)",
+    "sql_update_where": r"\bupdate\b.{0,200}\b(?:without|missing|no)\b.{0,80}\b(?:where|guard|row filter)\b",
+    "ownership_guard_absent": r"\b(?:insert|write|update|delete)\b.{0,120}\b(?:does not|without|missing|no)\b"
+                              r".{0,100}\b(?:ownership|membership|participant)\b|"
+                              r"\b(?:missing|absent|no)\b.{0,80}\b(?:ownership|membership) "
+                              r"(?:check|guard|validation)\b",
 }
 
 
 def title_kind(title):
+    if re.search(r"\b(?:and|or|also|separately|additionally)\b|[;\n]", title, re.I):
+        return None
     return next((kind for kind, pattern in _ATOMIC.items()
                  if re.fullmatch(pattern + r"[.]?", title, re.I)), None)
 
@@ -60,8 +77,10 @@ def requests(finding):
             continue
         found.append({"kind": item["kind"], "target": target, "line_start": start, "line_end": end})
     # Legacy answers still get a check. No inferred targets from quoted prose.
-    kinds = [atomic] if atomic else [kind for kind, pattern in _PARTIAL.items()
-                                    if re.search(pattern, title, re.I)]
+    narrative = title + "\n" + str(finding.get("explanation", ""))[:8000]
+    kinds = [kind for kind, pattern in _PARTIAL.items() if re.search(pattern, narrative, re.I)]
+    if atomic and atomic not in kinds:
+        kinds.insert(0, atomic)
     for kind in kinds:
         if len(found) >= MAX_PREMISES or any(item["kind"] == kind for item in found):
             continue
@@ -103,12 +122,71 @@ def _returns_on_not_ok(stmt, name):
         n.type in {"expression_statement", "lexical_declaration"} for n in parts[:-1]))
 
 
-def _http(own, bindings, target, kind):
+def _inside(node, ancestor):
+    return ancestor is not None and ancestor.start_byte <= node.start_byte and node.end_byte <= ancestor.end_byte
+
+
+def _positive_ok_branch(node, block, name):
+    """The JSON call must execute inside this response's positive branch."""
+    parent = node.parent
+    while parent and parent != block:
+        if parent.type in g._FUNCTIONS:
+            return False
+        if (parent.type == "if_statement"
+                and _member_name(g._unwrap(parent.child_by_field_name("condition")), "ok") == name
+                and _inside(node, parent.child_by_field_name("consequence"))):
+            return True
+        parent = parent.parent
+    return False
+
+
+def _literal_value(value):
+    return value is not None and all(n.type in {
+        "object", "pair", "property_identifier", "string", "string_fragment", "number", "null", "true", "false"
+    } for n in g._walk(g._unwrap(value)))
+
+
+def _safe_enclosing_catch(node):
+    # Only an awaited promise is caught by the surrounding synchronous try.
+    awaited = node.parent
+    while awaited and awaited.type == "parenthesized_expression":
+        awaited = awaited.parent
+    if not awaited or awaited.type != "await_expression":
+        return False
+    parent = awaited.parent
+    while parent and parent.type not in g._FUNCTIONS:
+        if parent.type == "try_statement" and _inside(node, parent.child_by_field_name("body")):
+            catch = parent.child_by_field_name("handler")
+            if not catch or parent.child_by_field_name("finalizer"):
+                return False
+            parameter = catch.child_by_field_name("parameter")
+            if parameter and parameter.type != "identifier":
+                return False  # destructuring/defaults may throw before the handler
+            statements = g._children(catch.child_by_field_name("body"))
+            if not statements:
+                return True
+            if len(statements) == 1 and statements[0].type == "return_statement":
+                values = g._children(statements[0])
+                return not values or (len(values) == 1 and _literal_value(values[0]))
+            return False  # calls, rethrows and conditional effects are not proved safe
+        parent = parent.parent
+    return False
+
+
+def _http(own, bindings, target, kind, start, end):
     candidates = []
     for node in own:
         receiver, args = g._method(node, "json")
         name = g._name(receiver)
-        if not name or args or (target and target != name) or bindings[name] != 1:
+        if not name or args or (target and target != name):
+            continue
+        declarations = [n for n in own if n.type == "variable_declarator"
+                        and g._name(n.child_by_field_name("name")) == name]
+        dec = declarations[0] if len(declarations) == 1 else None
+        selected = any(g._line(n) <= end and n.end_point[0] + 1 >= start for n in (node, dec) if n)
+        unresolved = (name, node, False, "The response binding or control flow is unresolved.", selected)
+        if bindings[name] != 1:
+            candidates.append(unresolved)
             continue
         if kind == "json_rejection_uncaught":
             obj, handlers = g._method(node.parent, "catch")
@@ -121,35 +199,44 @@ def _http(own, bindings, target, kind):
             simple_parameters = (handler is not None and
                                  not g._children(handler.child_by_field_name("parameters")) and
                                  handler.child_by_field_name("parameter") is None)
-            harmless = simple_parameters and value and all(n.type in {
-                "object", "pair", "property_identifier", "string", "string_fragment", "number", "null", "true", "false"
-            } for n in g._walk(value))
-            candidates.append((name, node, bool(harmless), "The same JSON promise has a local literal fallback. "
-                               "This does not catch a preceding fetch rejection or prove the UI resets."))
+            harmless = simple_parameters and _literal_value(value)
+            enclosing = _safe_enclosing_catch(node)
+            detail = ("The awaited JSON promise is inside a try with an empty or literal-return catch. "
+                      if enclosing else "The same JSON promise has a local literal fallback. ")
+            candidates.append((name, node, bool(harmless or enclosing), detail +
+                               "This does not prove response shape, transport handling or UI reset.", selected))
             continue
         # A same-spelling response factory (NextResponse.json) is not the
         # response binding. Require one immutable local awaited initializer.
-        declarations = [n for n in own if n.type == "variable_declarator"
-                        and g._name(n.child_by_field_name("name")) == name]
-        if len(declarations) != 1:
+        if dec is None:
+            candidates.append(unresolved)
             continue
-        dec = declarations[0]
-        value = dec.child_by_field_name("value")
+        value = g._unwrap(dec.child_by_field_name("value"))
         if not value or value.type != "await_expression" or dec.end_byte >= node.start_byte:
+            candidates.append(unresolved)
             continue
         block = dec.parent.parent
         if block.type != "statement_block" or dec not in g._consts(block).values():
+            candidates.append(unresolved)
             continue
         use = _direct_statement(node, block)
-        guarded = bool(use and any(dec.end_byte < guard.start_byte < guard.end_byte < use.start_byte
-                                  and _returns_on_not_ok(guard, name) for guard in g._children(block)))
-        candidates.append((name, node, guarded, "The same immutable local response has a !ok return branch "
-                           "before its JSON parse. Response factories are separate calls. "
-                           "Response shape, transport failures and runtime bindings remain unverified."))
+        guarded = bool(use and (any(dec.end_byte < guard.start_byte < guard.end_byte < use.start_byte
+                                    and _returns_on_not_ok(guard, name) for guard in g._children(block))
+                                or _positive_ok_branch(node, block, name)))
+        candidates.append((name, node, guarded, "The same immutable local response has a !ok return before "
+                           "its JSON parse, or the parse is inside its positive .ok branch. Response factories "
+                           "are separate calls. Response shape, transport failures and runtime bindings remain "
+                           "unverified.", selected))
+    # Coordinates may distinguish separate response operations in one function.
+    # A selected binding with two parses stays ambiguous even if one parse is safe.
+    if not target and len(candidates) > 1:
+        selected_names = {name for name, _, _, _, selected in candidates if selected}
+        if len(selected_names) == 1:
+            candidates = [candidate for candidate in candidates if candidate[0] in selected_names]
     # Never select the safe call while ignoring an unsafe call in the same scope.
     if len(candidates) != 1:
         return None
-    name, node, contradicted, detail = candidates[0]
+    name, node, contradicted, detail, _ = candidates[0]
     return (node, detail, name) if contradicted else None
 
 
@@ -246,10 +333,30 @@ def _limit(own, constants, bindings, free, target):
 
 
 def check_source(data, path, request):
+    if request["kind"] == "ownership_guard_absent":
+        from app.scan.ownership_claims import check_source as check_ownership
+        return check_ownership(data, path, request)
     result = unknown(request)
     start, end = request.get("line_start"), request.get("line_end")
-    if (type(start) is not int or type(end) is not int or not 1 <= start <= end <= len(data.splitlines())
-            or not path.endswith((".ts", ".tsx", ".js", ".jsx"))):
+    if type(start) is not int or type(end) is not int or not 1 <= start <= end <= len(data.splitlines()):
+        return result
+    if request["kind"] == "sql_update_where":
+        if not path.endswith(".sql"):
+            return result
+        from pglast.parser import ParseError
+        from app.scan.syntax_claims import _sql
+        try:
+            proof = _sql(data.decode("utf-8"), start, end, target=request.get("target", ""))
+        except (ParseError, UnicodeError, ValueError):
+            return result
+        anchor_start, anchor_end = request.get("anchor_line_start", start), request.get("anchor_line_end", end)
+        if (type(anchor_start) is not int or type(anchor_end) is not int
+                or not proof.get("line_start", 0) <= anchor_start <= anchor_end <= proof.get("line_end", 0)):
+            return unknown(request, "The selected UPDATE does not contain the cited finding's range.")
+        result.update(result=proof["result"], detail=proof["detail"],
+                      source_line_start=proof["line_start"], source_line_end=proof["line_end"])
+        return result
+    if not path.endswith((".ts", ".tsx", ".js", ".jsx")):
         return result
     parser = Parser(Language(tree_sitter_typescript.language_tsx() if path.endswith((".tsx", ".jsx"))
                              else tree_sitter_typescript.language_typescript()))
@@ -291,7 +398,11 @@ def check_source(data, path, request):
     kind, target = request["kind"], request.get("target", "")
     proof = None
     if kind in {"http_status_guard_absent", "json_rejection_uncaught"}:
-        proof = _http(own, bindings, target, kind)
+        proof = _http(own, bindings, target, kind, start, end)
+        if proof and (target or (start, end) != (anchor_start, anchor_end)):
+            anchored = _http(own, bindings, "", kind, anchor_start, anchor_end)
+            if not anchored or anchored[2] != proof[2]:
+                return unknown(request, "The selected response is not the unique operation at the cited finding.")
     elif kind == "intl_catch_absent":
         calls = [n for n in own if n.type in {"new_expression", "call_expression"}
                  and g._callee_name(n) in {"DateTimeFormat", "computed_unknown"}]

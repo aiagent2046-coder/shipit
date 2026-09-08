@@ -43,7 +43,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "f872944dd15f267f"
+PROMPT_FINGERPRINT = "0a26de8ac3ce3f53"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -664,7 +664,7 @@ def test_4xx_not_retried(monkeypatch):
 
 def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     """passes=2 doubles the prompts and unions the findings: stable
-    findings collapse via (file, line) dedup, pass-unique ones are
+    findings collapse via a shared source operation, pass-unique ones are
     kept — the paid Fix Pack completeness mode."""
     import io
     import zipfile as _zipfile
@@ -674,21 +674,23 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     with _zipfile.ZipFile(buf, "w") as zf:
         # содержимое матчит ОБЕ рубрики: auth (token) и security (env, fetch)
         zf.writestr("src/auth.ts",
-                    "const token = await fetch(process.env.API_URL)\n")
+                    "async function login() {\n"
+                    "const token = crypto.createHmac('sha256', process.env.KEY).update(userId);\n"
+                    "}\n")
     buf.seek(0)
 
     responses = iter([
         # pass 1: auth, security
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
-        '"evidence":"const token = await fetch","severity":"high",'
-        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]',
+        '[{"file":"src/auth.ts","line_start":2,"line_end":2,'
+        '"evidence":"const token = crypto.createHmac","severity":"high",'
+        '"confidence":0.9,"title":"HMAC used for password derivation","explanation":"","fix_hint":""}]',
         '[]',
         # pass 2: та же stable + уникальная для второго прохода
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
-        '"evidence":"const token = await fetch","severity":"high",'
-        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]',
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
-        '"evidence":"const token = await fetch","severity":"low",'
+        '[{"file":"src/auth.ts","line_start":2,"line_end":2,'
+        '"evidence":"const token = crypto.createHmac","severity":"high",'
+        '"confidence":0.9,"title":"HMAC used for password derivation","explanation":"","fix_hint":""}]',
+        '[{"file":"src/auth.ts","line_start":2,"line_end":2,'
+        '"evidence":"const token = crypto.createHmac","severity":"low",'
         '"confidence":0.5,"title":"pass-2-only finding","explanation":"","fix_hint":""}]',
     ])
 
@@ -707,7 +709,7 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
                                    rubrics=("auth", "security"), passes=2)
     assert stats.prompts == 4          # 2 рубрики × 2 прохода
     # Identical repeats collapse; the pass-specific cause keeps its own row,
-    # even though it shares the source line with the stable finding.
+    # even though it shares the source line with the HMAC used for password derivation.
     assert len(findings) == 2
     assert findings[0].severity == "high"
     assert findings[1].title == "pass-2-only finding"

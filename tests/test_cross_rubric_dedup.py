@@ -235,3 +235,127 @@ def test_command_injection_paraphrases_keep_all_originals():
     ])
     assert len(out) == 1
     assert len(out[0].claim_evidence["grouped_originals"]) == 2
+
+
+def _identity(operation=10, mechanism="query_row_bound"):
+    return {"version": 1, "method": "source_ast", "file": "api.py",
+            "source_sha256": "a" * 64, "function_span": [0, 100],
+            "operation_span": [operation, operation + 10], "mechanism": mechanism}
+
+
+def _source_evidence(identity=None, *, result="not_checked", target="rows", line=10):
+    return {"source_issue_identity": identity,
+            "syntax_check": {"kind": "unsupported", "result": "not_checked"},
+            "premise_checks": [{"kind": "query_limit_unbounded", "result": result,
+                                "target": target, "line_start": line, "line_end": line + 2,
+                                "anchor_line_start": line, "anchor_line_end": line + 10}]}
+
+
+def test_same_source_query_ignores_only_selector_coordinates():
+    out = dedup_cross_rubric([
+        _f(title="Matches query has no LIMIT", line=10,
+           claim_evidence=_source_evidence(_identity(), line=10)),
+        _f(title="Matches query has no LIMIT", line=11, rule_id="llm-money",
+           claim_evidence=_source_evidence(_identity(), line=11)),
+    ])
+    assert len(out) == 1
+    checks = [item["claim_evidence"]["premise_checks"][0] for item in out[0].claim_evidence["grouped_originals"]]
+    assert {item["line_start"] for item in checks} == {10, 11}
+
+
+def test_different_source_query_beats_identical_title_and_location():
+    out = dedup_cross_rubric([
+        _f(title="Query has no LIMIT", claim_evidence=_source_evidence(_identity(10))),
+        _f(title="Query has no LIMIT", claim_evidence=_source_evidence(_identity(30))),
+    ])
+    assert len(out) == 2
+
+
+def test_unresolved_source_identity_does_not_fall_back_to_same_title_or_drop_fresh_observations():
+    raw = [_f(title="Identical text", claim_evidence=_source_evidence()),
+           _f(title="Identical text", claim_evidence=_source_evidence())]
+    out = dedup_cross_rubric(raw)
+    assert len(out) == 2
+    assert dedup_cross_rubric(out) == out
+
+
+def test_same_source_mechanism_retains_different_targets_and_dispositions():
+    baseline = _f(claim_evidence=_source_evidence(_identity()))
+    for changed in [
+        _source_evidence(_identity(), result="contradicted"),
+        _source_evidence(_identity(), target="otherResponse"),
+        {**_source_evidence(_identity()), "premise_checks": []},
+        {**_source_evidence(_identity()), "syntax_check": {"kind": "query_limit_unbounded", "result": "contradicted"}},
+        {**_source_evidence(_identity()), "recommendation_check": {"result": "prerequisites_required"}},
+    ]:
+        assert len(dedup_cross_rubric([baseline, _f(claim_evidence=changed)])) == 2
+
+
+def test_pre_grouped_inputs_are_flat_idempotent_and_keep_origin_statuses():
+    identity = _identity()
+    a = _f(title="Query has no LIMIT", severity="medium", rule_id="llm-auth", line=10,
+           origin_category="Auth", verification_status="unverified",
+           claim_evidence=_source_evidence(identity, line=10))
+    b = _f(title="Query grows unbounded", severity="high", rule_id="llm-security", line=20,
+           origin_category="Security", verification_status="observed",
+           claim_evidence=_source_evidence(identity, line=20))
+    c = _f(title="Query has no row bound", severity="low", rule_id="llm-money", line=30,
+           origin_category="Money & Data", verification_status="unverified",
+           claim_evidence=_source_evidence(identity, line=30))
+    partial = dedup_cross_rubric([a, b])
+    out = dedup_cross_rubric([partial[0], b, c])
+    assert len(out) == 1
+    originals = out[0].claim_evidence["grouped_originals"]
+    assert len(originals) == 3
+    assert {item["origin_category"] for item in originals} == {"Auth", "Security", "Money & Data"}
+    assert {item["verification_status"] for item in originals} == {"unverified", "observed"}
+    assert all("grouped_originals" not in item["claim_evidence"] for item in originals)
+    assert dedup_cross_rubric(out) == out
+    assert out[0].explanation.count("not independent confirmation") == 1
+
+
+def test_legacy_representative_change_leaves_no_joinable_representatives():
+    from app.scan.cross_rubric_dedup import _same_issue
+    # Old first-anchor grouping produced [line 13, line 16], which merged on
+    # a second pass. The strongest representative must anchor from the outset.
+    out = dedup_cross_rubric([
+        _f(title="Same query", line=10, severity="medium"),
+        _f(title="Same query", line=13, severity="critical"),
+        _f(title="Same query", line=16, severity="high"),
+    ])
+    assert len(out) == 1
+    assert out[0].line == 13
+    assert dedup_cross_rubric(out) == out
+    assert not any(_same_issue(a, b) for i, a in enumerate(out) for b in out[i + 1:])
+
+
+def test_historical_group_with_nested_origins_and_new_severity_is_stable():
+    a = _f(title="Same query", severity="low", rule_id="llm-auth")
+    b = _f(title="Same query", severity="medium", rule_id="llm-security")
+    old_group = dedup_cross_rubric([a, b])[0]
+    c = _f(title="Same query", severity="critical", rule_id="llm-money")
+    out = dedup_cross_rubric([old_group, c])
+    assert len(out) == 1 and out[0].severity == "critical"
+    assert len(out[0].claim_evidence["grouped_originals"]) == 3
+    assert dedup_cross_rubric(out) == out
+
+
+def test_identical_repeated_observations_preserve_multiplicity_when_regrouped():
+    a = _f(title="Same issue")
+    out = dedup_cross_rubric([a, a])
+    assert len(out) == 1
+    assert len(out[0].claim_evidence["grouped_originals"]) == 2
+    assert dedup_cross_rubric(out) == out
+    assert dedup_cross_rubric([out[0], a]) == out
+
+
+def test_two_equally_severe_legacy_groups_keep_boundary_member_on_replay():
+    raw = [_f(line=line, severity=severity, explanation=str(index), title="Same issue")
+           for index, (line, severity) in enumerate([
+               (5, "high"), (4, "high"), (3, "medium"), (9, "critical"),
+               (5, "critical"), (8, "medium"), (0, "medium"),
+           ])]
+    out = dedup_cross_rubric(raw)
+    assert dedup_cross_rubric(out) == out
+    assert sorted(len((item.claim_evidence or {}).get("grouped_originals", [item]))
+                  for item in out) == [1, 1, 5]

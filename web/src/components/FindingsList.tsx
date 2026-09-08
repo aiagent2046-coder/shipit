@@ -1,7 +1,7 @@
 import { AuditCoverage } from "@/components/AuditCoverage";
 import type { Finding, Score, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
-import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts, syntaxContradicted } from "@/lib/evidence";
+import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, partialContradicted, sourceSeverityCounts, syntaxContradicted } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -55,9 +55,10 @@ function FindingCard({ finding, historical = false, included = false }: { findin
   const loc = finding.file
     ? `${finding.file}${finding.line ? `:${finding.line}` : ""}`
     : "";
-  const tech = [finding.title, loc, finding.masked].filter(Boolean).join(" · ");
   const model = finding.source === "llm" || finding.rule_id?.startsWith("llm-");
   const contradicted = syntaxContradicted(finding);
+  const partial = partialContradicted(finding) && !historical;
+  const tech = [partial ? "" : finding.title, loc, finding.masked].filter(Boolean).join(" · ");
   const evidence = <dl className="my-3 space-y-2 whitespace-pre-line text-sm">
     {claimEvidenceRows(finding).map(([label, value], index) => (
       <div key={`${label}-${index}`}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
@@ -66,23 +67,31 @@ function FindingCard({ finding, historical = false, included = false }: { findin
   return (
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
-        <p className="font-medium">{what}</p>
+        <p className="font-medium">{partial ? "Source checks contradict part of this finding" : what}</p>
         {historical ? <span className="text-sm text-muted">{included ? "Free audit observation — included in this audit" : "Previous preview — not reassessed"}
           {isNonProductionFinding(finding) && " · Test/example context"}</span>
           : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
+          : partial ? <span className="text-sm text-muted">Assessment needs review</span>
           : isInformational(finding) ? <span className="text-sm text-muted">Informational</span>
           : <SeverityBadge severity={finding.severity} />}
       </div>
       <p className="mb-2 text-sm text-muted">{evidenceLabel(finding)}</p>
-      {risk && <p className="mb-2 text-sm text-muted">
+      {partial && <p className="mb-2 text-sm text-muted">
+        Other claims remain unverified. Review the counterevidence below; the original model severity is retained in the score pending review.
+      </p>}
+      {risk && !partial && <p className="mb-2 text-sm text-muted">
         {model && <strong>Possible consequence — unverified: </strong>}{risk}
       </p>}
       {model ? evidence : <details className="my-3 text-sm"><summary>Evidence and conditions</summary>{evidence}</details>}
+      {partial && <details className="my-3 text-sm text-muted">
+        <summary>Original model claim and suggestion — contains a contradicted premise</summary>
+        <p>{what}</p>{risk && <p>{risk}</p>}{fix && <p>{fix}</p>}
+      </details>}
       {fix && (contradicted || historical) && <details className="my-3 text-sm text-muted">
         <summary>{historical ? (included ? "Free audit suggestion — unverified" : "Original preview suggestion — not reassessed")
           : "Original model suggestion — premise contradicted"}</summary>{fix}
       </details>}
-      {fix && !contradicted && !historical && (
+      {fix && !contradicted && !partial && !historical && (
         <p className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-accent">
           <span>
             <span aria-hidden="true">→ </span>

@@ -8,7 +8,7 @@ assets: the report is a single file that can be shared as-is.
 from __future__ import annotations
 
 from html import escape
-from app.scan.claim_evidence import syntax_contradicted
+from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
 
 from app.report.evidence import (
     is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
@@ -43,8 +43,11 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
     emoji, _ = tier(sev)
     tier_label = f"Potential {sev} impact"
     contradicted = syntax_contradicted(f.get("claim_evidence"))
+    partial = partial_contradicted(f.get("claim_evidence")) and not historical
     if contradicted:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
+    elif partial:
+        emoji, tier_label, color = "", "Assessment needs review", "#8b8d98"
     if is_informational(f):
         emoji, tier_label, color = "", "Informational", "#8b8d98"
     if historical:
@@ -71,6 +74,15 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
                        else 'Original preview suggestion — not reassessed')
                     + '</summary>'
                     + escape(fix) + '</details>') if fix else ""
+    if partial:
+        original = ('<details><summary>Original model claim and suggestion — contains a contradicted premise</summary>'
+                    + '<p>' + escape(what) + '</p>'
+                    + ('<p>' + escape(risk) + '</p>' if risk else '')
+                    + ('<p>' + escape(fix) + '</p>' if fix else '') + '</details>')
+        what = "Source checks contradict part of this finding"
+        risk_html = ('<div class="risk">Other claims remain unverified. Review the counterevidence below; '
+                     'the original model severity is retained in the score pending review.</div>')
+        fix_html = original
     evidence = '<dl style="white-space:pre-line">' + "".join(
         f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f)
     ) + '</dl>'
@@ -78,7 +90,7 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         evidence = '<details><summary>Evidence and conditions</summary>' + evidence + '</details>'
     tech_bits = " · ".join(x for x in (
         _category_label(f),
-        escape(str(f.get("title", ""))), loc,
+        ("" if partial else escape(str(f.get("title", "")))), loc,
         escape(str(f.get("masked", "")))) if x)
     return (
         '<tr>'
