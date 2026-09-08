@@ -142,7 +142,7 @@ def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
     # The stored report retains prose limitations; the prompt already has the
     # inventory scope. Avoid repeating the same prose for every candidate.
     def compact_checks(checks):
-        return [{k: v for k, v in check.items() if k != "detail"} for check in checks]
+        return [{k: v for k, v in check.items() if k not in {"detail", "summary"}} for check in checks]
     functions["records"] = [
         {**{k: v for k, v in item.items() if k != "call_names"},
          "checks": compact_checks(item["checks"]),

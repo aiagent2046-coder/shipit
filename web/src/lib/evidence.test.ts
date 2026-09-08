@@ -6,6 +6,31 @@ import type { Finding, ScanManifest } from "./types";
 const source: Finding = { rule_id: "aws-access-key-id", title: "AWS match",
   category: "Security", severity: "high", confidence: 1, file: "app/config.py" };
 
+it("explains catch and HTTP evidence without dismissing a compound claim or changing old records", () => {
+  const finding: Finding = { ...source, rule_id: "llm-web", source: "llm", claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked",
+    observation: "Navigation never recovers", context_checks: [{ kind: "react_async_context",
+      scope: "Page.submit", checks: [{ kind: "react_async_state_reset",
+        summary: "Catch at line 20 contains a saving=false setter at line 22 after earlier statements that may throw.",
+        detail: "UI recovery is not proven." }, { kind: "react_async_http_response",
+        summary: "Awaited fetch at line 15. Response.ok branches: http_error at line 16.",
+        detail: "An HTTP error response does not itself reject." }] }] } };
+  const before = JSON.stringify(finding);
+  const rows = claimEvidenceRows(finding);
+  expect(rows.filter(([label]) => label.startsWith("React error-path evidence"))).toHaveLength(2);
+  expect(rows.flat().join(" ")).toContain("after earlier statements that may throw");
+  expect(rows.flat().join(" ")).toContain("HTTP error response does not itself reject");
+  expect(rows.flat()).toContain("Navigation never recovers");
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  expect(JSON.stringify(finding)).toBe(before);
+  expect(claimEvidenceRows({ ...finding, claim_evidence: { version: 1,
+    source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked",
+    context_checks: [{ kind: "react_async_context", checks: [{ kind: "react_async_state_reset" }] }] } })
+    .some(([label]) => label.startsWith("React error-path evidence"))).toBe(false);
+});
+
 it("separates examples from the source headline and category count", () => {
   const findings = [source, { ...source, file: "tests/config.py", context: "test_file" }];
   expect(findingCounts(findings)).toEqual({ source: 1, examples: 1 });

@@ -45,12 +45,17 @@ def _result(kind: str, result: str, detail: str, **location) -> dict:
 class SyntaxVerifier:
     """One scan's parsing budget; no cross-customer cache or model calls."""
 
-    def __init__(self, archive: BinaryIO):
+    def __init__(self, archive: BinaryIO, source_facts: dict | None = None):
         self.archive = archive
+        self.source_facts = source_facts
         self.remaining = MAX_PARSE_BYTES
         self.checks = 0
 
     def check(self, finding: dict) -> dict:
+        from app.scan.react_async_context import react_async_syntax_check
+        async_check = react_async_syntax_check(finding, self.source_facts)
+        if async_check is not None:
+            return async_check
         title = str(finding.get("title", ""))
         kind = ("react_hook_order" if _HOOK_CLAIM.search(title) else
                 "sql_update_where" if _SQL_CLAIM.search(title) else

@@ -1277,7 +1277,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     with zipfile.ZipFile(fileobj) as zf:
         files = _iter_code_files(zf)
     files_by_name = dict(files)
-    syntax_verifier = SyntaxVerifier(fileobj)
+    syntax_verifier = SyntaxVerifier(fileobj, source_facts)
 
     findings: list[ScoredFinding] = []
     ran: set[str] = set()

@@ -156,6 +156,11 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
             detail += f" Checked source lines {syntax['line_start']}–{syntax['line_end']}."
         rows.append((label, detail))
     for context in record.get("context_checks", []):
+        if context.get("kind") == "react_async_context":
+            for item in context.get("checks", []):
+                if item.get("summary"):
+                    rows.append(("React error-path evidence — compare with the model claim",
+                                 str(context.get("scope", "")) + ": " + item["summary"] + " " + item["detail"]))
         rows.append(("Deterministic context check", json.dumps(context, ensure_ascii=False)))
     for i, original in enumerate(record.get("grouped_originals", []), 1):
         rows.append((f"Grouped original {i} — not independent confirmation",
