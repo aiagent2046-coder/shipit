@@ -52,6 +52,7 @@ WIRED_SCANNERS = (
     "scan_auth_read",
     "scan_ci_deploy_source",
     "scan_error_boundary",
+    "scan_http_success",
     "scan_rls",
     "scan_schema_drift",
     "scan_secrets",
@@ -82,6 +83,7 @@ EMITTED_RULE_IDS = (
     "no-tests",
     "private-key-block",
     "python-route-read-auth-consistency",
+    "react-unchecked-http-success",
     "sql-secret-assignment",
     "stripe-live-key",
     "supabase-anon-key",
@@ -98,7 +100,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-08-2"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-08-3"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

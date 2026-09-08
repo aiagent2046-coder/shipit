@@ -127,3 +127,22 @@ it("retains grouped original interpretations without treating repeats as confirm
   expect(rows["Grouped original 2 — not independent confirmation"]).toContain("Other reasoning");
   expect(rows["Consequence check"]).toBe("No independent verification recorded.");
 });
+
+it("shows source counterevidence and policy prerequisites without turning them into verified outcomes", () => {
+  const rows = Object.fromEntries(claimEvidenceRows({ ...source, claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, observation: "Model interpretation",
+    required_conditions: null, conditions_status: "not_checked", consequence_status: "not_checked",
+    context_checks: [
+      { kind: "guard_context", file: "auth.ts", line: 24,
+        summary: "A state comparison precedes the exchange; runtime validity was not checked." },
+      { kind: "cost_context", file: "chat.ts", line: 5, checks: [
+        { summary: "The imported helper contains numeric slice limits; total request cost is unknown." } ] },
+      { kind: "rls_recommendation_context", file: "route.ts", line: 12,
+        summary: "SELECT policies alone do not authorize writes. Check policy prerequisites before changing clients." },
+    ],
+  } }));
+  expect(rows["Existing guard evidence — compare with the model claim"]).toContain("auth.ts:24");
+  expect(rows["Cost and ordering evidence — compare with the model claim"]).toContain("total request cost is unknown");
+  expect(rows["Policy prerequisites — review before changing clients"]).toContain("SELECT policies alone");
+  expect(rows["Consequence check"]).toBe("No independent verification recorded.");
+});

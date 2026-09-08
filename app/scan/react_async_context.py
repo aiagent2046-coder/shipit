@@ -28,6 +28,9 @@ SCOPE = (
     "top-level named components; direct imported useState bindings; literal boolean setters, "
     "empty-string setters, simple state/empty-input return guards and native button onClick/disabled syntax only. "
     "Direct catch resets, awaited fetch calls and same-binding Response.ok branches are recorded. "
+    "A narrow unchecked-HTTP check links discarded/unused fetch responses to a following visible saved "
+    "state or imported Next router navigation in a straight-line block. Status-aware and opaque flows "
+    "are left unresolved; catch alone handles rejection, not HTTP error responses. "
     "Source order and try/catch/finally placement are observations, not full control-flow proofs. "
     "Indirect handlers, custom hooks/components, refs, all event entry points, runtime bindings, "
     "request idempotency and harmful outcomes are not verified. Missing observations do not prove "
@@ -153,7 +156,8 @@ def _call(node):
     if node.type == "expression_statement":
         children = _children(node)
         node = children[0] if len(children) == 1 else node
-    if node.type != "call_expression" or node.child_by_field_name("optional_chain"):
+    if (node.type != "call_expression" or node.child_by_field_name("optional_chain")
+            or any(c.type == "?." for c in node.children)):
         return "", []
     return _name(node.child_by_field_name("function")), _children(node.child_by_field_name("arguments"))
 
@@ -232,14 +236,290 @@ def _catch_resets(nodes, setter, limits):
     return records
 
 
-def _http_checks(nodes, bindings, limits):
+def _standard_fetch(root, nodes, bindings):
+    """Local evidence must not contradict the standard-global-fetch assumption."""
+    if bindings["fetch"] or any(
+        n.type == "identifier" and _name(n) == "fetch"
+        for stmt in root.named_children if stmt.type == "import_statement" for n in _walk(stmt)
+    ):
+        return False
+    globals_ = {"window", "globalThis", "self"}
+    for node in nodes:
+        if node.type in {"member_expression", "subscript_expression"}:
+            obj = node.child_by_field_name("object")
+            prop = node.child_by_field_name("property") or node.child_by_field_name("index")
+            if _name(obj) in globals_ and _text(prop).strip("'\"") == "fetch":
+                return False
+        # Global aliases / reflective writes are unresolved. Do not attempt to
+        # follow Object.defineProperty, an alias of window, or dynamic keys.
+        if _name(node) in globals_:
+            parent = node.parent
+            if parent and not (parent.type == "member_expression"
+                               and parent.child_by_field_name("object") == node):
+                return False
+    return True
+
+
+def _router_hooks(root, bindings):
+    imported, candidates = Counter(), set()
+    for stmt in root.named_children:
+        if stmt.type != "import_statement":
+            continue
+        source = _text(stmt.child_by_field_name("source")).strip("'\"")
+        for node in _walk(stmt):
+            if node.type != "import_specifier":
+                continue
+            local = _name(node.child_by_field_name("alias") or node.child_by_field_name("name"))
+            imported[local] += 1
+            if (source in {"next/navigation", "next/router"}
+                    and _name(node.child_by_field_name("name")) == "useRouter"
+                    and not any(c.type == "type" for c in (*stmt.children, *node.children))):
+                candidates.add(local)
+    return {n for n in candidates if n and imported[n] == 1 and not bindings[n]}
+
+
+def _unescaped_routers(body, routers):
+    """A router passed to another value/helper could have mutable methods."""
+    ambiguous = set()
+    for node in _walk(body):
+        name = _text(node) if node.type in {"identifier", "shorthand_property_identifier"} else ""
+        if name not in routers:
+            continue
+        parent = node.parent
+        if parent.type == "variable_declarator" and parent.child_by_field_name("name") == node:
+            continue
+        if parent.type == "member_expression" and parent.child_by_field_name("object") == node:
+            caller = parent.parent
+            if caller and caller.type == "call_expression" and caller.child_by_field_name("function") == parent:
+                continue
+        ambiguous.add(name)
+    return routers - ambiguous
+
+
+def _visible_success_states(body, states):
+    """Recognize a tiny visible-success vocabulary; never retain source text."""
+    visible = {}
+    for node in _walk(body, _SKIP):
+        if node.type == "ternary_expression":
+            state = _name(node.child_by_field_name("condition"))
+            value = node.child_by_field_name("consequence")
+        elif node.type == "binary_expression" and _text(node.child_by_field_name("operator")) == "&&":
+            state = _name(node.child_by_field_name("left"))
+            value = node.child_by_field_name("right")
+        else:
+            continue
+        if state not in states or not value:
+            continue
+        # Attribute values and deferred callbacks are not rendered child text.
+        child, parent, guards = node, node.parent, set()
+        while parent and parent.type in {"ternary_expression", "parenthesized_expression"}:
+            if parent.type == "ternary_expression" and (
+                _name(parent.child_by_field_name("condition")) not in states
+                or parent.child_by_field_name("alternative") != child
+            ):
+                break
+            if parent.type == "ternary_expression":
+                guards.add(_name(parent.child_by_field_name("condition")))
+            child = parent
+            parent = parent.parent
+        if not (parent and parent.type == "jsx_expression" and parent.parent
+                and parent.parent.type in {"jsx_element", "jsx_fragment"}):
+            continue
+        # A JSX value stored in an unused variable, or under an unsupported
+        # conditional return, is not a directly rendered component result.
+        rendered = parent.parent
+        hidden = False
+        if _hidden_jsx_ancestor(rendered):
+            hidden = True
+        while rendered.parent and rendered.parent.type in {"jsx_element", "jsx_fragment",
+                                                          "parenthesized_expression"}:
+            rendered = rendered.parent
+            if _hidden_jsx_ancestor(rendered):
+                hidden = True
+        if hidden or not (rendered.parent and rendered.parent.type == "return_statement"
+                and rendered.parent.parent == body):
+            continue
+        if value.type == "string":
+            label = _text(value)[1:-1].casefold()
+        elif value.type == "jsx_element":
+            parts = _children(value)
+            if ([c.type for c in parts] != ["jsx_opening_element", "jsx_text", "jsx_closing_element"]
+                    or len(_children(parts[0])) != 1
+                    or not _text(parts[0].child_by_field_name("name")).islower()):
+                continue
+            label = _text(parts[1]).casefold()
+        else:
+            continue
+        if re.fullmatch(r"[\W_]*(?:saved|saved successfully|success|successfully saved|submitted|"
+                        r"сохранено|успешно сохранено)[\W_]*", label):
+            visible.setdefault(state, []).append(guards)
+    return visible
+
+
+def _hidden_jsx_ancestor(node):
+    if node.type != "jsx_element":
+        return False
+    opening = next((c for c in _children(node) if c.type == "jsx_opening_element"), None)
+    # The TSX grammar represents <> fragments as a nameless JSX element.
+    if opening and not opening.child_by_field_name("name") and not _children(opening):
+        return False
+    if not opening or not _text(opening.child_by_field_name("name")).islower():
+        return True
+    for attr in _children(opening):
+        # A spread may introduce hidden, and custom components may omit children.
+        if attr.type == "jsx_expression":
+            return True
+        parts = _children(attr)
+        if attr.type != "jsx_attribute" or not parts:
+            continue
+        name = _text(parts[0])
+        value = parts[1] if len(parts) == 2 else None
+        if name in {"hidden", "aria-hidden"}:
+            expr = _children(value) if value and value.type == "jsx_expression" else []
+            if not (len(expr) == 1 and expr[0].type == "false"):
+                return True
+        if name == "style" and value and value.type == "jsx_expression":
+            for pair in _walk(value):
+                if pair.type != "pair":
+                    continue
+                key = _text(pair.child_by_field_name("key")).strip("'\"")
+                val = _text(pair.child_by_field_name("value")).strip("'\"")
+                if (key, val) in {("display", "none"), ("visibility", "hidden"), ("visibility", "collapse")}:
+                    return True
+    return False
+
+
+def _display_guards_allow(effect, body, nodes, states, alternatives):
+    """Reject known or ambiguous writes hiding the success branch.
+
+    These states had a literal false initializer. Only later literal setters
+    on the supported path can restore a false observation after another write.
+    This remains local syntax evidence, not a proof across other event handlers.
+    """
+    for guards in alternatives:
+        values = {states[g]: False for g in guards}
+        for node in nodes:
+            if node.type != "call_expression":
+                continue
+            # Optional calls are still potential writes; they must not be
+            # ignored merely because a strict positive linker rejects them.
+            setter = _name(node.child_by_field_name("function"))
+            args = _children(node.child_by_field_name("arguments"))
+            if setter not in values:
+                continue
+            if node.start_byte >= effect.start_byte:
+                if len(args) != 1 or args[0].type != "false":
+                    values[setter] = None
+                continue
+            stmt = node.parent
+            same_path = (stmt.type == "expression_statement" and _straight_block(stmt, body)
+                         and stmt.parent.start_byte <= effect.start_byte < stmt.parent.end_byte)
+            values[setter] = (args[0].type == "true" if same_path and len(args) == 1
+                              and args[0].type in {"true", "false"} else None)
+        if all(value is False for value in values.values()):
+            return True
+    return False
+
+
+def _straight_block(stmt, body):
+    block = stmt.parent
+    while block and block.type == "statement_block":
+        if any(s.type in {"return_statement", "throw_statement"} and s.start_byte < stmt.start_byte
+               for s in _children(block)):
+            return False
+        if block == body:
+            return True
+        parent = block.parent
+        if not parent or parent.type != "try_statement" or parent.child_by_field_name("body") != block:
+            return False
+        stmt, block = parent, parent.parent
+    return False
+
+
+def _boolean_setter(stmt, setters):
+    name, args = _call(stmt)
+    return name in setters and len(args) == 1 and args[0].type in {"true", "false"}
+
+
+def _caught_side_effect(stmt):
+    """An optional synchronous call enclosed by an empty catch can fall through.
+
+    This supports best-effort telemetry between save and navigation. Loops,
+    awaited calls, callbacks, returns and finally effects remain unknown.
+    """
+    if stmt.type != "try_statement" or stmt.child_by_field_name("finalizer"):
+        return False
+    handler = stmt.child_by_field_name("handler")
+    if not handler or _children(handler.child_by_field_name("body")):
+        return False
+    statements = _children(stmt.child_by_field_name("body"))
+    if len(statements) != 1 or statements[0].type != "expression_statement":
+        return False
+    parts = _children(statements[0])
+    if len(parts) != 1 or parts[0].type != "call_expression":
+        return False
+    return not any(n.type in _SKIP | {"await_expression", "assignment_expression",
+                                     "augmented_assignment_expression", "update_expression"}
+                   for n in _walk(parts[0]))
+
+
+def _http_success_check(stmt, response, nodes, body, states, visible, routers):
+    if not _straight_block(stmt, body):
+        return None
+    # Any use of a stored response might implement status/body validation via
+    # a helper. Absence of a supported .ok branch is insufficient evidence.
+    if response and any(_name(n) == response and n.start_byte >= stmt.end_byte for n in nodes):
+        return None
+    setters = set(states.values())
+    for following in _children(stmt.parent):
+        if following.start_byte < stmt.end_byte:
+            continue
+        state = next((s for s in visible if _literal_setter(following, states[s], "true")), None)
+        effect, binding = ("success_state", state) if state else (None, None)
+        parts = _children(following)
+        call = parts[0] if following.type == "expression_statement" and len(parts) == 1 else None
+        fn = call.child_by_field_name("function") if call and call.type == "call_expression" else None
+        if (fn and fn.type == "member_expression" and not fn.child_by_field_name("optional_chain")
+                and not call.child_by_field_name("optional_chain")
+                and not any(c.type == "?." for c in call.children)
+                and _name(fn.child_by_field_name("object")) in routers
+                and _text(fn.child_by_field_name("property")) in {"push", "replace"}):
+            args = _children(call.child_by_field_name("arguments"))
+            if len(args) == 1 and args[0].type == "string":
+                effect, binding = "navigation", _name(fn.child_by_field_name("object"))
+        if effect:
+            # React may batch these setters; a synchronously reverted success
+            # state does not establish a rendered success indication.
+            if effect == "success_state":
+                if not _display_guards_allow(following, body, nodes, states, visible[state]):
+                    return None
+                # Later direct/conditional/finally writes can be batched with
+                # true. Functional setters and unknown arguments are writes,
+                # too; deferred callback bodies are outside this traversal.
+                if any(n.type == "call_expression" and n.start_byte >= following.end_byte
+                       and _name(n.child_by_field_name("function")) == states[state] for n in nodes):
+                    return None
+            return {"kind": "react_async_http_success", "result": "observed",
+                    "fetch_line": _line(stmt), "effect_line": _line(following),
+                    "effect": effect, "binding": binding,
+                    "detail": "A direct UI effect follows a discarded or unused fetch response without "
+                    "status/body handling in this supported block. Standard fetch resolves for HTTP error "
+                    "responses; catch/finally alone does not make a 4xx/5xx response reject. The handler's "
+                    "runtime entry, server outcome and global fetch behavior outside this file are not verified."}
+        if not (_boolean_setter(following, setters) or _caught_side_effect(following)):
+            return None
+    return None
+
+
+def _http_checks(nodes, bindings, limits, handler_body, states, visible, routers):
     """Link direct awaited fetch results only; no aliases, wrappers or URL text."""
     checks = []
     for node in nodes:
         if node.type != "await_expression":
             continue
         parts = _children(node)
-        if len(parts) != 1 or _call(parts[0])[0] != "fetch":
+        if (len(parts) != 1 or _call(parts[0])[0] != "fetch"
+                or len(_call(parts[0])[1]) not in {1, 2}):
             continue
         parent = node.parent
         response = (_name(parent.child_by_field_name("name"))
@@ -250,6 +530,8 @@ def _http_checks(nodes, bindings, limits):
         stmt = parent.parent if response else parent
         if (stmt.type not in {"lexical_declaration", "expression_statement"}
                 or stmt.parent.type != "statement_block"):
+            continue
+        if stmt.type == "lexical_declaration" and len(_children(stmt)) != 1:
             continue
         branches = []
         for sibling in _children(stmt.parent):
@@ -300,13 +582,16 @@ def _http_checks(nodes, bindings, limits):
                        "2xx from other statuses. Missing branches mean not observed in this bounded check, "
                        "not missing protection. Wrappers, global fetch replacement, response-body errors, "
                        "branch reachability and UI success effects are not verified."})
+        success = _http_success_check(stmt, response, nodes, handler_body, states, visible, routers)
+        if success:
+            checks.append(success)
         if len(checks) >= MAX_ITEMS:
             limits.add("items_per_handler_limit")
             break
     return checks
 
 
-def _handler_record(fn, name, component, path, states, controls, limits, fetch_unbound):
+def _handler_record(fn, name, component, path, states, controls, limits, fetch_unbound, visible, routers):
     body = fn.child_by_field_name("body")
     if not body or body.type != "statement_block":
         limits.add("unsupported_async_body")
@@ -383,7 +668,7 @@ def _handler_record(fn, name, component, path, states, controls, limits, fetch_u
                            "empty check and handler spelling. React rendering, other entry points and "
                            "duplicate request prevention are not verified."})
     if fetch_unbound:
-        checks.extend(_http_checks(nodes, _bindings(list(_walk(fn))), limits))
+        checks.extend(_http_checks(nodes, _bindings(list(_walk(fn))), limits, body, states, visible, routers))
     if not checks and not controls:
         return None
     if len(checks) > MAX_ITEMS or len(awaits) > MAX_ITEMS:
@@ -396,21 +681,23 @@ def _handler_record(fn, name, component, path, states, controls, limits, fetch_u
 def _file_records(root, path, nodes, limits):
     file_bindings = _bindings(nodes)
     hooks, namespaces = _imports(root, file_bindings)
-    fetch_unbound = not file_bindings["fetch"] and not any(
-        n.type == "identifier" and _name(n) == "fetch"
-        for stmt in root.named_children if stmt.type == "import_statement" for n in _walk(stmt))
+    fetch_unbound = _standard_fetch(root, nodes, file_bindings)
+    router_hooks = _router_hooks(root, file_bindings)
     attempted = 0
     for component, fn in _definitions(root):
         body = fn.child_by_field_name("body")
         if not component or not component[0].isupper() or not body or body.type != "statement_block":
             continue
         bindings = _bindings(list(_walk(fn)))
-        states = {}
+        states, routers, false_states = {}, set(), set()
         for stmt in _children(body):
             if stmt.type != "lexical_declaration":
                 continue
             for dec in _children(stmt):
                 value, pattern = dec.child_by_field_name("value"), dec.child_by_field_name("name")
+                if (_name(pattern) and value and _call(value)[0] in router_hooks
+                        and not _call(value)[1] and bindings[_name(pattern)] == 1):
+                    routers.add(_name(pattern))
                 if not value or value.type != "call_expression" or not pattern or pattern.type != "array_pattern":
                     continue
                 call = value.child_by_field_name("function")
@@ -428,10 +715,15 @@ def _file_records(root, path, nodes, limits):
                 if bindings[state] == bindings[setter] == 1:
                     if len(states) < MAX_STATES:
                         states[state] = setter
+                        args = _children(value.child_by_field_name("arguments"))
+                        if len(args) == 1 and args[0].type == "false":
+                            false_states.add(state)
                     else:
                         limits.add("state_limit_reached")
                 else:
                     limits.add("ambiguous_state_binding")
+        visible = _visible_success_states(body, false_states)
+        routers = _unescaped_routers(body, routers)
         buttons = [n for n in _walk(body, _SKIP)
                    if n.type in {"jsx_opening_element", "jsx_self_closing_element"}
                    and _text(n.child_by_field_name("name")) == "button"]
@@ -448,7 +740,8 @@ def _file_records(root, path, nodes, limits):
                 limits.add("ambiguous_handler_binding")
                 continue
             controls = _controls(buttons[:MAX_BUTTONS], name, states, limits)
-            record = _handler_record(handler, name, component, path, states, controls, limits, fetch_unbound)
+            record = _handler_record(handler, name, component, path, states, controls, limits,
+                                     fetch_unbound, visible, routers)
             if record:
                 yield record
 

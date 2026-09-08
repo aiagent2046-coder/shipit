@@ -155,7 +155,22 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
         if syntax.get("line_start"):
             detail += f" Checked source lines {syntax['line_start']}–{syntax['line_end']}."
         rows.append((label, detail))
+    context_labels = {
+        "guard_context": "Existing guard evidence — compare with the model claim",
+        "cost_context": "Cost and ordering evidence — compare with the model claim",
+        "rls_recommendation_context": "Policy prerequisites — review before changing clients",
+    }
     for context in record.get("context_checks", []):
+        label = context_labels.get(context.get("kind"))
+        if label:
+            summaries = ([context["summary"]] if context.get("summary") else
+                         [item.get("summary", "") for item in context.get("checks", [])])
+            for summary in summaries:
+                if summary:
+                    location = str(context.get("file", ""))
+                    if context.get("line"):
+                        location += ":" + str(context["line"])
+                    rows.append((label, (location + " — " if location else "") + summary))
         if context.get("kind") == "react_async_context":
             for item in context.get("checks", []):
                 if item.get("summary"):
@@ -254,6 +269,17 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         rows.append((f"Static scope: {check}", str(status)))
     facts = manifest.get("source_facts")
     if isinstance(facts, dict):
+        for key, label in (("guards", "Guard evidence"), ("cost_context", "Cost evidence"),
+                           ("rls_recommendations", "Policy recommendation evidence")):
+            index = facts.get(key)
+            if isinstance(index, dict):
+                rows.extend([
+                    (label + " scope", index.get("scope", "Not recorded")),
+                    (label + " limits", ", ".join(index.get("limitations", [])) or "None recorded"),
+                    (label + " records", str(len(index.get("records", [])))),
+                ])
+                rows.extend((f"{label} {i}", json.dumps(item, ensure_ascii=False))
+                            for i, item in enumerate(index.get("records", []), 1))
         rows.append(("Source fact scope", facts.get("scope", "Not recorded")))
         rows.append(("Python files parsed for source facts", str(facts.get("parsed_files", 0))))
         rows.append(("Source fact limits", ", ".join(facts.get("limitations", [])) or "None recorded"))

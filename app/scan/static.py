@@ -10,6 +10,7 @@ from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
+from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.rls import scan_rls
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
@@ -108,6 +109,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
 
     fileobj.seek(0)
     source_facts = collect_source_facts(fileobj)
+    findings.extend(scan_http_success(source_facts))
     exclusion_labels = {"file_size_limit": "over the 1 MiB file limit", "symlink": "symbolic links",
                         "excluded_directory": "dependency/build directories",
                         "excluded_extension": "excluded file types", "binary_content": "binary content"}
@@ -157,9 +159,13 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # not look identical (#392). Consuming this in the pipeline/report is
         # the follow-up; here it is preserved so it can be.
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
-                       "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency"],
+                       "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
+                       "http_success"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
-                     "test/vendor files excluded; middleware and runtime access not resolved"},
+                     "test/vendor files excluded; middleware and runtime access not resolved",
+                     "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
+                     "runtime fetch bindings and HTTP failures are not verified. "
+                     "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},
     }
