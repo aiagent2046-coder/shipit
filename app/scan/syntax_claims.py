@@ -106,6 +106,14 @@ class SyntaxVerifier:
                          str(finding.get("explanation", ""))[:16000], re.I):
                 return _result(kind, "not_checked", "The narrative mentions a separate concern; "
                                "only individual premise checks are applied.")
+            narrative = " ".join(str(finding.get(key) or "")[:8000] for key in
+                                 ("explanation", "observation", "required_conditions"))
+            if kind in {"http_status_guard_absent", "json_rejection_uncaught"} and re.search(
+                    r"\b(?:network|transport|fetch)\s+(?:errors?|failures?|reject\w*)\b|"
+                    r"\b(?:content[ -]type|response schema|response shape|saving|busy|spinner|disabled|navigation)\b",
+                    narrative, re.I):
+                return _result(kind, "not_checked", "The narrative also concerns transport, response shape or UI "
+                               "behavior; the local response check is only partial counterevidence.")
             # Whole-finding disposition uses the finding's own coordinates;
             # model-selected targets elsewhere cannot dismiss its narrative.
             request = {"kind": kind, "target": "", "line_start": finding.get("line_start"),

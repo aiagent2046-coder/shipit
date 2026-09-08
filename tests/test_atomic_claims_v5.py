@@ -165,3 +165,18 @@ def test_sql_selector_cannot_borrow_another_statement_or_relation():
     assert sql_request(source, 2, 2, anchor_line_start=1, anchor_line_end=1)['result'] == 'not_checked'
     assert sql_request(source, 2, 2, target='profiles')['result'] == 'not_checked'
     assert sql_request(source, 2, 2, target='users')['result'] == 'contradicted'
+
+
+@pytest.mark.parametrize('field,text', [
+    ('explanation', 'Network rejection can leave a separate request pending.'),
+    ('observation', 'The response shape is not validated.'),
+    ('required_conditions', ['The UI remains disabled after a network error']),
+])
+def test_http_guard_does_not_dismiss_other_concerns_outside_explanation_markers(field, text):
+    from tests.test_atomic_claims import HTTP, PATH, raw
+    claim = raw(HTTP, 'Missing HTTP status validation in API call', 'const res')
+    claim[field] = text
+    verifier = SyntaxVerifier(make_zip({PATH: HTTP.encode()}))
+    assert verifier.check(claim)['result'] == 'not_checked'
+    checks = verifier.premise_checks(claim)
+    assert any(c['kind'] == 'http_status_guard_absent' and c['result'] == 'contradicted' for c in checks)

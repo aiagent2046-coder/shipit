@@ -32,14 +32,14 @@ The replay uses the fixed source tree and saved representative narratives. It re
 | Saved finding | New source counterevidence | Whole finding |
 | --- | --- | --- |
 | Free F06, auto-reply HTTP response | Same response's positive `.ok` branch | Partial; other concerns retained |
-| Free F08, avatar HTTP status | Terminal `!res.ok` guard before JSON | Contradicted |
+| Free F08, avatar HTTP status | Terminal `!res.ok` guard before JSON | Partial; transport/error-reporting concern retained |
 | Free F11, message ownership | Same target match/profile participant guard before insert | Partial; race/FK assumptions unresolved |
 | Free F12, GitHub user HTTP status | Positive `userRes.ok` branch, distinct from `tokenRes` | Contradicted |
 | Pro P28, SQL WHERE | WHERE on the cited UPDATE | Existing contradiction preserved |
 | Pro P53, SQL without a guard | WHERE on the cited UPDATE | Partial; backfill semantics unresolved |
 | Pro P56, BigFive network error | Fetch is awaited and catch resets the same state | Partial; HTTP navigation issue retained |
 
-Free keeps all 14 traceable rows; F08/F12 become whole contradicted observations. Pro's 58 saved representative rows become 46 groups in this experiment: ten groups remove 12 repeated penalties (including one four-way group). The underlying original observations remain retained.
+Free keeps all 14 traceable rows; F12 becomes a whole contradicted observation; F08 remains partial because its narrative also concerns transport-error handling. Pro's 58 saved representative rows become 46 groups in this experiment: ten groups remove 12 repeated penalties (including one four-way group). The underlying original observations remain retained.
 
 Same-operation groups: P05/P13, P07/P14, P12/P42, P15/P39, P16/P20/P46/P47, P17/P44, P22/P50, P23/P49, P24/P51, P25/P52. P06/P36, SQL whole/partial claims, HTTP/network issues and unsupported swipe/policy claims remain separate. No claim about privacy, cost, migration state or runtime exploitability is established by grouping.
 
@@ -47,6 +47,6 @@ Same-operation groups: P05/P13, P07/P14, P12/P42, P15/P39, P16/P20/P46/P47, P17/
 
 Behavioral regression tests pair source counterexamples with wrong-binding, wrong-resource, unsafe catch, independent-concern, range, budget and idempotence cases. End-to-end tests cover scanner JSON, score accounting, HTML, web display, model-metadata forgery and Free baseline retention. Existing multi-pass/accounting fixtures now use an identifiable HMAC operation while preserving their original accounting assertions.
 
-Local validation: the initial full Python run passed 3,959 tests, with two old generic-identity fixtures subsequently updated and passing. Eleven unrelated environment failures remain (ten unsupported ownership changes in the container, one missing SOCKS dependency). The final focused run passed 707 tests; Ruff and whitespace checks passed. All 124 web tests and TypeScript checking passed. A local production build was blocked by Google Fonts network access; GitHub Ubuntu CI provides the production build and full-suite gates.
+Local validation: the initial full Python run passed 3,959 tests, with two old generic-identity fixtures subsequently updated and passing. Eleven unrelated environment failures remain (ten unsupported ownership changes in the container, one missing SOCKS dependency). The final focused run passed 710 tests; Ruff and whitespace checks passed. All 124 web tests and TypeScript checking passed. A local production build was blocked by Google Fonts network access; GitHub Ubuntu CI provides the production build and full-suite gates.
 
 `AUDIT_ENGINE_VERSION` is bumped to `2026-09-08-5`, with the scanner and prompt fingerprint pins updated. No tag or production deployment is performed by this change. The uploaded broad test bundle is not copied into the repository.
