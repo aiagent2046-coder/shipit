@@ -5,6 +5,7 @@ literal, single-premise titles can deactivate a whole finding. A counterexample
 to one premise of a compound finding remains visible alongside that finding.
 """
 import re
+from collections import Counter
 
 from tree_sitter import Language, Parser
 import tree_sitter_typescript
@@ -117,7 +118,10 @@ def _http(own, bindings, target, kind):
             handler = handlers[0] if obj == node and len(handlers) == 1 else None
             value = (g._unwrap(handler.child_by_field_name("body"))
                      if handler and handler.type == "arrow_function" else None)
-            harmless = value and all(n.type in {
+            simple_parameters = (handler is not None and
+                                 not g._children(handler.child_by_field_name("parameters")) and
+                                 handler.child_by_field_name("parameter") is None)
+            harmless = simple_parameters and value and all(n.type in {
                 "object", "pair", "property_identifier", "string", "string_fragment", "number", "null", "true", "false"
             } for n in g._walk(value))
             candidates.append((name, node, bool(harmless), "The same JSON promise has a local literal fallback. "
@@ -151,14 +155,20 @@ def _http(own, bindings, target, kind):
 
 def _nested_schema(root, own, fn, constants, bindings, file_bindings, target):
     globals_ = g._consts(root)
-    zod = set()
+    zod, imported = set(), Counter()
     for stmt in root.named_children:
+        if stmt.type == "import_statement":
+            for spec in g._walk(stmt):
+                if spec.type == "import_specifier":
+                    imported[g._name(spec.child_by_field_name("alias") or spec.child_by_field_name("name"))] += 1
+                elif spec.type == "identifier" and spec.parent.type in {"import_clause", "namespace_import"}:
+                    imported[g._name(spec)] += 1
         if stmt.type == "import_statement" and g._literal(stmt.child_by_field_name("source")) == "zod":
             for spec in g._walk(stmt):
                 if (spec.type == "import_specifier" and g._name(spec.child_by_field_name("name")) == "z"
                         and not any(n.type == "type" for n in [*stmt.children, *spec.children])):
                     zod.add(g._name(spec.child_by_field_name("alias") or spec.child_by_field_name("name")))
-    zod = {name for name in zod if not file_bindings[name]}
+    zod = {name for name in zod if not file_bindings[name] and imported[name] == 1}
     candidates = []
     for dec in constants.values():
         schema, args = g._method(dec.child_by_field_name("value"), "safeParse")
@@ -200,6 +210,10 @@ def _nested_schema(root, own, fn, constants, bindings, file_bindings, target):
 
 def _limit(own, constants, bindings, free, target):
     candidates = []
+    all_sinks = [n for n in own if any(g._method(n, method)[0] is not None for method in ("limit", "rpc"))]
+    # An unqualified title cannot select one safe query and ignore another.
+    if not target and len(all_sinks) != 1:
+        return None
     for name, dec in constants.items():
         clamp = g._clamp(dec, bindings, constants, free)
         if not clamp or (target and target != name):
@@ -279,7 +293,7 @@ def check_source(data, path, request):
     if kind in {"http_status_guard_absent", "json_rejection_uncaught"}:
         proof = _http(own, bindings, target, kind)
     elif kind == "intl_catch_absent":
-        calls = [n for n in own if n.type == "new_expression"
+        calls = [n for n in own if n.type in {"new_expression", "call_expression"}
                  and g._callee_name(n) in {"DateTimeFormat", "computed_unknown"}]
         if len(calls) == 1 and target in {"", "Intl", "DateTimeFormat"}:
             check = g._intl(calls[0], fn, free)

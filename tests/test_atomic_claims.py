@@ -276,3 +276,24 @@ def test_atomic_title_cannot_dismiss_an_additional_independent_premise():
     f.pop('premises')
     f['explanation'] = 'Additionally, transport errors skip the loading reset.'
     assert verifier.check(f)['result'] == 'not_checked'
+
+
+def test_unqualified_limit_premise_cannot_select_one_of_two_queries():
+    source = CLAMP.replace("  return db.rpc", "  other.limit(untrusted);\n  return db.rpc")
+    assert check(source, 'query_limit_unbounded')['result'] == 'not_checked'
+    assert check(source, 'query_limit_unbounded', target='matchCount')['result'] == 'contradicted'
+
+
+def test_second_intl_call_without_new_keeps_target_ambiguous():
+    source = INTL.replace('  try {', "  Intl.DateTimeFormat('en', {timeZone: tz});\n  try {")
+    assert check(source, 'intl_catch_absent')['result'] == 'not_checked'
+
+
+def test_throwing_json_handler_parameter_is_not_a_literal_fallback():
+    source = JSON_CATCH.replace('() => ({})', '({message = fail()}) => ({})')
+    assert check(source, 'json_rejection_uncaught')['result'] == 'not_checked'
+
+
+def test_duplicate_zod_import_does_not_prove_a_binding():
+    source = "import {z} from './custom';\n" + SCHEMA
+    assert check(source, 'required_nested_objects_absent', marker='const body')['result'] == 'not_checked'
