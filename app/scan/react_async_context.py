@@ -91,9 +91,11 @@ def _bindings(nodes):
                                       or node.child_by_field_name("parameter")))
         if node.type == "catch_clause":
             names.extend(_bound_names(node.child_by_field_name("parameter")))
-        if node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression"}:
+        if node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression",
+                         "for_in_statement"}:
             target = node.child_by_field_name("left") or node.child_by_field_name("argument")
-            # An assignment (including a namespace member write) makes linking unsafe.
+            # Loop targets can declare a shadow or write an existing binding.
+            # A namespace member write also makes linking unsafe.
             while target and target.type in {"member_expression", "subscript_expression"}:
                 target = target.child_by_field_name("object")
             names.extend(_bound_names(target))
@@ -251,7 +253,7 @@ def _http_checks(nodes, bindings, limits):
             continue
         branches = []
         for sibling in _children(stmt.parent):
-            if not response or sibling.start_byte <= stmt.end_byte or sibling.type != "if_statement":
+            if not response or sibling.start_byte < stmt.end_byte or sibling.type != "if_statement":
                 continue
             condition = _children(sibling.child_by_field_name("condition"))
             expr = condition[0] if len(condition) == 1 else None

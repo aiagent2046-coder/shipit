@@ -155,6 +155,41 @@ def test_nested_shadow_of_response_is_left_unknown():
     assert all(not r['checks'] for r in scan(source)['records'])
 
 
+@pytest.mark.parametrize('loop', [
+    'for (const setBusy of setters)',
+    'for (let setBusy in setters)',
+    'for (setBusy of setters)',
+    'for await (const setBusy of setters)',
+    'for (const [setBusy] of pairs)',
+    'for (const {reset: setBusy} of items)',
+    'for ({setBusy} of items)',
+])
+def test_loop_shadow_or_write_cannot_disprove_missing_catch_reset(loop):
+    _, evidence = assessed('setBusy(true); ' + loop +
+                           ' { try { await request(); } catch(e) { setBusy(false); } }')
+    assert evidence['syntax_check']['result'] == 'not_checked'
+    assert not any(c.get('catch_resets') for ctx in evidence['context_checks'] for c in ctx['checks'])
+
+
+@pytest.mark.parametrize('target', ['resp', '[resp]', '{value: resp}', 'resp.ok'])
+def test_loop_write_invalidates_response_link(target):
+    source = component('let resp = await fetch("/"); for (' + target +
+                       ' of values) {} if (!resp.ok) return;')
+    result = scan(source)
+    assert 'ambiguous_response_binding' in result['limitations']
+    assert all(c['kind'] != 'react_async_http_response' for r in result['records'] for c in r['checks'])
+
+
+def test_loop_shadow_of_fetch_does_not_establish_standard_http_semantics():
+    result = scan(component('for (const fetch of clients) {await fetch("/");}'))
+    assert all(c['kind'] != 'react_async_http_response' for r in result['records'] for c in r['checks'])
+
+
+def test_status_branch_does_not_require_whitespace_after_previous_statement():
+    http = check(component('const resp=await fetch("/");if(!resp.ok)return;'), 'react_async_http_response')
+    assert http['branches'][0]['path'] == 'http_error'
+
+
 def test_await_inside_catch_does_not_inherit_that_catch():
     http = check(component('try { fail(); } catch(e) { await fetch("/"); }'), 'react_async_http_response')
     assert http['rejection_catch_line'] is None
