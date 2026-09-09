@@ -122,6 +122,16 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
     rls_recommendation_context: "Policy prerequisites — review before changing clients",
   };
   for (const context of record?.context_checks ?? []) {
+    if (context.scope === "bounded_source_context") {
+      const label = context.result === "observed"
+        ? "Bounded source context — compare with the model claim" : "Source context not checked";
+      rows.push([label, `${typeof context.claim === "string" ? context.claim : ""} `
+        + `${typeof context.detail === "string" ? context.detail : ""}`]);
+      if (context.result === "observed" && context.source_binding && typeof context.source_binding === "object"
+        && !Array.isArray(context.source_binding)) {
+        rows.push(["Checked source context binding", JSON.stringify(context.source_binding)]);
+      }
+    }
     const label = typeof context.kind === "string" ? contextLabels[context.kind] : undefined;
     if (label) {
       const summaries = context.summary ? [context.summary] : (Array.isArray(context.checks)

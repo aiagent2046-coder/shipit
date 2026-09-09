@@ -55,6 +55,8 @@ class SyntaxVerifier:
         self._premise_cache = {}
         from app.scan.zod_write_evidence import ZodWriteVerifier
         self._zod_write_verifier = ZodWriteVerifier(archive)
+        from app.scan.consequence_evidence import ConsequenceVerifier
+        self._consequence_verifier = ConsequenceVerifier(archive)
 
     def premise_checks(self, finding: dict) -> list[dict]:
         from app.scan.atomic_claims import requests
@@ -63,6 +65,10 @@ class SyntaxVerifier:
         }) for request in requests(finding)]
         zod = self._zod_write_verifier.check(finding)
         return checks + ([zod] if zod else [])
+
+    def consequence_context(self, finding: dict) -> list[dict]:
+        """Neutral source observations do not participate in premise dispositions."""
+        return self._consequence_verifier.checks_for(finding)
 
     def _premise_check(self, path, request):
         from app.scan.atomic_claims import check_source, unknown
