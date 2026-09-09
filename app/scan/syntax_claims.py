@@ -57,6 +57,8 @@ class SyntaxVerifier:
         self._zod_write_verifier = ZodWriteVerifier(archive)
         from app.scan.consequence_evidence import ConsequenceVerifier
         self._consequence_verifier = ConsequenceVerifier(archive)
+        from app.scan.imported_error_context import ImportedErrorVerifier
+        self._imported_error_verifier = ImportedErrorVerifier(archive)
 
     def premise_checks(self, finding: dict) -> list[dict]:
         from app.scan.atomic_claims import requests
@@ -69,6 +71,10 @@ class SyntaxVerifier:
     def consequence_context(self, finding: dict) -> list[dict]:
         """Neutral source observations do not participate in premise dispositions."""
         return self._consequence_verifier.checks_for(finding)
+
+    def imported_error_context(self, finding: dict) -> list[dict]:
+        """One-hop imported call observations; never premise dispositions or score relief."""
+        return self._imported_error_verifier.checks_for(finding)
 
     def _premise_check(self, path, request):
         from app.scan.atomic_claims import check_source, unknown
