@@ -7,6 +7,28 @@ import { findingCounts, sourceSeverityCounts } from "@/lib/evidence";
 
 afterEach(cleanup);
 
+it("shows observed consequence context and binding without turning it into a refutation", () => {
+  const f: Finding = { rule_id: "llm-auth", category: "Auth", title: "Original token claim",
+    source: "llm", severity: "high", confidence: .8,
+    claim_evidence: { version: 1, source_check: { kind: "not_recorded" },
+      observation: "A model interpretation", required_conditions: null,
+      conditions_status: "not_checked", consequence_status: "not_checked",
+      context_checks: [{ kind: "token_write_return_guard", scope: "bounded_source_context", result: "observed",
+        claim: "The local binding has an early return before later writes.",
+        detail: "Source context only; nonempty invalid tokens are not settled.",
+        source_binding: { file: "<unsafe>.ts", source_sha256: "a".repeat(64), binding: "credential" } }] } };
+  const before = JSON.stringify(f);
+  const { container } = render(<FindingsList findings={[f]} />);
+  expect(screen.getByText("Bounded source context — compare with the model claim")).toBeTruthy();
+  expect(screen.getByText("Checked source context binding")).toBeTruthy();
+  expect(screen.getByText("Potential high impact")).toBeTruthy();
+  expect(screen.queryByText("Assessment needs review")).toBeNull();
+  expect(screen.queryByText(/Atomic premise contradicted/)).toBeNull();
+  expect(screen.getByText("No independent verification recorded.")).toBeTruthy();
+  expect(container.querySelector("unsafe")).toBeNull();
+  expect(JSON.stringify(f)).toBe(before);
+});
+
 const finding: Finding = {
   rule_id: "llm-auth", category: "Auth", title: "Unproven double grant",
   severity: "critical", confidence: 1, source: "llm",

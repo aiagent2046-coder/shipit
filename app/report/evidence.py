@@ -234,6 +234,13 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
         "rls_recommendation_context": "Policy prerequisites — review before changing clients",
     }
     for context in record.get("context_checks", []):
+        if context.get("scope") == "bounded_source_context":
+            label = ("Bounded source context — compare with the model claim" if context.get("result") == "observed"
+                     else "Source context not checked")
+            rows.append((label, context["claim"] + " " + context["detail"]))
+            if context.get("result") == "observed" and isinstance(context.get("source_binding"), dict):
+                rows.append(("Checked source context binding",
+                             json.dumps(context["source_binding"], ensure_ascii=False)))
         label = context_labels.get(context.get("kind"))
         if label:
             summaries = ([context["summary"]] if context.get("summary") else
