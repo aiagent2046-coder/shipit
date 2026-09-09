@@ -5,6 +5,7 @@ linked. This is source evidence, not a control-flow or concurrency proof.
 Never execute uploaded code or retain its string literals.
 """
 from collections import Counter
+from hashlib import sha256
 import re
 import stat
 import zipfile
@@ -663,7 +664,62 @@ def _rejection_counterevidence(body, awaits, states):
     return checks
 
 
-def _handler_record(fn, name, component, path, states, controls, limits, fetch_unbound, visible, routers):
+def _network_bindings(fn, states, state_spans, fetch_unbound):
+    """Identity of a narrow cleanup hypothesis, not proof of the UI outcome.
+
+    Inspect the complete handler before inventory truncation. One direct native
+    fetch, one raised/reset pair for the named React state, and straight-line
+    statement locations identify the operation. Other awaits may retrieve a
+    token or parse the body; they are not renamed into fetch rejections.
+    """
+    if not fetch_unbound:
+        return []
+    body = fn.child_by_field_name("body")
+    nodes = list(_walk(body))
+    uses = [n for n in nodes if n.type in {"identifier", "shorthand_property_identifier"}
+            and _text(n) == "fetch"]
+    if len(uses) != 1:
+        return []
+    fetch = uses[0].parent
+    if (fetch is None or fetch.type != "call_expression" or _call(fetch)[0] != "fetch"
+            or len(_call(fetch)[1]) not in {1, 2}):
+        return []
+    awaited = fetch.parent
+    if awaited is None or awaited.type != "await_expression":
+        return []
+    statement = awaited.parent
+    if statement.type == "variable_declarator" and statement.child_by_field_name("value") == awaited:
+        statement = statement.parent
+    elif statement.type != "expression_statement":
+        return []
+    # Catch/finally, branches and nested callbacks have different error paths.
+    # They retain existing premise counterchecks, outside this grouping scope.
+    if statement.parent != body:
+        return []
+    statements = _children(body)
+    if any(s.type in {"try_statement", "return_statement", "throw_statement"} for s in statements):
+        return []
+    result = []
+    for state, setter in states.items():
+        uses = [n for n in nodes if n.type in {"identifier", "shorthand_property_identifier"}
+                and _text(n) == setter]
+        raised = [s for s in statements if _literal_setter(s, setter, "true")]
+        resets = [s for s in statements if _literal_setter(s, setter, "false")]
+        # An escaped setter or another conditional/deferred write is ambiguous.
+        if (len(uses) != 2 or len(raised) != 1 or len(resets) != 1
+                or not raised[0].end_byte < fetch.start_byte < resets[0].start_byte):
+            continue
+        result.append({"state": state, "setter": setter,
+                       "state_binding_span": state_spans[state],
+                       "operation_span": [fetch.start_byte, fetch.end_byte],
+                       "operation_line_start": _line(fetch), "operation_line_end": fetch.end_point[0] + 1,
+                       "set_true_span": [raised[0].start_byte, raised[0].end_byte],
+                       "reset_span": [resets[0].start_byte, resets[0].end_byte]})
+    return result
+
+
+def _handler_record(fn, name, component, path, states, controls, limits, fetch_unbound, visible, routers,
+                    state_spans):
     body = fn.child_by_field_name("body")
     if not body or body.type != "statement_block":
         limits.add("unsupported_async_body")
@@ -750,7 +806,9 @@ def _handler_record(fn, name, component, path, states, controls, limits, fetch_u
         limits.add("items_per_handler_limit")
     return {"file": path, "line": _line(fn), "line_end": fn.end_point[0] + 1,
             "scope": component + "." + name, "await_lines": [_line(a) for a in awaits[:MAX_ITEMS]],
-            "checks": checks[:MAX_ITEMS], "controls": controls}
+            "checks": checks[:MAX_ITEMS], "controls": controls,
+            "function_span": [fn.start_byte, fn.end_byte],
+            "network_cleanup_bindings": _network_bindings(fn, states, state_spans, fetch_unbound)}
 
 
 def _file_records(root, path, nodes, limits):
@@ -764,7 +822,7 @@ def _file_records(root, path, nodes, limits):
         if not component or not component[0].isupper() or not body or body.type != "statement_block":
             continue
         bindings = _bindings(list(_walk(fn)))
-        states, routers, false_states = {}, set(), set()
+        states, routers, false_states, state_spans = {}, set(), set(), {}
         for stmt in _children(body):
             if stmt.type != "lexical_declaration":
                 continue
@@ -790,6 +848,7 @@ def _file_records(root, path, nodes, limits):
                 if bindings[state] == bindings[setter] == 1:
                     if len(states) < MAX_STATES:
                         states[state] = setter
+                        state_spans[state] = [dec.start_byte, dec.end_byte]
                         args = _children(value.child_by_field_name("arguments"))
                         if len(args) == 1 and args[0].type == "false":
                             false_states.add(state)
@@ -804,7 +863,9 @@ def _file_records(root, path, nodes, limits):
                    and _text(n.child_by_field_name("name")) == "button"]
         if len(buttons) > MAX_BUTTONS:
             limits.add("button_limit_reached")
-        for name, handler in _definitions(body):
+        handlers = list(_definitions(body))
+        case_names = Counter(name.casefold() for name, _ in handlers)
+        for name, handler in handlers:
             if not name or not any(c.type == "async" for c in handler.children):
                 continue
             if attempted >= MAX_HANDLERS:
@@ -816,8 +877,11 @@ def _file_records(root, path, nodes, limits):
                 continue
             controls = _controls(buttons[:MAX_BUTTONS], name, states, limits)
             record = _handler_record(handler, name, component, path, states, controls, limits,
-                                     fetch_unbound, visible, routers)
+                                     fetch_unbound, visible, routers, state_spans)
             if record:
+                if case_names[name.casefold()] != 1:
+                    record["network_cleanup_bindings"] = []
+                record["component_span"] = [fn.start_byte, fn.end_byte]
                 yield record
 
 
@@ -869,7 +933,7 @@ def collect_react_async_context(fileobj):
                     if len(records) >= MAX_RECORDS:
                         limits.add("record_limit_reached")
                         break
-                    records.append(record)
+                    records.append({**record, "source_sha256": sha256(data).hexdigest()})
             except (UnicodeError, ValueError, RecursionError):
                 limits.add("unparseable_js_ts")
             if "record_limit_reached" in limits:

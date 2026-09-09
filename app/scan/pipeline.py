@@ -121,7 +121,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-08-3: guard/cost/policy evidence and unchecked HTTP success observations.
 # 2026-09-08-5: source-bound premise counterexamples and operation-based cause grouping.
 # 2026-09-08-6: count exact quote-bound model repeats once, retaining each response's provenance.
-AUDIT_ENGINE_VERSION = "2026-09-08-6"
+# 2026-09-09-1: bind narrow React network-cleanup repeats to source operations and retain all premises.
+AUDIT_ENGINE_VERSION = "2026-09-09-1"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

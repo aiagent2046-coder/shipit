@@ -14,6 +14,7 @@ import re
 import json
 
 from app.scan.scoring import ScoredFinding
+from app.scan.react_network_identity import MECHANISM, network_premise_projection, valid_network_identity
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -104,10 +105,23 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     if has_source and (not identity_a or identity_a != identity_b):
         exact = _exact_observation(anchor)
         return exact is not None and exact == _exact_observation(f)
+    network = isinstance(identity_a, dict) and identity_a.get("mechanism") == MECHANISM
+    if network:
+        if not valid_network_identity(identity_a, anchor.file):
+            return False
+        # Grouping an unresolved hypothesis cannot turn different execution or
+        # verification dispositions into one row. Other matchers are unchanged.
+        for key in ("source", "verification_method", "verification_status", "category", "origin_category"):
+            if getattr(anchor, key) != getattr(f, key):
+                return False
+        if anchor.source != "llm" or anchor.verification_method != "model_review":
+            return False
     # The source operation, not the model's selector coordinates, establishes
     # identity. Different check kinds/dispositions still retain separate rows.
     for key in ("syntax_check", "premise_checks"):
         a, b = ea.get(key), eb.get(key)
+        if network and key == "premise_checks":
+            a, b = network_premise_projection(a, identity_a), network_premise_projection(b, identity_b)
         if has_source:
             a, b = _check_status(a), _check_status(b)
         if a != b:
