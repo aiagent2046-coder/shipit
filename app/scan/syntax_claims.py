@@ -53,12 +53,16 @@ class SyntaxVerifier:
         self.remaining = MAX_PARSE_BYTES
         self.checks = 0
         self._premise_cache = {}
+        from app.scan.zod_write_evidence import ZodWriteVerifier
+        self._zod_write_verifier = ZodWriteVerifier(archive)
 
     def premise_checks(self, finding: dict) -> list[dict]:
         from app.scan.atomic_claims import requests
-        return [self._premise_check(finding.get("file"), {
+        checks = [self._premise_check(finding.get("file"), {
             **request, "anchor_line_start": finding.get("line_start"), "anchor_line_end": finding.get("line_end")
         }) for request in requests(finding)]
+        zod = self._zod_write_verifier.check(finding)
+        return checks + ([zod] if zod else [])
 
     def _premise_check(self, path, request):
         from app.scan.atomic_claims import check_source, unknown
@@ -94,6 +98,9 @@ class SyntaxVerifier:
         return result
 
     def check(self, finding: dict) -> dict:
+        zod = self._zod_write_verifier.whole_check(finding)
+        if zod is not None:
+            return zod
         from app.scan.atomic_claims import title_kind
         kind = title_kind(str(finding.get("title", "")))
         if kind:

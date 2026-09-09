@@ -164,11 +164,23 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
         rows.append((label, detail))
     for premise in record.get("premise_checks", []):
         label = ("Atomic premise contradicted — other claims remain unverified"
-                 if premise.get("result") == "contradicted" else "Atomic premise not checked")
+                 if premise.get("result") == "contradicted" else "Parsed output evidence — compare with the model claim"
+                 if premise.get("kind") == "zod_unknown_keys_in_write" and premise.get("result") == "observed"
+                 else "Atomic premise not checked")
         location = (f" Target {premise['target']}, source lines "
                     f"{premise['source_line_start']}–{premise['source_line_end']}."
                     if premise.get("source_line_start") else "")
-        rows.append((label, premise["claim"] + " " + premise["detail"] + location))
+        claim = ("Checked Zod input and the parsed write payload."
+                 if premise.get("kind") == "zod_unknown_keys_in_write" and premise.get("result") == "observed"
+                 else premise["claim"])
+        rows.append((label, claim + " " + premise["detail"] + location))
+        if premise.get("kind") == "zod_unknown_keys_in_write" and premise.get("source_binding"):
+            for path in premise["source_binding"].get("paths", []):
+                for write in path.get("writes", []):
+                    rows.append(("Checked parsed-output write",
+                                 f"{path['file']}:{path['parse_line']} {path['parse_method']} → "
+                                 f"{write['file']}:{write['line_start']} {write['method']}. "
+                                 "This does not establish that unknown input must be rejected."))
     context_labels = {
         "guard_context": "Existing guard evidence — compare with the model claim",
         "cost_context": "Cost and ordering evidence — compare with the model claim",
