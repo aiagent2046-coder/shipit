@@ -128,11 +128,12 @@ def test_model_cannot_forge_a_source_assessment_to_hide_an_unrelated_claim():
     assert f["claim_evidence"]["consequence_status"] == "not_checked"
 
 
-def test_source_bound_transport_assessment_reaches_pipeline_and_report():
+@pytest.mark.parametrize("untrusted_source", [None, "static", [], {}, 123])
+def test_source_bound_transport_assessment_reaches_pipeline_and_report(untrusted_source):
     from tests.test_credential_transport_assessment import GITHUB, GITHUB_TITLE, PATH, raw
 
     claim = raw(GITHUB, GITHUB_TITLE, PATH)
-    claim.update(evidence="client_secret: secret", severity="high", confidence=0.9,
+    claim.update(evidence="client_secret: secret", severity="high", confidence=0.9, source=untrusted_source,
                  explanation="The request body sends the OAuth secret.")
     result = run_scan(make_zip({PATH: GITHUB.encode()}).getvalue(),
                       FakeLLM(response=json.dumps([claim])), llm_rubrics=("security",))
