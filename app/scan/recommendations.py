@@ -10,6 +10,11 @@ from app.scan.recommendation_contract import (
     has_recommendation_check, recommendation_record, require_prerequisites,
 )
 from app.scan.rls_recommendations import client_change_prerequisites, is_client_change
+from app.scan.paid_operation_recommendations import (
+    PAID_OPERATION_HINT, PAID_OPERATION_KIND, RETRY_BUDGET_HINT, RETRY_BUDGET_KIND,
+    needs_operation_idempotency, needs_retry_budget,
+    operation_idempotency_prerequisites, operational_followups, retry_budget_prerequisites,
+)
 
 TIMING_SAFE_EQUAL_KIND = "node_crypto_timing_safe_equal"
 TIMING_SAFE_EQUAL_REFERENCE = "https://nodejs.org/api/crypto.html#cryptotimingsafeequala-b"
@@ -49,11 +54,23 @@ TIMING_SAFE_EQUAL_HINT = (
 
 
 def prepare_recommendation(finding, facts):
-    """Compose RLS and API prerequisites, keeping the first original canonical."""
+    """Compose advice prerequisites, keeping the first original canonical."""
     previous = recommendation_record(finding)
+    followups = operational_followups(previous.get("original_fix_hint", finding.fix_hint))
+    active = finding.fix_hint
+    if previous and isinstance(active, str):
+        # These fresh literal templates are trusted scanner text, not evidence
+        # of another model recommendation. In particular idempotency guidance
+        # mentions retries, and retry guidance mentions idempotency. Do not let
+        # that induce a second check on reprocessing. Arbitrary stored template
+        # values/markers never grant this exclusion.
+        for template in (PAID_OPERATION_HINT, RETRY_BUDGET_HINT,
+                         followups["replacement_fix_hint"] if followups else ""):
+            if template:
+                active = active.replace(template, " ")
     # Match the canonical original as well as the active hint. This recovers
     # mixed advice already rewritten by the legacy RLS-only guard.
-    texts = [text for text in (previous.get("original_fix_hint"), finding.fix_hint) if isinstance(text, str)]
+    texts = [text for text in (previous.get("original_fix_hint"), active) if isinstance(text, str)]
     candidates = [{**vars(finding), "fix_hint": text} for text in texts]
     rls_raw = next((raw for raw in candidates if is_client_change(raw)), None)
     checks, contexts = [], []
@@ -63,8 +80,16 @@ def prepare_recommendation(finding, facts):
     mentions_api = any(_TIMING_SAFE_EQUAL.search(text) for text in texts)
     if mentions_api or has_recommendation_check(finding, TIMING_SAFE_EQUAL_KIND):
         checks.append(timing_safe_equal_prerequisites())
+    if (any(needs_operation_idempotency(raw) for raw in candidates)
+            or has_recommendation_check(finding, PAID_OPERATION_KIND)):
+        checks.append(operation_idempotency_prerequisites())
+    if (any(needs_retry_budget(raw) for raw in candidates)
+            or has_recommendation_check(finding, RETRY_BUDGET_KIND)):
+        checks.append(retry_budget_prerequisites())
     if not checks:
         return finding
+    if followups:
+        checks.append(followups)
     # A stored marker, prior record, or arbitrary replacement_fix_hint never
     # grants permission to keep unchecked free-form advice active. Rebuild all
     # recognized templates; the evidence upsert makes repeated runs idempotent.

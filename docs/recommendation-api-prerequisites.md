@@ -3,7 +3,9 @@
 `app/scan/recommendations.py` runs after static/model findings are formed,
 before grouping and persistence. It composes the existing RLS client-change
 check with a deterministic guard for advice mentioning the exact identifier
-`timingSafeEqual`. It adds no model calls and executes no uploaded code.
+`timingSafeEqual`. It also composes the
+[external-operation and retry-budget contracts](paid-operation-recommendation-prerequisites.md).
+It adds no model calls and executes no uploaded code.
 
 The guard replaces recognized advice, including apparently guarded snippets,
 with a conditional recommendation: validate input types and a nonempty
@@ -51,6 +53,12 @@ Malformed optional recommendation fields are skipped during presentation;
 unknown evidence fields remain stored. Malformed outer evidence explicitly
 reprocessed by the guard is retained as `legacy_claim_evidence` and cannot
 fabricate a source check.
+
+Supported separate rate-limit, webhook and explicit billing-check goals in
+the canonical original are retained as conditional follow-ups. This avoids
+dropping a separate rate-limit goal when a crypto/RLS snippet is superseded;
+it does not certify the original implementation or retain unchecked code as
+an active alternative.
 
 The guard changes recommendation text and its evidence only. Source checks,
 severity, confidence, finding counts, consequence status and scoring are not
