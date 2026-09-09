@@ -135,15 +135,14 @@ def sql_request(source, start=1, end=1, **extra):
     })
 
 
-def test_without_guard_wording_exposes_own_where_without_dismissing_data_semantics():
+def test_migration_rerun_guard_does_not_invent_an_absent_where_claim():
     finding = dict(file='migration.sql', line_start=1, line_end=1,
                    title='Migration UPDATE silently overwrites intent for all existing profiles without a guard',
                    explanation='This changes legitimately unset values if the migration runs again.')
     sql = b"UPDATE profiles SET intent='has_idea' WHERE intent IS NULL;"
     verifier = SyntaxVerifier(make_zip({'migration.sql': sql}))
     checks = verifier.premise_checks(finding)
-    assert len(checks) == 1 and checks[0]['result'] == 'contradicted'
-    assert 'selectivity and safety were not tested' in checks[0]['detail']
+    assert checks == []
     assert verifier.check(finding)['result'] == 'not_checked'
 
 

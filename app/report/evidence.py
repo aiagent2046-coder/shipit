@@ -10,7 +10,7 @@ import re
 
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 from app.scan.claim_evidence import (
-    partial_contradicted, source_assessments, syntax_contradicted, unsupported_transport,
+    narrative_review_checks, partial_contradicted, source_assessments, syntax_contradicted, unsupported_transport,
 )
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
@@ -149,6 +149,8 @@ def evidence_label(finding: dict, historical: bool = False) -> str:
         return "Model syntax premise contradicted — see bounded check"
     if _partial_for_display(finding, historical):
         return "Part of the model claim is contradicted — remaining claims need review"
+    if not historical and narrative_review_checks(finding.get("claim_evidence")):
+        return "Outcome not established — source conditions need review"
     if is_informational(finding):
         return "Deployment inventory — informational"
     source = finding.get("source")
@@ -209,6 +211,11 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
                      "A bounded source check contradicts part of this finding. The original model severity "
                      "remains in the score because the other claims have not been resolved; it is not "
                      "independent confirmation of their impact. Review the source checks before acting."))
+    if not historical:
+        for assessment in narrative_review_checks(record):
+            rows.append(("Outcome needs review", assessment["narrative_review"]["reason"] +
+                         " The original model severity remains in the score pending review; "
+                         "this observation does not verify the outcome or establish safety."))
     context = record.get("source_context") or {}
     if context:
         labels = {"comment": "Comment", "docstring": "Python docstring", "doc_example": "Documentation/example",
