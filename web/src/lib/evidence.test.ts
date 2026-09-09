@@ -1,10 +1,98 @@
 import { expect, it } from "vitest";
-import { claimEvidenceRows, coverageRows, findingCounts, manifestRows } from "./evidence";
+import { claimEvidenceRows, coverageRows, findingCounts, manifestRows, modelAcceptanceNotice, modelAcceptanceSummary } from "./evidence";
 import { plainFields } from "./plain";
-import type { Finding, ScanManifest } from "./types";
+import type { Finding, ScanManifest, Score } from "./types";
 
 const source: Finding = { rule_id: "aws-access-key-id", title: "AWS match",
   category: "Security", severity: "high", confidence: 1, file: "app/config.py" };
+
+const acceptanceManifest: ScanManifest = {
+  archive_sha256: "digest", commit_sha: null, engine_version: "test", archive_files: 1,
+  static_checks: [], static_limits: {}, inventory: {}, model: "preview", model_calls: 1,
+  rubrics_completed: [], llm_candidate_files: 1, llm_submitted_files: 1,
+  llm_files_not_submitted: 0, limitations: [], runtime_verified: false,
+};
+
+function acceptanceScore(accepted: number, reasons: Record<string, number>): Score {
+  const rejected = Object.values(reasons).reduce((sum, value) => sum + value, 0);
+  return { total: 9.3, categories: {}, basis: "static+preview", scan_manifest: {
+    ...acceptanceManifest, model_findings: [{ model: "preview", responses: 1,
+      invalid_responses: 0, empty_responses: 0, received: accepted + rejected,
+      accepted, rejected, merged: 0, saved: accepted, rejection_reasons: reasons }],
+  } };
+}
+
+it("distinguishes source rejects, withdrawals and response validation without treating acceptance as truth", () => {
+  const score = acceptanceScore(1, { source_quote_or_location_mismatch: 9, self_cancelled: 1 });
+  const before = JSON.stringify(score);
+  expect(modelAcceptanceSummary(score)).toEqual({ version: 1, state: "partially_accepted",
+    received: 11, accepted: 1, rejected: 10, source_rejected: 9, withdrawn: 1, other_rejected: 0 });
+  expect(modelAcceptanceNotice(score)).toEqual(["Model observations accepted: 1 of 11",
+    "9 could not be matched to the cited source; 1 was withdrawn by the model. "
+    + "Excluded observations are not included in the findings. Acceptance checks source citation and response format; "
+    + "it does not verify conclusions or establish project safety."]);
+  const paid = acceptanceScore(55, { self_cancelled: 4 });
+  expect(modelAcceptanceNotice(paid)?.[0]).toBe("Model observations accepted: 55 of 59");
+  expect(modelAcceptanceNotice(paid)?.[1]).toContain("4 were withdrawn by the model");
+  expect(modelAcceptanceNotice(paid)?.[1]).not.toContain("could not be matched");
+  expect(modelAcceptanceSummary(acceptanceScore(0, { self_cancelled: 3 }))?.state).toBe("none_accepted");
+  expect(modelAcceptanceNotice(acceptanceScore(2, { invalid_text: 1 }))?.[1]).toContain("failed response validation");
+  expect(JSON.stringify(score)).toBe(before);
+});
+
+it("aggregates separate model processing rows and uses their counts over a duplicated API summary", () => {
+  const score = acceptanceScore(1, { source_quote_or_location_mismatch: 9, self_cancelled: 1 });
+  score.scan_manifest!.model_findings!.push(...acceptanceScore(55, { self_cancelled: 4 }).scan_manifest!.model_findings!);
+  score.scan_manifest!.model_acceptance = { version: 1, state: "all_accepted", received: 70, accepted: 70,
+    rejected: 0, source_rejected: 0, withdrawn: 0, other_rejected: 0 };
+  expect(modelAcceptanceSummary(score)).toEqual({ version: 1, state: "partially_accepted", received: 70,
+    accepted: 56, rejected: 14, source_rejected: 9, withdrawn: 5, other_rejected: 0 });
+});
+
+it.each([
+  undefined, null, [], Array(2), [null],
+  [{ received: 11, accepted: 1, rejected: 10 }],
+  [{ received: 11, accepted: 1, rejected: 9, rejection_reasons: { self_cancelled: 9 } }],
+  [{ received: 11, accepted: 1, rejected: 10, rejection_reasons: { self_cancelled: 9 } }],
+  [{ received: 1, accepted: 2, rejected: -1, rejection_reasons: { self_cancelled: -1 } }],
+  [{ received: "11", accepted: 1, rejected: 10, rejection_reasons: { self_cancelled: 10 } }],
+  [{ received: 1, accepted: true, rejected: 0, rejection_reasons: {} }],
+  [{ received: 1.5, accepted: 1.5, rejected: 0, rejection_reasons: {} }],
+  [{ received: Number.MAX_SAFE_INTEGER + 1, accepted: Number.MAX_SAFE_INTEGER + 1, rejected: 0, rejection_reasons: {} }],
+  [{ received: 1, accepted: 0, rejected: 1, rejection_reasons: { self_cancelled: true } }],
+  [{ received: 1, accepted: 0, rejected: 1, rejection_reasons: [1] }],
+])("does not infer a candidate count from missing or inconsistent accounting %#", (processing) => {
+  const score = { total: 0, categories: {}, scan_manifest: { ...acceptanceManifest, model_findings: processing } } as Score;
+  expect(modelAcceptanceSummary(score)).toBeNull();
+  expect(modelAcceptanceNotice(score)).toBeNull();
+});
+
+it("keeps known zero candidates distinct from missing accounting and rejects unsafe aggregate totals", () => {
+  expect(modelAcceptanceSummary(acceptanceScore(0, {}))?.state).toBe("no_candidates");
+  expect(modelAcceptanceNotice(acceptanceScore(0, {}))).toBeNull();
+  expect(modelAcceptanceSummary(acceptanceScore(3, {}))?.state).toBe("all_accepted");
+  expect(modelAcceptanceNotice(acceptanceScore(3, {}))).toBeNull();
+  const score = acceptanceScore(Number.MAX_SAFE_INTEGER, {});
+  score.scan_manifest!.model_findings!.push(...acceptanceScore(1, {}).scan_manifest!.model_findings!);
+  expect(modelAcceptanceSummary(score)).toBeNull();
+});
+
+it("bounds technical diagnostics and omits arbitrary model fields and unknown code values", () => {
+  const score = acceptanceScore(1, { self_cancelled: 1 });
+  const diagnostic = { response: 1, rubric: "web", item: 1, reason: "self_cancelled", detail: "self_cancelled",
+    file_ref: "sha256:" + "a".repeat(64), line_start: 3, line_end: 4 };
+  score.scan_manifest!.rejection_diagnostics = { version: 1, omitted: 2, items: [
+    { ...diagnostic, evidence: "private source", file: "private.ts", unexpected: "raw metadata" },
+    { ...diagnostic, detail: "<script>unsafe</script>" },
+    ...Array.from({ length: 200 }, (_, i) => ({ ...diagnostic, item: i + 2 })),
+  ] } as ScanManifest["rejection_diagnostics"];
+  const rows = manifestRows(score);
+  expect(rows.filter(([label]) => /^Rejected observation /.test(label))).toHaveLength(200);
+  const details = rows.find(([label]) => label === "Rejection diagnostics")?.[1];
+  expect(details).toContain("200 records shown; 4 omitted");
+  expect(details).toContain("At most 200 records");
+  expect(rows.flat().join(" ")).not.toMatch(/private source|private.ts|raw metadata|unsafe/);
+});
 
 it("explains catch and HTTP evidence without dismissing a compound claim or changing old records", () => {
   const finding: Finding = { ...source, rule_id: "llm-web", source: "llm", claim_evidence: {

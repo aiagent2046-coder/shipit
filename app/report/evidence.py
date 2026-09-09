@@ -10,6 +10,7 @@ import json
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
+from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 
 
 def is_non_production(finding: dict) -> bool:
@@ -107,6 +108,23 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
     if not manifest:
         detail = "The review is recorded as limited. The reason and model execution details were not recorded."
     return title, detail + " This is a limit of the audit, not evidence of a defect in your project."
+
+
+def model_acceptance_notice(score: dict) -> tuple[str, str] | None:
+    """Surface exclusions independently of provider completion and score fields."""
+    summary = acceptance_summary((score.get("scan_manifest") or {}).get("model_findings"))
+    if not summary or not summary["rejected"]:
+        return None
+    title = f"Model observations accepted: {summary['accepted']} of {summary['received']}"
+    reasons = [("source_rejected", "could not be matched to the cited source"),
+               ("withdrawn", "was withdrawn by the model" if summary["withdrawn"] == 1
+                else "were withdrawn by the model"),
+               ("other_rejected", "failed response validation")]
+    detail = "; ".join(f"{summary[key]} {label}" for key, label in reasons if summary[key])
+    detail += (". Excluded observations are not included in the findings. "
+              "Acceptance checks source citation and response format; "
+              "it does not verify conclusions or establish project safety.")
+    return title, detail
 
 
 def evidence_label(finding: dict) -> str:
@@ -277,6 +295,18 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
                          f"saved representatives: {row['saved']}. "
                          "Merged originals are retained. These counts do not verify conclusions."))
             rows.append(("Rejection reasons", json.dumps(row["rejection_reasons"], ensure_ascii=False)))
+    diagnostics = manifest.get("rejection_diagnostics")
+    if isinstance(diagnostics, dict) and diagnostics.get("version") == 1:
+        safe = diagnostics_manifest({"rejected_items": diagnostics.get("items"),
+                                     "rejected_items_omitted": diagnostics.get("omitted", 0)})
+        if safe:
+            rows.append(("Rejection diagnostic scope",
+                         "Bounded metadata only; source path SHA-256 references identify known paths. "
+                         "Rejected text, quotes and unknown paths are not retained. "
+                         f"Additional records omitted: {safe['omitted']}."))
+            for item in safe["items"]:
+                rows.append((f"Rejected observation {item['response']}:{item['item']}",
+                             json.dumps(item, ensure_ascii=False)))
     for key, label in (("llm_candidate_files", "Files eligible for model review"),
                        ("llm_submitted_files", "Unique files submitted to model"),
                        ("llm_files_not_submitted", "Eligible files not submitted")):

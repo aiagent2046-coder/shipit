@@ -30,6 +30,7 @@ from app.scan.react_async_context import react_async_premise_checks
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path
 from app.scan.source_facts import facts_prompt
+from app.scan.rejection_diagnostics import MAX_REJECTION_ITEMS, rejected_item
 
 # Per-file cap in the prompt, ~5% of MAX_TOTAL_CHARS: no single file may take
 # more than about a nineteenth of a rubric's budget.
@@ -727,6 +728,8 @@ class LLMScanStats:
     verified: int = 0
     invalid_responses: int = 0
     model_findings: list[dict] = field(default_factory=list)
+    rejected_items: list[dict] = field(default_factory=list)
+    rejected_items_omitted: int = 0
     # Findings rejected by verify_finding, which measures ONE thing: whether
     # the code the model quoted exists as quoted. File present, line range
     # sane, evidence verbatim inside the cited window, severity and confidence
@@ -1422,7 +1425,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               processing["invalid_responses"] += 1
           elif not parsed:
               processing["empty_responses"] += 1
-          for f in parsed or []:
+          for item_index, f in enumerate(parsed or [], 1):
               processing["received"] += 1
               stats.raw_findings += isinstance(f, dict)
               reason = rejection_reason(f, files_by_name)
@@ -1432,6 +1435,11 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   processing["rejected"] += 1
                   reasons = processing["rejection_reasons"]
                   reasons[reason] = reasons.get(reason, 0) + 1
+                  if len(stats.rejected_items) < MAX_REJECTION_ITEMS:
+                      stats.rejected_items.append(rejected_item(
+                          f, files_by_name, response=stats.calls, rubric=rubric, item=item_index, reason=reason))
+                  else:
+                      stats.rejected_items_omitted += 1
                   if reason == "self_cancelled":
                       stats.self_cancelled += 1
                   else:

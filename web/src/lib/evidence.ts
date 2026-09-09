@@ -1,4 +1,4 @@
-import type { Finding, Score, Severity } from "./types";
+import type { Finding, ModelAcceptance, Score, Severity } from "./types";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -202,6 +202,108 @@ export function modelStatusNotice(score: Score): [string, string] | null {
   return [title, detail + " This is a limit of the audit, not evidence of a defect in your project."];
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function count(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function acceptanceState(received: number, accepted: number, rejected: number): ModelAcceptance["state"] {
+  return received === 0 ? "no_candidates" : rejected === 0 ? "all_accepted"
+    : accepted === 0 ? "none_accepted" : "partially_accepted";
+}
+
+// Per-model processing remains the canonical source for both old and new
+// reports. Do not trust a duplicated summary over the recorded counts, or turn
+// missing/inconsistent accounting into zero candidates.
+export function modelAcceptanceSummary(score: Score): ModelAcceptance | null {
+  const manifest = score.scan_manifest;
+  if (!manifest) return null;
+  const processing: unknown = manifest.model_findings;
+  if (!Array.isArray(processing) || processing.length === 0) return null;
+  let received = 0, accepted = 0, rejected = 0, source_rejected = 0, withdrawn = 0;
+  for (const row of processing) {
+    if (!record(row) || !count(row.received) || !count(row.accepted) || !count(row.rejected)
+      || !record(row.rejection_reasons) || row.received !== row.accepted + row.rejected) return null;
+    let reasons = 0;
+    for (const [reason, value] of Object.entries(row.rejection_reasons)) {
+      if (!count(value)) return null;
+      reasons += value;
+      if (reason === "source_quote_or_location_mismatch") source_rejected += value;
+      else if (reason === "self_cancelled") withdrawn += value;
+    }
+    if (!Number.isSafeInteger(reasons) || reasons !== row.rejected) return null;
+    received += row.received;
+    accepted += row.accepted;
+    rejected += row.rejected;
+    if (![received, accepted, rejected, source_rejected, withdrawn].every(count)) return null;
+  }
+  return { version: 1, received, accepted, rejected, source_rejected, withdrawn,
+    other_rejected: rejected - source_rejected - withdrawn,
+    state: acceptanceState(received, accepted, rejected) };
+}
+
+export function modelAcceptanceNotice(score: Score): [string, string] | null {
+  const summary = modelAcceptanceSummary(score);
+  if (!summary || summary.rejected === 0) return null;
+  const details: string[] = [];
+  if (summary.source_rejected) details.push(`${summary.source_rejected} could not be matched to the cited source`);
+  if (summary.withdrawn) details.push(`${summary.withdrawn} ${summary.withdrawn === 1 ? "was" : "were"} withdrawn by the model`);
+  if (summary.other_rejected) details.push(`${summary.other_rejected} failed response validation`);
+  return [`Model observations accepted: ${summary.accepted} of ${summary.received}`,
+    details.join("; ") + ". Excluded observations are not included in the findings. "
+    + "Acceptance checks source citation and response format; it does not verify conclusions or establish project safety."];
+}
+
+const rejectionReasons = new Set(["not_an_object", "missing_fields", "invalid_severity",
+  "invalid_confidence", "invalid_text", "source_quote_or_location_mismatch", "self_cancelled"]);
+const rejectionDetails = new Set([...rejectionReasons, "unknown_file", "invalid_line_range",
+  "quote_missing_or_short", "quote_mismatch"]);
+const rejectionRubrics = new Set(["auth", "security", "money", "web"]);
+const maxRejectionItems = 200;
+
+function diagnosticLine(value: unknown): number | null {
+  return count(value) && value > 0 && value <= 2 ** 31 - 1 ? value : null;
+}
+
+// Never stringify a diagnostic record: only closed codes and bounded metadata
+// may be displayed. Rejected source text, path suggestions and arbitrary extra
+// fields must not appear in either the notice or the technical scan record.
+function rejectionDiagnosticRows(score: Score): [string, string][] {
+  const diagnostics: unknown = score.scan_manifest?.rejection_diagnostics;
+  if (diagnostics === undefined || diagnostics === null) return [];
+  if (!record(diagnostics) || diagnostics.version !== 1
+    || !Array.isArray(diagnostics.items) || !count(diagnostics.omitted)) {
+    return [["Rejection diagnostics", "Not recorded in a supported format"]];
+  }
+  const rows: [string, string][] = [];
+  let omitted = diagnostics.omitted, shown = 0;
+  for (const item of diagnostics.items) {
+    if (shown >= maxRejectionItems || !record(item)
+      || !count(item.response) || item.response === 0 || !count(item.item) || item.item === 0
+      || typeof item.rubric !== "string" || !rejectionRubrics.has(item.rubric)
+      || typeof item.reason !== "string" || !rejectionReasons.has(item.reason)
+      || typeof item.detail !== "string" || !rejectionDetails.has(item.detail)) {
+      omitted = Math.min(Number.MAX_SAFE_INTEGER, omitted + 1);
+      continue;
+    }
+    shown += 1;
+    const fileRef = typeof item.file_ref === "string" && /^sha256:[0-9a-f]{64}$/.test(item.file_ref)
+      ? item.file_ref : "Not recorded";
+    const start = diagnosticLine(item.line_start), end = diagnosticLine(item.line_end);
+    rows.push([`Rejected observation ${shown}`,
+      `Response: ${item.response}; review area: ${item.rubric}; entry: ${item.item}. `
+      + `Reason: ${item.reason}; detail: ${item.detail}. `
+      + `File reference: ${fileRef}; cited lines: ${start ?? "Not recorded"}–${end ?? "Not recorded"}.`]);
+  }
+  rows.unshift(["Rejection diagnostics", `${shown} records shown; ${count(omitted) ? omitted : "unknown count"} omitted. `
+    + `At most ${maxRejectionItems} records are retained. Rejected text and source quotes are not retained; `
+    + "a file reference identifies a known source path by hash. These records explain processing, not whether a claim is true."]);
+  return rows;
+}
+
 export function manifestRows(score: Score): [string, string][] {
   const m = score.scan_manifest;
   if (!m) return [["Scan record", "Not recorded for this older audit"]];
@@ -231,6 +333,7 @@ export function manifestRows(score: Score): [string, string][] {
       "Merged originals are retained. These counts do not verify conclusions."]);
     rows.push(["Rejection reasons", JSON.stringify(row.rejection_reasons)]);
   }
+  rows.push(...rejectionDiagnosticRows(score));
   const exclusionLabels: Record<string, string> = {
     no_rubric_match: "No keyword match in configured review areas",
     rubric_not_reached: "Matching review areas were not reached",

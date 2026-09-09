@@ -45,6 +45,28 @@ export interface ReviewContextIndex {
   records: Record<string, unknown>[];
 }
 
+export interface ModelAcceptance {
+  version: 1;
+  received: number;
+  accepted: number;
+  rejected: number;
+  source_rejected: number;
+  withdrawn: number;
+  other_rejected: number;
+  state: "partially_accepted" | "none_accepted" | "all_accepted" | "no_candidates";
+}
+
+export interface RejectionDiagnostic {
+  response: number;
+  rubric: string;
+  item: number;
+  reason: string;
+  detail: string;
+  file_ref: string | null;
+  line_start: number | null;
+  line_end: number | null;
+}
+
 export interface ScanManifest {
   source_facts?: {
     guards?: ReviewContextIndex;
@@ -88,6 +110,8 @@ export interface ScanManifest {
   model_findings?: { model: string | null; responses: number; invalid_responses: number;
     empty_responses: number; received: number; rejected: number; accepted: number;
     merged: number; saved: number; rejection_reasons: Record<string, number> }[] | null;
+  model_acceptance?: ModelAcceptance | null;
+  rejection_diagnostics?: { version: 1; items: RejectionDiagnostic[]; omitted: number } | null;
   rubrics_completed: string[];
   llm_candidate_files: number | null;
   llm_submitted_files: number | null;

@@ -20,6 +20,62 @@ const manifest: ScanManifest = {
 };
 
 describe("audit evidence", () => {
+  it("shows legacy Free and Pro acceptance counts independently above the collapsed technical record", () => {
+    const free: Score = { total: 9.3, categories: { Security: 9.2 }, basis: "static+preview",
+      scan_manifest: { ...manifest, model_calls: 1, model_findings: [{ model: "preview", responses: 1,
+        invalid_responses: 0, empty_responses: 0, received: 11, accepted: 1, rejected: 10,
+        merged: 0, saved: 1, rejection_reasons: { source_quote_or_location_mismatch: 9, self_cancelled: 1 } }] } };
+    const paid: Score = { total: 4.9, categories: { Frontend: 3 }, basis: "static+llm",
+      free_baseline: { version: 1, origin: "included", status: "completed", score: free, findings: [] },
+      scan_manifest: { ...manifest, model_calls: 8, model_findings: [{ model: "paid", responses: 8,
+        invalid_responses: 0, empty_responses: 0, received: 59, accepted: 55, rejected: 4,
+        merged: 13, saved: 42, rejection_reasons: { self_cancelled: 4 } }] } };
+    const { container } = render(<>
+      <section aria-label="Free audit"><AuditCoverage score={free} findings={[]} /></section>
+      <section aria-label="Pro audit"><AuditCoverage score={paid} findings={[]} /></section>
+    </>);
+    const freeNotice = within(screen.getByRole("region", { name: "Free audit" }))
+      .getByRole("complementary", { name: "Model observation acceptance" });
+    const paidNotice = within(screen.getByRole("region", { name: "Pro audit" }))
+      .getByRole("complementary", { name: "Model observation acceptance" });
+    expect(freeNotice.textContent).toContain("Model observations accepted: 1 of 11");
+    expect(freeNotice.textContent).toContain("9 could not be matched to the cited source");
+    expect(paidNotice.textContent).toContain("Model observations accepted: 55 of 59");
+    expect(paidNotice.textContent).toContain("4 were withdrawn by the model");
+    expect(paidNotice.textContent).not.toContain("could not be matched");
+    for (const notice of [freeNotice, paidNotice]) {
+      expect(notice.closest("details")).toBeNull();
+      expect(notice.textContent).toContain("does not verify conclusions or establish project safety");
+    }
+    expect(container.textContent).not.toContain("9.3");
+    expect(container.textContent).not.toContain("4.9");
+  });
+
+  it("keeps safe rejection diagnostics inside Scan record and excludes unsafe metadata", () => {
+    const { container } = render(<AuditCoverage findings={[]} score={{ total: 0, categories: {},
+      scan_manifest: { ...manifest, rejection_diagnostics: { version: 1, omitted: 2, items: [{
+        response: 1, rubric: "web", item: 2, reason: "source_quote_or_location_mismatch",
+        detail: "quote_mismatch", file_ref: "sha256:" + "b".repeat(64), line_start: 10, line_end: 12,
+        evidence: "<script>private source</script>", path: "/private/source.ts", title: "private claim",
+      }, { response: 1, rubric: "web", item: 3, reason: "self_cancelled", detail: "self_cancelled",
+        file_ref: "<img src=x onerror=alert(1)>", line_start: "<script>unsafe</script>", line_end: null,
+      }] } } } as unknown as Score} />);
+    const diagnostic = screen.getByText(/Reason: source_quote_or_location_mismatch; detail: quote_mismatch/);
+    expect(diagnostic.closest("details")?.querySelector("summary")?.textContent).toBe("Scan record");
+    expect(screen.getByText(/2 records shown; 2 omitted/).closest("details")).not.toBeNull();
+    expect(screen.getByText(/entry: 3/).textContent).toContain("File reference: Not recorded");
+    expect(container.querySelector("script, img")).toBeNull();
+    expect(container.textContent).not.toMatch(/private source|private claim|private\/source|onerror|unsafe/);
+  });
+
+  it("does not substitute zero acceptance when an older report has no processing record", () => {
+    render(<AuditCoverage score={{ total: 9.3, categories: {}, scan_manifest: manifest }} findings={[]} />);
+    expect(screen.queryByRole("complementary", { name: "Model observation acceptance" })).toBeNull();
+    expect(screen.getByText("Model finding processing").nextElementSibling?.textContent)
+      .toBe("Not recorded for this audit");
+    expect(screen.queryByText(/Model observations accepted: 0/)).toBeNull();
+  });
+
   it("shows automatic function evidence with unresolved candidate limits", () => {
     const source_facts: NonNullable<ScanManifest["source_facts"]> = {
       scope: "Syntax only", facts: [], parsed_files: 1, excluded_files: 0, limitations: [],
