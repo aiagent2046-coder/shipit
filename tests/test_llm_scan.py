@@ -21,7 +21,7 @@ from app.scan import (llm_scan, source_facts, operation_context, function_contex
                       syntax_claims, premise_context, operator_context, react_async_context,
                       guard_context, cost_context, rls_recommendations, recommendations, recommendation_contract,
                       model_metadata_identity, imported_error_context, rejection_diagnostics, source_limit_context,
-                      paid_operation_recommendations)
+                      paid_operation_recommendations, credential_transport_assessment, claim_evidence)
 from app.scan import pipeline as pipeline_mod
 from app.scan.secrets import damp_for_non_production_path
 from app.scan.llm_scan import (
@@ -45,7 +45,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "b0e287d49101cd5e"
+PROMPT_FINGERPRINT = "82ccbf6d7f5fb9e2"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1089,6 +1089,8 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         inspect.getsource(rejection_diagnostics),
         inspect.getsource(source_limit_context),
         inspect.getsource(paid_operation_recommendations),
+        inspect.getsource(credential_transport_assessment),
+        inspect.getsource(claim_evidence),
         inspect.getsource(premise_context),
         inspect.getsource(operator_context),
         inspect.getsource(syntax_claims.completed_notification_function),

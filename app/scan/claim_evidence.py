@@ -6,6 +6,53 @@ Do not persist the excerpt: it can contain an unmasked credential.
 """
 from __future__ import annotations
 
+import re
+
+
+def source_assessments(record: dict | None) -> list[dict]:
+    """Read only well-formed scanner assessments; old records stay unchanged.
+
+    These fields are constructed after model admission, never copied from its
+    JSON. A source binding identifies the scope of a check, not runtime proof.
+    Malformed saved metadata cannot grant score relief or a new disposition.
+    """
+    if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] != 1:
+        return []
+    checks = record.get("source_assessments")
+    if not isinstance(checks, list):
+        return []
+    valid = []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        start, end = check.get("line_start"), check.get("line_end")
+        if (check.get("method") != "source_ast"
+                or not isinstance(check.get("result"), str)
+                or check.get("result") not in {"unsupported", "contradicted", "observed", "not_checked"}
+                or type(check.get("whole_finding")) is not bool
+                or not isinstance(check.get("kind"), str) or not check["kind"]
+                or not isinstance(check.get("detail"), str) or not check["detail"]
+                or not isinstance(check.get("file"), str) or not check["file"]
+                or not isinstance(check.get("source_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", check["source_sha256"])
+                or type(start) is not int or type(end) is not int or not 1 <= start <= end <= 2**53 - 1
+                or not isinstance(check.get("source_binding"), dict) or not check["source_binding"]):
+            continue
+        valid.append(check)
+    return valid
+
+
+def unsupported_transport(record: dict | None) -> bool:
+    """A narrow transport-only hypothesis lacks evidence of credential exposure.
+
+    This excludes only that hypothesis's penalty. It does not verify routing,
+    logging, proxy configuration, credential validity or application safety.
+    Other unsupported/partial claims deliberately receive no score relief.
+    """
+    return any(check["kind"] == "credential_transport_only"
+               and check["result"] == "unsupported" and check["whole_finding"]
+               for check in source_assessments(record))
+
 
 def quote_match_window(finding: dict, files: dict[str, str]) -> tuple[int, int] | None:
     path = finding.get("file")
@@ -64,5 +111,7 @@ def partial_contradicted(record: dict | None) -> bool:
     as 'actually safe' never determine this disposition or the score.
     """
     return bool(record and record.get("version") == 1 and not syntax_contradicted(record)
-                and any(isinstance(check, dict) and check.get("result") == "contradicted"
-                        for check in (record.get("premise_checks") or [])))
+                and not unsupported_transport(record)
+                and (any(isinstance(check, dict) and check.get("result") == "contradicted"
+                         for check in (record.get("premise_checks") or []))
+                     or any(check["result"] == "contradicted" for check in source_assessments(record))))

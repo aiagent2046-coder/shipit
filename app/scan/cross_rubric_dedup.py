@@ -142,7 +142,7 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
             return False
     # The source operation, not the model's selector coordinates, establishes
     # identity. Different check kinds/dispositions still retain separate rows.
-    for key in ("syntax_check", "premise_checks"):
+    for key in ("syntax_check", "premise_checks", "source_assessments"):
         a, b = ea.get(key), eb.get(key)
         if network and key == "premise_checks":
             a, b = network_premise_projection(a, identity_a), network_premise_projection(b, identity_b)

@@ -60,6 +60,14 @@ class SyntaxVerifier:
         from app.scan.imported_error_context import ImportedErrorVerifier
         self._imported_error_verifier = ImportedErrorVerifier(archive)
         self._source_limit_verifier = None
+        self._credential_transport_verifier = None
+
+    def source_assessments(self, finding: dict) -> list[dict]:
+        """Scanner-owned assessments keep interpretations separate from source facts."""
+        if self._credential_transport_verifier is None:
+            from app.scan.credential_transport_assessment import CredentialTransportVerifier
+            self._credential_transport_verifier = CredentialTransportVerifier(self.archive)
+        return self._credential_transport_verifier.checks_for(finding)
 
     def premise_checks(self, finding: dict) -> list[dict]:
         from app.scan.atomic_claims import requests

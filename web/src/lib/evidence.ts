@@ -1,4 +1,4 @@
-import type { Finding, ModelAcceptance, Score, Severity } from "./types";
+import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment } from "./types";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -36,15 +36,49 @@ export function syntaxContradicted(finding: Finding): boolean {
     && finding.claim_evidence.syntax_check?.result === "contradicted";
 }
 
-export function partialContradicted(finding: Finding): boolean {
+// Shape checks mirror the report backend. A recorded source assessment does
+// not establish credential safety or runtime behavior.
+export function sourceAssessments(finding: Finding): SourceAssessment[] {
+  const assessments: unknown = finding.claim_evidence?.version === 1
+    ? finding.claim_evidence.source_assessments : undefined;
+  if (!Array.isArray(assessments)) return [];
+  return assessments.filter((assessment): assessment is SourceAssessment => record(assessment)
+    && typeof assessment.kind === "string" && assessment.kind.length > 0
+    && typeof assessment.result === "string"
+    && ["unsupported", "contradicted", "observed", "not_checked"].includes(assessment.result)
+    && typeof assessment.whole_finding === "boolean"
+    && typeof assessment.detail === "string" && assessment.detail.length > 0
+    && typeof assessment.file === "string" && assessment.file.length > 0
+    && count(assessment.line_start) && assessment.line_start > 0
+    && count(assessment.line_end) && assessment.line_end >= assessment.line_start
+    && typeof assessment.source_sha256 === "string" && /^[a-f0-9]{64}$/.test(assessment.source_sha256)
+    && assessment.method === "source_ast" && record(assessment.source_binding)
+    && Object.keys(assessment.source_binding).length > 0);
+}
+
+export function unsupportedTransport(finding: Finding): boolean {
+  return sourceAssessments(finding).some(assessment => assessment.kind === "credential_transport_only"
+    && assessment.result === "unsupported" && assessment.whole_finding);
+}
+
+function partialPremiseContradicted(finding: Finding): boolean {
   return finding.claim_evidence?.version === 1 && !syntaxContradicted(finding)
     && (finding.claim_evidence.premise_checks ?? []).some(check => check.result === "contradicted");
 }
 
-export function evidenceLabel(finding: Finding): string {
+export function partialContradicted(finding: Finding): boolean {
+  return finding.claim_evidence?.version === 1 && !syntaxContradicted(finding) && !unsupportedTransport(finding)
+    && (partialPremiseContradicted(finding)
+      || sourceAssessments(finding).some(assessment => assessment.result === "contradicted"));
+}
+
+export function evidenceLabel(finding: Finding, historical = false): string {
   if (isInformational(finding)) return "Deployment inventory — informational";
   if (syntaxContradicted(finding)) return "Model syntax premise contradicted — see bounded check";
-  if (partialContradicted(finding)) return "Part of the model claim is contradicted — remaining claims need review";
+  if (!historical && unsupportedTransport(finding)) return "Credential transport — exposure not established";
+  if (historical ? partialPremiseContradicted(finding) : partialContradicted(finding)) {
+    return "Part of the model claim is contradicted — remaining claims need review";
+  }
   if (finding.source === "llm" || finding.rule_id?.startsWith("llm-")) {
     return "Model hypothesis — unverified";
   }
@@ -78,7 +112,7 @@ function groupedClaimScopeRows(finding: Finding): [string, string][] {
   return rows;
 }
 
-export function claimEvidenceRows(finding: Finding): [string, string][] {
+export function claimEvidenceRows(finding: Finding, historical = false): [string, string][] {
   const record = finding.claim_evidence?.version === 1 ? finding.claim_evidence : undefined;
   const check = record?.source_check;
   const checked = check?.kind === "quote_match"
@@ -87,7 +121,16 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
       ? "A static rule emitted this observation. Its consequence was not tested."
       : "Not recorded for this finding; do not assume the cited code was verified.";
   const rows: [string, string][] = [["Source check", checked]];
-  if (partialContradicted(finding)) rows.push(["Assessment needs review",
+  if (!historical && unsupportedTransport(finding)) rows.push(["Needs exposure evidence",
+    "This transport-only hypothesis is excluded from the score. Runtime routing, logging and credential exposure remain unverified."]);
+  for (const assessment of sourceAssessments(finding)) {
+    rows.push(["Source assessment", `${assessment.detail} Checked ${assessment.file}:${assessment.line_start}–${assessment.line_end}.`]);
+    rows.push(["Source assessment binding", JSON.stringify({
+      file: assessment.file, line_start: assessment.line_start, line_end: assessment.line_end,
+      source_sha256: assessment.source_sha256, method: assessment.method, source_binding: assessment.source_binding,
+    })]);
+  }
+  if (historical ? partialPremiseContradicted(finding) : partialContradicted(finding)) rows.push(["Assessment needs review",
     "A bounded source check contradicts part of this finding. The original model severity "
     + "remains in the score because the other claims have not been resolved; it is not "
     + "independent confirmation of their impact. Review the source checks before acting."]);
@@ -224,7 +267,7 @@ export function coverageRows(score: Score, findings: Finding[]): [string, string
 
 export function findingCounts(findings: Finding[]): { source: number; examples: number } {
   return findings.reduce((counts, finding) => {
-    if (isInformational(finding) || syntaxContradicted(finding)) return counts;
+    if (isInformational(finding) || syntaxContradicted(finding) || unsupportedTransport(finding)) return counts;
     const key = isNonProductionFinding(finding) ? "examples" : "source";
     counts[key] += finding.occurrence_titles?.length || 1;
     return counts;
@@ -234,7 +277,7 @@ export function findingCounts(findings: Finding[]): { source: number; examples: 
 export function sourceSeverityCounts(findings: Finding[]): Record<Severity, number> {
   const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const finding of findings) {
-    if (isInformational(finding) || syntaxContradicted(finding)) continue;
+    if (isInformational(finding) || syntaxContradicted(finding) || unsupportedTransport(finding)) continue;
     if (isNonProductionFinding(finding)) continue;
     const severities = finding.occurrence_severities?.length
       ? finding.occurrence_severities : [finding.severity];
@@ -470,15 +513,17 @@ export function manifestRows(score: Score): [string, string][] {
 
 export function observationSummary(findings: Finding[]): string {
   const { source, examples } = findingCounts(findings);
-  let informational = 0, contradicted = 0;
+  let informational = 0, contradicted = 0, unsupported = 0;
   for (const f of findings) {
     const count = f.occurrence_titles?.length || 1;
     if (syntaxContradicted(f)) contradicted += count;
     else if (isInformational(f)) informational += count;
+    else if (unsupportedTransport(f)) unsupported += count;
   }
-  return `${source + examples + informational + contradicted} observations: ${source} in source, `
+  return `${source + examples + informational + contradicted + unsupported} observations: ${source} in source, `
     + `${examples} in tests/examples, ${informational} informational, `
-    + `${contradicted} with contradicted syntax premises.`;
+    + `${contradicted} with contradicted syntax premises`
+    + (unsupported ? `, ${unsupported} transport-only hypotheses without established exposure.` : ".");
 }
 
 export function reviewContributionRows(score: Score): [string, string, string][] {

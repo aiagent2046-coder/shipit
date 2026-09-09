@@ -1,10 +1,122 @@
 import { expect, it } from "vitest";
-import { claimEvidenceRows, coverageRows, findingCounts, manifestRows, modelAcceptanceNotice, modelAcceptanceSummary } from "./evidence";
+import { claimEvidenceRows, coverageRows, evidenceLabel, findingCounts, manifestRows, modelAcceptanceNotice, modelAcceptanceSummary, observationSummary, partialContradicted, sourceAssessments, sourceSeverityCounts, unsupportedTransport } from "./evidence";
 import { plainFields } from "./plain";
-import type { Finding, ScanManifest, Score } from "./types";
+import type { Finding, ScanManifest, Score, SourceAssessment } from "./types";
 
 const source: Finding = { rule_id: "aws-access-key-id", title: "AWS match",
   category: "Security", severity: "high", confidence: 1, file: "app/config.py" };
+
+const transportAssessment: SourceAssessment = {
+  kind: "credential_transport_only", result: "unsupported", whole_finding: true,
+  detail: "The bounded call transports a credential; the alleged exposure path is not established.",
+  file: "server/oauth.ts", line_start: 8, line_end: 12, source_sha256: "a".repeat(64),
+  method: "source_ast", source_binding: { call: "fetch", credential_field: "client_secret" },
+};
+
+function assessedFinding(assessment: unknown = transportAssessment): Finding {
+  return { ...source, rule_id: "llm-auth", source: "llm", file: "server/oauth.ts", claim_evidence: {
+    version: 1, source_check: { kind: "quote_match", line_start: 8, line_end: 12 }, observation: null,
+    required_conditions: null, conditions_status: "not_checked", consequence_status: "not_checked",
+    source_assessments: [assessment],
+  } } as Finding;
+}
+
+it("keeps transport-only assessments visible and separate from impact and syntax contradictions", () => {
+  const finding = assessedFinding();
+  const before = JSON.stringify(finding);
+  expect(unsupportedTransport(finding)).toBe(true);
+  expect(partialContradicted(finding)).toBe(false);
+  expect(findingCounts([finding, source])).toEqual({ source: 1, examples: 0 });
+  expect(sourceSeverityCounts([finding, source]).high).toBe(1);
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Source assessment"]).toContain("server/oauth.ts:8–12");
+  expect(rows["Source assessment binding"]).toContain('"source_sha256":"' + "a".repeat(64));
+  expect(rows["Source assessment binding"]).toContain('"credential_field":"client_secret"');
+  expect(rows["Needs exposure evidence"]).toBe("This transport-only hypothesis is excluded from the score. Runtime routing, logging and credential exposure remain unverified.");
+  expect(observationSummary([finding, source])).toBe("2 observations: 1 in source, 0 in tests/examples, 0 informational, 0 with contradicted syntax premises, 1 transport-only hypotheses without established exposure.");
+  expect(observationSummary([source])).toBe("1 observations: 1 in source, 0 in tests/examples, 0 informational, 0 with contradicted syntax premises.");
+  expect(coverageRows({ total: 5, categories: {}, basis: "static+preview" }, [finding])
+    .find(([name]) => name === "Security")?.[1]).not.toContain("unverified finding");
+  expect(JSON.stringify(finding)).toBe(before);
+});
+
+it.each([
+  null, [], 5, {},
+  { ...transportAssessment, result: "safe" },
+  { ...transportAssessment, method: "model_review" },
+  { ...transportAssessment, whole_finding: 1 },
+  { ...transportAssessment, kind: "" },
+  { ...transportAssessment, detail: "" },
+  { ...transportAssessment, file: "" },
+  { ...transportAssessment, source_sha256: "a".repeat(63) },
+  { ...transportAssessment, source_sha256: "A".repeat(64) },
+  { ...transportAssessment, line_start: 0 },
+  { ...transportAssessment, line_start: true },
+  { ...transportAssessment, line_start: "8" },
+  { ...transportAssessment, line_start: 8.5 },
+  { ...transportAssessment, line_end: 7 },
+  { ...transportAssessment, line_end: Number.MAX_SAFE_INTEGER + 1 },
+  { ...transportAssessment, source_binding: null },
+  { ...transportAssessment, source_binding: [] },
+  { ...transportAssessment, source_binding: {} },
+])("does not let malformed assessment metadata remove a finding from impact %#", assessment => {
+  const finding = assessedFinding(assessment);
+  expect(sourceAssessments(finding)).toEqual([]);
+  expect(unsupportedTransport(finding)).toBe(false);
+  expect(partialContradicted(finding)).toBe(false);
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  expect(sourceSeverityCounts([finding]).high).toBe(1);
+  expect(evidenceLabel(finding)).toBe("Model hypothesis — unverified");
+  expect(claimEvidenceRows(finding).some(([label]) => label.startsWith("Source assessment"))).toBe(false);
+});
+
+it.each([
+  { ...transportAssessment, result: "observed" },
+  { ...transportAssessment, result: "not_checked" },
+  { ...transportAssessment, kind: "different_hypothesis" },
+  { ...transportAssessment, whole_finding: false },
+])("does not infer whole-finding relief from a different assessment %#", assessment => {
+  const finding = assessedFinding(assessment);
+  expect(sourceAssessments(finding)).toHaveLength(1);
+  expect(unsupportedTransport(finding)).toBe(false);
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  expect(sourceSeverityCounts([finding]).high).toBe(1);
+});
+
+it("retains impact for a compound finding with a source contradiction and keeps legacy premise behavior", () => {
+  const finding = assessedFinding({ ...transportAssessment, kind: "memory_limit", result: "contradicted", whole_finding: false });
+  expect(partialContradicted(finding)).toBe(true);
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  expect(sourceSeverityCounts([finding]).high).toBe(1);
+  expect(evidenceLabel(finding)).toContain("Part of the model claim is contradicted");
+  expect(Object.fromEntries(claimEvidenceRows(finding))["Assessment needs review"]).toContain("remains in the score");
+  finding.claim_evidence!.source_assessments = [transportAssessment];
+  finding.claim_evidence!.premise_checks = [{ kind: "bounded_premise", target: "response", result: "contradicted",
+    claim: "Missing guard", detail: "The guard is present." }];
+  expect(partialContradicted(finding)).toBe(false);
+  delete finding.claim_evidence!.source_assessments;
+  expect(partialContradicted(finding)).toBe(true);
+});
+
+it.each([undefined, null, {}, "unsupported"])("abstains from unsupported assessment containers %#", assessments => {
+  const finding = assessedFinding();
+  Object.assign(finding.claim_evidence!, { source_assessments: assessments });
+  expect(sourceAssessments(finding)).toEqual([]);
+  expect(unsupportedTransport(finding)).toBe(false);
+});
+
+it("requires the evidence schema version and retains historical source records without a new disposition", () => {
+  const finding = assessedFinding();
+  const before = JSON.stringify(finding);
+  const rows = Object.fromEntries(claimEvidenceRows(finding, true));
+  expect(rows["Source assessment"]).toContain(transportAssessment.detail);
+  expect(rows["Needs exposure evidence"]).toBeUndefined();
+  expect(evidenceLabel(finding, true)).toBe("Model hypothesis — unverified");
+  expect(JSON.stringify(finding)).toBe(before);
+  Object.assign(finding.claim_evidence!, { version: 2 });
+  expect(sourceAssessments(finding)).toEqual([]);
+  expect(unsupportedTransport(finding)).toBe(false);
+});
 
 const acceptanceManifest: ScanManifest = {
   archive_sha256: "digest", commit_sha: null, engine_version: "test", archive_files: 1,

@@ -686,6 +686,12 @@ SYSTEM_PROMPT = (
     "are hypotheses, not verified facts. A matching quote does not verify your "
     "interpretation. Use a neutral title that does not assert unproven harm. "
     "A public API URL or NEXT_PUBLIC_ prefix alone is not a secret leak. "
+    "Server-to-provider authentication commonly sends an API key in an authentication header "
+    "or an OAuth client_secret to a token endpoint. That transmission alone is not a credential "
+    "exposure finding. Identify a concrete unintended recipient, client-visible output, logging "
+    "sink or other source-supported exposure path before alleging leakage. Proxy configuration "
+    "and hypothetical future misconfiguration are not evidence of an actual exposure; keep "
+    "unresolved routing separate from the observed authentication operation. "
     "For access control, distinguish intended operator privileges from user "
     "ownership; show how an unauthorized caller could cross that boundary. "
     "Keep each finding about one cause; separate independent causes even at the same line. "
@@ -1499,6 +1505,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   claim_evidence={**model_claim_evidence(f, files_by_name),
                                   "producer": {"model": usage.model, "response": stats.calls, "rubric": rubric},
                                   "syntax_check": syntax_verifier.check(f),
+                  "source_assessments": syntax_verifier.source_assessments({**f, "source": "llm"}),
                                   "premise_checks": (syntax_verifier.premise_checks(f)
                                                      + react_async_premise_checks(f, source_facts)),
                                   "source_issue_identity": issue_resolver.identity(f),

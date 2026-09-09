@@ -8,7 +8,7 @@ assets: the report is a single file that can be shared as-is.
 from __future__ import annotations
 
 from html import escape
-from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
+from app.scan.claim_evidence import partial_contradicted, syntax_contradicted, unsupported_transport
 
 from app.report.evidence import (
     is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
@@ -45,10 +45,13 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
     tier_label = f"Potential {sev} impact"
     contradicted = syntax_contradicted(f.get("claim_evidence"))
     partial = partial_contradicted(f.get("claim_evidence")) and not historical
+    unsupported = unsupported_transport(f.get("claim_evidence")) and not historical
     if contradicted:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
     elif partial:
         emoji, tier_label, color = "", "Assessment needs review", "#8b8d98"
+    elif unsupported:
+        emoji, tier_label, color = "", "Needs exposure evidence", "#8b8d98"
     if is_informational(f):
         emoji, tier_label, color = "", "Informational", "#8b8d98"
     if historical:
@@ -84,21 +87,30 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         risk_html = ('<div class="risk">Other claims remain unverified. Review the counterevidence below; '
                      'the original model severity is retained in the score pending review.</div>')
         fix_html = original
+    if unsupported:
+        original = ('<details><summary>Original model claim and suggestion — exposure not established</summary>'
+                    + '<p>' + escape(what) + '</p>'
+                    + ('<p>' + escape(risk) + '</p>' if risk else '')
+                    + ('<p>' + escape(fix) + '</p>' if fix else '') + '</details>')
+        what = "Credential transport — exposure not established"
+        risk_html = ('<div class="risk">This transport-only hypothesis is excluded from the score. '
+                     'Runtime routing, logging and credential exposure remain unverified.</div>')
+        fix_html = original
     evidence = '<dl style="white-space:pre-line">' + "".join(
-        f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f)
+        f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f, historical)
     ) + '</dl>'
     if not model:
         evidence = '<details><summary>Evidence and conditions</summary>' + evidence + '</details>'
     tech_bits = " · ".join(x for x in (
         _category_label(f),
-        ("" if partial else escape(str(f.get("title", "")))), loc,
+        ("" if partial or unsupported else escape(str(f.get("title", "")))), loc,
         escape(str(f.get("masked", "")))) if x)
     return (
         '<tr>'
         f'<td class="tiercell"><span class="sev" style="background:{color}">'
         f'{emoji} {escape(tier_label)}</span></td>'
         f'<td class="title"><div class="what">{escape(what)}</div>'
-        f'<div class="tech">{escape(evidence_label(f))}</div>'
+        f'<div class="tech">{escape(evidence_label(f, historical))}</div>'
         f'{risk_html}{evidence}{fix_html}'
         f'<div class="tech">{tech_bits}</div></td>'
         '</tr>'
@@ -231,7 +243,10 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     # either treat every row as urgent or, after the first false alarm, none
     # of them.
     contradicted = [f for f in findings if syntax_contradicted(f.get("claim_evidence"))]
-    unresolved = [f for f in findings if not syntax_contradicted(f.get("claim_evidence"))]
+    unsupported = [f for f in findings if not syntax_contradicted(f.get("claim_evidence"))
+                   and not is_informational(f) and unsupported_transport(f.get("claim_evidence"))]
+    unresolved = [f for f in findings if not syntax_contradicted(f.get("claim_evidence"))
+                  and not unsupported_transport(f.get("claim_evidence"))]
     informational = [f for f in unresolved if is_informational(f)]
     unresolved = [f for f in unresolved if not is_informational(f)]
     production = [f for f in unresolved if not _is_non_production(f)]
@@ -242,6 +257,9 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     elif non_production:
         body = ('<p class="clean">No findings outside the test and example '
                 'section. This does not establish safety.</p>')
+    elif unsupported:
+        body = ('<p class="clean">The transport observations below need evidence of credential exposure. '
+                'Their unresolved deployment conditions do not establish safety.</p>')
     else:
         body = '<p class="clean">No issues found by the current checks.</p>'
 
@@ -253,6 +271,12 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         )
     if informational:
         body += '<h2 class="sechead">Deployment inventory</h2>' + _findings_table(informational)
+    if unsupported:
+        body += ('<h2 class="sechead">Credential transport requiring exposure evidence</h2>'
+                 '<p class="secnote">These observations remain available for review. '
+                 'Transport alone does not establish a leak; actual exposure paths require evidence.</p>'
+                 + _findings_table(unsupported))
+
     if contradicted:
         body += ('<h2 class="sechead">Contradicted syntax premises</h2>'
                  '<p class="secnote">These model claims contradict the bounded syntax check. '
