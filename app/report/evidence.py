@@ -258,10 +258,35 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
                                  str(context.get("scope", "")) + ": " + item["summary"] + " " + item["detail"]))
         rows.append(("Deterministic context check", json.dumps(context, ensure_ascii=False)))
     recommendation = record.get("recommendation_check")
-    if recommendation:
-        rows.append(("Recommendation prerequisites", recommendation["detail"]))
-        rows.append(("Superseded original recommendation — do not apply without review",
-                     recommendation["original_fix_hint"]))
+    if isinstance(recommendation, dict) and recommendation:
+        detail = recommendation.get("detail")
+        rows.append(("Recommendation prerequisites", detail if isinstance(detail, str) else "Not recorded."))
+        checks = recommendation.get("checks")
+        for i, check in enumerate(checks if isinstance(checks, list) else [], 1):
+            if not (isinstance(check, dict) and check.get("version") == 1
+                    and check.get("result") == "prerequisites_required"
+                    and isinstance(check.get("kind"), str) and isinstance(check.get("detail"), str)):
+                continue
+            scope = check.get("scope") if isinstance(check.get("scope"), str) else ""
+            rows.append((f"Recommendation check {i} — prerequisites not verified",
+                         check["kind"] + ": " + check["detail"] + " " + scope))
+            prerequisites = check.get("prerequisites")
+            conditions = ([p for p in prerequisites if isinstance(p, str) and p]
+                          if isinstance(prerequisites, list) else [])
+            if conditions:
+                rows.append((f"Required recommendation conditions {i}", "\n".join(conditions)))
+            if isinstance(check.get("reference"), str) and check["reference"]:
+                rows.append((f"Recommendation API reference {i}", check["reference"]))
+        if isinstance(recommendation.get("original_fix_hint"), str):
+            rows.append(("Superseded original recommendation — do not apply without review",
+                         recommendation["original_fix_hint"]))
+        if isinstance(recommendation.get("original_provenance"), dict) and recommendation["original_provenance"]:
+            rows.append(("Superseded recommendation provenance — not independent verification",
+                         json.dumps(recommendation["original_provenance"], ensure_ascii=False)))
+        superseded = recommendation.get("superseded_fix_hints")
+        for i, hint in enumerate(superseded if isinstance(superseded, list) else [], 1):
+            if isinstance(hint, str):
+                rows.append((f"Superseded intermediate recommendation {i} — do not apply without review", hint))
     rows.extend(_grouped_claim_rows(record))
     for i, original in enumerate(record.get("grouped_originals", []), 1):
         rows.append((f"Grouped original {i} — not independent confirmation",
