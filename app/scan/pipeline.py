@@ -120,7 +120,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-08-2: reject ambiguous archives and record secret-scan exclusions.
 # 2026-09-08-3: guard/cost/policy evidence and unchecked HTTP success observations.
 # 2026-09-08-5: source-bound premise counterexamples and operation-based cause grouping.
-AUDIT_ENGINE_VERSION = "2026-09-08-5"
+# 2026-09-08-6: count exact quote-bound model repeats once, retaining each response's provenance.
+AUDIT_ENGINE_VERSION = "2026-09-08-6"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

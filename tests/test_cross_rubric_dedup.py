@@ -271,7 +271,7 @@ def test_different_source_query_beats_identical_title_and_location():
     assert len(out) == 2
 
 
-def test_unresolved_source_identity_does_not_fall_back_to_same_title_or_drop_fresh_observations():
+def test_unresolved_source_identity_without_quote_evidence_keeps_fresh_observations():
     raw = [_f(title="Identical text", claim_evidence=_source_evidence()),
            _f(title="Identical text", claim_evidence=_source_evidence())]
     out = dedup_cross_rubric(raw)
