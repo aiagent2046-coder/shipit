@@ -136,8 +136,9 @@ def _select(candidates, start, end):
 class SourceIssueResolver:
     """One audit's cached parsing budget. Does not execute/import target code."""
 
-    def __init__(self, archive):
+    def __init__(self, archive, source_facts=None):
         self.archive = archive
+        self.source_facts = source_facts
         self.remaining = MAX_TOTAL_BYTES
         self.checks = 0
         self.remaining_nodes = MAX_WORK_NODES
@@ -177,6 +178,20 @@ class SourceIssueResolver:
         return self._cache[path]
 
     def identity(self, finding):
+        if self.checks >= MAX_CHECKS:
+            return None
+        from app.scan.react_network_identity import network_cleanup_identity
+        network = network_cleanup_identity(finding, self.source_facts)
+        if network is not None:
+            self.checks += 1
+            # Facts belong to this audit's archive. A stale/reused inventory
+            # cannot supply an identity for different source bytes.
+            try:
+                document = self._document(network["file"])
+                return network if document and document[2] == network["source_sha256"] else None
+            except (UnicodeError, ValueError, TypeError, RecursionError, RuntimeError,
+                    OSError, zipfile.BadZipFile):
+                return None
         kind = _mechanism(finding.get("title", ""))
         path = finding.get("file")
         start = finding.get("line_start", finding.get("line"))

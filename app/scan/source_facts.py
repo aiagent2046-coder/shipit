@@ -162,7 +162,9 @@ def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
         for item in functions["records"]]
     subset["functions"] = functions
     react = {**(record.get("react_async") or {}), "records": [
-        {**item, "checks": compact_checks(item["checks"])}
+        {**{k: v for k, v in item.items() if k not in {
+            "source_sha256", "component_span", "function_span", "network_cleanup_bindings"}},
+         "checks": compact_checks(item["checks"])}
         for item in (record.get("react_async") or {}).get("records", [])]}
     subset["react_async"] = react
     # The added evidence shares the existing prompt budget. Full records and

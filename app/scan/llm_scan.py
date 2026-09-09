@@ -1309,7 +1309,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
         files = _iter_code_files(zf)
     files_by_name = dict(files)
     syntax_verifier = SyntaxVerifier(fileobj, source_facts)
-    issue_resolver = SourceIssueResolver(fileobj)
+    issue_resolver = SourceIssueResolver(fileobj, source_facts)
 
     findings: list[ScoredFinding] = []
     ran: set[str] = set()
