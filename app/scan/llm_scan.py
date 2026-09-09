@@ -1499,6 +1499,10 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                       stats.recategorised += 1
                       origin = category
                   category = declared
+              from app.scan.external_operation_identity import identity_from_assessments
+              assessments = syntax_verifier.source_assessments({**f, "source": "llm"})
+              source_identity = (identity_from_assessments(assessments, f["file"])
+                                 or issue_resolver.identity(f))
               findings.append(prepare_recommendation(ScoredFinding(
                   rule_id=f"llm-{rubric}",
                   title=clip(str(f["title"]), 200),
@@ -1516,10 +1520,10 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   claim_evidence={**model_claim_evidence(f, files_by_name),
                                   "producer": {"model": usage.model, "response": stats.calls, "rubric": rubric},
                                   "syntax_check": syntax_verifier.check(f),
-                  "source_assessments": syntax_verifier.source_assessments({**f, "source": "llm"}),
+                                  "source_assessments": assessments,
                                   "premise_checks": (syntax_verifier.premise_checks(f)
                                                      + react_async_premise_checks(f, source_facts)),
-                                  "source_issue_identity": issue_resolver.identity(f),
+                                  "source_issue_identity": source_identity,
                                   "context_checks": (finding_context(f, source_facts)
                                                      + syntax_verifier.consequence_context(f)
                                                      + syntax_verifier.imported_error_context(f)

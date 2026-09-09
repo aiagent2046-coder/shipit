@@ -12,9 +12,17 @@ import re
 # Only scanner-owned, source-bound checks may request this display disposition.
 # Unlike a contradiction, an unresolved outcome does not assert the opposite
 # claim and never removes its score contribution.
-NARRATIVE_REVIEW_KINDS = frozenset({
-    "navigation_pending_outcome_unverified", "verified_user_operation_scope", "matched_peer_operation_scope",
-})
+NARRATIVE_REVIEW_PREMISES = {
+    "navigation_pending_outcome_unverified": "navigation_pending_outcome_unverified",
+    "verified_user_operation_scope": "verified_user_operation_scope",
+    "matched_peer_operation_scope": "matched_peer_operation_scope",
+    "retry_classifier_terminal_error": "retry_error_multiplier",
+    "poll_wait_not_deadline": "poll_wait_wall_clock",
+    "request_role_billing_boundary": "request_count_as_paid_operations",
+    "imported_rate_limit_configuration": "configured_rate_limit_number",
+    "duplicate_key_before_external_call": "duplicate_request_dispatch",
+    "insert_before_count_schedule": "conditional_insert_count_schedule",
+}
 
 
 def source_assessments(record: dict | None) -> list[dict]:
@@ -67,11 +75,11 @@ def narrative_review_checks(record: dict | None) -> list[dict]:
     result = []
     for check in source_assessments(record):
         review = check.get("narrative_review")
-        if (check["kind"] not in NARRATIVE_REVIEW_KINDS
+        if (check["kind"] not in NARRATIVE_REVIEW_PREMISES
                 or check["result"] != "observed" or check["whole_finding"]
                 or not isinstance(review, dict)
                 or review.get("status") != "required"
-                or review.get("premise") != check["kind"]
+                or review.get("premise") != NARRATIVE_REVIEW_PREMISES[check["kind"]]
                 or not isinstance(review.get("reason"), str)
                 or not review["reason"].strip()):
             continue

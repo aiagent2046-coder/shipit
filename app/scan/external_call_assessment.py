@@ -8,6 +8,7 @@ finding. Unsupported control flow and ambiguous bindings abstain.
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import re
 import zipfile
 
@@ -16,13 +17,15 @@ from app.scan import guard_context as g
 from app.scan import imported_error_context as i
 
 MAX_CHECKS = 48
-MAX_RECORDS = 5
+MAX_RECORDS = 8
 KINDS = (
     "retry_callback_scope",
     "retry_classifier_terminal_error",
     "poll_wait_not_deadline",
     "duplicate_key_before_external_call",
     "insert_before_count_schedule",
+    "request_role_billing_boundary",
+    "imported_rate_limit_configuration",
 )
 LIMITS = (
     "Only the recorded source premise is assessed; the whole finding, other call sites, runtime bindings, "
@@ -61,6 +64,45 @@ def _selected(node, start, end):
     return g._line(node) <= start <= end <= node.end_point[0] + 1
 
 
+def _introduced(node, start, end):
+    """An adjacent comment may introduce one statement, never another operation."""
+    if _selected(node, start, end):
+        return True
+    previous = node.prev_named_sibling
+    return bool(previous and previous.type == "comment" and _selected(previous, start, start)
+                and end <= node.end_point[0] + 1
+                and node.start_point[0] <= previous.end_point[0] + 1)
+
+
+def _asserted(text, pattern):
+    """Select an affirmative consequence, never advice or an explicit disclaimer."""
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n", text):
+        if (re.search(pattern, sentence, re.I)
+                and not re.search(r"\b(?:not|never|cannot|neither|prevents?|"
+                                  r"verify|add|consider|recommend\w*|propos\w*|should|must|"
+                                  r"not (?:prove|establish|demonstrat|automatically|necessarily)|"
+                                  r"unverified|not (?:verified|established|supported|a proof|proof)|"
+                                  r"does not|do not|cannot conclude|"
+                                  r"whether|verify whether|no evidence|not a (?:deadline|billing))\b", sentence, re.I)):
+            return True
+    return False
+
+
+def _review(record, premise, reason):
+    record["narrative_review"] = {"status": "required", "premise": premise, "reason": reason}
+    return record
+
+
+def _callback_reentry_claim(text):
+    error = r"(?:any (?:thrown )?error|400|422|pars(?:e|ing)|JSON)"
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n", text):
+        if re.search(r"\b(?:outside|afterwards|separate|after (?:the |its )?(?:callback|retry))\b", sentence, re.I):
+            continue
+        if _asserted(sentence, r"\bretr\w*.{0,100}" + error + "|" + error + r".{0,100}\bretr\w*"):
+            return True
+    return False
+
+
 def _ancestor(node, typ):
     while node and node.type != typ:
         node = node.parent
@@ -82,6 +124,13 @@ def _declaration(node):
 
 def _pair(obj, key):
     if not obj or obj.type not in {"object", "object_pattern"}:
+        return None
+    # Quoted/computed keys and spreads can override an earlier plain key.
+    # Abstain instead of treating an ignored property as absent.
+    if any(n.type in {"spread_element", "rest_pattern"}
+           or (n.type in {"pair", "pair_pattern"}
+               and n.child_by_field_name("key").type != "property_identifier")
+           for n in g._children(obj)):
         return None
     matches = [
         n
@@ -209,6 +258,12 @@ def _terminal_classifier(handler, err):
         "isUpstream5xx": "status>=500&&status<600",
         "retryable": "isAbort||isRateLimit||isUpstream5xx",
     }
+    loop = _ancestor(handler, "for_statement")
+    condition = loop.child_by_field_name("condition") if loop else None
+    if condition is None:
+        return None
+    expected["isLast"] = (_tokens(condition.child_by_field_name("left")) + "==="
+                          + _tokens(condition.child_by_field_name("right")))
     if any(
         _tokens(consts[name].child_by_field_name("value")).replace('"', "'") != value
         for name, value in expected.items()
@@ -265,7 +320,7 @@ class ExternalCallVerifier:
 
     def _record(self, kind, path, selected, detail, *, result="observed", **binding):
         source = self.loader._binding(path, selected)
-        return {
+        record = {
             "kind": kind,
             "result": result,
             "whole_finding": False,
@@ -275,6 +330,17 @@ class ExternalCallVerifier:
             **source,
             "source_binding": {**source, **binding},
         }
+        operation = (binding.get("retry_call") or binding.get("registration")
+                     or binding.get("later_call"))
+        mechanism = ("retry_poll_execution" if binding.get("retry_call")
+                     else "insert_count_schedule" if binding.get("registration")
+                     else "duplicate_key_dispatch" if binding.get("later_call") else None)
+        if operation and mechanism:
+            record["operation_identity"] = {
+                "version": 1, "mechanism": mechanism, "file": path,
+                "source_sha256": source["source_sha256"], "operation_span": operation["span"],
+            }
+        return record
 
     def _retry(self, path, root, start, end, text):
         selected_fn = c._function(root, start, end)
@@ -348,7 +414,7 @@ class ExternalCallVerifier:
                             "total attempts, not additional retries. Helper/runtime failures and charges are separate.",
                             result=(
                                 "contradicted"
-                                if re.search(r"\b(?:any (?:thrown )?error|400|422|pars(?:e|ing)|JSON)\b", text, re.I)
+                                if _callback_reentry_claim(text)
                                 else "observed"
                             ),
                             **common,
@@ -438,9 +504,27 @@ class ExternalCallVerifier:
                         awaited_requests=[c._loc(n) for n in fetches[:4]],
                     )
                 )
+        for record in records:
+            if (record["kind"] == KINDS[1] and _asserted(text,
+                    r"(?:retr\w*.{0,60}(?:on failure|on any error)|"
+                    r"poll\w* exhaustion.{0,60}retr\w*|"
+                    r"(?:slow|stuck|exhaust\w*).{0,170}(?:\d+\s*[×*]|fixed|multipl))")):
+                _review(record, "retry_error_multiplier", "The source bound counts attempts and applies only "
+                        "when the recorded classifier accepts the actual error. Poll exhaustion alone does not "
+                        "establish a retry or fixed multiplier. Dynamic error messages, request failures, "
+                        "provider execution and cost remain unverified.")
+            if (record["kind"] == KINDS[2] and _asserted(text,
+                    r"(?:up to\s*~?\s*\d+\s*seconds|\d+\s*seconds of wall.clock|"
+                    r"(?:deadline|wall.clock).{0,40}\d+|\d+\s*seconds.{0,30}(?:maximum|deadline))")):
+                _review(record, "poll_wait_wall_clock", "The stated elapsed-time bound counts poll sleeps "
+                        "but omits the awaited requests and other work. No numeric wall-clock bound or "
+                        "successful cancellation is established by this source path; the deadline concern remains.")
+        if records and cbbody.type == "statement_block":
+            from app.scan.external_operation_context import request_role_checks
+            records += request_role_checks(self, path, root, callback, call, text, common)
         return records
 
-    def _duplicate(self, path, root, start, end):
+    def _duplicate(self, path, root, start, end, text="", *, select_unique=False):
         fn = c._function(root, start, end)
         proof = c._duplicate_branch(root, fn) if fn else None
         if not proof:
@@ -486,7 +570,8 @@ class ExternalCallVerifier:
                     continue
                 if not any(_tokens(arg) == result + ".id" for arg in _args(call)):
                     continue
-                if not (_selected(query, start, end) or _selected(call, start, end) or start == g._line(gate)):
+                if not (select_unique or _selected(query, start, end) or _selected(call, start, end)
+                        or _introduced(gate, start, end)):
                     continue
                 if any(
                     n.type == "call_expression" and g._name(n.child_by_field_name("function")) == "fetch"
@@ -496,8 +581,7 @@ class ExternalCallVerifier:
         if len(matches) != 1:
             return []
         query, call, helper = matches[0]
-        return [
-            self._record(
+        record = self._record(
                 KINDS[3],
                 path,
                 call,
@@ -512,7 +596,17 @@ class ExternalCallVerifier:
                 later_call=c._loc(call),
                 helper=self.loader._binding(path, helper),
             )
-        ]
+        disputed = "\n".join(sentence for sentence in re.split(r"(?<=[.!?;])\s+|\n", text)
+                              if not re.search(r"\bonly after (?:a |the )?successful (?:insert|write)\b",
+                                               sentence, re.I))
+        if _asserted(disputed, r"(?:unconditionally|will (?:still |fire |not create)|fires? again|"
+                     r"(?:auto.reply|logic).{0,80}(?:runs? twice|fires? again)|"
+                     r"duplicate.key.{0,100}(?:but|before)|match\??\.id.{0,50}(?:is|will|returned))"):
+            _review(record, "duplicate_request_dispatch", "The recorded duplicate-error branch returns before "
+                    "this dispatch. Repeating a request does not establish that this later operation executes "
+                    "again; active constraints and upsert returned-row behavior remain unverified. "
+                    "Client duplicate requests and state updates are separate, retained concerns.")
+        return [record]
 
     def _count(self, path, root, start, end, text):
         fn = c._function(root, start, end)
@@ -617,8 +711,7 @@ class ExternalCallVerifier:
                 inserts.append(insert)
         if len(inserts) != 1 or not _stable(handler, {filter_value, count_name}):
             return []
-        return [
-            self._record(
+        record = self._record(
                 KINDS[4],
                 path,
                 query,
@@ -639,26 +732,29 @@ class ExternalCallVerifier:
                 assumptions=list(COUNT_ASSUMPTIONS),
                 assumptions_verified=False,
             )
-        ]
+        if _asserted(text, r"(?:both.{0,130}(?:count.{0,30}(?:one|1)\b|(?:pass|satisfy|trigger))|"
+                     r"one sees.{0,100}other also fires|(?:duplicate|two|twice).{0,40}(?:AI|auto.reply|Claude))"):
+            _review(record, "conditional_insert_count_schedule", "The proposed two-dispatch schedule depends on "
+                    "unverified database assumptions. With the recorded committed-row/no-delete assumptions, "
+                    "the count after the second distinct insert is at least two and fails count <= 1. "
+                    "Both callbacks can skip dispatch after two commits; other visibility and failure paths "
+                    "remain unverified. This is a conditional review, not a source-proven contradiction.")
+        return [record]
 
     def checks_for(self, finding):
         text = c._narrative(finding)
         retry = bool(re.search(r"\b(?:retr\w*|poll\w*|maxAttempts)\b", text, re.I))
         concurrent = bool(re.search(r"\b(?:duplicat\w*|concurren\w*|racy|race|twice|dedup\w*)\b", text, re.I))
-        if not (retry or concurrent):
+        concurrent = concurrent or bool(re.search(r"\b(?:auto.reply|Claude)\b", text, re.I)
+                                        and re.search(r"\b(?:again|both)\b", text, re.I))
+        rate = bool(re.search(r"\brate[ -]?limit|\b\d+[ -]requests[ -]per", text, re.I))
+        if not (retry or concurrent or rate):
             return []
         path = finding.get("file")
         start, end = finding.get("line_start"), finding.get("line_end")
         if not i._source_path(path) or type(start) is not int or type(end) is not int or not 1 <= start <= end:
             return []
-        premises = (
-            bool(re.search(r"\b(?:any (?:thrown )?error|400|422|pars(?:e|ing)|JSON)\b", text, re.I)),
-            bool(
-                re.search(r"\b(?:both|two|second)\b", text, re.I)
-                and re.search(r"\b(?:count|first.message)\b", text, re.I)
-            ),
-        )
-        key = (path, start, end, retry, concurrent, premises)
+        key = (path, start, end, retry, concurrent, rate, hashlib.sha256(text.encode()).hexdigest())
         if key in self._cache:
             return deepcopy(self._cache[key])
         if self.checks >= MAX_CHECKS:
@@ -673,8 +769,14 @@ class ExternalCallVerifier:
             if retry and not facts[1]["Error"] and not facts[2]["Error"] and "Error" not in facts[3]:
                 results += self._retry(path, root, start, end, text)
             if concurrent:
-                results += self._duplicate(path, root, start, end)
+                results += self._duplicate(path, root, start, end, text)
                 results += self._count(path, root, start, end, text)
+                if not any(r["kind"] == KINDS[3] for r in results):
+                    from app.scan.external_operation_context import client_dispatch_checks
+                    results += client_dispatch_checks(self, path, root, start, end, text)
+            if rate:
+                from app.scan.external_operation_context import rate_limit_checks
+                results += rate_limit_checks(self, path, root, start, end, text)
         except (
             AttributeError,
             KeyError,
