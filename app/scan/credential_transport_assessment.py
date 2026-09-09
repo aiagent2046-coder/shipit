@@ -178,7 +178,7 @@ def _object(node, *, shorthand=False):
 
 
 def _selected(finding):
-    if finding.get("source") not in {None, "llm"}:
+    if finding.get("source") is not None and finding["source"] != "llm":
         return None
     title = finding.get("title")
     if not isinstance(title, str) or len(title) > 512:

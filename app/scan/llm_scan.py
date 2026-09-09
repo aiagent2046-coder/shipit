@@ -1505,7 +1505,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   claim_evidence={**model_claim_evidence(f, files_by_name),
                                   "producer": {"model": usage.model, "response": stats.calls, "rubric": rubric},
                                   "syntax_check": syntax_verifier.check(f),
-                                  "source_assessments": syntax_verifier.source_assessments(f),
+                  "source_assessments": syntax_verifier.source_assessments({**f, "source": "llm"}),
                                   "premise_checks": (syntax_verifier.premise_checks(f)
                                                      + react_async_premise_checks(f, source_facts)),
                                   "source_issue_identity": issue_resolver.identity(f),
