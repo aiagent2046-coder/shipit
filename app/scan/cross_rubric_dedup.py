@@ -17,6 +17,9 @@ from app.scan.scoring import ScoredFinding
 from app.scan.react_network_identity import (
     MECHANISM, network_premise_projection, title_label_disagreement, valid_network_identity,
 )
+from app.scan.model_metadata_identity import (
+    MECHANISM as MODEL_METADATA, compatible_model_metadata_claims, valid_model_metadata_identity,
+)
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -64,16 +67,20 @@ def _mechanisms(title: str) -> frozenset[str]:
     return frozenset(key for key, pattern in patterns.items() if re.search(pattern, title, re.I))
 
 
-def _exact_observation(finding: ScoredFinding) -> str | None:
+def _exact_observation(finding: ScoredFinding, *, model_metadata=False) -> str | None:
     """An identical observation is not a new penalty for another model response.
 
     Only scanner-accepted, quote-bound LLM rows with an explicitly unresolved
-    identity qualify. Do not infer semantic equivalence from similar text or
+    identity qualify, or the narrowly requested model metadata identities
+    (including legacy broad v1). Do not infer equivalence from similar text or
     erase any substantive field, status, or producer metadata. The original
     response numbers stay in grouped_originals; this key is only for matching.
     """
     record = finding.claim_evidence or {}
-    if ("source_issue_identity" not in record or record["source_issue_identity"] is not None
+    identity = record.get("source_issue_identity")
+    if ("source_issue_identity" not in record
+            or (identity is not None and not (model_metadata
+                and valid_model_metadata_identity(identity, finding.file, legacy=True)))
             or finding.source != "llm" or finding.verification_method != "model_review"
             or not isinstance(finding.file, str) or not finding.file.strip()
             or type(finding.line) is not int or finding.line < 1):
@@ -87,6 +94,10 @@ def _exact_observation(finding: ScoredFinding) -> str | None:
             or any(not isinstance(producer.get(key), str) or not producer[key].strip()
                    for key in ("model", "rubric"))
             or type(producer.get("response")) is not int or producer["response"] < 1):
+        return None
+    if model_metadata and identity is not None and (
+            check.get("source_sha256", identity["source_sha256"]) != identity["source_sha256"]
+            or check.get("file", finding.file) != finding.file):
         return None
     payload = {key: getattr(finding, key) for key in _FINDING_FIELDS}
     payload["claim_evidence"] = {
@@ -104,6 +115,17 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     ea, eb = anchor.claim_evidence or {}, f.claim_evidence or {}
     has_source = "source_issue_identity" in ea or "source_issue_identity" in eb
     identity_a, identity_b = ea.get("source_issue_identity"), eb.get("source_issue_identity")
+    metadata = any(isinstance(identity, dict) and identity.get("mechanism") == MODEL_METADATA
+                   for identity in (identity_a, identity_b))
+    if metadata:
+        # Persisted v1 identities name only a request. Never re-use them for
+        # semantic grouping, including when flattening a previously mixed row.
+        exact = _exact_observation(anchor, model_metadata=True)
+        if exact is not None and exact == _exact_observation(f, model_metadata=True):
+            return True
+        if (identity_a != identity_b or not valid_model_metadata_identity(identity_a, anchor.file)
+                or not compatible_model_metadata_claims(anchor, f, identity_a)):
+            return False
     if has_source and (not identity_a or identity_a != identity_b):
         exact = _exact_observation(anchor)
         return exact is not None and exact == _exact_observation(f)

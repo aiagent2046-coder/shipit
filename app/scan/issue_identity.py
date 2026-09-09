@@ -17,6 +17,10 @@ from tree_sitter import Language, Parser
 import tree_sitter_typescript
 
 from app.scan import guard_context as g
+from app.scan.model_metadata_identity import (
+    MECHANISM as MODEL_METADATA, VERSION as MODEL_METADATA_VERSION, model_metadata_claim,
+    model_metadata_title,
+)
 
 MAX_FILE_BYTES = 256_000
 MAX_TOTAL_BYTES = 2_000_000
@@ -192,7 +196,12 @@ class SourceIssueResolver:
             except (UnicodeError, ValueError, TypeError, RecursionError, RuntimeError,
                     OSError, zipfile.BadZipFile):
                 return None
-        kind = _mechanism(finding.get("title", ""))
+        metadata_claim = model_metadata_claim(finding)
+        if metadata_claim is None and model_metadata_title(finding.get("title", "")):
+            return None  # A rejected mixed metadata claim cannot select another cause.
+        kind = MODEL_METADATA if metadata_claim else _mechanism(finding.get("title", ""))
+        if kind == MODEL_METADATA and metadata_claim is None:
+            return None  # One metadata operation can underlie different claims.
         path = finding.get("file")
         start = finding.get("line_start", finding.get("line"))
         end = finding.get("line_end", start)
@@ -239,7 +248,9 @@ class SourceIssueResolver:
             if operation is None:
                 return None
             operation_scope = _enclosing(operation.parent, g._FUNCTIONS) or scope
-            return {"version": 1, "method": "source_ast", "file": path,
+            return {"version": MODEL_METADATA_VERSION if kind == MODEL_METADATA else 1,
+                    **(metadata_claim if kind == MODEL_METADATA else {}),
+                    "method": "source_ast", "file": path,
                     "source_sha256": digest, "mechanism": kind,
                     "function_span": _span(operation_scope), "operation_span": _span(operation),
                     "operation_line_start": _lines(operation)[0], "operation_line_end": _lines(operation)[1]}
