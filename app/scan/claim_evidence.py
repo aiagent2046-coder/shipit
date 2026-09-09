@@ -12,7 +12,9 @@ import re
 # Only scanner-owned, source-bound checks may request this display disposition.
 # Unlike a contradiction, an unresolved outcome does not assert the opposite
 # claim and never removes its score contribution.
-NARRATIVE_REVIEW_KINDS = frozenset({"navigation_pending_outcome_unverified"})
+NARRATIVE_REVIEW_KINDS = frozenset({
+    "navigation_pending_outcome_unverified", "verified_user_operation_scope", "matched_peer_operation_scope",
+})
 
 
 def source_assessments(record: dict | None) -> list[dict]:
