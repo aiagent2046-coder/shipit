@@ -154,7 +154,11 @@ def operational_followups(original):
     if not isinstance(original, str):
         return None
     conditions = []
-    if re.search(r"\brate[ -]limit(?:ing|s)?\b", original, re.I):
+    if any(re.search(
+        r"\b(?:add|review|apply|enforce|implement|introduce|configure|consider|use|verify|check)\b"
+        r"(?:\s+(?:a|an|the|local|shared|global|existing|distributed|separate|per[ -]tenant|per[ -]user)){0,5}"
+        r"\s+rate[ -]limit(?:ing|er|ers|s)?\b", part, re.I)
+        for part in re.split(r"[.!?;\n]", original)):
         conditions.append(
             "Review rate limiting separately: define the caller/tenant scope, storage and failure "
             "behavior, and apply the limit before expensive work. Rate limiting does not replace "
@@ -178,7 +182,7 @@ def operational_followups(original):
         "kind": FOLLOWUPS_KIND,
         "detail": "Supported complementary goals from the original recommendation are retained as "
                   "conditional follow-ups. Original implementations and unsupported advice remain superseded.",
-        "scope": "Literal rate-limit, webhook and explicit billing-check goals in original advice only. "
+        "scope": "Explicit rate-limiter action, webhook and billing-check goals in original advice only. "
                  "No source behavior, provider capability or proposed implementation is verified.",
         "prerequisites": conditions,
         "replacement_fix_hint": " ".join(conditions),

@@ -238,3 +238,33 @@ def test_model_pipeline_does_not_trust_forged_check_or_add_another_model_call():
     assert record["result"] == "prerequisites_required"
     assert record["original_fix_hint"] == advice
     assert record["original_provenance"]["producer"]["model"] == "fake-model"
+
+
+@pytest.mark.parametrize(
+    "advice",
+    [
+        "Retry only on 429 (rate limit), 5xx and transport failures.",
+        "Treat HTTP 429 (rate limit) as retryable.",
+        "Check the response status for 429 (rate limit).",
+        "Add retries for 429 (rate limit) responses.",
+    ],
+)
+def test_provider_rate_limit_status_does_not_invent_a_local_limiter_goal(advice):
+    from app.scan.paid_operation_recommendations import operational_followups
+
+    assert operational_followups(advice) is None
+
+
+@pytest.mark.parametrize(
+    "advice",
+    [
+        "Add rate limiting before expensive work.",
+        "Review the per-tenant rate limiter.",
+        "Apply a shared rate limit.",
+        "Consider rate limiting separately.",
+    ],
+)
+def test_explicit_local_limiter_action_remains_a_followup(advice):
+    from app.scan.paid_operation_recommendations import operational_followups
+
+    assert "Review rate limiting separately" in operational_followups(advice)["replacement_fix_hint"]
