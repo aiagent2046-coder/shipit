@@ -94,6 +94,21 @@ it("bounds technical diagnostics and omits arbitrary model fields and unknown co
   expect(rows.flat().join(" ")).not.toMatch(/private source|private.ts|raw metadata|unsafe/);
 });
 
+it("displays bounded quote relationship codes without retaining rejected text", () => {
+  const score = acceptanceScore(0, { source_quote_or_location_mismatch: 4 });
+  const details = ["quote_outside_cited_window", "quote_prompt_line_prefix",
+    "quote_ellipsis_fragments_match", "diagnostic_limit_reached"];
+  score.scan_manifest!.rejection_diagnostics = { version: 1, omitted: 0, items: details.map((detail, index) => ({
+    response: 1, rubric: "auth", item: index + 1, reason: "source_quote_or_location_mismatch", detail,
+    file_ref: "sha256:" + "a".repeat(64), line_start: 1, line_end: 2,
+    evidence: "private rejected source", quote_hash: "private quote hash",
+  })) } as ScanManifest["rejection_diagnostics"];
+  const rows = manifestRows(score).filter(([label]) => label.startsWith("Rejected observation "));
+  expect(rows).toHaveLength(4);
+  details.forEach((detail, index) => expect(rows[index][1]).toContain(`detail: ${detail}`));
+  expect(rows.flat().join(" ")).not.toMatch(/private rejected source|private quote hash/);
+});
+
 it("explains catch and HTTP evidence without dismissing a compound claim or changing old records", () => {
   const finding: Finding = { ...source, rule_id: "llm-web", source: "llm", claim_evidence: {
     version: 1, source_check: { kind: "not_recorded" }, required_conditions: null,

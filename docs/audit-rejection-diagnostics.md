@@ -33,9 +33,36 @@ counts remain complete after the item cap is reached. Each item retains only:
   that exact path exists in the candidate-source map; otherwise null.
 
 For `source_quote_or_location_mismatch`, detail distinguishes `unknown_file`,
-`invalid_line_range`, `quote_missing_or_short`, and `quote_mismatch`. This only
-explains an already rejected candidate. It does not relax the existing exact
-quote match, adjust coordinates, repair model output, or accept a rejected item.
+`invalid_line_range`, `quote_missing_or_short`, and `quote_mismatch`. Additional
+closed codes describe relationships found during bounded local inspection:
+
+- `quote_outside_cited_window`: the exact quote exists elsewhere in the same
+  known file, after source line-ending normalization. It is absent from the
+  original admission window, including its existing two-line tolerance. This
+  does not identify a correct replacement coordinate or establish a claim.
+- `quote_prompt_line_prefix`: removing only the prompt's `number<TAB>` gutter
+  yields literal source text in that window. Every quoted gutter number must
+  match its source line; multiple numbers must be consecutive. Other prefixes,
+  changed whitespace, or invented text are not repaired or classified this way.
+- `quote_ellipsis_fragments_match`: between two and eight nonempty fragments,
+  each at least four characters long after trimming, occur literally and in order
+  in the original window, with a nonempty gap at every internal `...` or `…`.
+  This is a description of matching fragments, not proof that an ellipsis caused
+  the rejection. A spread operator, arbitrary ellipsis, or unsupported fragment
+  alone does not satisfy this check.
+- `diagnostic_limit_reached`: deeper inspection was skipped because the source
+  exceeds 262,144 characters, the raw quote exceeds 2,048 characters, or format
+  inspection would need a window larger than 8,192 characters. Unknown-file and
+  basic coordinate checks still apply first; source size is checked before
+  splitting lines. No conclusions are drawn about uninspected text.
+
+Literal occurrence elsewhere takes precedence over format details. Unsupported
+relationships remain `quote_mismatch`, including non-string rejected evidence.
+The 200-item scan cap also bounds the number of deeper inspections. These details
+only explain already rejected candidates. They do not relax the existing exact
+quote gate, adjust coordinates, repair model output, or accept a rejected item.
+The existing gate continues to admit matching multiline or longer quotes;
+diagnostic budgets introduce no new admission restriction.
 
 Rejected titles, explanations, quotations, unknown paths, quote hashes, and
 arbitrary model metadata are never persisted through this diagnostic channel.
@@ -46,3 +73,19 @@ their rejected candidates.
 
 The diagnostic projection uses fixed field and code allowlists in both report
 renderers. Unknown fields are dropped; malformed entries count as omitted.
+
+## Prompt citation contract
+
+Free and paid prompts ask for one contiguous, verbatim substring of one supplied
+source line, 4–120 characters after JSON decoding, with its original path and
+positive line coordinates. Numbered gutters, file wrappers, truncation markers
+and source-context summaries are presentation, not source evidence. Quotes must
+preserve source whitespace and punctuation, apply JSON escaping once, and never
+join separate fragments or insert ellipses. A candidate that cannot be cited
+faithfully should be omitted. The parser and literal admission gate remain
+unchanged, and there is no additional model call or automatic retry.
+
+These changes cannot retrospectively diagnose older generic `quote_mismatch`
+records: rejected quotes are intentionally absent from stored reports. A fresh
+run may provide more specific processing facts; it does not promise a higher
+acceptance rate or accurate model conclusions.

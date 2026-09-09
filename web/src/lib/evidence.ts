@@ -327,7 +327,8 @@ export function modelAcceptanceNotice(score: Score): [string, string] | null {
 const rejectionReasons = new Set(["not_an_object", "missing_fields", "invalid_severity",
   "invalid_confidence", "invalid_text", "source_quote_or_location_mismatch", "self_cancelled"]);
 const rejectionDetails = new Set([...rejectionReasons, "unknown_file", "invalid_line_range",
-  "quote_missing_or_short", "quote_mismatch"]);
+  "quote_missing_or_short", "quote_mismatch", "quote_outside_cited_window",
+  "quote_prompt_line_prefix", "quote_ellipsis_fragments_match", "diagnostic_limit_reached"]);
 const rejectionRubrics = new Set(["auth", "security", "money", "web"]);
 const maxRejectionItems = 200;
 

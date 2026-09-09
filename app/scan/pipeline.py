@@ -126,7 +126,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-09-3: retain bounded rejection diagnostics and explicit acceptance accounting.
 # 2026-09-09-4: compose source-bound React cleanup claims and disclose grouped claim scope.
 # 2026-09-09-8: attach observational guard and consequence context without prose-derived refutations.
-AUDIT_ENGINE_VERSION = "2026-09-09-8"
+# 2026-09-09-9: tighten the citation contract and explain bounded quote mismatches without retaining quotes.
+AUDIT_ENGINE_VERSION = "2026-09-09-9"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
