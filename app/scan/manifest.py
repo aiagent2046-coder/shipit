@@ -5,6 +5,8 @@ import hashlib
 import io
 import zipfile
 
+from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
+
 
 def _file_counts(coverage: object) -> dict | None:
     """Persist a fixed numeric schema, never opaque scanner metadata.
@@ -62,6 +64,8 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object, failure_k
         "model": stats.get("model"),
         "model_calls": stats.get("calls", 0),
         "model_findings": stats.get("model_findings"),
+        "model_acceptance": acceptance_summary(stats.get("model_findings")),
+        "rejection_diagnostics": diagnostics_manifest(stats),
         "rubrics_completed": list(stats.get("rubrics_ran", ())),
         "llm_candidate_files": candidates,
         "llm_submitted_files": len(submitted) if submitted is not None else None,

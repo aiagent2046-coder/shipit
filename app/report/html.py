@@ -13,6 +13,7 @@ from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
 from app.report.evidence import (
     is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
     model_status_notice, source_severity_counts, claim_evidence_rows, observation_summary, review_contribution_rows,
+    model_acceptance_notice,
 )
 from app.report.grouping import group_for_display
 from app.report.plain_language import plain_fields, tier
@@ -161,6 +162,10 @@ def _free_baseline(score: dict) -> str:
     if not prior:
         return (result + '<p>Free audit unavailable: '
                 + escape(str(baseline.get("reason", "not recorded"))) + '.</p></section>')
+    acceptance = model_acceptance_notice(prior)
+    if acceptance:
+        result += ('<aside aria-label="Free audit observation acceptance"><strong>'
+                   + escape(acceptance[0]) + '</strong><p>' + escape(acceptance[1]) + '</p></aside>')
     findings = baseline.get("findings") or []
     rows = coverage_rows(prior, findings) + manifest_rows(prior)
     record = ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in rows)
@@ -203,6 +208,12 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         '<aside aria-label="Model review status" style="border:1px solid #d9a441;padding:16px;margin:16px 0">'
         f'<strong>{escape(notice[0])}</strong><p>{escape(notice[1])}</p></aside>'
         if notice else ""
+    )
+    acceptance = model_acceptance_notice(score)
+    acceptance_note = (
+        '<aside aria-label="Model observation acceptance" style="border:1px solid #d9a441;padding:16px;margin:16px 0">'
+        f'<strong>{escape(acceptance[0])}</strong><p>{escape(acceptance[1])}</p></aside>'
+        if acceptance else ""
     )
     tier_note = (
         '<section><p class="secnote">No readiness score out of 10. '
@@ -339,6 +350,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
 </header>
 {tier_note}
 {status_note}
+{acceptance_note}
 <section>{cats}</section>
 {body}
 {coverage_note}

@@ -338,6 +338,9 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
         prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]),
         rubrics_ran=("auth",),
+        rejected_items=[dict(response=1, rubric="auth", item=2,
+                             reason="source_quote_or_location_mismatch", detail="unknown_file",
+                             file_ref=None, line_start=3, line_end=3)],
         model_findings=[dict(model="fake-model", responses=1, invalid_responses=0,
                              empty_responses=0, received=2, rejected=1, accepted=1, merged=0, saved=1,
                              rejection_reasons={"source_quote_or_location_mismatch": 1})])

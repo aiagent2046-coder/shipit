@@ -1,12 +1,17 @@
 import type { Finding, Score } from "@/lib/types";
-import { coverageRows, manifestRows, modelStatusNotice, observationSummary, reviewContributionRows } from "@/lib/evidence";
+import { coverageRows, manifestRows, modelAcceptanceNotice, modelStatusNotice, observationSummary, reviewContributionRows } from "@/lib/evidence";
 
 export function AuditCoverage({ score, findings }: { score: Score; findings: Finding[] }) {
   const notice = modelStatusNotice(score);
+  const acceptance = modelAcceptanceNotice(score);
   const contribution = reviewContributionRows(score);
   return (
     <section aria-label="Audit coverage">
       <p className="mb-4 text-sm">{observationSummary(findings)}</p>
+      {acceptance && <aside aria-label="Model observation acceptance" className="mb-4 rounded-lg border border-amber-500 p-4">
+        <h3 className="font-semibold">{acceptance[0]}</h3>
+        <p className="mt-1 text-sm">{acceptance[1]}</p>
+      </aside>}
       {contribution.length > 0 && <section aria-label="Model review contribution" className="mb-4 text-sm">
         <h3 className="font-semibold">Model review contribution</h3>
         <table className="my-2 w-full text-left">
