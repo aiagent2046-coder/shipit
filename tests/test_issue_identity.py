@@ -74,7 +74,7 @@ def _identity(resolver, title, start=2, end=None, **extra):
   return res.json();
 }
 """, "Model version fetched on every embedding computation",
-     "Model version lookup makes a paid API call on every recompute", (2, 3)),
+     "Model version lookup is called on every recompute", (2, 3)),
     ("""async function embedding() {
   return withRetry(async () => {
     let result = await createPrediction();
