@@ -64,6 +64,7 @@ class SyntaxVerifier:
         self._source_claim_verifier = None
         self._external_call_verifier = None
         self._scoped_ui_verifier = None
+        self._auth_source_verifier = None
 
     def source_assessments(self, finding: dict) -> list[dict]:
         """Scanner-owned assessments keep interpretations separate from source facts."""
@@ -79,10 +80,14 @@ class SyntaxVerifier:
         if self._scoped_ui_verifier is None:
             from app.scan.scoped_ui_claim_assessment import ScopedUIClaimVerifier
             self._scoped_ui_verifier = ScopedUIClaimVerifier(self.archive)
+        if self._auth_source_verifier is None:
+            from app.scan.auth_source_assessment import AuthSourceVerifier
+            self._auth_source_verifier = AuthSourceVerifier(self.archive)
         return (self._credential_transport_verifier.checks_for(finding)
                 + self._source_claim_verifier.checks_for(finding)
                 + self._external_call_verifier.checks_for(finding)
-                + self._scoped_ui_verifier.checks_for(finding))
+                + self._scoped_ui_verifier.checks_for(finding)
+                + self._auth_source_verifier.checks_for(finding))
 
     def premise_checks(self, finding: dict) -> list[dict]:
         from app.scan.atomic_claims import requests
