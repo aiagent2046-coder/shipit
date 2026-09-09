@@ -189,7 +189,8 @@ def _check_status(value):
     if not isinstance(value, dict):
         return value
     return tuple((key, json.dumps(value[key], sort_keys=True)) for key in (
-        "kind", "result", "target", "source_entities", "scope", "claim_scope", "disposition", "whole_finding"
+        "kind", "result", "target", "source_entities", "scope", "claim_scope", "disposition", "whole_finding",
+        "narrative_review",
     ) if key in value)
 
 

@@ -8,7 +8,9 @@ assets: the report is a single file that can be shared as-is.
 from __future__ import annotations
 
 from html import escape
-from app.scan.claim_evidence import partial_contradicted, syntax_contradicted, unsupported_transport
+from app.scan.claim_evidence import (
+    narrative_review_checks, partial_contradicted, syntax_contradicted, unsupported_transport,
+)
 
 from app.report.evidence import (
     is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
@@ -46,12 +48,15 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
     contradicted = syntax_contradicted(f.get("claim_evidence"))
     partial = partial_contradicted(f.get("claim_evidence")) and not historical
     unsupported = unsupported_transport(f.get("claim_evidence")) and not historical
+    review = bool(narrative_review_checks(f.get("claim_evidence"))) and not historical
     if contradicted:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
     elif partial:
         emoji, tier_label, color = "", "Assessment needs review", "#8b8d98"
     elif unsupported:
         emoji, tier_label, color = "", "Needs exposure evidence", "#8b8d98"
+    elif review:
+        emoji, tier_label, color = "", "Outcome needs review", "#8b8d98"
     if is_informational(f):
         emoji, tier_label, color = "", "Informational", "#8b8d98"
     if historical:
@@ -96,6 +101,15 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         risk_html = ('<div class="risk">This transport-only hypothesis is excluded from the score. '
                      'Runtime routing, logging and credential exposure remain unverified.</div>')
         fix_html = original
+    elif review and not partial and not contradicted:
+        fix_html = ('<details><summary>Original model claim and suggestion — outcome not established</summary>'
+                    + '<p>' + escape(what) + '</p>'
+                    + ('<p>' + escape(risk) + '</p>' if risk else '')
+                    + ('<p>' + escape(fix) + '</p>' if fix else '') + '</details>')
+        what = "Source checks leave this outcome unresolved"
+        risk_html = ('<div class="risk">Review the source conditions below before acting. '
+                     'The original model severity remains in the score pending review; '
+                     'the claimed outcome and project safety have not been verified.</div>')
     evidence = '<dl style="white-space:pre-line">' + "".join(
         f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f, historical)
     ) + '</dl>'
@@ -103,7 +117,7 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         evidence = '<details><summary>Evidence and conditions</summary>' + evidence + '</details>'
     tech_bits = " · ".join(x for x in (
         _category_label(f),
-        ("" if partial or unsupported else escape(str(f.get("title", "")))), loc,
+        ("" if partial or unsupported or review else escape(str(f.get("title", "")))), loc,
         escape(str(f.get("masked", "")))) if x)
     return (
         '<tr>'

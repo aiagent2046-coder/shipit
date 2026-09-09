@@ -46,7 +46,8 @@ _PARTIAL = {
     "intl_catch_absent": r"(?:time.?zone|Intl).*(?:without error handling|no catch|uncaught)",
     "required_nested_objects_absent": r"Zod.*required nested object",
     "query_limit_unbounded": r"(?:Integer overflow risk in limit parameter parsing|negative.*limit|limit.*negative)",
-    "sql_update_where": r"\bupdate\b.{0,200}\b(?:without|missing|no)\b.{0,80}\b(?:where|guard|row filter)\b",
+    "sql_update_where": r"\b(?:without|missing|no|lacks?)\s+(?:(?:an?|its|own|any)\s+){0,2}"
+                        r"where\b|\bwhere(?:\s+clause)?\s+(?:is\s+)?(?:absent|missing)\b",
     "ownership_guard_absent": r"\b(?:insert|write|update|delete)\b.{0,120}\b(?:does not|without|missing|no)\b"
                               r".{0,100}\b(?:ownership|membership|participant)\b|"
                               r"\b(?:missing|absent|no)\b.{0,80}\b(?:ownership|membership) "
@@ -61,14 +62,54 @@ def title_kind(title):
                  if re.fullmatch(pattern + r"[.]?", title, re.I)), None)
 
 
+def sql_where_absence_asserted(narrative):
+    """Only an asserted absence of WHERE, not a different absent SQL guard."""
+    text = narrative.replace("`", "")
+    for clause in re.split(r"[\n,;.!?]", text):
+        if (not re.search(r"\bupdate\b", clause, re.I)
+                or re.search(r"\b(?:not|never|isn't|doesn't|aren't|can't|cannot)\b|"
+                             r"\bno (?:evidence|sign|indication|missing)\b", clause, re.I)):
+            continue
+        if re.search(_PARTIAL["sql_update_where"], clause, re.I):
+            return True
+    return False
+
+
+def ownership_absence_asserted(narrative):
+    """Do not turn a database policy or a negated allegation into a local guard."""
+    for clause in re.split(r"[\n;.!?]", narrative.replace("`", "")):
+        if (re.search(r"\b(?:not|never|no)\s+(?:missing|absent|without)\b|"
+                      r"\b(?:does not|doesn't)\s+lack\b|\bno (?:evidence|sign|indication)\b", clause, re.I)
+                or (re.search(r"\b(?:database|RLS|polic(?:y|ies))\b", clause, re.I)
+                    and not re.search(r"\b(?:local|application|handler|route)\b", clause, re.I))):
+            continue
+        if re.search(_PARTIAL["ownership_guard_absent"], clause, re.I):
+            return True
+    return False
+
+
 def requests(finding):
     """Normalize only selector fields; never copy model-supplied evidence/status."""
     title = str(finding.get("title", ""))[:2000]
     atomic = title_kind(title)
     found = []
+    # Model selectors do not establish that a different premise was asserted.
+    # RLS bypass is not absent local ownership checking, and migration rerun
+    # protection is a different guard from an UPDATE's WHERE clause.
+    narrative = title + "\n" + str(finding.get("explanation", ""))[:8000]
+    scoped_narrative = narrative + "\n" + str(finding.get("observation", ""))[:8000]
+    selected = {kind for kind, pattern in _PARTIAL.items()
+                if re.search(pattern, scoped_narrative if kind in {"sql_update_where", "ownership_guard_absent"}
+                             else narrative, re.I)}
+    if "sql_update_where" in selected and not sql_where_absence_asserted(scoped_narrative):
+        selected.remove("sql_update_where")
+    if "ownership_guard_absent" in selected and not ownership_absence_asserted(scoped_narrative):
+        selected.remove("ownership_guard_absent")
     raw = finding.get("premises")
     for item in raw[:MAX_PREMISES] if isinstance(raw, list) else []:
         if not isinstance(item, dict) or not isinstance(item.get("kind"), str) or item["kind"] not in KINDS:
+            continue
+        if item["kind"] in {"sql_update_where", "ownership_guard_absent"} and item["kind"] not in selected:
             continue
         target = item.get("target", "")
         start, end = item.get("line_start"), item.get("line_end")
@@ -77,8 +118,7 @@ def requests(finding):
             continue
         found.append({"kind": item["kind"], "target": target, "line_start": start, "line_end": end})
     # Legacy answers still get a check. No inferred targets from quoted prose.
-    narrative = title + "\n" + str(finding.get("explanation", ""))[:8000]
-    kinds = [kind for kind, pattern in _PARTIAL.items() if re.search(pattern, narrative, re.I)]
+    kinds = [kind for kind in _PARTIAL if kind in selected]
     if atomic and atomic not in kinds:
         kinds.insert(0, atomic)
     for kind in kinds:

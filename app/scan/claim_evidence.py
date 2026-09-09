@@ -9,6 +9,12 @@ from __future__ import annotations
 import re
 
 
+# Only scanner-owned, source-bound checks may request this display disposition.
+# Unlike a contradiction, an unresolved outcome does not assert the opposite
+# claim and never removes its score contribution.
+NARRATIVE_REVIEW_KINDS = frozenset({"navigation_pending_outcome_unverified"})
+
+
 def source_assessments(record: dict | None) -> list[dict]:
     """Read only well-formed scanner assessments; old records stay unchanged.
 
@@ -52,6 +58,23 @@ def unsupported_transport(record: dict | None) -> bool:
     return any(check["kind"] == "credential_transport_only"
                and check["result"] == "unsupported" and check["whole_finding"]
                for check in source_assessments(record))
+
+
+def narrative_review_checks(record: dict | None) -> list[dict]:
+    """Validated source observations whose claimed outcome still needs review."""
+    result = []
+    for check in source_assessments(record):
+        review = check.get("narrative_review")
+        if (check["kind"] not in NARRATIVE_REVIEW_KINDS
+                or check["result"] != "observed" or check["whole_finding"]
+                or not isinstance(review, dict)
+                or review.get("status") != "required"
+                or review.get("premise") != check["kind"]
+                or not isinstance(review.get("reason"), str)
+                or not review["reason"].strip()):
+            continue
+        result.append(check)
+    return result
 
 
 def quote_match_window(finding: dict, files: dict[str, str]) -> tuple[int, int] | None:

@@ -63,6 +63,7 @@ class SyntaxVerifier:
         self._credential_transport_verifier = None
         self._source_claim_verifier = None
         self._external_call_verifier = None
+        self._scoped_ui_verifier = None
 
     def source_assessments(self, finding: dict) -> list[dict]:
         """Scanner-owned assessments keep interpretations separate from source facts."""
@@ -75,9 +76,13 @@ class SyntaxVerifier:
         if self._external_call_verifier is None:
             from app.scan.external_call_assessment import ExternalCallVerifier
             self._external_call_verifier = ExternalCallVerifier(self.archive)
+        if self._scoped_ui_verifier is None:
+            from app.scan.scoped_ui_claim_assessment import ScopedUIClaimVerifier
+            self._scoped_ui_verifier = ScopedUIClaimVerifier(self.archive)
         return (self._credential_transport_verifier.checks_for(finding)
                 + self._source_claim_verifier.checks_for(finding)
-                + self._external_call_verifier.checks_for(finding))
+                + self._external_call_verifier.checks_for(finding)
+                + self._scoped_ui_verifier.checks_for(finding))
 
     def premise_checks(self, finding: dict) -> list[dict]:
         from app.scan.atomic_claims import requests
@@ -177,6 +182,10 @@ class SyntaxVerifier:
         kind = ("react_hook_order" if _HOOK_CLAIM.search(title) else
                 "sql_update_where" if _SQL_CLAIM.search(title) else
                 "python_completed_notification" if _NOTIFY_CLAIM.fullmatch(title) else "unsupported")
+        if kind == "sql_update_where":
+            from app.scan.atomic_claims import sql_where_absence_asserted
+            if not sql_where_absence_asserted(title):
+                kind = "unsupported"
         def unknown(detail):
             return _result(kind, "not_checked", detail)
         if (kind == "unsupported" or re.search(r"\b(?:not|never|and|or)\b|[;\n]", title, re.I)
