@@ -14,7 +14,9 @@ import re
 import json
 
 from app.scan.scoring import ScoredFinding
-from app.scan.react_network_identity import MECHANISM, network_premise_projection, valid_network_identity
+from app.scan.react_network_identity import (
+    MECHANISM, network_premise_projection, title_label_disagreement, valid_network_identity,
+)
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -270,6 +272,19 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
         if len(origins) > 1:
             rep = replace(rep, claim_evidence={"version": 1, **(rep.claim_evidence or {}),
                                               "grouped_originals": [_original(item) for item in origins]})
+            identity = (rep.claim_evidence or {}).get("source_issue_identity")
+            if valid_network_identity(identity, rep.file):
+                rep = replace(rep, claim_evidence={**rep.claim_evidence, "grouped_claim_scope": {
+                    "mechanism": MECHANISM,
+                    "scope": "Same source operation and network-rejection cleanup hypothesis only.",
+                    "consequences": "Original conditions and consequences retain their own verification statuses.",
+                    "title_source_disagreements": [
+                        {"original_index": index, "result": "different_handler_label",
+                         "source_handler": identity["handler"]}
+                        for index, item in enumerate(origins)
+                        if title_label_disagreement(item.title, identity)
+                    ],
+                }})
         first = min((position, order) for position, order, _ in members)
         out.append((*first, rep))
     return [finding for _, _, finding in sorted(out, key=lambda item: (item[0], item[1]))]

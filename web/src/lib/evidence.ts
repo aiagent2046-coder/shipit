@@ -52,6 +52,32 @@ export function evidenceLabel(finding: Finding): string {
   return "Legacy finding — verification not recorded";
 }
 
+function groupedClaimScopeRows(finding: Finding): [string, string][] {
+  const evidence = finding.claim_evidence;
+  const grouping: unknown = evidence?.grouped_claim_scope;
+  const originals = evidence?.grouped_originals;
+  if (evidence?.version !== 1 || !record(grouping)
+    || grouping.mechanism !== "react_network_rejection_cleanup"
+    || !Array.isArray(originals) || originals.length <= 1) return [];
+  const rows: [string, string][] = [["Grouped hypothesis scope",
+    "Grouped by the same source operation and network-rejection cleanup hypothesis. "
+    + "Original conditions and consequences retain their own verification statuses."]];
+  if (!Array.isArray(grouping.title_source_disagreements)) return rows;
+  const handler = evidence.source_issue_identity?.handler;
+  for (const disagreement of grouping.title_source_disagreements) {
+    if (!record(disagreement) || disagreement.result !== "different_handler_label"
+      || !count(disagreement.original_index) || disagreement.original_index >= originals.length
+      || typeof disagreement.source_handler !== "string"
+      || !/^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(disagreement.source_handler)
+      || disagreement.source_handler !== handler) continue;
+    rows.push(["Handler label needs review",
+      `Original ${disagreement.original_index + 1} uses a different handler label. `
+      + `Bound source handler: ${disagreement.source_handler}. `
+      + "The original wording is retained; its handler label is not verified."]);
+  }
+  return rows;
+}
+
 export function claimEvidenceRows(finding: Finding): [string, string][] {
   const record = finding.claim_evidence?.version === 1 ? finding.claim_evidence : undefined;
   const check = record?.source_check;
@@ -122,6 +148,7 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
     rows.push(["Recommendation prerequisites", recommendation.detail]);
     rows.push(["Superseded original recommendation — do not apply without review", recommendation.original_fix_hint]);
   }
+  rows.push(...groupedClaimScopeRows(finding));
   for (const [i, original] of (record?.grouped_originals ?? []).entries()) {
     rows.push([`Grouped original ${i + 1} — not independent confirmation`, JSON.stringify(original)]);
   }

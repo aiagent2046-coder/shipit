@@ -6,6 +6,7 @@ severity, tier, or how many model passes repeated the same claim.
 """
 
 import json
+import re
 
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
 from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
@@ -142,6 +143,34 @@ def evidence_label(finding: dict) -> str:
     return "Legacy finding — verification not recorded"
 
 
+def _grouped_claim_rows(record: dict) -> list[tuple[str, str]]:
+    grouping = record.get("grouped_claim_scope")
+    originals = record.get("grouped_originals")
+    if (not isinstance(grouping, dict) or grouping.get("mechanism") != "react_network_rejection_cleanup"
+            or not isinstance(originals, list) or len(originals) < 2):
+        return []
+    rows = [("Grouped hypothesis scope",
+             "Grouped by the same source operation and network-rejection cleanup hypothesis. "
+             "Original conditions and consequences retain their own verification statuses.")]
+    identity = record.get("source_issue_identity")
+    handler = identity.get("handler") if isinstance(identity, dict) else None
+    disagreements = grouping.get("title_source_disagreements")
+    if not isinstance(disagreements, list) or not isinstance(handler, str):
+        return rows
+    if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]{0,127}", handler):
+        return rows
+    for item in disagreements:
+        if not isinstance(item, dict) or item.get("result") != "different_handler_label":
+            continue
+        index = item.get("original_index")
+        if type(index) is not int or not 0 <= index < len(originals) or item.get("source_handler") != handler:
+            continue
+        rows.append(("Handler label needs review",
+                     f"Original {index + 1} uses a different handler label. Bound source handler: {handler}. "
+                     "The original wording is retained; its handler label is not verified."))
+    return rows
+
+
 def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
     """A recorded source check is separate from the model's reading of it."""
     record = finding.get("claim_evidence")
@@ -226,6 +255,7 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
         rows.append(("Recommendation prerequisites", recommendation["detail"]))
         rows.append(("Superseded original recommendation — do not apply without review",
                      recommendation["original_fix_hint"]))
+    rows.extend(_grouped_claim_rows(record))
     for i, original in enumerate(record.get("grouped_originals", []), 1):
         rows.append((f"Grouped original {i} — not independent confirmation",
                      json.dumps(original, ensure_ascii=False)))
