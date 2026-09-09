@@ -11,9 +11,12 @@ import pytest
 from app.llm.client import LLMClient, LLMUsage
 from app.report.evidence import model_acceptance_notice
 from app.report.html import render_report
-from app.scan.llm_scan import run_llm_scan, verify_finding
+from app.scan.llm_scan import SYSTEM_PROMPT, build_prompt, run_llm_scan, verify_finding
 from app.scan.manifest import scan_manifest
-from app.scan.rejection_diagnostics import MAX_REJECTION_ITEMS, acceptance_summary, diagnostics_manifest
+from app.scan.rejection_diagnostics import (
+    MAX_DIAGNOSTIC_QUOTE_CHARS, MAX_DIAGNOSTIC_SOURCE_CHARS, MAX_DIAGNOSTIC_WINDOW_CHARS,
+    MAX_REJECTION_ITEMS, acceptance_summary, diagnostics_manifest, rejected_item,
+)
 
 
 SOURCE = "export async function login() {\n  return await fetch('/session');\n}\n"
@@ -22,10 +25,10 @@ GOOD = dict(file="auth.ts", line_start=2, line_end=2, evidence="return await fet
             severity="low", confidence=.8)
 
 
-def archive():
+def archive(source=SOURCE):
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as z:
-        z.writestr("auth.ts", SOURCE)
+        z.writestr("auth.ts", source)
     output.seek(0)
     return output
 
@@ -161,3 +164,115 @@ def test_manifest_projection_drops_arbitrary_model_fields_and_unsafe_reference_s
 def test_diagnostics_cannot_overflow_the_shared_json_integer_bound():
     result = diagnostics_manifest({"rejected_items": [None], "rejected_items_omitted": 2 ** 53 - 1})
     assert result["omitted"] == 2 ** 53 - 1
+
+
+def detail(candidate, source=SOURCE):
+    return rejected_item(candidate, {"auth.ts": source}, response=1, rubric="auth", item=1,
+                         reason="source_quote_or_location_mismatch")["detail"]
+
+
+@pytest.mark.parametrize(("quote", "expected"), [
+    ("2\t  return await fetch('/session');", "quote_prompt_line_prefix"),
+    ("2\t  return await fetch('/session');\n3\t}", "quote_prompt_line_prefix"),
+    ("return await ...('/session');", "quote_ellipsis_fragments_match"),
+    ("return await …('/session');", "quote_ellipsis_fragments_match"),
+    ("99\t  return await fetch('/session');", "quote_mismatch"),
+    ("2:  return await fetch('/session');", "quote_mismatch"),
+    ("2\t  return await fetch('/session');\n4\t}", "quote_mismatch"),
+    ("return await fetch...('/session');", "quote_mismatch"),  # No omitted source text.
+    ("return await ...('/invented');", "quote_mismatch"),
+    ("('/session');...return await", "quote_mismatch"),
+    ("...return await fetch('/session');", "quote_mismatch"),
+    ("return await fetch(…);", "quote_mismatch"),  # Insufficient literal fragments.
+    ("return  await fetch('/session');", "quote_mismatch"),
+    ("return await fetch(\"/session\");", "quote_mismatch"),
+    ("```return await fetch('/session');```", "quote_mismatch"),
+])
+def test_format_details_require_literal_support_and_never_admit_the_candidate(quote, expected):
+    candidate = {**GOOD, "evidence": quote}
+    before = deepcopy(candidate)
+    assert not verify_finding(candidate, {"auth.ts": SOURCE})
+    assert detail(candidate) == expected
+    assert not verify_finding(candidate, {"auth.ts": SOURCE})
+    assert candidate == before
+
+
+def test_outside_window_search_is_literal_file_local_and_preserves_existing_tolerance():
+    source = SOURCE + "// filler\n" * 8 + "const token = 'source-canary';\n"
+    candidate = {**GOOD, "evidence": "source-canary"}
+    assert not verify_finding(candidate, {"auth.ts": source})
+    assert detail(candidate, source) == "quote_outside_cited_window"
+    # Another file and a paraphrase are not evidence of a bad line coordinate.
+    assert detail(candidate) == "quote_mismatch"
+    assert detail({**candidate, "evidence": "source canary"}, source) == "quote_mismatch"
+    # The existing +/-2 tolerance and multi-line admission remain unchanged.
+    for start in (1, 4):
+        assert verify_finding({**GOOD, "line_start": start, "line_end": start},
+                              {"auth.ts": SOURCE + "// filler\n" * 2})
+    assert not verify_finding({**GOOD, "line_start": 5, "line_end": 5},
+                              {"auth.ts": SOURCE + "// filler\n" * 2})
+    assert verify_finding({**GOOD, "evidence": SOURCE.strip(), "line_start": 1, "line_end": 3},
+                          {"auth.ts": SOURCE})
+
+
+def test_sensitive_rejected_quotes_and_their_hashes_never_reach_stats_manifest_or_html():
+    secret = "PRIVATE-CREDENTIAL-CANARY-NOT-TO-BE-SAVED"
+    source = f'const token = "{secret}";\n' + "// filler\n" * 8
+    candidates = [
+        {**GOOD, "line_start": 9, "line_end": 9, "evidence": secret},
+        {**GOOD, "line_start": 1, "line_end": 1, "evidence": f'1\tconst token = "{secret}";'},
+        {**GOOD, "line_start": 1, "line_end": 1, "evidence": f'const token ... "{secret}";'},
+    ]
+    client = Responses(candidates)
+    findings, stats = run_llm_scan(archive(source), client, rubrics=("auth",))
+    assert client.calls == 1 and findings == []
+    manifest = scan_manifest(archive(source).getvalue(), "test", {}, asdict(stats), None)
+    assert [item["detail"] for item in manifest["rejection_diagnostics"]["items"]] == [
+        "quote_outside_cited_window", "quote_prompt_line_prefix", "quote_ellipsis_fragments_match"]
+    html = render_report(dict(score=dict(total=0, categories={}, scan_manifest=manifest), findings=[]))
+    for code in ("quote_outside_cited_window", "quote_prompt_line_prefix", "quote_ellipsis_fragments_match"):
+        assert code in html
+    persisted = json.dumps(asdict(stats)) + json.dumps(manifest) + html
+    assert secret not in persisted
+    for text in [source, secret] + [candidate["evidence"] for candidate in candidates]:
+        assert hashlib.sha256(text.encode()).hexdigest() not in persisted
+    assert manifest["model_acceptance"]["source_rejected"] == 3
+    assert manifest["model_acceptance"]["accepted"] == 0
+
+
+def test_extra_diagnostics_are_bounded_without_changing_admission():
+    class OversizeSource(str):
+        def splitlines(self, *args, **kwargs):
+            raise AssertionError("Diagnostic must check size before splitting source")
+
+    assert detail(GOOD, OversizeSource("x" * (MAX_DIAGNOSTIC_SOURCE_CHARS + 1))) == "diagnostic_limit_reached"
+    assert detail({**GOOD, "evidence": "x" * (MAX_DIAGNOSTIC_QUOTE_CHARS + 1)}) == "diagnostic_limit_reached"
+    large_window = "x" * (MAX_DIAGNOSTIC_WINDOW_CHARS + 1) + "\n" + SOURCE
+    assert detail({**GOOD, "evidence": "return await ...('/session');"}, large_window) == "diagnostic_limit_reached"
+    # Bounds are for additional diagnostics, never a new gate on valid quotes.
+    long_quote = "x" * (MAX_DIAGNOSTIC_QUOTE_CHARS + 1)
+    assert verify_finding({**GOOD, "line_start": 1, "line_end": 1, "evidence": long_quote},
+                          {"auth.ts": long_quote})
+    exact_syntax = "const args = [...values];\n"
+    assert verify_finding({**GOOD, "line_start": 1, "line_end": 1, "evidence": "[...values]"},
+                          {"auth.ts": exact_syntax})
+
+
+def test_prompt_contract_and_json_escaping_keep_source_separate_from_numbered_gutter():
+    source = 'const token = "quoted\\\\path";\n'
+    prompt = build_prompt([("auth.ts", source)], "auth")
+    assert '1\t' + source.strip() in prompt
+    assert "one contiguous verbatim substring" in SYSTEM_PROMPT
+    assert "do not copy the gutter's line number and tab" in SYSTEM_PROMPT
+    assert "Apply JSON string escaping once" in SYSTEM_PROMPT
+    assert "Never insert ellipses" in SYSTEM_PROMPT
+    candidate = {**GOOD, "line_start": 1, "line_end": 1, "evidence": source.strip()}
+    # Valid JSON encoding is decoded by the scanner; double escaping and copied
+    # display prefixes are not silently repaired and do not trigger retries.
+    escaped_twice = json.dumps(candidate["evidence"])[1:-1]
+    client = Responses([candidate, {**candidate, "evidence": escaped_twice},
+                        {**candidate, "evidence": "1\t" + candidate["evidence"]}])
+    findings, stats = run_llm_scan(archive(source), client, rubrics=("auth",))
+    assert client.calls == 1 and len(findings) == 1
+    assert stats.verified == 1 and stats.discarded == 2
+    assert [row["detail"] for row in stats.rejected_items] == ["quote_mismatch", "quote_prompt_line_prefix"]

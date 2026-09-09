@@ -9,12 +9,22 @@ import hashlib
 import re
 
 MAX_REJECTION_ITEMS = 200
+# Extra inspection is diagnostic only, with a per-item bound independent of
+# archive limits. Over-budget input remains rejected without speculative detail.
+MAX_DIAGNOSTIC_SOURCE_CHARS = 262_144
+MAX_DIAGNOSTIC_QUOTE_CHARS = 2_048
+MAX_DIAGNOSTIC_WINDOW_CHARS = 8_192
+_MAX_ELLIPSIS_FRAGMENTS = 8
 _MAX_COUNT = 2 ** 53 - 1
 _REASONS = frozenset({
     "not_an_object", "missing_fields", "invalid_severity", "invalid_confidence",
     "invalid_text", "source_quote_or_location_mismatch", "self_cancelled",
 })
-_DETAILS = _REASONS | {"unknown_file", "invalid_line_range", "quote_missing_or_short", "quote_mismatch"}
+_DETAILS = _REASONS | {
+    "unknown_file", "invalid_line_range", "quote_missing_or_short", "quote_mismatch",
+    "quote_outside_cited_window", "quote_prompt_line_prefix",
+    "quote_ellipsis_fragments_match", "diagnostic_limit_reached",
+}
 _RUBRICS = frozenset({"auth", "security", "money", "web"})
 
 
@@ -63,6 +73,61 @@ def _line(value: object) -> int | None:
     return number if not isinstance(value, bool) and 1 <= number <= 2 ** 31 - 1 else None
 
 
+def _quote_detail(finding: dict, source: str, start: int, end: int) -> str:
+    """Describe bounded literal relationships, never repair a rejected quote.
+
+    A formatting detail is positive evidence of that particular relationship,
+    not a diagnosis of why a model produced the string or of claim validity.
+    Transformed strings are local temporaries and never leave this function.
+    """
+    if len(source) > MAX_DIAGNOSTIC_SOURCE_CHARS:
+        return "diagnostic_limit_reached"
+    lines = source.splitlines()
+    if not 1 <= start <= end <= len(lines):
+        return "invalid_line_range"
+    raw_quote = finding.get("evidence", "")
+    # Do not stringify arbitrary nested model data for additional diagnostics.
+    if not isinstance(raw_quote, str):
+        return "quote_mismatch"
+    if len(raw_quote) > MAX_DIAGNOSTIC_QUOTE_CHARS:
+        return "diagnostic_limit_reached"
+    quote = raw_quote.strip()
+    if len(quote) < 4:
+        return "quote_missing_or_short"
+    lo, hi = max(0, start - 3), min(len(lines), end + 2)
+    window = "\n".join(lines[lo:hi])
+    # Defensive for direct callers: an already matching quote is not a format
+    # failure. Admission is exclusively owned by quote_match_window.
+    if quote in window:
+        return "quote_mismatch"
+    if quote in "\n".join(lines):
+        return "quote_outside_cited_window"
+    if len(window) > MAX_DIAGNOSTIC_WINDOW_CHARS:
+        return "diagnostic_limit_reached"
+    numbered = [re.fullmatch(r"([1-9][0-9]{0,9})\t(.*)", line) for line in quote.splitlines()]
+    if numbered and all(numbered):
+        pairs = [(int(match[1]), match[2]) for match in numbered]
+        numbers = [number for number, _ in pairs]
+        stripped = "\n".join(text for _, text in pairs)
+        if (len(stripped.strip()) >= 4 and numbers == list(range(numbers[0], numbers[0] + len(numbers)))
+                and all(lo < number <= hi and text in lines[number - 1] for number, text in pairs)
+                and stripped in window):
+            return "quote_prompt_line_prefix"
+    # Only internal omissions with several substantial, ordered literal
+    # fragments qualify. Merely containing '...' is not sufficient (JS uses it).
+    fragments = re.split(r"\.\.\.|…", quote)
+    if 2 <= len(fragments) <= _MAX_ELLIPSIS_FRAGMENTS and all(len(part.strip()) >= 4 for part in fragments):
+        position = 0
+        for index, fragment in enumerate(fragments):
+            found = window.find(fragment, position)
+            if found < 0 or (index and found == position):
+                break
+            position = found + len(fragment)
+        else:
+            return "quote_ellipsis_fragments_match"
+    return "quote_mismatch"
+
+
 def rejected_item(finding: object, files: dict[str, str], *, response: int,
                   rubric: str, item: int, reason: str) -> dict:
     """Explain an existing rejection; never relax or replace the admission gate."""
@@ -74,12 +139,10 @@ def rejected_item(finding: object, files: dict[str, str], *, response: int,
     if reason == "source_quote_or_location_mismatch":
         if not known:
             detail = "unknown_file"
-        elif start is None or end is None or not 1 <= start <= end <= len(files[path].splitlines()):
+        elif start is None or end is None or start > end:
             detail = "invalid_line_range"
-        elif len(str(f.get("evidence", "")).strip()) < 4:
-            detail = "quote_missing_or_short"
         else:
-            detail = "quote_mismatch"
+            detail = _quote_detail(f, files[path], start, end)
     return dict(response=response, rubric=rubric, item=item, reason=reason, detail=detail,
                 file_ref="sha256:" + hashlib.sha256(path.encode("utf-8")).hexdigest() if known else None,
                 line_start=start, line_end=end)
