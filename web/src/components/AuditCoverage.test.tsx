@@ -20,6 +20,25 @@ const manifest: ScanManifest = {
 };
 
 describe("audit evidence", () => {
+  it("shows a grouped handler-label disagreement beside the model evidence with escaped originals", () => {
+    const { container } = render(<FindingsList findings={[{ ...finding, claim_evidence: {
+      version: 1, source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,
+      conditions_status: "not_checked", consequence_status: "not_checked",
+      source_issue_identity: { handler: "send" }, grouped_originals: [
+        { title: "Send can leave loading active" }, { title: "<script>Suggest original</script>" }],
+      grouped_claim_scope: { mechanism: "react_network_rejection_cleanup", scope: "<img src=x onerror=alert(1)>",
+        consequences: "Untrusted consequence", title_source_disagreements: [{
+          original_index: 1, result: "different_handler_label", source_handler: "send" }] },
+    } }]} />);
+    expect(screen.getByText("Grouped hypothesis scope").closest("details")).toBeNull();
+    expect(screen.getByText("Handler label needs review").closest("details")).toBeNull();
+    expect(screen.getByText(/Original 2 uses a different handler label/).textContent)
+      .toContain("Bound source handler: send");
+    expect(container.textContent).toContain("<script>Suggest original</script>");
+    expect(container.textContent).not.toContain("Untrusted consequence");
+    expect(container.querySelector("script, img")).toBeNull();
+  });
+
   it("shows legacy Free and Pro acceptance counts independently above the collapsed technical record", () => {
     const free: Score = { total: 9.3, categories: { Security: 9.2 }, basis: "static+preview",
       scan_manifest: { ...manifest, model_calls: 1, model_findings: [{ model: "preview", responses: 1,

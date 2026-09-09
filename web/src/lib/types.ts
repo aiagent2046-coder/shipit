@@ -183,6 +183,13 @@ export interface Finding {
     consequence_status: "not_checked";
     source_context?: { kind: string; uri_scheme: string; uri_kind: string } | null;
     grouped_originals?: Record<string, unknown>[];
+    grouped_claim_scope?: {
+      mechanism: "react_network_rejection_cleanup";
+      scope: string;
+      consequences: string;
+      title_source_disagreements: { original_index: number; result: "different_handler_label";
+        source_handler: string }[];
+    } | null;
     producer?: { model: string; response: number; rubric: string };
     source_issue_identity?: Record<string, unknown> | null;
     context_checks?: Record<string, unknown>[];

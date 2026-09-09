@@ -1,4 +1,4 @@
-"""Source identities for a deliberately small React cleanup claim vocabulary.
+"""Source identities for compositional, bounded React cleanup claims.
 
 The source inventory supplies the operation, bindings and byte spans. English
 only selects that hypothesis; it never establishes an error, an absent guard,
@@ -11,6 +11,7 @@ import re
 from pathlib import PurePosixPath
 
 from app.scan.react_async_context import _NETWORK_CLAIM, react_async_finding_context
+from app.scan.react_network_claims import project_network_claim
 
 MECHANISM = "react_network_rejection_cleanup"
 CLAIM_SCOPE = "single_network_rejection"
@@ -36,65 +37,22 @@ def _prefix_matches(prefix, component):
     return prefix in variants
 
 
-def _narrow_narrative(text, names, *, condition=False):
-    if not text:
-        return True
-    if re.search(r"\b(?:component_name|handler_name|state_name|setter_name)\b", text, re.I):
-        return False  # Only the scanner may introduce the grammar's roles.
-    # Substitution is bounded by the source-derived names. The full sentence
-    # grammar below, not a bag of allowed words or a compound-word blacklist,
-    # distinguishes a skipped reset from another state/concurrency concern.
-    for name, role in sorted(names.items(), key=lambda item: len(item[0]), reverse=True):
-        spellings = {name, name[:1].upper() + name[1:]}
-        pattern = "|".join(re.escape(spelling) for spelling in sorted(spellings))
-        text = re.sub(r"(?<![\w$])(?:" + pattern + r")(?![\w$])", role, text)
-    text = re.sub(r"\s+", " ", text.casefold().replace("e.g.", "for example")).strip()
-    line = r"(?: on line [0-9]{1,6})?"
-    reset = r"setter_name\(false\)" + line
-    missed = reset + r" is (?:never|not) reached"
-    successful = reset + r" is only (?:reached )?on the success path"
-    # A label must describe the selected operation. The narrow suggestion noun
-    # belongs to the selected suggesting flag; it cannot describe save/send.
-    labels = r"handler_name(?: embedding)?"
-    if names.get("suggesting") == "state_name":
-        labels += r"|ai suggestion"
-    label = r"(?:(?:" + labels + r") )?"
-    until = r"(?: until (?:the page is reloaded|the user reloads the page))?"
-    disabled = r"the " + label + r"button (?:stays |remains )?(?:permanently )?disabled" + until
-    raised = (r"(?:(?:the )?handler_name function (?:calls|sets) setter_name\(true\)" + line
-              + r"|line [0-9]{1,6} sets setter_name\(true\)"
-              + r"|setter_name\(true\) is called on line [0-9]{1,6})")
-    request = r"(?:the )?(?:network request|network|fetch)(?: in handler_name| on line [0-9]{1,6})?"
-    rejected = (r"if " + request + r" throws(?: a network (?:error|exception|failure))?"
-                + r"(?: \(for example the connection drops mid flight\))?, ")
-    consequence = (r"(?:the rejection propagates(?: out of the async function)? with no catch block|"
-                   + missed + r"(?:, (?:so |leaving )" + disabled + r")?)")
-    if condition:
-        patterns = [
-            r"the fetch call throws a network(?: level)? (?:error|exception|failure)"
-            r"(?: \(not an http error response(?:, but a thrown exception such as a connection reset)?\)"
-            r"| rather than returning an http error response)?",
-            r"the user has not navigated away(?: from the page)?",
-            r"the user remains on the (?:test conversation tab|chat page)",
-        ]
-    else:
-        patterns = [
-            rejected + consequence,
-            missed + r", so " + disabled,
-            disabled,
-            r"the user loses the ability to handler_name without a reload",
-            r"a network rejection skips it entirely",
-            successful,
-            raised,
-            raised + r" but has no try/catch",
-            r"in component_name, " + raised + r" before the fetch but has no try/catch",
-            raised + r", then awaits a fetch on line [0-9]{1,6} with no try/catch",
-            r"the fetch on line [0-9]{1,6} is awaited with no surrounding try/catch",
-            raised + r", the fetch is awaited on line [0-9]{1,6} with no surrounding try/catch, and " + successful,
-        ]
-    sentences = [sentence.strip() for sentence in text.split(".") if sentence.strip()]
-    return bool(sentences) and all(any(re.fullmatch(pattern, sentence) for pattern in patterns)
-                                   for sentence in sentences)
+def title_label_disagreement(title, identity):
+    """A display label can differ from the cited source handler; retain that fact."""
+    text = _text(title, 2000)
+    matches = list(_NETWORK_CLAIM.finditer(text or ""))
+    if len(matches) != 1:
+        return False
+    handler = identity.get("handler", "")
+    return matches[0]["handler"] not in {handler, handler[:1].upper() + handler[1:]}
+
+
+def _qualified_source_reference(finding, component, handler):
+    # A mislabeled title cannot pick a handler. Both actual source identifiers
+    # must occur together in the prose, inside a citation selecting one scope.
+    text = " ".join(str(finding.get(key) or "") for key in ("explanation", "observation"))
+    return (re.search(r"(?<![\w$])" + re.escape(component) + r"(?![\w$])", text)
+            and re.search(r"(?<![\w$])" + re.escape(handler) + r"(?![\w$])", text))
 
 
 def network_cleanup_identity(finding, source_facts):
@@ -112,31 +70,52 @@ def network_cleanup_identity(finding, source_facts):
         return None
     match, context = matches[0], contexts[0]
     component, handler = context["scope"].rsplit(".", 1)
-    if (match["handler"] not in {handler, handler[:1].upper() + handler[1:]}
-            or not _prefix_matches(title[:match.start()], component)
-            or title[match.end():].strip() not in {"", "."}):
+    source_label = match["handler"] in {handler, handler[:1].upper() + handler[1:]}
+    prefix = title[:match.start()].strip()
+    known_prefix = _prefix_matches(prefix, component)
+    # Route labels describe a UI area, not another asserted mechanism. A wrong
+    # handler label only qualifies with explicit source names in the narrative;
+    # it remains a disagreement in group metadata, never a verified title.
+    route_label = prefix.casefold() in {part.casefold() for part in PurePosixPath(path).parts[:-1]}
+    if (title[match.end():].strip() not in {"", "."}
+            or not (known_prefix or (not source_label and route_label))
+            or (not source_label and not _qualified_source_reference(finding, component, handler))):
         return None
     candidates = [item for item in context.get("network_cleanup_bindings", [])
                   if item["state"] == match["state"]]
     if len(candidates) != 1:
         return None
     binding = candidates[0]
-    names = {component: "component_name", handler: "handler_name",
-             binding["state"]: "state_name", binding["setter"]: "setter_name"}
+    projection = context.get("network_projection_context") or {}
+    response_names = {item["binding"] for item in projection.get("response_json_calls", [])
+                      if binding["operation_span"][1] < item["span"][0]
+                      and item["span"][1] < binding["reset_span"][0]}
+    kwargs = {"component": component, "handler": handler, "state": binding["state"],
+              "setter": binding["setter"], "response_names": response_names,
+              "has_button": any((item.get("state") == binding["state"] and item.get("disabled") == "state_truthy")
+                                or binding["state"] in item.get("truthy_disabled_states", [])
+                                for item in context.get("controls", [])),
+              "has_visible_state": any(item["state"] == binding["state"]
+                                       for item in projection.get("visible_states", []))}
     for key in ("explanation", "observation"):
-        text = _text(finding.get(key))
-        if text is None or not _narrow_narrative(text, names):
+        value = finding.get(key)
+        if project_network_claim("" if value is None else value, **kwargs) is None:
             return None
-    conditions = finding.get("required_conditions") or []
+    conditions = finding.get("required_conditions")
+    if conditions is None:
+        conditions = []
     if not isinstance(conditions, list) or len(conditions) > 16:
         return None
     for condition in conditions:
-        text = _text(condition, 2000)
-        if text is None or not _narrow_narrative(text, names, condition=True):
+        if not isinstance(condition, str) or len(condition) > 2000:
+            return None
+        if project_network_claim(condition, **kwargs, condition=True) is None:
             return None
     # These are model check requests, not results. Only the known stray request
     # about this same handler may coexist with the selected network narrative.
-    premises = finding.get("premises") or []
+    premises = finding.get("premises")
+    if premises is None:
+        premises = []
     if not isinstance(premises, list) or len(premises) > 1:
         return None
     for premise in premises:

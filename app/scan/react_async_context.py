@@ -188,6 +188,28 @@ def _disabled_state(node):
     return "", "not_checked"
 
 
+def _truthy_disabled_states(node, valid_states):
+    """States that short-circuit a closed OR before any potentially throwing trim."""
+    def terms(expr):
+        if expr is None:
+            return []
+        if expr.type == "parenthesized_expression" and len(_children(expr)) == 1:
+            return terms(_children(expr)[0])
+        if expr.type == "binary_expression" and _text(expr.child_by_field_name("operator")) == "||":
+            return terms(expr.child_by_field_name("left")) + terms(expr.child_by_field_name("right"))
+        return [_disabled_state(expr)]
+    result = set()
+    may_throw = False
+    for state, shape in terms(node):
+        if state not in valid_states:
+            return None  # Arbitrary expressions are outside the closed syntax.
+        if shape == "trimmed_state_empty":
+            may_throw = True  # Source state type does not prove a callable trim.
+        if shape == "state_truthy" and not may_throw:
+            result.add(state)
+    return result
+
+
 def _controls(buttons, handler, valid_states, limits):
     records = []
     for node in buttons:
@@ -212,7 +234,9 @@ def _controls(buttons, handler, valid_states, limits):
         state, shape = _disabled_state(values.get("disabled"))
         records.append({"line": _line(node), "line_end": node.end_point[0] + 1,
                         "event": "onClick", "disabled": shape if state in valid_states else "not_checked",
-                        "state": state if state in valid_states else None})
+                        "state": state if state in valid_states else None,
+                        "truthy_disabled_states": sorted(
+                            _truthy_disabled_states(values.get("disabled"), valid_states) or [])})
         if len(records) >= MAX_ITEMS:
             limits.add("items_per_handler_limit")
             break
@@ -718,6 +742,145 @@ def _network_bindings(fn, states, state_spans, fetch_unbound):
     return result
 
 
+def _direct_await_statement(call, body):
+    awaited = call.parent
+    if awaited is None or awaited.type != "await_expression":
+        return False
+    statement = awaited.parent
+    if statement.type == "variable_declarator" and statement.child_by_field_name("value") == awaited:
+        statement = statement.parent
+        if statement.type != "lexical_declaration" or len(_children(statement)) != 1:
+            return False
+    elif statement.type != "expression_statement":
+        return False
+    return statement.parent == body
+
+
+def _literal_indicator_attributes(opening):
+    """Exclude direct hiding and unknown local attributes; external CSS is unverified."""
+    if _text(opening) == "<>":
+        return True
+    if _text(opening.child_by_field_name("name")) not in {
+        "div", "span", "p", "i", "b", "strong", "em", "small", "section", "main", "aside", "article",
+    }:
+        return False
+    attrs = [node for node in _children(opening) if node.type == "jsx_attribute"]
+    if any(node.type == "jsx_expression" for node in _children(opening)):
+        return False
+    seen = set()
+    dimensions = {"fontSize", "lineHeight", "width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight"}
+    spacing = {"padding", "margin", "paddingTop", "paddingBottom", "marginTop", "marginBottom", "gap", "flex"}
+    choices = {"display": {"block", "inline", "inline-block", "flex", "grid"},
+               "alignSelf": {"auto", "flex-start", "flex-end", "center", "stretch"},
+               "alignItems": {"flex-start", "flex-end", "center", "stretch"},
+               "justifyContent": {"flex-start", "flex-end", "center", "space-between", "space-around"},
+               "flexDirection": {"row", "column"}, "overflow": {"auto", "scroll", "visible"}}
+    for attr in attrs:
+        parts = _children(attr)
+        name = _text(parts[0]) if parts else ""
+        if name in seen or len(parts) != 2:
+            return False
+        seen.add(name)
+        value = parts[1]
+        if name in {"className", "id", "role"} and value.type == "string":
+            continue  # Class rules and external style sheets are not inspected.
+        expression = _children(value) if value.type == "jsx_expression" else []
+        if name != "style" or len(expression) != 1 or expression[0].type != "object":
+            return False
+        keys = set()
+        for pair in _children(expression[0]):
+            if pair.type != "pair":
+                return False
+            key = _text(pair.child_by_field_name("key"))
+            val = pair.child_by_field_name("value")
+            if key in keys or val is None:
+                return False
+            keys.add(key)
+            literal = _text(val).strip("\"'")
+            if key in dimensions | spacing and val.type == "number":
+                try:
+                    number = float(literal)
+                except ValueError:
+                    return False
+                if number < 0 or (key in dimensions and number == 0):
+                    return False
+            elif key in choices and val.type == "string" and literal in choices[key]:
+                continue
+            elif (key == "color" and val.type == "string"
+                  and re.fullmatch(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?", literal)):
+                continue
+            else:
+                return False
+    return True
+
+
+def _rendered_status_indicator(value, condition, body):
+    """Native, directly labeled status under the flag; no runtime visibility proof."""
+    if value.type != "jsx_element":
+        return False
+    direct_text = " ".join(_text(node) for node in _children(value) if node.type == "jsx_text")
+    label = re.sub(r"\s+", " ", direct_text).strip()
+    if not re.fullmatch(r"(?:(?:avatar|agent|assistant|user|аватар|агент|ассистент|пользователь) )?"
+                        r"(?:loading|typing|working|sending|processing|pending|печатает|загрузка)[. …]*", label, re.I):
+        return False
+    returns = [node for node in _walk(body, _SKIP) if node.type == "return_statement"]
+    if len(returns) != 1 or returns[0].parent != body:
+        return False
+    returned = False
+    node = value
+    while node is not None and node != body:
+        if node.type == "jsx_element":
+            opening = next((child for child in _children(node) if child.type == "jsx_opening_element"), None)
+            if opening is None or not _literal_indicator_attributes(opening):
+                return False
+        elif node.type == "return_statement":
+            returned = node == returns[0]
+        elif node.type in {"ternary_expression", "if_statement"}:
+            return False
+        elif node.type == "binary_expression" and node != condition:
+            return False
+        node = node.parent
+    return node == body and returned
+
+
+def _network_projection_context(fn, component_body, states):
+    """Source-only syntax for subordinate claim roles, without source literals."""
+    nodes = list(_walk(fn.child_by_field_name("body"), _SKIP))
+    bindings = _bindings(list(_walk(fn)))
+    responses = []
+    for node in nodes:
+        if node.type != "variable_declarator":
+            continue
+        name, value = _name(node.child_by_field_name("name")), node.child_by_field_name("value")
+        parts = _children(value)
+        if (not name or bindings[name] != 1 or not value or value.type != "await_expression"
+                or len(parts) != 1 or _call(parts[0])[0] != "fetch"):
+            continue
+        for call in nodes:
+            member = call.child_by_field_name("function") if call.type == "call_expression" else None
+            if (member and member.type == "member_expression"
+                    and _name(member.child_by_field_name("object")) == name
+                    and _text(member.child_by_field_name("property")) == "json"
+                    and not _children(call.child_by_field_name("arguments"))
+                    and _direct_await_statement(call, fn.child_by_field_name("body"))
+                    and not member.child_by_field_name("optional_chain")
+                    and not call.child_by_field_name("optional_chain")):
+                responses.append({"binding": name, "span": [call.start_byte, call.end_byte]})
+    visible = []
+    for node in _walk(component_body, _SKIP):
+        if node.type != "binary_expression" or _text(node.child_by_field_name("operator")) != "&&":
+            continue
+        state, value = _name(node.child_by_field_name("left")), node.child_by_field_name("right")
+        while value and value.type == "parenthesized_expression" and len(_children(value)) == 1:
+            value = _children(value)[0]
+        if (state in states and value and value.type in {"jsx_element", "jsx_self_closing_element"}
+                and node.parent.type == "jsx_expression"
+                and node.parent.parent.type in {"jsx_element", "jsx_fragment"}
+                and _rendered_status_indicator(value, node, component_body)):
+            visible.append({"state": state, "span": [node.start_byte, node.end_byte]})
+    return {"response_json_calls": responses[:MAX_ITEMS], "visible_states": visible[:MAX_ITEMS]}
+
+
 def _handler_record(fn, name, component, path, states, controls, limits, fetch_unbound, visible, routers,
                     state_spans):
     body = fn.child_by_field_name("body")
@@ -881,6 +1044,8 @@ def _file_records(root, path, nodes, limits):
             if record:
                 if case_names[name.casefold()] != 1:
                     record["network_cleanup_bindings"] = []
+                if record["network_cleanup_bindings"]:
+                    record["network_projection_context"] = _network_projection_context(handler, body, states)
                 record["component_span"] = [fn.start_byte, fn.end_byte]
                 yield record
 

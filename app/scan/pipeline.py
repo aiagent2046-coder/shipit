@@ -124,7 +124,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-09-1: bind narrow React network-cleanup repeats to source operations and retain all premises.
 # 2026-09-09-2: distinguish default-strip Zod output from input rejection contracts.
 # 2026-09-09-3: retain bounded rejection diagnostics and explicit acceptance accounting.
-AUDIT_ENGINE_VERSION = "2026-09-09-3"
+# 2026-09-09-4: compose source-bound React cleanup claims and disclose grouped claim scope.
+AUDIT_ENGINE_VERSION = "2026-09-09-4"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

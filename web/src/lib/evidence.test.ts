@@ -216,6 +216,67 @@ it("retains grouped original interpretations without treating repeats as confirm
   expect(rows["Consequence check"]).toBe("No independent verification recorded.");
 });
 
+function groupedNetworkFinding(): Finding {
+  return { ...source, source: "llm", claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked",
+    source_issue_identity: { handler: "send" },
+    grouped_originals: [{ title: "First hypothesis" }, { title: "Suggest hypothesis" }],
+    grouped_claim_scope: { mechanism: "react_network_rejection_cleanup",
+      scope: "<script>arbitrary scope</script>", consequences: "Invented verified harm",
+      title_source_disagreements: [{ original_index: 1, result: "different_handler_label", source_handler: "send" }] },
+  } };
+}
+
+it("explains a source-bound React group while keeping each original interpretation unverified", () => {
+  const finding = groupedNetworkFinding(), before = JSON.stringify(finding);
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Grouped hypothesis scope"]).toBe("Grouped by the same source operation and network-rejection cleanup hypothesis. "
+    + "Original conditions and consequences retain their own verification statuses.");
+  expect(rows["Handler label needs review"]).toBe("Original 2 uses a different handler label. Bound source handler: send. "
+    + "The original wording is retained; its handler label is not verified.");
+  expect(rows["Grouped original 1 — not independent confirmation"]).toContain("First hypothesis");
+  expect(rows["Grouped original 2 — not independent confirmation"]).toContain("Suggest hypothesis");
+  expect(Object.values(rows).join(" ")).not.toMatch(/arbitrary scope|Invented verified harm/);
+  expect(rows["Consequence check"]).toBe("No independent verification recorded.");
+  expect(JSON.stringify(finding)).toBe(before);
+});
+
+it.each([
+  { original_index: -1 }, { original_index: 2 }, { original_index: 0.5 }, { original_index: true },
+  { original_index: "1" }, { source_handler: "suggest" }, { source_handler: "<script>send</script>" },
+  { source_handler: "send.run" }, { source_handler: "s".repeat(129) }, { result: "verified" },
+])("does not manufacture a handler-label warning from invalid metadata %#", (override) => {
+  const finding = groupedNetworkFinding();
+  Object.assign(finding.claim_evidence!.grouped_claim_scope!.title_source_disagreements[0], override);
+  const rows = claimEvidenceRows(finding);
+  expect(rows.some(([label]) => label === "Grouped hypothesis scope")).toBe(true);
+  expect(rows.some(([label]) => label === "Handler label needs review")).toBe(false);
+});
+
+it("requires a recognized grouping mechanism and multiple retained originals", () => {
+  for (const originalCount of [0, 1]) {
+    const finding = groupedNetworkFinding();
+    finding.claim_evidence!.grouped_originals!.length = originalCount;
+    expect(claimEvidenceRows(finding).some(([label]) =>
+      label === "Grouped hypothesis scope" || label === "Handler label needs review")).toBe(false);
+  }
+  const finding = groupedNetworkFinding();
+  Object.assign(finding.claim_evidence!.grouped_claim_scope!, { mechanism: "unknown" });
+  expect(claimEvidenceRows(finding).some(([label]) =>
+    label === "Grouped hypothesis scope" || label === "Handler label needs review")).toBe(false);
+  delete finding.claim_evidence!.grouped_claim_scope;
+  expect(claimEvidenceRows(finding).some(([label]) => label === "Grouped hypothesis scope")).toBe(false);
+});
+
+it("requires a matching source identity and handles missing disagreement metadata", () => {
+  const finding = groupedNetworkFinding();
+  delete finding.claim_evidence!.source_issue_identity;
+  expect(claimEvidenceRows(finding).some(([label]) => label === "Handler label needs review")).toBe(false);
+  Object.assign(finding.claim_evidence!.grouped_claim_scope!, { title_source_disagreements: null });
+  expect(claimEvidenceRows(finding).some(([label]) => label === "Grouped hypothesis scope")).toBe(true);
+});
+
 it("shows source counterevidence and policy prerequisites without turning them into verified outcomes", () => {
   const rows = Object.fromEntries(claimEvidenceRows({ ...source, claim_evidence: {
     version: 1, source_check: { kind: "not_recorded" }, observation: "Model interpretation",

@@ -163,7 +163,10 @@ def facts_prompt(record: dict | None, max_chars: int = 16_000) -> str:
     subset["functions"] = functions
     react = {**(record.get("react_async") or {}), "records": [
         {**{k: v for k, v in item.items() if k not in {
-            "source_sha256", "component_span", "function_span", "network_cleanup_bindings"}},
+            "source_sha256", "component_span", "function_span", "network_cleanup_bindings",
+            "network_projection_context"}},
+         "controls": [{k: v for k, v in control.items() if k != "truthy_disabled_states"}
+                      for control in item.get("controls", [])],
          "checks": compact_checks(item["checks"])}
         for item in (record.get("react_async") or {}).get("records", [])]}
     subset["react_async"] = react
