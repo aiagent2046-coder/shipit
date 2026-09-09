@@ -9,7 +9,9 @@ import json
 import re
 
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
-from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
+from app.scan.claim_evidence import (
+    partial_contradicted, source_assessments, syntax_contradicted, unsupported_transport,
+)
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 
@@ -27,7 +29,8 @@ def is_informational(finding: dict) -> bool:
 def finding_counts(findings: list[dict]) -> tuple[int, int]:
     source = examples = 0
     for finding in findings:
-        if is_informational(finding) or syntax_contradicted(finding.get("claim_evidence")):
+        if (is_informational(finding) or syntax_contradicted(finding.get("claim_evidence"))
+                or unsupported_transport(finding.get("claim_evidence"))):
             continue
         # Display-only RLS groups retain one title for each stored observation.
         count = len(finding.get("occurrence_titles") or []) or 1
@@ -40,16 +43,20 @@ def finding_counts(findings: list[dict]) -> tuple[int, int]:
 
 def observation_summary(findings: list[dict]) -> str:
     source, examples = finding_counts(findings)
-    informational = contradicted = 0
+    informational = contradicted = unsupported = 0
     for finding in findings:
         count = len(finding.get("occurrence_titles") or []) or 1
-        if syntax_contradicted(finding.get("claim_evidence")):
+        if unsupported_transport(finding.get("claim_evidence")):
+            unsupported += count
+        elif syntax_contradicted(finding.get("claim_evidence")):
             contradicted += count
         elif is_informational(finding):
             informational += count
-    return (f"{source + examples + informational + contradicted} observations: "
+    message = (f"{source + examples + informational + contradicted + unsupported} observations: "
             f"{source} in source, {examples} in tests/examples, {informational} informational, "
             f"{contradicted} with contradicted syntax premises.")
+    return (message + f" {unsupported} transport-only hypotheses need exposure evidence."
+            if unsupported else message)
 
 
 def review_contribution_rows(score: dict) -> list[tuple[str, str, str]]:
@@ -73,7 +80,8 @@ def review_contribution_rows(score: dict) -> list[tuple[str, str, str]]:
 def source_severity_counts(findings: list[dict]) -> dict[str, int]:
     counts = dict.fromkeys(("critical", "high", "medium", "low"), 0)
     for finding in findings:
-        if is_informational(finding) or syntax_contradicted(finding.get("claim_evidence")):
+        if (is_informational(finding) or syntax_contradicted(finding.get("claim_evidence"))
+                or unsupported_transport(finding.get("claim_evidence"))):
             continue
         if is_non_production(finding):
             continue
@@ -128,10 +136,18 @@ def model_acceptance_notice(score: dict) -> tuple[str, str] | None:
     return title, detail
 
 
-def evidence_label(finding: dict) -> str:
+def _partial_for_display(finding: dict, historical: bool) -> bool:
+    record = finding.get("claim_evidence") or {}
+    # Retain recorded assessments in history without applying a new disposition.
+    return partial_contradicted({**record, "source_assessments": []} if historical else record)
+
+
+def evidence_label(finding: dict, historical: bool = False) -> str:
+    if not historical and unsupported_transport(finding.get("claim_evidence")):
+        return "Credential transport — exposure not established"
     if syntax_contradicted(finding.get("claim_evidence")):
         return "Model syntax premise contradicted — see bounded check"
-    if partial_contradicted(finding.get("claim_evidence")):
+    if _partial_for_display(finding, historical):
         return "Part of the model claim is contradicted — remaining claims need review"
     if is_informational(finding):
         return "Deployment inventory — informational"
@@ -171,7 +187,7 @@ def _grouped_claim_rows(record: dict) -> list[tuple[str, str]]:
     return rows
 
 
-def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
+def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[str, str]]:
     """A recorded source check is separate from the model's reading of it."""
     record = finding.get("claim_evidence")
     record = record if isinstance(record, dict) and record.get("version") == 1 else {}
@@ -184,7 +200,11 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
-    if partial_contradicted(record):
+    if not historical and unsupported_transport(record):
+        rows.append(("Needs exposure evidence",
+                     "This transport-only hypothesis is excluded from the score. Runtime routing, logging "
+                     "and credential exposure remain unverified."))
+    if _partial_for_display(finding, historical):
         rows.append(("Assessment needs review",
                      "A bounded source check contradicts part of this finding. The original model severity "
                      "remains in the score because the other claims have not been resolved; it is not "
@@ -228,6 +248,9 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
                                  f"{path['file']}:{path['parse_line']} {path['parse_method']} → "
                                  f"{write['file']}:{write['line_start']} {write['method']}. "
                                  "This does not establish that unknown input must be rejected."))
+    for assessment in source_assessments(record):
+        rows.append(("Source assessment", assessment["detail"]))
+        rows.append(("Source assessment binding", json.dumps(assessment, ensure_ascii=False)))
     context_labels = {
         "guard_context": "Existing guard evidence — compare with the model claim",
         "cost_context": "Cost and ordering evidence — compare with the model claim",

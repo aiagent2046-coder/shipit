@@ -189,6 +189,19 @@ export interface RecommendationCheck {
   superseded_fix_hints?: string[];
 }
 
+export interface SourceAssessment {
+  kind: string;
+  result: "unsupported" | "contradicted" | "observed" | "not_checked";
+  whole_finding: boolean;
+  detail: string;
+  file: string;
+  line_start: number;
+  line_end: number;
+  source_sha256: string;
+  method: "source_ast";
+  source_binding: Record<string, unknown>;
+}
+
 export interface Finding {
   claim_evidence?: {
     version: 1;
@@ -210,6 +223,7 @@ export interface Finding {
     producer?: { model: string; response: number; rubric: string };
     source_issue_identity?: Record<string, unknown> | null;
     context_checks?: Record<string, unknown>[];
+    source_assessments?: SourceAssessment[];
     premise_checks?: { kind: string; target: string; line_start?: number; line_end?: number;
       source_line_start?: number; source_line_end?: number;
       result: "contradicted" | "not_checked"; claim: string; detail: string }[];

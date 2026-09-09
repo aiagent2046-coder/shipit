@@ -15,7 +15,7 @@ still gets credit for the others. See shipit-architecture.md 2.2 C.
 
 from __future__ import annotations
 
-from app.scan.claim_evidence import syntax_contradicted
+from app.scan.claim_evidence import syntax_contradicted, unsupported_transport
 
 from dataclasses import dataclass
 
@@ -441,6 +441,7 @@ def compute_scores(findings: list[ScoredFinding],
     of these categories.
     """
     findings = [f for f in findings if not syntax_contradicted(f.claim_evidence)
+                and not unsupported_transport(f.claim_evidence)
                 and not (f.rule_id == "no-dockerfile" and f.context == "deployment_inventory")]
     by_cat = {
         cat: _score([f for f in findings if f.category == cat])
