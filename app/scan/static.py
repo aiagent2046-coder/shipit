@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import BinaryIO
 
 from app.ingest.validators import validate_zip
@@ -12,7 +13,7 @@ from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.rls import scan_rls
-from app.scan.rls_recommendations import prepare_recommendation
+from app.scan.recommendations import prepare_recommendation
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
@@ -111,7 +112,8 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     fileobj.seek(0)
     source_facts = collect_source_facts(fileobj)
     findings.extend(scan_http_success(source_facts))
-    findings = [prepare_recommendation(f, source_facts) for f in findings]
+    findings = [prepare_recommendation(replace(f, source="static", verification_method="source_pattern"), source_facts)
+                for f in findings]
     exclusion_labels = {"file_size_limit": "over the 1 MiB file limit", "symlink": "symbolic links",
                         "excluded_directory": "dependency/build directories",
                         "excluded_extension": "excluded file types", "binary_content": "binary content"}

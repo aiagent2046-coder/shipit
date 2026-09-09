@@ -316,3 +316,52 @@ it("preserves a compound finding while exposing a contradicted atom and supersed
       claim: "No HTTP status guard", detail: "The same response has a return guard." } } };
   expect(findingCounts([contradicted])).toEqual({ source: 0, examples: 0 });
 });
+
+it("shows composed recommendation prerequisites and superseded provenance without certifying a fix", () => {
+  const finding: Finding = { ...source, rule_id: "llm-auth", source: "llm", claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked", observation: null,
+    recommendation_check: {
+      result: "prerequisites_required", detail: "Check policy and comparison prerequisites.",
+      original_fix_hint: "Switch clients and call timingSafeEqual(a, b).", original_status: "superseded",
+      original_provenance: { source: "llm", verification_method: "model_review", verification_status: "unverified",
+        producer: { model: "synthetic", response: 1, rubric: "auth" } },
+      checks: [
+        { version: 1, kind: "rls_client_change", result: "prerequisites_required", detail: "Check write policies." },
+        { version: 1, kind: "node_crypto_timing_safe_equal", result: "prerequisites_required",
+          detail: "Input and equal-byte-length checks have not been verified.",
+          scope: "Advice text only; no control-flow or runtime verification.",
+          reference: "https://nodejs.org/api/crypto.html#cryptotimingsafeequala-b",
+          prerequisites: ["Validate input type and encoding.", "Reject byteLength mismatch before the call."] },
+      ],
+      superseded_fix_hints: ["An intermediate comparison suggestion."],
+    },
+  } };
+  const before = JSON.stringify(finding);
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Recommendation check 1 — prerequisites not verified"]).toContain("Check write policies");
+  expect(rows["Recommendation check 2 — prerequisites not verified"]).toContain("no control-flow or runtime");
+  expect(rows["Required recommendation conditions 2"]).toContain("encoding.\nReject byteLength");
+  expect(rows["Recommendation API reference 2"]).toContain("nodejs.org/api/crypto.html");
+  expect(rows["Superseded recommendation provenance — not independent verification"]).toContain("synthetic");
+  expect(rows["Superseded intermediate recommendation 1 — do not apply without review"]).toContain("intermediate");
+  expect(rows["Consequence check"]).toBe("No independent verification recorded.");
+  expect(JSON.stringify(finding)).toBe(before);
+});
+
+it.each([
+  null, 7, [], { checks: null }, { checks: 7 }, { checks: [null, 7, {}] },
+  { checks: [{ version: 1, kind: "api", result: "prerequisites_required", detail: "Review.",
+    scope: 7, prerequisites: "byte lengths", reference: 7 }] },
+  { checks: [{ version: 1, kind: "api", result: "prerequisites_required", detail: "Review.",
+    prerequisites: [null, 7, "Valid condition."] }] },
+  { detail: null, original_fix_hint: 7, superseded_fix_hints: {} },
+  { superseded_fix_hints: [null, 7, "Earlier hint."], original_provenance: [] },
+])("skips malformed optional recommendation evidence: %j", (recommendation) => {
+  const finding = { ...source, claim_evidence: { version: 1, recommendation_check: recommendation } } as unknown as Finding;
+  const before = JSON.stringify(finding);
+  const rows = claimEvidenceRows(finding);
+  expect(rows.every(([, detail]) => typeof detail === "string")).toBe(true);
+  expect(JSON.stringify(finding)).toBe(before);
+  expect(Object.fromEntries(rows)["Consequence check"]).toBe("No independent verification recorded.");
+});

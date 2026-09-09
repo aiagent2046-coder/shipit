@@ -154,9 +154,39 @@ export function claimEvidenceRows(finding: Finding): [string, string][] {
     rows.push(["Deterministic context check", JSON.stringify(context)]);
   }
   const recommendation = record?.recommendation_check;
-  if (recommendation) {
-    rows.push(["Recommendation prerequisites", recommendation.detail]);
-    rows.push(["Superseded original recommendation — do not apply without review", recommendation.original_fix_hint]);
+  if (recommendation && typeof recommendation === "object" && !Array.isArray(recommendation)
+      && Object.keys(recommendation).length) {
+    rows.push(["Recommendation prerequisites", typeof recommendation.detail === "string"
+      ? recommendation.detail : "Not recorded."]);
+    for (const [i, check] of (Array.isArray(recommendation.checks) ? recommendation.checks : []).entries()) {
+      if (!check || typeof check !== "object" || Array.isArray(check) || check.version !== 1
+          || check.result !== "prerequisites_required" || typeof check.kind !== "string"
+          || typeof check.detail !== "string") continue;
+      rows.push([`Recommendation check ${i + 1} — prerequisites not verified`,
+        `${check.kind}: ${check.detail} ${typeof check.scope === "string" ? check.scope : ""}`]);
+      const conditions = Array.isArray(check.prerequisites)
+        ? check.prerequisites.filter((p): p is string => typeof p === "string" && p.length > 0) : [];
+      if (conditions.length) {
+        rows.push([`Required recommendation conditions ${i + 1}`, conditions.join("\n")]);
+      }
+      if (typeof check.reference === "string" && check.reference) {
+        rows.push([`Recommendation API reference ${i + 1}`, check.reference]);
+      }
+    }
+    if (typeof recommendation.original_fix_hint === "string") {
+      rows.push(["Superseded original recommendation — do not apply without review", recommendation.original_fix_hint]);
+    }
+    if (recommendation.original_provenance && typeof recommendation.original_provenance === "object"
+        && !Array.isArray(recommendation.original_provenance) && Object.keys(recommendation.original_provenance).length) {
+      rows.push(["Superseded recommendation provenance — not independent verification",
+        JSON.stringify(recommendation.original_provenance)]);
+    }
+    for (const [i, hint] of (Array.isArray(recommendation.superseded_fix_hints)
+      ? recommendation.superseded_fix_hints : []).entries()) {
+      if (typeof hint === "string") {
+        rows.push([`Superseded intermediate recommendation ${i + 1} — do not apply without review`, hint]);
+      }
+    }
   }
   rows.push(...groupedClaimScopeRows(finding));
   for (const [i, original] of (record?.grouped_originals ?? []).entries()) {

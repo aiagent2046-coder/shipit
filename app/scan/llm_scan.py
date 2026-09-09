@@ -23,7 +23,7 @@ from app.llm.client import LLMClient, LLMError
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan.syntax_claims import SyntaxVerifier
 from app.scan.premise_context import finding_context
-from app.scan.rls_recommendations import prepare_recommendation
+from app.scan.recommendations import prepare_recommendation
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.issue_identity import SourceIssueResolver
 from app.scan.react_async_context import react_async_premise_checks

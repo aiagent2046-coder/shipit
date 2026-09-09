@@ -172,6 +172,23 @@ export interface Score {
   reported_elsewhere?: Record<string, string[]>;
 }
 
+export interface RecommendationCheck {
+  result: "prerequisites_required";
+  detail: string;
+  original_fix_hint: string;
+  // Optional additions: earlier reports retain only the three fields above.
+  original_status?: "superseded";
+  original_provenance?: {
+    source: string; verification_method: string; verification_status: string;
+    producer?: { model: string; response: number; rubric: string };
+  };
+  checks?: {
+    version: 1; kind: string; result: "prerequisites_required"; detail: string;
+    scope?: string; reference?: string; prerequisites?: string[]; replacement_fix_hint?: string;
+  }[];
+  superseded_fix_hints?: string[];
+}
+
 export interface Finding {
   claim_evidence?: {
     version: 1;
@@ -196,7 +213,7 @@ export interface Finding {
     premise_checks?: { kind: string; target: string; line_start?: number; line_end?: number;
       source_line_start?: number; source_line_end?: number;
       result: "contradicted" | "not_checked"; claim: string; detail: string }[];
-    recommendation_check?: { result: "prerequisites_required"; detail: string; original_fix_hint: string };
+    recommendation_check?: RecommendationCheck;
     syntax_check?: {
       kind: "react_hook_order" | "sql_update_where" | "python_completed_notification" | "react_async_catch_reset"
         | "http_status_guard_absent" | "json_rejection_uncaught" | "intl_catch_absent"

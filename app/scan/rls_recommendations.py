@@ -4,7 +4,6 @@ Migration text is evidence about committed declarations, never deployed policy
 state or authorization. No SQL, JavaScript, or uploaded expression is executed.
 """
 from bisect import bisect_left
-from dataclasses import replace
 from collections import defaultdict
 import re
 import stat
@@ -16,7 +15,6 @@ from tree_sitter import Language, Parser
 import tree_sitter_typescript
 
 from app.scan.secrets import is_non_production_path
-from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import archive_root
 
 MAX_FILE_BYTES = 512_000
@@ -292,9 +290,9 @@ def collect_rls_recommendations(fileobj):
             "migration_files": len(migrations), "excluded_files": excluded, "limitations": sorted(limits)}
 
 
-def rls_recommendation_context(finding, facts):
+def rls_recommendation_context(finding, facts, *, client_change=False):
     """Contextualize a client-change suggestion; never dismiss the finding."""
-    if not is_client_change(finding):
+    if not client_change and not is_client_change(finding):
         return []
     contexts = []
     index = facts.get("rls_recommendations") or {}
@@ -323,16 +321,9 @@ def is_client_change(finding):
                 and re.search(r"\b(?:use|switch|replace|client|jwt|bearer)\b", advice, re.I))
 
 
-def prepare_recommendation(finding, facts):
-    """Replace client-switch advice with explicit prerequisites for either producer.
-
-    The original stays in evidence, labelled as superseded. Even complete SQL
-    declarations are insufficient to authorize a request in the deployed DB.
-    """
-    raw = vars(finding)
-    if not is_client_change(raw):
-        return finding
-    contexts = rls_recommendation_context(raw, facts)
+def client_change_prerequisites(raw, facts):
+    """Build fresh conditional advice; callers establish whether it applies."""
+    contexts = rls_recommendation_context(raw, facts, client_change=True)
     operations = sorted({(c["schema"], c["table"], c["operation"]) for c in contexts})
     targets = "; ".join(f"{schema}.{table}: {operation}" for schema, table, operation in operations)
     hint = ("Before changing the database client, verify caller authentication, intended ownership and "
@@ -347,10 +338,14 @@ def prepare_recommendation(finding, facts):
              "and denied requests before switching user-owned operations to an anon-key client with the "
              "caller's JWT. Keep intentional cross-user operations in authenticated, explicitly authorized "
              "administrative handlers.")
-    evidence = finding.claim_evidence or static_claim_evidence()
-    existing = list(evidence.get("context_checks", []))
-    existing.extend(c for c in contexts if c not in existing)
-    return replace(finding, fix_hint=hint, claim_evidence={**evidence, "context_checks": existing,
-        "recommendation_check": {"result": "prerequisites_required", "original_fix_hint": finding.fix_hint,
-                                 "detail": "Original client-change advice is superseded by the conditional "
-                                           "recommendation below. Deployed authorization is not verified."}})
+    return {
+        "kind": "rls_client_change", "replacement_fix_hint": hint,
+        "detail": "Original client-change advice is superseded by the conditional "
+                  "recommendation below. Deployed authorization is not verified.",
+    }, contexts
+
+
+def prepare_recommendation(finding, facts):
+    """Compatibility entry point; all prerequisites compose in one transaction."""
+    from app.scan.recommendations import prepare_recommendation as prepare
+    return prepare(finding, facts)
