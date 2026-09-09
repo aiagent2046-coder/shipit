@@ -1504,7 +1504,8 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                                   "source_issue_identity": issue_resolver.identity(f),
                                   "context_checks": (finding_context(f, source_facts)
                                                      + syntax_verifier.consequence_context(f)
-                                                     + syntax_verifier.imported_error_context(f))},
+                                                     + syntax_verifier.imported_error_context(f)
+                                                     + syntax_verifier.source_limit_context(f))},
               ), source_facts))
           # After the findings are in, not before the call: a rubric counts as
           # examined once its answer has been read, so a category is never

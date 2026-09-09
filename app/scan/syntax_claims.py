@@ -59,6 +59,7 @@ class SyntaxVerifier:
         self._consequence_verifier = ConsequenceVerifier(archive)
         from app.scan.imported_error_context import ImportedErrorVerifier
         self._imported_error_verifier = ImportedErrorVerifier(archive)
+        self._source_limit_verifier = None
 
     def premise_checks(self, finding: dict) -> list[dict]:
         from app.scan.atomic_claims import requests
@@ -75,6 +76,13 @@ class SyntaxVerifier:
     def imported_error_context(self, finding: dict) -> list[dict]:
         """One-hop imported call observations; never premise dispositions or score relief."""
         return self._imported_error_verifier.checks_for(finding)
+
+    def source_limit_context(self, finding: dict) -> list[dict]:
+        """Bounded numeric/collection context; no finding disposition or runtime proof."""
+        if self._source_limit_verifier is None:
+            from app.scan.source_limit_context import SourceLimitVerifier
+            self._source_limit_verifier = SourceLimitVerifier(self.archive)
+        return self._source_limit_verifier.checks_for(finding)
 
     def _premise_check(self, path, request):
         from app.scan.atomic_claims import check_source, unknown
