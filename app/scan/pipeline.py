@@ -131,7 +131,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-09-11: require external-operation idempotency and retry-budget prerequisites in advice.
 # 2026-09-09-13: bind fact limits, local Intl handlers and parsed-string guards to individual claims.
 # 2026-09-09-14: bind retry and duplicate-call premises, preserving conditional concurrency context.
-AUDIT_ENGINE_VERSION = "2026-09-09-16"
+AUDIT_ENGINE_VERSION = "2026-09-09-17"
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

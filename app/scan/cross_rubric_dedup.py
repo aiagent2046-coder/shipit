@@ -20,6 +20,9 @@ from app.scan.react_network_identity import (
 from app.scan.model_metadata_identity import (
     MECHANISM as MODEL_METADATA, compatible_model_metadata_claims, valid_model_metadata_identity,
 )
+from app.scan.external_operation_identity import (
+    MECHANISMS as EXTERNAL_OPERATIONS, compatible_external_claims, valid_external_identity,
+)
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -129,6 +132,11 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     if has_source and (not identity_a or identity_a != identity_b):
         exact = _exact_observation(anchor)
         return exact is not None and exact == _exact_observation(f)
+    external = (isinstance(identity_a, dict) and isinstance(identity_a.get("mechanism"), str)
+                and identity_a["mechanism"] in EXTERNAL_OPERATIONS)
+    if external and (not valid_external_identity(identity_a, anchor.file)
+                     or not compatible_external_claims(anchor, f, identity_a)):
+        return False
     network = isinstance(identity_a, dict) and identity_a.get("mechanism") == MECHANISM
     if network:
         if not valid_network_identity(identity_a, anchor.file):
