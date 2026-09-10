@@ -998,13 +998,13 @@ def test_scanned_python_quoted_key_keeps_key_and_runs_with_env(prefix, special, 
     plan = _scanned_assignment_plan("config.py", source)
     assert not plan.skipped
     rewritten = plan.files["config.py"]
-    assert '"api_key": os.environ["APP_SECRET"]' in rewritten
+    assert '"api_key": os.environ["API_KEY"]' in rewritten
     assert rewritten.count("import os\n") == 1
     if prefix.startswith("#!"):
         assert rewritten.startswith(prefix)
     assert all(value not in text for text in plan.files.values())
     assert value not in render_pr_body(plan)
-    monkeypatch.setenv("APP_SECRET", "replacement-from-env")
+    monkeypatch.setenv("API_KEY", "replacement-from-env")
     namespace = {}
     exec(compile(rewritten, "synthetic-config.py", "exec"), namespace)
     assert namespace["config"] == {"api_key": "replacement-from-env", "label": "api_key"}
@@ -1018,7 +1018,7 @@ def test_scanned_typescript_quoted_key_replaces_only_value(key_quote, value_quot
     plan = _scanned_assignment_plan("src/config.ts", source)
     assert not plan.skipped
     rewritten = plan.files["src/config.ts"]
-    assert f"{key}: process.env.APP_SECRET!" in rewritten
+    assert f"{key}: process.env.API_KEY!" in rewritten
     assert "label: 'api_key'" in rewritten
     assert _validate_syntax("src/config.ts", source, rewritten)
     assert all(value not in text for text in plan.files.values())
