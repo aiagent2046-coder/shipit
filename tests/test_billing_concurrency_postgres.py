@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 
+import psycopg
 import pytest
 
 from app import db
@@ -66,19 +68,11 @@ async def _open_invoice(payments) -> dict:
 
 
 class _BarrierAtTheRead(db.PaymentRepository):
-    """A real PaymentRepository that pauses each caller just after it reads the
-    payment, until both callers have read it or a short deadline passes.
+    """Pause YooKassa notifications after their repository lookup.
 
-    Without this the test is not a test. `asyncio.gather` over two grants
-    interleaves wherever the driver happens to yield, so whether the two reads
-    both land before either mint depends on pool warmth and scheduling -- the
-    first version of this test passed against the broken code as often as it
-    failed. The barrier makes the window certain in BOTH directions:
-
-      * unguarded, both callers pass the read and then both mint;
-      * with grant_lock held, the loser cannot even reach the read until the
-        winner is done, so it never arrives -- hence the deadline rather than a
-        plain barrier, which would hang forever waiting for it.
+    Unguarded callers meet at the barrier. Serialized callbacks cannot meet,
+    so a short deadline lets the winner continue. Pro grants use a different
+    atomic repository operation and are paused at actual SQL settlement below.
     """
 
     def __init__(self, expected: int, deadline: float = 0.5) -> None:
@@ -98,7 +92,59 @@ class _BarrierAtTheRead(db.PaymentRepository):
         return row
 
 
-async def test_two_concurrent_confirmations_grant_exactly_one_account(live_db):
+class _PauseProSettlement:
+    """Pause the first real payment write after the account INSERT.
+
+    The old implementation committed the account on another connection before
+    reaching this boundary. The atomic implementation still has an uncommitted
+    account here. Intercept SQL, not repository methods: a refactor must not
+    silently remove the race/failure injection from these tests.
+    """
+
+    def __init__(self, monkeypatch):
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.pid = None
+        original = psycopg.AsyncConnection.execute
+
+        async def execute(conn, query, params=None, **kwargs):
+            sql = " ".join(query.lower().split()) if isinstance(query, str) else ""
+            settlement = (
+                sql.startswith("update payments") and "account_id" in sql
+                and "completed" in sql
+            ) or (sql.startswith("insert into payments") and "account_id" in sql)
+            if settlement and self.pid is None:
+                self.pid = conn.info.backend_pid
+                self.entered.set()
+                await self.release.wait()
+            return await original(conn, query, params, **kwargs)
+
+        monkeypatch.setattr(psycopg.AsyncConnection, "execute", execute)
+
+
+async def _grant(payments, reference, invoice=None, *, provider="bank_transfer"):
+    return await grant_pro_tier(
+        payment_repo=payments, provider=provider, external_ref=reference,
+        amount=5.13, currency="USD",
+        invoice_payment_id=str(invoice["id"]) if invoice else None,
+    )
+
+
+async def _wait_for_charge_lock(pool):
+    """Observe a real blocked backend before releasing the first grant."""
+    async with asyncio.timeout(3):
+        while not await _count(
+            pool,
+            "select count(*) from pg_stat_activity where datname = current_database() "
+            "and wait_event_type = 'Lock' and wait_event = 'advisory'",
+        ):
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize("with_invoice", [True, False])
+async def test_two_concurrent_confirmations_grant_exactly_one_account(
+    live_db, monkeypatch, with_invoice,
+):
     """The bug, reproduced. An operator double-tapping Confirm, or two
     operators on the same invoice, used to produce:
 
@@ -111,20 +157,19 @@ async def test_two_concurrent_confirmations_grant_exactly_one_account(live_db):
     pointed at an account the payment does not reference -- so /mykey and
     /rotatekey for that payer led nowhere.
     """
-    accounts = db.AccountRepository()
-    payments = _BarrierAtTheRead(expected=2)
-    invoice = await _open_invoice(payments)
+    payments = db.PaymentRepository()
+    invoice = await _open_invoice(payments) if with_invoice else None
     reference = "DRY-RACE01"
-
-    async def confirm():
-        return await grant_pro_tier(
-            account_repo=accounts, payment_repo=payments,
-            provider="bank_transfer", external_ref=reference,
-            amount=5.13, currency="USD",
-            invoice_payment_id=str(invoice["id"]),
-        )
-
-    first, second = await asyncio.gather(confirm(), confirm())
+    pause = _PauseProSettlement(monkeypatch)
+    tasks = [asyncio.create_task(_grant(payments, reference, invoice))]
+    try:
+        await asyncio.wait_for(pause.entered.wait(), timeout=3)
+        tasks.append(asyncio.create_task(_grant(payments, reference, invoice)))
+        await _wait_for_charge_lock(live_db)
+    finally:
+        pause.release.set()
+        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+    first, second = results
 
     assert await _count(live_db, "select count(*) from accounts") == 1
 
@@ -145,24 +190,21 @@ async def test_two_concurrent_confirmations_grant_exactly_one_account(live_db):
     assert linked == 1
 
 
-async def test_the_lock_does_not_serialize_unrelated_charges(live_db):
+async def test_the_lock_does_not_serialize_unrelated_charges(live_db, monkeypatch):
     """The lock key is derived from (provider, external_ref), not global. Two
     different payers confirming at the same moment must not queue behind each
     other -- and each must get its own account and its own key."""
-    accounts, payments = db.AccountRepository(), db.PaymentRepository()
+    payments = db.PaymentRepository()
     one, two = await _open_invoice(payments), await _open_invoice(payments)
-
-    async def confirm(invoice, reference):
-        return await grant_pro_tier(
-            account_repo=accounts, payment_repo=payments,
-            provider="bank_transfer", external_ref=reference,
-            amount=5.13, currency="USD",
-            invoice_payment_id=str(invoice["id"]),
-        )
-
-    first, second = await asyncio.gather(
-        confirm(one, "DRY-AAA111"), confirm(two, "DRY-BBB222"),
-    )
+    pause = _PauseProSettlement(monkeypatch)
+    task = asyncio.create_task(_grant(payments, "DRY-AAA111", one))
+    try:
+        await asyncio.wait_for(pause.entered.wait(), timeout=3)
+        second = await asyncio.wait_for(_grant(payments, "DRY-BBB222", two), timeout=3)
+        assert not task.done()
+    finally:
+        pause.release.set()
+        first = await asyncio.wait_for(task, timeout=5)
 
     assert await _count(live_db, "select count(*) from accounts") == 2
     assert str(first["id"]) != str(second["id"])
@@ -170,22 +212,18 @@ async def test_the_lock_does_not_serialize_unrelated_charges(live_db):
     assert first["api_key"] != second["api_key"]
 
 
-async def test_a_sequential_replay_is_still_idempotent(live_db):
+@pytest.mark.parametrize("with_invoice", [True, False])
+async def test_a_sequential_replay_is_still_idempotent(live_db, with_invoice):
     """The path that must NOT change. A retried webhook or a transfer seen on
     a second poll arrives after the first grant committed, returns the same
     account, and mints no key -- that contract predates this fix and several
     callers depend on it (they fall back to deliver_key_once)."""
-    accounts, payments = db.AccountRepository(), db.PaymentRepository()
-    invoice = await _open_invoice(payments)
+    payments = db.PaymentRepository()
+    invoice = await _open_invoice(payments) if with_invoice else None
     reference = "DRY-REPLAY"
 
     async def confirm():
-        return await grant_pro_tier(
-            account_repo=accounts, payment_repo=payments,
-            provider="bank_transfer", external_ref=reference,
-            amount=5.13, currency="USD",
-            invoice_payment_id=str(invoice["id"]),
-        )
+        return await _grant(payments, reference, invoice)
 
     first = await confirm()
     second = await confirm()
@@ -196,12 +234,212 @@ async def test_a_sequential_replay_is_still_idempotent(live_db):
     assert second.get("api_key") is None  # the replay cannot, by design
 
 
+@pytest.mark.parametrize("with_invoice", [True, False])
+async def test_pro_disconnect_before_settlement_rolls_back_account(
+    live_db, monkeypatch, with_invoice,
+):
+    """A killed backend must leave no committed account or completed payment.
+
+    Kill the connection BEFORE the payment statement, at the point where the
+    old account-repository call had already committed. Then retry through the
+    same pool to also verify recovery after discarding a broken connection.
+    """
+    payments = db.PaymentRepository()
+    invoice = await _open_invoice(payments) if with_invoice else None
+    pause = _PauseProSettlement(monkeypatch)
+    task = asyncio.create_task(_grant(payments, "DRY-CRASH", invoice))
+    try:
+        await asyncio.wait_for(pause.entered.wait(), timeout=3)
+        async with live_db.connection() as killer:
+            cur = await killer.execute(
+                "select pg_terminate_backend(%s) as terminated", (pause.pid,),
+            )
+            assert (await cur.fetchone())["terminated"]
+    finally:
+        pause.release.set()
+        with pytest.raises(psycopg.OperationalError):
+            await asyncio.wait_for(task, timeout=5)
+
+    assert await _count(live_db, "select count(*) from accounts") == 0
+    assert await payments.get_by_external_ref("bank_transfer", "DRY-CRASH") is None
+    if invoice:
+        pending = await payments.get(invoice["id"])
+        assert pending["status"] == "pending" and pending["account_id"] is None
+
+    account = await _grant(payments, "DRY-CRASH", invoice)
+    assert account is not None and account.get("api_key")
+    assert await _count(live_db, "select count(*) from accounts") == 1
+    assert await _count(live_db, "select count(*) from payments") == 1
+    payment = await payments.get_by_external_ref("bank_transfer", "DRY-CRASH")
+    assert payment["status"] == "completed"
+    assert payment["account_id"] == account["id"]
+
+
+@pytest.mark.parametrize("with_invoice", [True, False])
+async def test_pro_cancellation_before_settlement_rolls_back_account(
+    live_db, monkeypatch, with_invoice,
+):
+    payments = db.PaymentRepository()
+    invoice = await _open_invoice(payments) if with_invoice else None
+    pause = _PauseProSettlement(monkeypatch)
+    task = asyncio.create_task(_grant(payments, "DRY-CANCEL", invoice))
+    try:
+        await asyncio.wait_for(pause.entered.wait(), timeout=3)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        pause.release.set()
+    assert await _count(live_db, "select count(*) from accounts") == 0
+    assert await payments.get_by_external_ref("bank_transfer", "DRY-CANCEL") is None
+    # Cancellation released the transaction lock and left the invoice usable.
+    account = await asyncio.wait_for(_grant(payments, "DRY-CANCEL", invoice), timeout=3)
+    assert account is not None
+
+
+@pytest.mark.parametrize("with_invoice", [True, False])
+@pytest.mark.parametrize("failure", ["sql_error", "empty_returning"])
+async def test_pro_settlement_failure_rolls_back_account(live_db, with_invoice, failure):
+    """An actual failing/suppressed SQL write must not commit its new account."""
+    payments = db.PaymentRepository()
+    invoice = await _open_invoice(payments) if with_invoice else None
+    name = "pro_settlement_test_" + uuid.uuid4().hex
+    identifier = psycopg.sql.Identifier(name)
+    body = (
+        "raise exception 'injected Pro settlement failure';"
+        if failure == "sql_error" else "return null;"
+    )
+    async with live_db.connection() as conn:
+        await conn.execute(psycopg.sql.SQL(
+            "create function {}() returns trigger language plpgsql as $$ "
+            "begin if NEW.product = 'pro_tier' and NEW.status = 'completed' then "
+            "{} end if; return NEW; end $$"
+        ).format(identifier, psycopg.sql.SQL(body)))
+        await conn.execute(psycopg.sql.SQL(
+            "create trigger {} before insert or update on payments "
+            "for each row execute function {}()"
+        ).format(identifier, identifier))
+    try:
+        expected = psycopg.errors.RaiseException if failure == "sql_error" else db.ProGrantConflict
+        with pytest.raises(expected):
+            await _grant(payments, "DRY-REJECT", invoice)
+        assert await _count(live_db, "select count(*) from accounts") == 0
+        assert await payments.get_by_external_ref("bank_transfer", "DRY-REJECT") is None
+        if invoice:
+            assert (await payments.get(invoice["id"]))["status"] == "pending"
+    finally:
+        async with live_db.connection() as conn:
+            await conn.execute(psycopg.sql.SQL("drop trigger {} on payments").format(identifier))
+            await conn.execute(psycopg.sql.SQL("drop function {}()").format(identifier))
+    assert await _grant(payments, "DRY-REJECT", invoice) is not None
+    assert await _count(live_db, "select count(*) from accounts") == 1
+
+
+async def test_two_charges_cannot_complete_one_pro_invoice(live_db, monkeypatch):
+    payments = db.PaymentRepository()
+    invoice = await _open_invoice(payments)
+    pause = _PauseProSettlement(monkeypatch)
+    first = asyncio.create_task(_grant(payments, "DRY-FIRST", invoice))
+    tasks = [first]
+    try:
+        await asyncio.wait_for(pause.entered.wait(), timeout=3)
+        tasks.append(asyncio.create_task(_grant(payments, "DRY-SECOND", invoice)))
+        # A different charge gets its own advisory lock, then waits on the
+        # invoice row. Observe that database wait before committing the winner.
+        async with asyncio.timeout(3):
+            while not await _count(
+                live_db,
+                "select count(*) from pg_stat_activity where datname = current_database() "
+                "and wait_event_type = 'Lock' and wait_event in ('transactionid', 'tuple')",
+            ):
+                await asyncio.sleep(0.01)
+    finally:
+        pause.release.set()
+        winner, refused = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+    assert winner is not None and refused is None
+    assert await _count(live_db, "select count(*) from accounts") == 1
+    payment = await payments.get(invoice["id"])
+    assert payment["external_ref"] == "DRY-FIRST"
+    assert payment["account_id"] == winner["id"]
+
+
+async def test_one_charge_cannot_grant_a_different_invoice(live_db):
+    payments = db.PaymentRepository()
+    first, second = await _open_invoice(payments), await _open_invoice(payments)
+    winner = await _grant(payments, "DRY-INVOICE", first)
+    assert await _grant(payments, "DRY-INVOICE", second) is None
+    assert await _count(live_db, "select count(*) from accounts") == 1
+    unchanged = await payments.get(second["id"])
+    assert unchanged["status"] == "pending" and unchanged["account_id"] is None
+    assert (await payments.get(first["id"]))["account_id"] == winner["id"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("provider", "other-provider"),
+    ("product", "fixpack"),
+    ("external_ref", "DRY-OTHER"),
+    ("status", "refunded"),
+    ("status", "failed"),
+    ("status", "completed"),
+])
+async def test_pro_rejects_invalid_invoice_without_creating_an_account(live_db, field, value):
+    payments = db.PaymentRepository()
+    invoice = await _open_invoice(payments)
+    async with live_db.connection() as conn:
+        await conn.execute(
+            psycopg.sql.SQL("update payments set {} = %s where id = %s").format(
+                psycopg.sql.Identifier(field),
+            ), (value, invoice["id"]),
+        )
+    before = await payments.get(invoice["id"])
+    assert await _grant(payments, "DRY-INVALID", invoice) is None
+    assert await _count(live_db, "select count(*) from accounts") == 0
+    assert await payments.get(invoice["id"]) == before
+
+
+async def test_pro_rejects_missing_invoice_without_creating_an_account(live_db):
+    assert await _grant(db.PaymentRepository(), "DRY-MISSING", {"id": str(uuid.uuid4())}) is None
+    assert await _count(live_db, "select count(*) from accounts") == 0
+    assert await _count(live_db, "select count(*) from payments") == 0
+
+
+async def test_pro_grants_above_pool_capacity_do_not_starve(live_db):
+    payments = db.PaymentRepository()
+    # The configured pool has five connections. Each grant must need only one.
+    results = await asyncio.wait_for(asyncio.gather(*[
+        _grant(payments, f"DRY-CAPACITY-{number}") for number in range(8)
+    ]), timeout=5)
+    assert all(account and account.get("api_key") for account in results)
+    assert len({account["id"] for account in results}) == 8
+    assert await _count(live_db, "select count(*) from accounts") == 8
+    assert await _count(live_db, "select count(*) from payments") == 8
+
+
+async def test_pro_lock_timeout_refuses_without_minting(live_db, monkeypatch):
+    payments = db.PaymentRepository()
+    invoice = await _open_invoice(payments)
+    reference = "DRY-TIMEOUT"
+    monkeypatch.setattr(db, "GRANT_LOCK_TIMEOUT_MS", 50)
+    # The same namespace also covers old workers during a release switch.
+    async with live_db.connection() as holder:
+        async with holder.transaction():
+            await holder.execute(
+                "select pg_advisory_xact_lock(%s, %s)",
+                (db._GRANT_LOCK_NAMESPACE, db._grant_lock_key("bank_transfer", reference)),
+            )
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                await _grant(payments, reference, invoice)
+    assert await _count(live_db, "select count(*) from accounts") == 0
+    assert (await payments.get(invoice["id"]))["status"] == "pending"
+    assert await _grant(payments, reference, invoice) is not None
+
+
 async def test_mark_completed_refuses_to_move_a_linked_account(live_db):
     """The backstop, tested directly rather than through a race.
 
     Even with the lock bypassed entirely, the account_id on a completed
-    payment can never be reassigned. This is what makes the fix money-safe if
-    the lock is ever unavailable -- see grant_lock's timeout path.
+    payment can never be reassigned. The legacy completion method retains this
+    guard for direct repository callers; Pro grants now settle atomically.
     """
     accounts, payments = db.AccountRepository(), db.PaymentRepository()
     invoice = await _open_invoice(payments)

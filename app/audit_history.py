@@ -71,6 +71,12 @@ access token through the normal repository create path.
         stack=cached["stack"], file_count=cached["file_count"],
         score_total=cached["score_total"], score_json=score, findings_json=findings,
         repo_url=cached.get("repo_url"), content_hash=digest, engine_version=engine,
+        # The stored inventory travels with the copy. Without it this row -- the
+        # newest one for this content, and therefore the one a repeat audit
+        # reuses -- has nothing for the refresh sweep to re-ask about, so the
+        # dependency answer would freeze at the moment of the copy for every
+        # audit that came through here.
+        dependency_inventory=cached.get("dependency_inventory"),
     )
     if persisted is None:
         raise DatabaseNotConfigured("Could not persist the audit history snapshot")
