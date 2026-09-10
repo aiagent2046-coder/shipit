@@ -132,15 +132,6 @@ import it by name from react. Do not output a fragment or a truncated file.
 --- END FILE ---
 """
 
-# Long unbroken runs of credential-shaped characters never reach a report or
-# the terminal in full, even though every value here is model-invented.
-SECRET_SHAPED = re.compile(r"[A-Za-z0-9_\-]{24,}")
-
-
-def mask(text: str) -> str:
-    return SECRET_SHAPED.sub(lambda m: f"{m.group()[:4]}...[{len(m.group())} chars]", text)
-
-
 @dataclass
 class Escape:
     """One variation the detector did not flag. A question, not a verdict."""
@@ -391,12 +382,31 @@ def hunt(rule_id: str, case_dir: Path, model: str, n: int) -> RuleResult:
 
 
 def dump_escapes(results: list[RuleResult], out_dir: Path) -> None:
-    """Write escape bodies for review. Masked: values are invented, habits are not."""
+    """Write escape bodies for review, VERBATIM.
+
+    The bodies are written as the model produced them, not through a masker. The
+    earlier version masked every run of 24+ word characters, and the reviews it
+    was meant to serve could not read it: `Depends(provide_storage_interface)`
+    reached the file as `Depends(prov...[25 chars])`, which does not parse, so a
+    reviewer counting escapes was counting bodies nobody could judge. Measured
+    cost over two rules: 6 of 19 and 3 of 12 dumped bodies were unreadable.
+
+    Nothing valuable is exposed by writing them raw. A body carries the corpus
+    fixture's `@DRYDOCK_SAMPLE:NAME@` placeholders INTACT -- expansion happens in
+    memory on the way into the archive (see build_archive), never on disk -- so
+    the only credential-shaped text that can appear here is a value the model
+    invented contrary to its instructions, and an invented value is not a secret.
+    The report prints counts, ids and body hashes; it never prints a body, so the
+    masking that remains meaningful stays where it belongs, on the terminal.
+
+    A test pins this (`tests/test_hunt_detector_escapes.py`): a dump whose text
+    differs from the escape body is a dump that cannot be reviewed.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     for result in results:
         for escape in result.escapes:
             name = f"{result.rule_id}__{escape.body_sha}__{Path(escape.target_file).name}"
-            (out_dir / name).write_text(mask(escape.body))
+            (out_dir / name).write_text(escape.body)
 
 
 def report(results: list[RuleResult], model: str) -> dict:
