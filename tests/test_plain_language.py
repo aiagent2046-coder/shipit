@@ -5,27 +5,28 @@ from app.scan.checks import run_checks  # noqa: F401 (import sanity)
 
 
 def _all_static_rule_ids():
-    import re
+    import ast
+    from pathlib import Path
+
     ids = set()
     for path in ("app/scan/secrets.py", "app/scan/checks.py"):
-        src = open(path).read()
-        # SecretRule("id", ... / CheckFinding("id", ...
-        ids |= set(re.findall(r'(?:SecretRule|CheckFinding)\(\s*\n?\s*"([a-z0-9-]+)"', src))
-        # Fallback for rule ids the constructor regex misses. Requires a
-        # leading letter and three characters minimum: without that it also
-        # matches any adjacent pair of short string literals, and picked up
-        # "--" from the comment-prefix tuple in secrets.py as a rule id.
-        ids |= set(re.findall(r'"([a-z][a-z0-9-]{2,})", "', src))
-        # Ids that no rule declares: _classify_match re-routes a match to a
-        # DIFFERENT id once it knows what the value is (an anon key, a demo
-        # key, a tutorial password, a localhost DSN). Four such ids existed
-        # and this function saw none of them -- so any of the four could have
-        # reached the report with no translation at all, which does not fail
-        # loudly: plain_fields falls back to the technical title, and static
-        # secret findings carry no explanation or fix_hint of their own, so
-        # the reader gets a finding with an EMPTY "what to do".
-        ids |= set(re.findall(r'effective_rule_id = "([a-z][a-z0-9-]+)"', src))
-    return {i for i in ids if "-" in i}
+        for node in ast.walk(ast.parse(Path(path).read_text())):
+            value = None
+            # Read actual constructors, including ones with comments before
+            # their first argument. Adjacent marker strings are not rule IDs.
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in {"SecretRule", "CheckFinding"}):
+                value = node.args[0] if node.args else next(
+                    (item.value for item in node.keywords if item.arg in {"id", "rule_id"}), None)
+            # Reclassified anon/demo keys and local/development DSNs have no
+            # constructor of their own, but still need report translations.
+            elif (isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == "effective_rule_id"
+                          for target in node.targets)):
+                value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                ids.add(value.value)
+    return ids
 
 
 def test_every_static_rule_has_a_translation():
@@ -39,6 +40,10 @@ def test_the_re_routed_ids_are_in_what_this_guard_checks():
     rule declares -- they are written at the point a match is reclassified,
     far from any SecretRule constructor."""
     ids = _all_static_rule_ids()
+    from app.scan.secrets import RULES
+
+    assert {rule.id for rule in RULES} <= ids
+    assert not {"not-a-real", "smoke-test"} & ids
 
     assert {"supabase-anon-key", "supabase-demo-key",
             "connection-string-dev-password",
