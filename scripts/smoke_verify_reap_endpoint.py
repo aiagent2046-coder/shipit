@@ -34,7 +34,7 @@ import httpx
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BASE_URL = "http://127.0.0.1:8811"
-TOKEN = "smoke-test-reap-token"
+TOKEN = os.environ["APP_SECRET"]
 
 
 def zip_dir(root: Path) -> bytes:

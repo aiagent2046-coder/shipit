@@ -95,13 +95,13 @@ _JWT = re.compile(
 PG = "shipit-bundle-e2e-pg"
 REST = "shipit-bundle-e2e-rest"
 NET = "shipit-bundle-e2e-net"
-PG_PASSWORD = "e2e-not-a-real-password"  # noqa: S105 — local throwaway container
+PG_PASSWORD = os.environ["APP_SECRET"]  # noqa: S105 — local throwaway container
 REST_PORT = 54399
 
 # Must match the secret the stand signed its JWTs with (keys.env). PostgREST
 # validates the bearer token against it and assigns the DB role from the `role`
 # claim — which is the entire mechanism: service_role -> BYPASSRLS, anon -> not.
-JWT_SECRET = "e2e-bundle-stand-jwt-secret-not-a-real-one-xxxxxxxx"  # noqa: S105
+JWT_SECRET = os.environ["APP_SECRET"]  # noqa: S105
 
 
 # --------------------------------------------------------------------------- #

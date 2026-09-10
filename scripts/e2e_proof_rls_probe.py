@@ -57,7 +57,7 @@ from app.proof.rls_probe import run_rls_probe  # noqa: E402
 PG = "shipit-rls-e2e-pg"
 REST = "shipit-rls-e2e-rest"
 NET = "shipit-rls-e2e-net"
-PG_PASSWORD = "e2e-not-a-real-password"  # noqa: S105 — local throwaway container
+PG_PASSWORD = os.environ["APP_SECRET"]  # noqa: S105 — local throwaway container
 REST_PORT = 54399
 
 NEGATIVE_CONTROL = (os.environ.get("NEGATIVE_CONTROL") or "").strip().lower() in (
