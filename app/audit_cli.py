@@ -36,14 +36,26 @@ def main() -> int:
     # dependency check is the one part of a scan that sends anything to a
     # third party. The operator decides that per run; the service decides it
     # per entitlement (see app/sca/stage.py:sca_client_for).
-    with_sca = "--sca" in sys.argv[1:]
-    args = [a for a in sys.argv[1:] if a != "--sca"]
-    if len(args) not in (1, 2):
-        print("usage: python -m app.audit_cli <archive.zip> [report.html] [--sca]",
-              file=sys.stderr)
+    #
+    # `--sarif <path>` writes the same findings in the format GitHub's code
+    # scanning and VS Code consume. It changes nothing about the audit.
+    argv = sys.argv[1:]
+    with_sca = "--sca" in argv
+    argv = [a for a in argv if a != "--sca"]
+    sarif_path: str | None = None
+    if "--sarif" in argv:
+        index = argv.index("--sarif")
+        if index + 1 >= len(argv):
+            print("--sarif needs a path to write", file=sys.stderr)
+            return 2
+        sarif_path = argv[index + 1]
+        argv = argv[:index] + argv[index + 2:]
+    if len(argv) not in (1, 2):
+        print("usage: python -m app.audit_cli <archive.zip> [report.html] "
+              "[--sca] [--sarif out.sarif]", file=sys.stderr)
         return 2
 
-    raw = Path(args[0]).read_bytes()
+    raw = Path(argv[0]).read_bytes()
     buf = io.BytesIO(raw)
 
     try:
@@ -67,11 +79,19 @@ def main() -> int:
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
-    if len(sys.argv) == 3:
+    if len(argv) == 2:
         from app.report.html import render_report
-        out = Path(args[1])
-        out.write_text(render_report(report, project_name=Path(args[0]).stem))
+        out = Path(argv[1])
+        out.write_text(render_report(report, project_name=Path(argv[0]).stem))
         print(f"html report: {out}", file=sys.stderr)
+
+    if sarif_path:
+        from app.report.sarif import render_sarif
+        destination = Path(sarif_path)
+        destination.write_text(render_sarif(
+            scan["findings"], engine_version=scan["score"]["scan_manifest"]["engine_version"],
+            score=scan["score"], project_name=Path(argv[0]).stem))
+        print(f"sarif: {destination}", file=sys.stderr)
     return 0
 
 
