@@ -1,0 +1,10 @@
+{
+  "description": "The read rule shares the dependency vocabulary, so the same rename escaped it too: the protected sibling was only recognisable while the repository was called get_*_repo. Here it is fetch_audit_repository and the disagreement must still be reported.",
+  "expect": [
+    {
+      "rule_id": "python-route-read-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
