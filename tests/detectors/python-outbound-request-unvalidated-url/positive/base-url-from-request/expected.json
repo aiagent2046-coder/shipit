@@ -1,0 +1,10 @@
+{
+  "description": "The caller chooses the client's base address, which every request through that client then uses. Reported at the constructor, which is where the address is decided.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

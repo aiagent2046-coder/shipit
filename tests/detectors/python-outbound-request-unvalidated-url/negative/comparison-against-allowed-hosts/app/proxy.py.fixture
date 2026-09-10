@@ -1,0 +1,14 @@
+from fastapi import APIRouter
+
+import httpx
+
+router = APIRouter()
+
+ALLOWED_HOSTS = {"api.example.com", "status.example.com"}
+
+
+@router.get("/proxy/{host}")
+async def proxy(host: str):
+    if host not in ALLOWED_HOSTS:
+        raise ValueError("host not allowed")
+    return httpx.get(f"http://{host}/status").json()

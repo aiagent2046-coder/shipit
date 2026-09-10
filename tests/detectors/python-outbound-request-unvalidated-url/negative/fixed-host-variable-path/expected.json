@@ -1,0 +1,7 @@
+{
+  "description": "The host is a literal and only the path is interpolated: `https://api.example.com/items/{sku}` is the shape a text scan cannot tell from the positive beside it. The mutation moves the interpolation into the authority, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

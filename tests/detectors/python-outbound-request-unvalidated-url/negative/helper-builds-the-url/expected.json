@@ -1,0 +1,7 @@
+{
+  "description": "The URL is assembled by a call this rule cannot see into, and the trace stops inside one function by design. The mutation inlines the same assembly, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "The URL is built with %-formatting rather than an f-string. The value sits in the authority, so the host is caller-chosen -- a template reader that only understood f-strings would go silent here.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

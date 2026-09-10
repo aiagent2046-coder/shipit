@@ -12,6 +12,7 @@ from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
+from app.scan.outbound_url import scan_outbound_url
 from app.scan.rls import scan_rls
 from app.scan.recommendations import prepare_recommendation
 from app.scan.schema_drift import scan_schema_drift
@@ -79,6 +80,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=q.rule_id, title=q.title, severity=q.severity,
             confidence=q.confidence, category=q.category, file=q.file,
             line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for u in scan_outbound_url(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=u.rule_id, title=u.title, severity=u.severity,
+            confidence=u.confidence, category=u.category, file=u.file,
+            line=u.line, explanation=u.explanation, fix_hint=u.fix_hint,
             claim_evidence=static_claim_evidence(),
         ))
 
@@ -184,11 +194,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # the follow-up; here it is preserved so it can be.
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
-                       "http_success", "sql_injection", "sql_injection_js"],
+                       "http_success", "sql_injection", "sql_injection_js", "outbound_url"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
                      "test/vendor files excluded; middleware and runtime access not resolved",
+                     "outbound_url": "HTTP clients called inside FastAPI route handlers in parseable Python "
+                     "files up to 400 KB; the value is traced only within the handler that builds the URL, "
+                     "so a URL assembled in a helper, a check in another module, a proxy or a network policy "
+                     "is not resolved; TS/JS fetch calls are not covered",
                      "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
                      "runtime fetch bindings and HTTP failures are not verified. "
                      "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},

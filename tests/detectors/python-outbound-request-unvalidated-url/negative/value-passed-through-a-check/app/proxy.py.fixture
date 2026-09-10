@@ -1,0 +1,17 @@
+from fastapi import APIRouter
+
+import httpx
+
+router = APIRouter()
+
+
+def validate_url(host: str) -> str:
+    if not host.startswith("https://"):
+        raise ValueError("scheme")
+    return host
+
+
+@router.get("/proxy/{host}")
+async def proxy(host: str):
+    url = validate_url(host)
+    return httpx.get(url).text

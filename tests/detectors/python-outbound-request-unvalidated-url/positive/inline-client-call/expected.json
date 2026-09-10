@@ -1,0 +1,10 @@
+{
+  "description": "The client is constructed inline in the expression that uses it. A receiver recogniser that only looked at names missed this; aiohttp's one-shot session is ordinary code.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

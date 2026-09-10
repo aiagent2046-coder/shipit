@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+from urllib.parse import urljoin
+
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/docs/{name}")
+async def docs(name: str):
+    return httpx.get(urljoin("https://docs.example.com/", name)).text

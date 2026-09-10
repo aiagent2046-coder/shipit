@@ -1,0 +1,10 @@
+{
+  "description": "The classic shape: the host comes from the path parameter, so the caller chooses what this server talks to. A text scan cannot tell this from the case below it, where only the PATH is variable.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+from fastapi import APIRouter
+
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/lookup/{sku}")
+async def lookup(sku: str):
+    return httpx.get(f"https://api.example.com/items/{sku}").json()

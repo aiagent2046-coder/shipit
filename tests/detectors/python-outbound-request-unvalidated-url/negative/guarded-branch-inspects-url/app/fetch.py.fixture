@@ -1,0 +1,12 @@
+from fastapi import APIRouter
+
+import httpx
+
+router = APIRouter()
+
+
+@router.post("/fetch")
+async def fetch(url: str):
+    if not url.startswith("https://api.example.com/"):
+        raise ValueError("not allowed")
+    return httpx.get(url).text

@@ -1,0 +1,10 @@
+{
+  "description": "The address never becomes a URL string: it is handed to http.client.HTTPConnection as the host. Same defect, lower-level client, and the constructor is where the caller's value lands.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

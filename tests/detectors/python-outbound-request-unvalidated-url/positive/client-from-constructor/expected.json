@@ -1,0 +1,10 @@
+{
+  "description": "The receiver is a client built in the handler, which is ordinary for timeouts and headers. The URL is still the caller's value.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

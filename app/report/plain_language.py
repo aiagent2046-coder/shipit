@@ -20,6 +20,16 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "python-outbound-request-unvalidated-url": (
+        "An outbound request is built from a value the caller sent.",
+        "The address this route fetches is assembled from the request itself, with no check on it "
+        "visible in the same function. On a server that can reach more than the public internet, a "
+        "caller who controls that value can make it fetch an internal service or a cloud metadata "
+        "endpoint. Whether the value is constrained elsewhere has not been checked.",
+        "Allow only the scheme and hosts you expect, check the resolved host rather than the text, "
+        "refuse private and link-local addresses, and build the address from the parts you validated "
+        "instead of putting the caller's value straight into it.",
+    ),
     "python-route-read-auth-consistency": (
         "Object lookup differs from protected sibling routes.",
         'A local route uses a different lookup from protected sibling routes. Global '

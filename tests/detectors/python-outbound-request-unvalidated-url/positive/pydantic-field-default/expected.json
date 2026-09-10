@@ -1,0 +1,10 @@
+{
+  "description": "The hunt's second rewrite: the parameter is declared with pydantic's Field(...) marker. A handler parameter declared that way is as caller-filled as Query(...), and reading only the FastAPI markers made the defect invisible.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

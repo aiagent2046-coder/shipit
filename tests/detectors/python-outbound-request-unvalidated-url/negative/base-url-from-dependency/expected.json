@@ -1,0 +1,7 @@
+{
+  "description": "The base comes from an injected dependency, which is configuration rather than something the caller sent. The mutation turns the same parameter into one the request fills, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

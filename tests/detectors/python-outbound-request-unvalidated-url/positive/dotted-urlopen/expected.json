@@ -1,0 +1,10 @@
+{
+  "description": "The stdlib sink written the way it is actually called: urllib.request.urlopen(...). An earlier version accepted only a bare urlopen(...), so the dotted form was invisible -- found by the hunt, not by a hand-written example.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

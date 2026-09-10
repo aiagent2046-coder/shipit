@@ -135,7 +135,14 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # refuse secret Fix Packs for formats without a verified environment rewrite.
 # 2026-09-10-4: distinguish explicitly labelled local harness fixtures from
 # production credentials and allocate independent environment keys per secret.
-AUDIT_ENGINE_VERSION = "2026-09-10-4"
+# 2026-09-10-5: python-outbound-request-unvalidated-url -- an HTTP client called
+# inside a route handler with a URL assembled from the handler's OWN request
+# input, and no check on that value visible in the same function. A new rule id
+# is exactly the case this constant exists for: an audit reports something it did
+# not report before, for unchanged bytes. (Two other unmerged branches claim the
+# same number; whoever merges second renumbers, and the history keeps both
+# entries.)
+AUDIT_ENGINE_VERSION = "2026-09-10-5"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

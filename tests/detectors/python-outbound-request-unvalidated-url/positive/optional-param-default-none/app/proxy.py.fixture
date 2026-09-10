@@ -1,0 +1,13 @@
+from fastapi import APIRouter
+from typing import Optional
+
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/proxy/{site}")
+async def proxy_site(site: Optional[str] = None):
+    if site is None:
+        raise ValueError("Host must be provided")
+    return httpx.get(f"http://{site}/status").json()

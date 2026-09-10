@@ -1,0 +1,11 @@
+from fastapi import FastAPI
+import http.client
+
+app = FastAPI()
+
+
+@app.get("/get-info/{destination}")
+async def get_info(destination: str):
+    conn = http.client.HTTPConnection(destination)
+    conn.request("GET", "/info")
+    return conn.getresponse().read()

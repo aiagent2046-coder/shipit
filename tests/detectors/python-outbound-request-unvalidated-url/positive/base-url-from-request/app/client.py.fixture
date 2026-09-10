@@ -1,0 +1,10 @@
+from fastapi import APIRouter
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/proxy/{host}")
+async def proxy(host: str):
+    client = httpx.Client(base_url=f"http://{host}", timeout=5)
+    return client.get("/status").json()

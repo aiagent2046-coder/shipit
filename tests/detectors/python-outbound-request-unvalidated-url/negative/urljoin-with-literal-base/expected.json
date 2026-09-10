@@ -1,0 +1,7 @@
+{
+  "description": "The host is fixed by the base argument while the caller controls the path. Only the base decides which service is reached, and only the base is read. The mutation moves the interpolation into the base, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

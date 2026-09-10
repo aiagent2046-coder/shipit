@@ -1,0 +1,7 @@
+{
+  "description": "A check on the value is visible in the same function and is handed the value itself. The mutation renames the call so nothing about its name says it validates, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "The hunt's rewrite of the first positive: the parameter is Optional with an explicit `= None`, and the handler raises when it is missing. Two things had to be fixed before this fired -- an explicit None default is an ast.Constant and not the Python None a missing default gives, and a presence check says nothing about where the request would go, so it must not silence an address finding.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

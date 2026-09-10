@@ -1,0 +1,10 @@
+from fastapi import APIRouter
+
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/ping")
+async def ping(host: str):
+    return httpx.get("https://api.example.com/ping").json()

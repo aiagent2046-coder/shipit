@@ -3,6 +3,7 @@ import { isNonProductionFinding } from "./evidence";
 
 // Mirrors app/report/plain_language.py.
 const PLAIN: Record<string, { what: string; risk: string; fix: string }> = {
+  "python-outbound-request-unvalidated-url": {"what": "An outbound request is built from a value the caller sent.", "risk": "The address this route fetches is assembled from the request itself, with no check on it visible in the same function. On a server that can reach more than the public internet, a caller who controls that value can make it fetch an internal service or a cloud metadata endpoint. Whether the value is constrained elsewhere has not been checked.", "fix": "Allow only the scheme and hosts you expect, check the resolved host rather than the text, refuse private and link-local addresses, and build the address from the parts you validated instead of putting the caller's value straight into it."},
   "python-route-read-auth-consistency": {"what": "Object lookup differs from protected sibling routes.", "risk": "A local route uses a different lookup from protected sibling routes. Global authorization is unresolved.", "fix": "Check ownership authorization and reproduce missing/wrong-token access using synthetic records."},
   "aws-access-key-id": {
     "what": "A value matches the AWS access key ID format.",
