@@ -432,6 +432,8 @@ def _row_to_audit(row: dict[str, Any]) -> dict[str, Any]:
         d["score_total"] = round(float(d["score_total"]), 1)
     d["score_json"] = _backfill_unexamined(_json_field(d["score_json"]))
     d["findings_json"] = _json_field(d["findings_json"])
+    if "dependency_inventory" in d:
+        d["dependency_inventory"] = _json_field(d["dependency_inventory"])
     return d
 
 
@@ -590,7 +592,7 @@ class AuditRepository:
                 values (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::jsonb)
                 returning id, stack, status, file_count, score_total,
                           score_json, findings_json, repo_url, content_hash,
-                          engine_version, access_token, created_at
+                          engine_version, dependency_inventory, access_token, created_at
                 """,
                 (
                     stack, file_count, score_total,
@@ -644,7 +646,7 @@ class AuditRepository:
                 """
                 select id, stack, status, file_count, score_total,
                        score_json, findings_json, repo_url, content_hash,
-                       engine_version, access_token, created_at
+                       engine_version, dependency_inventory, access_token, created_at
                 from audits
                 where content_hash = %s and engine_version = %s
                       and status = 'completed'
@@ -663,12 +665,13 @@ class AuditRepository:
         """Completed audits whose stored dependency inventory is old enough to
         re-ask about, oldest first.
 
-        `created_before` is the coarse filter and `created_at` is why it is
-        enough: the inventory is only written at scan time, so a row's
-        created_at is its asked_at to within the scan itself. The exact
-        comparison against the manifest's `sca_asked_at` happens in Python,
-        where the age policy lives (app/sca/refresh.py) rather than being
-        duplicated into SQL.
+        `created_before` is the dependency answer's age cutoff. History-only
+        snapshots get a new created_at while keeping the original asked_at,
+        so the snapshot date cannot decide freshness. The stage records ISO
+        UTC timestamps; comparing their seconds prefix avoids casting JSON
+        input, and Python still makes the exact freshness check. Ordering by
+        the same answer date prevents fresh copies consuming the batch limit
+        ahead of genuinely stale answers.
 
         Only rows WITH an inventory are returned. A row without one was never
         asked (free tier, opt-out, no lockfile), and asking now would be the
@@ -688,7 +691,9 @@ class AuditRepository:
                 from audits
                 where dependency_inventory is not null
                       and status = 'completed'
-                      and created_at < %s
+                      and left(score_json->'scan_manifest'->>'sca_asked_at', 19)
+                          <= to_char(%s::timestamptz at time zone 'UTC',
+                                     'YYYY-MM-DD"T"HH24:MI:SS')
                       -- A row that has already been superseded by a newer row
                       -- for the same content, engine and basis is not refreshed
                       -- again: the refreshed row is the current answer, and
@@ -702,7 +707,8 @@ class AuditRepository:
                                 and newer.score_json->>'basis' = audits.score_json->>'basis'
                                 and newer.created_at > audits.created_at
                       )
-                order by created_at asc
+                order by left(score_json->'scan_manifest'->>'sca_asked_at', 19) asc,
+                         created_at asc
                 limit %s
                 """,
                 (created_before, limit),

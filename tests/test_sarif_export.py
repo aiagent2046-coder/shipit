@@ -159,10 +159,20 @@ def test_the_message_carries_the_plain_language_explanation():
     assert SECRET["explanation"] in text
 
 
-def test_a_finding_that_moves_down_a_file_keeps_its_identity():
-    moved = {**SECRET, "line": 400}
-    assert fingerprint(moved) == fingerprint(SECRET), (
-        "a consumer deduping on this must not see a moved finding as new")
+@pytest.mark.parametrize("finding", [SECRET, {**SECRET, "masked": None}])
+def test_same_mask_or_title_at_distinct_locations_does_not_share_a_hint(finding):
+    second = {**finding, "line": 400}
+    document = build_sarif([finding, second], engine_version=AUDIT_ENGINE_VERSION)
+    results = document["runs"][0]["results"]
+    assert len(results) == 2
+    assert results[0]["partialFingerprints"] != results[1]["partialFingerprints"]
+    assert [r["locations"][0]["physicalLocation"]["region"]["startLine"]
+            for r in results] == [12, 400]
+
+
+def test_even_identical_hints_never_collapse_reported_occurrences():
+    document = build_sarif([SECRET, dict(SECRET)], engine_version=AUDIT_ENGINE_VERSION)
+    assert len(document["runs"][0]["results"]) == 2
 
 
 def test_a_changed_evidence_gets_a_new_identity():
@@ -216,6 +226,41 @@ def test_a_path_that_is_not_a_uri_is_encoded():
         "artifactLocation"]["uri"]
     assert uri == "src/my%20config/keys.ts"
     assert " " not in uri
+
+
+def test_explicit_archive_root_maps_only_matching_paths(schema):
+    root = "aiagent2046-coder-shipit-952d392"
+    paths = [f"{root}/src/my config.ts", f"./{root}/.env",
+             ".github/workflows/ci.yml", "src/already-relative.ts",
+             f"{root}-other/src/config.ts"]
+    findings = [{**SECRET, "file": path} for path in paths]
+    document = build_sarif(findings, engine_version=AUDIT_ENGINE_VERSION,
+                           archive_root=root + "/")
+    validate(document, schema)
+    assert [r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            for r in document["runs"][0]["results"]] == [
+                "src/my%20config.ts", ".env", ".github/workflows/ci.yml",
+                "src/already-relative.ts", f"{root}-other/src/config.ts"]
+    assert [finding["file"] for finding in findings] == paths
+
+
+def test_archive_wrapper_changes_do_not_change_normalized_location_hints():
+    documents = [build_sarif([{**SECRET, "file": f"{root}/{SECRET['file']}"}],
+                            engine_version=AUDIT_ENGINE_VERSION, archive_root=root)
+                 for root in ["shipit-952d392", "shipit-c95d20d"]]
+    assert documents[0]["runs"][0]["results"] == documents[1]["runs"][0]["results"]
+
+
+def test_render_accepts_explicit_arbitrary_export_root_but_never_guesses_one():
+    findings = [{**SECRET, "file": "backup/nested/src/config.ts"}]
+    unmodified = build_sarif(findings, engine_version=AUDIT_ENGINE_VERSION)
+    mapped = json.loads(render_sarif(findings, engine_version=AUDIT_ENGINE_VERSION,
+                                    archive_root="backup/nested"))
+    def uri(document):
+        return document["runs"][0]["results"][0]["locations"][0][
+            "physicalLocation"]["artifactLocation"]["uri"]
+    assert uri(unmodified) == "backup/nested/src/config.ts"
+    assert uri(mapped) == "src/config.ts"
 
 
 # -- execution facts -------------------------------------------------------

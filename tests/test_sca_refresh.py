@@ -42,7 +42,7 @@ def advisory_client(advisory_id: str = "GHSA-35jh-r3h4-6jhm",
 
 
 def silent_client() -> OsvClient:
-    return OsvClient(transport=FakeTransport([[]], {}))
+    return OsvClient(transport=FakeTransport([[{}]], {}))
 
 
 # -- the stored inventory ---------------------------------------------------
@@ -82,11 +82,11 @@ def test_a_malformed_inventory_yields_what_is_readable_rather_than_raising(paylo
     assert dependencies_from_payload(payload) == []
 
 
-def test_a_partly_readable_inventory_keeps_the_readable_entries():
-    payload = {"dependencies": [
+def test_a_partly_readable_inventory_cannot_authorize_a_partial_refresh():
+    payload = {"version": 1, "dependencies": [
         {"ecosystem": "npm", "name": "good", "version": "1.0.0"},
         {"ecosystem": "npm", "name": "bad"}]}
-    assert [d.name for d in dependencies_from_payload(payload)] == ["good"]
+    assert dependencies_from_payload(payload) == []
 
 
 # -- rescoring --------------------------------------------------------------
@@ -238,9 +238,8 @@ async def test_an_audit_without_an_inventory_is_never_asked_about():
 
 
 @pytest.mark.asyncio
-async def test_the_entitlement_is_consulted_per_row():
-    """An account that opted out since the audit was written is not asked about
-    again because the sweep had already decided otherwise."""
+async def test_the_deployment_policy_is_consulted_per_row():
+    """A disabled deployment must not contact OSV during a refresh."""
     repo = StoredRepo([stored_row(SCA_FRESHNESS_TTL_DAYS + 3)])
     calls = []
 

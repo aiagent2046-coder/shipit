@@ -42,13 +42,12 @@ MAX_LOCKFILES = 6
 _REQUIREMENT = re.compile(
     r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*"
     r"(?:\[[^\]]*\])?\s*"
-    r"==\s*(?P<version>[A-Za-z0-9][A-Za-z0-9.!+_-]*)"
+    r"==\s*(?P<version>[A-Za-z0-9][A-Za-z0-9.!+_-]*)(?=\s|;|$)"
 )
 
-# Files that ARE lockfiles but cannot answer "what is installed", so their
-# presence must not read as "the dependencies were checked and look fine":
-# go.sum lists every module version the build ever verified, not the build.
-_UNUSABLE = ("go.sum",)
+# Dependency files that cannot establish the selected versions by themselves.
+# Their presence must remain visible as a gap in dependency coverage.
+_UNUSABLE = ("go.mod", "go.sum")
 
 
 def unusable_lockfiles(data: bytes) -> list[str]:
@@ -63,24 +62,19 @@ def unusable_lockfiles(data: bytes) -> list[str]:
             and not is_non_production_path(info.filename)
             and not _vendored(info.filename))
 
-# go.mod's require directive, in both shapes it is written:
-#     require github.com/x/y v1.2.3
-#     require ( github.com/x/y v1.2.3 // indirect ... )
-_GO_REQUIRE_SINGLE = re.compile(
-    r"^\s*require\s+(?P<module>\S+)\s+(?P<version>v\S+)\s*(?://.*)?$")
-_GO_REQUIRE_ENTRY = re.compile(
-    r"^\s*(?P<module>[^\s()]+)\s+(?P<version>v\S+)\s*$")
-
+# Neither go.mod's minimum requirements nor go.sum's checksum history is a
+# resolved build list. Replacements, exclusions and transitive requirements
+# change Go's selected graph. Report unsupported coverage until such a graph
+# is supplied; do not run repository code or Go tooling to construct one.
 OSV_ECOSYSTEM = {
     "package-lock.json": "npm",
     "requirements.txt": "PyPI",
     "poetry.lock": "PyPI",
-    # go.sum is NOT in this map on purpose: it is a checksum log of every
-    # module version the build ever verified, not a statement of what is
-    # installed. It is read only to CONFIRM a version go.mod already named --
-    # see _go_mod.
-    "go.mod": "Go",
 }
+
+_NPM_NAME = re.compile(r"(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$")
+_NPM_VERSION = re.compile(
+    r"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 
 
 @dataclass(frozen=True)
@@ -153,140 +147,149 @@ def _read(archive: zipfile.ZipFile, name: str) -> str:
 
 
 def _package_location(location: str) -> str:
-    """'node_modules/x', 'apps/web/node_modules/x', 'node_modules/a/node_modules/x'
-    -> 'x'; '' when the entry is not an installed package.
+    """Return an installed package's name, including workspace/nested copies."""
+    parts = location.split("/")
+    markers = [i for i, part in enumerate(parts) if part == "node_modules"]
+    if not markers:
+        return ""
+    candidate = "/".join(parts[markers[-1] + 1:])
+    return candidate if _NPM_NAME.fullmatch(candidate) else ""
 
-    The LAST `node_modules/` segment names the package and everything before it
-    says who installed it: the root, a workspace that resolved its own copy, or
-    a package that nested one. Reading only the first shape silently skipped
-    every workspace-resolved and nested package, which is under-reporting that
-    looks exactly like a clean dependency tree.
-    """
-    marker = "node_modules/"
-    if marker not in location:
-        return ""                   # the root, or a workspace's own directory
-    return location.rsplit(marker, 1)[1]
+
+def _npm_identity(installed_name: str, entry: dict) -> tuple[str, str] | None:
+    """Aliases use the real registry name, never their installation nickname."""
+    version = entry.get("version")
+    package = entry.get("name", installed_name)
+    if isinstance(version, str) and version.startswith("npm:"):
+        package, separator, version = version[4:].rpartition("@")
+        if not separator:
+            return None
+    if (not isinstance(package, str) or not _NPM_NAME.fullmatch(package)
+            or not isinstance(version, str) or not _NPM_VERSION.fullmatch(version)):
+        return None
+    resolved = entry.get("resolved", "")
+    if isinstance(resolved, str) and resolved.startswith(("git", "file:", "link:")):
+        return None
+    return package, version
 
 
 def _json_dependencies(name: str, text: str, direct_names: set[str],
-                       out: list[Dependency]) -> None:
+                       out: list[Dependency]) -> str | None:
     try:
         data = json.loads(text)
     except (ValueError, RecursionError):
-        return                      # unreadable lockfile is not an empty one
+        return "malformed"
     if not isinstance(data, dict):
-        return
+        return "malformed"
+    incomplete = None
     packages = data.get("packages")
-    if isinstance(packages, dict):          # lockfileVersion 2 and 3
+    if isinstance(packages, dict):           # lockfileVersion 2 and 3
         for location, entry in packages.items():
-            if not isinstance(entry, dict) or "version" not in entry:
-                continue
-            version = entry.get("version")
-            if not isinstance(version, str) or not version:
-                continue
-            dep_name = _package_location(location)
-            if not dep_name:
-                continue            # the root project or a workspace directory
-            out.append(Dependency("npm", dep_name, version, name,
-                                  direct=dep_name in direct_names,
-                                  development=entry.get("dev") is True))
-        return
-    dependencies = data.get("dependencies")
-    if isinstance(dependencies, dict):      # lockfileVersion 1
-        for dep_name, entry in dependencies.items():
+            installed_name = _package_location(location)
+            if not installed_name:
+                continue                    # root or workspace directory
             if not isinstance(entry, dict):
+                incomplete = "malformed"
                 continue
-            version = entry.get("version")
-            if isinstance(version, str) and version:
-                out.append(Dependency("npm", dep_name, version, name,
-                                      direct=dep_name in direct_names,
-                                      development=entry.get("dev") is True))
+            if entry.get("link") is True:
+                continue                    # resolved workspace entry elsewhere
+            identity = _npm_identity(installed_name, entry)
+            if identity is None:
+                incomplete = incomplete or "unresolved"
+                continue
+            package, version = identity
+            out.append(Dependency("npm", package, version, name,
+                                  direct=(location == f"node_modules/{installed_name}"
+                                          and installed_name in direct_names),
+                                  development=entry.get("dev") is True))
+        return incomplete
+    dependencies = data.get("dependencies")
+    if not isinstance(dependencies, dict):
+        return "malformed"
+    # Version 1 nests installed dependencies recursively. Iterate explicitly so
+    # repository-controlled nesting never consumes the Python call stack.
+    pending = [(dependencies, True)]
+    while pending:
+        block, root = pending.pop()
+        for installed_name, entry in block.items():
+            if not isinstance(entry, dict):
+                incomplete = "malformed"
+                continue
+            nested = entry.get("dependencies", {})
+            if isinstance(nested, dict):
+                pending.append((nested, False))
+            else:
+                incomplete = "malformed"
+            identity = _npm_identity(installed_name, entry)
+            if identity is None:
+                incomplete = incomplete or "unresolved"
+                continue
+            package, version = identity
+            out.append(Dependency("npm", package, version, name,
+                                  direct=root and installed_name in direct_names,
+                                  development=entry.get("dev") is True))
+    return incomplete
 
 
-def _requirement_lines(name: str, text: str, out: list[Dependency]) -> None:
+def _requirement_lines(name: str, text: str, out: list[Dependency]) -> str | None:
+    incomplete = None
+    logical = ""
+    start = 0
     for number, raw in enumerate(text.splitlines(), start=1):
-        line = raw.split("#", 1)[0].rstrip()
+        if not logical:
+            start = number
+        # pip removes continuations before parsing comments and requirements.
+        logical += raw.rstrip().removesuffix("\\")
+        if raw.rstrip().endswith("\\"):
+            continue
+        line = logical.split("#", 1)[0].strip()
+        logical = ""
         if not line:
             continue
-        # A pip-compile pin ENDS with the continuation backslash and its hashes
-        # follow on their own lines:
-        #
-        #     annotated-doc==0.0.5 \
-        #         --hash=sha256:117bac... \
-        #
-        # Skipping every line that ends with a backslash -- which is what this
-        # did -- therefore skipped every package in the file this project
-        # generates for itself: 37 pins read as 0 dependencies. The backslash is
-        # removed here and the `--hash` lines that follow are dropped by the
-        # option check below.
-        line = line.rstrip("\\").rstrip()
-        if not line or line.lstrip().startswith("-"):
-            # Options (-r, -e, --hash), comments and direct references carry no
-            # resolvable version, and a URL is not a version either.
+        if line.startswith(("--index-url", "--extra-index-url", "--no-index",
+                            "--find-links", "--trusted-host", "--only-binary",
+                            "--no-binary", "--prefer-binary", "--require-hashes")):
             continue
-        if "@" in line:
-            continue
-        match = _REQUIREMENT.match(line)
+        # Includes, ranges, editable installs and URLs cannot resolve a package
+        # by themselves. Preserve any other exact pins, but expose partialness.
+        match = _REQUIREMENT.match(line) if "@" not in line else None
         if not match:
-            continue                     # a range (>=, ~=) is not a version
+            incomplete = "unresolved"
+            continue
         out.append(Dependency("PyPI", normalize_pypi(match.group("name")),
-                              match.group("version"), name, line=number))
+                              match.group("version"), name, line=start))
+    if logical:
+        incomplete = "malformed"             # unterminated continuation
+    return incomplete
 
 
-def _poetry_packages(name: str, text: str, out: list[Dependency]) -> None:
+def _poetry_packages(name: str, text: str, out: list[Dependency]) -> str | None:
     try:
         data = tomllib.loads(text)
     except (tomllib.TOMLDecodeError, ValueError):
-        return
-    for entry in data.get("package", []) or []:
+        return "malformed"
+    packages = data.get("package")
+    if not isinstance(packages, list):
+        return "malformed"
+    incomplete = None
+    for entry in packages:
         if not isinstance(entry, dict):
+            incomplete = "malformed"
             continue
         package, version = entry.get("name"), entry.get("version")
-        if isinstance(package, str) and isinstance(version, str) and version:
-            # Poetry 1.x wrote `category = "dev"`; poetry 2.x stopped. Absence
-            # is therefore "not recorded", not "production".
-            category = entry.get("category")
-            out.append(Dependency("PyPI", normalize_pypi(package), version, name,
-                                  development=True if category == "dev" else None))
-
-
-def _go_mod_packages(name: str, text: str, out: list[Dependency]) -> None:
-    """The Go dependencies the build actually uses.
-
-    go.mod is the source, NOT go.sum. go.sum is a checksum log: it holds an
-    entry for every module version the build ever verified, including versions
-    that were later upgraded away, so reading it reports retired software as an
-    installed dependency -- measured here with a two-line file, where a module
-    named `retired` came back as a finding. Both shapes of the require
-    directive are read, since both are written by `go mod tidy`:
-
-        require github.com/x/y v1.2.3
-        require (
-            github.com/x/y v1.2.3 // indirect
-        )
-    """
-    in_block = False
-    for number, raw in enumerate(text.splitlines(), start=1):
-        line = raw.split("//", 1)[0].rstrip()
-        stripped = line.strip()
-        if not stripped:
+        if (not isinstance(package, str) or not package.strip()
+                or not isinstance(version, str) or not version):
+            incomplete = "malformed"
             continue
-        if stripped.startswith("require ("):
-            in_block = True
+        source = entry.get("source")
+        if source is not None and (not isinstance(source, dict)
+                                   or source.get("type") in ("git", "directory", "file")):
+            incomplete = incomplete or "unresolved"
             continue
-        if in_block:
-            if stripped.startswith(")"):
-                in_block = False
-                continue
-            match = _GO_REQUIRE_ENTRY.match(stripped)
-            if match:
-                out.append(Dependency("Go", match.group("module"),
-                                      match.group("version"), name, line=number))
-            continue
-        match = _GO_REQUIRE_SINGLE.match(stripped)
-        if match:
-            out.append(Dependency("Go", match.group("module"),
-                                  match.group("version"), name, line=number))
+        category = entry.get("category")
+        out.append(Dependency("PyPI", normalize_pypi(package), version, name,
+                              development=True if category == "dev" else None))
+    return incomplete
 
 
 def _direct_names(archive: zipfile.ZipFile, manifest_path: str) -> set[str]:
@@ -312,28 +315,45 @@ def _direct_names(archive: zipfile.ZipFile, manifest_path: str) -> set[str]:
     return names
 
 
-def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str], int]:
-    """(dependencies, lockfiles read, found before the cap), deduplicated.
+@dataclass(frozen=True)
+class DependencyInventory:
+    dependencies: list[Dependency]
+    manifests: list[str]
+    found: int
+    incomplete_manifests: dict[str, str]
 
-    Two lockfiles may record the same package at the same version -- a
-    monorepo's root and a workspace, say. That is one dependency to look up,
-    and reporting it twice would double-count one advisory.
-    """
+
+def collect_dependency_inventory(data: bytes) -> DependencyInventory:
+    """Read independent files independently, retaining honest coverage gaps."""
+    incomplete: dict[str, str] = {}
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         manifests = find_lockfiles(archive)
+        selected = set(manifests)
+        for info in archive.infolist():
+            path = info.filename
+            if info.is_dir() or is_non_production_path(path) or _vendored(path):
+                continue
+            if path.rsplit("/", 1)[-1] in _UNUSABLE:
+                incomplete[path] = "unsupported"
+            elif _looks_like_lockfile(path) and path not in selected:
+                incomplete[path] = ("oversized" if info.file_size > MAX_LOCKFILE_BYTES
+                                    else "truncated")
         collected: list[Dependency] = []
         for manifest in manifests:
-            text = _read(archive, manifest)
-            basename = manifest.rsplit("/", 1)[-1]
-            if basename == "package-lock.json":
-                _json_dependencies(manifest, text, _direct_names(archive, manifest),
-                                   collected)
-            elif basename == "requirements.txt":
-                _requirement_lines(manifest, text, collected)
-            elif basename == "poetry.lock":
-                _poetry_packages(manifest, text, collected)
-            elif basename == "go.mod":
-                _go_mod_packages(manifest, text, collected)
+            try:
+                text = _read(archive, manifest)
+                basename = manifest.rsplit("/", 1)[-1]
+                if basename == "package-lock.json":
+                    reason = _json_dependencies(
+                        manifest, text, _direct_names(archive, manifest), collected)
+                elif basename == "requirements.txt":
+                    reason = _requirement_lines(manifest, text, collected)
+                else:
+                    reason = _poetry_packages(manifest, text, collected)
+            except (KeyError, ValueError, RuntimeError, OSError, zipfile.BadZipFile):
+                reason = "malformed"
+            if reason:
+                incomplete[manifest] = reason
 
     unique: dict[tuple[str, str, str], Dependency] = {}
     for dependency in collected:
@@ -342,9 +362,13 @@ def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str], int]
         if kept is None:
             unique[key] = dependency
         elif kept.development is True and dependency.development is False:
-            # The same package recorded as both a development and a production
-            # dependency: it IS in the production install, so the weaker claim
-            # must not win just because it was read first.
             unique[key] = dependency
     ordered = list(unique.values())
-    return ordered[:MAX_DEPENDENCIES], manifests, len(ordered)
+    return DependencyInventory(ordered[:MAX_DEPENDENCIES], manifests,
+                               len(ordered), incomplete)
+
+
+def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str], int]:
+    """Compatibility view; scan stages use inventory to retain coverage gaps."""
+    inventory = collect_dependency_inventory(data)
+    return inventory.dependencies, inventory.manifests, inventory.found

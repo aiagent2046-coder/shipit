@@ -1,6 +1,7 @@
 """Run a full audit on a local ZIP:
 
   python -m app.audit_cli app.zip [report.html]
+  python -m app.audit_cli app.zip --sarif out.sarif --sarif-root export-folder
 
 Static scan always runs; LLM scan runs only if providers are configured
 in the environment (.env). Prints the report as JSON to stdout. Shares
@@ -13,7 +14,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
+import zipfile
 from pathlib import Path
 
 from app.logging_config import configure_logging
@@ -22,6 +25,25 @@ from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.sca.stage import sca_client_for
 from app.llm.client import LLMClient
 from app.scan.pipeline import run_scan
+
+
+def _github_archive_prefix(raw: bytes) -> str | None:
+    """Recognize a common GitHub commit-export folder from all ZIP entries.
+
+    Never strip an arbitrary common directory such as `src/`. Other export
+    wrappers need `--sarif-root`; passing `.` explicitly keeps archive paths.
+    """
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        names = [entry.filename.removeprefix("./") for entry in archive.infolist()]
+    files = [name for name in names if name and not name.endswith("/")]
+    if not files:
+        return None
+    prefix = files[0].partition("/")[0]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+-[0-9a-fA-F]{7,40}", prefix):
+        return None
+    if not all(name.startswith(prefix + "/") for name in names):
+        return None
+    return prefix
 
 
 def _write_artifact(path: Path, text: str) -> None:
@@ -58,8 +80,8 @@ def main() -> int:
     configure_logging()
     # `--sca` is an explicit opt-in, and deliberately not the default: this
     # tool audits a repository that is usually someone else's, and the
-    # dependency check is the one part of a scan that sends anything to a
-    # third party. The operator decides that per run; the service decides it
+    # dependency check sends package names and versions to OSV. The operator
+    # decides that per run; the service decides it
     # per entitlement (see app/sca/stage.py:sca_client_for).
     #
     # `--sarif <path>` writes the same findings in the format GitHub's code
@@ -67,17 +89,22 @@ def main() -> int:
     argv = sys.argv[1:]
     with_sca = "--sca" in argv
     argv = [a for a in argv if a != "--sca"]
-    sarif_path: str | None = None
-    if "--sarif" in argv:
-        index = argv.index("--sarif")
-        if index + 1 >= len(argv):
-            print("--sarif needs a path to write", file=sys.stderr)
-            return 2
-        sarif_path = argv[index + 1]
-        argv = argv[:index] + argv[index + 2:]
+    sarif_options: dict[str, str] = {}
+    for option in ("--sarif", "--sarif-root"):
+        if option in argv:
+            index = argv.index(option)
+            if index + 1 >= len(argv) or argv[index + 1].startswith("--"):
+                print(f"{option} needs a path", file=sys.stderr)
+                return 2
+            sarif_options[option] = argv[index + 1]
+            argv = argv[:index] + argv[index + 2:]
+    sarif_path = sarif_options.get("--sarif")
+    if "--sarif-root" in sarif_options and not sarif_path:
+        print("--sarif-root requires --sarif", file=sys.stderr)
+        return 2
     if len(argv) not in (1, 2):
         print("usage: python -m app.audit_cli <archive.zip> [report.html] "
-              "[--sca] [--sarif out.sarif]", file=sys.stderr)
+              "[--sca] [--sarif out.sarif] [--sarif-root archive/folder]", file=sys.stderr)
         return 2
 
     raw = Path(argv[0]).read_bytes()
@@ -113,9 +140,13 @@ def main() -> int:
     if sarif_path:
         from app.report.sarif import render_sarif
         destination = Path(sarif_path)
+        archive_root = sarif_options.get("--sarif-root")
+        if archive_root is None:
+            archive_root = _github_archive_prefix(raw)
         _write_artifact(destination, render_sarif(
             scan["findings"], engine_version=scan["score"]["scan_manifest"]["engine_version"],
-            score=scan["score"], project_name=Path(argv[0]).stem))
+            score=scan["score"], project_name=Path(argv[0]).stem,
+            archive_root=archive_root))
         print(f"sarif: {destination}", file=sys.stderr)
     return 0
 

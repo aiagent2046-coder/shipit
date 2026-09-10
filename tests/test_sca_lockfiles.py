@@ -15,7 +15,8 @@ import zipfile
 
 import pytest
 
-from app.sca.lockfiles import (MAX_DEPENDENCIES, collect_dependencies,
+from app.sca.lockfiles import (MAX_DEPENDENCIES, MAX_LOCKFILES,
+                               collect_dependencies, collect_dependency_inventory,
                                normalize_pypi, unusable_lockfiles)
 
 
@@ -172,32 +173,31 @@ def test_this_repositorys_own_requirements_file_is_read():
                if "==" in line and not line.strip().startswith("#"))
     deps, _manifests, _found = collect_dependencies(
         make_zip({"requirements.txt": own.read_text()}))
-    assert len(deps) >= 30, f"read {len(deps)} of {pins} pins"
+    assert len(deps) == pins, f"read {len(deps)} of {pins} pins"
     assert len(deps) == len({d.name for d in deps}), "each pin is one dependency"
 
 
-def test_go_mod_names_the_builds_dependencies():
-    gomod = "\n".join([
-        "module example.com/app",
-        "",
-        "go 1.22",
-        "",
-        "require github.com/gin-gonic/gin v1.6.3",
-        "",
-        "require (",
-        "    golang.org/x/text v0.3.3 // indirect",
-        "    github.com/stretchr/testify v1.7.0",
-        ")",
-        "",
-        "replace example.com/other => ../other",
-    ]) + "\n"
-    deps, manifests, _found = collect_dependencies(make_zip({"go.mod": gomod}))
-    assert [(d.name, d.version, d.ecosystem) for d in deps] == [
-        ("github.com/gin-gonic/gin", "v1.6.3", "Go"),
-        ("golang.org/x/text", "v0.3.3", "Go"),
-        ("github.com/stretchr/testify", "v1.7.0", "Go"),
-    ]
-    assert manifests == ["go.mod"]
+@pytest.mark.parametrize("extra", [
+    "",
+    "replace golang.org/x/text => ../local-text\n",
+    "replace golang.org/x/text v0.3.3 => golang.org/x/text v0.3.8\n",
+    "replace (\n golang.org/x/text => example.com/fork v1.0.0\n)\n",
+    "exclude golang.org/x/text v0.3.3\n",
+])
+def test_go_requirements_are_not_misrepresented_as_the_resolved_graph(extra):
+    # require is a minimum; dependency requirements and replacements can
+    # select different code. Neither go.mod nor go.sum proves what is built.
+    files = {
+        "go.mod": "module example.com/app\ngo 1.22\n"
+                  "require golang.org/x/text v0.3.3\n" + extra,
+        "go.sum": "golang.org/x/text v0.3.3 h1:aaa=\n"
+                  "golang.org/x/text v0.3.8 h1:bbb=\n",
+    }
+    inventory = collect_dependency_inventory(make_zip(files))
+    assert inventory.dependencies == []
+    assert inventory.incomplete_manifests == {
+        "go.mod": "unsupported", "go.sum": "unsupported"}
+    assert unusable_lockfiles(make_zip(files)) == ["go.mod", "go.sum"]
 
 
 def test_go_sum_alone_is_not_a_dependency_list():
@@ -294,7 +294,7 @@ def test_npm_dev_flag_is_carried_and_its_absence_means_production():
 
 def test_formats_that_do_not_record_development_say_unknown_not_production():
     for entries in ({"requirements.txt": "django==2.0.0\n"},
-                    {"go.mod": "module x\n\nrequire github.com/x/y v1.0.0\n"}):
+                    {"poetry.lock": '[[package]]\nname="django"\nversion="2.0.0"\n'}):
         deps, _, _found = collect_dependencies(make_zip(entries))
         assert deps[0].development is None, (
             "silence about development is not a claim that it is production")
@@ -321,3 +321,82 @@ def test_a_package_recorded_as_dev_and_production_counts_as_production():
     assert len(deps) == 1
     assert deps[0].development is False, (
         "it IS in the production install; the weaker claim must not win")
+
+
+@pytest.mark.parametrize("poetry", [
+    "package=7\n", "package=true\n", 'package="django"\n',
+    '[package]\nname="django"\nversion="2.0.0"\n',
+    'package=[7]\n',
+])
+def test_malformed_poetry_does_not_discard_a_valid_lockfile(poetry):
+    inventory = collect_dependency_inventory(make_zip({
+        "poetry.lock": poetry, "requirements.txt": "django==2.0.0\n"}))
+    assert [(d.name, d.version) for d in inventory.dependencies] == [("django", "2.0.0")]
+    assert inventory.incomplete_manifests == {"poetry.lock": "malformed"}
+
+
+def test_npm_v1_nested_versions_and_aliases_use_real_package_identity():
+    legacy = {"lockfileVersion": 1, "dependencies": {
+        "lodash": {"version": "4.17.21", "dependencies": {
+            "legacy-lodash": {"version": "npm:lodash@4.17.4"},
+            "scoped-alias": {"version": "npm:@scope/tool@1.2.3"}}}}}
+    inventory = collect_dependency_inventory(make_zip({
+        "package-lock.json": json.dumps(legacy),
+        "package.json": json.dumps({"dependencies": {"lodash": "4.17.21"}})}))
+    found = {(d.name, d.version): d for d in inventory.dependencies}
+    assert set(found) == {("lodash", "4.17.21"), ("lodash", "4.17.4"),
+                          ("@scope/tool", "1.2.3")}
+    assert found[("lodash", "4.17.21")].direct is True
+    assert found[("lodash", "4.17.4")].direct is False
+    assert inventory.incomplete_manifests == {}
+
+
+def test_npm_v3_aliases_and_workspace_links_are_distinguished():
+    lock = {"lockfileVersion": 3, "packages": {
+        "node_modules/my-alias": {"name": "lodash", "version": "4.17.4"},
+        "packages/legacy/node_modules/lodash": {"version": "4.17.21"},
+        "node_modules/local": {"link": True, "version": "1.0.0"},
+        "not_node_modules/invented": {"version": "9.9.9"}}}
+    inventory = collect_dependency_inventory(make_zip({
+        "package-lock.json": json.dumps(lock),
+        "package.json": json.dumps({"dependencies": {"my-alias": "npm:lodash@4.17.4"}})}))
+    found = {(d.name, d.version): d for d in inventory.dependencies}
+    assert set(found) == {("lodash", "4.17.4"), ("lodash", "4.17.21")}
+    assert found[("lodash", "4.17.4")].direct is True
+    assert inventory.incomplete_manifests == {}
+
+
+@pytest.mark.parametrize("requirement", ["django==2.0.*", "django>=2.0",
+                                         "-r production.in", "-e ./local"])
+def test_unresolved_requirement_is_never_queried_as_a_guessed_exact_version(requirement):
+    inventory = collect_dependency_inventory(make_zip({
+        "requirements.txt": requirement + "\nrequests==2.19.0\n"}))
+    assert [(d.name, d.version) for d in inventory.dependencies] == [("requests", "2.19.0")]
+    assert inventory.incomplete_manifests == {"requirements.txt": "unresolved"}
+
+
+def test_continuation_can_split_the_pin_without_losing_its_original_line():
+    inventory = collect_dependency_inventory(make_zip({
+        "requirements.txt": "# dependencies\ndjango\\\n==2.0.0 \\\n --hash=sha256:abc\n"}))
+    assert [(d.name, d.version, d.line) for d in inventory.dependencies] == [
+        ("django", "2.0.0", 2)]
+    assert inventory.incomplete_manifests == {}
+
+
+def test_mixed_supported_and_unsupported_graphs_keep_honest_coverage():
+    inventory = collect_dependency_inventory(make_zip({
+        "go.mod": "module example.com/app\nrequire example.com/module v1.0.0\n",
+        "poetry.lock": "package=7\n",
+        "requirements.txt": "requests==2.19.0\n"}))
+    assert [(d.name, d.version) for d in inventory.dependencies] == [("requests", "2.19.0")]
+    assert inventory.incomplete_manifests == {
+        "go.mod": "unsupported", "poetry.lock": "malformed"}
+
+
+def test_lockfile_selection_limit_is_visible_in_inventory():
+    files = {f"apps/app{i}/requirements.txt": f"app{i}==1.0.0\n"
+             for i in range(MAX_LOCKFILES + 1)}
+    inventory = collect_dependency_inventory(make_zip(files))
+    assert len(inventory.dependencies) == MAX_LOCKFILES
+    assert inventory.incomplete_manifests == {
+        f"apps/app{MAX_LOCKFILES}/requirements.txt": "truncated"}

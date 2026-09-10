@@ -71,6 +71,7 @@ from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                               basis_for_account, content_digest)
 from app.sca.stage import sca_client_for
 from app.sca.refresh import inventory_payload, refresh_stale_dependency_audits
+from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
 
 # Reused rather than reimplemented, which is the whole point: the worker must
 # run the same scan, under the same concurrency bound, with the same spend
@@ -313,7 +314,9 @@ async def _execute_job(
         # twice -- the same reuse create_audit does, just later in the timeline.
         if job.get("account_id"):
             cached = await refresh_cached_preview_history(audit_repo, cached)
-        if not job.get("account_id") or cached["score_json"].get("free_baseline"):
+        if (not job.get("account_id")
+                or (cached["score_json"].get("free_baseline")
+                    and not needs_dependency_scan(cached))):
             return str(cached["id"])
 
     # The free tier is static-only by policy, not by accident. The static rules
@@ -360,14 +363,17 @@ async def _execute_job(
         llm_skip_reason=llm_skip_reason,
         llm_rubrics=FREE_TIER_RUBRICS if depth == BASIS_PREVIEW else None,
         depth=depth,
-        # Variant A: the dependency check is the paid depth. It is also the
-        # only part of an audit that sends anything to a third party, so the
-        # free tier -- anonymous, unauthenticated, unbounded -- must not make
-        # that call on a visitor's behalf, and an account can opt out.
+        # Variant A: dependency lookup is paid depth. The free tier does not
+        # send package inventories to OSV. SCA_ENABLED controls the service's
+        # outward calls; there is no stored per-account preference.
         sca_client=sca_client_for(
-            paid=depth == BASIS_FULL and bool(job.get("account_id")),
-            opt_out=bool(job.get("sca_opt_out"))),
+            paid=depth == BASIS_FULL and bool(job.get("account_id"))),
         ))
+
+    if cached and job.get("account_id") and needs_dependency_scan(cached):
+        sca_client = sca_client_for(paid=True)
+        if sca_client is not None:
+            scan = await asyncio.to_thread(complete_cached_dependencies, cached, raw, sca_client)
 
     # The audit still finalises as succeeded; the operator is the only one
     # who can act, and until now nothing told them. See _alert_llm_stage_failed.
@@ -400,8 +406,9 @@ async def _execute_job(
             # (which this deployment does not keep). None when the stage never
             # asked -- an inventory we never queried would turn a skipped check
             # into one that looks performed.
-            dependency_inventory=inventory_payload(
-                raw, (scan.get("sca") or {}).get("asked_at")),
+            dependency_inventory=(scan.get("dependency_inventory", cached.get("dependency_inventory"))
+                                  if cached else inventory_payload(
+                                      raw, (scan.get("sca") or {}).get("asked_at"))),
         )
         if persisted is None:
             # create_audit tolerates this by minting a throwaway id for its

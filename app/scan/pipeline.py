@@ -142,7 +142,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # true of the day they were asked: the manifest records `sca_asked_at`, and a
 # cached row older than SCA_FRESHNESS_TTL_DAYS is reported as stale rather than
 # presented as current.
-AUDIT_ENGINE_VERSION = "2026-09-10-2"
+# 2026-09-10-3: preserve dependency findings on incomplete OSV refreshes,
+# report unresolved inventory honestly, and fill missing SCA on paid cache hits.
+AUDIT_ENGINE_VERSION = "2026-09-10-3"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt
@@ -180,14 +182,6 @@ AUDIT_ENGINE_VERSION = "2026-09-10-2"
 # 2026-09-09-32: preserve credential values through Fix Pack planning; distinguish
 #               SQL expressions from comparisons and non-SQL calls; scope SQL
 #               assignments, deploy commands and completed-success labels.
-# 2026-09-10-33: dependency-known-vulnerability -- a new PAID stage that resolves
-#               the lockfiles' versions and asks the OSV database about them.
-#               It changes what a paid audit reports for unchanged bytes (and a
-#               new rule id is exactly the case this constant exists for), so
-#               the bump is not optional. Its answers are true of the day they
-#               were asked: the manifest records `sca_asked_at`, and a cached
-#               row older than SCA_FRESHNESS_TTL_DAYS is reported as stale
-#               rather than presented as current.
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
@@ -496,10 +490,10 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
     it then is. Keeping the two apart is what stops a preview that never
     reached the provider from being cached and served as one.
 
-    `sca_client` turns on the dependency stage, which is the only part of an
-    audit that leaves this machine: it resolves the archive's lockfile versions
-    and asks the OSV database about them. No client means the stage is skipped
-    with a recorded reason (the free tier and the opt-out path), and a database
+    `sca_client` turns on the dependency stage: it resolves the archive's
+    lockfile versions and asks the OSV database about them. No client means the
+    stage is skipped with a recorded reason (for example the free tier or a
+    deployment with SCA disabled), and a database
     that cannot be reached degrades the same way -- never a failed audit, and
     never a clean bill of health. It is a separate argument from `llm_client`
     because the two decisions are separate: one is about spending money on a

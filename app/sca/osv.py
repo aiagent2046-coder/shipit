@@ -44,6 +44,7 @@ BATCH_SIZE = 250
 # because a repository with an ancient dependency tree can match hundreds of
 # advisories, and an audit must not turn into an unbounded crawl.
 MAX_DETAILS = 60
+MAX_QUERY_PAGES = 4
 
 
 class OsvUnavailable(RuntimeError):
@@ -69,6 +70,7 @@ class OsvClient:
     timeout: float = 20.0
     batch_size: int = BATCH_SIZE
     max_details: int = MAX_DETAILS
+    max_query_pages: int = MAX_QUERY_PAGES
     base_url: str = OSV_BASE
     requests_made: int = field(default=0, init=False)
 
@@ -91,7 +93,7 @@ class OsvClient:
                         and method == "POST" else transport.get(url))
             self.requests_made += 1
             status = getattr(response, "status_code", 0)
-            if status >= 400:
+            if not 200 <= status < 300:
                 raise OsvUnavailable(f"{method} {path} -> HTTP {status}")
             body = response.json()
         except OsvUnavailable:
@@ -114,25 +116,55 @@ class OsvClient:
     # -- api ---------------------------------------------------------------
 
     def query(self, dependencies: list[Dependency]) -> dict[int, list[str]]:
-        """index -> advisory IDs, for every batch that answered."""
+        """Index -> advisory IDs, only after every query answered completely.
+
+        OSV guarantees positional results, including an empty object for a
+        clean package. Missing entries and unread pages are not clean answers.
+        Pagination is bounded; exhausting that budget leaves the previous
+        audit intact rather than treating a partial answer as complete.
+        """
         hits: dict[int, list[str]] = {}
         for start in range(0, len(dependencies), self.batch_size):
             chunk = dependencies[start:start + self.batch_size]
-            queries = [{"package": {"ecosystem": d.ecosystem, "name": d.name},
-                        "version": d.version} for d in chunk]
-            body = self._call("POST", "/v1/querybatch", {"queries": queries})
-            results = body.get("results")
-            if not isinstance(results, list):
-                raise OsvUnavailable("querybatch answered without a results list")
-            for offset, result in enumerate(results):
-                if not isinstance(result, dict):
-                    continue
-                ids: list[str] = []
-                for vuln in result.get("vulns", []):
-                    if isinstance(vuln, dict) and isinstance(vuln.get("id"), str):
-                        ids.append(vuln["id"])
-                if ids:
-                    hits[start + offset] = ids
+            pending = [(start + offset,
+                        {"package": {"ecosystem": d.ecosystem, "name": d.name},
+                         "version": d.version}) for offset, d in enumerate(chunk)]
+            seen_tokens: dict[int, set[str]] = {}
+            for _page in range(self.max_query_pages):
+                body = self._call("POST", "/v1/querybatch",
+                                  {"queries": [query for _, query in pending]})
+                results = body.get("results")
+                if not isinstance(results, list) or len(results) != len(pending):
+                    raise OsvUnavailable("querybatch result count does not match queries")
+                next_pending = []
+                for (index, query), result in zip(pending, results):
+                    if not isinstance(result, dict) or "error" in result:
+                        raise OsvUnavailable("querybatch returned an invalid result")
+                    vulns = result.get("vulns", [])
+                    if not isinstance(vulns, list):
+                        raise OsvUnavailable("querybatch returned an invalid vulns list")
+                    for vuln in vulns:
+                        if (not isinstance(vuln, dict)
+                                or not isinstance(vuln.get("id"), str)
+                                or not vuln["id"].strip()):
+                            raise OsvUnavailable("querybatch returned an invalid advisory ID")
+                        ids = hits.setdefault(index, [])
+                        if vuln["id"] not in ids:
+                            ids.append(vuln["id"])
+                    token = result.get("next_page_token", "")
+                    if not isinstance(token, str):
+                        raise OsvUnavailable("querybatch returned an invalid page token")
+                    if token:
+                        seen = seen_tokens.setdefault(index, set())
+                        if token in seen:
+                            raise OsvUnavailable("querybatch repeated a page token")
+                        seen.add(token)
+                        next_pending.append((index, {**query, "page_token": token}))
+                pending = next_pending
+                if not pending:
+                    break
+            if pending:
+                raise OsvUnavailable("querybatch pagination budget exhausted")
         return hits
 
     def details(self, ids: list[str]) -> dict[str, dict]:
@@ -144,7 +176,43 @@ class OsvClient:
         records: dict[str, dict] = {}
         for advisory in ids[:self.max_details]:
             try:
-                records[advisory] = self._call("GET", f"/v1/vulns/{advisory}")
+                record = self._call("GET", f"/v1/vulns/{advisory}")
+                if _valid_record(record, advisory):
+                    records[advisory] = record
             except OsvUnavailable:
                 continue
         return records
+
+
+def _valid_record(record: dict, advisory: str) -> bool:
+    """Validate the fields consumed by the report before trusting a detail.
+
+    A successful HTTP response with a malformed body is still an unreadable
+    advisory; it must neither crash an audit nor replace stronger evidence.
+    """
+    if record.get("id") != advisory:
+        return False
+    aliases = record.get("aliases", [])
+    affected = record.get("affected", [])
+    references = record.get("references", [])
+    if not isinstance(aliases, list) or not all(isinstance(a, str) for a in aliases):
+        return False
+    if not isinstance(references, list) or not all(isinstance(r, dict) for r in references):
+        return False
+    if not isinstance(affected, list):
+        return False
+    for entry in affected:
+        if not isinstance(entry, dict):
+            return False
+        if "package" in entry and not isinstance(entry["package"], dict):
+            return False
+        ranges = entry.get("ranges", [])
+        if not isinstance(ranges, list):
+            return False
+        for span in ranges:
+            if not isinstance(span, dict):
+                return False
+            events = span.get("events", [])
+            if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
+                return False
+    return True

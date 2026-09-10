@@ -9,6 +9,40 @@ from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manif
 from app.sca.lockfiles import OSV_ECOSYSTEM
 
 
+SCA_LIMITATIONS = frozenset({
+    "dependency_check_not_run", "dependency_database_unavailable",
+    "dependency_lockfile_unreadable", "dependency_coverage_incomplete",
+})
+
+
+def sca_limitations(sca: dict) -> list[str]:
+    """Dependency coverage facts shared by initial scans and cached refreshes."""
+    reasons = []
+    skipped = str(sca.get("skipped_reason") or "")
+    if skipped == "no_client" and sca.get("dependencies"):
+        reasons.append("dependency_check_not_run")
+    elif skipped.startswith("osv_unavailable"):
+        reasons.append("dependency_database_unavailable")
+    elif skipped.startswith("lockfile_unreadable"):
+        reasons.append("dependency_lockfile_unreadable")
+    if sca.get("coverage_incomplete") or skipped == "no_resolvable_lockfile":
+        reasons.append("dependency_coverage_incomplete")
+    return reasons
+
+
+def sca_manifest_fields(sca: dict) -> dict:
+    """Public dependency facts, excluding the private package inventory."""
+    fields = {"sca_" + name: sca.get(name) for name in (
+        "dependencies", "dependencies_found", "asked_at", "findings", "advisories",
+        "unreadable_advisories", "unusable_lockfiles", "incomplete_lockfiles",
+        "coverage_incomplete", "below_severity_floor",
+    )}
+    fields.update({"sca_checks": sca.get("checks_run", []),
+                   "sca_findings_truncated": sca.get("truncated", 0),
+                   "sca_skipped_reason": sca.get("skipped_reason") or None})
+    return fields
+
+
 def _file_counts(coverage: object) -> dict | None:
     """Persist a fixed numeric schema, never opaque scanner metadata.
 
@@ -68,14 +102,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
     # an absence of problems. The two reasons are kept apart: one is a policy
     # boundary (the check is not part of this entitlement), the other is a
     # failure that could be retried.
-    skipped = str(sca.get("skipped_reason") or "")
-    if skipped == "no_client" and sca.get("dependencies"):
-        reasons.append("dependency_check_not_run")
-    elif skipped.startswith("osv_unavailable"):
-        reasons.append("dependency_database_unavailable")
-    elif skipped.startswith("lockfile_unreadable"):
-        # Not "no dependencies": a lockfile was there and could not be read.
-        reasons.append("dependency_lockfile_unreadable")
+    reasons.extend(sca_limitations(sca))
     return {
         "archive_sha256": hashlib.sha256(data).hexdigest(),
         "engine_version": engine,
@@ -85,14 +112,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         "commit_sha": None,
         "inventory": inventory,
         "static_checks": static.get("checks_run", []),
-        "sca_checks": sca.get("checks_run", []),
-        "sca_dependencies": sca.get("dependencies"),
-        "sca_dependencies_found": sca.get("dependencies_found"),
-        "sca_asked_at": sca.get("asked_at"),
-        "sca_findings": sca.get("findings"),
-        "sca_unreadable_advisories": sca.get("unreadable_advisories"),
-        "sca_unusable_lockfiles": sca.get("unusable_lockfiles"),
-        "sca_skipped_reason": sca.get("skipped_reason") or None,
+        **sca_manifest_fields(sca),
         "static_limits": static.get("coverage", {}),
         "secrets_coverage": _file_counts(static.get("secrets_coverage")),
         "source_facts": static.get("source_facts"),

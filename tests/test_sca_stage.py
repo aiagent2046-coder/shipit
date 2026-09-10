@@ -129,7 +129,7 @@ def test_the_finding_does_not_claim_the_code_is_exploitable():
 
 
 def test_a_patched_version_is_silent():
-    transport = FakeTransport([[]], {})
+    transport = FakeTransport([[{}]], {})
     findings, stats = run_sca_stage(repo_with("4.17.21"), client_for(transport))
     assert findings == []
     assert stats["dependencies"] == 1
@@ -138,7 +138,7 @@ def test_a_patched_version_is_silent():
 
 
 def test_no_lockfile_asks_nothing_and_says_so():
-    transport = FakeTransport([[]], {})
+    transport = FakeTransport([[{}]], {})
     findings, stats = run_sca_stage(make_zip({"src/app.py": "print(1)\n"}),
                                    client_for(transport))
     assert findings == []
@@ -243,8 +243,8 @@ def test_a_confirmed_match_survives_a_failed_detail_fetch():
 def test_when_no_detail_could_be_fetched_nothing_is_claimed():
     class AllDetailsDown(FakeTransport):
         def __init__(self):
-            super().__init__([[{"vulns": [{"id": "GHSA-aaaa-0000-0000"}]},
-                              {"vulns": [{"id": "GHSA-bbbb-0000-0000"}]}]], {})
+            super().__init__([[{"vulns": [{"id": "GHSA-aaaa-0000-0000"},
+                                          {"id": "GHSA-bbbb-0000-0000"}]}]], {})
 
         def get(self, url):
             return FakeResponse(503, {})
@@ -256,35 +256,37 @@ def test_when_no_detail_could_be_fetched_nothing_is_claimed():
     assert stats["asked_at"] is None, "nothing was established, so nothing is dated"
 
 
-def test_the_upgrade_advice_names_one_target_and_flags_the_earlier_fix():
-    """Fixes on two branches used to be offered as equals -- "upgrade to 2.0.0,
-    or 1.5.0 or later" -- and taking 1.5.0 leaves the advisory that needed
-    2.0.0. Advice that undoes itself."""
+def test_upgrade_advice_keeps_each_advisory_fix_without_claiming_a_safe_target():
+    """A fixed boundary for one advisory does not clear the other advisory;
+    even the largest version needs range and compatibility validation."""
     records = {
         "GHSA-aaaa-0000-0000": {**LODASH_ADVISORY, "id": "GHSA-aaaa-0000-0000",
                                 "aliases": ["CVE-2020-0001"],
                                 "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
-                                              "ranges": [{"events": [{"fixed": "1.5.0"}]}]}]},
+                                              "ranges": [{"type": "SEMVER", "events": [
+                                                  {"fixed": "1.5.0"}]}]}]},
         "GHSA-bbbb-0000-0000": {**LODASH_ADVISORY, "id": "GHSA-bbbb-0000-0000",
                                 "aliases": ["CVE-2020-0002"],
                                 "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
-                                              "ranges": [{"events": [{"fixed": "2.0.0"}]}]}]},
+                                              "ranges": [{"type": "SEMVER", "events": [
+                                                  {"fixed": "2.0.0"}]}]}]},
     }
     transport = FakeTransport([[{"vulns": [{"id": k} for k in records]}]], records)
     findings, _stats = run_sca_stage(repo_with(), client_for(transport))
 
     fix = findings[0].fix_hint
-    assert "Upgrade to 2.0.0 or later" in fix
-    assert "or 1.5.0 or later" not in fix, "an earlier fix is not an equal option"
-    assert "1.5.0" in fix and "do not clear every advisory" in fix, (
-        "the earlier fix is named, and named as insufficient")
+    assert "CVE-2020-0001: fixed versions recorded by the database: 1.5.0" in fix
+    assert "CVE-2020-0002: fixed versions recorded by the database: 2.0.0" in fix
+    assert "safe upgrade target was not verified" in fix
+    assert "or later" not in fix
+    assert "clears every advisory" not in fix
 
 
 def test_batches_are_split_and_results_line_up_with_dependencies():
     packages = {f"node_modules/pkg{i}": {"version": "1.0.0"} for i in range(3)}
     advisory = {**LODASH_ADVISORY, "affected": []}
     transport = FakeTransport(
-        [[], [{"vulns": [{"id": "GHSA-35jh-r3h4-6jhm"}]}], []],
+        [[{}], [{"vulns": [{"id": "GHSA-35jh-r3h4-6jhm"}]}], [{}]],
         {"GHSA-35jh-r3h4-6jhm": advisory})
     client = OsvClient(transport=transport, batch_size=1)
     findings, stats = run_sca_stage(
@@ -313,7 +315,7 @@ def test_two_packages_are_ordered_by_severity_and_the_order_is_stable():
     assert [f.title for f in again] == [f.title for f in findings]
 
 
-def test_two_records_for_one_cve_become_one_finding_with_the_furthest_fix():
+def test_two_records_for_one_cve_keep_both_sources_fixed_version_facts():
     """Measured against the live API: lodash 4.17.21 matched two entries that
     both resolve to CVE-2025-13465, and reporting them separately printed the
     same CVE twice with two different upgrade targets."""
@@ -321,12 +323,14 @@ def test_two_records_for_one_cve_become_one_finding_with_the_furthest_fix():
              "aliases": ["CVE-2025-13465"], "summary": "Prototype pollution",
              "database_specific": {"severity": "MODERATE"},
              "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
-                           "ranges": [{"events": [{"fixed": "4.17.23"}]}]}]}
+                           "ranges": [{"type": "SEMVER", "events": [
+                               {"fixed": "4.17.23"}]}]}]}
     second = {**LODASH_ADVISORY, "id": "GHSA-bbbb-0000-0000",
               "aliases": ["CVE-2025-13465"], "summary": "Prototype pollution",
               "database_specific": {"severity": "HIGH"},
               "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
-                            "ranges": [{"events": [{"fixed": "4.18.0"}]}]}]}
+                            "ranges": [{"type": "SEMVER", "events": [
+                                {"fixed": "4.18.0"}]}]}]}
     transport = FakeTransport(
         [[{"vulns": [{"id": "GHSA-aaaa-0000-0000"}, {"id": "GHSA-bbbb-0000-0000"}]}]],
         {"GHSA-aaaa-0000-0000": first, "GHSA-bbbb-0000-0000": second})
@@ -334,7 +338,8 @@ def test_two_records_for_one_cve_become_one_finding_with_the_furthest_fix():
 
     assert len(findings) == 1, "one CVE is one row"
     assert findings[0].severity == "high", "the higher of the merged ratings"
-    assert "4.18.0" in findings[0].fix_hint, "the furthest fix satisfies both"
+    assert "4.17.23, 4.18.0" in findings[0].fix_hint, "both source facts survive"
+    assert "safe upgrade target was not verified" in findings[0].fix_hint
     assert stats["advisories"] == 2
 
 
@@ -392,7 +397,7 @@ def test_at_most_four_advisories_are_named_and_the_rest_are_counted():
 
 
 @pytest.mark.parametrize("development,expected", [
-    (True, "installed for development only"),
+    (True, "marks this as a development dependency"),
     (False, "lists this dependency directly"),
 ])
 def test_the_row_says_where_the_package_came_from(development, expected):
@@ -411,7 +416,7 @@ def test_a_lockfile_that_cannot_be_parsed_does_not_abort_the_audit(monkeypatch):
     def exploding(_data):
         raise RecursionError("nested deeper than this parser can walk")
 
-    monkeypatch.setattr("app.sca.stage.collect_dependencies", exploding)
+    monkeypatch.setattr("app.sca.stage.collect_dependency_inventory", exploding)
     findings, stats = run_sca_stage(repo_with(), client_for(one_advisory()))
     assert findings == []
     assert stats["skipped_reason"] == "lockfile_unreadable: RecursionError"

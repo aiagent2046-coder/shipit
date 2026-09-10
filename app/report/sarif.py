@@ -39,16 +39,14 @@ TOOL_NAME = "Drydock"
 # make (app/report/plain_language.TIERS), so the two cannot disagree.
 LEVELS = {"critical": "error", "high": "error", "medium": "warning", "low": "note"}
 
-# Fingerprint key. A key of our own rather than SARIF's example
-# (`primaryLocationLineHash`), because this one is deliberately NOT derived from
-# the line: a finding that moves down a file is the same finding reported again,
-# and a consumer that dedupes on it must not see a new one. It changes when the
-# evidence changes, which is what makes a genuinely new finding new.
-FINGERPRINT_KEY = "drydock/finding/v1"
+# A location-based hint for consumers that understand our key. This is not
+# GitHub's source-derived `primaryLocationLineHash`, and does not replace its
+# fingerprint generation at upload time. Moving a finding changes this hint.
+FINGERPRINT_KEY = "drydock/finding/v2"
 
 
-def _uri(path: str) -> str:
-    """An archive-relative path as a URI reference.
+def _relative_path(path: str, archive_root: str | None = None) -> str:
+    """Remove only a caller-identified archive wrapper, on a path boundary.
 
     A LITERAL prefix is removed, never a set of characters: `lstrip("./")`
     strips any leading '.' and '/' characters, so `.env` became `env` and
@@ -61,7 +59,16 @@ def _uri(path: str) -> str:
         cleaned = cleaned[2:]
     if cleaned.startswith("/"):
         cleaned = cleaned[1:]
-    return urllib.parse.quote(cleaned, safe="/")
+    if archive_root:
+        prefix = _relative_path(archive_root).rstrip("/") + "/"
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):]
+    return cleaned
+
+
+def _uri(path: str) -> str:
+    """A relative source path as a URI reference, preserving dotfiles."""
+    return urllib.parse.quote(path, safe="/")
 
 
 def _level(severity: str) -> str:
@@ -69,15 +76,18 @@ def _level(severity: str) -> str:
 
 
 def fingerprint(finding: dict) -> str:
-    """A stable identity for this finding, independent of its line number.
+    """A repeatable location hint, not a unique identity for secret material.
 
-    `masked` is the deterministic fingerprint of a secret's value and `title`
-    covers every other rule, so two findings of the same rule in the same file
-    stay distinct while the same finding keeps one identity across line moves.
+    Different secrets can have the same display mask, and different findings
+    can share a title. Include the reported line to distinguish their locations;
+    never use this hint to collapse results, including same-line occurrences.
+    Without source bytes we cannot claim identity across line moves.
     """
     evidence = str(finding.get("masked") or finding.get("title") or "")
+    line = finding.get("line")
+    location = str(line) if isinstance(line, int) and line > 0 else ""
     material = "\x00".join((str(finding.get("rule_id") or ""),
-                            str(finding.get("file") or ""), evidence))
+                            str(finding.get("file") or ""), location, evidence))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
 
 
@@ -109,12 +119,18 @@ def _rule(findings_for_rule: list[dict], rule_id: str) -> dict:
 
 
 def build_sarif(findings: list[dict], *, engine_version: str,
-                score: dict | None = None, project_name: str | None = None) -> dict:
+                score: dict | None = None, project_name: str | None = None,
+                archive_root: str | None = None) -> dict:
     """The SARIF document for this finding list.
 
     `score` is optional and only its recorded facts travel: the engine version,
     the basis (which decides how much was examined) and the limitations (what
     was not). A consumer that shows the log will show those beside the results.
+
+    `archive_root` explicitly identifies a ZIP wrapper to remove from matching
+    paths. Already repository-relative paths stay intact. Without that context
+    paths remain archive-relative; a shared directory alone is not evidence of
+    a wrapper (an archive may legitimately contain only `src/`).
     """
     manifest = ((score or {}).get("scan_manifest") or {})
     by_rule: dict[str, list[dict]] = {}
@@ -132,7 +148,8 @@ def build_sarif(findings: list[dict], *, engine_version: str,
         rule_id = str(finding.get("rule_id") or "")
         if not rule_id:
             continue
-        physical: dict = {"artifactLocation": {"uri": _uri(str(finding.get("file") or ""))}}
+        path = _relative_path(str(finding.get("file") or ""), archive_root)
+        physical: dict = {"artifactLocation": {"uri": _uri(path)}}
         line = finding.get("line")
         if isinstance(line, int) and line > 0:
             physical["region"] = {"startLine": line}
@@ -143,7 +160,7 @@ def build_sarif(findings: list[dict], *, engine_version: str,
             "message": {"text": _message(finding)},
             "locations": [{"physicalLocation": physical, "logicalLocations": [
                 {"name": rule_id, "kind": "rule"}]}],
-            "partialFingerprints": {FINGERPRINT_KEY: fingerprint(finding)},
+            "partialFingerprints": {FINGERPRINT_KEY: fingerprint({**finding, "file": path})},
         })
 
     run: dict = {

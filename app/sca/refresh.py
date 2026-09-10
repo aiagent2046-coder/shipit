@@ -29,11 +29,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from app.scan.checks import CheckFinding
-from app.sca.lockfiles import Dependency, collect_dependencies
+from app.sca.lockfiles import Dependency, collect_dependency_inventory
 from app.sca.stage import (RULE_ID, SCA_FRESHNESS_TTL_DAYS, findings_for,
                            freshness, query_dependencies)
 from app.sca.osv import OsvClient
 from app.scan.pipeline import RUBRICS, BASIS_STATIC_ONLY, score_findings
+from app.scan.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
 
 INVENTORY_VERSION = 1
 
@@ -50,7 +51,8 @@ def inventory_payload(data: bytes, asked_at: str | None) -> dict | None:
     """
     if not asked_at:
         return None
-    dependencies, manifests, found = collect_dependencies(data)
+    inventory = collect_dependency_inventory(data)
+    dependencies, manifests, found = inventory.dependencies, inventory.manifests, inventory.found
     if not dependencies:
         return None
     return {
@@ -58,6 +60,7 @@ def inventory_payload(data: bytes, asked_at: str | None) -> dict | None:
         "asked_at": asked_at,
         "lockfiles": manifests,
         "found": found,
+        "incomplete_manifests": inventory.incomplete_manifests,
         "dependencies": [
             {"ecosystem": d.ecosystem, "name": d.name, "version": d.version,
              "manifest": d.manifest, "line": d.line, "direct": d.direct,
@@ -73,13 +76,15 @@ def with_asked_at(payload: dict, asked_at: str) -> dict:
 
 
 def dependencies_from_payload(payload: object) -> list[Dependency]:
-    """Read a stored inventory back, ignoring anything malformed.
+    """Read a complete stored inventory back, rejecting malformed rows.
 
-    A row stored by a future version, or a partially written one, yields the
-    entries that are readable rather than raising inside a sweep: a refresh
-    that cannot read one audit must not stop the others.
+    A row stored by a future version, or a partially written one, yields
+    no entries rather than a subset: a partial list cannot justify deleting
+    previously confirmed findings about dependencies that were omitted.
     """
     if not isinstance(payload, dict):
+        return []
+    if payload.get("version") != INVENTORY_VERSION:
         return []
     stored = payload.get("dependencies")
     if not isinstance(stored, list):
@@ -87,16 +92,19 @@ def dependencies_from_payload(payload: object) -> list[Dependency]:
     out: list[Dependency] = []
     for entry in stored:
         if not isinstance(entry, dict):
-            continue
+            return []
         ecosystem, name, version = (entry.get("ecosystem"), entry.get("name"),
                                     entry.get("version"))
         if not all(isinstance(v, str) and v for v in (ecosystem, name, version)):
-            continue
+            return []
+        line = entry.get("line", 0)
+        if not isinstance(line, int) or isinstance(line, bool) or line < 0:
+            return []
         development = entry.get("development")
         out.append(Dependency(
             ecosystem=ecosystem, name=name, version=version,
             manifest=str(entry.get("manifest") or ""),
-            line=int(entry.get("line") or 0),
+            line=line,
             direct=bool(entry.get("direct")),
             development=development if isinstance(development, bool) else None,
         ))
@@ -148,14 +156,9 @@ def refreshed_score(stored_score: dict, findings: list[dict], stats: dict,
     scan, and this refresh only changed one rule's rows.
     """
     manifest = dict(stored_score.get("scan_manifest") or {})
-    manifest.update({
-        "sca_checks": stats.get("checks_run", []),
-        "sca_dependencies": stats.get("dependencies"),
-        "sca_dependencies_found": stats.get("dependencies_found"),
-        "sca_asked_at": stats.get("asked_at"),
-        "sca_findings": stats.get("findings"),
-        "sca_skipped_reason": stats.get("skipped_reason") or None,
-    })
+    manifest.update(sca_manifest_fields(stats))
+    manifest["limitations"] = [reason for reason in manifest.get("limitations", [])
+                               if reason not in SCA_LIMITATIONS] + sca_limitations(stats)
     refreshed = {**stored_score,
                  **score_findings(findings, **score_inputs_from_stored(stored_score)),
                  "scan_manifest": manifest}
@@ -188,6 +191,7 @@ def _empty_stats() -> dict:
     return {"checks_run": ["sca_dependencies"], "lockfiles": [], "dependencies": 0,
             "dependencies_found": 0, "advisories": 0, "reported_advisories": 0,
             "packages_reported": 0, "below_severity_floor": 0,
+            "incomplete_lockfiles": {}, "coverage_incomplete": False,
             "unreadable_advisories": 0, "requests": 0, "findings": 0,
             "truncated": 0, "asked_at": None, "skipped_reason": None}
 
@@ -197,10 +201,9 @@ async def refresh_stale_dependency_audits(
 ) -> dict:
     """Re-ask about the dependencies of audits whose answer has aged.
 
-    `client_factory` is asked for a client PER ROW, so the entitlement policy
-    is consulted again on every refresh rather than frozen at sweep start: an
-    account that opted out since the audit was written must not be asked about
-    again because the sweep had already decided otherwise.
+    `client_factory` is asked for a client per row so the deployment policy is
+    consulted again on every refresh rather than frozen at sweep start. There
+    is no persisted per-account opt-out setting in this implementation.
     """
     reference = now or datetime.now(timezone.utc)
     cutoff = reference - timedelta(days=SCA_FRESHNESS_TTL_DAYS)
@@ -223,6 +226,12 @@ async def refresh_stale_dependency_audits(
             summary.skipped += 1
             summary.reasons["empty_inventory"] = summary.reasons.get("empty_inventory", 0) + 1
             continue
+        found = payload.get("found", len(dependencies))
+        if (not isinstance(found, int) or isinstance(found, bool)
+                or found != len(dependencies) or payload.get("incomplete_manifests")):
+            summary.skipped += 1
+            summary.reasons["incomplete_inventory"] = summary.reasons.get("incomplete_inventory", 0) + 1
+            continue
         client = client_factory()
         if client is None:
             summary.skipped += 1
@@ -237,11 +246,11 @@ async def refresh_stale_dependency_audits(
             summary.reasons[reason.split(":")[0]] = (
                 summary.reasons.get(reason.split(":")[0], 0) + 1)
             continue
-        if not records and unreadable:
-            # The batch answered and every detail lookup failed. The stage
-            # reports that as "nothing was established"; a REFRESH has a better
-            # option -- leaving the older, detailed answer in place rather than
-            # overwriting it with rows that know less.
+        if unreadable:
+            # Any missing record (including the detail budget) can hide the
+            # previously confirmed worst severity. Keep the whole old answer
+            # and its date; replacing high/critical evidence with a medium
+            # placeholder would improve the score solely because a call failed.
             summary.unavailable += 1
             summary.reasons["details_unavailable"] = (
                 summary.reasons.get("details_unavailable", 0) + 1)
@@ -250,7 +259,7 @@ async def refresh_stale_dependency_audits(
         stats = _empty_stats()
         stats["lockfiles"] = list(payload.get("lockfiles") or [])
         stats["dependencies"] = len(dependencies)
-        stats["dependencies_found"] = int(payload.get("found") or len(dependencies))
+        stats["dependencies_found"] = found
         stats["asked_at"] = reference.isoformat(timespec="seconds")
         findings = findings_for(dependencies, hits, records, stats)
         stats["requests"] = getattr(client, "requests_made", 0)

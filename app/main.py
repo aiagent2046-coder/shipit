@@ -69,6 +69,7 @@ from app.db import (
 )
 from app.audit_history import refresh_cached_preview_history, ensure_paid_baseline
 from app.sca.refresh import inventory_payload
+from app.sca.cache import needs_dependency_scan
 from app.deploypack import github_app
 from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
 from app.deploypack.delivery import DeliveryError, render_pr_body
@@ -559,11 +560,9 @@ async def run_repo_audit(
     # No sca_client here on purpose, and not because this path is unpaid: it
     # audits at BASIS_FULL for paying subscribers. It has no account context --
     # `account_id is None` immediately below, because these are system
-    # re-audits -- and the dependency check sends a customer's packages to a
-    # third party, so an account that has opted out could not be honoured on
-    # this path. Until the monitoring trigger carries the account, the check
-    # simply does not run here; the row therefore stores no inventory and the
-    # refresh sweep leaves it alone.
+    # re-audits -- so this trigger does not authorize a new dependency lookup.
+    # Fresh scans here store no inventory. When reusing an existing answer,
+    # preserve its inventory so that the refresh sweep can still update it.
     await _alert_llm_stage_failed(scan["llm"])
     # Cost accounting. account_id is None: this path serves system re-audits
     # (continuous monitoring), whose LLM cost is incurred once per push
@@ -591,11 +590,10 @@ async def run_repo_audit(
             score_total=scan["score"]["total"], score_json=scan["score"],
             findings_json=scan["findings"], repo_url=repo_url,
             content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
-            # None for now on this path (see the sca_client note above): an
-            # inventory is only stored when the stage actually asked, which is
-            # what keeps a skipped check from looking performed.
-            dependency_inventory=inventory_payload(
-                raw, (scan.get("sca") or {}).get("asked_at")),
+            # Preserve the original dependency answer when only its free
+            # baseline was missing. A newly skipped check has no inventory.
+            dependency_inventory=(cached.get("dependency_inventory") if cached else
+                                  inventory_payload(raw, (scan.get("sca") or {}).get("asked_at"))),
         )
     except Exception:
         if llm_usage_repo is not None:
@@ -2076,8 +2074,10 @@ async def create_audit(
         basis_for_account(account["id"] if account else None))
     if cached is not None and account:
         cached = await refresh_cached_preview_history(audit_repo, cached)
-        if not cached["score_json"].get("free_baseline"):
-            cached = None  # Complete the missing baseline in the worker, never in HTTP intake.
+        if (not cached["score_json"].get("free_baseline")
+                or needs_dependency_scan(cached)):
+            # Complete missing stages in the worker, never in HTTP intake.
+            cached = None
     logger.info(
         "audit intake: cache %s for digest %s",
         "hit" if cached is not None else "miss", digest[:12],

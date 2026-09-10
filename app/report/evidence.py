@@ -383,13 +383,19 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
                 "No lockfile was found, so there were no resolved versions to "
                 "look up. A range in a manifest is not a version, and guessing "
                 "one would report on software the project may not install.")
-    if skipped == "no_resolvable_lockfile":
-        unusable = ", ".join(manifest.get("sca_unusable_lockfiles") or []) or "a lockfile"
+    if skipped == "no_resolved_dependencies":
         return ("Dependencies checked",
-                f"Not checked: {unusable} was found, and it lists every module "
-                "version the build ever verified rather than what this build "
-                "installs. A go.mod is what names the build's own dependencies; "
-                "without one there is nothing to look up without guessing.")
+                "Supported lockfiles were read but contained no resolved packages "
+                "to query. The vulnerability database was not contacted.")
+    if skipped == "no_resolvable_lockfile":
+        incomplete = manifest.get("sca_incomplete_lockfiles") or {}
+        unusable = ", ".join(incomplete or manifest.get("sca_unusable_lockfiles") or []) or "a lockfile"
+        return ("Dependencies checked",
+                f"Not checked: {unusable} was found, but this scanner could not "
+                "establish its resolved dependency inventory. Malformed, unsupported "
+                "or unpinned entries are not a clean result. For Go, go.sum lists "
+                "every module version the build ever verified; go.mod alone does "
+                "not establish the complete selected dependency graph.")
     if isinstance(skipped, str) and skipped.startswith("lockfile_unreadable"):
         return ("Dependencies checked",
                 "Not checked: a lockfile was present and could not be read "
@@ -398,6 +404,7 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
     if isinstance(skipped, str) and skipped.startswith("osv_unavailable"):
         return ("Dependencies checked",
                 f"Not checked: the vulnerability database could not be reached "
+                f"or did not provide a complete answer "
                 f"({skipped.removeprefix('osv_unavailable: ')}). A missing "
                 "answer here is not a clean result.")
     if not manifest.get("sca_asked_at"):
@@ -409,11 +416,23 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
                else f"{resolved} resolved packages")
     findings = manifest.get("sca_findings")
     found_text = (f"; {findings} reported" if isinstance(findings, int) and findings
-                  else "; no known vulnerabilities for those versions")
+                  else "; no medium-or-higher findings reported")
+    filtered = manifest.get("sca_below_severity_floor")
+    if isinstance(filtered, int) and filtered:
+        found_text += f"; {filtered} package(s) had only below-threshold advisories"
     unclear = manifest.get("sca_unreadable_advisories")
     if isinstance(unclear, int) and unclear:
         found_text += (f"; {unclear} advisory record(s) could not be fetched, "
                        "and those matches are reported without their details")
+    truncated = manifest.get("sca_findings_truncated")
+    if isinstance(truncated, int) and truncated:
+        found_text += f"; {truncated} additional package finding(s) omitted by the report limit"
+    incomplete = manifest.get("sca_incomplete_lockfiles") or {}
+    if isinstance(incomplete, dict) and incomplete:
+        found_text += (f"; dependency inventory incomplete for {len(incomplete)} "
+                       "lockfile(s), so this is not a complete repository check")
+    elif manifest.get("sca_coverage_incomplete"):
+        found_text += "; coverage is incomplete"
     aged = ("" if state == "fresh" else
             " This answer was true of that date; advisories published since are "
             "not in it.")

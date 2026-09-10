@@ -47,7 +47,7 @@ def test_the_free_tier_does_not_send_a_visitors_dependencies_anywhere(monkeypatc
     assert sca_client_for(paid=False) is None
 
 
-def test_an_account_can_opt_out(monkeypatch):
+def test_a_caller_can_decline_the_dependency_check(monkeypatch):
     monkeypatch.delenv(SCA_ENABLED_ENV, raising=False)
     assert sca_client_for(paid=True, opt_out=True) is None
 

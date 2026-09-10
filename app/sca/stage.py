@@ -26,12 +26,11 @@ claims and only the first one was verified.
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.scan.checks import CheckFinding
-from app.sca.lockfiles import Dependency, collect_dependencies, unusable_lockfiles
+from app.sca.lockfiles import Dependency, collect_dependency_inventory, unusable_lockfiles
 from app.sca.osv import OsvClient, OsvUnavailable
 
 # One rule id for the whole stage: the reader's action is the same for every
@@ -109,7 +108,8 @@ def sca_client_for(*, paid: bool, opt_out: bool = False,
     One place, because three separate decisions all end in the same outward
     call: whether this audit is one the customer paid for (variant A runs the
     check only there), whether the deployment has forbidden it outright, and
-    whether the customer has asked to be left out. `requested` is the caller's
+    whether this caller has declined the lookup. `opt_out` is a caller-level
+    hook, not a persisted account preference. `requested` is the caller's
     OWN opt-in -- None means "whatever the deployment policy says", which is
     the audit service, while an explicit True/False is a local decision (the
     CLI, where the operator is looking at someone else's repository and the
@@ -122,17 +122,6 @@ def sca_client_for(*, paid: bool, opt_out: bool = False,
     if requested is None and not sca_enabled():
         return None
     return OsvClient()
-
-
-def _version_key(version: str) -> tuple[int, ...]:
-    """Numeric parts of a version, for comparing upgrade targets.
-
-    Deliberately crude: it only has to decide which of two upgrades is the
-    further one, and a version this cannot parse sorts as (0,) rather than
-    raising inside a report.
-    """
-    parts = [int(p) for p in re.findall(r"\d+", version)]
-    return tuple(parts) if parts else (0,)
 
 
 def _rank(severity: str) -> int:
@@ -164,28 +153,45 @@ def _severity(record: dict) -> tuple[str, bool]:
 
 
 def _fixed_versions(record: dict, dependency: Dependency) -> list[str]:
-    """Versions the advisory says fix this package, as written in the record."""
+    """Fixed version boundaries from this package's advisory ranges.
+
+    These are source facts, not upgrade candidates: separate release lines,
+    reintroductions and ecosystem-specific ordering are not resolved here.
+    GIT range events contain commit IDs, not package versions.
+    """
     fixed: list[str] = []
-    for affected in record.get("affected", []) or []:
+    affected_entries = record.get("affected")
+    if not isinstance(affected_entries, list):
+        return fixed
+    for affected in affected_entries:
         if not isinstance(affected, dict):
             continue
         package = affected.get("package")
-        if isinstance(package, dict):
-            name = str(package.get("name", ""))
-            ecosystem = str(package.get("ecosystem", ""))
-            if name and (name.lower(), ecosystem) != (dependency.name.lower(),
-                                                     dependency.ecosystem):
-                continue
-        for span in affected.get("ranges", []) or []:
+        if not isinstance(package, dict):
+            continue
+        name = str(package.get("name", ""))
+        ecosystem = str(package.get("ecosystem", ""))
+        if (name.lower(), ecosystem) != (dependency.name.lower(), dependency.ecosystem):
+            continue
+        ranges = affected.get("ranges")
+        if not isinstance(ranges, list):
+            continue
+        for span in ranges:
             if not isinstance(span, dict):
                 continue
-            for event in span.get("events", []) or []:
-                if isinstance(event, dict) and isinstance(event.get("fixed"), str):
+            if span.get("type") not in ("SEMVER", "ECOSYSTEM"):
+                continue
+            events = span.get("events")
+            if not isinstance(events, list):
+                continue
+            for event in events:
+                if (isinstance(event, dict) and isinstance(event.get("fixed"), str)
+                        and event["fixed"].strip()):
                     fixed.append(event["fixed"])
     seen: dict[str, None] = {}
     for version in fixed:
         seen.setdefault(version, None)
-    return list(seen)[:4]
+    return list(seen)
 
 
 def _advisory_url(record: dict) -> str:
@@ -206,8 +212,8 @@ class Advisory:
     Two entries frequently carry the same CVE alias -- measured against the
     live API: lodash 4.17.21 matched two records that both resolve to
     CVE-2025-13465 with different fixed versions (4.17.21 and 4.18.0). One
-    vulnerability is one entry here, and the fixes are unioned so the reported
-    upgrade is the one that satisfies every record.
+    vulnerability is one entry here. Its fixed version boundaries are combined
+    as source facts; that does not establish a common safe upgrade target.
     """
     identifier: str
     severity: str
@@ -280,8 +286,8 @@ def _scope_sentence(dependency: Dependency) -> str:
     different actions, so they are not collapsed into one sentence.
     """
     if dependency.development is True:
-        return ("The lockfile marks this package as installed for development "
-                "only, so it does not reach the running application")
+        return ("The lockfile marks this as a development dependency; its use "
+                "in builds or the deployed application was not checked")
     if dependency.direct:
         return "Your project lists this dependency directly"
     return "This dependency arrives through another one"
@@ -290,23 +296,23 @@ def _scope_sentence(dependency: Dependency) -> str:
 def build_finding(dependency: Dependency, advisories: list[Advisory]) -> CheckFinding:
     worst = advisories[0]
     others = advisories[1:]
-    # ONE target: the furthest fix across the advisories listed. Offering the
-    # earlier ones as alternatives ("upgrade to 2.0.0, or 1.5.0 or later") reads
-    # as a choice between equals, and taking 1.5.0 leaves the advisory that
-    # needed 2.0.0 -- advice that undoes itself. The earlier lines are named,
-    # but as what they are: not sufficient.
-    furthest: list[str] = []
-    for advisory in advisories:
-        for version in advisory.fixed:
-            if version not in furthest:
-                furthest.append(version)
-    ordered = sorted(furthest, key=_version_key, reverse=True)
-    upgrade = f" Upgrade to {ordered[0]} or later." if ordered else ""
-    shortfall = ""
-    if len(ordered) > 1:
-        shortfall = (" The database also lists earlier fixes ("
-                     + ", ".join(ordered[1:3])
-                     + "), which do not clear every advisory above.")
+    # Fixed events belong to individual affected ranges, not to a global
+    # version ordering. Preserve their attribution without choosing a target
+    # or claiming that every later release is unaffected.
+    fix_facts = []
+    for advisory in advisories[:MAX_LISTED_ADVISORIES]:
+        if advisory.details_missing:
+            fact = "details unavailable; fixed versions unknown"
+        elif advisory.fixed:
+            fact = "fixed versions recorded by the database: " + ", ".join(advisory.fixed[:4])
+            if len(advisory.fixed) > 4:
+                fact += f" (and {len(advisory.fixed) - 4} more fixed versions)"
+        else:
+            fact = "no fixed version recorded in the available package ranges"
+        fix_facts.append(f"{advisory.identifier}: {fact}.")
+    if len(advisories) > MAX_LISTED_ADVISORIES:
+        fix_facts.append(f"Fix details for {len(advisories) - MAX_LISTED_ADVISORIES} "
+                         "additional advisories are not shown here.")
 
     listed = [f"{worst.identifier} ({worst.severity}): {worst.summary or 'known vulnerability'}"]
     for advisory in others[:MAX_LISTED_ADVISORIES - 1]:
@@ -335,10 +341,10 @@ def build_finding(dependency: Dependency, advisories: list[Advisory]) -> CheckFi
         risk += (" At least one advisory's details could not be fetched from the "
                  "database, so its nature and its worst rating are unknown; the "
                  "match against your version is what was confirmed.")
-    fix = (f"{upgrade.strip()}{shortfall} That upgrade clears every advisory "
-           f"listed here. Then reinstall and run your tests: a lockfile change "
-           f"reaches production only after the build that reads it. "
-           f"Reference: {worst.url}")
+    fix = (" ".join(fix_facts) + " Review every advisory's affected ranges and "
+           "choose a release compatible with your project; a common safe upgrade "
+           "target was not verified. Update the lockfile, reinstall, and rerun "
+           f"the dependency scan and your tests. Reference: {worst.url}")
 
     if len(advisories) == 1:
         title = f"{worst.identifier} in {dependency.name} {dependency.version}"
@@ -384,6 +390,8 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         "packages_reported": 0,
         "below_severity_floor": 0,
         "unreadable_advisories": 0,
+        "incomplete_lockfiles": {},
+        "coverage_incomplete": False,
         "requests": 0,
         "findings": 0,
         "truncated": 0,
@@ -391,7 +399,7 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         "skipped_reason": None,
     }
     try:
-        dependencies, manifests, found = collect_dependencies(data)
+        inventory = collect_dependency_inventory(data)
     except Exception as exc:            # noqa: BLE001 -- see below
         # A lockfile is INPUT, and no input may abort the audit it was
         # submitted to: this stage promises the audit it belongs to that it
@@ -400,7 +408,10 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         # examined rather than that they were fine.
         stats["skipped_reason"] = f"lockfile_unreadable: {type(exc).__name__}"
         return [], stats
-    stats["lockfiles"] = manifests
+    dependencies, found = inventory.dependencies, inventory.found
+    stats["lockfiles"] = inventory.manifests
+    stats["incomplete_lockfiles"] = inventory.incomplete_manifests
+    stats["coverage_incomplete"] = bool(inventory.incomplete_manifests) or found > len(dependencies)
     # `found` and `dependencies` differ only when the cap bit. Both are
     # recorded: a repository whose 300th dependency was silently never asked
     # about must not read as a repository that was fully checked.
@@ -412,8 +423,9 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         # Neither case is "no vulnerabilities": one is nothing to look up, the
         # other is a lockfile that cannot answer the question at all (go.sum
         # lists every version the build ever verified, not the build's list).
-        stats["skipped_reason"] = ("no_resolvable_lockfile" if unusable
-                                   else "no_lockfile")
+        stats["skipped_reason"] = (
+            "no_resolvable_lockfile" if unusable or inventory.incomplete_manifests
+            else "no_resolved_dependencies" if inventory.manifests else "no_lockfile")
         return [], stats
     if client is None:
         stats["skipped_reason"] = "no_client"
@@ -436,7 +448,9 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
 
     stats["asked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     stats["requests"] = client.requests_made
-    return findings_for(dependencies, hits, records, stats), stats
+    findings = findings_for(dependencies, hits, records, stats)
+    stats["coverage_incomplete"] = bool(stats["coverage_incomplete"] or unreadable)
+    return findings, stats
 
 
 def query_dependencies(
@@ -484,7 +498,7 @@ def findings_for(
     stats["unreadable_advisories"] = len(answers - set(records))
 
     findings: list[CheckFinding] = []
-    unreadable = set(records) ^ answers
+    unreadable = answers - set(records)
     for index, advisory_ids in hits.items():
         dependency = dependencies[index]
         served = [records[a] for a in advisory_ids if a in records]
