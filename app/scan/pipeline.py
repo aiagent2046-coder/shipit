@@ -165,7 +165,13 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # HTTP import provenance, statement order and field-specific check identity;
 # bound AST/template work and report unresolved runtime/network controls.
 # This supersedes the outbound branch preview version 2026-09-10-7.
-AUDIT_ENGINE_VERSION = "2026-09-10-9"
+# 2026-09-10-12: path-traversal-file-sink -- a filesystem path handed to open/Path/
+# send_file/FileResponse/shutil/os-removal built from the handler's own request
+# input, with no containment check visible before the call. A new rule id is exactly
+# the case this constant exists for: an audit reports something it did not report
+# before, for unchanged bytes. (Sibling branches carry -10 and -11; this one takes
+# -12 so nothing in flight claims one number.)
+AUDIT_ENGINE_VERSION = "2026-09-10-12"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

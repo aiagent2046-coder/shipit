@@ -14,6 +14,7 @@ from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.outbound_url import scan_outbound_url
+from app.scan.path_traversal import scan_path_traversal
 from app.scan.rls import scan_rls
 from app.scan.recommendations import prepare_recommendation
 from app.scan.schema_drift import scan_schema_drift
@@ -133,6 +134,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             line=w.line, explanation=w.explanation, fix_hint=w.fix_hint,
         ))
 
+    fileobj.seek(0)
+    for t in scan_path_traversal(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=t.rule_id, title=t.title, severity=t.severity,
+            confidence=t.confidence, category=t.category, file=t.file,
+            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
     # The first static producer for Frontend. Wired on a number measured in
     # this repository (DRYDOCK_LENS_PLAN.md): 11 of 12 mounted apps in the
     # audited corpus ship no error boundary above their routes, the hits on
@@ -204,9 +214,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
                        "auth_write_consistency",
-                       "http_success", "sql_injection", "sql_injection_js", "outbound_url"],
+                       "http_success", "sql_injection", "sql_injection_js", "outbound_url",
+                       "path_traversal"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
+                     "path_traversal": "Local FastAPI route handlers in parseable Python files up to "
+                     "400 KB; a path is traced inside the handler that builds it, and a containment "
+                     "check counts only when it runs BEFORE the sink in the same function. A path "
+                     "built in a helper, a check in another module, a mount, a caller that only sends "
+                     "safe names, and TS/JS file handling are NOT covered",
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
                      "test/vendor files excluded; middleware and runtime access not resolved",
                      "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in "

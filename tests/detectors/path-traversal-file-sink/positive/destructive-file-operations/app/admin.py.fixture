@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends, Request
+import os
+import shutil
+from pathlib import Path
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+@router.post("/cleanup/{name}")
+async def cleanup(name: str):
+    shutil.rmtree(os.path.join(UPLOAD_DIR, name))
+    return {"ok": True}

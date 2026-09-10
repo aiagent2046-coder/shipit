@@ -1,0 +1,10 @@
+{
+  "description": "The name is read off the Request object rather than declared as a parameter, which is how query-string and form file pickers are written.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

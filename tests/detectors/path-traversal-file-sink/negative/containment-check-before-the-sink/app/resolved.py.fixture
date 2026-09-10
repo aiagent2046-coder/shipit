@@ -1,0 +1,15 @@
+from fastapi import APIRouter, Depends, Request
+import os
+import shutil
+from pathlib import Path
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+@router.get("/checked/{name}")
+async def checked(name: str):
+    candidate = (Path(UPLOAD_DIR) / name).resolve()
+    if not candidate.is_relative_to(UPLOAD_DIR):
+        raise ValueError("escape")
+    return candidate.read_text()

@@ -1,0 +1,12 @@
+from fastapi import APIRouter, Depends, Request
+import os
+import shutil
+from pathlib import Path
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+@router.get("/report/{name}")
+async def report(name: str):
+    return (Path(UPLOAD_DIR) / name).read_text()

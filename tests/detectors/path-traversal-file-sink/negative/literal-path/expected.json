@@ -1,0 +1,7 @@
+{
+  "description": "A path the code chose. The mutation puts the caller's name into it, which must fire.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

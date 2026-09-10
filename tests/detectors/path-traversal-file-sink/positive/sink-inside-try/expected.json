@@ -1,0 +1,10 @@
+{
+  "description": "The same defect wrapped in try/except, which is how every cleanup endpoint is written in real code. Six of nine bodies in one hunt round sat in this shape, and the rule was silent on all of them: the statement walker looked for list-valued children, and ast.iter_child_nodes yields their ELEMENTS, so it never descended into a try body at all. The corpus had no try-shaped case, which is why only the hunt found it.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

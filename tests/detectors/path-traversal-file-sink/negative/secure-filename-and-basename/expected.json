@@ -1,0 +1,7 @@
+{
+  "description": "Both standard containments, in the expression itself. The mutation removes the wrapper call, which must fire.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

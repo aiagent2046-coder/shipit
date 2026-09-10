@@ -1,0 +1,12 @@
+from fastapi import APIRouter, Depends, Request
+import os
+import shutil
+from pathlib import Path
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+@router.get("/files/{filename}")
+async def serve(filename: str):
+    return send_file(os.path.join(UPLOAD_DIR, filename))

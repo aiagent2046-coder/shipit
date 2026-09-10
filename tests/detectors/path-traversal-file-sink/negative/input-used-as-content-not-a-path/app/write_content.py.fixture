@@ -1,0 +1,15 @@
+from fastapi import APIRouter, Depends, Request
+import os
+import shutil
+from pathlib import Path
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+@router.post("/notes/{name}")
+async def write_note(name: str, request: Request):
+    body = await request.body()
+    with open(os.path.join(UPLOAD_DIR, "notes.txt"), "wb") as handle:
+        handle.write(body)
+    return {"name": name}

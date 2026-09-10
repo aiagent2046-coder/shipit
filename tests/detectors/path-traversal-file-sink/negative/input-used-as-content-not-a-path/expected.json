@@ -1,0 +1,7 @@
+{
+  "description": "The caller's value is written INTO a file whose path the code chose. That is the safe direction and a different claim; the mutation turns the name into the path, which must fire.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

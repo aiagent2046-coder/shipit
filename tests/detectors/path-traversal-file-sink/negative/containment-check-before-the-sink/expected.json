@@ -1,0 +1,7 @@
+{
+  "description": "The resolved path is checked against the base before it is used -- the check that actually stops a traversal. The mutation moves the check AFTER the read, where it cannot help, which must fire.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

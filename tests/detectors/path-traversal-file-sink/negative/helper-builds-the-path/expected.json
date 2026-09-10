@@ -1,0 +1,7 @@
+{
+  "description": "The path is assembled by a call this rule does not follow into, so the trace stops -- and the finding's text says the trace is local. The mutation inlines the same join, which must fire.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

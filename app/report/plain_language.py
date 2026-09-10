@@ -20,6 +20,17 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "path-traversal-file-sink": (
+        "A file path is built from a value the caller sent.",
+        "This route hands a filesystem path to a file operation, and that path is assembled from the "
+        "request itself. A value like ../../etc/passwd, or a name ending in a served extension, can "
+        "make the application read or write files it never meant to touch. Whether anything outside "
+        "this function constrains the path has not been checked.",
+        "Keep only a name, not a path: pass the value through secure_filename (or whitelist its "
+        "characters), join it to a fixed base directory, then confirm the result is still inside that "
+        "base with resolve() and is_relative_to(). Never serve a file by a path that came straight "
+        "from the request.",
+    ),
     "python-outbound-request-unvalidated-url": (
         "An HTTP client receives an address derived from request input.",
         "A caller-controlled value reaches the host portion of a request target or client "

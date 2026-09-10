@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+from fastapi.responses import FileResponse
+import os
+
+router = APIRouter()
+PUBLIC_DIR = "/srv/public"
+
+
+@router.get("/assets/{name}")
+async def asset(name: str):
+    return FileResponse(os.path.join(PUBLIC_DIR, name))

@@ -1,0 +1,14 @@
+from fastapi import APIRouter, Depends, Request
+import os
+import shutil
+from pathlib import Path
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+@router.get("/safe/{name}")
+async def safe(name: str):
+    first = open(os.path.join(UPLOAD_DIR, secure_filename(name))).read()
+    second = open(os.path.join(UPLOAD_DIR, os.path.basename(name))).read()
+    return first, second
