@@ -57,6 +57,8 @@ WIRED_SCANNERS = (
     "scan_schema_drift",
     "scan_secrets",
     "scan_service_role",
+    "scan_sql_injection",
+    "scan_sql_injection_js",
 )
 
 # Every rule id a static finding can reach the reader under. Taken from the
@@ -84,6 +86,7 @@ EMITTED_RULE_IDS = (
     "private-key-block",
     "python-route-read-auth-consistency",
     "react-unchecked-http-success",
+    "sql-injection-string-built-query",
     "sql-secret-assignment",
     "stripe-live-key",
     "supabase-anon-key",
@@ -100,7 +103,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-09-17"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-09-32"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

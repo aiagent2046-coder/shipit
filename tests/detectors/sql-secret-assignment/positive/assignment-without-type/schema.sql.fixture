@@ -1,0 +1,3 @@
+update app_config set api_secret = 'abcdefgh12345' where id = 1;
+alter table cfg set service_role_key = 'ijklmnop67890';
+create table creds (id serial, api_password varchar(255) default 'qrstuvwx09876');

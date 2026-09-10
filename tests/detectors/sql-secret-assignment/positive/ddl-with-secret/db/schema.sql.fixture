@@ -1,1 +1,2 @@
-ALTER TABLE cfg ADD api_secret text := 'abcdefgh12345';
+ALTER TABLE cfg ADD COLUMN api_secret text DEFAULT('abcdefgh12345');
+ALTER TABLE cfg ADD COLUMN service_role_key varchar(64) DEFAULT ('ijklmnop67890');

@@ -1,0 +1,7 @@
+{
+  "description": "A loop over a literal dict's .items(), which is the list case with a column name attached -- this repository's own scripts/audit_test_data.py is written this way and was reported twice for it. The account_id that could carry input is parameterised; only the table and column names are interpolated, and both come from the literal above.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

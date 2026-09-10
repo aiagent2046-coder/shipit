@@ -43,6 +43,53 @@ _FUNCTIONS = {"function_declaration", "function_expression", "arrow_function", "
               "generator_function_declaration", "generator_function"}
 _SKIP = _FUNCTIONS | {"class_declaration", "class"}
 
+# The success-claim vocabulary, built as core + optional subject + optional tail
+# rather than a list of exact phrases. See _visible_success_states for why.
+# Kept deliberately short: this is a false-positive guard, so a word that is not
+# itself a claim that the operation succeeded does not belong here.
+_SUCCESS_CORE = (
+    r"saved|submitted|success|successful|updated|created|sent|done|complete|completed"
+    # Russian inflects, and the list shipped inconsistent about it: сохранено
+    # had its masculine and plural forms, обновлено/отправлено/создано had only
+    # the neuter. So "Данные сохранены" was recognised and "Данные обновлены"
+    # was not -- a difference in the copywriter's verb, not in the defect.
+    # Found by scripts/hunt_detector_escapes.py on "Профиль обновлён".
+    r"|сохранено|сохранён|сохранен|сохранена|сохранены"
+    r"|обновлено|обновлён|обновлен|обновлена|обновлены"
+    r"|отправлено|отправлен|отправлена|отправлены"
+    r"|создано|создан|создана|созданы"
+    r"|готово|успешно"
+)
+# A short subject in front: "profile saved", "изменения сохранены", "your
+# profile was saved". Three words at most, so the match stays a phrase that
+# ENDS in a success word rather than a sentence that merely contains one.
+#
+# NEGATION IS EXCLUDED FIRST. Widening the subject to three words let phrases
+# through that end in a success word while denying it -- "nothing was saved",
+# "error: not saved". Those are the opposite claim, and arming an
+# unchecked-success finding on them would report correct error handling as the
+# bug it prevents.
+_SUCCESS_SUBJECT = r"(?:[^\W\d_]{2,20}[\W_]+){0,3}"
+_NEGATION = re.compile(
+    r"(?:^|[\W_])(?:not|no|never|nothing|none|failed|fail|failure|unable|cannot|can't|couldn't"
+    r"|не|нет|ничего|неуспешно|ошибка)(?:$|[\W_])"
+)
+# Future, conditional, requested and partial outcomes are not assertions that
+# the operation completed. This narrow lexical reader leaves those labels
+# unresolved rather than treating a success word alone as evidence.
+_NON_ASSERTIVE_SUCCESS = re.compile(
+    r"(?:^|[\W_])(?:waiting|awaiting|pending|almost|nearly|will|would|could|should"
+    r"|might|may|must|if|when|until|once|please|expect|hopefully"
+    r"|будет|будут|почти|ожидается|ожидание|ждём|ждем|если|когда|нужно|необходимо"
+    r"|должно|должны|должна)(?:$|[\W_])"
+    r"|\bto\s+be\b|\bexpected\s+success\b"
+)
+# A short tail behind: "saved successfully", "успешно сохранено".
+_SUCCESS_TAIL = r"(?:[\W_]+(?:successfully|успешно))?"
+_SUCCESS_LABEL = re.compile(
+    rf"[\W_]*{_SUCCESS_SUBJECT}(?:{_SUCCESS_CORE}){_SUCCESS_TAIL}[\W_]*"
+)
+
 
 def _walk(root, skip=()):
     todo = [root]
@@ -377,8 +424,33 @@ def _visible_success_states(body, states):
             label = _text(parts[1]).casefold()
         else:
             continue
-        if re.fullmatch(r"[\W_]*(?:saved|saved successfully|success|successfully saved|submitted|"
-                        r"сохранено|успешно сохранено)[\W_]*", label):
+        # WHAT COUNTS AS A VISIBLE SUCCESS MESSAGE. This vocabulary is the
+        # rule's false-positive guard: the finding says "the UI told the user
+        # it worked without checking whether it did", so a label that is not a
+        # success claim must not arm it. That argues for a small list, and the
+        # list shipped small -- but it also shipped as a fullmatch over six
+        # exact phrases, which made it narrower than its own purpose:
+        #
+        #   <p>Saved</p>            reported
+        #   <p>Profile saved</p>    silent    -- one extra word
+        #   <p>Changes saved</p>    silent
+        #   <p>Done</p>             silent
+        #   <p>Готово</p>           silent    -- Russian was present, but only
+        #   <p>Данные сохранены</p> silent       in two exact spellings
+        #
+        # The defect is identical in all of them; only the copywriting differs,
+        # and no product ships the word "Saved" alone because a scanner prefers
+        # it. Found by scripts/hunt_detector_escapes.py.
+        #
+        # So: a success CORE, optionally preceded by a short subject ("profile",
+        # "changes", "данные") and followed by a short tail ("successfully").
+        # The bound of two leading words is deliberate -- it admits real UI copy
+        # while keeping the match anchored to a phrase that ends in a success
+        # word, so a sentence that merely contains "saved" somewhere does not
+        # qualify. Russian keeps its inflections: сохранено/сохранён/сохранены
+        # are the same claim, and picking one spelling is picking one product.
+        if (_SUCCESS_LABEL.fullmatch(label) and not _NEGATION.search(label)
+                and not _NON_ASSERTIVE_SUCCESS.search(label) and "?" not in label):
             visible.setdefault(state, []).append(guards)
     return visible
 

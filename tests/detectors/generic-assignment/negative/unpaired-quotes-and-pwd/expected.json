@@ -1,0 +1,7 @@
+{
+  "description": "Two shapes that look like quoted secrets and are not. Unpaired quotes -- a Python string whose apostrophe is unrelated to the double quote around the word -- are not an object key. And PWD is the working-directory variable, so pwd was dropped from the vocabulary (passwd remains); measured: zero pwd-as-password uses in 689 live files.",
+  "expect": [],
+  "forbid": [
+    "generic-assignment"
+  ]
+}

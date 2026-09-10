@@ -1,0 +1,11 @@
+{
+  "description": "Russian inflects. The vocabulary carried сохранён and сохранены but only the neuter обновлено, so 'Данные сохранены' was reported and 'Профиль обновлён' was not -- a difference in the copywriter's verb, not in the defect.",
+  "expect": [
+    {
+      "rule_id": "react-unchecked-http-success",
+      "severity": "medium",
+      "file_endswith": "page.tsx"
+    }
+  ],
+  "forbid": []
+}

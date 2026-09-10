@@ -18,6 +18,8 @@ from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
+from app.scan.sql_injection import scan_sql_injection
+from app.scan.sql_injection_js import scan_sql_injection_js
 from app.scan.source_facts import collect_source_facts
 
 
@@ -60,6 +62,24 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=d.rule_id, title=d.title, severity=d.severity,
             confidence=d.confidence, category=d.category, file=d.file,
             explanation=d.explanation, fix_hint=d.fix_hint,
+        ))
+
+    fileobj.seek(0)
+    for q in scan_sql_injection(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=q.rule_id, title=q.title, severity=q.severity,
+            confidence=q.confidence, category=q.category, file=q.file,
+            line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for q in scan_sql_injection_js(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=q.rule_id, title=q.title, severity=q.severity,
+            confidence=q.confidence, category=q.category, file=q.file,
+            line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
+            claim_evidence=static_claim_evidence(),
         ))
 
     fileobj.seek(0)
@@ -164,7 +184,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # the follow-up; here it is preserved so it can be.
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
-                       "http_success"],
+                       "http_success", "sql_injection", "sql_injection_js"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "

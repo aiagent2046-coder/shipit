@@ -24,9 +24,17 @@ def _scan(entries: dict[str, str]):
 
 
 def test_renaming_a_local_variable_changes_nothing():
+    # The new name must be as credential-shaped as the old one, or the rename
+    # is not the only edit. PAYMENTS_API_KEY was used here until
+    # generic-assignment learned to read a credential word as a COMPONENT of a
+    # name: it then reported that line as well, and the test failed for a
+    # correct reason -- the rename had added `api_key` to the identifier.
+    # STRIPE_PUBLISHABLE is a rename that carries no such word, so it isolates
+    # what this invariant is about: the VALUE is what the scanner reads, and
+    # moving it to a differently named constant must not change the verdict.
     base = clean_nextjs_repo(**{SECRET_FILE: SECRET_BODY})
     renamed = clean_nextjs_repo(**{
-        SECRET_FILE: SECRET_BODY.replace("STRIPE_KEY", "PAYMENTS_API_KEY")
+        SECRET_FILE: SECRET_BODY.replace("STRIPE_KEY", "STRIPE_PUBLISHABLE")
     })
     assert findings_keys(_scan(base)) == findings_keys(_scan(renamed))
 

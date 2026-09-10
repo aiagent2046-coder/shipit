@@ -27,6 +27,8 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
+
 from app.scan.ci_deploy_source import (
     RULE_ID,
     deployed_repositories,
@@ -173,6 +175,59 @@ def test_a_repository_named_twice_is_listed_once() -> None:
         "git clone https://github.com/o/r.git x\n"
         "git pull https://github.com/o/r.git"
     ) == [("o", "r")]
+
+
+@pytest.mark.parametrize("install", ["npm install", "npm ci", "pip install -r requirements.txt",
+                                     "pnpm add git+https://github.com/tools/helper.git"])
+@pytest.mark.parametrize("separator", [" && ", "; ", " || "])
+def test_install_in_another_command_does_not_hide_foreign_clone(install, separator):
+    clone = 'git clone "https://github.com/other/repo.git" /srv/app'
+    for commands in (clone + separator + install, install + separator + clone):
+        body = "jobs:\n  deploy:\n    steps:\n      - run: " + commands + "\n"
+        result, = scan({".github/workflows/deploy.yml": body})
+        assert "other/repo" in result.explanation
+        assert "tools/helper" not in result.explanation
+
+
+@pytest.mark.parametrize("quote", ["'", '"', ""])
+def test_dependency_url_and_comment_are_not_targets_beside_own_clone(quote):
+    command = (
+        "git clone https://github.com/donjonson-hash/devtools-aggregator.git /srv/app"
+        " && pip install git+https://github.com/tools/helper.git"
+    )
+    body = "- run: " + quote + command + quote + "\n# git clone https://github.com/comment/repo.git\n"
+    assert scan({".github/workflows/deploy.yml": body}) == []
+
+
+def test_install_comment_does_not_hide_clone_or_create_another_target():
+    assert deployed_repositories(
+        "git clone https://github.com/other/repo.git /srv/app # npm install https://github.com/tools/helper.git"
+    ) == [("other", "repo")]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("command", [
+    "git clone https://github.com/other/repo.git \\\n    /srv/app && npm install",
+    "git clone \\\n    https://github.com/other/repo.git /srv/app && npm install",
+])
+def test_shell_continuations_preserve_the_deployed_repository(command, newline):
+    body = "name: Don't lose deploy\njobs:\n  deploy:\n    steps:\n      - run: |\n          "
+    body += command.replace("\n", "\n          ")
+    result, = scan({".github/workflows/deploy.yml": body.replace("\n", newline)})
+    assert "other/repo" in result.explanation
+
+
+def test_comment_backslash_does_not_consume_the_next_clone():
+    source = "# git clone https://github.com/comment/repo.git \\\n"
+    source += "git clone https://github.com/other/repo.git /srv/app"
+    assert deployed_repositories(source) == [("other", "repo")]
+
+
+def test_single_quoted_literal_is_not_joined_as_a_shell_continuation():
+    from app.scan.ci_deploy_source import _join_shell_continuations
+
+    source = "printf 'line one\\\nline two'"
+    assert _join_shell_continuations(source) == source
 
 
 # --- the seams, because a rule nothing calls is a rule that does nothing -----

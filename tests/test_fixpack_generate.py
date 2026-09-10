@@ -14,10 +14,12 @@ import ast
 import io
 import json
 import zipfile
+from dataclasses import asdict
 
 import pytest
 
 from app.fixpack import generate
+from app.scan.secrets import scan_secrets
 from app.fixpack.generate import (
     _is_test_path,
     _validate_syntax,
@@ -975,3 +977,95 @@ def test_short_config_values_are_not_hunted_as_secrets():
     assert ("config.py", 1) not in plan.surviving_secrets
     assert ("config.py", 2) not in plan.surviving_secrets
     assert all(path == "action_service.py" for path, _ in plan.surviving_secrets)
+
+
+def _scanned_assignment_plan(path, source):
+    zipped = make_zip({path: source})
+    findings = [asdict(f) for f in scan_secrets(io.BytesIO(zipped))]
+    assert any(f["rule_id"] == "generic-assignment" for f in findings)
+    return build_fixpack_plan(zipped, findings)
+
+
+@pytest.mark.parametrize("prefix", [
+    "", "import os\n",
+    '#!/usr/bin/env python3\n# coding: utf-8\n"""Configuration."""\n'
+    "from __future__ import annotations\n",
+])
+@pytest.mark.parametrize("special", ["$", "{", "}", "${literal}"])
+def test_scanned_python_quoted_key_keeps_key_and_runs_with_env(prefix, special, monkeypatch):
+    value = "review-" + special + "synthetic-value-123"
+    source = prefix + f'config = {{"api_key": "{value}", "label": "api_key"}}\n'
+    plan = _scanned_assignment_plan("config.py", source)
+    assert not plan.skipped
+    rewritten = plan.files["config.py"]
+    assert '"api_key": os.environ["APP_SECRET"]' in rewritten
+    assert rewritten.count("import os\n") == 1
+    if prefix.startswith("#!"):
+        assert rewritten.startswith(prefix)
+    assert all(value not in text for text in plan.files.values())
+    assert value not in render_pr_body(plan)
+    monkeypatch.setenv("APP_SECRET", "replacement-from-env")
+    namespace = {}
+    exec(compile(rewritten, "synthetic-config.py", "exec"), namespace)
+    assert namespace["config"] == {"api_key": "replacement-from-env", "label": "api_key"}
+
+
+@pytest.mark.parametrize("key_quote,value_quote", [('"', '"'), ("'", '"'), ('"', "'"), ('"', '`')])
+def test_scanned_typescript_quoted_key_replaces_only_value(key_quote, value_quote):
+    value = "review-$" + "synthetic-value-123"
+    key = key_quote + "api_key" + key_quote
+    source = f"export const config = {{{key}: {value_quote}{value}{value_quote}, label: 'api_key'}};\n"
+    plan = _scanned_assignment_plan("src/config.ts", source)
+    assert not plan.skipped
+    rewritten = plan.files["src/config.ts"]
+    assert f"{key}: process.env.APP_SECRET!" in rewritten
+    assert "label: 'api_key'" in rewritten
+    assert _validate_syntax("src/config.ts", source, rewritten)
+    assert all(value not in text for text in plan.files.values())
+
+
+@pytest.mark.parametrize("path,source_template,reason", [
+    ("config.json", '{{"api_key": "{}"}}\n', "invalid syntax"),
+    ("config.yaml", '"api_key": "{}"\n', "unsupported format"),
+    ("config.toml", '"api_key" = "{}"\n', "unsupported format"),
+])
+def test_scanned_quoted_data_key_is_skipped_without_emitting_secret(path, source_template, reason):
+    value = "review-" + "synthetic-value-123"
+    plan = _scanned_assignment_plan(path, source_template.format(value))
+    assert plan.files == {}
+    assert not plan.secret_fixes
+    assert any(reason in item.reason for item in plan.skipped)
+    assert value not in render_pr_body(plan)
+
+
+def test_quoted_assignment_does_not_rewrite_unrelated_key_and_preserves_scrub_gate():
+    value = "review-" + "synthetic-value-123"
+    source = f'config = {{"api_key": "{value}"}}\nother = {{"{value}": 1}}\n'
+    plan = _scanned_assignment_plan("config.py", source)
+    assert plan.files == {}
+    assert not plan.secret_fixes
+    assert any("could not safely remove the value" in item.reason for item in plan.skipped)
+
+
+@pytest.mark.parametrize("prefix", [
+    "os = custom_environment\n",
+    "from other_module import os\n",
+    "from other_module import *\n",
+    "def unrelated(os):\n    return os\n",
+])
+def test_quoted_python_assignment_with_ambiguous_os_binding_is_skipped(prefix):
+    value = "review-" + "synthetic-value-123"
+    plan = _scanned_assignment_plan("config.py", prefix + f'config = {{"api_key": "{value}"}}\n')
+    assert plan.files == {}
+    assert not plan.secret_fixes
+    assert any("ambiguous Python os binding" in item.reason for item in plan.skipped)
+
+
+@pytest.mark.parametrize("prefix", ['"""Configuration."""; ', "from __future__ import annotations; "])
+def test_quoted_python_assignment_sharing_preamble_line_is_skipped(prefix):
+    value = "review-" + "synthetic-value-123"
+    source = prefix + 'config = {"api_key": "' + value + '"}\n'
+    plan = _scanned_assignment_plan("config.py", source)
+    assert plan.files == {}
+    assert not plan.secret_fixes
+    assert plan.skipped

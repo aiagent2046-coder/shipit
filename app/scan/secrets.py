@@ -18,6 +18,7 @@ import json
 import re
 import stat
 import zipfile
+from bisect import bisect_right
 from dataclasses import dataclass
 from typing import BinaryIO, Iterator
 
@@ -158,6 +159,15 @@ def _is_test_fixture_path(name: str) -> bool:
     lower = name.lower()
     base = lower.rsplit("/", 1)[-1]
     if base in _TEST_SETUP_FILENAMES or lower.endswith(_TEST_FILE_SUFFIXES):
+        return True
+    # Python's own convention, independent of the directory: pytest and
+    # unittest both discover test_*.py / *_test.py. A root-level
+    # test_mini_app_integration.py escaped damping before -- it was not in
+    # tests/ and carried no .test.ts-style suffix, so a quoted credential
+    # inside it came back at full severity. Only .py files: test_utils.js
+    # is a minifier convention, not a test.
+    if base.endswith(".py") and (
+            base.startswith("test_") or base.endswith("_test.py")):
         return True
     return any(seg in _TEST_PATH_SEGMENTS for seg in lower.split("/")[:-1])
 
@@ -394,22 +404,205 @@ RULES: tuple[SecretRule, ...] = (
         #   v_cron_secret text := 'hunter2...';
         # The generic-assignment rule misses these because a type
         # annotation sits between the name and the assignment.
+        # THE TYPE ANNOTATION WAS REQUIRED, and that made the rule read one
+        # shape out of six. A hunt run rewrote the fixture into the ways people
+        # actually put a secret in a database --
+        #
+        #   update users set access_token = 'sk-live-...'
+        #   alter table config set secret_key = '...'
+        #   create table c (token varchar(255) default '...')
+        #
+        # -- and the scanner was silent on every one. The type is now optional.
+        #
+        # WHERE IS EXCLUDED. `select * from users where password = '...'` is a
+        # comparison, not a stored secret, and matching it would report a login
+        # query as a leak. SQL files also get a clause-context check below:
+        # whitespace, parentheses and qualified columns do not change a
+        # comparison into an assignment. Keep the immediate exclusions for
+        # SQL snippets embedded in other source languages.
         "sql-secret-assignment", "Hardcoded secret in SQL/PLpgSQL assignment",
         re.compile(
-            r"(?i)\b\w*(?:secret|password|api[_-]?key|service[_-]?role)\w*\s+"
-            r"(?:text|varchar(?:\(\d+\))?|character varying)\s*:?=\s*'[^']{8,}'"
+            r"(?i)(?<!where\s)(?<!and\s)(?<!or\s)"
+            r"\b\w*(?:secret|password|api[_-]?key|service[_-]?role)\w*\s*"
+            r"(?:(?:text|varchar(?:\(\d+\))?|character varying)\s*)?"
+            # DEFAULT('...') and DEFAULT('...') with the parentheses the form
+            # actually wears are both read; a hunt run on the stronger model
+            # produced the parenthesised spelling and the detector stayed
+            # silent. The closing parenthesis is optional so `:= '...'` and
+            # `:= ('...')` share one branch.
+            r"(?::?=|\s+default\s*)"
+            r"\s*(?:\(\s*)?'(?P<value>[^']{8,})'(?:\s*\))?"
         ),
         "high", 0.7,
     ),
     SecretRule(
+        # Backticks are quotes too. The rule shipped accepting ' and " only, so
+        #   const apiKey = `AKIA...`
+        # scanned clean while the same line in single quotes was reported --
+        # and a template literal is ordinary JS/TS, not an evasion. Found by
+        # scripts/hunt_detector_escapes.py, which rewrote the corpus fixture
+        # into a template literal and watched the detector stay silent.
+        #
+        # The quote character must match on both sides: an unbalanced pair is
+        # a string that does not end where the match does, and the Fix Pack
+        # replaces a secret by locating the quoted literal around it.
+        # `connection-string-password` documents what that costs when a span
+        # and its literal disagree.
+        #
+        # Only backtick templates exclude ${...} interpolation. Ordinary
+        # quoted values may contain dollar signs and braces as secret bytes.
+        # The NAME vocabulary is the other half of the rule, and it shipped
+        # narrower than the things people actually call a credential:
+        #   const authToken = "...."      scanned clean
+        #   const accessKey = "...."      scanned clean
+        # while `service_role` -- rarer in real code than either -- was covered.
+        # Also found by scripts/hunt_detector_escapes.py: the model renamed
+        # api_key to token and the detector stopped seeing it.
+        #
+        # WHICH WORDS, AND WHY NOT MORE. Every addition risks false positives,
+        # so each candidate was counted against real code before being let in:
+        # web/src (59 files), 3000 node_modules files and app/ (142 files).
+        # The words below matched NOTHING in that corpus -- they cost no noise.
+        # Two were rejected on the evidence:
+        #   `key`   -- 14 hits, all ordinary data (jsdom's `key = "modifierAltGraph"`).
+        #              Too generic to mean credential.
+        #   `token` -- 1 hit, in a *.test.tsx that is_non_production_path already
+        #              damps, so it is kept; a bare `token` is common enough in
+        #              real code that this one deserves re-measuring if the
+        #              corpus ever grows.
+        # THE WORD MUST BE A COMPONENT OF THE NAME, not the whole of it.
+        # `\b` shipped here, and `_` is a word character, so `\bpassword\b`
+        # did not match inside `db_password` -- nor `secret_token`,
+        # `my_api_key`, `admin_token` or `dbPassword`. Those are the names
+        # people actually use, and the rule saw none of them. Found by
+        # scripts/hunt_detector_escapes.py, where the model renamed the
+        # fixture's `api_key` to shapes like these and the detector went quiet.
+        #
+        # A plain substring test was MEASURED AND REJECTED FIRST: it matches
+        # `tokenizer` and `secretary`, which are ordinary words. The boundary
+        # below keeps the word whole on its right -- a separator, a capital, or
+        # the end of the identifier -- so `token` matches in `admin_token` and
+        # `adminToken` but not in `tokenizer`. Verified against 8243 files
+        # (web/src, app/, scripts/, 8000 from node_modules): 6 matches, of
+        # which the scanner damps the test-file one and reports two throwaway
+        # container passwords in scripts/ that already carry a `# noqa: S105`
+        # from another linter -- so the new reach finds the class of thing it
+        # is for. `encryption[_-]?key` is the one added word: nothing else in
+        # the vocabulary covers it, and it cost 2 matches in that corpus, both
+        # in Next.js internals naming an env var rather than holding a key.
+        #
+        # The value must follow the WORD, not merely the name containing it, so
+        # `hash_password = "..."` matches and `password_hash = "..."` does not.
+        # That asymmetry is the boundary doing its job: in the second case the
+        # identifier is `password_hash`, and a rule that matched it would also
+        # match `tokenizer`. Plurals (`credentials`) are missed for the same
+        # reason and are left missed -- the alternative costs the words above.
         "generic-assignment", "Hardcoded credential assignment",
         re.compile(
-            r"(?i)\b(api[_-]?key|secret|password|service[_-]?role)\b"
-            r"\s*[:=]\s*['\"][^'\"\s]{12,}['\"]"
+            r"(?i)"
+            # TWO SPELLINGS OF THE NAME, measured on the same corpus:
+            #
+            # A. A bare identifier, as before: `db_password = "..."`,
+            #    `const adminToken = "..."`, `{ db_password: "..." }`.
+            # B. A QUOTED KEY in an object literal or JSON document:
+            #    `{"db_password": "..."}`, `'client_secret': '...'`.
+            #    The quotes must be a CONSENTING PAIR around the name --
+            #    `'api-key": "ANTHROPIC_API_KEY"'` (a Python string whose
+            #    apostrophe is unrelated to the double quote) does not match.
+            #    Prefixed keys (`db_password`) are read because the prefix
+            #    ends in `_`, so the word still starts at a boundary.
+            #
+            # WHY B EXISTS: a JSON config is how real leaks travel
+            # (firebase/analytics configs, docker env files). Measured:
+            # adding B produced ZERO new matches on 691 files of live
+            # repository code and removed none -- it only starts to fire
+            # when an actual quoted secret appears.
+            r"(?:"
+            r"(?:(?<![A-Za-z0-9])|(?<=[a-z0-9])(?=[A-Z]))"
+            r"(?:api[_-]?key|secret|password|service[_-]?role"
+            r"|token|auth[_-]?token|access[_-]?key|client[_-]?secret"
+            r"|credential|private[_-]?key|encryption[_-]?key|passwd)"
+            # THE WORD MAY START THE NAME, not only end it. `adminToken` was
+            # read because the value follows the word directly; `tokenForAdmin`
+            # and `secretOne` were not, though they name the same thing. A hunt
+            # run on a stronger model produced exactly those two shapes and the
+            # scanner was silent on both.
+            #
+            # The boundary is "not followed by a LOWERCASE letter", which is
+            # what separates a suffix from a longer word: `secretOne` and
+            # `token2` qualify, `tokenizer` and `secretary` do not.
+            #
+            # (?-i:...) IS LOAD-BEARING. Under the pattern's (?i) flag the
+            # class [a-z] matches capitals too, so "not lowercase" would have
+            # forbidden every letter and this addition would have changed
+            # nothing at all -- it read as working while doing nothing.
+            r"(?-i:(?![a-z]))[A-Za-z0-9]*"
+            # A suffix after a SEPARATOR stays out: `api_key_pepper_env`,
+            # `TOKEN_HEADER` and `API_KEY_COOKIE` are the names of environment
+            # variables and headers, not the secrets themselves. Measured at
+            # 8208 files: allowing it added 4 matches, all of that shape and
+            # all wrong. `password_hash` stays out for the same reason it
+            # always has.
+            r"[_-]*"
+            r"|"
+            r"(?P<k>['\"])"
+            r"(?:[A-Za-z0-9]+_)*"
+            r"(?:(?<![A-Za-z0-9])|(?<=[a-z0-9])(?=[A-Z]))"
+            r"(?:api[_-]?key|secret|password|service[_-]?role"
+            r"|token|auth[_-]?token|access[_-]?key|client[_-]?secret"
+            r"|credential|private[_-]?key|encryption[_-]?key|passwd)"
+            r"(?-i:(?![a-z]))[A-Za-z0-9]*[_-]*"
+            r"(?P=k)"
+            r")"
+            # Named, not numbered: the backreference has to survive someone
+            # adding a group to the name half, which numbering does not.
+            r"\s*[:=]\s*(?P<q>['\"]|(?P<template>`))"
+            r"(?P<value>(?:(?!(?P=q))(?(template)(?!\$\{))[^\s]){12,})(?P=q)"
         ),
         "high", 0.5,
     ),
 )
+
+
+# These tokens locate SQL predicate clauses without reading keywords inside
+# quoted values, identifiers or comments. Parentheses retain the outer clause
+# so a subquery's WHERE cannot hide a later UPDATE SET assignment.
+_SQL_CONTEXT_TOKEN = re.compile(
+    r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|--[^\n]*|/\*.*?\*/"
+    r"|(?P<word>\b[A-Za-z_][A-Za-z_0-9]*\b)|(?P<punct>[();])",
+    re.DOTALL,
+)
+
+
+def _sql_comparison_ranges(text: str) -> list[tuple[int, int]]:
+    """Source ranges in recognizable SQL predicates; no query execution."""
+    ranges = []
+    stack = []
+    comparison = False
+    start = 0
+    for token in _SQL_CONTEXT_TOKEN.finditer(text):
+        previous = comparison
+        word = (token.group("word") or "").lower()
+        punct = token.group("punct")
+        if punct == "(":
+            stack.append(comparison)
+        elif punct == ")":
+            comparison = stack.pop() if stack else False
+        elif punct == ";":
+            comparison = False
+            stack.clear()
+        elif word in {"where", "having", "on", "select", "check"}:
+            comparison = True
+        elif word in {"set", "update", "insert", "delete", "create", "alter", "declare", "begin"}:
+            comparison = False
+        if comparison != previous:
+            if comparison:
+                start = token.end()
+            else:
+                ranges.append((start, token.start()))
+    if comparison:
+        ranges.append((start, len(text)))
+    return ranges
 
 
 @dataclass(frozen=True)
@@ -777,9 +970,25 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
     with zipfile.ZipFile(fileobj) as zf:
         for name, text in _iter_text_files(zf, coverage):
             regions = None
-            for lineno, line in enumerate(text.splitlines(), start=1):
+            comparison_ranges = None
+            next_line_offset = 0
+            for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
+                line_offset = next_line_offset
+                next_line_offset += len(raw_line)
+                line = raw_line.rstrip("\r\n")
                 for rule in RULES:
                     m = rule.pattern.search(line)
+                    if m and rule.id == "sql-secret-assignment" and name.lower().endswith(".sql"):
+                        if comparison_ranges is None:
+                            comparison_ranges = _sql_comparison_ranges(text)
+                        for candidate in rule.pattern.finditer(line):
+                            offset = line_offset + candidate.start()
+                            index = bisect_right(comparison_ranges, offset, key=lambda span: span[0]) - 1
+                            if index < 0 or offset >= comparison_ranges[index][1]:
+                                m = candidate
+                                break
+                        else:
+                            m = None
                     if not m:
                         continue
                     source_role = None

@@ -1,0 +1,7 @@
+{
+  "description": "A bare `key` is ordinary data, not a credential: it matched 14 times across 3000 node_modules files, all of them harmless (jsdom's key = \"modifierAltGraph\"). It was measured and rejected; this case is what keeps it out.",
+  "expect": [],
+  "forbid": [
+    "generic-assignment"
+  ]
+}

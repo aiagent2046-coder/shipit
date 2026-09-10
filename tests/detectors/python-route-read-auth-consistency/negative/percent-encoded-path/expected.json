@@ -1,0 +1,7 @@
+{
+  "description": "The same unprotected-sibling shape with percent-encoded braces in the path. An escape hunt produced it and it looks like a gap, but the code does not work: FastAPI reads the path literally, so %7B is three characters rather than a parameter, audit_id is never bound and every request 404s -- checked against a running app. A rule that pairs routes by their path parameter is right to see no pair here, and widening it to decode paths would mean reporting on code that cannot serve a request.",
+  "expect": [],
+  "forbid": [
+    "python-route-read-auth-consistency"
+  ]
+}

@@ -198,6 +198,17 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Check response.ok before showing success or navigating. Handle failed HTTP responses "
         "and reset loading state when a network request rejects.",
     ),
+    "sql-injection-string-built-query": (
+        "A database query is built by joining strings together instead of passing the values "
+        "as parameters.",
+        "Whatever ends up in that string is read by the database as SQL, not as data. If any "
+        "part of it comes from a request, a form or a URL, someone can change what the query "
+        "does and read or delete rows that are not theirs. Whether this particular value is "
+        "reachable from user input was not verified; the string assembly is what was observed.",
+        "Pass the values as parameters and keep the query text a plain literal: "
+        "cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,)). Where a table or column "
+        "name genuinely has to vary, pick it from a fixed list in your own code.",
+    ),
     "no-ci": (
         "No automated checks run when the code changes (no CI).",
         "Broken changes reach your live app with nothing in the way.",

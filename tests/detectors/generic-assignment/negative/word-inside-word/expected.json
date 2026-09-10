@@ -1,0 +1,7 @@
+{
+  "description": "A credential word buried inside an ordinary one. Matching the name by substring -- the obvious way to reach db_password -- was measured and rejected precisely because it reports these: tokenizer, secretary, keyboard, passwordless.",
+  "expect": [],
+  "forbid": [
+    "generic-assignment"
+  ]
+}

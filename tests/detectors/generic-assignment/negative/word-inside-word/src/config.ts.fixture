@@ -1,0 +1,4 @@
+const tokenizer = "abcdefghijklmnop"
+const secretary = "qrstuvwxyz012345"
+const keyboard = "6789abcdefghijkl"
+const passwordless = "mnopqrstuvwxyz01"

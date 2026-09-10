@@ -1,0 +1,23 @@
+import psycopg
+
+# A column list kept beside the query rather than repeated in it. Interpolating
+# this name carries no external value into the SQL.
+COLUMNS = ", ".join(("id", "email", "created_at"))
+
+
+def find_user(conn, user_id):
+    """Look a user up by id, with the value passed as a parameter."""
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {COLUMNS} FROM users WHERE id = %s", (user_id,))
+        return cur.fetchone()
+
+
+def count_users(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM users")
+        return cur.fetchone()[0]
+
+
+def audit_label(user_id):
+    # String building that is not a query at all.
+    return "user " + str(user_id)
