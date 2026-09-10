@@ -1,0 +1,2 @@
+import { admin } from '../../../src/lib/supabase-admin'
+export async function DELETE() { await admin.from('x').delete() }

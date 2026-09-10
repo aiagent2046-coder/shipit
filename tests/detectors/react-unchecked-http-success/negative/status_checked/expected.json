@@ -1,0 +1,5 @@
+{
+  "description": "The same visible Saved state is gated on this fetch response's HTTP status, so the unchecked-success rule must not fire.",
+  "expect": [],
+  "forbid": ["react-unchecked-http-success"]
+}

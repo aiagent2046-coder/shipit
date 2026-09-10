@@ -1,0 +1,7 @@
+{
+  "description": "The anon key in a route is the intended pattern.",
+  "expect": [],
+  "forbid": [
+    "supabase-service-role-route"
+  ]
+}

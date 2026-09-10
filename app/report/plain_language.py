@@ -91,23 +91,19 @@ PLAIN: dict[str, tuple[str, str, str]] = {
     ),
     'connection-string-password': (
         'A connection URI contains a password-like value.',
-        'If it names a reachable database and valid credentials, it may permit access within '
-        "that database account's permissions. Reachability, validity and grants are not "
+        'If it names a reachable service and valid credentials, it may permit access within '
+        "that account's permissions. Reachability, validity and grants are not "
         'checked.',
-        'Check whether this is a fixture. If real database credentials were exposed, change the '
+        'Check whether this is a fixture. If real service credentials were exposed, change the '
         'password and move configuration outside the repository.',
     ),
     "connection-string-dev-password": (
-        "A connection string in your project uses a default password like "
-        "`postgres` or `change_me`.",
-        "This is the value tutorials and docker-compose files ship with, "
-        "so it is almost certainly your local development database and not "
-        "a leak. It is worth knowing about for one reason: if that same "
-        "default is ever pointed at a real database, the password is "
-        "already public knowledge.",
-        "Nothing to do if this is your local setup. If anything real ever "
-        "uses it, give it a proper password and move the connection string "
-        "to an environment variable.",
+        "A URI contains a conventional password or placeholder.",
+        "Values such as postgres or change_me are commonly used in examples. The value alone "
+        "does not establish whether this is a template, local setup or live configuration. "
+        "If a real service accepts it, the password is predictable.",
+        "Check where the URI is used. Replace a default used by a real service; "
+        "a synthetic example does not require credential rotation.",
     ),
     'env-file-committed': (
         'An environment configuration file is included in the archive.',
@@ -195,6 +191,24 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "wrap the top-level component in an <ErrorBoundary> with a small "
         "fallback that offers a reload.",
     ),
+    "react-unchecked-http-success": (
+        "A handler continues to a success state or navigation without checking its HTTP response.",
+        "Standard fetch resolves even on HTTP 4xx/5xx. On the observed path a rejected save could "
+        "therefore appear successful. A real server failure and runtime bindings were not tested.",
+        "Check response.ok before showing success or navigating. Handle failed HTTP responses "
+        "and reset loading state when a network request rejects.",
+    ),
+    "sql-injection-string-built-query": (
+        "A database query is built by joining strings together instead of passing the values "
+        "as parameters.",
+        "Whatever ends up in that string is read by the database as SQL, not as data. If any "
+        "part of it comes from a request, a form or a URL, someone can change what the query "
+        "does and read or delete rows that are not theirs. Whether this particular value is "
+        "reachable from user input was not verified; the string assembly is what was observed.",
+        "Pass the values as parameters and keep the query text a plain literal: "
+        "cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,)). Where a table or column "
+        "name genuinely has to vary, pick it from a fixed list in your own code.",
+    ),
     "no-ci": (
         "No automated checks run when the code changes (no CI).",
         "Broken changes reach your live app with nothing in the way.",
@@ -208,6 +222,7 @@ CREDENTIAL_RULES = frozenset({
     'anthropic-api-key',
     'aws-access-key-id',
     'connection-string-local-host',
+    'connection-string-dev-password',
     'connection-string-password',
     'generic-assignment',
     'github-pat',
@@ -246,6 +261,9 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
                 risk += " Files: " + ", ".join(files) + "."
         return what, risk, fix
     if rid == "no-dockerfile":
+        what, risk, fix = PLAIN[rid]
+        if finding.get("context") == "deployment_inventory":
+            return what, own_risk or risk, own_fix or fix
         return PLAIN[rid]
     if rid in PLAIN:
         what, risk, fix = PLAIN[rid]

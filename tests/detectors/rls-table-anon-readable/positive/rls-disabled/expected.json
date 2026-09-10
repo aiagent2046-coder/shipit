@@ -1,0 +1,10 @@
+{
+  "description": "A private table without RLS; inferred from committed SQL, not the live database.",
+  "expect": [
+    {
+      "rule_id": "rls-table-anon-readable",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

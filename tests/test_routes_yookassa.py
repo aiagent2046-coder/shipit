@@ -18,6 +18,7 @@ httpx.MockTransport, and the repositories are the in-memory fakes.
 from __future__ import annotations
 
 import json
+import asyncio
 import uuid
 
 import httpx
@@ -304,8 +305,8 @@ def _record_told(into: list):
     lower than what these tests are about, which is whether the customer is
     written to at all and when.
     """
-    async def telling(row, *, product, notify=None, transport=None) -> None:
-        into.append(row)
+    async def telling(row, *, product, notify=None, transport=None, funding_review_required=False) -> None:
+        into.append({**row, "funding_review_required": funding_review_required})
     return telling
 
 
@@ -620,6 +621,105 @@ async def test_the_payer_is_told_after_the_notification_is_answered(
 
 # --- the receipt ------------------------------------------------------------
 
+
+@pytest.mark.anyio
+async def test_concurrent_notifications_should_tell_payer_once(anyio_backend, monkeypatch):
+    """Exercise the handler guard; PostgreSQL lock semantics have a live DB test."""
+    from contextlib import asynccontextmanager
+    from app.routes import yookassa as route
+
+    mutex = asyncio.Lock()
+    barrier = asyncio.Barrier(2)
+
+    @asynccontextmanager
+    async def serialized(*args):
+        await barrier.wait()  # Both requests enter before either gets the lock.
+        async with mutex:
+            yield
+
+    class SlowJobs(FakeFixpackRepo):
+        async def create_paid(self, **kwargs):
+            await asyncio.sleep(0.01)  # Give an unguarded peer time to read pending.
+            return await super().create_paid(**kwargs)
+
+    monkeypatch.setattr(route, "payment_confirmation_lock", serialized)
+    payments, jobs = FakePaymentRepo(), SlowJobs()
+    audits, audit_id = _audit_with_findings()
+    await _seed(payments, audit_id)
+    told = []
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+    backgrounds = [BackgroundTasks(), BackgroundTasks()]
+    body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
+    results = await asyncio.wait_for(asyncio.gather(*[
+        receive_notification(_request(body), bg, payment_repo=payments,
+                             fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
+        for bg in backgrounds
+    ]), timeout=5)
+    assert results == [{"ok": True}, {"ok": True}]
+    assert len(jobs.rows) == 1
+    for bg in backgrounds:
+        await bg()
+    assert len(told) == 1
+
+
+@pytest.mark.anyio
+async def test_busy_confirmation_retries_without_grant_or_notification(anyio_backend, monkeypatch):
+    from contextlib import asynccontextmanager
+    from app.routes import yookassa as route
+
+    @asynccontextmanager
+    async def busy(*args):
+        raise route.PaymentConfirmationBusy()
+        yield
+
+    monkeypatch.setattr(route, "payment_confirmation_lock", busy)
+    payments, jobs = FakePaymentRepo(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    row = await _seed(payments, audit_id)
+    background = BackgroundTasks()
+    body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
+    with pytest.raises(route.HTTPException) as exc:
+        await receive_notification(_request(body), background, payment_repo=payments,
+                                   fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
+    assert exc.value.status_code == 503
+    assert exc.value.headers == {"Retry-After": "5"}
+    assert row["status"] == "pending"
+    assert not jobs.rows and not background.tasks
+
+
+@pytest.mark.anyio
+async def test_retry_after_payment_write_failure_reuses_live_job(anyio_backend, monkeypatch):
+    """Inject the crash window in memory; no payment provider or real DB writes."""
+    class InterruptedPayment(FakePaymentRepo):
+        fail_once = True
+
+        async def mark_completed_fixpack(self, *args, **kwargs):
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("injected loss after job creation")
+            return await super().mark_completed_fixpack(*args, **kwargs)
+
+    payments, jobs = InterruptedPayment(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    row = await _seed(payments, audit_id)
+    told = []
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+    body = {"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}
+    failed_background = BackgroundTasks()
+    with pytest.raises(RuntimeError, match="injected loss"):
+        await receive_notification(_request(body), failed_background, payment_repo=payments,
+                                   fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
+    assert row["status"] == "pending" and len(jobs.rows) == 1
+    assert failed_background.tasks == []
+    original_job = next(iter(jobs.rows))
+    background = BackgroundTasks()
+    await receive_notification(_request(body), background, payment_repo=payments,
+                               fixpack_repo=jobs, audit_repo=audits, transport=_succeeded())
+    assert row["status"] == "completed" and len(jobs.rows) == 1
+    assert next(iter(jobs.rows)) == original_job
+    await background()
+    assert len(told) == 1
+
 def test_no_receipt_is_sent_when_the_shop_has_no_tax_position(monkeypatch) -> None:
     """A guessed VAT rate is a fiscal document making a false statement about
     somebody's tax, filed in their name. No configuration means no receipt."""
@@ -646,3 +746,23 @@ def test_a_receipt_is_sent_when_the_shop_is_configured_for_one(monkeypatch) -> N
     assert receipt["customer"]["email"] == "ada@example.invalid"
     assert receipt["tax_system_code"] == 2
     assert receipt["items"][0]["amount"]["value"] == "990.00"
+
+
+@pytest.mark.anyio
+async def test_second_payment_is_announced_as_review_required(anyio_backend, monkeypatch):
+    payments, jobs = FakePaymentRepo(), FakeFixpackRepo()
+    audits, audit_id = _audit_with_findings()
+    told = []
+    monkeypatch.setattr(bank_transfer, "_tell_the_payer", _record_told(told))
+    for reference in ("DRY-ABC123", "DRY-DEF456"):
+        await _seed(payments, audit_id, reference=reference)
+        background = BackgroundTasks()
+        await receive_notification(
+            _request({"event": "payment.succeeded", "object": {"id": PAYMENT_ID}}),
+            background, payment_repo=payments, fixpack_repo=jobs, audit_repo=audits,
+            transport=_succeeded(reference=reference),
+        )
+        await background()
+    assert len(jobs.rows) == 1
+    assert [r["funding_review_required"] for r in told] == [False, True]
+    assert {r["status"] for r in payments.rows.values()} == {"completed"}

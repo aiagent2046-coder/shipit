@@ -1,0 +1,7 @@
+{
+  "description": "Both sibling routes use the authorized read.",
+  "expect": [],
+  "forbid": [
+    "python-route-read-auth-consistency"
+  ]
+}

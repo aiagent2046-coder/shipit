@@ -1,0 +1,492 @@
+{
+  "description": "Entirely synthetic findings for the repeated-observation regression. No text, source excerpts, paths, identifiers or metadata from a user report are included.",
+  "scenario": "Four static observations plus seven model observations repeated across two responses. The chosen severity and confidence weights yield Frontend 2.9 before grouping and 5.5 afterwards.",
+  "second_response": 2,
+  "frontend_static": [
+    {
+      "rule_id": "fixture-static-1",
+      "title": "Synthetic static observation 1",
+      "severity": "high",
+      "confidence": 0.8,
+      "category": "Frontend",
+      "file": "src/screens/static_example_1.tsx",
+      "line": 10,
+      "explanation": "Static scoring input 1, created solely for this regression scenario.",
+      "fix_hint": "Review the synthetic example before choosing a change.",
+      "source": "static",
+      "verification_status": "unverified",
+      "verification_method": "source_pattern"
+    },
+    {
+      "rule_id": "fixture-static-2",
+      "title": "Synthetic static observation 2",
+      "severity": "medium",
+      "confidence": 0.9,
+      "category": "Frontend",
+      "file": "src/screens/static_example_2.tsx",
+      "line": 10,
+      "explanation": "Static scoring input 2, created solely for this regression scenario.",
+      "fix_hint": "Review the synthetic example before choosing a change.",
+      "source": "static",
+      "verification_status": "unverified",
+      "verification_method": "source_pattern"
+    },
+    {
+      "rule_id": "fixture-static-3",
+      "title": "Synthetic static observation 3",
+      "severity": "medium",
+      "confidence": 0.9,
+      "category": "Frontend",
+      "file": "src/screens/static_example_3.tsx",
+      "line": 10,
+      "explanation": "Static scoring input 3, created solely for this regression scenario.",
+      "fix_hint": "Review the synthetic example before choosing a change.",
+      "source": "static",
+      "verification_status": "unverified",
+      "verification_method": "source_pattern"
+    },
+    {
+      "rule_id": "fixture-static-4",
+      "title": "Synthetic static observation 4",
+      "severity": "medium",
+      "confidence": 0.9,
+      "category": "Frontend",
+      "file": "src/screens/static_example_4.tsx",
+      "line": 10,
+      "explanation": "Static scoring input 4, created solely for this regression scenario.",
+      "fix_hint": "Review the synthetic example before choosing a change.",
+      "source": "static",
+      "verification_status": "unverified",
+      "verification_method": "source_pattern"
+    }
+  ],
+  "frontend_observations": [
+    {
+      "rule_id": "llm-web",
+      "title": "Synthetic editor 1 does not restore its pending flag",
+      "severity": "medium",
+      "confidence": 0.85,
+      "category": "Frontend",
+      "file": "src/screens/editor_1.tsx",
+      "line": 20,
+      "explanation": "Example 1 assumes an interrupted save operation leaves the editor unavailable.",
+      "fix_hint": "For example 1, restore the pending flag when the operation completes.",
+      "source": "llm",
+      "verification_status": "unverified",
+      "verification_method": "model_review",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "fixture-model",
+          "rubric": "web",
+          "response": 1
+        },
+        "source_check": {
+          "kind": "quote_match",
+          "line_start": 18,
+          "line_end": 32
+        },
+        "observation": "Synthetic handler 1 contains a pending flag and an asynchronous operation.",
+        "required_conditions": [
+          "The synthetic save operation in editor 1 is interrupted."
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_issue_identity": null,
+        "syntax_check": {
+          "kind": "unsupported",
+          "result": "not_checked"
+        },
+        "premise_checks": [
+          {
+            "kind": "react_async_network_reset_absent",
+            "result": "not_checked",
+            "target": "pending_1"
+          }
+        ],
+        "context_checks": [
+          {
+            "kind": "react_async_context",
+            "file": "src/screens/editor_1.tsx",
+            "line": 20,
+            "line_end": 30,
+            "scope": "FixtureEditor1.commit",
+            "checks": [
+              {
+                "kind": "react_async_state_reset",
+                "state": "pending_1",
+                "result": "observed"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "llm-web",
+      "title": "Synthetic editor 2 does not restore its pending flag",
+      "severity": "medium",
+      "confidence": 0.85,
+      "category": "Frontend",
+      "file": "src/screens/editor_2.tsx",
+      "line": 20,
+      "explanation": "Example 2 assumes an interrupted save operation leaves the editor unavailable.",
+      "fix_hint": "For example 2, restore the pending flag when the operation completes.",
+      "source": "llm",
+      "verification_status": "unverified",
+      "verification_method": "model_review",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "fixture-model",
+          "rubric": "web",
+          "response": 1
+        },
+        "source_check": {
+          "kind": "quote_match",
+          "line_start": 18,
+          "line_end": 32
+        },
+        "observation": "Synthetic handler 2 contains a pending flag and an asynchronous operation.",
+        "required_conditions": [
+          "The synthetic save operation in editor 2 is interrupted."
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_issue_identity": null,
+        "syntax_check": {
+          "kind": "unsupported",
+          "result": "not_checked"
+        },
+        "premise_checks": [
+          {
+            "kind": "react_async_network_reset_absent",
+            "result": "not_checked",
+            "target": "pending_2"
+          }
+        ],
+        "context_checks": [
+          {
+            "kind": "react_async_context",
+            "file": "src/screens/editor_2.tsx",
+            "line": 20,
+            "line_end": 30,
+            "scope": "FixtureEditor2.commit",
+            "checks": [
+              {
+                "kind": "react_async_state_reset",
+                "state": "pending_2",
+                "result": "observed"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "llm-web",
+      "title": "Synthetic editor 3 does not restore its pending flag",
+      "severity": "medium",
+      "confidence": 0.85,
+      "category": "Frontend",
+      "file": "src/screens/editor_3.tsx",
+      "line": 20,
+      "explanation": "Example 3 assumes an interrupted save operation leaves the editor unavailable.",
+      "fix_hint": "For example 3, restore the pending flag when the operation completes.",
+      "source": "llm",
+      "verification_status": "unverified",
+      "verification_method": "model_review",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "fixture-model",
+          "rubric": "web",
+          "response": 1
+        },
+        "source_check": {
+          "kind": "quote_match",
+          "line_start": 18,
+          "line_end": 32
+        },
+        "observation": "Synthetic handler 3 contains a pending flag and an asynchronous operation.",
+        "required_conditions": [
+          "The synthetic save operation in editor 3 is interrupted."
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_issue_identity": null,
+        "syntax_check": {
+          "kind": "unsupported",
+          "result": "not_checked"
+        },
+        "premise_checks": [
+          {
+            "kind": "react_async_network_reset_absent",
+            "result": "not_checked",
+            "target": "pending_3"
+          }
+        ],
+        "context_checks": [
+          {
+            "kind": "react_async_context",
+            "file": "src/screens/editor_3.tsx",
+            "line": 20,
+            "line_end": 30,
+            "scope": "FixtureEditor3.commit",
+            "checks": [
+              {
+                "kind": "react_async_state_reset",
+                "state": "pending_3",
+                "result": "observed"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "llm-web",
+      "title": "Synthetic editor 4 does not restore its pending flag",
+      "severity": "medium",
+      "confidence": 0.85,
+      "category": "Frontend",
+      "file": "src/screens/editor_4.tsx",
+      "line": 20,
+      "explanation": "Example 4 assumes an interrupted save operation leaves the editor unavailable.",
+      "fix_hint": "For example 4, restore the pending flag when the operation completes.",
+      "source": "llm",
+      "verification_status": "unverified",
+      "verification_method": "model_review",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "fixture-model",
+          "rubric": "web",
+          "response": 1
+        },
+        "source_check": {
+          "kind": "quote_match",
+          "line_start": 18,
+          "line_end": 32
+        },
+        "observation": "Synthetic handler 4 contains a pending flag and an asynchronous operation.",
+        "required_conditions": [
+          "The synthetic save operation in editor 4 is interrupted."
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_issue_identity": null,
+        "syntax_check": {
+          "kind": "unsupported",
+          "result": "not_checked"
+        },
+        "premise_checks": [
+          {
+            "kind": "react_async_network_reset_absent",
+            "result": "not_checked",
+            "target": "pending_4"
+          }
+        ],
+        "context_checks": [
+          {
+            "kind": "react_async_context",
+            "file": "src/screens/editor_4.tsx",
+            "line": 20,
+            "line_end": 30,
+            "scope": "FixtureEditor4.commit",
+            "checks": [
+              {
+                "kind": "react_async_state_reset",
+                "state": "pending_4",
+                "result": "observed"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "llm-web",
+      "title": "Synthetic editor 5 does not restore its pending flag",
+      "severity": "high",
+      "confidence": 0.8,
+      "category": "Frontend",
+      "file": "src/screens/editor_5.tsx",
+      "line": 20,
+      "explanation": "Example 5 assumes an interrupted save operation leaves the editor unavailable.",
+      "fix_hint": "For example 5, restore the pending flag when the operation completes.",
+      "source": "llm",
+      "verification_status": "unverified",
+      "verification_method": "model_review",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "fixture-model",
+          "rubric": "web",
+          "response": 1
+        },
+        "source_check": {
+          "kind": "quote_match",
+          "line_start": 18,
+          "line_end": 32
+        },
+        "observation": "Synthetic handler 5 contains a pending flag and an asynchronous operation.",
+        "required_conditions": [
+          "The synthetic save operation in editor 5 is interrupted."
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_issue_identity": null,
+        "syntax_check": {
+          "kind": "unsupported",
+          "result": "not_checked"
+        },
+        "premise_checks": [
+          {
+            "kind": "react_async_network_reset_absent",
+            "result": "not_checked",
+            "target": "pending_5"
+          }
+        ],
+        "context_checks": [
+          {
+            "kind": "react_async_context",
+            "file": "src/screens/editor_5.tsx",
+            "line": 20,
+            "line_end": 30,
+            "scope": "FixtureEditor5.commit",
+            "checks": [
+              {
+                "kind": "react_async_state_reset",
+                "state": "pending_5",
+                "result": "observed"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "llm-web",
+      "title": "Synthetic editor 6 does not restore its pending flag",
+      "severity": "medium",
+      "confidence": 0.9,
+      "category": "Frontend",
+      "file": "src/screens/editor_6.tsx",
+      "line": 20,
+      "explanation": "Example 6 assumes an interrupted save operation leaves the editor unavailable.",
+      "fix_hint": "For example 6, restore the pending flag when the operation completes.",
+      "source": "llm",
+      "verification_status": "unverified",
+      "verification_method": "model_review",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "fixture-model",
+          "rubric": "web",
+          "response": 1
+        },
+        "source_check": {
+          "kind": "quote_match",
+          "line_start": 18,
+          "line_end": 32
+        },
+        "observation": "Synthetic handler 6 contains a pending flag and an asynchronous operation.",
+        "required_conditions": [
+          "The synthetic save operation in editor 6 is interrupted."
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_issue_identity": null,
+        "syntax_check": {
+          "kind": "unsupported",
+          "result": "not_checked"
+        },
+        "premise_checks": [
+          {
+            "kind": "react_async_network_reset_absent",
+            "result": "not_checked",
+            "target": "pending_6"
+          }
+        ],
+        "context_checks": [
+          {
+            "kind": "react_async_context",
+            "file": "src/screens/editor_6.tsx",
+            "line": 20,
+            "line_end": 30,
+            "scope": "FixtureEditor6.commit",
+            "checks": [
+              {
+                "kind": "react_async_state_reset",
+                "state": "pending_6",
+                "result": "observed"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "llm-web",
+      "title": "Synthetic editor 7 does not restore its pending flag",
+      "severity": "low",
+      "confidence": 0.75,
+      "category": "Frontend",
+      "file": "src/screens/editor_7.tsx",
+      "line": 20,
+      "explanation": "Example 7 assumes an interrupted save operation leaves the editor unavailable.",
+      "fix_hint": "For example 7, restore the pending flag when the operation completes.",
+      "source": "llm",
+      "verification_status": "unverified",
+      "verification_method": "model_review",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "fixture-model",
+          "rubric": "web",
+          "response": 1
+        },
+        "source_check": {
+          "kind": "quote_match",
+          "line_start": 18,
+          "line_end": 32
+        },
+        "observation": "Synthetic handler 7 contains a pending flag and an asynchronous operation.",
+        "required_conditions": [
+          "The synthetic save operation in editor 7 is interrupted."
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_issue_identity": null,
+        "syntax_check": {
+          "kind": "unsupported",
+          "result": "not_checked"
+        },
+        "premise_checks": [
+          {
+            "kind": "react_async_network_reset_absent",
+            "result": "not_checked",
+            "target": "pending_7"
+          }
+        ],
+        "context_checks": [
+          {
+            "kind": "react_async_context",
+            "file": "src/screens/editor_7.tsx",
+            "line": 20,
+            "line_end": 30,
+            "scope": "FixtureEditor7.commit",
+            "checks": [
+              {
+                "kind": "react_async_state_reset",
+                "state": "pending_7",
+                "result": "observed"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

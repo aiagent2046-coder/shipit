@@ -8,6 +8,7 @@ caller can still see what happened via the `llm` field ("failed: ...").
 
 from __future__ import annotations
 
+from decimal import Decimal
 import hashlib
 import io
 import logging
@@ -110,7 +111,66 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # rows move; the mean is deliberately unchanged, because admitting such a
 # category to it RAISES a weak repository's total
 # (scripts/measure_unexamined_evidence.py, route A -- measured and refused).
-AUDIT_ENGINE_VERSION = "2026-09-06-5"
+# 2026-09-07-7: preserve credential source roles and URI protocols;
+# alternative deployment configuration is retained as inventory.
+# 2026-09-07-8: record why eligible files were not submitted to the model.
+# 2026-09-07-10: avoid native Point.row corruption on JS/TS files with large line numbers.
+# 2026-09-07-11: pre-model React async state and button syntax evidence.
+# 2026-09-08-1: catch resets, HTTP response branches and bounded absence checks.
+# 2026-09-08-2: reject ambiguous archives and record secret-scan exclusions.
+# 2026-09-08-3: guard/cost/policy evidence and unchecked HTTP success observations.
+# 2026-09-08-5: source-bound premise counterexamples and operation-based cause grouping.
+# 2026-09-08-6: count exact quote-bound model repeats once, retaining each response's provenance.
+# 2026-09-09-1: bind narrow React network-cleanup repeats to source operations and retain all premises.
+# 2026-09-09-2: distinguish default-strip Zod output from input rejection contracts.
+# 2026-09-09-3: retain bounded rejection diagnostics and explicit acceptance accounting.
+# 2026-09-09-4: compose source-bound React cleanup claims and disclose grouped claim scope.
+# 2026-09-09-8: attach observational guard and consequence context without prose-derived refutations.
+# 2026-09-09-9: tighten the citation contract and explain bounded quote mismatches without retaining quotes.
+# 2026-09-09-10: bind numeric RPC clamps and imported collection caps to bounded source context.
+# 2026-09-09-11: require external-operation idempotency and retry-budget prerequisites in advice.
+# 2026-09-09-13: bind fact limits, local Intl handlers and parsed-string guards to individual claims.
+# 2026-09-09-14: bind retry and duplicate-call premises, preserving conditional concurrency context.
+# 2026-09-10-1: distinguish source interpolation from literal credentials and
+# refuse secret Fix Packs for formats without a verified environment rewrite.
+AUDIT_ENGINE_VERSION = "2026-09-10-1"
+
+# 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
+#               negation excluded -- react_async_context is part of the prompt
+#               surface, so what the model is shown changed with it.
+# 2026-09-09-19: sql-injection-string-built-query, a new static scanner.
+# 2026-09-09-20: auth_read reads nested scopes, so routes declared in a router
+#               factory are analysed instead of skipped.
+# 2026-09-09-21: Russian success copy recognised in all its inflections, not
+#               only the neuter -- react_async_context is in the prompt surface.
+
+# 2026-09-09-22: generic-assignment reads a credential word as a component of an
+#               identifier (db_password, adminToken), plus encryption_key.
+
+# 2026-09-09-23: sql-injection-string-built-query now reads TypeScript and
+#               JavaScript, which is what most audited repositories are written in.
+
+# 2026-09-09-24: gitignore-missing-secrets reads the root .gitignore only, so a
+#               nested one no longer reads as covering the whole repository.
+# 2026-09-09-25: ci-deploys-a-different-repository ignores URLs that name no
+#               deploy target; no-dockerfile's inventory covers compose,
+#               Kubernetes, Terraform, Render, Railway and Dockerfile variants.
+
+# 2026-09-09-26: sql-secret-assignment reads UPDATE/ALTER/DEFAULT assignments,
+#               not only typed declarations; generic-assignment tolerates a
+#               trailing separator before the value.
+# 2026-09-09-27: sql-injection trusts a loop variable bound to a literal list,
+#               which was reporting fixed table-name loops on real code.
+# 2026-09-09-28: the same trust for a literal dict and its .items()/.keys().
+# 2026-09-09-29: generic-assignment reads a credential word that STARTS the
+#               name (tokenForAdmin, secretOne), not only one that ends it.
+# 2026-09-09-30: generic-assignment reads a QUOTED object key
+#               ({"db_password": "..."}); pwd dropped from the vocabulary.
+# 2026-09-09-31: sql-secret-assignment reads DEFAULT(...) with parentheses, the
+#               form ALTER TABLE actually wears.
+# 2026-09-09-32: preserve credential values through Fix Pack planning; distinguish
+#               SQL expressions from comparisons and non-SQL calls; scope SQL
+#               assignments, deploy commands and completed-success labels.
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
@@ -358,7 +418,7 @@ def content_digest(data: bytes) -> str:
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
              llm_skip_reason: str | None = None,
              llm_rubrics: tuple[str, ...] | None = None,
-             depth: str = BASIS_FULL) -> dict:
+             depth: str = BASIS_FULL, llm_cost_cap: Decimal | None = None) -> dict:
     """Returns {"score", "findings", "llm": <stats | status>, "llm_usage"}.
 
     `llm` is a stats dict when the stage ran, and also a stats-shaped dict
@@ -404,6 +464,7 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             llm_findings, stats = run_llm_scan(
                 io.BytesIO(data), llm_client, passes=llm_passes, stats=spend,
                 source_facts=static.get("source_facts"),
+                **({} if llm_cost_cap is None else {"cost_cap_usd": llm_cost_cap}),
                 **({} if llm_rubrics is None else {"rubrics": llm_rubrics}))
         except LLMError as exc:
             # A provider failure mid-audit silently degrades the score to
@@ -504,7 +565,8 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # BASIS_PARTIAL instead of `depth`, which keeps it out of the
             # cache slot a full audit reads from -- see BASIS_PARTIAL.
             "basis": ((BASIS_PARTIAL if any(llm_summary.get(k) for k in
-                                           ("failure", "cost_cap_exceeded", "input_truncated")) else depth)
+                                           ("failure", "cost_cap_exceeded", "input_truncated",
+                                            "invalid_responses")) else depth)
                       if llm_ran else BASIS_STATIC_ONLY),
         },
         "findings": findings,

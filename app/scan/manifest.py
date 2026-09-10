@@ -5,6 +5,26 @@ import hashlib
 import io
 import zipfile
 
+from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
+
+
+def _file_counts(coverage: object) -> dict | None:
+    """Persist a fixed numeric schema, never opaque scanner metadata.
+
+    These are public file counts. No source value, path or extra dictionary
+    field may travel through this channel into JSON, HTML or CLI output.
+    """
+    if not isinstance(coverage, dict):
+        return None
+    counts = {name: int(coverage.get(name, 0)) for name in (
+        "files_total", "files_read", "files_scanned", "lossy_decoded_files",
+    )}
+    excluded = coverage.get("exclusions", {})
+    counts["exclusions"] = {reason: int(excluded[reason]) for reason in (
+        "file_size_limit", "symlink", "excluded_directory", "excluded_extension", "binary_content",
+    ) if reason in excluded}
+    return counts
+
 
 def scan_manifest(data: bytes, engine: str, static: dict, llm: object, failure_kind: str | None) -> dict:
     stats = llm if isinstance(llm, dict) else {}
@@ -24,7 +44,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object, failure_k
         reasons.append(str(stats["skipped_reason"]))
     if failure_kind:
         reasons.append(failure_kind)
-    for flag in ("cost_cap_exceeded", "input_truncated"):
+    for flag in ("cost_cap_exceeded", "input_truncated", "invalid_responses"):
         if stats.get(flag):
             reasons.append(flag)
     if stats.get("failed_rubric"):
@@ -39,14 +59,19 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object, failure_k
         "inventory": inventory,
         "static_checks": static.get("checks_run", []),
         "static_limits": static.get("coverage", {}),
+        "secrets_coverage": _file_counts(static.get("secrets_coverage")),
         "source_facts": static.get("source_facts"),
         "model": stats.get("model"),
         "model_calls": stats.get("calls", 0),
+        "model_findings": stats.get("model_findings"),
+        "model_acceptance": acceptance_summary(stats.get("model_findings")),
+        "rejection_diagnostics": diagnostics_manifest(stats),
         "rubrics_completed": list(stats.get("rubrics_ran", ())),
         "llm_candidate_files": candidates,
         "llm_submitted_files": len(submitted) if submitted is not None else None,
         "llm_files_not_submitted": max(0, candidates - len(submitted))
         if candidates is not None and submitted is not None else None,
+        "llm_selection_exclusions": stats.get("selection_exclusions"),
         "limitations": reasons,
         "runtime_verified": False,
     }

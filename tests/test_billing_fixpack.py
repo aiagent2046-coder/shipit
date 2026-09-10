@@ -23,6 +23,7 @@ import re
 import uuid
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.billing import telegram_stars
@@ -85,13 +86,19 @@ class FakeFixpackRepo:
     def __init__(self):
         self.rows: list[dict] = []
 
-    async def create_paid(self, *, audit_id, stack):
+    async def get(self, job_id):
+        return next((r for r in self.rows if r["id"] == job_id), None)
+
+    async def create_paid(self, *, audit_id, stack, funding_key=None):
+        owned = next((r for r in self.rows if funding_key and r.get("funding_key") == funding_key), None)
+        if owned:
+            return {**owned, "inserted": False}
         live = fixpack_live_job(self.rows, audit_id)
         if live is not None:
             return {**live, "inserted": False}
         row = {
             "id": str(uuid.uuid4()), "audit_id": audit_id, "pack": "fixpack",
-            "stack": stack, "status": "paid", "verified": None, "detail": None,
+            "funding_key": funding_key, "stack": stack, "status": "paid", "verified": None, "detail": None,
             "pr_url": None, "pr_delivered": False,
             "created_at": datetime.datetime.now(datetime.timezone.utc),
         }
@@ -419,6 +426,63 @@ async def test_fixpack_status_leaves_a_generation_failure_unlabelled():
         _clear()
 
 
+@pytest.mark.parametrize(("detail", "reason"), [
+    (
+        "proof gate (hard): exploit still succeeds after patch "
+        "(not verified (secrets_leak): private diagnostic)",
+        "proof_failed",
+    ),
+    ("patched build failed: private diagnostic", "verification_failed"),
+    ("new test failure: private diagnostic", "verification_failed"),
+    (None, "verification_failed"),
+])
+async def test_fixpack_status_explains_block_without_exposing_diagnostics(detail, reason):
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    created = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    fixpacks.stored(created["id"]).update(
+        status="blocked", detail=detail,
+        proof_json={"private": "proof evidence not intended for this endpoint"},
+    )
+    _override_status(audits=audits, fixpacks=fixpacks)
+    try:
+        response = client.get(
+            f"/v1/audits/{audit['id']}/fixpack-status",
+            params={"token": audit["access_token"]},
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "audit_id": audit["id"], "status": "blocked", "pr_url": None,
+            "failure_kind": None, "block_reason": reason, "job_id": created["id"],
+        }
+        assert "private diagnostic" not in response.text
+        assert "proof evidence" not in response.text
+    finally:
+        _clear()
+
+
+async def test_fixpack_status_does_not_label_delivered_soft_proof_failure_as_blocked():
+    audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
+    audit = audits.add(repo_url=REPO_URL)
+    created = await fixpacks.create_paid(audit_id=audit["id"], stack="fastapi")
+    fixpacks.stored(created["id"]).update(
+        status="delivered", pr_url="https://github.com/acme/widget/pull/7",
+        detail="delivered with soft proof gate: exploit still succeeds after patch",
+    )
+    _override_status(audits=audits, fixpacks=fixpacks)
+    try:
+        response = client.get(
+            f"/v1/audits/{audit['id']}/fixpack-status",
+            params={"token": audit["access_token"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "delivered"
+        assert "block_reason" not in response.json()
+        assert "detail" not in response.json()
+    finally:
+        _clear()
+
+
 def test_fixpack_status_unknown_audit_is_404():
     audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
     _override_status(audits=audits, fixpacks=fixpacks)
@@ -490,3 +554,18 @@ def test_the_audit_response_tells_the_page_whether_to_offer_a_fix_pack():
         ).json()["fixpack_auto_fixable"] is False
     finally:
         _clear()
+
+
+async def test_second_stars_payment_is_not_announced_as_new_work():
+    audits, payments = FakeAuditRepo(), FakePaymentRepo()
+    fixpacks, accounts, calls = FakeFixpackRepo(), FakeAccountRepo(), []
+    audit = audits.add(repo_url=REPO_URL)
+    for charge in ("first-charge", "second-charge", "second-charge"):
+        result = await _send(_fixpack_payment_update(charge, audit["id"]),
+                             audits=audits, payments=payments, fixpacks=fixpacks,
+                             accounts=accounts, calls=calls)
+    assert result["funding_review_required"] is True
+    assert len(fixpacks.rows) == 1 and len(payments.rows) == 2
+    text = [c for c in calls if c[0] == "sendMessage"][-1][1]["text"]
+    assert "has not been confirmed" in text and "No refund has been issued" in text
+    assert "queued" not in text

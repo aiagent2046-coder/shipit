@@ -1,0 +1,10 @@
+{
+  "description": "The three ways a secret actually reaches a database -- UPDATE SET, ALTER SET, CREATE with DEFAULT. The rule required a type annotation between the name and the value, which is the PL/pgSQL variable shape it was written for, so it read one form and was silent on these.",
+  "expect": [
+    {
+      "rule_id": "sql-secret-assignment",
+      "severity": "high"
+    }
+  ],
+  "forbid": []
+}

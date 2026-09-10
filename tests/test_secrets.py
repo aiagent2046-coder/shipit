@@ -5,6 +5,8 @@ a scanner that leaks the secrets it finds is worse than no scanner.
 import io
 import zipfile
 
+import pytest
+
 from app.scan.secrets import scan_secrets
 
 # Deliberately fake but format-valid samples.
@@ -154,8 +156,19 @@ def test_same_secret_outside_doc_context_stays_critical():
 def test_markdown_files_are_doc_context():
     zf = make_zip({"README.md": b'token: "AKIAIOSFODNN7EXAMPLE"\n'})
     findings = scan_secrets(zf)
-    assert len(findings) == 1
-    assert findings[0].severity == "medium"
+    # EVERY finding on the line, not just the first: this fixture is matched by
+    # the specific aws-access-key-id rule AND by generic-assignment, because
+    # rules are applied to a line independently and neither yields to the
+    # other. That overlap predates the name-vocabulary widening -- `api_key:
+    # "AKIA..."` has always produced both -- and the fixture only avoided it
+    # by naming the variable `token`, a word the vocabulary happened to miss.
+    #
+    # Pinning a COUNT here pinned that gap by accident, so the assertion now
+    # states what the test is actually about: a secret in a markdown file is
+    # damped to documentation context, whichever rule reports it.
+    assert findings
+    assert {f.severity for f in findings} == {"medium"}
+    assert {f.context for f in findings} == {"doc_example"}
 
 
 def test_plpgsql_secret_assignment_caught():
@@ -442,3 +455,170 @@ def test_the_match_spans_the_whole_connection_string():
     rewritten, _ = _apply_secret_fix(src, "connection-string-password", raw,
                                      "os.environ['DATABASE_URL']")
     assert rewritten.strip() == "DB = os.environ['DATABASE_URL']"
+
+
+@pytest.mark.parametrize("special", ["$", "{", "}", "${literal}"])
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_ordinary_quoted_credentials_keep_dollars_and_braces(special, quote):
+    value = "aB3" + special + "eF6gH8jK2mN4"
+    source = f"api_key = {quote}{value}{quote}\n"
+    findings = scan_secrets(make_zip({"config.py": source.encode()}))
+    assert any(f.rule_id == "generic-assignment" for f in findings)
+    assert all(value not in f.masked for f in findings)
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("aB3$eF6gH8jK2mN4", True),
+    ("aB3{eF6gH8jK2mN4", True),
+    ("aB3}eF6gH8jK2mN4", True),
+    ("${process.env.API_KEY}", False),
+    ("prefix-${process.env.API_KEY}", False),
+])
+def test_template_interpolation_is_distinct_from_literal_secret_bytes(value, expected):
+    source = f"const apiKey = `{value}`;\n"
+    findings = scan_secrets(make_zip({"src/config.ts": source.encode()}))
+    assert any(f.rule_id == "generic-assignment" for f in findings) is expected
+
+
+@pytest.mark.parametrize("value", [
+    "${API_TOKEN}", "${!token_env_name:-}", "$SHIPIT_API_TOKEN",
+    "${API_TOKEN:-}", "${FIRST_TOKEN}${SECOND_TOKEN}",
+])
+@pytest.mark.parametrize("path,prefix", [
+    ("deploy/call.sh", ""), ("bin/call", "#!/usr/bin/env bash\n"),
+])
+def test_shell_parameter_references_do_not_become_secret_findings(path, prefix, value):
+    source = prefix + f'token="{value}"\n'
+    assert scan_secrets(make_zip({path: source.encode()})) == []
+
+
+@pytest.mark.parametrize("source", [
+    "token='${API_TOKEN}'\n",
+    'token="\\${API_TOKEN}"\n',
+    'token="prefix-${API_TOKEN}"\n',
+    'token="${API_TOKEN:-fallback-credential}"\n',
+    "printf '%s' 'token=\"${API_TOKEN}\"'\n",
+    "cat <<'EOF'\ntoken=\"${API_TOKEN}\"\nEOF\n",
+])
+def test_shell_literal_bytes_are_not_hidden_by_parameter_filter(source):
+    findings = scan_secrets(make_zip({"deploy/call.sh": source.encode()}))
+    assert any(f.rule_id == "generic-assignment" for f in findings)
+
+
+def test_shell_filter_continues_to_real_credential_on_the_same_line():
+    value = "runtime-" + "literal-credential"
+    source = f'token="${{API_TOKEN}}"; api_key="{value}"\n'
+    findings = scan_secrets(make_zip({"deploy/call.sh": source.encode()}))
+    generic = [f for f in findings if f.rule_id == "generic-assignment"]
+    assert len(generic) == 1
+    assert generic[0].masked.startswith("api_")
+
+
+@pytest.mark.parametrize("path,source", [
+    ("src/config.ts", 'const token="${API_TOKEN}";'),
+    ("src/config.py", 'token="${API_TOKEN}"'),
+    ("config.yml", 'token: "${API_TOKEN}"'),
+])
+def test_non_shell_literals_resembling_parameter_references_stay_visible(path, source):
+    assert any(f.rule_id == "generic-assignment"
+               for f in scan_secrets(make_zip({path: source.encode()})))
+
+
+@pytest.mark.parametrize("run", [
+    'run: |\n        token="${API_TOKEN}"\n',
+    'run: token="${!token_env_name:-}"\n',
+    "run: 'token=\"$SHIPIT_API_TOKEN\"'\n",
+])
+def test_workflow_only_excludes_parameter_references_inside_shell_run(run):
+    source = (
+        'jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    env:\n'
+        '      token: "${API_TOKEN}"\n    steps:\n    - ' + run
+    )
+    findings = scan_secrets(make_zip({".github/workflows/deploy.yml": source.encode()}))
+    assert [(f.rule_id, f.line) for f in findings] == [("generic-assignment", 5)]
+
+
+@pytest.mark.parametrize("shell", ["python", "node"])
+def test_workflow_run_with_non_shell_interpreter_keeps_quoted_literal(shell):
+    source = (
+        'jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n'
+        f'    - shell: {shell}\n      run: |\n        token="${{API_TOKEN}}"\n'
+    )
+    assert any(f.rule_id == "generic-assignment" for f in scan_secrets(
+        make_zip({".github/workflows/deploy.yml": source.encode()})))
+
+
+def test_recursive_yaml_and_complex_keys_do_not_crash_secret_scan():
+    source = (
+        'defaults:\n  ? [complex, key]\n  : value\n  run:\n'
+        '    ? [shell, other]\n    : bash\n'
+        'extra: &recursive\n  self: *recursive\n'
+        'jobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n'
+        '    - run: token="${API_TOKEN}"\n'
+    )
+    assert scan_secrets(make_zip({".github/workflows/deploy.yml": source.encode()})) == []
+
+
+def test_oversized_yaml_retains_findings_when_context_parsing_is_declined():
+    source = '# ' + 'x' * 256_000 + '\nrun: token="${API_TOKEN}"\n'
+    findings = scan_secrets(make_zip({".github/workflows/deploy.yml": source.encode()}))
+    assert any(f.rule_id == "generic-assignment" for f in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "value = f'const db_password = \"{GENERIC_16}\";'\n",
+    'value = f"update config set api_secret = \'{GENERIC_16}\';"\n',
+    "label = 'кириллица'; value = f'const db_password = \"{GENERIC_16}\";'\n",
+])
+def test_python_formatted_fields_are_not_literal_credentials(source):
+    assert scan_secrets(make_zip({"scripts/probe.py": source.encode()})) == []
+
+
+@pytest.mark.parametrize("source", [
+    "value = 'const db_password = \"{GENERIC_16}\";'\n",
+    "value = f'const db_password = \"prefix-{GENERIC_16}\";'\n",
+    "value = f'const db_password = \"literal-credential\"; {suffix}'\n",
+])
+def test_python_formatted_string_filter_keeps_actual_literal_secret_bytes(source):
+    assert any(f.rule_id == "generic-assignment" for f in scan_secrets(
+        make_zip({"scripts/probe.py": source.encode()})))
+
+
+def test_aws_example_in_python_docstring_is_reported_without_automatic_fix_context():
+    value = "AKIA" + "IOSFODNN7EXAMPLE"
+    source = f'"""Example credential: {value}."""\nprint("ok")\n'
+    findings = scan_secrets(make_zip({"scripts/probe.py": source.encode()}))
+    assert len(findings) == 1
+    assert findings[0].rule_id == "aws-access-key-id"
+    assert findings[0].context == "doc_example"
+    assert findings[0].severity == "medium"
+
+
+@pytest.mark.parametrize("predicate", [
+    "WHERE  password", "WHERE\tpassword", "WHERE\n  password",
+    "WHERE\r\n  password", "WHERE (password", "WHERE ((u.password",
+    "WHERE TRUE AND  password", "WHERE FALSE OR (u.password",
+    "WHERE u . password", "WHERE /* predicate */ u.password",
+    "HAVING  password", "JOIN other u ON (u.password",
+])
+def test_sql_comparison_formatting_does_not_create_assignments(predicate):
+    source = f"SELECT id FROM users {predicate} = 'redacted'" + ")" * predicate.count("(") + ";\n"
+    findings = scan_secrets(make_zip({"schema.sql": source.encode()}))
+    assert not any(f.rule_id == "sql-secret-assignment" for f in findings)
+
+
+@pytest.mark.parametrize("source", [
+    "UPDATE users SET password = 'redacted' WHERE id = 1;",
+    "DECLARE password text := 'redacted';",
+    "CREATE TABLE config (password varchar(255) DEFAULT ('redacted'));",
+    "-- WHERE password is compared elsewhere\nUPDATE users SET password = 'redacted';",
+    "/* WHERE predicate */ UPDATE users SET password = 'redacted';",
+    "UPDATE users SET note = 'WHERE', password = 'redacted';",
+    "WITH selected AS (SELECT id FROM users WHERE active) "
+    "UPDATE users SET password = 'redacted';",
+    "SELECT id FROM users WHERE (password = 'redacted'); "
+    "UPDATE users SET password = 'redacted';",
+])
+def test_sql_predicate_context_does_not_hide_real_assignments(source):
+    findings = scan_secrets(make_zip({"schema.sql": source.encode()}))
+    assert any(f.rule_id == "sql-secret-assignment" for f in findings)

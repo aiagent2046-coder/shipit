@@ -141,3 +141,105 @@ def test_build_plan_applies_sqli_fix() -> None:
     assert stripe not in body
     assert "%s" in body
     assert any(c.rule_id == "sqli-dynamic-execute" for c in plan.config_fixes)
+
+
+def test_cors_documentation_and_python_string_examples_are_untouched() -> None:
+    example = 'app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True)'
+    files = {
+        "docs/cors.md": f"# Configuration example\n```python\n{example}\n```\n",
+        "README.rst": f"For local experiments only::\n\n    {example}\n",
+        "probe.py": f"'''Probe usage: {example}'''\nprint('probe')\n",
+        "example.py": f"example = {example!r}\n# {example}\n",
+        "server.js": 'const example = "cors({ origin: true, credentials: true })";\n',
+        "template.ts": "const example = `cors({ origin: '*', credentials: true })`;\n",
+    }
+    assert apply_cors_fixes(files) == ({}, [])
+
+
+def test_cors_python_docstring_before_real_call_preserved_exactly() -> None:
+    example = 'app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True)'
+    prefix = f"'''Пример настройки: {example}'''\n# {example}\n"
+    actual = 'app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True)\n'
+    updates, fixes = apply_cors_fixes({"server.py": prefix + actual})
+    assert updates["server.py"] == prefix + actual.replace('["*"]', '["http://localhost:3000"]')
+    assert len(fixes) == 1
+
+
+def test_cors_credentials_from_comments_strings_or_other_calls_are_not_evidence() -> None:
+    files = {
+        "comments.py": '# allow_credentials=True\napp.add_middleware(CORSMiddleware, allow_origins=["*"])\n',
+        "docstring.py": '\'\'\'allow_credentials=True\'\'\'\napp.add_middleware(CORSMiddleware, allow_origins=["*"])\n',
+        "string.py": 'example = "allow_credentials=True"\napp.add_middleware(CORSMiddleware, allow_origins=["*"])\n',
+        "separate.py": (
+            'app.add_middleware(CORSMiddleware, allow_origins=["https://example.org"], allow_credentials=True)\n'
+            'other.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False)\n'
+        ),
+        "flask.py": '# supports_credentials=True\nCORS(app, origins="*")\n',
+        "comment.js": "// credentials: true\napp.use(cors({ origin: '*' }));\n",
+        "block_comment.ts": "app.use(cors({ origin: '*', /* credentials: true */ credentials: false }));\n",
+        "string.js": 'const example = "credentials: true";\napp.use(cors({ origin: true }));\n',
+        "separate.js": (
+            "app.use(cors({ origin: 'https://example.org', credentials: true }));\n"
+            "other.use(cors({ origin: '*', credentials: false }));\n"
+        ),
+        "headers.conf": (
+            '# add_header Access-Control-Allow-Credentials "true";\n'
+            'add_header Access-Control-Allow-Origin "*";\n'
+        ),
+    }
+    for path, src in files.items():
+        assert apply_cors_fixes({path: src}) == ({}, []), path
+
+
+def test_cors_js_examples_before_real_object_preserved_exactly() -> None:
+    prefix = (
+        '// cors({ origin: true, credentials: true })\n'
+        '/* cors({ origin: "*", credentials: true }) */\n'
+        'const example = `Пример: cors({ origin: true, credentials: true })`;\n'
+    )
+    actual = 'app.use(cors({ origin: "*", credentials: true }));\n'
+    updates, _fixes = apply_cors_fixes({"server.ts": prefix + actual})
+    assert updates["server.ts"] == prefix + actual.replace(
+        '"*"', "process.env.CORS_ORIGIN || 'http://localhost:3000'",
+    )
+
+
+def test_cors_structured_header_config_is_pinned_without_rewriting_examples() -> None:
+    import json
+
+    src = json.dumps({"example": 'Access-Control-Allow-Origin "*"; Access-Control-Allow-Credentials "true";',
+                      "headers": {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Credentials": "true"}})
+    updates, _fixes = apply_cors_fixes({"headers.json": src})
+    result = json.loads(updates["headers.json"])
+    assert result["example"] == json.loads(src)["example"]
+    assert result["headers"]["Access-Control-Allow-Origin"] == "http://localhost:3000"
+
+
+def test_build_plan_preserves_cors_documentation_and_probe_docstring() -> None:
+    stripe = "sk_" + "live_" + ("C" * 24)
+    example = 'app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True)'
+    files = {
+        "config.py": f'STRIPE = "{stripe}"\n',
+        "docs/runtime-proof.md": f"```python\n{example}\n```\n",
+        "scripts/probe.py": f"'''Runtime probe: {example}'''\nprint('probe')\n",
+        "main.py": example + "\n",
+    }
+    findings = [{"rule_id": "stripe-live-key", "file": "config.py", "line": 1,
+                 "title": "Stripe live secret key", "context": None}]
+    plan = build_fixpack_plan(_zip_with(files), findings)
+    assert "config.py" in plan.files
+    assert "main.py" in plan.files
+    assert "docs/runtime-proof.md" not in plan.files
+    assert "scripts/probe.py" not in plan.files
+    assert sum(f.rule_id == "cors-open-credentials" for f in plan.config_fixes) == 1
+
+
+def test_cors_nginx_multiline_examples_and_separate_blocks_are_untouched() -> None:
+    src = (
+        'set $example "\nadd_header Access-Control-Allow-Origin \'*\';\n'
+        'add_header Access-Control-Allow-Credentials \'true\';\n";\n'
+        'server {\nadd_header Access-Control-Allow-Origin "*";\n}\n'
+        'server {\nadd_header Access-Control-Allow-Origin "https://example.org";\n'
+        'add_header Access-Control-Allow-Credentials "true";\n}\n'
+    )
+    assert apply_cors_fixes({"nginx.conf": src}) == ({}, [])

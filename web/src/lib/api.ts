@@ -27,11 +27,13 @@ export const API_BASE_URL = (
 export class ApiError extends Error {
   status: number;
   reason?: string;
-  constructor(message: string, status: number, reason?: string) {
+  retryAt?: number;
+  constructor(message: string, status: number, reason?: string, retryAt?: number) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.reason = reason;
+    this.retryAt = retryAt;
   }
 }
 
@@ -78,10 +80,19 @@ async function parse<T>(res: Response): Promise<T> {
             "and nothing was started. Try again shortly, or email " +
             "support@drydock.co if it stays paused."
           : d.detail || d.reason || message;
+      if (d.reason === "duplicate_path") {
+        message = "The archive contains repeated file paths. Please create a fresh ZIP and try again.";
+      }
     } else if (typeof detail === "string") {
       message = detail;
     }
-    throw new ApiError(message, res.status, reason);
+    // The audit API sends Retry-After as whole seconds remaining in its
+    // current window. Missing/malformed headers must not invent a reset time.
+    const retryAfter = res.headers.get("Retry-After");
+    const retryAt = res.status === 429 && retryAfter && /^\d+$/.test(retryAfter)
+      ? Date.now() + Number(retryAfter) * 1000 : NaN;
+    throw new ApiError(message, res.status, reason,
+      Number.isFinite(retryAt) && retryAt <= 8.64e15 ? retryAt : undefined);
   }
   return body as T;
 }

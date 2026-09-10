@@ -18,8 +18,12 @@ import json
 import re
 import stat
 import zipfile
+import yaml
+from bisect import bisect_right
 from dataclasses import dataclass
 from typing import BinaryIO, Iterator
+
+from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
 
 MAX_SCANNED_FILE_BYTES = 1 * 1024 * 1024  # skip huge files: minified bundles etc.
 
@@ -156,6 +160,15 @@ def _is_test_fixture_path(name: str) -> bool:
     lower = name.lower()
     base = lower.rsplit("/", 1)[-1]
     if base in _TEST_SETUP_FILENAMES or lower.endswith(_TEST_FILE_SUFFIXES):
+        return True
+    # Python's own convention, independent of the directory: pytest and
+    # unittest both discover test_*.py / *_test.py. A root-level
+    # test_mini_app_integration.py escaped damping before -- it was not in
+    # tests/ and carried no .test.ts-style suffix, so a quoted credential
+    # inside it came back at full severity. Only .py files: test_utils.js
+    # is a minifier convention, not a test.
+    if base.endswith(".py") and (
+            base.startswith("test_") or base.endswith("_test.py")):
         return True
     return any(seg in _TEST_PATH_SEGMENTS for seg in lower.split("/")[:-1])
 
@@ -369,7 +382,7 @@ RULES: tuple[SecretRule, ...] = (
         # cannot drive the engine into backtracking.
         "connection-string-password", "Password embedded in a connection string",
         re.compile(
-            r"(?i)\b[a-z][a-z0-9+.-]{1,15}://"      # scheme
+            r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}://"      # scheme
             r"[^:/?#@\s\"']{1,64}"                  # user
             r":[^@/?#\s\"'${}<>%]{3,128}"           # password, no interpolation
             r"@[A-Za-z0-9._-]{1,253}"               # host
@@ -392,22 +405,345 @@ RULES: tuple[SecretRule, ...] = (
         #   v_cron_secret text := 'hunter2...';
         # The generic-assignment rule misses these because a type
         # annotation sits between the name and the assignment.
+        # THE TYPE ANNOTATION WAS REQUIRED, and that made the rule read one
+        # shape out of six. A hunt run rewrote the fixture into the ways people
+        # actually put a secret in a database --
+        #
+        #   update users set access_token = 'sk-live-...'
+        #   alter table config set secret_key = '...'
+        #   create table c (token varchar(255) default '...')
+        #
+        # -- and the scanner was silent on every one. The type is now optional.
+        #
+        # WHERE IS EXCLUDED. `select * from users where password = '...'` is a
+        # comparison, not a stored secret, and matching it would report a login
+        # query as a leak. SQL files also get a clause-context check below:
+        # whitespace, parentheses and qualified columns do not change a
+        # comparison into an assignment. Keep the immediate exclusions for
+        # SQL snippets embedded in other source languages.
         "sql-secret-assignment", "Hardcoded secret in SQL/PLpgSQL assignment",
         re.compile(
-            r"(?i)\b\w*(?:secret|password|api[_-]?key|service[_-]?role)\w*\s+"
-            r"(?:text|varchar(?:\(\d+\))?|character varying)\s*:?=\s*'[^']{8,}'"
+            r"(?i)(?<!where\s)(?<!and\s)(?<!or\s)"
+            r"\b\w*(?:secret|password|api[_-]?key|service[_-]?role)\w*\s*"
+            r"(?:(?:text|varchar(?:\(\d+\))?|character varying)\s*)?"
+            # DEFAULT('...') and DEFAULT('...') with the parentheses the form
+            # actually wears are both read; a hunt run on the stronger model
+            # produced the parenthesised spelling and the detector stayed
+            # silent. The closing parenthesis is optional so `:= '...'` and
+            # `:= ('...')` share one branch.
+            r"(?::?=|\s+default\s*)"
+            r"\s*(?:\(\s*)?'(?P<value>[^']{8,})'(?:\s*\))?"
         ),
         "high", 0.7,
     ),
     SecretRule(
+        # Backticks are quotes too. The rule shipped accepting ' and " only, so
+        #   const apiKey = `AKIA...`
+        # scanned clean while the same line in single quotes was reported --
+        # and a template literal is ordinary JS/TS, not an evasion. Found by
+        # scripts/hunt_detector_escapes.py, which rewrote the corpus fixture
+        # into a template literal and watched the detector stay silent.
+        #
+        # The quote character must match on both sides: an unbalanced pair is
+        # a string that does not end where the match does, and the Fix Pack
+        # replaces a secret by locating the quoted literal around it.
+        # `connection-string-password` documents what that costs when a span
+        # and its literal disagree.
+        #
+        # Backtick templates exclude ${...} here. Shell expansion is checked
+        # against its source context below; ordinary Python/JS quoted values
+        # may contain dollar signs and braces as secret bytes.
+        # The NAME vocabulary is the other half of the rule, and it shipped
+        # narrower than the things people actually call a credential:
+        #   const authToken = "...."      scanned clean
+        #   const accessKey = "...."      scanned clean
+        # while `service_role` -- rarer in real code than either -- was covered.
+        # Also found by scripts/hunt_detector_escapes.py: the model renamed
+        # api_key to token and the detector stopped seeing it.
+        #
+        # WHICH WORDS, AND WHY NOT MORE. Every addition risks false positives,
+        # so each candidate was counted against real code before being let in:
+        # web/src (59 files), 3000 node_modules files and app/ (142 files).
+        # The words below matched NOTHING in that corpus -- they cost no noise.
+        # Two were rejected on the evidence:
+        #   `key`   -- 14 hits, all ordinary data (jsdom's `key = "modifierAltGraph"`).
+        #              Too generic to mean credential.
+        #   `token` -- 1 hit, in a *.test.tsx that is_non_production_path already
+        #              damps, so it is kept; a bare `token` is common enough in
+        #              real code that this one deserves re-measuring if the
+        #              corpus ever grows.
+        # THE WORD MUST BE A COMPONENT OF THE NAME, not the whole of it.
+        # `\b` shipped here, and `_` is a word character, so `\bpassword\b`
+        # did not match inside `db_password` -- nor `secret_token`,
+        # `my_api_key`, `admin_token` or `dbPassword`. Those are the names
+        # people actually use, and the rule saw none of them. Found by
+        # scripts/hunt_detector_escapes.py, where the model renamed the
+        # fixture's `api_key` to shapes like these and the detector went quiet.
+        #
+        # A plain substring test was MEASURED AND REJECTED FIRST: it matches
+        # `tokenizer` and `secretary`, which are ordinary words. The boundary
+        # below keeps the word whole on its right -- a separator, a capital, or
+        # the end of the identifier -- so `token` matches in `admin_token` and
+        # `adminToken` but not in `tokenizer`. Verified against 8243 files
+        # (web/src, app/, scripts/, 8000 from node_modules): 6 matches, of
+        # which the scanner damps the test-file one and reports two throwaway
+        # container passwords in scripts/ that already carry a `# noqa: S105`
+        # from another linter -- so the new reach finds the class of thing it
+        # is for. `encryption[_-]?key` is the one added word: nothing else in
+        # the vocabulary covers it, and it cost 2 matches in that corpus, both
+        # in Next.js internals naming an env var rather than holding a key.
+        #
+        # The value must follow the WORD, not merely the name containing it, so
+        # `hash_password = "..."` matches and `password_hash = "..."` does not.
+        # That asymmetry is the boundary doing its job: in the second case the
+        # identifier is `password_hash`, and a rule that matched it would also
+        # match `tokenizer`. Plurals (`credentials`) are missed for the same
+        # reason and are left missed -- the alternative costs the words above.
         "generic-assignment", "Hardcoded credential assignment",
         re.compile(
-            r"(?i)\b(api[_-]?key|secret|password|service[_-]?role)\b"
-            r"\s*[:=]\s*['\"][^'\"\s]{12,}['\"]"
+            r"(?i)"
+            # TWO SPELLINGS OF THE NAME, measured on the same corpus:
+            #
+            # A. A bare identifier, as before: `db_password = "..."`,
+            #    `const adminToken = "..."`, `{ db_password: "..." }`.
+            # B. A QUOTED KEY in an object literal or JSON document:
+            #    `{"db_password": "..."}`, `'client_secret': '...'`.
+            #    The quotes must be a CONSENTING PAIR around the name --
+            #    `'api-key": "ANTHROPIC_API_KEY"'` (a Python string whose
+            #    apostrophe is unrelated to the double quote) does not match.
+            #    Prefixed keys (`db_password`) are read because the prefix
+            #    ends in `_`, so the word still starts at a boundary.
+            #
+            # WHY B EXISTS: a JSON config is how real leaks travel
+            # (firebase/analytics configs, docker env files). Measured:
+            # adding B produced ZERO new matches on 691 files of live
+            # repository code and removed none -- it only starts to fire
+            # when an actual quoted secret appears.
+            r"(?:"
+            r"(?:(?<![A-Za-z0-9])|(?<=[a-z0-9])(?=[A-Z]))"
+            r"(?:api[_-]?key|secret|password|service[_-]?role"
+            r"|token|auth[_-]?token|access[_-]?key|client[_-]?secret"
+            r"|credential|private[_-]?key|encryption[_-]?key|passwd)"
+            # THE WORD MAY START THE NAME, not only end it. `adminToken` was
+            # read because the value follows the word directly; `tokenForAdmin`
+            # and `secretOne` were not, though they name the same thing. A hunt
+            # run on a stronger model produced exactly those two shapes and the
+            # scanner was silent on both.
+            #
+            # The boundary is "not followed by a LOWERCASE letter", which is
+            # what separates a suffix from a longer word: `secretOne` and
+            # `token2` qualify, `tokenizer` and `secretary` do not.
+            #
+            # (?-i:...) IS LOAD-BEARING. Under the pattern's (?i) flag the
+            # class [a-z] matches capitals too, so "not lowercase" would have
+            # forbidden every letter and this addition would have changed
+            # nothing at all -- it read as working while doing nothing.
+            r"(?-i:(?![a-z]))[A-Za-z0-9]*"
+            # A suffix after a SEPARATOR stays out: `api_key_pepper_env`,
+            # `TOKEN_HEADER` and `API_KEY_COOKIE` are the names of environment
+            # variables and headers, not the secrets themselves. Measured at
+            # 8208 files: allowing it added 4 matches, all of that shape and
+            # all wrong. `password_hash` stays out for the same reason it
+            # always has.
+            r"[_-]*"
+            r"|"
+            r"(?P<k>['\"])"
+            r"(?:[A-Za-z0-9]+_)*"
+            r"(?:(?<![A-Za-z0-9])|(?<=[a-z0-9])(?=[A-Z]))"
+            r"(?:api[_-]?key|secret|password|service[_-]?role"
+            r"|token|auth[_-]?token|access[_-]?key|client[_-]?secret"
+            r"|credential|private[_-]?key|encryption[_-]?key|passwd)"
+            r"(?-i:(?![a-z]))[A-Za-z0-9]*[_-]*"
+            r"(?P=k)"
+            r")"
+            # Named, not numbered: the backreference has to survive someone
+            # adding a group to the name half, which numbering does not.
+            r"\s*[:=]\s*(?P<q>['\"]|(?P<template>`))"
+            r"(?P<value>(?:(?!(?P=q))(?(template)(?!\$\{))[^\s]){12,})(?P=q)"
         ),
         "high", 0.5,
     ),
 )
+
+
+# Pure parameter references carry no literal credential. In particular an
+# empty fallback in `${!token_env_name:-}` is not a hardcoded default. A
+# nonempty fallback or literal prefix stays reportable rather than having
+# potentially secret bytes discarded merely because a dollar sign occurs.
+_SHELL_VARIABLE_VALUE = re.compile(
+    r"(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{!?[A-Za-z_][A-Za-z0-9_]*(?::?[-+?])?\})+"
+)
+_SHELL_SHEBANG = re.compile(r"^#![^\n]*\b(?:ba|da|k|z)?sh(?:\s|$)")
+_SHELL_NAMES = frozenset(("sh", "bash", "dash", "ksh", "zsh"))
+_HEREDOC_START = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+
+
+def _shell_variable_offsets(script: str, base: int = 0) -> set[int]:
+    """Locate active quoted assignments without executing shell code.
+
+    Single-quoted strings, comments and heredoc bodies are not executable
+    assignments. This small lexical filter declines ambiguous constructs;
+    it only removes candidates whose entire value is parameter expansion.
+    """
+    generic = next(rule for rule in RULES if rule.id == "generic-assignment")
+    candidates = {
+        match.start() for match in generic.pattern.finditer(script)
+        if match.group("q") == '"'
+        and _SHELL_VARIABLE_VALUE.fullmatch(match.group("value"))
+    }
+    ignored: set[int] = set()
+    quote = ""
+    comment = False
+    heredocs: list[tuple[str, bool]] = []
+    in_heredoc = False
+    index = 0
+    while index < len(script):
+        if in_heredoc:
+            end = script.find("\n", index)
+            end = len(script) if end < 0 else end
+            line = script[index:end].rstrip("\r")
+            delimiter, strip_tabs = heredocs[0]
+            if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                heredocs.pop(0)
+                in_heredoc = bool(heredocs)
+            index = end + 1
+            continue
+        char = script[index]
+        if index in candidates and not quote and not comment:
+            ignored.add(base + index)
+        if char == "\n":
+            comment = False
+            if heredocs and not quote:
+                in_heredoc = True
+        elif not comment:
+            if char == "\\" and quote != "'":
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            elif not quote:
+                if char in "'\"`":
+                    quote = char
+                elif char == "#" and (index == 0 or script[index - 1].isspace()):
+                    comment = True
+                elif script.startswith("<<", index):
+                    marker = _HEREDOC_START.match(script, index)
+                    if marker is None:
+                        # Here strings and computed delimiters need a fuller
+                        # parser; do not suppress later candidates by guessing.
+                        break
+                    heredocs.append((marker.group(3), bool(marker.group(1))))
+                    index = marker.end()
+                    continue
+        index += 1
+    return ignored
+
+
+def _shell_substitution_offsets(name: str, text: str) -> set[int]:
+    """Recognise shell files and the shell run fields of GitHub workflows.
+
+    YAML configuration values and Python/JS run steps are literal data in
+    their own languages. Treating the entire workflow as shell would hide
+    genuine credentials there, so use YAML node spans to delimit run code.
+    """
+    lower = name.lower()
+    if (lower.endswith((".sh", ".bash", ".zsh", ".ksh"))
+            or lower.rsplit("/", 1)[-1] in {".bashrc", ".bash_profile", ".profile", ".zshrc"}
+            or _SHELL_SHEBANG.match(text)):
+        return _shell_variable_offsets(text)
+    if not (_is_ci_workflow_path(name) and lower.endswith((".yml", ".yaml"))):
+        return set()
+    if len(text) > MAX_PYTHON_BYTES or len(text.encode("utf-8")) > MAX_PYTHON_BYTES:
+        return set()  # retain findings when parsing exceeds the source-context budget
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except (yaml.YAMLError, RecursionError):
+        return set()
+    ignored: set[int] = set()
+    pending = [(root, "bash")]
+    seen: set[int] = set()
+    while pending:
+        node, inherited_shell = pending.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.SequenceNode):
+            pending.extend((child, inherited_shell) for child in node.value)
+            continue
+        if not isinstance(node, yaml.MappingNode):
+            continue
+        fields = {key.value: value for key, value in node.value if isinstance(key, yaml.ScalarNode)}
+        shell = inherited_shell
+        runner = fields.get("runs-on")
+        if runner is not None and "windows" in text[runner.start_mark.index:runner.end_mark.index].lower():
+            shell = "pwsh"
+        defaults = fields.get("defaults")
+        if isinstance(defaults, yaml.MappingNode):
+            for key, value in defaults.value:
+                if (isinstance(key, yaml.ScalarNode) and key.value == "run"
+                        and isinstance(value, yaml.MappingNode)):
+                    shell = next((item.value for key, item in value.value
+                                  if isinstance(key, yaml.ScalarNode) and key.value == "shell"
+                                  and isinstance(item, yaml.ScalarNode)), shell)
+        explicit_shell = fields.get("shell")
+        if isinstance(explicit_shell, yaml.ScalarNode):
+            shell = explicit_shell.value
+        run = fields.get("run")
+        if isinstance(run, yaml.ScalarNode) and shell.split(" ", 1)[0] in _SHELL_NAMES:
+            start, end = run.start_mark.index, run.end_mark.index
+            raw = text[start:end]
+            if run.style in {"'", '"'}:
+                # Escaped YAML content needs its own source map. Retain a
+                # candidate when that mapping is uncertain.
+                if raw[1:-1] != run.value:
+                    raw = ""
+                else:
+                    raw = raw[1:-1]
+                    start += 1
+            ignored.update(_shell_variable_offsets(raw, start))
+        pending.extend((child, shell) for child in fields.values())
+    return ignored
+
+
+# These tokens locate SQL predicate clauses without reading keywords inside
+# quoted values, identifiers or comments. Parentheses retain the outer clause
+# so a subquery's WHERE cannot hide a later UPDATE SET assignment.
+_SQL_CONTEXT_TOKEN = re.compile(
+    r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|--[^\n]*|/\*.*?\*/"
+    r"|(?P<word>\b[A-Za-z_][A-Za-z_0-9]*\b)|(?P<punct>[();])",
+    re.DOTALL,
+)
+
+
+def _sql_comparison_ranges(text: str) -> list[tuple[int, int]]:
+    """Source ranges in recognizable SQL predicates; no query execution."""
+    ranges = []
+    stack = []
+    comparison = False
+    start = 0
+    for token in _SQL_CONTEXT_TOKEN.finditer(text):
+        previous = comparison
+        word = (token.group("word") or "").lower()
+        punct = token.group("punct")
+        if punct == "(":
+            stack.append(comparison)
+        elif punct == ")":
+            comparison = stack.pop() if stack else False
+        elif punct == ";":
+            comparison = False
+            stack.clear()
+        elif word in {"where", "having", "on", "select", "check"}:
+            comparison = True
+        elif word in {"set", "update", "insert", "delete", "create", "alter", "declare", "begin"}:
+            comparison = False
+        if comparison != previous:
+            if comparison:
+                start = token.end()
+            else:
+                ranges.append((start, token.start()))
+    if comparison:
+        ranges.append((start, len(text)))
+    return ranges
 
 
 @dataclass(frozen=True)
@@ -426,27 +762,51 @@ class SecretFinding:
     # finding is undamped production code. Escalated migration findings stay
     # None: they are production context, more so than anything else here.
     context: str | None = None
+    source_context: dict | None = None
 
 
 def _mask(value: str) -> str:
     return f"{value[:4]}****({len(value)} chars)"
 
 
-def _iter_text_files(zf: zipfile.ZipFile) -> Iterator[tuple[str, str]]:
+def _iter_text_files(zf: zipfile.ZipFile, coverage: dict | None = None) -> Iterator[tuple[str, str]]:
+    if coverage is None:
+        coverage = {}
+    coverage.update(files_total=0, files_read=0, files_scanned=0, lossy_decoded_files=0, exclusions={})
+
+    def skip(reason: str) -> None:
+        counts = coverage["exclusions"]
+        counts[reason] = counts.get(reason, 0) + 1
+
     for info in zf.infolist():
         name = info.filename
-        if info.is_dir() or info.file_size > MAX_SCANNED_FILE_BYTES:
+        if info.is_dir():
+            continue
+        coverage["files_total"] += 1
+        if info.file_size > MAX_SCANNED_FILE_BYTES:
+            skip("file_size_limit")
             continue
         if stat.S_ISLNK(info.external_attr >> 16):
+            skip("symlink")
             continue
         if any(part in name for part in _SKIP_DIRS):
+            skip("excluded_directory")
             continue
         if name.lower().endswith(_SKIP_SUFFIXES):
+            skip("excluded_extension")
             continue
         data = zf.read(info)
+        coverage["files_read"] += 1
         if b"\x00" in data[:4096]:  # binary sniff
+            skip("binary_content")
             continue
-        yield name, data.decode("utf-8", errors="ignore")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            coverage["lossy_decoded_files"] += 1
+            text = data.decode("utf-8", errors="ignore")
+        coverage["files_scanned"] += 1
+        yield name, text
 
 
 # The Supabase CLI's local stack signs its tokens with the SAME secret for
@@ -621,7 +981,7 @@ def _dsn_severity(matched: str) -> tuple[str, float, str]:
 
 
 def _classify_match(name: str, lineno: int, rule: SecretRule,
-                    matched: str, line_text: str = "") -> SecretFinding:
+                    matched: str, line_text: str = "", source_role: str | None = None) -> SecretFinding:
     """Turn one rule hit into a SecretFinding, applying the same
     context-damping and effective-rule-id logic scan_secrets has always
     used. Extracted so iter_secret_matches and scan_secrets share one
@@ -678,9 +1038,9 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
             and not is_local_dsn):
         confidence = max(confidence, _MIGRATION_MIN_CONFIDENCE)
         title = f"{title} (committed database migration)"
-    elif is_anon or is_dev_dsn or is_demo_jwt:
+    elif is_anon or is_demo_jwt:
         pass
-    elif is_local_dsn and _is_ci_workflow_path(name):
+    elif (is_local_dsn or (is_dev_dsn and dsn_host_is_local(matched))) and _is_ci_workflow_path(name):
         # A connection string to localhost inside a CI workflow is the
         # password of a service container that exists for the length of one
         # job. Measured on dubinc/dub (audit a5fcb681):
@@ -711,11 +1071,17 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
         title = f"{title} (commented-out line)"
         context = "comment"
-    elif _is_doc_context(name):
+    elif _is_doc_context(name) or source_role == "docstring":
         severity = _DOC_SEVERITY_CAP.get(severity, severity)
         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
         title = f"{title} (documentation/example context)"
         context = "doc_example"
+    role = source_role or context or "source_literal"
+    if is_dev_dsn and context is None and source_role is None:
+        parts = _DSN_SPLIT_RE.search(matched)
+        host = parts["host"].lower() if parts else ""
+        if host in {"example.com", "example.org", "example.net"} or host.endswith(".example"):
+            context, role = "doc_example", "placeholder_uri"
     return SecretFinding(
         rule_id=effective_rule_id,
         title=title,
@@ -725,10 +1091,11 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
         line=lineno,
         masked=_mask(matched),
         context=context,
+        source_context=uri_context(matched, role) if rule.id == "connection-string-password" else None,
     )
 
 
-def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]]:
+def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> Iterator[tuple[SecretFinding, str]]:
     """Like scan_secrets, but also yields the RAW matched text alongside
     each finding.
 
@@ -740,18 +1107,66 @@ def iter_secret_matches(fileobj: BinaryIO) -> Iterator[tuple[SecretFinding, str]
     source. Callers MUST NOT persist, log, or echo the raw value; it may
     only be written OUT of a file, never back into any artifact.
     """
+    remaining = MAX_TOTAL_PYTHON_BYTES
     with zipfile.ZipFile(fileobj) as zf:
-        for name, text in _iter_text_files(zf):
-            for lineno, line in enumerate(text.splitlines(), start=1):
+        for name, text in _iter_text_files(zf, coverage):
+            regions = None
+            comparison_ranges = None
+            shell_substitutions = None
+            next_line_offset = 0
+            for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
+                line_offset = next_line_offset
+                next_line_offset += len(raw_line)
+                line = raw_line.rstrip("\r\n")
                 for rule in RULES:
                     m = rule.pattern.search(line)
                     if not m:
                         continue
+                    if regions is None:
+                        regions = []
+                        size = len(text.encode("utf-8"))
+                        if name.endswith(".py") and size <= min(MAX_PYTHON_BYTES, remaining):
+                            remaining -= size
+                            regions = python_regions(text)
+                    for candidate in rule.pattern.finditer(line):
+                        if rule.id == "sql-secret-assignment" and name.lower().endswith(".sql"):
+                            if comparison_ranges is None:
+                                comparison_ranges = _sql_comparison_ranges(text)
+                            offset = line_offset + candidate.start()
+                            index = bisect_right(comparison_ranges, offset, key=lambda span: span[0]) - 1
+                            if index >= 0 and offset < comparison_ranges[index][1]:
+                                continue
+                        if (rule.id == "generic-assignment" and candidate.group("q") == '"'
+                                and _SHELL_VARIABLE_VALUE.fullmatch(candidate.group("value"))):
+                            if shell_substitutions is None:
+                                shell_substitutions = _shell_substitution_offsets(name, text)
+                            if line_offset + candidate.start() in shell_substitutions:
+                                continue
+                        if rule.id in {"generic-assignment", "sql-secret-assignment"}:
+                            value_start = (lineno, len(line[:candidate.start("value")].encode("utf-8")))
+                            value_end = (lineno, len(line[:candidate.end("value")].encode("utf-8")))
+                            # Only an entire formatted field is nonliteral;
+                            # real secret bytes inside its expression or next
+                            # to the field must remain visible.
+                            if any(role == "formatted_value"
+                                   and value_start == (lo, col) and value_end == (hi, end_col)
+                                   for lo, col, hi, end_col, role in regions):
+                                continue
+                        m = candidate
+                        break
+                    else:
+                        continue
+                    # AST columns are UTF-8 byte offsets; regex offsets are characters.
+                    start = (lineno, len(line[:m.start()].encode("utf-8")))
+                    end = (lineno, len(line[:m.end()].encode("utf-8")))
+                    source_role = next((role for lo, col, hi, end_col, role in regions
+                                        if role != "formatted_value"
+                                        and (lo, col) <= start and end <= (hi, end_col)), None)
                     yield (
-                        _classify_match(name, lineno, rule, m.group(0), line),
+                        _classify_match(name, lineno, rule, m.group(0), line, source_role),
                         m.group(0),
                     )
 
 
-def scan_secrets(fileobj: BinaryIO) -> list[SecretFinding]:
-    return [finding for finding, _ in iter_secret_matches(fileobj)]
+def scan_secrets(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[SecretFinding]:
+    return [finding for finding, _ in iter_secret_matches(fileobj, coverage=coverage)]

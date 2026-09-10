@@ -83,7 +83,8 @@ def test_fact_and_prompt_budgets_preserve_valid_records(monkeypatch):
 
 
 def test_same_static_fact_record_in_free_and_paid_scan_and_model_receives_index():
-    data = make_zip({"repo/shared.py": HELPER, "repo/auth.py": b"from shared import _secret_equals\n"}).getvalue()
+    data = make_zip({"repo/shared.py": HELPER, "repo/auth.py": b"from shared import _secret_equals\n",
+                     "repo/runner.py": b"import subprocess\nsubprocess.run(command, input=sql)\n"}).getvalue()
     class RecordingLLM(FakeLLM):
         calls = []
 
@@ -99,6 +100,8 @@ def test_same_static_fact_record_in_free_and_paid_scan_and_model_receives_index(
     assert len(client.calls) == 1  # No new model call for fact collection.
     assert "Source syntax index" in client.calls[0][1]
     assert "_secret_equals" in client.calls[0][1]
+    assert "python_subprocess_context" in client.calls[0][1]
+    assert "Keyword input: Name; names: sql" in client.calls[0][1]
 
 
 def test_real_shared_helper_is_located_without_importing_it():
@@ -107,3 +110,29 @@ def test_real_shared_helper_is_located_without_importing_it():
     fact = next(f for f in record["facts"] if f["scope"] == "_secret_equals")
     assert fact["call"] == "hmac.compare_digest"
     assert "hmac.compare_digest" in path.read_text().splitlines()[fact["line"] - 1]
+
+
+def test_react_async_facts_survive_free_paid_and_unavailable_model_paths():
+    from app.llm.client import LLMError
+    from tests.test_react_async_context import component
+
+    data = make_zip({'src/Page.tsx': component('setBusy(true); await request(); setBusy(false);').encode()}).getvalue()
+    class RecordingLLM(FakeLLM):
+        def __init__(self):
+            super().__init__(response='[]')
+            self.calls = []
+
+        def complete(self, system, user, **kwargs):
+            self.calls.append(user)
+            return super().complete(system, user, **kwargs)
+
+    client = RecordingLLM()
+    free = run_scan(data, LLMClient(providers=[]))
+    paid = run_scan(data, client, llm_rubrics=('web',))
+    failed = run_scan(data, FakeLLM(error=LLMError('provider unavailable')), llm_rubrics=('web',))
+    facts = free['score']['scan_manifest']['source_facts']['react_async']
+    assert facts['records'][0]['checks'][0]['kind'] == 'react_async_state_reset'
+    assert facts == paid['score']['scan_manifest']['source_facts']['react_async']
+    assert facts == failed['score']['scan_manifest']['source_facts']['react_async']
+    assert free['score']['scan_manifest']['model_calls'] == 0
+    assert len(client.calls) == 1 and 'react_async_state_reset' in client.calls[0]

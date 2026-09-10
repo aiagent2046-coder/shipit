@@ -1,0 +1,7 @@
+{
+  "description": "The correct forms, which must stay silent: values passed as parameters, a constant query, an interpolated column list that is a literal defined in the same file, and ordinary non-SQL string building. A rule that reports these teaches its reader to ignore it.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

@@ -1,0 +1,7 @@
+import { createClient } from '@supabase/supabase-js'
+export async function GET(req: Request) {
+  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
+  const { id } = await req.json()
+  return Response.json(await supabase.from('profiles').select().eq('id', id))
+}

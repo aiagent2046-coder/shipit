@@ -1,0 +1,7 @@
+{
+  "description": "A placeholder-shaped value must not fire (damping is separate).",
+  "expect": [],
+  "forbid": [
+    "stripe-live-key"
+  ]
+}

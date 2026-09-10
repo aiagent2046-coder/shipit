@@ -1,0 +1,6 @@
+name: Deploy
+jobs:
+  deploy:
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone https://github.com/other/project.git /srv/project

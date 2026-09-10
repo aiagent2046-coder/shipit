@@ -1,0 +1,3 @@
+const authToken = "abcdefghijklmnop"
+const accessKey = "qrstuvwxyz012345"
+const clientSecret = "6789abcdefghijkl"

@@ -1,0 +1,10 @@
+{
+  "description": "The same loop shape, but iterating request data and a function parameter. Exempting loop variables over literal lists must not exempt these -- they are exactly where an attacker-controlled table name arrives.",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "severity": "high"
+    }
+  ],
+  "forbid": []
+}

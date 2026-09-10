@@ -5,8 +5,15 @@ finding's consequence. Keep that limit visible regardless of confidence,
 severity, tier, or how many model passes repeated the same claim.
 """
 
+import json
+import re
+
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
+from app.scan.claim_evidence import (
+    narrative_review_checks, partial_contradicted, source_assessments, syntax_contradicted, unsupported_transport,
+)
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
+from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 
 
 def is_non_production(finding: dict) -> bool:
@@ -15,9 +22,16 @@ def is_non_production(finding: dict) -> bool:
             else is_non_production_path(str(finding.get("file", ""))))
 
 
+def is_informational(finding: dict) -> bool:
+    return finding.get("rule_id") == "no-dockerfile" and finding.get("context") == "deployment_inventory"
+
+
 def finding_counts(findings: list[dict]) -> tuple[int, int]:
     source = examples = 0
     for finding in findings:
+        if (is_informational(finding) or syntax_contradicted(finding.get("claim_evidence"))
+                or unsupported_transport(finding.get("claim_evidence"))):
+            continue
         # Display-only RLS groups retain one title for each stored observation.
         count = len(finding.get("occurrence_titles") or []) or 1
         if is_non_production(finding):
@@ -27,9 +41,48 @@ def finding_counts(findings: list[dict]) -> tuple[int, int]:
     return source, examples
 
 
+def observation_summary(findings: list[dict]) -> str:
+    source, examples = finding_counts(findings)
+    informational = contradicted = unsupported = 0
+    for finding in findings:
+        count = len(finding.get("occurrence_titles") or []) or 1
+        if unsupported_transport(finding.get("claim_evidence")):
+            unsupported += count
+        elif syntax_contradicted(finding.get("claim_evidence")):
+            contradicted += count
+        elif is_informational(finding):
+            informational += count
+    message = (f"{source + examples + informational + contradicted + unsupported} observations: "
+            f"{source} in source, {examples} in tests/examples, {informational} informational, "
+            f"{contradicted} with contradicted syntax premises.")
+    return (message + f" {unsupported} transport-only hypotheses need exposure evidence."
+            if unsupported else message)
+
+
+def review_contribution_rows(score: dict) -> list[tuple[str, str, str]]:
+    baseline = score.get("free_baseline") or {}
+    if baseline.get("version") != 1:
+        return []
+
+    def values(stage: dict) -> list[str]:
+        manifest = stage.get("scan_manifest") or {}
+        processing = manifest.get("model_findings")
+        saved = (sum(r["saved"] for r in processing)
+                 if processing and all(isinstance(r.get("saved"), int) for r in processing) else None)
+        recorded = [manifest.get("llm_submitted_files"), manifest.get("model_calls"), saved]
+        return [str(v) if v is not None else "Not recorded" for v in recorded]
+
+    free = values(baseline.get("score") or {})
+    paid = values(score)
+    return list(zip(("Files submitted to model", "Model responses", "Retained model hypotheses"), free, paid))
+
+
 def source_severity_counts(findings: list[dict]) -> dict[str, int]:
     counts = dict.fromkeys(("critical", "high", "medium", "low"), 0)
     for finding in findings:
+        if (is_informational(finding) or syntax_contradicted(finding.get("claim_evidence"))
+                or unsupported_transport(finding.get("claim_evidence"))):
+            continue
         if is_non_production(finding):
             continue
         for severity in finding.get("occurrence_severities") or [finding.get("severity")]:
@@ -66,7 +119,40 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
     return title, detail + " This is a limit of the audit, not evidence of a defect in your project."
 
 
-def evidence_label(finding: dict) -> str:
+def model_acceptance_notice(score: dict) -> tuple[str, str] | None:
+    """Surface exclusions independently of provider completion and score fields."""
+    summary = acceptance_summary((score.get("scan_manifest") or {}).get("model_findings"))
+    if not summary or not summary["rejected"]:
+        return None
+    title = f"Model observations accepted: {summary['accepted']} of {summary['received']}"
+    reasons = [("source_rejected", "could not be matched to the cited source"),
+               ("withdrawn", "was withdrawn by the model" if summary["withdrawn"] == 1
+                else "were withdrawn by the model"),
+               ("other_rejected", "failed response validation")]
+    detail = "; ".join(f"{summary[key]} {label}" for key, label in reasons if summary[key])
+    detail += (". Excluded observations are not included in the findings. "
+              "Acceptance checks source citation and response format; "
+              "it does not verify conclusions or establish project safety.")
+    return title, detail
+
+
+def _partial_for_display(finding: dict, historical: bool) -> bool:
+    record = finding.get("claim_evidence") or {}
+    # Retain recorded assessments in history without applying a new disposition.
+    return partial_contradicted({**record, "source_assessments": []} if historical else record)
+
+
+def evidence_label(finding: dict, historical: bool = False) -> str:
+    if not historical and unsupported_transport(finding.get("claim_evidence")):
+        return "Credential transport — exposure not established"
+    if syntax_contradicted(finding.get("claim_evidence")):
+        return "Model syntax premise contradicted — see bounded check"
+    if _partial_for_display(finding, historical):
+        return "Part of the model claim is contradicted — remaining claims need review"
+    if not historical and narrative_review_checks(finding.get("claim_evidence")):
+        return "Outcome not established — source conditions need review"
+    if is_informational(finding):
+        return "Deployment inventory — informational"
     source = finding.get("source")
     if source == "llm" or str(finding.get("rule_id", "")).startswith("llm-"):
         return "Model hypothesis — unverified"
@@ -75,7 +161,35 @@ def evidence_label(finding: dict) -> str:
     return "Legacy finding — verification not recorded"
 
 
-def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
+def _grouped_claim_rows(record: dict) -> list[tuple[str, str]]:
+    grouping = record.get("grouped_claim_scope")
+    originals = record.get("grouped_originals")
+    if (not isinstance(grouping, dict) or grouping.get("mechanism") != "react_network_rejection_cleanup"
+            or not isinstance(originals, list) or len(originals) < 2):
+        return []
+    rows = [("Grouped hypothesis scope",
+             "Grouped by the same source operation and network-rejection cleanup hypothesis. "
+             "Original conditions and consequences retain their own verification statuses.")]
+    identity = record.get("source_issue_identity")
+    handler = identity.get("handler") if isinstance(identity, dict) else None
+    disagreements = grouping.get("title_source_disagreements")
+    if not isinstance(disagreements, list) or not isinstance(handler, str):
+        return rows
+    if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]{0,127}", handler):
+        return rows
+    for item in disagreements:
+        if not isinstance(item, dict) or item.get("result") != "different_handler_label":
+            continue
+        index = item.get("original_index")
+        if type(index) is not int or not 0 <= index < len(originals) or item.get("source_handler") != handler:
+            continue
+        rows.append(("Handler label needs review",
+                     f"Original {index + 1} uses a different handler label. Bound source handler: {handler}. "
+                     "The original wording is retained; its handler label is not verified."))
+    return rows
+
+
+def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[str, str]]:
     """A recorded source check is separate from the model's reading of it."""
     record = finding.get("claim_evidence")
     record = record if isinstance(record, dict) and record.get("version") == 1 else {}
@@ -88,6 +202,125 @@ def claim_evidence_rows(finding: dict) -> list[tuple[str, str]]:
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
+    if not historical and unsupported_transport(record):
+        rows.append(("Needs exposure evidence",
+                     "This transport-only hypothesis is excluded from the score. Runtime routing, logging "
+                     "and credential exposure remain unverified."))
+    if _partial_for_display(finding, historical):
+        rows.append(("Assessment needs review",
+                     "A bounded source check contradicts part of this finding. The original model severity "
+                     "remains in the score because the other claims have not been resolved; it is not "
+                     "independent confirmation of their impact. Review the source checks before acting."))
+    if not historical:
+        for assessment in narrative_review_checks(record):
+            rows.append(("Outcome needs review", assessment["narrative_review"]["reason"] +
+                         " The original model severity remains in the score pending review; "
+                         "this observation does not verify the outcome or establish safety."))
+    context = record.get("source_context") or {}
+    if context:
+        labels = {"comment": "Comment", "docstring": "Python docstring", "doc_example": "Documentation/example",
+                  "test_file": "Test file", "test_fixture": "Test fixture/placeholder",
+                  "ci_service": "CI configuration with a local host", "placeholder_uri": "Example URI",
+                  "configuration_template": "Configuration text containing change_me",
+                  "source_literal": "Source text; runtime use not established"}
+        rows.append(("Source context", labels.get(context.get("kind"), "Not recorded")))
+        rows.append(("URI protocol", str(context.get("uri_scheme", "Not recorded")) + " — "
+                     + str(context.get("uri_kind", "other_or_unknown"))
+                     + "; URI use, credential validity and deployment are not verified."))
+    syntax = record.get("syntax_check")
+    if syntax:
+        labels = {"contradicted": "Syntax premise contradicted", "observed": "Syntax pattern observed",
+                  "not_checked": "Syntax premise not checked"}
+        label = labels.get(syntax.get("result"), "Syntax premise not checked")
+        detail = syntax["claim"] + " " + syntax["detail"]
+        if syntax.get("line_start"):
+            detail += f" Checked source lines {syntax['line_start']}–{syntax['line_end']}."
+        rows.append((label, detail))
+    for premise in record.get("premise_checks", []):
+        label = ("Atomic premise contradicted — other claims remain unverified"
+                 if premise.get("result") == "contradicted" else "Parsed output evidence — compare with the model claim"
+                 if premise.get("kind") == "zod_unknown_keys_in_write" and premise.get("result") == "observed"
+                 else "Atomic premise not checked")
+        location = (f" Target {premise['target']}, source lines "
+                    f"{premise['source_line_start']}–{premise['source_line_end']}."
+                    if premise.get("source_line_start") else "")
+        claim = ("Checked Zod input and the parsed write payload."
+                 if premise.get("kind") == "zod_unknown_keys_in_write" and premise.get("result") == "observed"
+                 else premise["claim"])
+        rows.append((label, claim + " " + premise["detail"] + location))
+        if premise.get("kind") == "zod_unknown_keys_in_write" and premise.get("source_binding"):
+            for path in premise["source_binding"].get("paths", []):
+                for write in path.get("writes", []):
+                    rows.append(("Checked parsed-output write",
+                                 f"{path['file']}:{path['parse_line']} {path['parse_method']} → "
+                                 f"{write['file']}:{write['line_start']} {write['method']}. "
+                                 "This does not establish that unknown input must be rejected."))
+    for assessment in source_assessments(record):
+        rows.append(("Source assessment", assessment["detail"]))
+        rows.append(("Source assessment binding", json.dumps(assessment, ensure_ascii=False)))
+    context_labels = {
+        "guard_context": "Existing guard evidence — compare with the model claim",
+        "cost_context": "Cost and ordering evidence — compare with the model claim",
+        "rls_recommendation_context": "Policy prerequisites — review before changing clients",
+    }
+    for context in record.get("context_checks", []):
+        if context.get("scope") == "bounded_source_context":
+            label = ("Bounded source context — compare with the model claim" if context.get("result") == "observed"
+                     else "Source context not checked")
+            rows.append((label, context["claim"] + " " + context["detail"]))
+            if context.get("result") == "observed" and isinstance(context.get("source_binding"), dict):
+                rows.append(("Checked source context binding",
+                             json.dumps(context["source_binding"], ensure_ascii=False)))
+        label = context_labels.get(context.get("kind"))
+        if label:
+            summaries = ([context["summary"]] if context.get("summary") else
+                         [item.get("summary", "") for item in context.get("checks", [])])
+            for summary in summaries:
+                if summary:
+                    location = str(context.get("file", ""))
+                    if context.get("line"):
+                        location += ":" + str(context["line"])
+                    rows.append((label, (location + " — " if location else "") + summary))
+        if context.get("kind") == "react_async_context":
+            for item in context.get("checks", []):
+                if item.get("summary"):
+                    rows.append(("React error-path evidence — compare with the model claim",
+                                 str(context.get("scope", "")) + ": " + item["summary"] + " " + item["detail"]))
+        rows.append(("Deterministic context check", json.dumps(context, ensure_ascii=False)))
+    recommendation = record.get("recommendation_check")
+    if isinstance(recommendation, dict) and recommendation:
+        detail = recommendation.get("detail")
+        rows.append(("Recommendation prerequisites", detail if isinstance(detail, str) else "Not recorded."))
+        checks = recommendation.get("checks")
+        for i, check in enumerate(checks if isinstance(checks, list) else [], 1):
+            if not (isinstance(check, dict) and check.get("version") == 1
+                    and check.get("result") == "prerequisites_required"
+                    and isinstance(check.get("kind"), str) and isinstance(check.get("detail"), str)):
+                continue
+            scope = check.get("scope") if isinstance(check.get("scope"), str) else ""
+            rows.append((f"Recommendation check {i} — prerequisites not verified",
+                         check["kind"] + ": " + check["detail"] + " " + scope))
+            prerequisites = check.get("prerequisites")
+            conditions = ([p for p in prerequisites if isinstance(p, str) and p]
+                          if isinstance(prerequisites, list) else [])
+            if conditions:
+                rows.append((f"Required recommendation conditions {i}", "\n".join(conditions)))
+            if isinstance(check.get("reference"), str) and check["reference"]:
+                rows.append((f"Recommendation API reference {i}", check["reference"]))
+        if isinstance(recommendation.get("original_fix_hint"), str):
+            rows.append(("Superseded original recommendation — do not apply without review",
+                         recommendation["original_fix_hint"]))
+        if isinstance(recommendation.get("original_provenance"), dict) and recommendation["original_provenance"]:
+            rows.append(("Superseded recommendation provenance — not independent verification",
+                         json.dumps(recommendation["original_provenance"], ensure_ascii=False)))
+        superseded = recommendation.get("superseded_fix_hints")
+        for i, hint in enumerate(superseded if isinstance(superseded, list) else [], 1):
+            if isinstance(hint, str):
+                rows.append((f"Superseded intermediate recommendation {i} — do not apply without review", hint))
+    rows.extend(_grouped_claim_rows(record))
+    for i, original in enumerate(record.get("grouped_originals", []), 1):
+        rows.append((f"Grouped original {i} — not independent confirmation",
+                     json.dumps(original, ensure_ascii=False)))
     if record.get("observation"):
         rows.append(("Model interpretation — unverified", record["observation"]))
     conditions = record.get("required_conditions")
@@ -139,17 +372,67 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Model responses", str(manifest.get("model_calls", 0))),
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),
     ]
+    accounting = manifest.get("model_findings")
+    if accounting is None:
+        rows.append(("Model finding processing", "Not recorded for this audit"))
+    elif not accounting:
+        rows.append(("Model finding processing", "No model response processed"))
+    else:
+        for row in accounting:
+            rows.append(("Finding processing: " + str(row.get("model") or "unknown model"),
+                         f"Responses: {row['responses']}; unreadable: {row['invalid_responses']}; "
+                         f"valid empty: {row['empty_responses']}. "
+                         f"Received entries: {row['received']}; rejected: {row['rejected']}; "
+                         f"accepted before grouping: {row['accepted']}; merged: {row['merged']}; "
+                         f"saved representatives: {row['saved']}. "
+                         "Merged originals are retained. These counts do not verify conclusions."))
+            rows.append(("Rejection reasons", json.dumps(row["rejection_reasons"], ensure_ascii=False)))
+    diagnostics = manifest.get("rejection_diagnostics")
+    if isinstance(diagnostics, dict) and diagnostics.get("version") == 1:
+        safe = diagnostics_manifest({"rejected_items": diagnostics.get("items"),
+                                     "rejected_items_omitted": diagnostics.get("omitted", 0)})
+        if safe:
+            rows.append(("Rejection diagnostic scope",
+                         "Bounded metadata only; source path SHA-256 references identify known paths. "
+                         "Rejected text, quotes and unknown paths are not retained. "
+                         f"Additional records omitted: {safe['omitted']}."))
+            for item in safe["items"]:
+                rows.append((f"Rejected observation {item['response']}:{item['item']}",
+                             json.dumps(item, ensure_ascii=False)))
     for key, label in (("llm_candidate_files", "Files eligible for model review"),
                        ("llm_submitted_files", "Unique files submitted to model"),
                        ("llm_files_not_submitted", "Eligible files not submitted")):
         value = manifest.get(key)
         rows.append((label, str(value) if value is not None else "Not recorded"))
+    exclusions = manifest.get("llm_selection_exclusions")
+    labels = {
+        "no_rubric_match": "No keyword match in configured review areas",
+        "rubric_not_reached": "Matching review areas were not reached",
+        "selection_budget": "Outside file-selection budgets of attempted areas",
+        "request_window": "Removed to fit the request window",
+    }
+    if isinstance(exclusions, dict):
+        rows.extend(("Files not submitted: " + label, str(exclusions.get(key, 0)))
+                    for key, label in labels.items())
+    elif manifest.get("llm_files_not_submitted"):
+        rows.append(("File exclusion reasons", "Not recorded for this audit"))
     limitations = manifest.get("limitations", [])
     rows.append(("Model limits / skip reasons", ", ".join(limitations) or "None recorded"))
     for check, status in manifest.get("static_limits", {}).items():
         rows.append((f"Static scope: {check}", str(status)))
     facts = manifest.get("source_facts")
     if isinstance(facts, dict):
+        for key, label in (("guards", "Guard evidence"), ("cost_context", "Cost evidence"),
+                           ("rls_recommendations", "Policy recommendation evidence")):
+            index = facts.get(key)
+            if isinstance(index, dict):
+                rows.extend([
+                    (label + " scope", index.get("scope", "Not recorded")),
+                    (label + " limits", ", ".join(index.get("limitations", [])) or "None recorded"),
+                    (label + " records", str(len(index.get("records", [])))),
+                ])
+                rows.extend((f"{label} {i}", json.dumps(item, ensure_ascii=False))
+                            for i, item in enumerate(index.get("records", []), 1))
         rows.append(("Source fact scope", facts.get("scope", "Not recorded")))
         rows.append(("Python files parsed for source facts", str(facts.get("parsed_files", 0))))
         rows.append(("Source fact limits", ", ".join(facts.get("limitations", [])) or "None recorded"))
@@ -157,6 +440,43 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
             rows.append((f"Source syntax fact {i}",
                          f"{fact['file']}:{fact['line']} — {fact['scope']}: call {fact['call']}; "
                          f"matching {fact['import_module']} import at line {fact['import_line']}"))
+        operations = facts.get("operations")
+        if isinstance(operations, dict):
+            rows.extend([
+                ("Operation context scope", operations.get("scope", "Not recorded")),
+                ("Files parsed for operation context", str(operations.get("parsed_files", 0))),
+                ("Operation context limits", ", ".join(operations.get("limitations", [])) or "None recorded"),
+            ])
+            for i, fact in enumerate(operations.get("records", []), 1):
+                rows.append((f"Operation context {i}",
+                             f"{fact['file']}:{fact['line']} — {fact['scope']}: {fact['call']}\n"
+                             + fact["detail"]))
+        react = facts.get("react_async")
+        if isinstance(react, dict):
+            rows.extend([
+                ("React async scope", react.get("scope", "Not recorded")),
+                ("Files parsed for React async context", str(react.get("parsed_files", 0))),
+                ("React async limits", ", ".join(react.get("limitations", [])) or "None recorded"),
+            ])
+            for i, fact in enumerate(react.get("records", []), 1):
+                detail = [f"{fact['file']}:{fact['line']}–{fact['line_end']} — {fact['scope']}",
+                          "Await lines: " + ", ".join(map(str, fact["await_lines"]))]
+                detail.extend(json.dumps(c, ensure_ascii=False) for c in fact["checks"])
+                detail.extend("Button syntax: " + json.dumps(c, ensure_ascii=False) for c in fact["controls"])
+                rows.append((f"React async context {i}", "\n".join(detail)))
+        functions = facts.get("functions")
+        if isinstance(functions, dict):
+            rows.extend([
+                ("Function evidence scope", functions.get("scope", "Not recorded")),
+                ("Functions indexed", str(functions.get("indexed_functions", 0))),
+                ("Function evidence limits", ", ".join(functions.get("limitations", [])) or "None recorded"),
+            ])
+            for i, fact in enumerate(functions.get("records", []), 1):
+                detail = [f"{fact['file']}:{fact['line']}–{fact['line_end']} — {fact['scope']}"]
+                detail.extend(json.dumps(c, ensure_ascii=False) for c in fact["checks"])
+                detail.extend("Candidate (binding not resolved): " + json.dumps(c, ensure_ascii=False)
+                              for c in fact["candidates"])
+                rows.append((f"Function evidence {i}", "\n".join(detail)))
     for kind, paths in manifest.get("inventory", {}).items():
         shown = ", ".join(paths[:5])
         if len(paths) > 5:

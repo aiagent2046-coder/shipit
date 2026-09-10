@@ -1,0 +1,10 @@
+import { useState } from 'react';
+
+export default function ProfileForm() {
+  const [done, setDone] = useState(false);
+  const persist = async () => {
+    await fetch('/api/profile', { method: 'POST' });
+    setDone(true);
+  };
+  return <><button onClick={persist}>Save</button>{done && <p>Профиль сохранён</p>}</>;
+}

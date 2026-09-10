@@ -1,0 +1,7 @@
+{
+  "description": "Short values stay under the length bar.",
+  "expect": [],
+  "forbid": [
+    "generic-assignment"
+  ]
+}

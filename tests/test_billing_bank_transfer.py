@@ -179,13 +179,19 @@ class FakeFixpackRepo:
     def __init__(self):
         self.rows: list[dict] = []
 
-    async def create_paid(self, *, audit_id, stack):
+    async def get(self, job_id):
+        return next((r for r in self.rows if r["id"] == job_id), None)
+
+    async def create_paid(self, *, audit_id, stack, funding_key=None):
+        owned = next((r for r in self.rows if funding_key and r.get("funding_key") == funding_key), None)
+        if owned:
+            return {**owned, "inserted": False}
         live = fixpack_live_job(self.rows, audit_id)
         if live is not None:
             return {**live, "inserted": False}
         row = {
             "id": str(uuid.uuid4()), "audit_id": audit_id, "pack": "fixpack",
-            "stack": stack, "status": "paid", "verified": None, "detail": None,
+            "funding_key": funding_key, "stack": stack, "status": "paid", "verified": None, "detail": None,
             "pr_url": None, "pr_delivered": False,
             "created_at": datetime.datetime.now(datetime.timezone.utc),
         }
@@ -784,6 +790,7 @@ async def test_operator_confirm_creates_one_fixpack_job(monkeypatch):
     assert status == {
         "reference": invoice["reference"], "status": "completed",
         "product": "fixpack", "audit_id": audit["id"],
+        "funding_review_required": False,
     }
 
 
@@ -1195,14 +1202,24 @@ async def test_confirming_a_second_payment_warns_the_operator(monkeypatch):
         fixpack_repo=fixpacks, payment_id=second_invoice["payment_id"],
         transport=_no_network())
 
-    # Both payments went through and both report granted -- that part is
-    # unchanged and correct, the Fix Pack IS queued.
+    # A deterministic control case for the audit: two distinct confirmed
+    # payments can fund one job. A warning is not prevention or a refund,
+    # and an LLM failing to mention this scenario does not make it fixed.
+    assert len(payments.rows) == 2
+    assert {row["status"] for row in payments.rows.values()} == {"completed"}
+    assert {row["audit_id"] for row in payments.rows.values()} == {audit["id"]}
     assert first["granted"] is True and second["granted"] is True
     assert len(fixpacks.rows) == 1
 
     # What changed: the second one no longer claims to have funded work.
     assert first["joined_existing_job"] is False
     assert second["joined_existing_job"] is True
+
+    replay = await bank_transfer.confirm(
+        payment_repo=payments, account_repo=accounts, audit_repo=audits,
+        fixpack_repo=fixpacks, payment_id=second_invoice["payment_id"],
+        transport=_no_network())
+    assert replay["joined_existing_job"] is True
 
     text = telegram_stars._confirmed_text(second)
     assert "WARNING" in text

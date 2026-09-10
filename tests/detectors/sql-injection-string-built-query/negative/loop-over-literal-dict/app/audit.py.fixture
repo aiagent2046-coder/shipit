@@ -1,0 +1,16 @@
+ACCOUNT_CHILDREN = {
+    "payments": "account_id",
+    "subscriptions": "account_id",
+    "llm_usage": "account_id",
+}
+
+
+def audit(cur, account_id):
+    """A table-to-column map beside the query it drives."""
+    for table, col in ACCOUNT_CHILDREN.items():
+        cur.execute(f"SELECT id FROM {table} WHERE {col} = %s", (account_id,))
+
+
+def purge(cur):
+    for table in ACCOUNT_CHILDREN.keys():
+        cur.execute(f"DELETE FROM {table} WHERE stale = true")

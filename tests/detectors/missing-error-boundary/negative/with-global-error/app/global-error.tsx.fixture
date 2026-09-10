@@ -1,0 +1,2 @@
+'use client'
+export default function E(){return <html><body>Error</body></html>}

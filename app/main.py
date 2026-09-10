@@ -67,6 +67,7 @@ from app.db import (
     fixpack_processor_lock,
     monitoring_processor_lock,
 )
+from app.audit_history import refresh_cached_preview_history, ensure_paid_baseline
 from app.deploypack import github_app
 from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
 from app.deploypack.delivery import DeliveryError, render_pr_body
@@ -188,6 +189,7 @@ def configure_cors(target: FastAPI) -> None:
         allow_credentials=bool(origins) or allow_previews,
         allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type", CSRF_HEADER],
+        expose_headers=["Retry-After"],
     )
 
 
@@ -537,18 +539,22 @@ async def run_repo_audit(
     cached = await audit_repo.get_by_content_hash(
         digest, AUDIT_ENGINE_VERSION, BASIS_FULL)
     if cached is not None:
-        return {
-            "audit_id": cached["id"],
-            "findings": cached["findings_json"] or [],
-            "repo_url": cached.get("repo_url"),
-            "access_token": cached.get("access_token"),
-            # Always BASIS_FULL here -- that is what the lookup asked for --
-            # but reported anyway so callers never have to know that.
-            "basis": (cached.get("score_json") or {}).get("basis"),
-            "reused": True,
-        }
+        cached = await refresh_cached_preview_history(audit_repo, cached)
+        if cached["score_json"].get("free_baseline"):
+            return {
+                "audit_id": cached["id"],
+                "findings": cached["findings_json"] or [],
+                "repo_url": cached.get("repo_url"),
+                "access_token": cached.get("access_token"),
+                # Always BASIS_FULL here -- that is what the lookup asked for --
+                # but reported anyway so callers never have to know that.
+                "basis": (cached.get("score_json") or {}).get("basis"),
+                "reused": True,
+            }
 
-    scan = await _run_scan_offthread(raw, llm_client)
+    scan = ({"score": cached["score_json"], "findings": cached["findings_json"] or [],
+             "llm": {}, "llm_usage": {"calls": 0}} if cached else
+            await _run_scan_offthread(raw, llm_client))
     await _alert_llm_stage_failed(scan["llm"])
     # Cost accounting. account_id is None: this path serves system re-audits
     # (continuous monitoring), whose LLM cost is incurred once per push
@@ -561,6 +567,16 @@ async def run_repo_audit(
     # audit_repo.create does next -- including raise, which is why this is a
     # try/except/else rather than a line after the call.
     try:
+        async def record_preview(usage):
+            if llm_usage_repo is not None:
+                await _record_llm_usage(llm_usage_repo, job_type=job_type, job_id=None,
+                                       account_id=None, llm_stats=usage)
+        scan["score"] = await ensure_paid_baseline(
+            audit_repo, scan, raw, llm_client, digest, AUDIT_ENGINE_VERSION,
+            runner=_run_scan_offthread, record_usage=record_preview)
+        if cached:
+            scan["score"] = {**scan["score"], "analysis_reused_from":
+                             scan["score"].get("analysis_reused_from") or str(cached["id"])}
         persisted = await audit_repo.create(
             stack=stack.value, file_count=report.file_count,
             score_total=scan["score"]["total"], score_json=scan["score"],
@@ -2044,6 +2060,10 @@ async def create_audit(
     cached = await audit_repo.get_by_content_hash(
         digest, AUDIT_ENGINE_VERSION,
         basis_for_account(account["id"] if account else None))
+    if cached is not None and account:
+        cached = await refresh_cached_preview_history(audit_repo, cached)
+        if not cached["score_json"].get("free_baseline"):
+            cached = None  # Complete the missing baseline in the worker, never in HTTP intake.
     logger.info(
         "audit intake: cache %s for digest %s",
         "hit" if cached is not None else "miss", digest[:12],

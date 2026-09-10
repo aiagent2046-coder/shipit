@@ -1,0 +1,19 @@
+import { sql, db } from "./client";
+
+// A tagged template parameterises: the fragments and the values reach the
+// driver separately, exactly as a placeholder does.
+export async function findUser(userId: string) {
+  return sql`SELECT id, email FROM users WHERE id = ${userId}`;
+}
+
+export async function findByEmail(email: string) {
+  return db.query("SELECT id FROM users WHERE email = $1", [email]);
+}
+
+export async function countUsers() {
+  return db.query("SELECT count(*) FROM users");
+}
+
+export function label(userId: string) {
+  return "user " + userId;
+}

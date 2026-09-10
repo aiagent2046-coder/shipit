@@ -3,8 +3,31 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { AuditCoverage } from "./AuditCoverage";
 import { FindingsList, SeveritySummary } from "./FindingsList";
 import type { Finding, Score, ScanManifest } from "@/lib/types";
+import { findingCounts, sourceSeverityCounts } from "@/lib/evidence";
 
 afterEach(cleanup);
+
+it("shows observed consequence context and binding without turning it into a refutation", () => {
+  const f: Finding = { rule_id: "llm-auth", category: "Auth", title: "Original token claim",
+    source: "llm", severity: "high", confidence: .8,
+    claim_evidence: { version: 1, source_check: { kind: "not_recorded" },
+      observation: "A model interpretation", required_conditions: null,
+      conditions_status: "not_checked", consequence_status: "not_checked",
+      context_checks: [{ kind: "token_write_return_guard", scope: "bounded_source_context", result: "observed",
+        claim: "The local binding has an early return before later writes.",
+        detail: "Source context only; nonempty invalid tokens are not settled.",
+        source_binding: { file: "<unsafe>.ts", source_sha256: "a".repeat(64), binding: "credential" } }] } };
+  const before = JSON.stringify(f);
+  const { container } = render(<FindingsList findings={[f]} />);
+  expect(screen.getByText("Bounded source context — compare with the model claim")).toBeTruthy();
+  expect(screen.getByText("Checked source context binding")).toBeTruthy();
+  expect(screen.getByText("Potential high impact")).toBeTruthy();
+  expect(screen.queryByText("Assessment needs review")).toBeNull();
+  expect(screen.queryByText(/Atomic premise contradicted/)).toBeNull();
+  expect(screen.getByText("No independent verification recorded.")).toBeTruthy();
+  expect(container.querySelector("unsafe")).toBeNull();
+  expect(JSON.stringify(f)).toBe(before);
+});
 
 const finding: Finding = {
   rule_id: "llm-auth", category: "Auth", title: "Unproven double grant",
@@ -19,6 +42,131 @@ const manifest: ScanManifest = {
 };
 
 describe("audit evidence", () => {
+  it("shows a grouped handler-label disagreement beside the model evidence with escaped originals", () => {
+    const { container } = render(<FindingsList findings={[{ ...finding, claim_evidence: {
+      version: 1, source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,
+      conditions_status: "not_checked", consequence_status: "not_checked",
+      source_issue_identity: { handler: "send" }, grouped_originals: [
+        { title: "Send can leave loading active" }, { title: "<script>Suggest original</script>" }],
+      grouped_claim_scope: { mechanism: "react_network_rejection_cleanup", scope: "<img src=x onerror=alert(1)>",
+        consequences: "Untrusted consequence", title_source_disagreements: [{
+          original_index: 1, result: "different_handler_label", source_handler: "send" }] },
+    } }]} />);
+    expect(screen.getByText("Grouped hypothesis scope").closest("details")).toBeNull();
+    expect(screen.getByText("Handler label needs review").closest("details")).toBeNull();
+    expect(screen.getByText(/Original 2 uses a different handler label/).textContent)
+      .toContain("Bound source handler: send");
+    expect(container.textContent).toContain("<script>Suggest original</script>");
+    expect(container.textContent).not.toContain("Untrusted consequence");
+    expect(container.querySelector("script, img")).toBeNull();
+  });
+
+  it("shows legacy Free and Pro acceptance counts independently above the collapsed technical record", () => {
+    const free: Score = { total: 9.3, categories: { Security: 9.2 }, basis: "static+preview",
+      scan_manifest: { ...manifest, model_calls: 1, model_findings: [{ model: "preview", responses: 1,
+        invalid_responses: 0, empty_responses: 0, received: 11, accepted: 1, rejected: 10,
+        merged: 0, saved: 1, rejection_reasons: { source_quote_or_location_mismatch: 9, self_cancelled: 1 } }] } };
+    const paid: Score = { total: 4.9, categories: { Frontend: 3 }, basis: "static+llm",
+      free_baseline: { version: 1, origin: "included", status: "completed", score: free, findings: [] },
+      scan_manifest: { ...manifest, model_calls: 8, model_findings: [{ model: "paid", responses: 8,
+        invalid_responses: 0, empty_responses: 0, received: 59, accepted: 55, rejected: 4,
+        merged: 13, saved: 42, rejection_reasons: { self_cancelled: 4 } }] } };
+    const { container } = render(<>
+      <section aria-label="Free audit"><AuditCoverage score={free} findings={[]} /></section>
+      <section aria-label="Pro audit"><AuditCoverage score={paid} findings={[]} /></section>
+    </>);
+    const freeNotice = within(screen.getByRole("region", { name: "Free audit" }))
+      .getByRole("complementary", { name: "Model observation acceptance" });
+    const paidNotice = within(screen.getByRole("region", { name: "Pro audit" }))
+      .getByRole("complementary", { name: "Model observation acceptance" });
+    expect(freeNotice.textContent).toContain("Model observations accepted: 1 of 11");
+    expect(freeNotice.textContent).toContain("9 could not be matched to the cited source");
+    expect(paidNotice.textContent).toContain("Model observations accepted: 55 of 59");
+    expect(paidNotice.textContent).toContain("4 were withdrawn by the model");
+    expect(paidNotice.textContent).not.toContain("could not be matched");
+    for (const notice of [freeNotice, paidNotice]) {
+      expect(notice.closest("details")).toBeNull();
+      expect(notice.textContent).toContain("does not verify conclusions or establish project safety");
+    }
+    expect(container.textContent).not.toContain("9.3");
+    expect(container.textContent).not.toContain("4.9");
+  });
+
+  it("keeps safe rejection diagnostics inside Scan record and excludes unsafe metadata", () => {
+    const { container } = render(<AuditCoverage findings={[]} score={{ total: 0, categories: {},
+      scan_manifest: { ...manifest, rejection_diagnostics: { version: 1, omitted: 2, items: [{
+        response: 1, rubric: "web", item: 2, reason: "source_quote_or_location_mismatch",
+        detail: "quote_mismatch", file_ref: "sha256:" + "b".repeat(64), line_start: 10, line_end: 12,
+        evidence: "<script>private source</script>", path: "/private/source.ts", title: "private claim",
+      }, { response: 1, rubric: "web", item: 3, reason: "self_cancelled", detail: "self_cancelled",
+        file_ref: "<img src=x onerror=alert(1)>", line_start: "<script>unsafe</script>", line_end: null,
+      }] } } } as unknown as Score} />);
+    const diagnostic = screen.getByText(/Reason: source_quote_or_location_mismatch; detail: quote_mismatch/);
+    expect(diagnostic.closest("details")?.querySelector("summary")?.textContent).toBe("Scan record");
+    expect(screen.getByText(/2 records shown; 2 omitted/).closest("details")).not.toBeNull();
+    expect(screen.getByText(/entry: 3/).textContent).toContain("File reference: Not recorded");
+    expect(container.querySelector("script, img")).toBeNull();
+    expect(container.textContent).not.toMatch(/private source|private claim|private\/source|onerror|unsafe/);
+  });
+
+  it("does not substitute zero acceptance when an older report has no processing record", () => {
+    render(<AuditCoverage score={{ total: 9.3, categories: {}, scan_manifest: manifest }} findings={[]} />);
+    expect(screen.queryByRole("complementary", { name: "Model observation acceptance" })).toBeNull();
+    expect(screen.getByText("Model finding processing").nextElementSibling?.textContent)
+      .toBe("Not recorded for this audit");
+    expect(screen.queryByText(/Model observations accepted: 0/)).toBeNull();
+  });
+
+  it("shows automatic function evidence with unresolved candidate limits", () => {
+    const source_facts: NonNullable<ScanManifest["source_facts"]> = {
+      scope: "Syntax only", facts: [], parsed_files: 1, excluded_files: 0, limitations: [],
+      functions: { scope: "Name candidates; runtime binding not verified", indexed_functions: 2,
+        parsed_files: 1, excluded_files: 0, limitations: ["record_limit_reached"],
+        records: [{ file: "<unsafe>.py", line: 3, line_end: 7, scope: "grant",
+          checks: [{ kind: "completed_status_return", result: "observed" }],
+          candidates: [{ file: "db.py", line: 2000, binding: "name_candidate_not_resolved" }],
+          call_names: [] }] },
+    };
+    const { container } = render(<AuditCoverage score={{ total: 0, categories: {}, basis: "static_only",
+      scan_manifest: { ...manifest, source_facts } }} findings={[]} />);
+    expect(screen.getByText("Function evidence 1")).toBeTruthy();
+    expect(container.textContent).toContain("Candidate (binding not resolved)");
+    expect(container.textContent).toContain("record_limit_reached");
+    expect(container.querySelector("unsafe")).toBeNull();
+    expect(findingCounts([])).toEqual({ source: 0, examples: 0 });
+  });
+
+  it("retains contradicted premises separately without critical badges or actionable fixes", () => {
+    const contradicted: Finding = { ...finding, title: "UPDATE without WHERE",
+      fix_hint: "<script>old advice</script>",
+      claim_evidence: { version: 1, source_check: { kind: "quote_match", line_start: 1, line_end: 3 },
+        observation: null, required_conditions: null, conditions_status: "not_checked",
+        consequence_status: "not_checked", syntax_check: { kind: "sql_update_where", result: "contradicted",
+          claim: "The cited UPDATE has no WHERE.", detail: "Its own WHERE is present; safety was not tested.",
+          line_start: 1, line_end: 3 } },
+    };
+    const { container } = render(<FindingsList findings={[contradicted]} />);
+    const section = screen.getByRole("region", { name: "Contradicted syntax premises" });
+    expect(within(section).getAllByText("UPDATE without WHERE").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Potential critical impact")).toBeNull();
+    expect(screen.getByText("<script>old advice</script>").closest("details")).not.toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+    expect(findingCounts([contradicted])).toEqual({ source: 0, examples: 0 });
+    expect(sourceSeverityCounts([contradicted]).critical).toBe(0);
+  });
+
+  it("does not turn an observed syntax pattern into confirmed harm", () => {
+    render(<FindingsList findings={[{ ...finding,
+      claim_evidence: { version: 1, source_check: { kind: "quote_match", line_start: 1, line_end: 3 },
+        observation: null, required_conditions: null, conditions_status: "not_checked",
+        consequence_status: "not_checked", syntax_check: { kind: "react_hook_order", result: "observed",
+          claim: "A hook follows a conditional return.", detail: "Render paths were not tested." } },
+    }]} />);
+    expect(screen.getByText("Syntax pattern observed")).toBeTruthy();
+    expect(screen.getByText("No independent verification recorded.")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Contradicted syntax premises" })).toBeNull();
+  });
+
   it("keeps quote checks separate from model conditions and consequences", () => {
     const { container } = render(<FindingsList findings={[{ ...finding,
       explanation: "Another account might be readable.",

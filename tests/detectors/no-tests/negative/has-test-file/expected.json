@@ -1,0 +1,7 @@
+{
+  "description": "One test file is enough to answer this check.",
+  "expect": [],
+  "forbid": [
+    "no-tests"
+  ]
+}

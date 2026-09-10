@@ -1,0 +1,11 @@
+{
+  "description": "The credential word is a component of the name, not the whole of it. `_` is a word character, so \\b did not match inside db_password, adminToken or encryption_key -- the shapes people actually use.",
+  "expect": [
+    {
+      "rule_id": "generic-assignment",
+      "severity": "high",
+      "file_endswith": "config.ts"
+    }
+  ],
+  "forbid": []
+}
