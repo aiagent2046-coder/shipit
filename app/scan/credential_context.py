@@ -23,6 +23,15 @@ def python_regions(text: str) -> list[tuple[int, int, int, int, str]]:
                 and 'DATABASE_URL=' in node.value and 'POSTGRES_PASSWORD=change_me' in node.value):
             regions.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset,
                             'configuration_template'))
+        if isinstance(node, ast.FormattedValue):
+            # Only the expression field is dynamic. Constant portions of the
+            # same f-string may still contain genuine hardcoded credentials.
+            # Older Python parsers can give this node the whole f-string's
+            # span; never suppress a literal based on that imprecise range.
+            segment = ast.get_source_segment(text, node)
+            if segment and segment.startswith('{') and segment.endswith('}'):
+                regions.append((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset,
+                                'formatted_value'))
     return regions
 
 
