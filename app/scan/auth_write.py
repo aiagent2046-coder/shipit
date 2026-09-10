@@ -43,18 +43,33 @@ A scheduler is not storage: `add_task`/`create_task` are excluded by full name,
 because the product's own YooKassa handler was reported for scheduling a
 coroutine.
 
-WHAT REMAINS SILENT, measured over three hunt rounds (116 scored variations, 36
-candidates, every judgeable one read by hand): the rewrites that escape are the
-ones where the rewrite itself removed the evidence -- both routes protected, or
-the guard moved into the route's own `dependencies=[...]` list, which this rule
-declares it does not read. Where the defect survived, the rule caught it. The one
-accepted loss is a storage injection named with an unplaceable verb in front of a
-tail that mentions something else (`handle_security`, `manage_assets`): unknown
-names count as authorization, so those stay silent, and reading `handle_security`
-as storage would let the rule assert a gap on a route whose dependency plainly
-names security. One tail was measured OUT for the same reason: `handler` appeared
-as a guard (`resolve_handler`) and as storage (`get_repository_handler`) in
-different rounds, and including it gained one body while losing two.
+WHAT REMAINS SILENT, measured rather than argued. Five hunt rounds against this
+rule; the counts below are of bodies on disk that a reader can check:
+
+  * round 1, before the fix: 10 of 10 escaped, all by renaming the repository;
+  * round 2, after the classifier was widened: 13 of 13 judgeable bodies caught
+    (6 more were unreadable -- see the note about the hunt's own dump);
+  * round 5, against the shipped code: 2 of 9 judgeable bodies caught. The other
+    seven are rewrites that removed the evidence -- both routes protected, or the
+    guard moved into the route's own `dependencies=[...]` list, which this rule
+    declares it does not read. A rewrite that keeps the defect and renames the
+    storage dependency is caught; what is not caught is a storage injection named
+    with an unplaceable verb in front of a tail that mentions something else
+    (`handle_security`, `manage_assets`). Unknown names count as authorization,
+    so those stay silent: reading `handle_security` as storage would let the rule
+    assert a gap on a route whose dependency plainly names security.
+
+One tail was measured OUT for the same reason: `handler` appeared as a guard
+(`resolve_handler`) and as storage (`get_repository_handler`) in different rounds,
+and including it gained one body while losing two. A tail that both roles wear is
+not evidence of either.
+
+A note about the hunt's own dump: it masks long identifier runs, so a body such as
+`Depends(provide_storage_interface)` is written to disk as
+`Depends(prov...[25 chars])` and cannot be parsed or reviewed. Roughly a quarter of
+the dumped bodies in every round were unreadable for this reason, which is why the
+counts above say "judgeable" instead of "bodies". That is a defect in the tool, not
+in the detector, and it is the next thing to fix there.
 """
 
 from __future__ import annotations
