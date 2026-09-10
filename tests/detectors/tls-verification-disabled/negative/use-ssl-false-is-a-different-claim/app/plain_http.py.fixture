@@ -1,0 +1,6 @@
+import aiohttp
+
+
+async def fetch():
+    async with aiohttp.ClientSession() as session:
+        return await session.get("http://internal.example/")

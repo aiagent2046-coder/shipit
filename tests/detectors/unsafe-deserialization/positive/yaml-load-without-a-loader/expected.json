@@ -1,5 +1,5 @@
 {
-  "description": "PyYAML before 5.1 executed objects by default, and the call that leaves the loader out is still the one people write.",
+  "description": "Implicit YAML Loader behavior depends on the dependency version. Older versions allowed unsafe loaders; modern PyYAML raises TypeError. The finding is conditional and does not assert execution.",
   "expect": [
     {
       "rule_id": "unsafe-deserialization",

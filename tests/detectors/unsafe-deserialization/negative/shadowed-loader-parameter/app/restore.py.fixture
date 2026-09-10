@@ -1,0 +1,4 @@
+import pickle as codec
+
+def restore(codec, data):
+    return codec.loads(data)

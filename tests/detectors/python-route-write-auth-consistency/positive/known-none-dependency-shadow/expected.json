@@ -1,0 +1,11 @@
+{
+  "description": "A shadowed dependency alias whose visible helper returns literal None does not protect a write route.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,8 @@
+import pickle as codec
+
+def unrelated():
+    import json as codec
+    return codec.loads("{}")
+
+def restore(data):
+    return codec.loads(data)

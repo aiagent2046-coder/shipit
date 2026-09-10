@@ -135,6 +135,10 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     # a validating call in the middle of the chain is why it stays silent
     "value-passed-through-a-check": ("app/proxy.py", "url = validate_url(host)",
                                      'url = f"http://{host}/status"'),
+    "checked-model-field": ("app/fetch.py", "if payload.target not in ALLOWED_URLS:",
+                             "if not payload.target:"),
+    "stripped-fixed-host-path": ("app/fetch.py", '"https://api.example.test/items/" + item',
+                                 '"https://" + item + "/items"'),
 }
 
 
@@ -432,4 +436,111 @@ def test_checking_one_request_field_does_not_validate_an_unrelated_field(body, e
     source = source.replace('async def proxy(host: str):', 'async def proxy(request: Request):')
     source = source.replace('    return httpx.get(f"http://{host}/status").json()',
                              '\n'.join('    ' + line for line in body.splitlines()))
+    assert bool(scan_outbound_url(archive(source))) is expected
+
+
+MODEL_ROUTE = '''from fastapi import FastAPI, Depends, Request
+from pydantic import BaseModel
+import httpx
+
+app = FastAPI()
+
+class FetchPayload(BaseModel):
+    target: str
+    replacement: str
+    label: str = "fetch"
+
+@app.post("/fetch")
+def fetch(payload: FetchPayload):
+    BODY
+'''
+
+
+def model_route(body: str) -> str:
+    return MODEL_ROUTE.replace("    BODY", "\n".join("    " + line for line in body.splitlines()))
+
+
+@pytest.mark.parametrize("body, expected", [
+    ('return httpx.get(payload.target)', True),
+    ('validate_url(payload.target)\nreturn httpx.get(payload.target)', False),
+    ('validate_url(payload.target)\nreturn httpx.get(payload.replacement)', True),
+    ('if payload.target not in ALLOWED_URLS:\n    raise ValueError()\nreturn httpx.get(payload.target)', False),
+    ('validate_url(payload.target)\npayload.target = payload.replacement\nreturn httpx.get(payload.target)', True),
+    ('saved = payload.target\nvalidate_url(saved)\npayload.target = payload.replacement\n'
+     'return httpx.get(saved)', False),
+    ('shared = payload\nvalidate_url(payload.target)\nshared.target = payload.replacement\n'
+     'return httpx.get(payload.target)', True),
+    ('shared = payload\nshared = build_payload()\nreturn httpx.get(shared.target)', False),
+    ('payload.target = "https://fixed.example.test/status"\nreturn httpx.get(payload.target)', False),
+    ('payload.target = normalize(payload.replacement)\nreturn httpx.get(payload.target)', False),
+    ('payload = build_payload()\nreturn httpx.get(payload.target)', False),
+    ('from settings import payload\nreturn httpx.get(payload.target)', False),
+    ('del payload.target\nreturn httpx.get(payload.target)', False),
+    ('for item in items:\n    payload.target = normalize(item)\nreturn httpx.get(payload.target)', False),
+    ('payload.label = "changed"\nreturn httpx.get(payload.target)', True),
+    ('return httpx.get("https://api.example.test/" + payload.target.strip())', False),
+    ('return httpx.get(payload.target.strip())', True),
+    ('return httpx.get(payload.undeclared)', False),
+])
+def test_model_fields_preserve_separate_sources_and_mutation_order(body, expected):
+    assert bool(scan_outbound_url(archive(model_route(body)))) is expected
+
+
+@pytest.mark.parametrize("imports, base, signature, expected", [
+    ('from pydantic import BaseModel as Model', 'Model', 'payload: FetchPayload', True),
+    ('import pydantic as pd', 'pd.BaseModel', 'payload: FetchPayload', True),
+    ('from pydantic import BaseModel', 'BaseModel', 'payload: "FetchPayload"', True),
+    ('from typing import Annotated\nfrom pydantic import BaseModel', 'BaseModel',
+     'payload: Annotated[FetchPayload, "body"]', True),
+    ('from pydantic import BaseModel', 'BaseModel', 'payload: FetchPayload = Depends(config)', False),
+    ('from local_models import BaseModel', 'BaseModel', 'payload: FetchPayload', False),
+    ('from pydantic import BaseModel\nBaseModel = custom_base', 'BaseModel', 'payload: FetchPayload', False),
+    ('from pydantic import BaseModel\nclass BaseModel:\n    pass', 'BaseModel', 'payload: FetchPayload', False),
+    ('from pydantic import BaseModel\nstr = CustomString', 'BaseModel', 'payload: FetchPayload', False),
+    ('from pydantic import BaseModel', 'BaseModel, CustomBase', 'payload: FetchPayload', False),
+    ('from pydantic import BaseModel', 'BaseModel', 'payload: UnrelatedObject', False),
+])
+def test_model_annotations_require_local_declaration_and_unshadowed_import_origin(imports, base, signature, expected):
+    source = model_route('return httpx.get(payload.target)').replace('from pydantic import BaseModel', imports)
+    source = source.replace('class FetchPayload(BaseModel):', f'class FetchPayload({base}):')
+    source = source.replace('payload: FetchPayload):', signature + '):')
+    assert bool(scan_outbound_url(archive(source))) is expected
+
+
+def test_private_pydantic_attributes_are_not_request_body_fields():
+    source = model_route('return httpx.get(payload._target)').replace('    target: str', '    _target: str')
+    assert scan_outbound_url(archive(source)) == []
+
+
+def test_many_model_parameters_do_not_expand_an_unbounded_field_product():
+    source = model_route('return httpx.get(last.target)')
+    parameters = ', '.join(f'value{index}: FetchPayload' for index in range(100)) + ', last: FetchPayload'
+    source = source.replace('payload: FetchPayload):', parameters + '):')
+    # The late parameter exceeds the bounded field trace; no uploaded code is
+    # called and no inherited field provenance is fabricated for that parameter.
+    assert scan_outbound_url(archive(source)) == []
+
+
+@pytest.mark.parametrize("body, signature, expected", [
+    ('return httpx.get(request.query_params["url"].strip())', 'request: Request', True),
+    ('value = request.query_params.get("url")\nreturn httpx.get(value.strip())', 'request: Request', True),
+    ('return httpx.get(request.headers["target"].strip().strip())', 'request: Request', True),
+    ('return httpx.get(host.strip())', 'host: str', True),
+    ('validate_url(host)\nreturn httpx.get(host.strip())', 'host: str', False),
+    ('return httpx.get((" https://api.example.test/" + host).strip())', 'host: str', False),
+    ('return httpx.get(host.strip())', 'host: UnknownObject', False),
+    ('return httpx.get(host.strip())', 'host', False),
+    ('host = build_value()\nreturn httpx.get(host.strip())', 'host: str', False),
+    ('return httpx.get(request.query_params.get("url", custom).strip())', 'request: Request', False),
+    ('return httpx.get(request.query_params.get("url", default=custom).strip())', 'request: Request', False),
+    ('body = await request.json()\nreturn httpx.get(body["url"].strip())', 'request: Request', False),
+    ('return httpx.get(host.strip("https:/"))', 'host: str', False),
+    ('return httpx.get(host.replace("x", "y"))', 'host: str', False),
+    ('httpx = LocalClient()\nreturn httpx.get(host.strip())', 'host: str', False),
+])
+def test_strip_only_preserves_known_string_sources_without_becoming_a_validator(body, signature, expected):
+    source = POSITIVE.replace('from fastapi import APIRouter', 'from fastapi import APIRouter, Request')
+    source = source.replace('host: str):', signature + '):')
+    source = source.replace('    return httpx.get(f"http://{host}/status").json()',
+                            '\n'.join('    ' + line for line in body.splitlines()))
     assert bool(scan_outbound_url(archive(source))) is expected

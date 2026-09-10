@@ -98,9 +98,11 @@ def test_the_import_map_resolves_aliases_the_way_python_does():
 # case name -> (file, the one change that removes the property the case pins)
 CORPUS_NEGATIVES = REPO_ROOT / "tests" / "detectors" / RULE_ID / "negative"
 MUTATIONS: dict[str, tuple[str, str, str]] = {
+    "shadowed-loader-parameter": ("app/restore.py", "restore(codec, data)", "restore(data)"),
+    "safe-yaml-import-alias": ("app/restore.py", "SafeLoader as SL", "UnsafeLoader as SL"),
     "yaml-safe-loaders": ("app/config_safe.py", "yaml.load(text, Loader=yaml.SafeLoader)",
                           "yaml.load(text)"),
-    "json-and-literal-eval": ("app/data_in.py", "json.loads(text)", "pickle.loads(text)"),
+    "json-and-literal-eval": ("app/data_in.py", "import json", "import pickle as json"),
     "pickle-dumps-is-the-safe-direction": ("app/write_cache.py", "pickle.dump(obj, handle)",
                                            "pickle.load(handle)"),
     "torch-load-weights-only-true": ("app/models_safe.py", "weights_only=True", "weights_only=False"),
@@ -139,3 +141,100 @@ def test_the_product_own_code_reports_nothing():
     assert re.search(r"Loader=yaml\.SafeLoader", text), "our own safe YAML read should still be there"
     assert len(re.findall(r"json\.loads\(", text)) > 10, "and JSON parsing is everywhere"
     assert scan_unsafe_deserialization(archive(sources)) == []
+
+
+@pytest.mark.parametrize("source", [
+    "def restore(pickle, data):\n    return pickle.loads(data)\n",
+    "import pickle\ndef restore(pickle, data):\n    return pickle.loads(data)\n",
+    "import pickle\nimport json\npickle = json\npickle.loads(data)\n",
+    "from pickle import loads\ndef restore(loads, data):\n    return loads(data)\n",
+    "from pickle import loads\ndef loads(data):\n    return data\nloads(data)\n",
+    "def restore(service, data):\n    return service.pickle.loads(data)\n",
+    "from . import pickle\npickle.loads(data)\n",
+    "import json as codec\ndef unrelated():\n    import pickle as codec\n"
+    "def restore(data):\n    return codec.loads(data)\n",
+    "import pickle as codec\ndef restore(data):\n    return codec.loads(data)\n"
+    "import json as codec\n",
+    "import pickle\ndef restore(data):\n    result = pickle.loads(data)\n"
+    "    pickle = None\n    return result\n",
+    "import pickle\n(lambda pickle: pickle.loads(data))(decoder)\n",
+    "import pickle\n[pickle.loads(data) for pickle in decoders]\n",
+    "class Local:\n    import pickle\n    def restore(self, data):\n"
+    "        return pickle.loads(data)\n",
+    "import pickle\ndef overwrite():\n    global pickle\n    pickle = None\n"
+    "def restore(data):\n    return pickle.loads(data)\n",
+    "import pickle\nfrom extension import *\npickle.loads(data)\n",
+    "import pickle\nimport pickle as p\np.loads = custom_loader\npickle.loads(data)\n",
+    "from pickle import loads\nimport pickle\npickle.loads = custom_loader\nloads(data)\n",
+    "import yaml\ndef restore(SafeLoader, data):\n"
+    "    return yaml.load(data, Loader=SafeLoader)\n",
+    "import yaml\nyaml.load(data, **options)\n",
+])
+def test_unknown_or_shadowed_objects_are_not_claimed_to_be_library_loaders(source):
+    assert scan_unsafe_deserialization(archive(source)) == []
+
+
+@pytest.mark.parametrize("source", [
+    "import pickle as codec\ndef unrelated():\n    import json as codec\n"
+    "def restore(data):\n    return codec.loads(data)\n",
+    "def restore(data):\n    from pickle import loads as decode\n    return decode(data)\n",
+    "import pickle\nclass Local:\n    import json as pickle\n"
+    "    def restore(self, data):\n        return pickle.loads(data)\n",
+    "import pickle\ndef outer():\n    def inner(data):\n        return pickle.loads(data)\n",
+    "import pickle\npickle = pickle.loads(data)\n",
+    "import pickle\nresult = pickle.loads(data)\nimport json as pickle\n",
+    "import yaml\nfrom yaml import UnsafeLoader as SafeLoader\n"
+    "yaml.load(data, Loader=SafeLoader)\n",
+    "from yaml.loader import UnsafeLoader as SL\nfrom yaml import load\nload(data, SL)\n",
+])
+def test_stable_imports_survive_unrelated_scopes_and_import_aliases(source):
+    findings = scan_unsafe_deserialization(archive(source))
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+
+
+@pytest.mark.parametrize("name", ["BaseLoader", "CBaseLoader", "SafeLoader", "CSafeLoader",
+                                 "FullLoader", "CFullLoader"])
+def test_yaml_value_loaders_are_silent_under_import_aliases(name):
+    source = f"import yaml\nfrom yaml import {name} as SL\nyaml.load(data, Loader=SL)\n"
+    assert scan_unsafe_deserialization(archive(source)) == []
+    unsafe = source.replace(f"import {name} as SL", "import UnsafeLoader as SL")
+    assert len(scan_unsafe_deserialization(archive(unsafe))) == 1
+
+
+def test_unpickler_constructor_does_not_claim_to_deserialize():
+    source = "import pickle\nprepared = pickle.Unpickler(stream)\n"
+    assert scan_unsafe_deserialization(archive(source)) == []
+    loaded = source.replace("Unpickler(stream)", "Unpickler(stream).load()")
+    findings = scan_unsafe_deserialization(archive(loaded))
+    assert len(findings) == 1
+    assert "Unpickler.load" in findings[0].explanation
+
+
+def test_marshal_warning_distinguishes_returning_code_from_executing_it():
+    findings = scan_unsafe_deserialization(archive("import marshal\nmarshal.loads(data)\n"))
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.severity == "medium"
+    assert "does not execute it" in finding.explanation
+    assert "does not establish arbitrary code execution" in finding.explanation
+
+
+def test_missing_yaml_loader_is_an_unresolved_version_warning():
+    finding, = scan_unsafe_deserialization(archive("import yaml\nyaml.load(data)\n"))
+    assert finding.severity == "medium"
+    assert "Modern PyYAML requires Loader and raises TypeError" in finding.explanation
+    assert "installed version was not resolved" in finding.explanation
+
+
+def test_untrusted_checksum_is_not_suggested_as_authentication():
+    finding, = scan_unsafe_deserialization(archive(POSITIVE))
+    assert "HMAC or digital signature" in finding.fix_hint
+    assert "checksum supplied alongside untrusted bytes does not authenticate" in finding.fix_hint
+
+
+def test_deep_or_large_ast_is_outside_the_bounded_trace():
+    # Both inputs parse but would exceed the detector's declared traversal budget.
+    assert scan_unsafe_deserialization(archive("x = " + "a." * 110 + "load(data)\n")) == []
+    large = "x = 1\n" * 6000 + POSITIVE
+    assert scan_unsafe_deserialization(archive(large)) == []

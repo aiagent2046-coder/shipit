@@ -165,13 +165,15 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # HTTP import provenance, statement order and field-specific check identity;
 # bound AST/template work and report unresolved runtime/network controls.
 # This supersedes the outbound branch preview version 2026-09-10-7.
-# 2026-09-10-11: unsafe-deserialization -- pickle/cPickle/dill/marshal, pandas'
-# read_pickle, jsonpickle.decode, yaml.load without a safe Loader, yaml.unsafe_load
-# and torch.load(weights_only=False). A new rule id is exactly the case this
-# constant exists for: an audit reports something it did not report before, for
-# unchanged bytes. (The TLS rule's branch carries -10; this one takes -11 so the
-# two in flight never claim one number.)
-AUDIT_ENGINE_VERSION = "2026-09-10-11"
+# 2026-09-10-10: skip unrelated Python route scopes; retain imported dependency
+# aliases, same-repository guarded reads, and bounded model/string URL origins.
+# 2026-09-10-13: bounded TLS configuration analysis with imported client/context
+# provenance, real Python signatures and JS/TS syntax. Certificate-chain and
+# hostname checks have separate explanations; escaped literals remain in scope.
+# 2026-09-10-14: import-resolved deserialization with lexical shadowing and real
+# YAML loader provenance; distinguish object construction, marshal values and
+# version-dependent YAML defaults. Each changed rule set invalidates the cache.
+AUDIT_ENGINE_VERSION = "2026-09-10-14"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

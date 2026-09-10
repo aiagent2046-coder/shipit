@@ -1,0 +1,10 @@
+{
+  "description": "The asyncio spelling: the connector is told not to verify, and every request through that session inherits it.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

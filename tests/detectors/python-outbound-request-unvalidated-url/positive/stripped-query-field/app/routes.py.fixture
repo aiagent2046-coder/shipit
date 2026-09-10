@@ -1,0 +1,9 @@
+import requests
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+@app.get('/fetch')
+async def fetch(request: Request):
+    response = requests.get(request.query_params['target'].strip(), timeout=2)
+    return {'status': response.status_code}

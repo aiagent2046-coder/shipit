@@ -1,0 +1,7 @@
+{
+  "description": "A local repository with the same name is not the sibling collection repository.",
+  "expect": [],
+  "forbid": [
+    "python-route-read-auth-consistency"
+  ]
+}

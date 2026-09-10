@@ -1,0 +1,10 @@
+{
+  "description": "A local json import in another function cannot hide a stable outer pickle import.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

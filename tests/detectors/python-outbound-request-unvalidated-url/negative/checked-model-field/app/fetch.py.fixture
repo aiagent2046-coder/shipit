@@ -1,0 +1,15 @@
+from fastapi import FastAPI
+from pydantic import BaseModel
+import httpx
+
+app = FastAPI()
+ALLOWED_URLS = {"https://api.example.test/status"}
+
+class FetchPayload(BaseModel):
+    target: str
+
+@app.post("/fetch")
+def fetch(payload: FetchPayload):
+    if payload.target not in ALLOWED_URLS:
+        raise ValueError("Unsupported target")
+    return httpx.get(payload.target)

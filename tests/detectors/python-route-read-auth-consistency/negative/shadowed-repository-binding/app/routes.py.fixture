@@ -1,0 +1,11 @@
+from fastapi import APIRouter, Depends
+repo = Repository()
+router = APIRouter()
+@router.get("/notes")
+def list_notes(actor=Depends(current_actor)):
+    return repo.list()
+
+@router.get("/notes/{note_id}")
+def get_note(note_id):
+    repo = PublicRepository()
+    return repo.get(note_id)

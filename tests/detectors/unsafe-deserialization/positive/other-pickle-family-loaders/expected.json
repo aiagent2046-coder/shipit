@@ -1,5 +1,5 @@
 {
-  "description": "The same power wearing other names: dill, marshal and jsonpickle all rebuilt objects, not values.",
+  "description": "Dill and jsonpickle can reconstruct arbitrary objects. Marshal is a separate warning about untrusted binary values; loading a code object does not execute it.",
   "expect": [
     {
       "rule_id": "unsafe-deserialization",
