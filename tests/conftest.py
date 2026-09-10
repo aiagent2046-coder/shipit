@@ -106,6 +106,21 @@ def _no_ambient_database_url(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_dependency_lookups(monkeypatch):
+    """No test may send a dependency list to a database on the internet.
+
+    The audit service builds its own client for a paid job, so a test that runs
+    a paid audit through the worker would make a real OSV request the moment its
+    fixture happened to contain a lockfile -- and a suite that reaches the
+    network is a suite that fails on a plane, or worse, one whose result depends
+    on what the database said that day. Tests that cover the stage inject their
+    own client, which this does not affect; a test that wants the wiring must
+    set the switch back itself, on purpose.
+    """
+    monkeypatch.setenv("SCA_ENABLED", "0")
+
+
+@pytest.fixture(autouse=True)
 def audit_spool_dir(tmp_path, monkeypatch):
     """Point the archive spool at a per-test directory.
 

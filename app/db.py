@@ -126,6 +126,9 @@ async def close_pool() -> None:
 _FIXPACK_PROCESSOR_LOCK_KEY = 0x46495850
 _MONITORING_PROCESSOR_LOCK_KEY = 0x4D4F4E49
 _BANK_TRANSFER_AMOUNT_LOCK_KEY = 0x424E4B41  # "BNKA"
+# "DEPS": the dependency-refresh sweep. Its own key so a slow refresh never
+# serializes a Fix Pack run or a monitoring drain.
+_DEPENDENCY_REFRESH_LOCK_KEY = 0x44455053
 
 
 class ProcessorLockBusy(Exception):
@@ -311,6 +314,11 @@ def monitoring_processor_lock():
     """The continuous-monitoring processor's advisory lock, on a distinct key so
     it never serializes against a Fix Pack run (see _advisory_processor_lock)."""
     return _advisory_processor_lock(_MONITORING_PROCESSOR_LOCK_KEY)
+
+
+def dependency_refresh_lock():
+    """The dependency-refresh sweep's advisory lock, on its own key."""
+    return _advisory_processor_lock(_DEPENDENCY_REFRESH_LOCK_KEY)
 
 
 # Retry budget for the kopeck-suffix lock. ~1s of contention before giving up,
@@ -562,6 +570,7 @@ class AuditRepository:
         score_total: float | None, score_json: dict | None,
         findings_json: list | None, repo_url: str | None = None,
         content_hash: str | None = None, engine_version: str | None = None,
+        dependency_inventory: dict | None = None,
     ) -> dict[str, Any] | None:
         # access_token is not inserted here: the column default
         # (migration 0010, encode(gen_random_bytes(16),'hex')) mints a
@@ -577,8 +586,8 @@ class AuditRepository:
                 """
                 insert into audits (stack, file_count, score_total, score_json,
                                     findings_json, repo_url, content_hash,
-                                    engine_version)
-                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+                                    engine_version, dependency_inventory)
+                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s::jsonb)
                 returning id, stack, status, file_count, score_total,
                           score_json, findings_json, repo_url, content_hash,
                           engine_version, access_token, created_at
@@ -588,6 +597,12 @@ class AuditRepository:
                     json.dumps(score_json) if score_json is not None else None,
                     json.dumps(findings_json) if findings_json is not None else None,
                     repo_url, content_hash, engine_version,
+                    # Migration 0039. Only the dependency stage's own scan
+                    # writes this, and only when it actually asked: the column
+                    # is what makes a stale answer refreshable without the
+                    # archive bytes, which this deployment does not retain.
+                    (json.dumps(dependency_inventory)
+                     if dependency_inventory is not None else None),
                 ),
             )
             row = await cur.fetchone()
@@ -641,6 +656,65 @@ class AuditRepository:
             )
             row = await cur.fetchone()
         return _row_to_audit(row) if row else None
+
+    async def stale_dependency_audits(
+        self, *, created_before: Any, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Completed audits whose stored dependency inventory is old enough to
+        re-ask about, oldest first.
+
+        `created_before` is the coarse filter and `created_at` is why it is
+        enough: the inventory is only written at scan time, so a row's
+        created_at is its asked_at to within the scan itself. The exact
+        comparison against the manifest's `sca_asked_at` happens in Python,
+        where the age policy lives (app/sca/refresh.py) rather than being
+        duplicated into SQL.
+
+        Only rows WITH an inventory are returned. A row without one was never
+        asked (free tier, opt-out, no lockfile), and asking now would be the
+        entitlement boundary leaking in the direction this design exists to
+        prevent. Returns [] when DATABASE_URL isn't set.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return []
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                select id, stack, status, file_count, score_total,
+                       score_json, findings_json, repo_url, content_hash,
+                       engine_version, dependency_inventory, created_at
+                from audits
+                where dependency_inventory is not null
+                      and status = 'completed'
+                      and created_at < %s
+                      -- A row that has already been superseded by a newer row
+                      -- for the same content, engine and basis is not refreshed
+                      -- again: the refreshed row is the current answer, and
+                      -- re-asking an old one would grow a new row per sweep
+                      -- forever. Compared on all three, because a preview row
+                      -- must never supersede a full-depth one.
+                      and not exists (
+                          select 1 from audits newer
+                          where newer.content_hash = audits.content_hash
+                                and newer.engine_version = audits.engine_version
+                                and newer.score_json->>'basis' = audits.score_json->>'basis'
+                                and newer.created_at > audits.created_at
+                      )
+                order by created_at asc
+                limit %s
+                """,
+                (created_before, limit),
+            )
+            rows = await cur.fetchall()
+        stored = []
+        for row in rows:
+            audit = _row_to_audit(row)
+            audit["dependency_inventory"] = _json_field(
+                dict(row).get("dependency_inventory"))
+            stored.append(audit)
+        return stored
 
     async def get_latest_by_repo_url(
         self, repo_full_name: str, basis: str

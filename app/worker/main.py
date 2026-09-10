@@ -53,7 +53,9 @@ from app.db import (
     AuditJobRepository,
     AuditRepository,
     LlmUsageRepository,
+    ProcessorLockBusy,
     ServiceFlagsRepository,
+    dependency_refresh_lock,
 )
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import detect_stack
@@ -68,6 +70,7 @@ from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                               FREE_TIER_RUBRICS, PAID_AUDIT_PASSES,
                               basis_for_account, content_digest)
 from app.sca.stage import sca_client_for
+from app.sca.refresh import inventory_payload, refresh_stale_dependency_audits
 
 # Reused rather than reimplemented, which is the whole point: the worker must
 # run the same scan, under the same concurrency bound, with the same spend
@@ -392,6 +395,13 @@ async def _execute_job(
             score_total=scan["score"]["total"], score_json=scan["score"],
             findings_json=scan["findings"], repo_url=source_url,
             content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
+            # Migration 0039: the resolved versions, so this audit's dependency
+            # answer can be re-asked after it ages without the archive bytes
+            # (which this deployment does not keep). None when the stage never
+            # asked -- an inventory we never queried would turn a skipped check
+            # into one that looks performed.
+            dependency_inventory=inventory_payload(
+                raw, (scan.get("sca") or {}).get("asked_at")),
         )
         if persisted is None:
             # create_audit tolerates this by minting a throwaway id for its
@@ -757,6 +767,54 @@ async def _stats_heartbeat(
             continue
 
 
+# How often the dependency-refresh sweep looks for answers that have aged. The
+# age it acts on is measured in days, so hours of granularity cost nothing --
+# and the sweep is idempotent, because a refreshed row is no longer stale.
+DEPENDENCY_REFRESH_INTERVAL_SECONDS = int(
+    os.environ.get("DEPENDENCY_REFRESH_INTERVAL_SECONDS", str(6 * 3600)))
+
+
+async def _dependency_refresh_loop(
+    *, audit_repo: AuditRepository, shutting_down: asyncio.Event
+) -> None:
+    """Re-ask about aged dependency answers, on its own clock and lock.
+
+    Sleeps FIRST: a worker that restarts in a loop must not sweep the database
+    on every start, and nothing here is urgent -- a row whose answer has aged
+    already says so in its report.
+    """
+    while not shutting_down.is_set():
+        try:
+            await asyncio.wait_for(shutting_down.wait(),
+                                   timeout=max(DEPENDENCY_REFRESH_INTERVAL_SECONDS, 1))
+        except asyncio.TimeoutError:
+            pass
+        else:
+            return                      # shutting down
+        await _dependency_refresh_once(audit_repo)
+
+
+async def _dependency_refresh_once(audit_repo: AuditRepository) -> None:
+    """One sweep, under an advisory lock so two workers never duplicate it.
+
+    The client is built per row by refresh_stale_dependency_audits, which is
+    what keeps the entitlement policy live: an account that has opted out since
+    its audit was written is not asked about again.
+    """
+    try:
+        async with dependency_refresh_lock():
+            summary = await refresh_stale_dependency_audits(
+                audit_repo, client_factory=lambda: sca_client_for(paid=True))
+    except ProcessorLockBusy:
+        logger.debug("dependency refresh skipped: another sweep holds the lock")
+        return
+    except Exception:                   # noqa: BLE001 -- a sweep must not kill a slot
+        logger.warning("dependency refresh sweep failed", exc_info=True)
+        return
+    if summary["considered"]:
+        logger.info("dependency refresh: %s", summary)
+
+
 async def run_worker(
     *, concurrency: int = AUDIT_WORKER_CONCURRENCY,
     shutting_down: asyncio.Event | None = None,
@@ -781,6 +839,11 @@ async def run_worker(
     # saturated worker and cannot delay a claim.
     heartbeat_task = asyncio.create_task(
         _stats_heartbeat(jobs=jobs, shutting_down=shutting_down))
+    # Its own task for the same reason the heartbeat is: a slot inside a long
+    # scan is exactly when this loop is not coming back around, and the ages it
+    # acts on are measured in days, so it must not depend on job traffic.
+    refresh_task = asyncio.create_task(
+        _dependency_refresh_loop(audit_repo=audit_repo, shutting_down=shutting_down))
     slot_tasks = [
         asyncio.create_task(
             _slot(
@@ -818,9 +881,10 @@ async def run_worker(
 
     reaper_task.cancel()
     heartbeat_task.cancel()
+    refresh_task.cancel()
     # return_exceptions so one slot's failure cannot hide the others' cleanup;
     # the exceptions were already logged where they happened.
-    await asyncio.gather(*slot_tasks, reaper_task, heartbeat_task,
+    await asyncio.gather(*slot_tasks, reaper_task, heartbeat_task, refresh_task,
                          return_exceptions=True)
     await db_mod.close_pool()
     logger.info("audit worker stopped")

@@ -68,6 +68,7 @@ from app.db import (
     monitoring_processor_lock,
 )
 from app.audit_history import refresh_cached_preview_history, ensure_paid_baseline
+from app.sca.refresh import inventory_payload
 from app.deploypack import github_app
 from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
 from app.deploypack.delivery import DeliveryError, render_pr_body
@@ -555,6 +556,14 @@ async def run_repo_audit(
     scan = ({"score": cached["score_json"], "findings": cached["findings_json"] or [],
              "llm": {}, "llm_usage": {"calls": 0}} if cached else
             await _run_scan_offthread(raw, llm_client))
+    # No sca_client here on purpose, and not because this path is unpaid: it
+    # audits at BASIS_FULL for paying subscribers. It has no account context --
+    # `account_id is None` immediately below, because these are system
+    # re-audits -- and the dependency check sends a customer's packages to a
+    # third party, so an account that has opted out could not be honoured on
+    # this path. Until the monitoring trigger carries the account, the check
+    # simply does not run here; the row therefore stores no inventory and the
+    # refresh sweep leaves it alone.
     await _alert_llm_stage_failed(scan["llm"])
     # Cost accounting. account_id is None: this path serves system re-audits
     # (continuous monitoring), whose LLM cost is incurred once per push
@@ -582,6 +591,11 @@ async def run_repo_audit(
             score_total=scan["score"]["total"], score_json=scan["score"],
             findings_json=scan["findings"], repo_url=repo_url,
             content_hash=digest, engine_version=AUDIT_ENGINE_VERSION,
+            # None for now on this path (see the sca_client note above): an
+            # inventory is only stored when the stage actually asked, which is
+            # what keeps a skipped check from looking performed.
+            dependency_inventory=inventory_payload(
+                raw, (scan.get("sca") or {}).get("asked_at")),
         )
     except Exception:
         if llm_usage_repo is not None:

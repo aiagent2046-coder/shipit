@@ -423,6 +423,32 @@ def content_digest(data: bytes) -> str:
     return h.hexdigest()
 
 
+def score_findings(findings: list[dict], *, llm_ran: bool,
+                   llm_categories: frozenset[str],
+                   incomplete_static: frozenset[str]) -> dict:
+    """The single place a finding list becomes a score.
+
+    Extracted so the dependency refresh can rescore an audit it did not run
+    (app/sca/refresh.py) without owning a second copy of this expression: a
+    second copy is how the refreshed total would drift from the total a full
+    scan of the same findings produces, silently, one rule at a time.
+    """
+    return compute_scores(
+        [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
+         for f in findings],
+        llm_ran=llm_ran,
+        # Derived from the rubrics that ran, never written out: a preview
+        # covers one of them, and a category no rubric looked at must not
+        # score 10.0 off the back of the ones that did. Reading RUBRICS is
+        # what keeps this correct when the free tier's rubric list is changed
+        # by an env var.
+        llm_categories=llm_categories,
+        # A static producer that ran out of read budget did not finish, so the
+        # absence of its finding is not evidence of a clean category.
+        incomplete_static=incomplete_static,
+    )
+
+
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
              llm_skip_reason: str | None = None,
              llm_rubrics: tuple[str, ...] | None = None,
@@ -545,23 +571,11 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
 
     return {
         "score": {
-            **compute_scores(
-                [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
-                 for f in findings],
+            **score_findings(
+                findings,
                 llm_ran=llm_ran,
-                # Derived from the rubrics that ran, never written out: a
-                # preview covers one of them, and a category no rubric looked
-                # at must not score 10.0 off the back of the ones that did.
-                # Reading RUBRICS is what keeps this correct when the free
-                # tier's rubric list is changed by an env var.
                 llm_categories=frozenset(
                     RUBRICS[r]["category"] for r in ran if r in RUBRICS),
-                # A static producer that ran out of read budget did not finish,
-                # so the absence of its finding is not evidence of a clean
-                # category. The error-boundary scan reports this in
-                # static["coverage"]; here is where it stops Frontend scoring a
-                # clean 10.0 off a look that never completed. Other analyzers
-                # can join by reporting their own coverage the same way.
                 incomplete_static=frozenset(
                     {"Frontend"}
                     if static.get("coverage", {}).get("error_boundary")

@@ -369,6 +369,28 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         stats["skipped_reason"] = "no_client"
         return [], stats
 
+    hits, records, skip_reason = query_dependencies(dependencies, client)
+    if skip_reason is not None:
+        stats["skipped_reason"] = skip_reason
+        stats["requests"] = client.requests_made
+        return [], stats
+
+    stats["asked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    stats["requests"] = client.requests_made
+    return findings_for(dependencies, hits, records, stats), stats
+
+
+def query_dependencies(
+    dependencies: list[Dependency], client: OsvClient
+) -> tuple[dict[int, list[str]], dict[str, dict], str | None]:
+    """Ask the database about a resolved list: (hits, records, skip_reason).
+
+    Split out from run_sca_stage because a REFRESH has the dependency list and
+    not the archive: the versions are stored with the audit (migration 0039),
+    so re-asking is a query about a list, never a re-read of bytes this
+    deployment does not keep. Never raises, for the same reason the stage never
+    does -- an unreachable database is a reason, not a failed audit.
+    """
     try:
         hits = client.query(dependencies)
         wanted: dict[str, None] = {}
@@ -377,14 +399,18 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
                 wanted.setdefault(advisory, None)
         records = client.details(list(wanted))
     except OsvUnavailable as exc:
-        stats["skipped_reason"] = f"osv_unavailable: {exc}"
-        stats["requests"] = client.requests_made
-        return [], stats
+        return {}, {}, f"osv_unavailable: {exc}"
+    return hits, records, None
 
-    stats["asked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    stats["requests"] = client.requests_made
-    stats["advisories"] = len(wanted)
-    stats["unreadable_advisories"] = max(0, len(wanted) - len(records))
+
+def findings_for(
+    dependencies: list[Dependency], hits: dict[int, list[str]],
+    records: dict[str, dict], stats: dict,
+) -> list[CheckFinding]:
+    """Turn answers into rows, counting what was seen and what was filtered."""
+    answers = {advisory for indexes in hits.values() for advisory in indexes}
+    stats["advisories"] = len(answers)
+    stats["unreadable_advisories"] = max(0, len(answers) - len(records))
 
     findings: list[CheckFinding] = []
     for index, advisory_ids in hits.items():
@@ -404,4 +430,4 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
     findings = findings[:MAX_FINDINGS]
     stats["packages_reported"] = len(findings)
     stats["findings"] = len(findings)
-    return findings, stats
+    return findings
