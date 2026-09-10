@@ -1,0 +1,10 @@
+{
+  "description": "The write is a chained call (repo.table(...).insert(...)), not a direct method on the injected object. A positive here means the detector reads the call NAME anywhere in the handler rather than only at the top of the chain.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,7 @@
+{
+  "description": "Both write routes declare an identity dependency. Nothing disagrees, so the rule must stay silent -- a detector that fires on agreement fires on everything.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

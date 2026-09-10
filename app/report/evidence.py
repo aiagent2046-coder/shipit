@@ -344,8 +344,14 @@ def coverage_rows(score: dict, findings: list[dict]) -> list[tuple[str, str]]:
             label = "Not surveyed — see findings" if count else "Not checked"
         else:
             label = "Partly checked"
-        if name == "Auth" and name in skipped and "auth_read_consistency" in (
-                score.get("scan_manifest", {}).get("static_checks", [])):
+        # EITHER route check earns this label. Auth has two static producers now
+        # -- reads and writes -- and a repository whose Python routes are only
+        # writes would otherwise read as "Not checked" while a route check did
+        # run. The label stays literal about what it establishes: a local route
+        # check ran, and broader authorization did not.
+        if name == "Auth" and name in skipped and any(
+                key in score.get("scan_manifest", {}).get("static_checks", [])
+                for key in ("auth_read_consistency", "auth_write_consistency")):
             label = "Local Python route check ran — broader auth not checked"
         elsewhere = (score.get("reported_elsewhere") or {}).get(name)
         if elsewhere:

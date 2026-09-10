@@ -254,7 +254,12 @@ export function coverageRows(score: Score, findings: Finding[]): [string, string
     const { source: count, examples } = findingCounts(findings.filter((f) => f.category === name));
     let label = !recorded ? "Coverage not recorded" : skipped.has(name)
       ? (count ? "Not surveyed — see findings" : "Not checked") : "Partly checked";
-    if (name === "Auth" && skipped.has(name) && score.scan_manifest?.static_checks.includes("auth_read_consistency")) {
+    // Either route check earns this label: Auth has two static producers now
+    // (reads and writes), and a repository whose Python routes are only writes
+    // would otherwise read as "Not checked" while a route check did run.
+    if (name === "Auth" && skipped.has(name) &&
+        ["auth_read_consistency", "auth_write_consistency"].some(
+          (key) => score.scan_manifest?.static_checks.includes(key))) {
       label = "Local Python route check ran — broader auth not checked";
     }
     const elsewhere = score.reported_elsewhere?.[name];

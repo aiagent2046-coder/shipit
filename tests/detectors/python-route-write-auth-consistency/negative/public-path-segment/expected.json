@@ -1,0 +1,7 @@
+{
+  "description": "An unguarded write route on a conventionally public path, beside a guarded write route. A login route that demanded an identity first could not let anybody log in; the exclusion is matched as a whole path SEGMENT, which the /auth/login-count case in the sibling test covers.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

@@ -20,6 +20,15 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "python-route-write-auth-consistency": (
+        "A route that changes stored data shows no identity check, while a sibling route does.",
+        "A local route that writes does not show the check its sibling route on the same router "
+        "uses. Middleware in other files and router mounting have not been read, so the check may "
+        "exist outside this handler.",
+        "Confirm whether this route is meant to be reachable without an identity -- a webhook or an "
+        "onboarding step would be. If not, apply the sibling route's identity contract, then test a "
+        "write with a foreign or absent credential against synthetic records.",
+    ),
     "python-route-read-auth-consistency": (
         "Object lookup differs from protected sibling routes.",
         'A local route uses a different lookup from protected sibling routes. Global '

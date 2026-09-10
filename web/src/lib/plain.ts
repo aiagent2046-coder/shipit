@@ -3,6 +3,7 @@ import { isNonProductionFinding } from "./evidence";
 
 // Mirrors app/report/plain_language.py.
 const PLAIN: Record<string, { what: string; risk: string; fix: string }> = {
+  "python-route-write-auth-consistency": {"what": "A route that changes stored data shows no identity check, while a sibling route does.", "risk": "A local route that writes does not show the check its sibling route on the same router uses. Middleware in other files and router mounting have not been read, so the check may exist outside this handler.", "fix": "Confirm whether this route is meant to be reachable without an identity -- a webhook or an onboarding step would be. If not, apply the sibling route's identity contract, then test a write with a foreign or absent credential against synthetic records."},
   "python-route-read-auth-consistency": {"what": "Object lookup differs from protected sibling routes.", "risk": "A local route uses a different lookup from protected sibling routes. Global authorization is unresolved.", "fix": "Check ownership authorization and reproduce missing/wrong-token access using synthetic records."},
   "aws-access-key-id": {
     "what": "A value matches the AWS access key ID format.",

@@ -1,0 +1,10 @@
+{
+  "description": "Two write routes on one router disagree: the PUT requires an actor dependency, the POST creates a record through the same repository and requires none. Guard retrieval is a storage injection, not an identity check, which is why the POST is unprotected here.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
