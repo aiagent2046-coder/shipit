@@ -67,12 +67,18 @@ class Fixpacks:
     def __init__(self) -> None:
         self.rows: list[dict] = []
 
-    async def create_paid(self, *, audit_id, stack):
+    async def get(self, job_id):
+        return next((r for r in self.rows if r["id"] == job_id), None)
+
+    async def create_paid(self, *, audit_id, stack, funding_key=None):
+        owned = next((r for r in self.rows if funding_key and r.get("funding_key") == funding_key), None)
+        if owned:
+            return {**owned, "inserted": False}
         live = fixpack_live_job(self.rows, audit_id)
         if live is not None:
             return {**live, "inserted": False}
         row = {"id": str(uuid.uuid4()), "audit_id": audit_id, "stack": stack,
-               "status": "paid", "pack": "fixpack", "inserted": True}
+               "funding_key": funding_key, "status": "paid", "pack": "fixpack", "inserted": True}
         self.rows.append(row)
         return row
 

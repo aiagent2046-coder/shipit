@@ -1,0 +1,11 @@
+{
+  "description": "A route handler reading the service-role key: every RLS policy the owner relies on stops applying on this path.",
+  "expect": [
+    {
+      "rule_id": "supabase-service-role-route",
+      "file_endswith": "route.ts",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

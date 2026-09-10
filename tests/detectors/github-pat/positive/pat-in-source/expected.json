@@ -1,0 +1,10 @@
+{
+  "description": "GitHub personal access token committed in source.",
+  "expect": [
+    {
+      "rule_id": "github-pat",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

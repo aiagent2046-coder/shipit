@@ -1,0 +1,18 @@
+import sqlite3
+
+
+async def table_stats(conn):
+    """Row counts for a fixed set of tables."""
+    stats = {}
+    for table in ['messages', 'sessions', 'dialog_history']:
+        cursor = await conn.execute(f"SELECT COUNT(*) FROM {table}")
+        row = await cursor.fetchone()
+        stats[table] = row[0] if row else 0
+    return stats
+
+
+async def copy_rows(conn):
+    """The same shape with the list named first."""
+    sources = ('projects', 'archived_projects')
+    for source in sources:
+        await conn.execute(f"SELECT * FROM {source}")

@@ -1,0 +1,9 @@
+import { db } from "./client";
+
+export async function findUser(userId: string) {
+  return db.query("SELECT id, email FROM users WHERE id = " + userId);
+}
+
+export async function deleteRows(table: string, owner: string) {
+  return db.query(`DELETE FROM ${table} WHERE owner = '${owner}'`);
+}

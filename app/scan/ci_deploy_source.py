@@ -45,6 +45,7 @@ a rewrite. app/fixpack/generate.py declines it by name.
 from __future__ import annotations
 
 import re
+import shlex
 import zipfile
 from typing import BinaryIO
 
@@ -68,6 +69,25 @@ _PLACING_CODE = re.compile(
 _WORKFLOW_DIR = ".github/workflows/"
 _WORKFLOW_EXTS = (".yml", ".yaml")
 
+# Lines that name a repository WITHOUT placing it on the server, and which the
+# whole-file URL sweep below would otherwise read as the deploy target:
+#
+#     # adapted from https://github.com/actions/starter-workflows
+#     - run: pip install git+https://github.com/psf/black.git
+#
+# Both appear beside a legitimate `git clone` of the project's own repository,
+# and reporting either accuses a correct workflow of shipping someone else's
+# code -- the exact claim this rule exists to make truthfully.
+_NOT_A_DEPLOY_TARGET = re.compile(
+    r"""^\s*\#                                     # a comment line
+      | \b(?:pip|pip3|pipx|npm|pnpm|yarn|bun|cargo|go)\s+(?:install|add|i|get)\b
+      | \bgit\+https://                            # pip's VCS syntax
+      | \bgithub:[A-Za-z0-9._-]+/                  # npm's shorthand
+      | \buses:\s                                  # an action reference
+    """,
+    re.VERBOSE | re.I,
+)
+
 # GitHub's zipball root is `{owner}-{repo}-{sha}`. Only the trailing SHA is
 # stripped: an owner or repo name may itself contain hyphens, so the remainder
 # is compared whole rather than split into two fields.
@@ -87,6 +107,73 @@ def self_identity(root: str) -> str:
     return _ROOT_SHA_SUFFIX.sub("", trimmed).lower()
 
 
+def _join_shell_continuations(text: str) -> str:
+    """Remove active backslash-newline pairs, retaining comments and literals."""
+    output: list[str] = []
+    quote = ""
+    comment = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\n":
+            comment = False
+            # Each physical YAML line is independent unless the shell
+            # explicitly continues it. A quote in a plain YAML name must
+            # not change how a later run block is interpreted.
+            quote = ""
+        elif not comment:
+            if char == "\\" and quote != "'" and index + 1 < len(text):
+                following = text[index + 1]
+                if following == "\n":
+                    index += 2
+                    continue
+                if following == "\r" and text[index + 2:index + 3] == "\n":
+                    index += 3
+                    continue
+                output.extend((char, following))
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            elif not quote and char in "\"'":
+                quote = char
+            elif not quote and char == "#" and (index == 0 or text[index - 1].isspace()):
+                comment = True
+        output.append(char)
+        index += 1
+    return "".join(output)
+
+
+def _command_segments(line: str) -> list[str]:
+    """Separate shell commands without splitting quoted URLs or reading comments.
+
+    A dependency install and a git clone can share a YAML run line. The
+    dependency exception belongs to its command, not to that entire line.
+    This is lexical segmentation only; shell variables are not resolved.
+    """
+    command, fields = re.subn(r"^\s*(?:-\s*)?(?:run|script):\s*", "", line)
+    if fields and len(command) >= 2 and command[0] in "\"'" and command[-1] == command[0]:
+        command = command[1:-1]
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    segments: list[str] = []
+    words: list[str] = []
+    try:
+        for word in lexer:
+            if word and all(char in ";&|" for char in word):
+                if words:
+                    segments.append(" ".join(words))
+                    words = []
+            else:
+                words.append(word)
+    except ValueError:
+        # A partial shell expression does not establish a deploy target.
+        return []
+    if words:
+        segments.append(" ".join(words))
+    return segments
+
+
 def deployed_repositories(text: str) -> list[tuple[str, str]]:
     """(owner, repo) for every GitHub repository this workflow PLACES ON DISK.
 
@@ -95,14 +182,23 @@ def deployed_repositories(text: str) -> list[tuple[str, str]]:
     wild, so a URL assigned anywhere in the file counts once the file also
     performs one of those operations — the alternative is resolving shell
     variables, which is a different program.
+
+    Commands matching _NOT_A_DEPLOY_TARGET are excluded from that sweep. Without
+    it a comment crediting the workflow's source, or a `pip install git+…`,
+    was read as the deploy target and the rule accused a workflow that deploys
+    its own repository correctly.
     """
-    if not _PLACING_CODE.search(text):
+    commands = [command for line in _join_shell_continuations(text).splitlines()
+                for command in _command_segments(line)
+                if not _NOT_A_DEPLOY_TARGET.search(command)]
+    if not any(_PLACING_CODE.search(command) for command in commands):
         return []
     seen: list[tuple[str, str]] = []
-    for match in _REPO_URL.finditer(text):
-        pair = (match.group(1).lower(), match.group(2).lower())
-        if pair not in seen:
-            seen.append(pair)
+    for command in commands:
+        for match in _REPO_URL.finditer(command):
+            pair = (match.group(1).lower(), match.group(2).lower())
+            if pair not in seen:
+                seen.append(pair)
     return seen
 
 

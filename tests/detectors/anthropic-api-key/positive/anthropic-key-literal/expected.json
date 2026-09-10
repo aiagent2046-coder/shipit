@@ -1,0 +1,11 @@
+{
+  "description": "Anthropic API key committed in source.",
+  "expect": [
+    {
+      "rule_id": "anthropic-api-key",
+      "severity": "critical",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

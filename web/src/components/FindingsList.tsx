@@ -1,6 +1,7 @@
-import type { Finding, Severity } from "@/lib/types";
+import { AuditCoverage } from "@/components/AuditCoverage";
+import type { Finding, Score, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
-import { claimEvidenceRows, evidenceLabel, isNonProductionFinding, sourceSeverityCounts } from "@/lib/evidence";
+import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, partialContradicted, sourceSeverityCounts, syntaxContradicted, unsupportedTransport } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -49,43 +50,113 @@ export function SeveritySummary({ findings }: { findings: Finding[] }) {
   );
 }
 
-function FindingCard({ finding }: { finding: Finding }) {
+function FindingCard({ finding, historical = false, included = false }: { finding: Finding; historical?: boolean; included?: boolean }) {
   const { what, risk, fix } = plainFields(finding);
   const loc = finding.file
     ? `${finding.file}${finding.line ? `:${finding.line}` : ""}`
     : "";
-  const tech = [finding.title, loc, finding.masked].filter(Boolean).join(" · ");
   const model = finding.source === "llm" || finding.rule_id?.startsWith("llm-");
+  const contradicted = syntaxContradicted(finding);
+  const unsupported = unsupportedTransport(finding) && !contradicted && !historical;
+  const partial = partialContradicted(finding) && !historical;
+  const tech = [partial || unsupported ? "" : finding.title, loc, finding.masked].filter(Boolean).join(" · ");
   const evidence = <dl className="my-3 space-y-2 whitespace-pre-line text-sm">
-    {claimEvidenceRows(finding).map(([label, value]) => (
-      <div key={label}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
+    {claimEvidenceRows(finding, historical).map(([label, value], index) => (
+      <div key={`${label}-${index}`}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
     ))}
   </dl>;
   return (
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
-        <p className="font-medium">{what}</p>
-        <SeverityBadge severity={finding.severity} />
+        <p className="font-medium">{unsupported ? "Credential transport — exposure not established"
+          : partial ? "Source checks contradict part of this finding" : what}</p>
+        {historical ? <span className="text-sm text-muted">{included ? "Free audit observation — included in this audit" : "Previous preview — not reassessed"}
+          {isNonProductionFinding(finding) && " · Test/example context"}</span>
+          : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
+          : unsupported ? <span className="text-sm text-muted">Needs exposure evidence</span>
+          : partial ? <span className="text-sm text-muted">Assessment needs review</span>
+          : isInformational(finding) ? <span className="text-sm text-muted">Informational</span>
+          : <SeverityBadge severity={finding.severity} />}
       </div>
-      <p className="mb-2 text-sm text-muted">{evidenceLabel(finding)}</p>
-      {risk && <p className="mb-2 text-sm text-muted">
+      <p className="mb-2 text-sm text-muted">{evidenceLabel(finding, historical)}</p>
+      {partial && <p className="mb-2 text-sm text-muted">
+        Other claims remain unverified. Review the counterevidence below; the original model severity is retained in the score pending review.
+      </p>}
+      {risk && !partial && !unsupported && <p className="mb-2 text-sm text-muted">
         {model && <strong>Possible consequence — unverified: </strong>}{risk}
       </p>}
       {model ? evidence : <details className="my-3 text-sm"><summary>Evidence and conditions</summary>{evidence}</details>}
-      {fix && (
+      {partial && <details className="my-3 text-sm text-muted">
+        <summary>Original model claim and suggestion — contains a contradicted premise</summary>
+        <p>{what}</p>{risk && <p>{risk}</p>}{fix && <p>{fix}</p>}
+      </details>}
+      {unsupported && <details className="my-3 text-sm text-muted">
+        <summary>Original model claim and suggestion — exposure not established</summary>
+        <p>{finding.title}</p>{finding.explanation && <p>{finding.explanation}</p>}
+        {finding.fix_hint && <p>{finding.fix_hint}</p>}
+      </details>}
+      {fix && (contradicted || historical) && <details className="my-3 text-sm text-muted">
+        <summary>{historical ? (included ? "Free audit suggestion — unverified" : "Original preview suggestion — not reassessed")
+          : "Original model suggestion — premise contradicted"}</summary>{fix}
+      </details>}
+      {fix && !contradicted && !partial && !unsupported && !historical && (
         <p className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-accent">
           <span>
             <span aria-hidden="true">→ </span>
             {model && <strong>Suggested verification / fix: </strong>}
             {fix}
           </span>
-          {ENTERPRISE_FIX_RULES.has(finding.rule_id) && <EnterpriseBadge />}
+          {!isInformational(finding) && ENTERPRISE_FIX_RULES.has(finding.rule_id) && <EnterpriseBadge />}
         </p>
       )}
       {tech && (
         <p className="break-all font-mono text-xs text-muted">{tech}</p>
       )}
     </li>
+  );
+}
+
+export function PreviewHistory({ score }: { score: Score }) {
+  const history = score.preview_history;
+  const baseline = score.free_baseline;
+  const full = baseline?.version === 1 ? (
+    <section aria-label="Included free audit" className="my-6 space-y-3 rounded-lg border border-border p-4">
+      <h2 className="text-lg font-semibold">Included free audit</h2>
+      <p>{baseline.origin === "reused" ? "Reused same-archive free audit" : "Included in this paid audit"}.
+        {" "}Status: {baseline.status}.</p>
+      <p>The complete baseline is preserved below, including observations repeated in the paid review.
+        It includes static observations and any model hypotheses; repeated observations are not independent confirmation or additional current-scan findings.</p>
+      {baseline.score ? <details><summary>Full baseline findings and scope</summary>
+        <AuditCoverage score={baseline.score} findings={baseline.findings} />
+        <ul className="space-y-3">{baseline.findings.map((finding, index) =>
+          <FindingCard key={index} finding={finding} historical included={baseline.origin === "included"} />)}</ul>
+      </details> : <p>Free audit unavailable: {baseline.reason ?? "not recorded"}.</p>}
+    </section>
+  ) : null;
+  if (history?.version !== 1) return full;
+  return (
+    <>{full}<section aria-label="Free audit history" className="my-6 space-y-3 rounded-lg border border-border p-4">
+      <h2 className="text-lg font-semibold">Free audit history</h2>
+      <p className="break-all text-sm text-muted">
+        Preview {history.preview_audit_id} · engine {history.engine_version} · model {history.model ?? "not recorded"}.
+      </p>
+      <p className="text-sm text-muted">
+        Matched by identical archive content and audit engine. {history.matched_count} unchanged observations
+        already appear in this scan; {history.retained_findings.length} other preview observations are retained below.
+      </p>
+      <p className="text-sm text-muted">
+        Not repeated does not mean fixed, disproved or confirmed. These are original preview records,
+        not reassessed findings. They are excluded from current scan counts, scores and automatic fixes.
+        Repetition is not independent evidence.
+      </p>
+      {score.analysis_reused_from && <p className="text-sm text-muted">
+        The model analysis was reused from an existing audit; adding this history made no new LLM calls.
+      </p>}
+      <ul className="space-y-3">
+        {history.retained_findings.map((finding, index) =>
+          <FindingCard key={index} finding={finding} historical />)}
+      </ul>
+    </section></>
   );
 }
 
@@ -101,8 +172,12 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
     );
   }
   const sorted = sortFindings(findings);
-  const production = sorted.filter((f) => !isNonProductionFinding(f));
-  const examples = sorted.filter(isNonProductionFinding);
+  const contradicted = sorted.filter(syntaxContradicted);
+  const informational = sorted.filter(isInformational);
+  const unsupported = sorted.filter((f) => !syntaxContradicted(f) && !isInformational(f) && unsupportedTransport(f));
+  const unresolved = sorted.filter((f) => !syntaxContradicted(f) && !isInformational(f) && !unsupportedTransport(f));
+  const production = unresolved.filter((f) => !isNonProductionFinding(f));
+  const examples = unresolved.filter(isNonProductionFinding);
   return (
     <>
       <ul className="flex flex-col gap-3">
@@ -126,6 +201,33 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
           </ul>
         </section>
       )}
+      {informational.length > 0 && <section className="mt-6" aria-label="Deployment inventory">
+        <h3 className="font-semibold">Deployment inventory</h3>
+        <ul className="flex flex-col gap-3">
+          {informational.map((f, i) => <FindingCard key={i} finding={f} />)}
+        </ul>
+      </section>}
+      {unsupported.length > 0 && <section className="mt-6" aria-label="Credential transport hypotheses">
+        <h3 className="font-semibold">Credential transport hypotheses</h3>
+        <p className="my-2 text-sm text-muted">
+          These transport-only hypotheses lack demonstrated credential exposure. They are retained for review
+          and excluded from unresolved finding counts and score penalties. Credential safety remains unverified.
+        </p>
+        <ul className="flex flex-col gap-3">
+          {unsupported.map((f, i) => <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />)}
+        </ul>
+      </section>}
+      {contradicted.length > 0 && <section className="mt-6" aria-label="Contradicted syntax premises">
+        <h3 className="font-semibold">Contradicted syntax premises</h3>
+        <p className="my-2 text-sm text-muted">
+          These model claims contradict the bounded syntax check. They are retained for traceability
+          and excluded from unresolved finding counts and score penalties. This does not establish
+          that the surrounding code is safe.
+        </p>
+        <ul className="flex flex-col gap-3">
+          {contradicted.map((f, i) => <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />)}
+        </ul>
+      </section>}
     </>
   );
 }

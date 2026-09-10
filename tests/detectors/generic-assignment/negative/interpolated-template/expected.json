@@ -1,0 +1,7 @@
+{
+  "description": "A template literal that interpolates has no credential in it to find. Widening the rule to accept backticks must not turn correct env-var wiring into a reported leak.",
+  "expect": [],
+  "forbid": [
+    "generic-assignment"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "description": "The correct TypeScript forms, and the one a regex gets wrong: a tagged template IS the parameterised form, so reporting sql`...${id}` would flag the fix. Also a placeholder query, a constant query, and ordinary non-SQL string building.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

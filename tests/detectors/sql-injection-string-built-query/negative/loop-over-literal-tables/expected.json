@@ -1,0 +1,7 @@
+{
+  "description": "A loop over a fixed list of table names, which is how migrations and stats collectors are written. Nothing outside the file can reach the loop variable, so interpolating it carries no input -- this was two of five findings on a real repository, both high severity and both wrong.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

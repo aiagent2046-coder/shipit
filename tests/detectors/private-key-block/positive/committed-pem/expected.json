@@ -1,0 +1,10 @@
+{
+  "description": "Private key material committed to the repository.",
+  "expect": [
+    {
+      "rule_id": "private-key-block",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

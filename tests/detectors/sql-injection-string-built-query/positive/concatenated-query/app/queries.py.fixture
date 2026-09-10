@@ -1,0 +1,13 @@
+import psycopg
+
+
+def find_user(conn, user_id):
+    """Look a user up by id."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, email FROM users WHERE id = " + user_id)
+        return cur.fetchone()
+
+
+def delete_rows(conn, table, owner):
+    with conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {table} WHERE owner = '{owner}'")

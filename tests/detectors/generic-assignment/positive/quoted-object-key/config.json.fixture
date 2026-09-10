@@ -1,0 +1,13 @@
+{
+  "config": {
+    "database": {
+      "db_password": "abcdefghijklmnop"
+    },
+    "integrations": {
+      "admin_token": "qrstuvwxyz012345"
+    },
+    "auth": {
+      "client_secret": "6789abcdefghijkl"
+    }
+  }
+}

@@ -1,33 +1,28 @@
-"""Collapse the same LLM finding reported by more than one rubric.
+"""Conservative grouping by source operation and compatible claim status.
 
-The auth and security rubrics run as two independent prompts over
-overlapping file sets, so both can flag the SAME issue at the same
-(file, line) — seen in production: one hardcoded cron secret reported
-once per rubric, double-penalizing the score. (In union-of-N mode the
-same issue also repeats across passes.) We keep the single most-severe
-instance per location and, when a *different* rubric also flagged it,
-record that on the survivor instead of dropping it silently — a second
-rubric repeating a claim is provenance, not independent confirmation.
-
-Grouping is on file + nearby line + title similarity — NOT rule_id — so
-a medium from one rubric and a high from the other collapse into one.
-Two rubrics often anchor the same issue to different lines of one
-multi-line statement (seen in production: an HMAC-derived-password call
-spanning four lines, flagged at line 46 by one rubric and 47 by the
-other), so exact-line grouping under-merged. We now group within a small
-line window AND require the titles to be about the same thing, so
-genuinely distinct issues that merely sit near each other are not merged.
-Only LLM findings (rule_id "llm-*") are grouped: static-scan findings
-pass through untouched even when they share a location with an LLM
-finding, because the two scanners detect genuinely different things (a
-regex secret hit vs. a semantic auth flaw) and are not the same issue.
+New interpretations require a trusted source identity. Exact repeats of one
+quote-checked observation can also share a row when that identity is unresolved.
+Legacy reports retain their location/cause fallback. All original interpretations
+and statuses survive grouping, including pre-grouped input.
 """
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
+from collections import Counter
 from difflib import SequenceMatcher
+import re
+import json
 
 from app.scan.scoring import ScoredFinding
+from app.scan.react_network_identity import (
+    MECHANISM, network_premise_projection, title_label_disagreement, valid_network_identity,
+)
+from app.scan.model_metadata_identity import (
+    MECHANISM as MODEL_METADATA, compatible_model_metadata_claims, valid_model_metadata_identity,
+)
+from app.scan.external_operation_identity import (
+    MECHANISMS as EXTERNAL_OPERATIONS, compatible_external_claims, valid_external_identity,
+)
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -57,96 +52,270 @@ def _title_ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
-def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
-    """Same line is enough. A nearby line additionally needs similar titles.
+def _mechanisms(title: str) -> frozenset[str]:
+    """Small, conservative cause vocabulary; categories/rubrics are not causes.
 
-    Requiring title similarity everywhere was measured and does not work. On a
-    paying customer's report two pairs reached the reader twice each, and the
-    ratios explain why the gate never fired:
-
-        0.317  "Command injection via unsanitised user-controlled parameter"
-               vs "User-controlled input interpolated into SSH shell commands"
-        0.352  "Unauthenticated endpoint executes arbitrary SSH commands"
-               vs "No authentication on action execution endpoint"
-        0.535  the pair this threshold was calibrated to MERGE
-        0.588  a same-place-but-distinct pair that must NOT merge
-
-    The classes are interleaved: the pair that must stay apart scores higher
-    than both that must join. No threshold separates them, so the signal is
-    wrong rather than the constant, and lowering it would only merge more of
-    the wrong things.
-
-    What does separate them is position. Two rubrics anchoring to the SAME
-    line are looking at one place in one file, and two prompts over
-    overlapping files reaching the same line is the ordinary way one issue
-    gets reported twice. The line window exists for a different case -- one
-    statement spanning several lines, where the titles genuinely are alike --
-    so it keeps the similarity test it was calibrated with.
-
-    The cost is named: two genuinely distinct issues anchored to the same line
-    (a decorator attracts "no auth" and "no rate limit" alike) now merge. That
-    is why the merge carries the other title into the survivor's explanation
-    instead of discarding it -- the finding loses its own row, not its
-    existence.
+    Compound titles are never reduced to one of their constituent mechanisms.
+    This is grouping of hypotheses, not verification of their source claims.
     """
+    patterns = {
+        "authentication": r"unauthenticated|(?:no|missing|without) (?:server.side )?(?:authentication|auth check)",
+        "rate_limit": r"rate[ -]limit",
+        "service_role_access": r"service[ _-]*role.*(?:client|database|reads|writes|RLS)|"
+                               r"(?:client|RLS).*service[ _-]*role",
+        "derived_password": r"password.*(?:derived|service.role)|(?:deterministic|derived).*password",
+        "shell_interpolation": r"command injection|(?:input|parameter).*interpolat.*(?:shell|SSH)|"
+                               r"(?:shell|SSH).*interpolat.*input",
+    }
+    return frozenset(key for key, pattern in patterns.items() if re.search(pattern, title, re.I))
+
+
+def _exact_observation(finding: ScoredFinding, *, model_metadata=False) -> str | None:
+    """An identical observation is not a new penalty for another model response.
+
+    Only scanner-accepted, quote-bound LLM rows with an explicitly unresolved
+    identity qualify, or the narrowly requested model metadata identities
+    (including legacy broad v1). Do not infer equivalence from similar text or
+    erase any substantive field, status, or producer metadata. The original
+    response numbers stay in grouped_originals; this key is only for matching.
+    """
+    record = finding.claim_evidence or {}
+    identity = record.get("source_issue_identity")
+    if ("source_issue_identity" not in record
+            or (identity is not None and not (model_metadata
+                and valid_model_metadata_identity(identity, finding.file, legacy=True)))
+            or finding.source != "llm" or finding.verification_method != "model_review"
+            or not isinstance(finding.file, str) or not finding.file.strip()
+            or type(finding.line) is not int or finding.line < 1):
+        return None
+    check, producer = record.get("source_check"), record.get("producer")
+    if not isinstance(check, dict) or not isinstance(producer, dict):
+        return None
+    start, end = check.get("line_start"), check.get("line_end")
+    if (check.get("kind") != "quote_match" or type(start) is not int or type(end) is not int
+            or not 1 <= start <= finding.line <= end
+            or any(not isinstance(producer.get(key), str) or not producer[key].strip()
+                   for key in ("model", "rubric"))
+            or type(producer.get("response")) is not int or producer["response"] < 1):
+        return None
+    if model_metadata and identity is not None and (
+            check.get("source_sha256", identity["source_sha256"]) != identity["source_sha256"]
+            or check.get("file", finding.file) != finding.file):
+        return None
+    payload = {key: getattr(finding, key) for key in _FINDING_FIELDS}
+    payload["claim_evidence"] = {
+        **record, "producer": {key: value for key, value in producer.items() if key != "response"},
+    }
+    try:
+        return json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        return None  # Malformed evidence cannot establish an exact repeat.
+
+
+def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     if anchor.file != f.file:
         return False
-    distance = abs(anchor.line - f.line)
-    if distance == 0:
+    ea, eb = anchor.claim_evidence or {}, f.claim_evidence or {}
+    has_source = "source_issue_identity" in ea or "source_issue_identity" in eb
+    identity_a, identity_b = ea.get("source_issue_identity"), eb.get("source_issue_identity")
+    metadata = any(isinstance(identity, dict) and identity.get("mechanism") == MODEL_METADATA
+                   for identity in (identity_a, identity_b))
+    if metadata:
+        # Persisted v1 identities name only a request. Never re-use them for
+        # semantic grouping, including when flattening a previously mixed row.
+        exact = _exact_observation(anchor, model_metadata=True)
+        if exact is not None and exact == _exact_observation(f, model_metadata=True):
+            return True
+        if (identity_a != identity_b or not valid_model_metadata_identity(identity_a, anchor.file)
+                or not compatible_model_metadata_claims(anchor, f, identity_a)):
+            return False
+    if has_source and (not identity_a or identity_a != identity_b):
+        exact = _exact_observation(anchor)
+        return exact is not None and exact == _exact_observation(f)
+    external = (isinstance(identity_a, dict) and isinstance(identity_a.get("mechanism"), str)
+                and identity_a["mechanism"] in EXTERNAL_OPERATIONS)
+    if external and (not valid_external_identity(identity_a, anchor.file)
+                     or not compatible_external_claims(anchor, f, identity_a)):
+        return False
+    network = isinstance(identity_a, dict) and identity_a.get("mechanism") == MECHANISM
+    if network:
+        if not valid_network_identity(identity_a, anchor.file):
+            return False
+        # Grouping an unresolved hypothesis cannot turn different execution or
+        # verification dispositions into one row. Other matchers are unchanged.
+        for key in ("source", "verification_method", "verification_status", "category", "origin_category"):
+            if getattr(anchor, key) != getattr(f, key):
+                return False
+        if anchor.source != "llm" or anchor.verification_method != "model_review":
+            return False
+    # The source operation, not the model's selector coordinates, establishes
+    # identity. Different check kinds/dispositions still retain separate rows.
+    for key in ("syntax_check", "premise_checks", "source_assessments"):
+        a, b = ea.get(key), eb.get(key)
+        if network and key == "premise_checks":
+            a, b = network_premise_projection(a, identity_a), network_premise_projection(b, identity_b)
+        if has_source:
+            a, b = _check_status(a), _check_status(b)
+        if a != b:
+            return False
+    for key in ("conditions_status", "consequence_status"):
+        if ea.get(key) != eb.get(key):
+            return False
+
+    def recommendation_status(item):
+        return ((item.claim_evidence or {}).get("recommendation_check") or {}).get("result")
+    if recommendation_status(anchor) != recommendation_status(f):
+        return False
+    if has_source:
         return True
-    return (distance <= _NEARBY_LINE_WINDOW
-            and _title_ratio(anchor.title, f.title) >= _TITLE_SIMILARITY_THRESHOLD)
+
+    def function_key(item):
+        return {(c["file"], c["function_line_start"], c["function_line_end"],
+                 tuple(c["read_lines"]), c["equivalence"])
+                for c in (item.claim_evidence or {}).get("context_checks", [])
+                if c.get("kind") == "operator_guard_order" and c.get("equivalence")}
+
+    if function_key(anchor) & function_key(f):
+        return True
+    if abs(anchor.line - f.line) > _NEARBY_LINE_WINDOW:
+        return False
+    a, b = anchor.title.casefold().strip(), f.title.casefold().strip()
+    if a == b:
+        return True
+    causes_a, causes_b = _mechanisms(a), _mechanisms(b)
+    if len(causes_a) != 1 or causes_a != causes_b:
+        return False
+    # Recognized paraphrases at the same line share one mechanism. Nearby
+    # statements still need similar wording to limit accidental joining.
+    return anchor.line == f.line or _title_ratio(a, b) >= _TITLE_SIMILARITY_THRESHOLD
+
+
+def _check_status(value):
+    """Keep semantic status, excluding selector coordinates and prose."""
+    if isinstance(value, list):
+        return sorted({_check_status(item) for item in value}, key=repr)
+    if not isinstance(value, dict):
+        return value
+    return tuple((key, json.dumps(value[key], sort_keys=True)) for key in (
+        "kind", "result", "target", "source_entities", "scope", "claim_scope", "disposition", "whole_finding",
+        "narrative_review",
+    ) if key in value)
+
+
+_FINDING_FIELDS = {field.name for field in fields(ScoredFinding)}
+_REQUIRED_FIELDS = {"rule_id", "title", "severity", "confidence", "category"}
+
+
+def _original(finding):
+    # Retain origin_category, provenance and verification statuses as well as
+    # all original evidence. Never nest a grouping inside another grouping.
+    values = {key: getattr(finding, key) for key in _FINDING_FIELDS}
+    if values["claim_evidence"]:
+        values["claim_evidence"] = {key: value for key, value in values["claim_evidence"].items()
+                                    if key != "grouped_originals"}
+    return values
+
+
+def _flatten(finding, depth=0):
+    originals = (finding.claim_evidence or {}).get("grouped_originals")
+    if not isinstance(originals, list) or not originals or depth >= 8:
+        yield finding
+        return
+    # Malformed history cannot silently erase the displayed representative.
+    if any(not isinstance(item, dict) or not _REQUIRED_FIELDS <= item.keys() for item in originals):
+        yield finding
+        return
+    for item in originals:
+        original = ScoredFinding(**{key: value for key, value in item.items() if key in _FINDING_FIELDS})
+        yield from _flatten(original, depth + 1)
 
 
 def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
-    """Keep one finding per same-issue group across LLM rubrics, most
-    severe (then most confident) wins; ties keep the first seen. A group
-    is findings in the same file, within a small line window, with
-    similar titles (see _same_issue). Non-LLM findings are returned
-    untouched, in their original positions."""
-    groups: list[list[ScoredFinding]] = []
-    slot_of: list[int] = []  # parallel to groups: each group's out index
-    out: list[ScoredFinding | None] = []
+    """Group source-identical LLM hypotheses with compatible evidence status.
 
-    for f in findings:
-        if not f.rule_id.startswith("llm-"):
-            out.append(f)  # static scan — never merged with LLM findings
+    Historical findings without source identities retain the conservative
+    legacy matcher. Representatives are selected before grouping, so choosing
+    a more severe row cannot leave two representatives that should join. Every
+    original is retained, and pre-grouped input is flattened before regrouping.
+    """
+    entries = []
+    seen = Counter()
+    seen_groups = set()
+    for position, finding in enumerate(findings):
+        if not finding.rule_id.startswith("llm-"):
+            entries.append((position, finding))
             continue
-        # First group whose anchor (first seen, per tie rule) is the same
-        # issue. Adjacency is judged against that anchor, matching the old
-        # "first seen wins" semantics.
-        gi = next((i for i, m in enumerate(groups) if _same_issue(m[0], f)), None)
-        if gi is None:
-            slot_of.append(len(out))
-            groups.append([f])
-            out.append(None)  # reserve this group's slot, filled below
-        else:
-            groups[gi].append(f)
+        from_group = bool((finding.claim_evidence or {}).get("grouped_originals"))
+        represented_before = seen.copy() if from_group else None
+        group_counts = Counter()
+        for leaf in _flatten(finding):
+            fingerprint = json.dumps(_original(leaf), sort_keys=True, ensure_ascii=False, default=str)
+            # Pre-grouped input can overlap with another group or an original.
+            # Such overlap is not an additional observation/model response.
+            if from_group:
+                seen_groups.add(fingerprint)
+                group_counts[fingerprint] += 1
+                if group_counts[fingerprint] <= represented_before[fingerprint]:
+                    continue
+            elif fingerprint in seen_groups:
+                continue
+            seen[fingerprint] += 1
+            entries.append((position, leaf))
 
-    for members, slot in zip(groups, slot_of):
-        rep = min(members, key=lambda f: (_SEV_RANK[f.severity], -f.confidence))
-        others = sorted({f.rule_id for f in members} - {rep.rule_id})
+    groups = []
+    static = []
+    def priority(item):
+        finding = item[1][1]
+        # Input positions change when old groups are flattened. A stable
+        # source/origin tie-break keeps group membership unchanged on replay.
+        return (_SEV_RANK.get(finding.severity, 4), -finding.confidence,
+                finding.file, finding.line,
+                json.dumps(_original(finding), sort_keys=True, ensure_ascii=False, default=str))
+
+    ordered = sorted(enumerate(entries), key=priority)
+    for original_order, (position, finding) in ordered:
+        if not finding.rule_id.startswith("llm-"):
+            static.append((position, original_order, finding))
+            continue
+        match = next((members for members in groups if _same_issue(members[0][2], finding)), None)
+        if match is None:
+            groups.append([(position, original_order, finding)])
+        else:
+            match.append((position, original_order, finding))
+
+    out = list(static)
+    for members in groups:
+        rep = members[0][2]
+        origins = [item[2] for item in sorted(members, key=lambda item: item[1])]
+        others = sorted({finding.rule_id for finding in origins} - {rep.rule_id})
         if others:
-            labels = ", ".join(_RUBRIC_LABEL.get(r, r) for r in others)
-            # Say "at a nearby line" only when the other observation was actually
-            # at a different line, so the note stays accurate for both the
-            # same-line and widened cases.
-            where = " at a nearby line" if any(m.line != rep.line for m in members) else ""
+            labels = ", ".join(_RUBRIC_LABEL.get(rule, rule) for rule in others)
+            distance = max(abs(finding.line - rep.line) for finding in origins)
+            where = (" at another source location" if distance > _NEARBY_LINE_WINDOW else
+                     " at a nearby line" if distance else "")
             note = (f" Also reported by the {labels}{where}; "
                     "this is not independent confirmation.")
-            # The other wording, kept. Merging on position alone can join two
-            # genuinely different issues that share a line, so the survivor
-            # has to carry what the other one said or the second issue leaves
-            # no trace at all. Dissimilar titles are exactly the ones worth
-            # repeating; near-identical ones would only pad the explanation.
-            extra = [
-                m.title for m in members
-                if m is not rep
-                and _title_ratio(m.title, rep.title) < _TITLE_SIMILARITY_THRESHOLD
-            ]
+            extra = [finding.title for finding in origins if finding is not rep
+                     and _title_ratio(finding.title, rep.title) < _TITLE_SIMILARITY_THRESHOLD]
             if extra:
                 note += " Reported there as: " + "; ".join(sorted(set(extra))) + "."
             rep = replace(rep, explanation=(rep.explanation + note).strip())
-        out[slot] = rep
-
-    return out
+        if len(origins) > 1:
+            rep = replace(rep, claim_evidence={"version": 1, **(rep.claim_evidence or {}),
+                                              "grouped_originals": [_original(item) for item in origins]})
+            identity = (rep.claim_evidence or {}).get("source_issue_identity")
+            if valid_network_identity(identity, rep.file):
+                rep = replace(rep, claim_evidence={**rep.claim_evidence, "grouped_claim_scope": {
+                    "mechanism": MECHANISM,
+                    "scope": "Same source operation and network-rejection cleanup hypothesis only.",
+                    "consequences": "Original conditions and consequences retain their own verification statuses.",
+                    "title_source_disagreements": [
+                        {"original_index": index, "result": "different_handler_label",
+                         "source_handler": identity["handler"]}
+                        for index, item in enumerate(origins)
+                        if title_label_disagreement(item.title, identity)
+                    ],
+                }})
+        first = min((position, order) for position, order, _ in members)
+        out.append((*first, rep))
+    return [finding for _, _, finding in sorted(out, key=lambda item: (item[0], item[1]))]

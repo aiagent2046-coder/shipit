@@ -1,0 +1,10 @@
+{
+  "description": "No .gitignore at all -- the next secret added lands in history.",
+  "expect": [
+    {
+      "rule_id": "gitignore-missing-secrets",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,3 @@
+const secretOne = "abcdefghijklmnop"
+const tokenForAdmin = "qrstuvwxyz012345"
+const passwordForDatabase = "6789abcdefghijkl"

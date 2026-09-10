@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import BinaryIO
 
+from app.ingest.validators import validate_zip
 from app.scan.auth_read import scan_auth_read
 from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
+from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.rls import scan_rls
+from app.scan.recommendations import prepare_recommendation
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
+from app.scan.sql_injection import scan_sql_injection
+from app.scan.sql_injection_js import scan_sql_injection_js
 from app.scan.source_facts import collect_source_facts
 
 
@@ -26,14 +32,20 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     that use it directly (the tests, and anything added later) must not be
     handed a number computed on a premise this function contradicts.
     """
+    # Direct callers must meet the same input contract as uploads and jobs.
+    # Otherwise repeated ZIP entries can create repeated score penalties.
+    size = fileobj.seek(0, 2)
+    validate_zip(fileobj, size_bytes=size)
     findings: list[ScoredFinding] = []
 
     fileobj.seek(0)
-    for s in scan_secrets(fileobj):
+    file_coverage: dict = {}
+    for s in scan_secrets(fileobj, coverage=file_coverage):
         findings.append(ScoredFinding(
             rule_id=s.rule_id, title=s.title, severity=s.severity,
             confidence=s.confidence, category="Security",
             file=s.file, line=s.line, masked=s.masked, context=s.context,
+            claim_evidence={**static_claim_evidence(), "source_context": s.source_context},
         ))
 
     fileobj.seek(0)
@@ -53,11 +65,29 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         ))
 
     fileobj.seek(0)
+    for q in scan_sql_injection(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=q.rule_id, title=q.title, severity=q.severity,
+            confidence=q.confidence, category=q.category, file=q.file,
+            line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for q in scan_sql_injection_js(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=q.rule_id, title=q.title, severity=q.severity,
+            confidence=q.confidence, category=q.category, file=q.file,
+            line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
     for c in run_checks(fileobj):
         findings.append(ScoredFinding(
             rule_id=c.rule_id, title=c.title, severity=c.severity,
             confidence=c.confidence, category=c.category, file=c.file,
-            line=c.line, explanation=c.explanation, fix_hint=c.fix_hint,
+            line=c.line, explanation=c.explanation, fix_hint=c.fix_hint, context=c.context,
         ))
 
     fileobj.seek(0)
@@ -101,7 +131,22 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
 
     fileobj.seek(0)
     source_facts = collect_source_facts(fileobj)
+    findings.extend(scan_http_success(source_facts))
+    findings = [prepare_recommendation(replace(f, source="static", verification_method="source_pattern"), source_facts)
+                for f in findings]
+    exclusion_labels = {"file_size_limit": "over the 1 MiB file limit", "symlink": "symbolic links",
+                        "excluded_directory": "dependency/build directories",
+                        "excluded_extension": "excluded file types", "binary_content": "binary content"}
+    excluded = ", ".join(f"{count} {exclusion_labels[reason]}"
+                         for reason, count in sorted(file_coverage.get("exclusions", {}).items())) or "none"
+    scope_description = (
+        f"{file_coverage.get('files_scanned', 0)}/{file_coverage.get('files_total', 0)} files scanned; "
+        f"excluded: {excluded}; "
+        f"files with invalid UTF-8 bytes omitted: {file_coverage.get('lossy_decoded_files', 0)}. "
+        "Exclusions are outside this check; no finding does not establish that excluded content is safe."
+    )
     return {
+        "secrets_coverage": file_coverage,
         "source_facts": source_facts,
         # llm_ran=False, not the default: no LLM stage runs inside this
         # function, so Auth and Money & Data sit at 10.0 for want of a
@@ -129,7 +174,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                               "coverage": boundary.coverage},
         },
         "findings": [dict(vars(f), source="static",
-                          claim_evidence=static_claim_evidence(),
+                          claim_evidence=f.claim_evidence or static_claim_evidence(),
                           verification_method="source_pattern") for f in findings],
         # Carried, not folded into a finding: `budget_exhausted` means the
         # boundary scan stopped before it could say a boundary is absent, so
@@ -138,8 +183,13 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # not look identical (#392). Consuming this in the pipeline/report is
         # the follow-up; here it is preserved so it can be.
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
-                       "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency"],
-        "coverage": {"error_boundary": boundary.coverage,
+                       "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
+                       "http_success", "sql_injection", "sql_injection_js"],
+        "coverage": {"secrets": scope_description,
+                     "error_boundary": boundary.coverage,
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
-                     "test/vendor files excluded; middleware and runtime access not resolved"},
+                     "test/vendor files excluded; middleware and runtime access not resolved",
+                     "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
+                     "runtime fetch bindings and HTTP failures are not verified. "
+                     "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},
     }

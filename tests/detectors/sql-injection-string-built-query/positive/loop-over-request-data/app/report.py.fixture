@@ -1,0 +1,13 @@
+import sqlite3
+
+
+async def report(conn, request):
+    """The loop source comes from the request, so the variable is input."""
+    for table in request.json['tables']:
+        await conn.execute(f"SELECT * FROM {table}")
+
+
+async def dump(conn, names):
+    """A parameter is not a literal either."""
+    for name in names:
+        await conn.execute(f"SELECT * FROM {name}")

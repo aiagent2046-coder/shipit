@@ -1,0 +1,7 @@
+{
+  "description": "Ordinary DDL without literals.",
+  "expect": [],
+  "forbid": [
+    "sql-secret-assignment"
+  ]
+}

@@ -1,0 +1,20 @@
+from fastapi import APIRouter, Depends
+
+from .deps import get_audit_repo
+
+router = APIRouter()
+
+
+# Percent-encoded braces. FastAPI reads the path string literally, so `%7B`
+# is three characters and not a parameter: this route registers as a literal
+# path, `audit_id` is never bound, and every request 404s. Verified against a
+# running app -- /audits/abc123, /audits/%7Baudit_id%7D and /audits/{audit_id}
+# all return 404 Not Found.
+@router.get("/audits/%7Baudit_id%7D")
+async def detail(audit_id, token, audit_repo=Depends(get_audit_repo)):
+    return await audit_repo.get_authorized(audit_id, token)
+
+
+@router.get("/audits/%7Baudit_id%7D/status")
+async def status(audit_id, token, audit_repo=Depends(get_audit_repo)):
+    return await audit_repo.get(audit_id)

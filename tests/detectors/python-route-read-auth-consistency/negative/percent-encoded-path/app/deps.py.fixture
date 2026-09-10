@@ -1,0 +1,3 @@
+async def get_audit_repo():
+    """Dependency stub: the corpus case is about routing, not storage."""
+    raise NotImplementedError

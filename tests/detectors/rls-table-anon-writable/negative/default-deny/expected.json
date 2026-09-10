@@ -1,0 +1,7 @@
+{
+  "description": "RLS enabled with no policy is default deny.",
+  "expect": [],
+  "forbid": [
+    "rls-table-anon-writable"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Secrets baked into DDL, in the two spellings ALTER TABLE actually wears: `:= '...'` and `DEFAULT('...')` with parentheses, with and without a space after DEFAULT. A hunt run on the stronger model produced the parenthesised form and the detector was silent on it; the closing parenthesis is optional in the pattern so `:= ('...')` shares one branch.",
+  "expect": [
+    {
+      "rule_id": "sql-secret-assignment",
+      "count": 2
+    }
+  ],
+  "forbid": []
+}

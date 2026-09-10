@@ -181,7 +181,7 @@ async def get_fixpack_status(
 
     Returns the most recent Fix Pack job's status and pr_url. status is one
     of the fixpack_jobs states — 'paid' (bought, generating), 'delivered'
-    (PR opened, pr_url set), 'no_fix_needed', or 'failed'. When no Fix Pack
+    (PR opened, pr_url set), 'no_fix_needed', 'blocked', or 'failed'. When no Fix Pack
     has been purchased yet (or persistence isn't configured), status is null
     so the frontend can poll a stable shape rather than treat "no job" as an
     error. Missing, wrong or another audit's token returns 404, as does an unknown id.
@@ -191,6 +191,11 @@ async def get_fixpack_status(
     worker — nothing to do with the client's code), else null for a genuine
     generation failure. Derived from the detail the reaper writes, so it needs no
     schema change; null for every non-failed status.
+
+    On 'blocked', block_reason distinguishes a proof check that still detected
+    the issue after patching from other verification failures. Never return
+    the raw detail: it can contain private repository or runner output. The
+    job_id lets the owner reference the order when contacting support.
     """
     set_log_context(audit_id=audit_id)
     audit = await audit_repo.get_authorized(audit_id, token)
@@ -210,12 +215,19 @@ async def get_fixpack_status(
     failure_kind = None
     if status == "failed" and detail.startswith(STALE_LEASE_DETAIL_PREFIX):
         failure_kind = "infrastructure"
-    return {
+    result = {
         "audit_id": audit_id,
         "status": status,
         "pr_url": job.get("pr_url"),
         "failure_kind": failure_kind,
     }
+    if status == "blocked":
+        result["block_reason"] = (
+            "proof_failed" if detail.startswith("proof gate")
+            else "verification_failed"
+        )
+        result["job_id"] = job["id"]
+    return result
 
 
 @router.get("/v1/fixpacks/{job_id}")

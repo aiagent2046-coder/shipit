@@ -14,10 +14,12 @@ import ast
 import io
 import json
 import zipfile
+from dataclasses import asdict
 
 import pytest
 
 from app.fixpack import generate
+from app.scan.secrets import scan_secrets
 from app.fixpack.generate import (
     _is_test_path,
     _validate_syntax,
@@ -431,7 +433,7 @@ def test_secret_in_json_value_left_unquoted_is_excluded():
 
     assert not plan.has_changes
     assert "config.json" not in plan.files
-    assert any("invalid syntax" in r for r in _skipped_reason_for(plan, "config.json"))
+    assert any("unsupported format" in r for r in _skipped_reason_for(plan, "config.json"))
 
 
 def test_valid_python_edit_passes_syntax_gate_and_is_shipped():
@@ -975,3 +977,185 @@ def test_short_config_values_are_not_hunted_as_secrets():
     assert ("config.py", 1) not in plan.surviving_secrets
     assert ("config.py", 2) not in plan.surviving_secrets
     assert all(path == "action_service.py" for path, _ in plan.surviving_secrets)
+
+
+def _scanned_assignment_plan(path, source):
+    zipped = make_zip({path: source})
+    findings = [asdict(f) for f in scan_secrets(io.BytesIO(zipped))]
+    assert any(f["rule_id"] == "generic-assignment" for f in findings)
+    return build_fixpack_plan(zipped, findings)
+
+
+@pytest.mark.parametrize("prefix", [
+    "", "import os\n",
+    '#!/usr/bin/env python3\n# coding: utf-8\n"""Configuration."""\n'
+    "from __future__ import annotations\n",
+])
+@pytest.mark.parametrize("special", ["$", "{", "}", "${literal}"])
+def test_scanned_python_quoted_key_keeps_key_and_runs_with_env(prefix, special, monkeypatch):
+    value = "review-" + special + "synthetic-value-123"
+    source = prefix + f'config = {{"api_key": "{value}", "label": "api_key"}}\n'
+    plan = _scanned_assignment_plan("config.py", source)
+    assert not plan.skipped
+    rewritten = plan.files["config.py"]
+    assert '"api_key": os.environ["APP_SECRET"]' in rewritten
+    assert rewritten.count("import os\n") == 1
+    if prefix.startswith("#!"):
+        assert rewritten.startswith(prefix)
+    assert all(value not in text for text in plan.files.values())
+    assert value not in render_pr_body(plan)
+    monkeypatch.setenv("APP_SECRET", "replacement-from-env")
+    namespace = {}
+    exec(compile(rewritten, "synthetic-config.py", "exec"), namespace)
+    assert namespace["config"] == {"api_key": "replacement-from-env", "label": "api_key"}
+
+
+@pytest.mark.parametrize("key_quote,value_quote", [('"', '"'), ("'", '"'), ('"', "'"), ('"', '`')])
+def test_scanned_typescript_quoted_key_replaces_only_value(key_quote, value_quote):
+    value = "review-$" + "synthetic-value-123"
+    key = key_quote + "api_key" + key_quote
+    source = f"export const config = {{{key}: {value_quote}{value}{value_quote}, label: 'api_key'}};\n"
+    plan = _scanned_assignment_plan("src/config.ts", source)
+    assert not plan.skipped
+    rewritten = plan.files["src/config.ts"]
+    assert f"{key}: process.env.APP_SECRET!" in rewritten
+    assert "label: 'api_key'" in rewritten
+    assert _validate_syntax("src/config.ts", source, rewritten)
+    assert all(value not in text for text in plan.files.values())
+
+
+@pytest.mark.parametrize("path,source_template,reason", [
+    ("config.json", '{{"api_key": "{}"}}\n', "unsupported format"),
+    ("config.yaml", '"api_key": "{}"\n', "unsupported format"),
+    ("config.toml", '"api_key" = "{}"\n', "unsupported format"),
+])
+def test_scanned_quoted_data_key_is_skipped_without_emitting_secret(path, source_template, reason):
+    value = "review-" + "synthetic-value-123"
+    plan = _scanned_assignment_plan(path, source_template.format(value))
+    assert plan.files == {}
+    assert not plan.secret_fixes
+    assert any(reason in item.reason for item in plan.skipped)
+    assert value not in render_pr_body(plan)
+
+
+def test_quoted_assignment_does_not_rewrite_unrelated_key_and_preserves_scrub_gate():
+    value = "review-" + "synthetic-value-123"
+    source = f'config = {{"api_key": "{value}"}}\nother = {{"{value}": 1}}\n'
+    plan = _scanned_assignment_plan("config.py", source)
+    assert plan.files == {}
+    assert not plan.secret_fixes
+    assert any("could not safely remove the value" in item.reason for item in plan.skipped)
+
+
+@pytest.mark.parametrize("prefix", [
+    "os = custom_environment\n",
+    "from other_module import os\n",
+    "from other_module import *\n",
+    "def unrelated(os):\n    return os\n",
+])
+def test_quoted_python_assignment_with_ambiguous_os_binding_is_skipped(prefix):
+    value = "review-" + "synthetic-value-123"
+    plan = _scanned_assignment_plan("config.py", prefix + f'config = {{"api_key": "{value}"}}\n')
+    assert plan.files == {}
+    assert not plan.secret_fixes
+    assert any("ambiguous Python os binding" in item.reason for item in plan.skipped)
+
+
+@pytest.mark.parametrize("prefix", ['"""Configuration."""; ', "from __future__ import annotations; "])
+def test_quoted_python_assignment_sharing_preamble_line_is_skipped(prefix):
+    value = "review-" + "synthetic-value-123"
+    source = prefix + 'config = {"api_key": "' + value + '"}\n'
+    plan = _scanned_assignment_plan("config.py", source)
+    assert plan.files == {}
+    assert not plan.secret_fixes
+    assert plan.skipped
+
+
+@pytest.mark.parametrize("path,source_template", [
+    ("migrations/001.sql", "UPDATE config SET api_secret = '{}';\n"),
+    ("config.toml", 'api_key = "{}"\n'),
+    ("config.yaml", 'api_key: "{}"\n'),
+    ("deploy.sh", "token='{}'\n"),
+    ("config.rb", 'api_key = "{}"\n'),
+    ("config.go", 'var apiKey = "{}"\n'),
+    ("config.json", '{{"api_key": "{}"}}\n'),
+])
+def test_unsupported_secret_format_stays_reported_without_selling_or_emitting_a_fake_fix(
+        path, source_template):
+    value = "review-" + "synthetic-credential-123"
+    zipped = make_zip({path: source_template.format(value)})
+    findings = [asdict(f) for f in scan_secrets(io.BytesIO(zipped))]
+    assert findings
+    marked = generate.mark_unfixable_findings(zipped, findings)
+    assert len(marked) == len(findings)
+    assert all(f["fixpack_eligible"] is False for f in marked)
+    assert not generate.has_auto_fixable_findings(marked)
+    # Historical findings lack the stamp; the checkout gate can still decide
+    # this from their paths, and the generator must reach the same decision.
+    assert not generate.has_auto_fixable_findings(findings)
+    for current in (findings, marked):
+        plan = build_fixpack_plan(zipped, current)
+        assert not plan.has_changes
+        assert not plan.secret_fixes
+        assert all("unsupported format" in item.reason for item in plan.skipped)
+        assert len(plan.skipped) == len(findings)
+        assert value not in render_pr_body(plan)
+
+
+@pytest.mark.parametrize("path,source_template", [
+    ("config.py", 'api_key = "{}"\n'),
+    ("src/config.ts", 'export const apiKey = "{}";\n'),
+])
+def test_supported_secret_format_remains_sellable_and_produces_a_valid_edit(path, source_template):
+    value = "review-" + "synthetic-credential-123"
+    source = source_template.format(value)
+    zipped = make_zip({path: source})
+    findings = [asdict(f) for f in scan_secrets(io.BytesIO(zipped))]
+    marked = generate.mark_unfixable_findings(zipped, findings)
+    assert generate.has_auto_fixable_findings(marked)
+    plan = build_fixpack_plan(zipped, marked)
+    assert plan.secret_fixes
+    assert _validate_syntax(path, source, plan.files[path])
+    assert all(value not in content for content in plan.files.values())
+
+
+def test_unsupported_secret_does_not_block_independent_supported_fix():
+    value = "review-" + "synthetic-credential-123"
+    zipped = make_zip({
+        "migrations/001.sql": f"UPDATE config SET api_secret = '{value}';\n",
+        "config.py": f'api_key = "{value}"\n',
+    })
+    findings = [asdict(f) for f in scan_secrets(io.BytesIO(zipped))]
+    marked = generate.mark_unfixable_findings(zipped, findings)
+    assert generate.has_auto_fixable_findings(marked)
+    plan = build_fixpack_plan(zipped, marked)
+    assert "config.py" in plan.files
+    assert "migrations/001.sql" not in plan.files
+    assert any("unsupported format" in item.reason for item in plan.skipped)
+
+
+def test_runtime_indirect_shell_parameter_does_not_generate_a_fix():
+    zipped = make_zip({"deploy/call.sh": 'token="${!token_env_name:-}"\n'})
+    findings = [asdict(f) for f in scan_secrets(io.BytesIO(zipped))]
+    assert findings == []
+    assert not generate.has_auto_fixable_findings(findings)
+    assert not build_fixpack_plan(zipped, findings).has_changes
+
+
+@pytest.mark.parametrize("paths", [("config.toml", "config.py"), ("config.py", "config.toml")])
+def test_partial_group_with_unsupported_occurrence_is_not_offered_for_sale(paths):
+    from app.scan.collapse import collapse_repeats
+
+    value = "review-" + "synthetic-credential-123"
+    source = f'api_key = "{value}"\n'
+    zipped = make_zip(dict.fromkeys(paths, source))
+    findings = collapse_repeats([asdict(f) for f in scan_secrets(io.BytesIO(zipped))])
+    assert len(findings) == 1
+    assert findings[0]["file"].endswith(paths[0])
+    marked = generate.mark_unfixable_findings(zipped, findings)
+    assert not generate.has_auto_fixable_findings(marked)
+    assert not generate.has_auto_fixable_findings(findings)
+    plan = build_fixpack_plan(zipped, marked)
+    assert "config.py" in plan.files
+    assert "config.toml" not in plan.files
+    assert any("unsupported format" in item.reason for item in plan.skipped)

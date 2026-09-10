@@ -39,6 +39,8 @@ from app.db import (
     AuditRepository,
     FixpackJobRepository,
     PaymentRepository,
+    PaymentConfirmationBusy,
+    payment_confirmation_lock,
     ServiceFlagsRepository,
 )
 from app.routes.bank_transfer import (
@@ -320,6 +322,7 @@ async def create_fixpack_payment(
 
 async def _tell_the_payer_after_answering(
     payment_repo: PaymentRepository, *, payment_id: str, transport=None,
+    funding_review_required: bool = False,
 ) -> None:
     """Send the confirmation once the notification has already been answered.
 
@@ -346,7 +349,8 @@ async def _tell_the_payer_after_answering(
         logger.warning("could not re-read a confirmed payment to announce it")
         return
     await _tell_the_payer(
-        row, product=bank_transfer.PRODUCT_FIXPACK, transport=transport)
+        row, product=bank_transfer.PRODUCT_FIXPACK, transport=transport,
+        funding_review_required=funding_review_required)
 
 
 @router.post("/v1/billing/yookassa/notifications")
@@ -443,51 +447,58 @@ async def receive_notification(
         logger.warning("a ЮKassa payment carries no order reference")
         return {"ok": True}
 
-    row = await payment_repo.get_by_external_ref(yookassa.PROVIDER, reference)
-    if row is None:
-        logger.warning("a ЮKassa payment names an order we do not have")
-        return {"ok": True}
+    try:
+        async with payment_confirmation_lock(yookassa.PROVIDER, reference):
+            row = await payment_repo.get_by_external_ref(yookassa.PROVIDER, reference)
+            if row is None:
+                logger.warning("a ЮKassa payment names an order we do not have")
+                return {"ok": True}
 
-    expected = f"{float(row.get('amount') or 0):.2f}"
-    if not yookassa.is_paid(payment, expected_amount=expected):
-        # Succeeded is not the same as paid-for-this. A payment of one rouble
-        # is succeeded too, and this is the check that stops one buying a
-        # 990-rouble product.
-        logger.warning("a ЮKassa payment for %s did not pay for it", reference)
-        return {"ok": True}
+            expected = f"{float(row.get('amount') or 0):.2f}"
+            if not yookassa.is_paid(payment, expected_amount=expected):
+                # Succeeded is not the same as paid-for-this. A payment of one rouble
+                # is succeeded too, and this is the check that stops one buying a
+                # 990-rouble product.
+                logger.warning("a ЮKassa payment for %s did not pay for it", reference)
+                return {"ok": True}
 
-    # Read BEFORE the grant, which is what rewrites it. ЮKassa retries a
-    # notification it did not get a 2xx for, the operator can confirm the same
-    # payment by hand, and grant_fixpack is idempotent through all of that --
-    # but _tell_the_payer is not. It simply sends, so without this a retry is a
-    # second "your payment is confirmed" to someone who already read the first.
-    # A duplicate has no recovery; a send that failed pages the operator and
-    # can be repeated by hand, so the guard errs towards saying it once.
-    already_confirmed = (
-        str(row.get("status") or "").strip().lower() == "completed")
+            # Read BEFORE the grant, which is what rewrites it. ЮKassa retries a
+            # notification it did not get a 2xx for, the operator can confirm the same
+            # payment by hand, and grant_fixpack is idempotent through all of that --
+            # but _tell_the_payer is not. It simply sends, so without this a retry is a
+            # second "your payment is confirmed" to someone who already read the first.
+            # A duplicate has no recovery; a send that failed pages the operator and
+            # can be repeated by hand, so the guard errs towards saying it once.
+            already_confirmed = (
+                str(row.get("status") or "").strip().lower() == "completed")
 
-    granted = await grant_fixpack(
-        fixpack_repo=fixpack_repo, payment_repo=payment_repo,
-        audit_repo=audit_repo, provider=yookassa.PROVIDER,
-        external_ref=reference, amount=row.get("amount"),
-        currency=row.get("currency") or yookassa.CURRENCY,
-        audit_id=row.get("audit_id"), invoice_payment_id=str(row["id"]),
-    )
+            granted = await grant_fixpack(
+                fixpack_repo=fixpack_repo, payment_repo=payment_repo,
+                audit_repo=audit_repo, provider=yookassa.PROVIDER,
+                external_ref=reference, amount=row.get("amount"),
+                currency=row.get("currency") or yookassa.CURRENCY,
+                audit_id=row.get("audit_id"), invoice_payment_id=str(row["id"]),
+            )
 
-    if not granted:
-        # The money is real and the Fix Pack was not recorded. Announcing it
-        # would promise a pull request nothing is going to open, so this stays
-        # silent to the payer and loud in the log.
-        logger.error("ЮKassa payment %s was paid but granted no Fix Pack",
-                     reference)
-        return {"ok": True}
+            if not granted:
+                # The money is real and the Fix Pack was not recorded. Announcing it
+                # would promise a pull request nothing is going to open, so this stays
+                # silent to the payer and loud in the log.
+                logger.error("ЮKassa payment %s was paid but granted no Fix Pack",
+                             reference)
+                return {"ok": True}
 
-    logger.info("ЮKassa payment confirmed for %s", reference)
+            logger.info("ЮKassa payment confirmed for %s", reference)
 
-    if not already_confirmed:
-        background.add_task(
-            _tell_the_payer_after_answering, payment_repo,
-            payment_id=str(row["id"]), transport=transport)
+            if not already_confirmed:
+                background.add_task(
+                    _tell_the_payer_after_answering, payment_repo,
+                    payment_id=str(row["id"]), transport=transport,
+                    funding_review_required=bool(granted.get("funding_review_required")))
+
+    except PaymentConfirmationBusy as exc:
+        raise HTTPException(status_code=503, detail="Payment confirmation busy",
+                            headers={"Retry-After": "5"}) from exc
 
     # THE SAME ANSWER TO EVERY CALLER, which the docstring above has always
     # claimed and this used to break by returning `granted`. The body was the

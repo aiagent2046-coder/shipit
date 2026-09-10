@@ -1,0 +1,7 @@
+{
+  "description": "A suffix after a separator names something ABOUT the secret, not the secret: a cookie name, a header name, a hash. Allowing it was measured at 8208 files and added four matches -- API_KEY_PEPPER_ENV and API_KEY_COOKIE in this repository's own accounts.py, TOKEN_HEADER twice in Next.js -- every one of them wrong.",
+  "expect": [],
+  "forbid": [
+    "generic-assignment"
+  ]
+}

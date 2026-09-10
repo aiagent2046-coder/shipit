@@ -1,0 +1,7 @@
+{
+  "description": "The archive root identifies acme/project; compare with the deployed source.",
+  "expect": [],
+  "forbid": [
+    "ci-deploys-a-different-repository"
+  ]
+}

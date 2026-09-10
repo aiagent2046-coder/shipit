@@ -1,10 +1,250 @@
 import { expect, it } from "vitest";
-import { coverageRows, findingCounts, manifestRows } from "./evidence";
+import { claimEvidenceRows, coverageRows, evidenceLabel, findingCounts, manifestRows, modelAcceptanceNotice, modelAcceptanceSummary, observationSummary, partialContradicted, sourceAssessments, sourceSeverityCounts, unsupportedTransport } from "./evidence";
 import { plainFields } from "./plain";
-import type { Finding } from "./types";
+import type { Finding, ScanManifest, Score, SourceAssessment } from "./types";
 
 const source: Finding = { rule_id: "aws-access-key-id", title: "AWS match",
   category: "Security", severity: "high", confidence: 1, file: "app/config.py" };
+
+const transportAssessment: SourceAssessment = {
+  kind: "credential_transport_only", result: "unsupported", whole_finding: true,
+  detail: "The bounded call transports a credential; the alleged exposure path is not established.",
+  file: "server/oauth.ts", line_start: 8, line_end: 12, source_sha256: "a".repeat(64),
+  method: "source_ast", source_binding: { call: "fetch", credential_field: "client_secret" },
+};
+
+function assessedFinding(assessment: unknown = transportAssessment): Finding {
+  return { ...source, rule_id: "llm-auth", source: "llm", file: "server/oauth.ts", claim_evidence: {
+    version: 1, source_check: { kind: "quote_match", line_start: 8, line_end: 12 }, observation: null,
+    required_conditions: null, conditions_status: "not_checked", consequence_status: "not_checked",
+    source_assessments: [assessment],
+  } } as Finding;
+}
+
+it("keeps transport-only assessments visible and separate from impact and syntax contradictions", () => {
+  const finding = assessedFinding();
+  const before = JSON.stringify(finding);
+  expect(unsupportedTransport(finding)).toBe(true);
+  expect(partialContradicted(finding)).toBe(false);
+  expect(findingCounts([finding, source])).toEqual({ source: 1, examples: 0 });
+  expect(sourceSeverityCounts([finding, source]).high).toBe(1);
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Source assessment"]).toContain("server/oauth.ts:8–12");
+  expect(rows["Source assessment binding"]).toContain('"source_sha256":"' + "a".repeat(64));
+  expect(rows["Source assessment binding"]).toContain('"credential_field":"client_secret"');
+  expect(rows["Needs exposure evidence"]).toBe("This transport-only hypothesis is excluded from the score. Runtime routing, logging and credential exposure remain unverified.");
+  expect(observationSummary([finding, source])).toBe("2 observations: 1 in source, 0 in tests/examples, 0 informational, 0 with contradicted syntax premises, 1 transport-only hypotheses without established exposure.");
+  expect(observationSummary([source])).toBe("1 observations: 1 in source, 0 in tests/examples, 0 informational, 0 with contradicted syntax premises.");
+  expect(coverageRows({ total: 5, categories: {}, basis: "static+preview" }, [finding])
+    .find(([name]) => name === "Security")?.[1]).not.toContain("unverified finding");
+  expect(JSON.stringify(finding)).toBe(before);
+});
+
+it.each([
+  null, [], 5, {},
+  { ...transportAssessment, result: "safe" },
+  { ...transportAssessment, method: "model_review" },
+  { ...transportAssessment, whole_finding: 1 },
+  { ...transportAssessment, kind: "" },
+  { ...transportAssessment, detail: "" },
+  { ...transportAssessment, file: "" },
+  { ...transportAssessment, source_sha256: "a".repeat(63) },
+  { ...transportAssessment, source_sha256: "A".repeat(64) },
+  { ...transportAssessment, line_start: 0 },
+  { ...transportAssessment, line_start: true },
+  { ...transportAssessment, line_start: "8" },
+  { ...transportAssessment, line_start: 8.5 },
+  { ...transportAssessment, line_end: 7 },
+  { ...transportAssessment, line_end: Number.MAX_SAFE_INTEGER + 1 },
+  { ...transportAssessment, source_binding: null },
+  { ...transportAssessment, source_binding: [] },
+  { ...transportAssessment, source_binding: {} },
+])("does not let malformed assessment metadata remove a finding from impact %#", assessment => {
+  const finding = assessedFinding(assessment);
+  expect(sourceAssessments(finding)).toEqual([]);
+  expect(unsupportedTransport(finding)).toBe(false);
+  expect(partialContradicted(finding)).toBe(false);
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  expect(sourceSeverityCounts([finding]).high).toBe(1);
+  expect(evidenceLabel(finding)).toBe("Model hypothesis — unverified");
+  expect(claimEvidenceRows(finding).some(([label]) => label.startsWith("Source assessment"))).toBe(false);
+});
+
+it.each([
+  { ...transportAssessment, result: "observed" },
+  { ...transportAssessment, result: "not_checked" },
+  { ...transportAssessment, kind: "different_hypothesis" },
+  { ...transportAssessment, whole_finding: false },
+])("does not infer whole-finding relief from a different assessment %#", assessment => {
+  const finding = assessedFinding(assessment);
+  expect(sourceAssessments(finding)).toHaveLength(1);
+  expect(unsupportedTransport(finding)).toBe(false);
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  expect(sourceSeverityCounts([finding]).high).toBe(1);
+});
+
+it("retains impact for a compound finding with a source contradiction and keeps legacy premise behavior", () => {
+  const finding = assessedFinding({ ...transportAssessment, kind: "memory_limit", result: "contradicted", whole_finding: false });
+  expect(partialContradicted(finding)).toBe(true);
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  expect(sourceSeverityCounts([finding]).high).toBe(1);
+  expect(evidenceLabel(finding)).toContain("Part of the model claim is contradicted");
+  expect(Object.fromEntries(claimEvidenceRows(finding))["Assessment needs review"]).toContain("remains in the score");
+  finding.claim_evidence!.source_assessments = [transportAssessment];
+  finding.claim_evidence!.premise_checks = [{ kind: "bounded_premise", target: "response", result: "contradicted",
+    claim: "Missing guard", detail: "The guard is present." }];
+  expect(partialContradicted(finding)).toBe(false);
+  delete finding.claim_evidence!.source_assessments;
+  expect(partialContradicted(finding)).toBe(true);
+});
+
+it.each([undefined, null, {}, "unsupported"])("abstains from unsupported assessment containers %#", assessments => {
+  const finding = assessedFinding();
+  Object.assign(finding.claim_evidence!, { source_assessments: assessments });
+  expect(sourceAssessments(finding)).toEqual([]);
+  expect(unsupportedTransport(finding)).toBe(false);
+});
+
+it("requires the evidence schema version and retains historical source records without a new disposition", () => {
+  const finding = assessedFinding();
+  const before = JSON.stringify(finding);
+  const rows = Object.fromEntries(claimEvidenceRows(finding, true));
+  expect(rows["Source assessment"]).toContain(transportAssessment.detail);
+  expect(rows["Needs exposure evidence"]).toBeUndefined();
+  expect(evidenceLabel(finding, true)).toBe("Model hypothesis — unverified");
+  expect(JSON.stringify(finding)).toBe(before);
+  Object.assign(finding.claim_evidence!, { version: 2 });
+  expect(sourceAssessments(finding)).toEqual([]);
+  expect(unsupportedTransport(finding)).toBe(false);
+});
+
+const acceptanceManifest: ScanManifest = {
+  archive_sha256: "digest", commit_sha: null, engine_version: "test", archive_files: 1,
+  static_checks: [], static_limits: {}, inventory: {}, model: "preview", model_calls: 1,
+  rubrics_completed: [], llm_candidate_files: 1, llm_submitted_files: 1,
+  llm_files_not_submitted: 0, limitations: [], runtime_verified: false,
+};
+
+function acceptanceScore(accepted: number, reasons: Record<string, number>): Score {
+  const rejected = Object.values(reasons).reduce((sum, value) => sum + value, 0);
+  return { total: 9.3, categories: {}, basis: "static+preview", scan_manifest: {
+    ...acceptanceManifest, model_findings: [{ model: "preview", responses: 1,
+      invalid_responses: 0, empty_responses: 0, received: accepted + rejected,
+      accepted, rejected, merged: 0, saved: accepted, rejection_reasons: reasons }],
+  } };
+}
+
+it("distinguishes source rejects, withdrawals and response validation without treating acceptance as truth", () => {
+  const score = acceptanceScore(1, { source_quote_or_location_mismatch: 9, self_cancelled: 1 });
+  const before = JSON.stringify(score);
+  expect(modelAcceptanceSummary(score)).toEqual({ version: 1, state: "partially_accepted",
+    received: 11, accepted: 1, rejected: 10, source_rejected: 9, withdrawn: 1, other_rejected: 0 });
+  expect(modelAcceptanceNotice(score)).toEqual(["Model observations accepted: 1 of 11",
+    "9 could not be matched to the cited source; 1 was withdrawn by the model. "
+    + "Excluded observations are not included in the findings. Acceptance checks source citation and response format; "
+    + "it does not verify conclusions or establish project safety."]);
+  const paid = acceptanceScore(55, { self_cancelled: 4 });
+  expect(modelAcceptanceNotice(paid)?.[0]).toBe("Model observations accepted: 55 of 59");
+  expect(modelAcceptanceNotice(paid)?.[1]).toContain("4 were withdrawn by the model");
+  expect(modelAcceptanceNotice(paid)?.[1]).not.toContain("could not be matched");
+  expect(modelAcceptanceSummary(acceptanceScore(0, { self_cancelled: 3 }))?.state).toBe("none_accepted");
+  expect(modelAcceptanceNotice(acceptanceScore(2, { invalid_text: 1 }))?.[1]).toContain("failed response validation");
+  expect(JSON.stringify(score)).toBe(before);
+});
+
+it("aggregates separate model processing rows and uses their counts over a duplicated API summary", () => {
+  const score = acceptanceScore(1, { source_quote_or_location_mismatch: 9, self_cancelled: 1 });
+  score.scan_manifest!.model_findings!.push(...acceptanceScore(55, { self_cancelled: 4 }).scan_manifest!.model_findings!);
+  score.scan_manifest!.model_acceptance = { version: 1, state: "all_accepted", received: 70, accepted: 70,
+    rejected: 0, source_rejected: 0, withdrawn: 0, other_rejected: 0 };
+  expect(modelAcceptanceSummary(score)).toEqual({ version: 1, state: "partially_accepted", received: 70,
+    accepted: 56, rejected: 14, source_rejected: 9, withdrawn: 5, other_rejected: 0 });
+});
+
+it.each([
+  undefined, null, [], Array(2), [null],
+  [{ received: 11, accepted: 1, rejected: 10 }],
+  [{ received: 11, accepted: 1, rejected: 9, rejection_reasons: { self_cancelled: 9 } }],
+  [{ received: 11, accepted: 1, rejected: 10, rejection_reasons: { self_cancelled: 9 } }],
+  [{ received: 1, accepted: 2, rejected: -1, rejection_reasons: { self_cancelled: -1 } }],
+  [{ received: "11", accepted: 1, rejected: 10, rejection_reasons: { self_cancelled: 10 } }],
+  [{ received: 1, accepted: true, rejected: 0, rejection_reasons: {} }],
+  [{ received: 1.5, accepted: 1.5, rejected: 0, rejection_reasons: {} }],
+  [{ received: Number.MAX_SAFE_INTEGER + 1, accepted: Number.MAX_SAFE_INTEGER + 1, rejected: 0, rejection_reasons: {} }],
+  [{ received: 1, accepted: 0, rejected: 1, rejection_reasons: { self_cancelled: true } }],
+  [{ received: 1, accepted: 0, rejected: 1, rejection_reasons: [1] }],
+])("does not infer a candidate count from missing or inconsistent accounting %#", (processing) => {
+  const score = { total: 0, categories: {}, scan_manifest: { ...acceptanceManifest, model_findings: processing } } as Score;
+  expect(modelAcceptanceSummary(score)).toBeNull();
+  expect(modelAcceptanceNotice(score)).toBeNull();
+});
+
+it("keeps known zero candidates distinct from missing accounting and rejects unsafe aggregate totals", () => {
+  expect(modelAcceptanceSummary(acceptanceScore(0, {}))?.state).toBe("no_candidates");
+  expect(modelAcceptanceNotice(acceptanceScore(0, {}))).toBeNull();
+  expect(modelAcceptanceSummary(acceptanceScore(3, {}))?.state).toBe("all_accepted");
+  expect(modelAcceptanceNotice(acceptanceScore(3, {}))).toBeNull();
+  const score = acceptanceScore(Number.MAX_SAFE_INTEGER, {});
+  score.scan_manifest!.model_findings!.push(...acceptanceScore(1, {}).scan_manifest!.model_findings!);
+  expect(modelAcceptanceSummary(score)).toBeNull();
+});
+
+it("bounds technical diagnostics and omits arbitrary model fields and unknown code values", () => {
+  const score = acceptanceScore(1, { self_cancelled: 1 });
+  const diagnostic = { response: 1, rubric: "web", item: 1, reason: "self_cancelled", detail: "self_cancelled",
+    file_ref: "sha256:" + "a".repeat(64), line_start: 3, line_end: 4 };
+  score.scan_manifest!.rejection_diagnostics = { version: 1, omitted: 2, items: [
+    { ...diagnostic, evidence: "private source", file: "private.ts", unexpected: "raw metadata" },
+    { ...diagnostic, detail: "<script>unsafe</script>" },
+    ...Array.from({ length: 200 }, (_, i) => ({ ...diagnostic, item: i + 2 })),
+  ] } as ScanManifest["rejection_diagnostics"];
+  const rows = manifestRows(score);
+  expect(rows.filter(([label]) => /^Rejected observation /.test(label))).toHaveLength(200);
+  const details = rows.find(([label]) => label === "Rejection diagnostics")?.[1];
+  expect(details).toContain("200 records shown; 4 omitted");
+  expect(details).toContain("At most 200 records");
+  expect(rows.flat().join(" ")).not.toMatch(/private source|private.ts|raw metadata|unsafe/);
+});
+
+it("displays bounded quote relationship codes without retaining rejected text", () => {
+  const score = acceptanceScore(0, { source_quote_or_location_mismatch: 4 });
+  const details = ["quote_outside_cited_window", "quote_prompt_line_prefix",
+    "quote_ellipsis_fragments_match", "diagnostic_limit_reached"];
+  score.scan_manifest!.rejection_diagnostics = { version: 1, omitted: 0, items: details.map((detail, index) => ({
+    response: 1, rubric: "auth", item: index + 1, reason: "source_quote_or_location_mismatch", detail,
+    file_ref: "sha256:" + "a".repeat(64), line_start: 1, line_end: 2,
+    evidence: "private rejected source", quote_hash: "private quote hash",
+  })) } as ScanManifest["rejection_diagnostics"];
+  const rows = manifestRows(score).filter(([label]) => label.startsWith("Rejected observation "));
+  expect(rows).toHaveLength(4);
+  details.forEach((detail, index) => expect(rows[index][1]).toContain(`detail: ${detail}`));
+  expect(rows.flat().join(" ")).not.toMatch(/private rejected source|private quote hash/);
+});
+
+it("explains catch and HTTP evidence without dismissing a compound claim or changing old records", () => {
+  const finding: Finding = { ...source, rule_id: "llm-web", source: "llm", claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked",
+    observation: "Navigation never recovers", context_checks: [{ kind: "react_async_context",
+      scope: "Page.submit", checks: [{ kind: "react_async_state_reset",
+        summary: "Catch at line 20 contains a saving=false setter at line 22 after earlier statements that may throw.",
+        detail: "UI recovery is not proven." }, { kind: "react_async_http_response",
+        summary: "Awaited fetch at line 15. Response.ok branches: http_error at line 16.",
+        detail: "An HTTP error response does not itself reject." }] }] } };
+  const before = JSON.stringify(finding);
+  const rows = claimEvidenceRows(finding);
+  expect(rows.filter(([label]) => label.startsWith("React error-path evidence"))).toHaveLength(2);
+  expect(rows.flat().join(" ")).toContain("after earlier statements that may throw");
+  expect(rows.flat().join(" ")).toContain("HTTP error response does not itself reject");
+  expect(rows.flat()).toContain("Navigation never recovers");
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  expect(JSON.stringify(finding)).toBe(before);
+  expect(claimEvidenceRows({ ...finding, claim_evidence: { version: 1,
+    source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked",
+    context_checks: [{ kind: "react_async_context", checks: [{ kind: "react_async_state_reset" }] }] } })
+    .some(([label]) => label.startsWith("React error-path evidence"))).toBe(false);
+});
 
 it("separates examples from the source headline and category count", () => {
   const findings = [source, { ...source, file: "tests/config.py", context: "test_file" }];
@@ -32,4 +272,223 @@ it("does not invent execution records for old audits", () => {
 it("counts underlying observations in display-only schema groups", () => {
   expect(findingCounts([{ ...source, occurrence_titles: ["Table A", "Table B"] },
     { ...source, file: "tests/schema.sql" }])).toEqual({ source: 2, examples: 1 });
+});
+
+it("shows operation evidence and limits without assigning finding severity", () => {
+  const manifest: ScanManifest = {
+    archive_sha256: "test-digest", commit_sha: null, engine_version: "test", archive_files: 1,
+    static_checks: [], static_limits: {}, inventory: {}, model: null, model_calls: 0,
+    rubrics_completed: [], llm_candidate_files: null, llm_submitted_files: null,
+    llm_files_not_submitted: null, limitations: [], runtime_verified: false,
+    source_facts: { scope: "Syntax only", parsed_files: 0, excluded_files: 0, limitations: [], facts: [],
+      operations: { scope: "Names are not resolved", parsed_files: 1, excluded_files: 0,
+        limitations: ["record_limit_reached"], records: [{ kind: "javascript_fetch_context",
+          file: "api.ts", line: 4, scope: "request", call: "fetch", detail: "Input trust not checked" }] } },
+  };
+  const rows = Object.fromEntries(manifestRows({ total: 0, categories: {}, scan_manifest: manifest }));
+  expect(rows["Operation context 1"]).toBe("api.ts:4 — request: fetch\nInput trust not checked");
+  expect(rows["Operation context limits"]).toBe("record_limit_reached");
+});
+
+it("shows React async evidence without model calls and preserves syntax limits", () => {
+  const manifest: ScanManifest = {
+    archive_sha256: "digest", commit_sha: null, engine_version: "test", archive_files: 1,
+    static_checks: [], static_limits: {}, inventory: {}, model: null, model_calls: 0,
+    rubrics_completed: [], llm_candidate_files: null, llm_submitted_files: null,
+    llm_files_not_submitted: null, limitations: [], runtime_verified: false,
+    source_facts: { scope: "Syntax only", parsed_files: 0, excluded_files: 0, limitations: [], facts: [],
+      react_async: { scope: "No runtime or concurrency proof", parsed_files: 1, excluded_files: 0,
+        limitations: ["ambiguous_state_binding"], records: [{ file: "page.tsx", line: 10, line_end: 20,
+          scope: "Page.send", await_lines: [13], checks: [{ kind: "react_async_state_reset",
+            result: "observed", direct_reset_line: 14, finally_reset_line: null }],
+          controls: [{ line: 30, line_end: 30, event: "onClick", disabled: "state_truthy", state: "busy" }] }] } },
+  };
+  const rows = Object.fromEntries(manifestRows({ total: 0, categories: {}, basis: "static_only", scan_manifest: manifest }));
+  expect(rows["React async context 1"]).toContain("page.tsx:10–20 — Page.send\nAwait lines: 13");
+  expect(rows["React async context 1"]).toContain('"finally_reset_line":null');
+  expect(rows["React async context 1"]).toContain('Button syntax: {"line":30');
+  expect(rows["React async limits"]).toBe("ambiguous_state_binding");
+  expect(rows["React async scope"]).toBe("No runtime or concurrency proof");
+});
+
+
+it("distinguishes model processing states and missing older accounting", () => {
+  const manifest: ScanManifest = {
+    archive_sha256: "digest", commit_sha: null, engine_version: "test", archive_files: 1,
+    static_checks: [], static_limits: {}, inventory: {}, model: "paid", model_calls: 2,
+    rubrics_completed: [], llm_candidate_files: 1, llm_submitted_files: 1,
+    llm_files_not_submitted: 0, limitations: ["invalid_responses"], runtime_verified: false,
+    model_findings: [{ model: "paid", responses: 2, invalid_responses: 1, empty_responses: 0,
+      received: 4, rejected: 2, accepted: 2, merged: 1, saved: 1,
+      rejection_reasons: { missing_fields: 2 } }],
+  };
+  const rows = Object.fromEntries(manifestRows({ total: 0, categories: {}, scan_manifest: manifest }));
+  expect(rows["Finding processing: paid"]).toContain("unreadable: 1; valid empty: 0");
+  expect(rows["Finding processing: paid"]).toContain("merged: 1; saved representatives: 1");
+  expect(rows["Rejection reasons"]).toContain("missing_fields");
+  delete manifest.model_findings;
+  expect(Object.fromEntries(manifestRows({ total: 0, categories: {}, scan_manifest: manifest }))[
+    "Model finding processing"]).toBe("Not recorded for this audit");
+});
+
+it("retains grouped original interpretations without treating repeats as confirmation", () => {
+  const rows = Object.fromEntries(claimEvidenceRows({ ...source, claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked",
+    grouped_originals: [{ title: "First hypothesis", explanation: "Original reasoning" },
+      { title: "Other wording", explanation: "Other reasoning" }],
+  } }));
+  expect(rows["Grouped original 1 — not independent confirmation"]).toContain("Original reasoning");
+  expect(rows["Grouped original 2 — not independent confirmation"]).toContain("Other reasoning");
+  expect(rows["Consequence check"]).toBe("No independent verification recorded.");
+});
+
+function groupedNetworkFinding(): Finding {
+  return { ...source, source: "llm", claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked",
+    source_issue_identity: { handler: "send" },
+    grouped_originals: [{ title: "First hypothesis" }, { title: "Suggest hypothesis" }],
+    grouped_claim_scope: { mechanism: "react_network_rejection_cleanup",
+      scope: "<script>arbitrary scope</script>", consequences: "Invented verified harm",
+      title_source_disagreements: [{ original_index: 1, result: "different_handler_label", source_handler: "send" }] },
+  } };
+}
+
+it("explains a source-bound React group while keeping each original interpretation unverified", () => {
+  const finding = groupedNetworkFinding(), before = JSON.stringify(finding);
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Grouped hypothesis scope"]).toBe("Grouped by the same source operation and network-rejection cleanup hypothesis. "
+    + "Original conditions and consequences retain their own verification statuses.");
+  expect(rows["Handler label needs review"]).toBe("Original 2 uses a different handler label. Bound source handler: send. "
+    + "The original wording is retained; its handler label is not verified.");
+  expect(rows["Grouped original 1 — not independent confirmation"]).toContain("First hypothesis");
+  expect(rows["Grouped original 2 — not independent confirmation"]).toContain("Suggest hypothesis");
+  expect(Object.values(rows).join(" ")).not.toMatch(/arbitrary scope|Invented verified harm/);
+  expect(rows["Consequence check"]).toBe("No independent verification recorded.");
+  expect(JSON.stringify(finding)).toBe(before);
+});
+
+it.each([
+  { original_index: -1 }, { original_index: 2 }, { original_index: 0.5 }, { original_index: true },
+  { original_index: "1" }, { source_handler: "suggest" }, { source_handler: "<script>send</script>" },
+  { source_handler: "send.run" }, { source_handler: "s".repeat(129) }, { result: "verified" },
+])("does not manufacture a handler-label warning from invalid metadata %#", (override) => {
+  const finding = groupedNetworkFinding();
+  Object.assign(finding.claim_evidence!.grouped_claim_scope!.title_source_disagreements[0], override);
+  const rows = claimEvidenceRows(finding);
+  expect(rows.some(([label]) => label === "Grouped hypothesis scope")).toBe(true);
+  expect(rows.some(([label]) => label === "Handler label needs review")).toBe(false);
+});
+
+it("requires a recognized grouping mechanism and multiple retained originals", () => {
+  for (const originalCount of [0, 1]) {
+    const finding = groupedNetworkFinding();
+    finding.claim_evidence!.grouped_originals!.length = originalCount;
+    expect(claimEvidenceRows(finding).some(([label]) =>
+      label === "Grouped hypothesis scope" || label === "Handler label needs review")).toBe(false);
+  }
+  const finding = groupedNetworkFinding();
+  Object.assign(finding.claim_evidence!.grouped_claim_scope!, { mechanism: "unknown" });
+  expect(claimEvidenceRows(finding).some(([label]) =>
+    label === "Grouped hypothesis scope" || label === "Handler label needs review")).toBe(false);
+  delete finding.claim_evidence!.grouped_claim_scope;
+  expect(claimEvidenceRows(finding).some(([label]) => label === "Grouped hypothesis scope")).toBe(false);
+});
+
+it("requires a matching source identity and handles missing disagreement metadata", () => {
+  const finding = groupedNetworkFinding();
+  delete finding.claim_evidence!.source_issue_identity;
+  expect(claimEvidenceRows(finding).some(([label]) => label === "Handler label needs review")).toBe(false);
+  Object.assign(finding.claim_evidence!.grouped_claim_scope!, { title_source_disagreements: null });
+  expect(claimEvidenceRows(finding).some(([label]) => label === "Grouped hypothesis scope")).toBe(true);
+});
+
+it("shows source counterevidence and policy prerequisites without turning them into verified outcomes", () => {
+  const rows = Object.fromEntries(claimEvidenceRows({ ...source, claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, observation: "Model interpretation",
+    required_conditions: null, conditions_status: "not_checked", consequence_status: "not_checked",
+    context_checks: [
+      { kind: "guard_context", file: "auth.ts", line: 24,
+        summary: "A state comparison precedes the exchange; runtime validity was not checked." },
+      { kind: "cost_context", file: "chat.ts", line: 5, checks: [
+        { summary: "The imported helper contains numeric slice limits; total request cost is unknown." } ] },
+      { kind: "rls_recommendation_context", file: "route.ts", line: 12,
+        summary: "SELECT policies alone do not authorize writes. Check policy prerequisites before changing clients." },
+    ],
+  } }));
+  expect(rows["Existing guard evidence — compare with the model claim"]).toContain("auth.ts:24");
+  expect(rows["Cost and ordering evidence — compare with the model claim"]).toContain("total request cost is unknown");
+  expect(rows["Policy prerequisites — review before changing clients"]).toContain("SELECT policies alone");
+  expect(rows["Consequence check"]).toBe("No independent verification recorded.");
+});
+
+
+it("preserves a compound finding while exposing a contradicted atom and superseded recommendation", () => {
+  const finding: Finding = { ...source, rule_id: "llm-web", source: "llm", claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked", observation: null,
+    premise_checks: [{ kind: "json_rejection_uncaught", target: "res", result: "contradicted",
+      claim: "JSON parsing lacks a rejection fallback.", detail: "A local fallback exists; fetch rejection is separate." }],
+    recommendation_check: { result: "prerequisites_required", detail: "Verify write policies before changing clients.",
+      original_fix_hint: "Switch clients; policies already exist." },
+  } };
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Atomic premise contradicted — other claims remain unverified"]).toContain("fetch rejection is separate");
+  expect(rows["Superseded original recommendation — do not apply without review"]).toContain("policies already exist");
+  expect(rows["Recommendation prerequisites"]).toContain("Verify write policies");
+  expect(findingCounts([finding])).toEqual({ source: 1, examples: 0 });
+  const contradicted = { ...finding, claim_evidence: { ...finding.claim_evidence!,
+    syntax_check: { kind: "http_status_guard_absent" as const, result: "contradicted" as const,
+      claim: "No HTTP status guard", detail: "The same response has a return guard." } } };
+  expect(findingCounts([contradicted])).toEqual({ source: 0, examples: 0 });
+});
+
+it("shows composed recommendation prerequisites and superseded provenance without certifying a fix", () => {
+  const finding: Finding = { ...source, rule_id: "llm-auth", source: "llm", claim_evidence: {
+    version: 1, source_check: { kind: "not_recorded" }, required_conditions: null,
+    conditions_status: "not_checked", consequence_status: "not_checked", observation: null,
+    recommendation_check: {
+      result: "prerequisites_required", detail: "Check policy and comparison prerequisites.",
+      original_fix_hint: "Switch clients and call timingSafeEqual(a, b).", original_status: "superseded",
+      original_provenance: { source: "llm", verification_method: "model_review", verification_status: "unverified",
+        producer: { model: "synthetic", response: 1, rubric: "auth" } },
+      checks: [
+        { version: 1, kind: "rls_client_change", result: "prerequisites_required", detail: "Check write policies." },
+        { version: 1, kind: "node_crypto_timing_safe_equal", result: "prerequisites_required",
+          detail: "Input and equal-byte-length checks have not been verified.",
+          scope: "Advice text only; no control-flow or runtime verification.",
+          reference: "https://nodejs.org/api/crypto.html#cryptotimingsafeequala-b",
+          prerequisites: ["Validate input type and encoding.", "Reject byteLength mismatch before the call."] },
+      ],
+      superseded_fix_hints: ["An intermediate comparison suggestion."],
+    },
+  } };
+  const before = JSON.stringify(finding);
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Recommendation check 1 — prerequisites not verified"]).toContain("Check write policies");
+  expect(rows["Recommendation check 2 — prerequisites not verified"]).toContain("no control-flow or runtime");
+  expect(rows["Required recommendation conditions 2"]).toContain("encoding.\nReject byteLength");
+  expect(rows["Recommendation API reference 2"]).toContain("nodejs.org/api/crypto.html");
+  expect(rows["Superseded recommendation provenance — not independent verification"]).toContain("synthetic");
+  expect(rows["Superseded intermediate recommendation 1 — do not apply without review"]).toContain("intermediate");
+  expect(rows["Consequence check"]).toBe("No independent verification recorded.");
+  expect(JSON.stringify(finding)).toBe(before);
+});
+
+it.each([
+  null, 7, [], { checks: null }, { checks: 7 }, { checks: [null, 7, {}] },
+  { checks: [{ version: 1, kind: "api", result: "prerequisites_required", detail: "Review.",
+    scope: 7, prerequisites: "byte lengths", reference: 7 }] },
+  { checks: [{ version: 1, kind: "api", result: "prerequisites_required", detail: "Review.",
+    prerequisites: [null, 7, "Valid condition."] }] },
+  { detail: null, original_fix_hint: 7, superseded_fix_hints: {} },
+  { superseded_fix_hints: [null, 7, "Earlier hint."], original_provenance: [] },
+])("skips malformed optional recommendation evidence: %j", (recommendation) => {
+  const finding = { ...source, claim_evidence: { version: 1, recommendation_check: recommendation } } as unknown as Finding;
+  const before = JSON.stringify(finding);
+  const rows = claimEvidenceRows(finding);
+  expect(rows.every(([, detail]) => typeof detail === "string")).toBe(true);
+  expect(JSON.stringify(finding)).toBe(before);
+  expect(Object.fromEntries(rows)["Consequence check"]).toBe("No independent verification recorded.");
 });

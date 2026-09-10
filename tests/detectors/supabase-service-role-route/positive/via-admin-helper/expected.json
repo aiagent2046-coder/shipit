@@ -1,0 +1,10 @@
+{
+  "description": "The key one import away (a factored-out admin client) must still be caught -- on a real repo 8 of 16 routes were shaped exactly so.",
+  "expect": [
+    {
+      "rule_id": "supabase-service-role-route",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

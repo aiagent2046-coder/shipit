@@ -11,6 +11,7 @@ from __future__ import annotations
 from app.main import configure_cors
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from fastapi.responses import JSONResponse
 
 
 def _app_with_cors() -> TestClient:
@@ -91,3 +92,20 @@ def test_preflight_advertises_methods_and_auth_header(monkeypatch):
     allowed_methods = r.headers["access-control-allow-methods"]
     assert "GET" in allowed_methods and "POST" in allowed_methods
     assert "authorization" in r.headers["access-control-allow-headers"].lower()
+
+
+def test_quota_retry_time_is_readable_by_the_allowed_browser_origin(monkeypatch):
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", LISTED)
+    fresh = FastAPI()
+
+    @fresh.post("/limited")
+    async def limited():
+        return JSONResponse({"detail": {"reason": "rate_limited"}}, status_code=429,
+                            headers={"Retry-After": "3600"})
+
+    configure_cors(fresh)
+    response = TestClient(fresh).post("/limited", headers={"Origin": LISTED})
+    assert response.status_code == 429
+    assert response.headers["access-control-allow-origin"] == LISTED
+    assert "retry-after" in response.headers["access-control-expose-headers"].lower()
+    assert response.headers["retry-after"] == "3600"

@@ -17,7 +17,14 @@ import pytest
 
 from app.llm import client as client_mod
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan import llm_scan, source_facts
+from app.scan import (llm_scan, source_facts, operation_context, function_context,
+                      syntax_claims, premise_context, operator_context, react_async_context,
+                      guard_context, cost_context, rls_recommendations, recommendations, recommendation_contract,
+                      model_metadata_identity, imported_error_context, rejection_diagnostics, source_limit_context,
+                      paid_operation_recommendations, credential_transport_assessment, claim_evidence,
+                      source_claim_assessment, external_call_assessment, scoped_ui_claim_assessment, atomic_claims,
+                      cross_rubric_dedup, auth_source_assessment, url_token_assessment,
+                      external_operation_context, external_operation_identity)
 from app.scan import pipeline as pipeline_mod
 from app.scan.secrets import damp_for_non_production_path
 from app.scan.llm_scan import (
@@ -41,7 +48,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "b5e5a93d34f718eb"
+PROMPT_FINGERPRINT = "3d97991ae413a7f1"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -331,10 +338,17 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
 
     assert stats == LLMScanStats(
         candidate_files=1, submitted_files=("src/auth.ts",),
+        selection_exclusions=dict(no_rubric_match=0, rubric_not_reached=0, selection_budget=0, request_window=0),
         prompts=1, raw_findings=2, verified=1, discarded=1,
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
         prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]),
-        rubrics_ran=("auth",))
+        rubrics_ran=("auth",),
+        rejected_items=[dict(response=1, rubric="auth", item=2,
+                             reason="source_quote_or_location_mismatch", detail="unknown_file",
+                             file_ref=None, line_start=3, line_end=3)],
+        model_findings=[dict(model="fake-model", responses=1, invalid_responses=0,
+                             empty_responses=0, received=2, rejected=1, accepted=1, merged=0, saved=1,
+                             rejection_reasons={"source_quote_or_location_mismatch": 1})])
     assert len(findings) == 1
     f = findings[0]
     assert f.rule_id == "llm-auth" and f.category == "Auth"
@@ -658,7 +672,7 @@ def test_4xx_not_retried(monkeypatch):
 
 def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     """passes=2 doubles the prompts and unions the findings: stable
-    findings collapse via (file, line) dedup, pass-unique ones are
+    findings collapse via a shared source operation, pass-unique ones are
     kept — the paid Fix Pack completeness mode."""
     import io
     import zipfile as _zipfile
@@ -668,21 +682,23 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     with _zipfile.ZipFile(buf, "w") as zf:
         # содержимое матчит ОБЕ рубрики: auth (token) и security (env, fetch)
         zf.writestr("src/auth.ts",
-                    "const token = await fetch(process.env.API_URL)\n")
+                    "async function login() {\n"
+                    "const token = crypto.createHmac('sha256', process.env.KEY).update(userId);\n"
+                    "}\n")
     buf.seek(0)
 
     responses = iter([
         # pass 1: auth, security
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
-        '"evidence":"const token = await fetch","severity":"high",'
-        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]',
+        '[{"file":"src/auth.ts","line_start":2,"line_end":2,'
+        '"evidence":"const token = crypto.createHmac","severity":"high",'
+        '"confidence":0.9,"title":"HMAC used for password derivation","explanation":"","fix_hint":""}]',
         '[]',
         # pass 2: та же stable + уникальная для второго прохода
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
-        '"evidence":"const token = await fetch","severity":"high",'
-        '"confidence":0.9,"title":"stable finding","explanation":"","fix_hint":""}]',
-        '[{"file":"src/auth.ts","line_start":1,"line_end":1,'
-        '"evidence":"const token = await fetch","severity":"low",'
+        '[{"file":"src/auth.ts","line_start":2,"line_end":2,'
+        '"evidence":"const token = crypto.createHmac","severity":"high",'
+        '"confidence":0.9,"title":"HMAC used for password derivation","explanation":"","fix_hint":""}]',
+        '[{"file":"src/auth.ts","line_start":2,"line_end":2,'
+        '"evidence":"const token = crypto.createHmac","severity":"low",'
         '"confidence":0.5,"title":"pass-2-only finding","explanation":"","fix_hint":""}]',
     ])
 
@@ -700,9 +716,11 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     findings, stats = run_llm_scan(io.BytesIO(buf.getvalue()), FakeClient(),
                                    rubrics=("auth", "security"), passes=2)
     assert stats.prompts == 4          # 2 рубрики × 2 прохода
-    # оба ответа указывают на одну (file, line): дедуп оставил тяжёлую
-    assert len(findings) == 1
+    # Identical repeats collapse; the pass-specific cause keeps its own row,
+    # even though it shares the source line with the HMAC used for password derivation.
+    assert len(findings) == 2
     assert findings[0].severity == "high"
+    assert findings[1].title == "pass-2-only finding"
 
 
 # --- non-production context damping ---
@@ -1059,6 +1077,36 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         inspect.getsource(llm_scan.build_prompt),
         # The deterministic helper index also changes what the model sees.
         inspect.getsource(source_facts),
+        inspect.getsource(operation_context),
+        inspect.getsource(function_context),
+        inspect.getsource(react_async_context),
+        inspect.getsource(guard_context),
+        inspect.getsource(cost_context),
+        inspect.getsource(rls_recommendations),
+        # Post-model advice also changes the cached report for identical source.
+        inspect.getsource(recommendations),
+        inspect.getsource(recommendation_contract),
+        inspect.getsource(model_metadata_identity),
+        inspect.getsource(imported_error_context),
+        # Rejection details are cached report output, even when admission stays fixed.
+        inspect.getsource(rejection_diagnostics),
+        inspect.getsource(source_limit_context),
+        inspect.getsource(paid_operation_recommendations),
+        inspect.getsource(credential_transport_assessment),
+        inspect.getsource(claim_evidence),
+        inspect.getsource(source_claim_assessment),
+        inspect.getsource(external_call_assessment),
+        inspect.getsource(scoped_ui_claim_assessment),
+        inspect.getsource(atomic_claims),
+        inspect.getsource(syntax_claims.SyntaxVerifier),
+        inspect.getsource(cross_rubric_dedup),
+        inspect.getsource(auth_source_assessment),
+        inspect.getsource(url_token_assessment),
+        inspect.getsource(external_operation_context),
+        inspect.getsource(external_operation_identity),
+        inspect.getsource(premise_context),
+        inspect.getsource(operator_context),
+        inspect.getsource(syntax_claims.completed_notification_function),
         inspect.getsource(llm_scan.request_limit_for),
         str(llm_scan._PROMPT_OVERHEAD),
         repr(sorted(client_mod.MODEL_INPUT_TOKENS.items())),
@@ -1845,3 +1893,15 @@ def test_a_blanked_free_tier_override_is_not_a_model_named_nothing(monkeypatch):
     monkeypatch.delenv("FREE_TIER_LLM_MODEL_AITUNNEL", raising=False)
 
     assert pipeline_mod.free_tier_models_by_kind() == {}
+
+
+def test_unreadable_model_response_is_partial_and_not_cached_as_complete():
+    llm = FakeLLM("This response contains no findings array")
+    llm.providers = [Provider("openai_compat", "http://unused", "test", "fake-model")]
+    scan = pipeline_mod.run_scan(make_zip({"src/auth.ts": VULN_TS.encode()}).getvalue(),
+                                 llm, llm_rubrics=("auth",))
+    assert scan["score"]["basis"] == pipeline_mod.BASIS_PARTIAL
+    assert "invalid_responses" in scan["score"]["scan_manifest"]["limitations"]
+    assert scan["score"]["scan_manifest"]["model_findings"][0]["invalid_responses"] == 1
+    assert scan["llm_usage"]["calls"] == 1
+    assert "Auth" in scan["score"]["unexamined"]

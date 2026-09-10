@@ -1,0 +1,11 @@
+{
+  "description": "The same defect in TypeScript, which is what Drydock mostly audits. The Python-only rule could not fire on a Next.js repository at all, so the language it covered was the language its customers were least likely to be writing.",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "severity": "high",
+      "file_endswith": "queries.ts"
+    }
+  ],
+  "forbid": []
+}

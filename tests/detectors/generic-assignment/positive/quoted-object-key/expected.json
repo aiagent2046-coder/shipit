@@ -1,0 +1,10 @@
+{
+  "description": "A secret as a QUOTED KEY in a JSON config, the shape an escape hunt produced that the rule could not read: the closing quote of the key sat between the credential word and the colon, and the regex demanded the colon immediately. Quoted keys are how real leaks travel -- config.json and docker env files -- so the rule now accepts a consenting pair of quotes around the name. Measured: zero new matches on 691 files of live repository code.",
+  "expect": [
+    {
+      "rule_id": "generic-assignment",
+      "severity": "high"
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,8 @@
+select id, email from users where password = 'abcdefgh12345';
+select * from sessions where api_key = 'ijklmnop67890' and active;
+delete from tokens where service_role = 'qrstuvwx09876';
+select id from users where  password = 'abcdefgh12345';
+select id from users where (password = 'abcdefgh12345');
+select id from users u where u.password = 'abcdefgh12345';
+select id from users where
+    password = 'abcdefgh12345';

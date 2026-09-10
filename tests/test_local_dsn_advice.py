@@ -96,7 +96,7 @@ def test_a_local_database_is_not_sent_to_a_provider_dashboard():
     # must address reuse without assuming a provider dashboard exists.
     assert "provider" not in local_fix
     assert "synthetic or reused on a real service" in local_fix
-    assert "If real database credentials were exposed" in live_fix
+    assert "If real service credentials were exposed" in live_fix
     assert local_fix != live_fix
     # Deleting the advice is not an improvement over the wrong advice: with
     # no dictionary entry plain_fields falls back to the technical title and

@@ -1,0 +1,7 @@
+{
+  "description": "A label that ends in a success word while denying it is the opposite claim. This component checks res.ok and says so; widening the vocabulary must not turn correct error handling into the bug the rule exists to catch.",
+  "expect": [],
+  "forbid": [
+    "react-unchecked-http-success"
+  ]
+}

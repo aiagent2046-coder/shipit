@@ -1,0 +1,5 @@
+{
+  "description": "A discarded fetch response reaches a visible Saved state even for HTTP 500; the real static pipeline must report exactly one response-handling observation.",
+  "expect": [{"rule_id": "react-unchecked-http-success", "severity": "medium", "file_endswith": "app/page.tsx", "count": 1}],
+  "forbid": []
+}

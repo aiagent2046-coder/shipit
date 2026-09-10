@@ -1,0 +1,11 @@
+{
+  "description": "The same unchecked fetch, with the confirmation written the way a product actually writes it. The rule matched six exact phrases, so 'Профиль сохранён' -- and 'Profile saved' -- went unreported while the bare word 'Saved' did not.",
+  "expect": [
+    {
+      "rule_id": "react-unchecked-http-success",
+      "severity": "medium",
+      "file_endswith": "page.tsx"
+    }
+  ],
+  "forbid": []
+}

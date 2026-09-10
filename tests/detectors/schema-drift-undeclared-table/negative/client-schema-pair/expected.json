@@ -1,0 +1,7 @@
+{
+  "description": "Compare a literal client table name with the committed schema.",
+  "expect": [],
+  "forbid": [
+    "schema-drift-undeclared-table"
+  ]
+}

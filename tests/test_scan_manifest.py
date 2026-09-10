@@ -1,5 +1,6 @@
 """Scan passport records available facts and explicit gaps, including failures."""
 import hashlib
+import json
 
 import pytest
 
@@ -11,6 +12,19 @@ from app.report.plain_language import plain_fields
 from app.scan.manifest import scan_manifest
 from app.scan.pipeline import AUDIT_ENGINE_VERSION, run_scan
 from tests.test_audit_llm_wiring import AUTH_ZIP, FakeLLM, make_zip
+
+
+def test_file_coverage_exports_counts_without_opaque_scanner_metadata():
+    internal_value = "synthetic-source-content-must-stay-in-memory"
+    counts = {"files_total": 2, "files_read": 1, "files_scanned": 1,
+              "lossy_decoded_files": 0, "exclusions": {"file_size_limit": 1}}
+    extended = {**counts, "source_value": internal_value,
+                "exclusions": {**counts["exclusions"], internal_value: internal_value}}
+    data = make_zip({"main.py": b"print('hello')"}).getvalue()
+    manifest = scan_manifest(data, "test", {"secrets_coverage": extended}, {}, None)
+    assert manifest["secrets_coverage"] == counts
+    assert internal_value not in json.dumps(manifest)
+    assert extended["source_value"] == internal_value  # the scanner's object is not mutated
 
 
 def test_static_scan_records_input_and_skip_without_inventing_a_git_commit():
@@ -60,7 +74,7 @@ def test_fixture_counts_and_old_credential_claims_cannot_inflate_the_headline():
     html = render_report({"score": {"basis": "static_only", "categories": {}},
                           "findings": [source, fixture]})
     assert "An attacker controls" not in html
-    assert "1 test/example observations" in html
+    assert "1 in tests/examples" in html
     assert "Not recorded for this older audit" in html
 
 

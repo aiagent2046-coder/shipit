@@ -1,0 +1,7 @@
+{
+  "description": "A PUBLIC key block is not key material.",
+  "expect": [],
+  "forbid": [
+    "private-key-block"
+  ]
+}

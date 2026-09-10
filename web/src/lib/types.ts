@@ -37,8 +37,60 @@ export interface GateReason {
   title?: string; // critical only
 }
 
+export interface ReviewContextIndex {
+  scope: string;
+  parsed_files?: number;
+  excluded_files?: number;
+  limitations: string[];
+  records: Record<string, unknown>[];
+}
+
+export interface ModelAcceptance {
+  version: 1;
+  received: number;
+  accepted: number;
+  rejected: number;
+  source_rejected: number;
+  withdrawn: number;
+  other_rejected: number;
+  state: "partially_accepted" | "none_accepted" | "all_accepted" | "no_candidates";
+}
+
+export interface RejectionDiagnostic {
+  response: number;
+  rubric: string;
+  item: number;
+  reason: string;
+  detail: string;
+  file_ref: string | null;
+  line_start: number | null;
+  line_end: number | null;
+}
+
 export interface ScanManifest {
   source_facts?: {
+    guards?: ReviewContextIndex;
+    cost_context?: ReviewContextIndex;
+    rls_recommendations?: ReviewContextIndex;
+    react_async?: {
+      scope: string; parsed_files: number; excluded_files: number; limitations: string[];
+      records: { file: string; line: number; line_end: number; scope: string;
+        await_lines: number[]; checks: Record<string, unknown>[]; controls: Record<string, unknown>[] }[];
+    };
+    functions?: {
+      scope: string; indexed_functions: number; parsed_files: number;
+      excluded_files: number; limitations: string[];
+      records: { file: string; line: number; line_end: number; scope: string;
+        checks: Record<string, unknown>[]; candidates: Record<string, unknown>[];
+        call_names: string[] }[];
+    };
+    operations?: {
+      scope: string;
+      parsed_files: number;
+      excluded_files: number;
+      limitations: string[];
+      records: { kind: string; file: string; line: number; scope: string; call: string; detail: string }[];
+    };
     scope: string;
     parsed_files: number;
     excluded_files: number;
@@ -55,15 +107,38 @@ export interface ScanManifest {
   inventory: Record<string, string[]>;
   model: string | null;
   model_calls: number;
+  model_findings?: { model: string | null; responses: number; invalid_responses: number;
+    empty_responses: number; received: number; rejected: number; accepted: number;
+    merged: number; saved: number; rejection_reasons: Record<string, number> }[] | null;
+  model_acceptance?: ModelAcceptance | null;
+  rejection_diagnostics?: { version: 1; items: RejectionDiagnostic[]; omitted: number } | null;
   rubrics_completed: string[];
   llm_candidate_files: number | null;
   llm_submitted_files: number | null;
   llm_files_not_submitted: number | null;
+  llm_selection_exclusions?: Record<string, number> | null;
   limitations: string[];
   runtime_verified: false;
 }
 
 export interface Score {
+  free_baseline?: {
+    version: 1; origin: "reused" | "included"; audit_id?: string | null;
+    status: "completed" | "incomplete" | "unavailable"; reason?: string;
+    score: Score | null; findings: Finding[];
+  };
+  preview_history?: {
+    version: 1;
+    preview_audit_id: string;
+    content_hash: string;
+    engine_version: string;
+    model: string | null;
+    total: number;
+    matched_count: number;
+    retained_findings: Finding[];
+    status: "not_reassessed";
+  };
+  analysis_reused_from?: string;
   scan_manifest?: ScanManifest;
   // Numeric fields remain for older API consumers; they are not a readiness verdict.
   readiness_score_validated?: false;
@@ -97,6 +172,36 @@ export interface Score {
   reported_elsewhere?: Record<string, string[]>;
 }
 
+export interface RecommendationCheck {
+  result: "prerequisites_required";
+  detail: string;
+  original_fix_hint: string;
+  // Optional additions: earlier reports retain only the three fields above.
+  original_status?: "superseded";
+  original_provenance?: {
+    source: string; verification_method: string; verification_status: string;
+    producer?: { model: string; response: number; rubric: string };
+  };
+  checks?: {
+    version: 1; kind: string; result: "prerequisites_required"; detail: string;
+    scope?: string; reference?: string; prerequisites?: string[]; replacement_fix_hint?: string;
+  }[];
+  superseded_fix_hints?: string[];
+}
+
+export interface SourceAssessment {
+  kind: string;
+  result: "unsupported" | "contradicted" | "observed" | "not_checked";
+  whole_finding: boolean;
+  detail: string;
+  file: string;
+  line_start: number;
+  line_end: number;
+  source_sha256: string;
+  method: "source_ast";
+  source_binding: Record<string, unknown>;
+}
+
 export interface Finding {
   claim_evidence?: {
     version: 1;
@@ -106,6 +211,35 @@ export interface Finding {
     required_conditions: string[] | null;
     conditions_status: "not_checked";
     consequence_status: "not_checked";
+    source_context?: { kind: string; uri_scheme: string; uri_kind: string } | null;
+    grouped_originals?: Record<string, unknown>[];
+    grouped_claim_scope?: {
+      mechanism: "react_network_rejection_cleanup";
+      scope: string;
+      consequences: string;
+      title_source_disagreements: { original_index: number; result: "different_handler_label";
+        source_handler: string }[];
+    } | null;
+    producer?: { model: string; response: number; rubric: string };
+    source_issue_identity?: Record<string, unknown> | null;
+    context_checks?: Record<string, unknown>[];
+    source_assessments?: SourceAssessment[];
+    premise_checks?: { kind: string; target: string; line_start?: number; line_end?: number;
+      source_line_start?: number; source_line_end?: number;
+      result: "contradicted" | "not_checked"; claim: string; detail: string }[];
+    recommendation_check?: RecommendationCheck;
+    syntax_check?: {
+      kind: "react_hook_order" | "sql_update_where" | "python_completed_notification" | "react_async_catch_reset"
+        | "http_status_guard_absent" | "json_rejection_uncaught" | "intl_catch_absent"
+        | "required_nested_objects_absent" | "query_limit_unbounded"
+        | "ownership_guard_absent" | "react_async_fetch_unawaited" | "react_async_network_reset_absent"
+        | "domain_suffix_argument" | "finite_limit_clamp" | "intl_try_catch" | "unsupported";
+      result: "contradicted" | "observed" | "not_checked";
+      claim: string;
+      detail: string;
+      line_start?: number;
+      line_end?: number;
+    };
   } | null;
   occurrence_count?: number;
   occurrence_files?: string[];
@@ -327,6 +461,7 @@ export type BankTransferStatus =
       status: "completed";
       product: "fixpack";
       audit_id?: string;
+      funding_review_required?: boolean;
     }
   | { reference: string; status: "expired" };
 
@@ -360,6 +495,10 @@ export interface FixpackStatus {
   // repo was at fault. null for a genuine generation failure, and for every
   // other status.
   failure_kind?: "infrastructure" | null;
+  // On "blocked" only; older APIs omit these fields. Raw verification output
+  // stays server-side, while job_id is a support reference for the owner.
+  block_reason?: "proof_failed" | "verification_failed" | null;
+  job_id?: string | null;
 }
 
 // GET /v1/github/installation-status?owner=&repo=

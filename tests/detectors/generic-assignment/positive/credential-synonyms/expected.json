@@ -1,0 +1,11 @@
+{
+  "description": "authToken, accessKey and clientSecret are what people actually call a credential. The rule covered service_role -- rarer in real code than any of them -- and missed these.",
+  "expect": [
+    {
+      "rule_id": "generic-assignment",
+      "severity": "high",
+      "file_endswith": "config.ts"
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,7 @@
+{
+  "description": "Reading the key from the environment is the fix, not a finding.",
+  "expect": [],
+  "forbid": [
+    "stripe-live-key"
+  ]
+}

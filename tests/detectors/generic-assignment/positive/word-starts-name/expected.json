@@ -1,0 +1,10 @@
+{
+  "description": "The credential word starts the name instead of ending it. `adminToken` was read because the value follows the word directly, but `tokenForAdmin` names the same thing and was not -- a hunt run on a stronger model produced exactly these shapes and the scanner was silent on all three.",
+  "expect": [
+    {
+      "rule_id": "generic-assignment",
+      "severity": "high"
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Context-specific DSN classification, not proof of a production leak.",
+  "expect": [
+    {
+      "rule_id": "connection-string-local-host",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -8,9 +8,9 @@ job exhausting its attempts into dead_letter -- charged the account at the
 provider and recorded nothing. These tests pin the money, not the audit:
 
   * the fake-repo half proves each of those paths now writes its row, and that
-    the paths which already worked still write exactly one;
+    each model stage writes one row, with no lost or duplicated spend;
   * the Postgres half proves the retry arithmetic -- three attempts leave three
-    rows under one audit_jobs.id and sum_by_audit_job adds them up, which is
+    attempts under one audit_jobs.id and sum_by_audit_job adds both stages, which is
     the question "what did this job actually cost" that could not be asked
     before.
 """
@@ -38,6 +38,7 @@ from app.worker.main import JobExecutionError, _execute_job
 # each matching rubric is prompted PAID_AUDIT_PASSES times, and the money a
 # both-rubric fixture spends is 2 x passes calls.
 _FULL_SCAN_CALLS = 2 * PAID_AUDIT_PASSES
+_BASELINE_CALLS = 1
 
 NEXT_PKG = json.dumps({"dependencies": {"next": "15.0.0", "react": "19.0.0"}}).encode()
 
@@ -160,16 +161,18 @@ ONE_CALL_USD = Decimal("0.006")
 # --- the behaviour that already worked, pinned before it is changed ---------
 
 async def test_a_successful_audit_still_writes_exactly_one_linked_row():
-    """Regression guard. The success path is the one that was never broken, and
-    the new failure branches must not turn it into two rows or unlink it."""
+    """Each stage records spend once; the paid stage remains linked to the audit."""
     audits, usage = _Audits(), _Usage()
     job = _job(_both_rubrics_zip())
 
     audit_id = await _execute_job(
         job, llm_client=_LLM(), audit_repo=audits, llm_usage_repo=usage)
 
-    assert len(usage.rows) == 1
-    row = usage.rows[0]
+    assert len(usage.rows) == 2
+    assert usage.rows[0]["calls"] == _BASELINE_CALLS
+    assert usage.rows[0]["job_id"] is None
+    assert usage.rows[0]["audit_job_id"] == job["id"]
+    row = usage.rows[-1]
     assert row["job_id"] == audit_id            # still points at the audit
     assert row["audit_job_id"] == job["id"]     # and now also at the queue row
     assert row["calls"] == _FULL_SCAN_CALLS     # both rubrics, paid passes
@@ -203,8 +206,10 @@ async def test_the_row_lands_when_the_audit_cannot_be_persisted():
                            audit_repo=audits, llm_usage_repo=usage)
 
     assert excinfo.value.code == "audit_not_persisted"
-    assert len(usage.rows) == 1
-    row = usage.rows[0]
+    assert len(usage.rows) == 2
+    assert usage.rows[0]["calls"] == _BASELINE_CALLS
+    assert usage.rows[0]["job_id"] is None
+    row = usage.rows[-1]
     assert row["job_id"] is None                # there is no audit to point at
     assert row["audit_job_id"] == job["id"]     # but the job is still known
     assert row["cost_usd"] == _FULL_SCAN_CALLS * ONE_CALL_USD
@@ -221,9 +226,9 @@ async def test_the_row_lands_when_the_persist_raises():
         await _execute_job(job, llm_client=_LLM(),
                            audit_repo=audits, llm_usage_repo=usage)
 
-    assert len(usage.rows) == 1
-    assert usage.rows[0]["audit_job_id"] == job["id"]
-    assert usage.rows[0]["cost_usd"] == _FULL_SCAN_CALLS * ONE_CALL_USD
+    assert len(usage.rows) == 2
+    assert all(r["audit_job_id"] == job["id"] and r["job_id"] is None for r in usage.rows)
+    assert sum(r["cost_usd"] for r in usage.rows) == (_FULL_SCAN_CALLS + _BASELINE_CALLS) * ONE_CALL_USD
 
 
 async def test_the_row_lands_when_the_lease_is_lost_mid_persist():
@@ -239,9 +244,9 @@ async def test_the_row_lands_when_the_lease_is_lost_mid_persist():
         await _execute_job(job, llm_client=_LLM(),
                            audit_repo=audits, llm_usage_repo=usage)
 
-    assert len(usage.rows) == 1
-    assert usage.rows[0]["audit_job_id"] == job["id"]
-    assert usage.rows[0]["cost_usd"] == _FULL_SCAN_CALLS * ONE_CALL_USD
+    assert len(usage.rows) == 2
+    assert all(r["audit_job_id"] == job["id"] and r["job_id"] is None for r in usage.rows)
+    assert sum(r["cost_usd"] for r in usage.rows) == (_FULL_SCAN_CALLS + _BASELINE_CALLS) * ONE_CALL_USD
 
 
 async def test_calls_made_before_a_provider_failure_are_still_charged():
@@ -405,10 +410,10 @@ async def test_every_attempt_of_a_retried_job_is_billed(
     assert await _row_state(enqueued["id"]) == "succeeded"
 
     total = await LlmUsageRepository().sum_by_audit_job(enqueued["id"])
-    assert total["attempts"] == 3               # one row per attempt
+    assert total["attempts"] == 3               # actual queue attempts, not the six model-stage rows
     # two rubrics x PAID_AUDIT_PASSES x three attempts
-    assert total["calls"] == _FULL_SCAN_CALLS * 3
-    assert total["cost_usd"] == _FULL_SCAN_CALLS * 3 * ONE_CALL_USD
+    assert total["calls"] == (_FULL_SCAN_CALLS + _BASELINE_CALLS) * 3
+    assert total["cost_usd"] == (_FULL_SCAN_CALLS + _BASELINE_CALLS) * 3 * ONE_CALL_USD
 
     # And the rows are distinguishable: only the winning attempt has an audit.
     pool = await db_mod.get_pool()
@@ -441,7 +446,7 @@ async def test_a_dead_lettered_job_still_has_its_spend_on_record(
     total = await LlmUsageRepository().sum_by_audit_job(enqueued["id"])
     assert total["attempts"] == 3               # max_attempts scans happened
     # three attempts, each a full paid scan (two rubrics x PAID_AUDIT_PASSES)
-    assert total["cost_usd"] == _FULL_SCAN_CALLS * 3 * ONE_CALL_USD
+    assert total["cost_usd"] == (_FULL_SCAN_CALLS + _BASELINE_CALLS) * 3 * ONE_CALL_USD
 
     pool = await db_mod.get_pool()
     async with pool.connection() as conn:
@@ -449,7 +454,7 @@ async def test_a_dead_lettered_job_still_has_its_spend_on_record(
             "select count(*) as n from llm_usage "
             "where audit_job_id = %s and job_id is null",
             (uuid.UUID(enqueued["id"]),))
-        assert (await cur.fetchone())["n"] == 3
+        assert (await cur.fetchone())["n"] == 6  # Two model stages per attempt.
 
 
 @pg

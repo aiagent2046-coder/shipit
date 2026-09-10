@@ -284,7 +284,13 @@ function TransferCheckout({ auditId }: { auditId: string }) {
       createInvoice={(payer) =>
         createFixpackBankTransferInvoice(auditId, payer)
       }
-      renderCompleted={() => (
+      renderCompleted={(completed) => completed.product === "fixpack" && completed.funding_review_required ? (
+        <p role="alert" className="mt-4 text-sm">
+          Payment received. A separate Fix Pack job for this payment has not been confirmed.
+          Please contact support with reference {completed.reference} to reconcile the
+          payment and determine whether a refund is due. No refund has been issued.
+        </p>
+      ) : (
         <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
           <p className="font-semibold text-accent">
             Transfer confirmed — generating your Fix Pack.
@@ -521,11 +527,16 @@ function FixpackStatusArea({ auditId, accessToken }: { auditId: string; accessTo
 
         {status.status === "blocked" && (
           <p className="rounded-md border border-high/40 bg-high/10 p-3 text-sm text-high">
-            An automated check found a potential problem in the generated fix
-            (it made the repository&apos;s tests worse), so the pull request was
-            not opened and the change is held for manual review by our team.
-            Your payment was received — <SupportContact /> and we&apos;ll sort it
-            out.
+            {status.block_reason === "proof_failed"
+              ? "A verification check still detected the reported issue after applying the generated fix, so the pull request was not opened."
+              : "The generated fix did not pass verification, so the pull request was not opened."}
+            {" "}Your payment was received — <SupportContact /> so we can review
+            your order.
+            {status.job_id && (
+              <span className="mt-2 block break-all">
+                Include this support reference: <code>{status.job_id}</code>
+              </span>
+            )}
           </p>
         )}
 

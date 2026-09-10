@@ -1,0 +1,7 @@
+{
+  "description": ".gitignore covering .env and node_modules.",
+  "expect": [],
+  "forbid": [
+    "gitignore-missing-secrets"
+  ]
+}

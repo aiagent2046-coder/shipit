@@ -1,0 +1,11 @@
+{
+  "description": "The query text is concatenated with a value instead of parameterised, so whatever that value contains reaches the database as SQL. Both the + form and the f-string form are here; the fixture is a plain module so the finding points at the call line.",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "severity": "high",
+      "file_endswith": "queries.py"
+    }
+  ],
+  "forbid": []
+}

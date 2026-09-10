@@ -731,7 +731,8 @@ async def test_repurchase_after_failed_is_allowed(real_db):
     await fixpack_repo.mark_status(third["id"], "failed", "smoke cleanup")
 
 
-async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db):
+@pytest.mark.parametrize("finish_before_retry", [False, True])
+async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db, finish_before_retry):
     """THE test this change exists for: a crash between grant_fixpack's two
     writes must leave a state a retry can finish, and the retry must not produce
     a second fix PR.
@@ -808,6 +809,10 @@ async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db):
     assert (await payment_repo.get(invoice["id"]))["status"] == "pending"
     assert len(await _fixpack_job_rows(audit_id)) == 1
 
+    if finish_before_retry:
+        reserved = (await _fixpack_job_rows(audit_id))[0]
+        await fixpack_repo.mark_status(str(reserved["id"]), "no_fix_needed")
+
     # The retry, run entirely normally -- no fakes, no patches.
     job = await grant_fixpack(
         fixpack_repo=fixpack_repo, payment_repo=payment_repo, **grant_kwargs
@@ -815,6 +820,7 @@ async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db):
 
     assert job is not None
     assert job["inserted"] is False, "the retry created a second job"
+    assert job["funding_review_required"] is False
     settled = await payment_repo.get(invoice["id"])
     assert settled["status"] == "completed"
     assert settled["external_ref"] == charge
@@ -1776,3 +1782,60 @@ async def test_a_failed_check_is_not_a_baseline_in_real_sql(real_db):
     assert await repo.latest_completed_for(
         audit_id=audit_id, deployment_url=f"https://other-{run}.example/",
     ) is None
+
+
+async def test_distinct_confirmed_payments_share_work_but_keep_the_funding_buyer(real_db):
+    from app.billing import grant_fixpack
+    from app.billing.bank_transfer import invoice_status
+
+    audits, payments, jobs = AuditRepository(), PaymentRepository(), FixpackJobRepository()
+    run = uuid.uuid4().hex[:12]
+    audit_id = await _fixpack_audit(audits, run)
+    invoices = []
+    for nth in range(2):
+        invoices.append(await payments.create(
+            account_id=None, provider="bank_transfer", external_ref=f"fund-{run}-{nth}",
+            amount=990, currency="RUB", status="pending", tier_granted=None,
+            product="fixpack", audit_id=audit_id,
+        ))
+
+    async def confirm(invoice):
+        return await grant_fixpack(
+            fixpack_repo=jobs, payment_repo=payments, audit_repo=audits,
+            provider="bank_transfer", external_ref=invoice["external_ref"],
+            amount=990, currency="RUB", audit_id=audit_id, invoice_payment_id=invoice["id"],
+        )
+
+    results = await asyncio.gather(*(confirm(invoice) for invoice in invoices))
+    assert len({r["id"] for r in results}) == 1
+    assert sorted(r["funding_review_required"] for r in results) == [False, True]
+    owner_index = next(i for i, result in enumerate(results) if not result["funding_review_required"])
+    pool = await db_mod.get_pool()
+    async with pool.connection() as conn:
+        await conn.execute(
+            "update payments set created_at = now() - interval '1 day' where id = %s",
+            (invoices[owner_index]["id"],),
+        )
+    owner = await payments.get_completed_fixpack_for_job(results[0]["id"])
+    assert owner["id"] == invoices[owner_index]["id"]
+    for index, invoice in enumerate(invoices):
+        replay = await confirm(invoice)
+        assert replay["funding_review_required"] is (index != owner_index)
+        status = await invoice_status(payments, None, invoice["external_ref"])
+        assert status["funding_review_required"] is (index != owner_index)
+    assert len(await _fixpack_job_rows(audit_id)) == 1
+    await jobs.mark_status(results[0]["id"], "failed", "smoke cleanup")
+
+
+async def test_legacy_job_with_multiple_completed_payments_has_no_guessed_owner(real_db):
+    jobs, payments = FixpackJobRepository(), PaymentRepository()
+    audit_id = await _fixpack_audit(AuditRepository(), uuid.uuid4().hex[:12])
+    job = await jobs.create_paid(audit_id=audit_id, stack="fastapi")
+    for _ in range(2):
+        await payments.create(
+            account_id=None, provider="bank_transfer", external_ref=uuid.uuid4().hex,
+            amount=990, currency="RUB", status="completed", tier_granted=None,
+            product="fixpack", audit_id=audit_id, fixpack_job_id=job["id"],
+        )
+    assert await payments.get_completed_fixpack_for_job(job["id"]) is None
+    await jobs.mark_status(job["id"], "failed", "smoke cleanup")

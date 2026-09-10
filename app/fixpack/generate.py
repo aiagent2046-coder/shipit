@@ -37,6 +37,10 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 
+from tree_sitter import Language, Parser
+import tree_sitter_javascript
+import tree_sitter_typescript
+
 from app.scan.checks import find_committed_env_files, gitignore_covers_env
 from app.fixpack.rls_policy import PolicyProposal, migration_filename, propose_read_policy
 from app.scan.rls import RULE_ID as RLS_RULE_ID
@@ -50,6 +54,8 @@ from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
 from app.scan.secrets import (
     NON_PRODUCTION_CONTEXTS,
     RULES,
+    SecretFinding,
+    is_non_production_path,
     iter_secret_matches,
 )
 
@@ -134,6 +140,10 @@ _PEM_BLOCK_RE = re.compile(
 # Inner quoted literal of an assignment-style match (generic/sql rules
 # match the whole `name = "value"` span; we only want the value).
 _QUOTED_LITERAL_RE = re.compile(r"['\"`]([^'\"`\s]+)['\"`]")
+_ASSIGNMENT_RULES = {
+    rule.id: rule for rule in RULES
+    if rule.id in {"generic-assignment", "sql-secret-assignment"}
+}
 
 
 @dataclass
@@ -264,6 +274,30 @@ def _env_key_names(body: str) -> set[str]:
     return names
 
 
+def _secret_format_supported(path: str) -> bool:
+    """Only emit secret expressions in languages with a supported rewrite.
+
+    Balanced delimiters do not establish runtime interpolation: SQL, JSON,
+    YAML and shell require different configuration contracts. They still
+    belong in the audit, but must not receive a placeholder pretending to be
+    an executable fix.
+    """
+    return path.lower().endswith((".py",) + _JS_SUFFIXES)
+
+
+def _secret_finding_formats_supported(finding: dict) -> bool:
+    if not _secret_format_supported(finding.get("file", "")):
+        return False
+    paths = finding.get("occurrence_files")
+    # A supported representative does not make its SQL/shell copies fixable.
+    # Those live copies would still fail the proof gate after a partial edit.
+    # Known documentation/test paths are intentionally preserved by the plan.
+    return not isinstance(paths, list) or all(
+        _secret_format_supported(path) or is_non_production_path(path)
+        for path in paths if isinstance(path, str)
+    )
+
+
 def _env_reference(path: str, env_var: str) -> str:
     """The idiomatic way to read an env var in this file's language."""
     lower = path.lower()
@@ -280,10 +314,7 @@ def _env_reference(path: str, env_var: str) -> str:
         return f"process.env.{env_var}"
     if lower.endswith(".py"):
         return f'os.environ["{env_var}"]'
-    # Unknown language: a shell/interpolation-style reference removes the
-    # secret and clearly signals "an env var goes here" without pretending
-    # to know the syntax.
-    return f"${{{env_var}}}"
+    raise ValueError("unsupported format for automatic secret replacement")
 
 
 def _sensitive_literals(rule_id: str, raw_match: str) -> list[str]:
@@ -297,6 +328,9 @@ def _sensitive_literals(rule_id: str, raw_match: str) -> list[str]:
     """
     if rule_id == "private-key-block":
         return []  # handled specially against the full file text
+    if rule_id in _ASSIGNMENT_RULES:
+        match = _ASSIGNMENT_RULES[rule_id].pattern.fullmatch(raw_match)
+        return [match.group("value")] if match else [raw_match]
     m = _QUOTED_LITERAL_RE.search(raw_match)
     if m:
         return [m.group(1)]
@@ -316,6 +350,16 @@ def _apply_secret_fix(text: str, rule_id: str, raw_match: str,
         return new_text, blocks
 
     sensitive = _sensitive_literals(rule_id, raw_match)
+    if rule_id in _ASSIGNMENT_RULES:
+        match = _ASSIGNMENT_RULES[rule_id].pattern.fullmatch(raw_match)
+        if match is None:
+            return text, sensitive  # the unchanged span fails the scrub gate
+        # The scanner identifies the VALUE, even when the key is quoted too.
+        # Replace only its surrounding literal within the matched assignment;
+        # a global replacement could also rewrite an unrelated dictionary key.
+        start, end = match.span("value")
+        replacement = raw_match[:start - 1] + env_ref + raw_match[end + 1:]
+        return text.replace(raw_match, replacement), sensitive
     new_text = text
     for secret in sensitive:
         replaced = False
@@ -335,6 +379,68 @@ def _verify_scrubbed(text: str, sensitive: list[str]) -> bool:
     return all(secret not in text for secret in sensitive)
 
 
+def _ensure_python_os_import(text: str) -> str | None:
+    """Supply the generated os.environ reference, or decline ambiguous names."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "os" and not isinstance(node.ctx, ast.Load):
+            return None
+        if isinstance(node, ast.arg) and node.arg == "os":
+            return None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "os":
+            return None
+        if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name == "os":
+            return None
+        if isinstance(node, ast.MatchMapping) and node.rest == "os":
+            return None
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and "os" in node.names:
+            return None
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".", 1)[0]
+                if alias.name == "*":
+                    return None
+                if bound != "os":
+                    continue
+                if isinstance(node, ast.Import) and alias.name == "os" and node in tree.body:
+                    imports.append(node.lineno)
+                else:
+                    return None
+    first_use = min((node.lineno for node in ast.walk(tree)
+                     if isinstance(node, ast.Name) and node.id == "os"), default=0)
+    if imports and min(imports) < first_use:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    insertion = 0
+    while insertion < len(lines) and (
+        not lines[insertion].strip() or lines[insertion].lstrip().startswith("#")
+    ):
+        insertion += 1
+    body = tree.body
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)):
+        insertion = body[0].end_lineno
+        body = body[1:]
+    for node in body:
+        if not isinstance(node, ast.ImportFrom) or node.module != "__future__":
+            break
+        insertion = node.end_lineno
+    if first_use and insertion >= first_use:
+        # A docstring/future import and the changed assignment can share a
+        # semicolon-delimited line. Inserting after that line would be too late.
+        return None
+    newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+    prefix = "".join(lines[:insertion])
+    if prefix and not prefix.endswith(("\n", "\r")):
+        prefix += newline
+    return prefix + "import os" + newline + "".join(lines[insertion:])
+
+
 def _brackets_balanced(text: str) -> bool:
     """True if (), [], {} are properly nested. A cheap, language-agnostic
     heuristic (it ignores quotes/comments, so it is only ever used as a
@@ -351,6 +457,9 @@ def _brackets_balanced(text: str) -> bool:
     return not stack
 
 
+_MAX_JS_SYNTAX_BYTES = 256_000
+
+
 def _validate_syntax(path: str, original: str, new: str) -> bool:
     """Best-effort guard that our edit left the file syntactically valid.
 
@@ -364,15 +473,33 @@ def _validate_syntax(path: str, original: str, new: str) -> bool:
       * .py            -> ast.parse
       * .json / .jsonc -> json.loads
 
-    For every other language there is NO zero-dependency parser available,
-    and we deliberately do not invent one. We fall back to a conservative
-    delimiter check: reject only when our edit turned a bracket-balanced
-    file into an unbalanced one. Anything we cannot judge, we accept — the
-    never-leak post-check (`_verify_scrubbed`) has already run, so the worst
-    case for an unparseable-language file is a semantically-odd but
-    non-secret-leaking edit, not a broken secret removal.
+    JS/JSX and TS/TSX use their respective Tree-sitter grammars. Reject
+    recovered parse errors too: getting a tree does not mean valid syntax.
+    Oversized or unparseable edits are excluded, never passed to the weaker
+    delimiter check. Parsing does not execute code, resolve imports or check
+    types/behaviour; a clean syntax tree is not proof that an edit is correct.
+
+    Other languages retain the relative delimiter check: reject only when
+    our edit turned a bracket-balanced file into an unbalanced one.
     """
     lower = path.lower()
+    if lower.endswith(_JS_SUFFIXES):
+        if len(new) > _MAX_JS_SYNTAX_BYTES:
+            return False
+        try:
+            data = new.encode("utf-8")
+            if len(data) > _MAX_JS_SYNTAX_BYTES:
+                return False
+            if lower.endswith(".tsx"):
+                language = tree_sitter_typescript.language_tsx()
+            elif lower.endswith(".ts"):
+                language = tree_sitter_typescript.language_typescript()
+            else:
+                language = tree_sitter_javascript.language()
+            tree = Parser(Language(language)).parse(data)
+            return tree is not None and not tree.root_node.has_error
+        except (ValueError, OverflowError):
+            return False
     if lower.endswith(".py"):
         try:
             ast.parse(new)
@@ -618,6 +745,8 @@ def has_auto_fixable_findings(findings: list[dict]) -> bool:
     return any(
         f.get("fixpack_eligible") is not False
         and _is_fixable_rule(f) and _is_production_code(f)
+        and (f.get("rule_id") not in SECRET_RULE_IDS
+             or _secret_finding_formats_supported(f))
         for f in findings
     )
 
@@ -630,11 +759,9 @@ def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict
     with no repo bytes and no business fetching any, so the question has to be
     answered here or answered wrong.
 
-    ONLY THE RLS READ RULE NEEDS THIS. For a secret, a committed .env or a
-    missing gitignore pattern, the rule id and the file's context settle it —
-    which is what _is_fixable_rule and _is_production_code already check.
-    propose_read_policy is the one decision that reads the schema, so it is
-    the one that can disagree with the rule id, and it did.
+    RLS reads need the schema. Secret findings also need a supported file
+    format: a literal in SQL or YAML is detectable without having a safe
+    runtime environment expression to replace it with.
 
     Stamped rather than filtered: the finding is REAL and stays in the report
     in full. What changes is only whether we offer to sell a fix for it.
@@ -643,6 +770,12 @@ def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict
     before this existed keep the old behaviour rather than silently becoming
     unsellable.
     """
+    findings = [
+        {**f, "fixpack_eligible": False}
+        if f.get("rule_id") in SECRET_RULE_IDS
+        and not _secret_finding_formats_supported(f) else f
+        for f in findings
+    ]
     if not any(f.get("rule_id") == RLS_RULE_ID for f in findings):
         return findings
 
@@ -668,6 +801,44 @@ def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict
         else:
             marked.append({**finding, "fixpack_eligible": False})
     return marked
+
+
+def _grouped_secret_occurrences(
+    finding: dict,
+    raw_value: str,
+    fresh_by_file: dict[tuple[str, str], list[tuple[SecretFinding, str]]],
+) -> list[tuple[dict, str, str]]:
+    """Recover a collapsed finding's other locations from current source.
+
+    Report masks are not secret identities: unrelated credentials can have
+    the same prefix and length. Use the representative's freshly matched
+    literal, and limit expansion to the group's recorded files. Every added
+    location must still be production code; collapse can combine examples
+    and tests with a production representative.
+    """
+    paths = finding.get("occurrence_files")
+    if not isinstance(paths, list):
+        return []
+    rule_id = finding["rule_id"]
+    sensitive = _sensitive_literals(rule_id, raw_value)
+    if not sensitive:
+        return []
+    occurrences = []
+    for path in paths:
+        if not isinstance(path, str):
+            continue
+        for fresh, raw in fresh_by_file.get((rule_id, _repo_relative(path)), []):
+            current = {
+                **finding,
+                "file": fresh.file,
+                "line": fresh.line,
+                "context": fresh.context,
+                "title": fresh.title,
+            }
+            if (_is_production_code(current)
+                    and _sensitive_literals(rule_id, raw) == sensitive):
+                occurrences.append((current, fresh.file, raw))
+    return occurrences
 
 
 def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
@@ -724,14 +895,17 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
 
     # --- Secret findings: relocate each against a fresh re-scan to get the
     # real value, then scrub it out of the file. ------------------------
-    fresh_index: dict[tuple[str, str, int], tuple[str, str]] = {}
+    fresh_index: dict[tuple[str, str, int], tuple[SecretFinding, str]] = {}
+    fresh_by_file: dict[tuple[str, str], list[tuple[SecretFinding, str]]] = {}
     for finding, raw_value in iter_secret_matches(io.BytesIO(zip_bytes)):
         key = (finding.rule_id, _repo_relative(finding.file), finding.line)
-        fresh_index.setdefault(key, (finding.file, raw_value))
+        fresh_index.setdefault(key, (finding, raw_value))
+        fresh_by_file.setdefault(key[:2], []).append((finding, raw_value))
 
     # Group the wanted secret fixes by repo-relative file so overlapping
     # findings on one file are applied together in a single edit.
     per_file: dict[str, list[tuple[dict, str, str]]] = {}
+    selected_locations: set[tuple[str, str, int]] = set()
     for f in eligible:
         if f.get("rule_id") not in SECRET_RULE_IDS:
             continue
@@ -743,8 +917,24 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                 f, "finding no longer matches on re-fetch (repo changed)",
                 file=repo_rel))
             continue
-        raw_entry, raw_value = match
-        per_file.setdefault(repo_rel, []).append((f, raw_entry, raw_value))
+        fresh, raw_value = match
+        current = {**f, "file": fresh.file, "line": fresh.line,
+                   "context": fresh.context}
+        if not _is_production_code(current):
+            plan.skipped.append(_skipped(
+                current, f"{fresh.context or 'test path'} on fresh scan — "
+                "non-production context; file left unchanged", file=repo_rel))
+            continue
+        occurrences = [(current, fresh.file, raw_value)] + _grouped_secret_occurrences(
+            current, raw_value, fresh_by_file
+        )
+        for current, entry, value in occurrences:
+            current_rel = _repo_relative(entry)
+            location = (current["rule_id"], current_rel, current.get("line", 0))
+            if location in selected_locations:
+                continue
+            selected_locations.add(location)
+            per_file.setdefault(current_rel, []).append((current, entry, value))
 
     env_vars_used: set[str] = set()
     for repo_rel, items in per_file.items():
@@ -754,6 +944,15 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
             for f, _, _ in items:
                 plan.skipped.append(_skipped(
                     f, "file not readable on re-fetch", file=repo_rel))
+            continue
+
+        if not _secret_format_supported(repo_rel):
+            for f, _, _ in items:
+                plan.skipped.append(_skipped(
+                    f, "unsupported format for automatic secret replacement; "
+                    "configure the credential manually using this format's "
+                    "runtime configuration mechanism, then rotate it",
+                    file=repo_rel))
             continue
 
         new_text = text
@@ -777,6 +976,16 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                     file=repo_rel))
             continue
 
+        if repo_rel.lower().endswith(".py"):
+            imported = _ensure_python_os_import(new_text)
+            if imported is None:
+                for f, _ in applied:
+                    plan.skipped.append(_skipped(
+                        f, "invalid syntax or ambiguous Python os binding; "
+                        "file excluded from Fix Pack", file=repo_rel))
+                continue
+            new_text = imported
+
         # Root-cause safety net: never ship a file our edit made
         # unparseable. A value-span replacement can corrupt the surrounding
         # literal (PEM/f-string/JSON value); drop the file instead of
@@ -784,7 +993,7 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
         if not _validate_syntax(repo_rel, text, new_text):
             for f, _ in applied:
                 plan.skipped.append(_skipped(
-                    f, "edit produced invalid syntax; file excluded from "
+                    f, "invalid syntax or syntax-check limit; file excluded from "
                     "Fix Pack", file=repo_rel))
             logger.warning(
                 "fixpack: syntax validation failed for %s after applying "

@@ -1,0 +1,7 @@
+{
+  "description": "A workflow that deploys its OWN repository, beside three GitHub URLs that are not deploy targets: a comment crediting the starter workflow it was copied from, a pip install from git, and npm's github: shorthand. Sweeping every URL in the file read the first of them as the deployed repository and accused a correct workflow of shipping someone else's code.",
+  "expect": [],
+  "forbid": [
+    "ci-deploys-a-different-repository"
+  ]
+}

@@ -56,6 +56,17 @@ def collapse_repeats(findings: list[dict]) -> list[dict]:
             -float(f.get("confidence", 0)),
         ))
         rep = dict(rep)
+        if rep.get("rule_id") == "supabase-service-role-route":
+            # A display representative must retain prerequisites from every
+            # affected route, not only the first route's read/write commands.
+            evidence = dict(rep.get("claim_evidence") or {"version": 1})
+            checks = list(evidence.get("context_checks", []))
+            for member in group:
+                for check in (member.get("claim_evidence") or {}).get("context_checks", []):
+                    if check.get("kind") == "rls_recommendation_context" and check not in checks:
+                        checks.append(check)
+            evidence["context_checks"] = checks
+            rep["claim_evidence"] = evidence
         n = len(group)
         files = sorted({str(f.get("file", "")) for f in group if f.get("file")})
         shown = ", ".join(files[:5]) + (f" and {len(files) - 5} more" if len(files) > 5 else "")
