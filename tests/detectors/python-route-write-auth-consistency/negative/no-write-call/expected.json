@@ -1,0 +1,7 @@
+{
+  "description": "An unguarded POST whose handler only computes a response: it reads a repository and returns a report. The HTTP verb alone is not evidence of a write, and treating it as one would be a claim about intent rather than about code.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

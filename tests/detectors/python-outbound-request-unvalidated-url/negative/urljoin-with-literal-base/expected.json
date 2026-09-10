@@ -1,5 +1,5 @@
 {
-  "description": "The host is fixed by the base argument while the caller controls the path. Only the base decides which service is reached, and only the base is read. The mutation moves the interpolation into the base, which must fire.",
+  "description": "The literal docs/ prefix makes the second urljoin argument a relative path, preserving the fixed base host. A literal base alone is not sufficient: removing docs/ allows a caller value such as //other.example/ to replace the authority, and the mutation must fire.",
   "expect": [],
   "forbid": [
     "python-outbound-request-unvalidated-url"

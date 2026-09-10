@@ -1,0 +1,7 @@
+{
+  "description": "The router has exactly one write route and it is unguarded, beside guarded reads. There is nothing to disagree with, and 'no guard visible here' would be a claim about middleware this scanner cannot see. Reads are deliberately not siblings: the claim is about write routes.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

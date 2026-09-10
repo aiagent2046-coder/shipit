@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.put("/checks/{check_id}")
+async def update_check(check_id, payload, admin=Depends(require_admin), check_repo=Depends(get_check_repo)):
+    return check_repo.update(check_id, payload)
+
+
+@router.post("/checks")
+async def create_check(payload, security=Depends(handle_security)):
+    return security.create(payload)

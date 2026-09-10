@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.put("/logs/{log_id}")
+async def update_log(log_id, details, admin=Depends(get_admin), log_repo=Depends(fetch_log_repository)):
+    return log_repo.update(log_id, details)
+
+
+@router.post("/logs")
+async def add_log(details, handler=Depends(handler), log_repo=Depends(fetch_log_repository)):
+    return log_repo.add(details)

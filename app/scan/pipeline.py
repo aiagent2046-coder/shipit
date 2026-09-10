@@ -148,16 +148,24 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # production credentials and allocate independent environment keys per secret.
 # 2026-09-10-5: integrate paid dependency evidence and freshness handling with
 # the released harness-fixture classification and independent secret rewrites.
-# 2026-09-10-7: python-outbound-request-unvalidated-url -- an HTTP client called
-# inside a route handler with an address assembled from the handler's OWN request
-# input, and no check on that address visible in the same function. A new rule id
-# is exactly the case this constant exists for: an audit reports something it did
-# not report before, for unchanged bytes. It takes -7, not -6, so the two rules in
-# flight never claim one number (main released -5; the write rule's branch carries
-# -6). ORDER MATTERS: if THIS branch merges first, the other one must renumber
-# ABOVE -7 rather than down to -6 -- the counter only moves forward, and the
-# version block conflicts at that merge, which is what forces the look.
-AUDIT_ENGINE_VERSION = "2026-09-10-7"
+# 2026-09-10-6: python-route-write-auth-consistency -- a route that changes data
+# is compared with a sibling route on the same router that shows an identity
+# check. A new rule id is exactly the case this constant exists for: a paid or
+# free audit reports something it did not report before, for unchanged bytes.
+# The dependency vocabulary both route rules share was widened in the same
+# change, so the read rule's findings move with it: two hunt rounds through
+# scripts/hunt_detector_escapes.py showed a storage dependency renamed
+# fetch_record_repository, and a write call named createRecord or executed as
+# raw SQL, escaping a vocabulary built from one naming convention.
+# 2026-09-10-8: reviewed route checks distinguish an unknown dependency from an
+# identity witness, keep different router objects and nested function bodies
+# separate, and report recognized write calls without claiming runtime effects.
+# 2026-09-10-9: integrate the reviewed outbound URL rule with the reviewed
+# route checks. Trace supported local request values to URL authority using
+# HTTP import provenance, statement order and field-specific check identity;
+# bound AST/template work and report unresolved runtime/network controls.
+# This supersedes the outbound branch preview version 2026-09-10-7.
+AUDIT_ENGINE_VERSION = "2026-09-10-9"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

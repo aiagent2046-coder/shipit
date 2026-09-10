@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.delete("/items/{item_id}")
+async def drop_item(item_id, admin=Depends(get_admin), item_svc=Depends(load_item_service)):
+    return item_svc.remove(item_id)
+
+
+@router.post("/items")
+async def add_item(payload, item_svc=Depends(load_item_service)):
+    return item_svc.add(payload)

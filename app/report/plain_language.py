@@ -21,14 +21,23 @@ TIERS = {
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
     "python-outbound-request-unvalidated-url": (
-        "An outbound request is built from a value the caller sent.",
-        "The address this route fetches is assembled from the request itself, with no check on it "
-        "visible in the same function. On a server that can reach more than the public internet, a "
-        "caller who controls that value can make it fetch an internal service or a cloud metadata "
-        "endpoint. Whether the value is constrained elsewhere has not been checked.",
-        "Allow only the scheme and hosts you expect, check the resolved host rather than the text, "
-        "refuse private and link-local addresses, and build the address from the parts you validated "
-        "instead of putting the caller's value straight into it.",
+        "An HTTP client receives an address derived from request input.",
+        "A caller-controlled value reaches the host portion of a request target or client "
+        "configuration without a preceding local address check recognized by the scanner. "
+        "If external controls do not restrict it, a request may reach unintended services. "
+        "Runtime requests, network reachability and checks outside this handler have not been verified.",
+        "Allow only approved schemes and hosts. Check resolved addresses against the permitted "
+        "destinations, including private and link-local ranges, and ensure the connection uses the "
+        "address that was checked. Disable redirects or validate every redirect destination too.",
+    ),
+    "python-route-write-auth-consistency": (
+        "A route contains a call recognized as a write and shows no local identity check.",
+        "A sibling write route on the same router declares an identity check. This is a local "
+        "consistency signal based on calls and dependency names; actual changes to stored data, "
+        "middleware, router mounting and runtime access have not been verified.",
+        "Confirm whether this route is meant to be reachable without an identity -- a webhook or an "
+        "onboarding step would be. If not, apply the sibling route's identity contract, then test a "
+        "write with a foreign or absent credential against synthetic records.",
     ),
     "python-route-read-auth-consistency": (
         "Object lookup differs from protected sibling routes.",

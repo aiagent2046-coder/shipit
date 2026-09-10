@@ -8,4 +8,4 @@ router = APIRouter()
 
 @router.get("/docs/{name}")
 async def docs(name: str):
-    return httpx.get(urljoin("https://docs.example.com/", name)).text
+    return httpx.get(urljoin("https://docs.example.com/", "docs/" + name)).text

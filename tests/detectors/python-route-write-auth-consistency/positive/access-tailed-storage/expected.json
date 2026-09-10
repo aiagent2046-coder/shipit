@@ -1,0 +1,10 @@
+{
+  "description": "The storage dependency is named fetch_data_access. The hunt produced this tail twice in one round; `access` is now read as storage when the HEAD is a fetching verb, while check_access and require_access stay unclassified because their heads say nothing about storage.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -75,3 +75,46 @@ def test_current_fixpack_status_uses_the_protected_read():
     )
     hits = scan_auth_read(archive(previous))
     assert any("/fixpack-status" in f.explanation for f in hits)
+
+
+@pytest.mark.parametrize("assignment,decorator", [
+    ("other = APIRouter()", "@other."),
+    ("router = APIRouter()", "@router."),
+    ("router = imported_router", "@router."),
+])
+def test_protected_reads_must_belong_to_the_same_router_object(assignment, decorator):
+    source = PREFIX + "\n" + assignment + "\n" + UNPROTECTED.replace("@router.", decorator)
+    assert scan_auth_read(archive(source)) == []
+    assert scan_auth_read(archive(PREFIX + UNPROTECTED))
+
+
+@pytest.mark.parametrize("dependency", [
+    "Depends(dependency=require_owner)", "Depends()", "Depends(dependency=handler)",
+    "Security(require_owner)", "Depends(get_auth_service)", "Depends(get_user_session)",
+])
+def test_shared_dependency_classifier_keeps_guarded_reads_silent(dependency):
+    source = PREFIX + UNPROTECTED.replace("audit_id, audit_repo", f"audit_id, actor={dependency}, audit_repo")
+    assert scan_auth_read(archive(source)) == []
+
+
+@pytest.mark.parametrize("dependency", ["fetch_audit_repository", "load_audit_service", "get_db_connection"])
+def test_renamed_storage_dependency_does_not_hide_a_read_disagreement(dependency):
+    source = (PREFIX + UNPROTECTED).replace("get_audit_repo", dependency)
+    assert scan_auth_read(archive(source))
+
+
+def test_nested_protected_lookup_cannot_supply_a_read_witness():
+    source = PREFIX.replace("    return await audit_repo.get_authorized",
+                            "    async def unused():\n        return await audit_repo.get_authorized")
+    assert scan_auth_read(archive(source + UNPROTECTED)) == []
+
+
+def test_nested_unprotected_lookup_is_not_handler_read_evidence():
+    source = UNPROTECTED.replace("    return await audit_repo.get",
+                                 "    async def unused():\n        return await audit_repo.get")
+    assert scan_auth_read(archive(PREFIX + source)) == []
+
+
+def test_nested_guard_does_not_hide_a_read_disagreement():
+    source = UNPROTECTED.replace("    return await", "    def unused():\n        require_owner()\n    return await")
+    assert scan_auth_read(archive(PREFIX + source))

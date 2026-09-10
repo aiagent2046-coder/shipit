@@ -1,0 +1,7 @@
+{
+  "description": "The target's only dependency is get_user_session: storage-shaped, but `session` is an ambiguous tail and `user` names a person, so the name is not evidence either way and unknown counts as authorization. Renaming it to a repository makes the disagreement visible -- the mutation does exactly that.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

@@ -50,6 +50,7 @@ from app.scan.error_boundary import BoundaryScan
 WIRED_SCANNERS = (
     "run_checks",
     "scan_auth_read",
+    "scan_auth_write",
     "scan_ci_deploy_source",
     "scan_error_boundary",
     "scan_http_success",
@@ -87,6 +88,7 @@ EMITTED_RULE_IDS = (
     "private-key-block",
     "python-outbound-request-unvalidated-url",
     "python-route-read-auth-consistency",
+    "python-route-write-auth-consistency",
     "react-unchecked-http-success",
     "sql-injection-string-built-query",
     "sql-secret-assignment",
@@ -105,7 +107,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-10-7"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-10-9"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

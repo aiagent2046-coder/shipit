@@ -1,0 +1,10 @@
+{
+  "description": "The write call is camelCase (createRecord), which an exact name match missed -- the corpus had only ever been written in snake_case, so the gap was invisible until a model rewrote it. The guard dependency is renamed in the same way.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

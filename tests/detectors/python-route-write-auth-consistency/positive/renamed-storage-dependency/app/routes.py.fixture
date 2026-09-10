@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.put("/records/{record_id}")
+async def update_record(record_id, payload, admin=Depends(get_admin), record_repo=Depends(fetch_record_repository)):
+    return record_repo.update(record_id, payload)
+
+
+@router.post("/records")
+async def create_record(payload, record_repo=Depends(fetch_record_repository)):
+    return record_repo.create(payload)

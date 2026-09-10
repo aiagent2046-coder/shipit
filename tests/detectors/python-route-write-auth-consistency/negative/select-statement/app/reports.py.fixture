@@ -1,0 +1,15 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.put("/reports/{report_id}")
+async def update_report(report_id, payload, admin=Depends(get_admin), report_repo=Depends(fetch_report_repository)):
+    return report_repo.update(report_id, payload)
+
+
+@router.post("/reports/preview")
+async def preview(payload, connections=Depends(get_connection_pool)):
+    cursor = connections.cursor()
+    cursor.execute("SELECT * FROM reports WHERE id = %s", (payload["id"],))
+    return cursor.fetchall()

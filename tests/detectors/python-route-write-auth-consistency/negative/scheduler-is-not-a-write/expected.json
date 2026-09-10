@@ -1,0 +1,7 @@
+{
+  "description": "The handler schedules a coroutine (background.add_task). The leading verb is `add`, but a scheduler is not storage: whether anything is stored depends on code this scanner never reads. The product's own YooKassa callback was reported for exactly this.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

@@ -1,415 +1,634 @@
-"""An outbound HTTP request whose URL is assembled from the handler's own input.
+"""Bounded, source-only signal for caller-controlled outbound Python addresses.
 
-WHY THIS EXISTS. The static stage reads secrets, migrations, routes and dependency
-versions, and none of it notices the one line where a request handler hands a
-value that arrived from a stranger to an HTTP client. That is server-side request
-forgery, and it is the class a buyer expects a security audit to look for:
-`requests.get(f"http://{host}/latest")` inside a route lets the caller choose what
-the server talks to -- the cloud metadata endpoint, an internal admin panel, a
-service that trusts the caller's network position.
-
-WHAT IT REPORTS, AND WHAT IT DOES NOT CLAIM. One thing only: inside a function
-that declares an HTTP route, an outbound call whose URL argument is BUILT from a
-name that is one of that handler's own request inputs (a parameter without a
-`Depends(...)` injection, or a value read off the `Request` object), where no
-validation of that name is visible in the same function. That is a fact about the
-source. It is NOT proof of an exploitable SSRF: a host allowlist in a wrapper, a
-proxy, or a network policy this scanner cannot read may already contain it. The
-inverse is not claimed either -- silence is not a certificate that a repository
-cannot be made to fetch something it should not.
-
-THE BOUNDED TRACE, STATED HONESTLY. The value's path is followed WITHIN ONE
-FUNCTION: a parameter, a `request.query_params` read assigned to a local, and the
-string built from them. A URL assembled in a helper and passed in, a value that
-travelled through two modules, or a validation performed by the caller are all
-invisible here, and the finding's text says so. Cross-function taint is exactly
-what app/scan/sql_injection.py also refuses to attempt, and for the same reason:
-guessing there produces findings an owner learns to ignore.
-
-WHY AST, NOT A REGEX. The rule turns on distinctions a text scan cannot make:
-
-    httpx.get(f"https://api.example.com/{path}")     fixed host, variable path
-    httpx.get(f"https://{host}/health")              the caller picks the host
-
-Both are f-strings in a call. Only the tree shows which part is interpolated, and
-the first one is not the defect being reported.
-
-Python only, deliberately, and FastAPI-shaped routes only: TS/JS fetch calls need
-the tree-sitter path and a different sink vocabulary, and shipping half of it
-under a rule id that claims both would misdescribe what was checked.
-
-NEVER EXECUTES THE UPLOADED CODE. ast.parse builds a tree; it does not run a
-module, import it, or evaluate any expression inside it.
+Only locally declared FastAPI routes and HTTP clients with visible import or
+constructor provenance are read. A function's statements are visited in order;
+plain assignments preserve literal URL structure, while unknown calls stop the
+trace. No uploaded code is imported or executed, and helpers are not analysed
+across calls. A recognised local check suppresses this signal without certifying
+that the check, redirects, DNS resolution or the network boundary are safe.
 """
 
 from __future__ import annotations
 
 import ast
 import re
+import string
 import zipfile
+from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "python-outbound-request-unvalidated-url"
-
-# Method names that make an outbound request, matched on the attribute alone. The
-# receiver check below is what keeps `payload.get("url")` out of this set.
-_OUTBOUND_METHODS = frozenset({
-    "delete", "get", "head", "options", "patch", "post", "put", "request", "send",
-    "stream",
+_METHODS = frozenset({"delete", "get", "head", "options", "patch", "post", "put", "request", "stream"})
+_HTTP_MODULES = frozenset({"httpx", "requests", "aiohttp"})
+_CONSTRUCTORS = frozenset({
+    "httpx.Client", "httpx.AsyncClient", "requests.Session", "requests.sessions.Session",
+    "aiohttp.ClientSession", "http.client.HTTPConnection", "http.client.HTTPSConnection",
 })
-
-# Bare function sinks: `urlopen(url)`, `urlretrieve(url, path)`. Matched on the
-# attribute too, because the hunt produced `urllib.request.urlopen(...)` -- the
-# dotted form is how the stdlib actually gets called, and the earlier version
-# only accepted the bare name.
-_OUTBOUND_FUNCTIONS = frozenset({"urlopen", "urlretrieve"})
-
-# Constructors that take the ADDRESS. `http.client.HTTPConnection(host)` and
-# `httpx.Client(base_url=...)` are the same defect as an interpolated URL with a
-# lower-level client: the caller picks where the connection goes. A constructor
-# with no address argument (`httpx.Client(timeout=5)`) is not a sink.
-_ADDRESS_CONSTRUCTORS = frozenset({
-    "AsyncClient", "Client", "ClientSession", "HTTPConnection", "HTTPSConnection", "Session",
-})
-
-# Receivers that are HTTP clients by name. A local variable counts if this
-# module saw it assigned from a client constructor (`client = httpx.Client(...)`),
-# which is one hop -- enough for the ordinary shape, and no more guessing than
-# the finding text admits to.
-_CLIENT_NAMES = frozenset({
-    "aclient", "aioclient", "api", "client", "http", "http_client", "httpclient",
-    "httpx", "aiohttp", "http_session", "httpsession", "requests", "s", "sess",
-    "session", "urllib",
-})
-
-# FastAPI parameter markers that carry a value from the request. `Depends` is
-# deliberately absent: an injected dependency is not the caller's value, and
-# treating it as one would report every route that injects a configured client.
-# `Field` joins them after the escape hunt rewrote a fixture with
-# `location: str = Field(...)` -- the model reached for pydantic's marker, and a
-# handler parameter declared that way is as caller-filled as `Query(...)`.
-_INPUT_MARKERS = frozenset({
-    "Body", "Cookie", "Field", "File", "Form", "Header", "Path", "Query", "UploadFile",
-})
-
-# Attributes of a `Request` object (or of anything named like one) whose value
-# came from the caller.
-_REQUEST_ATTRS = frozenset({
-    "args", "body", "form", "get_json", "getlist", "json", "path_params",
-    "query_params", "values",
-})
-_REQUEST_CONTAINER_TYPES = frozenset({"Request", "starlette.requests.Request", "fastapi.Request"})
-
-# A name containing one of these is treated as a visible validation of the value.
-# "allow" covers allow_list/allowlist/allowed, "restrict" covers host allowlists
-# written as restrictions.
+_URL_FUNCTIONS = frozenset({"urllib.request.urlopen", "urllib.request.urlretrieve"})
+_ROUTERS = frozenset({"fastapi.FastAPI", "fastapi.APIRouter"})
+_REQUEST_TYPES = frozenset({"fastapi.Request", "starlette.requests.Request"})
+_DEPENDENCIES = frozenset({"fastapi.Depends", "fastapi.Security"})
+_REQUEST_ATTRS = frozenset({"body", "form", "json", "path_params", "query_params", "headers", "cookies", "url"})
 _VALIDATION_WORDS = frozenset({
     "allow", "assert", "canonical", "deny", "ensure", "guard", "is_public",
-    "is_safe", "permit", "restrict", "sanitise", "sanitize", "scrub", "validate",
-    "valid", "verify",
+    "is_safe", "permit", "restrict", "sanitise", "sanitize", "scrub", "validate", "valid", "verify",
 })
-
-# Calls that examine a URL rather than merely mention it. Used only for the
-# guarded-branch shape, so a condition that inspects the value counts as a check
-# while `if url:` does not.
 _URL_INSPECTORS = frozenset({
     "endswith", "fullmatch", "hostname", "ip_address", "is_global", "is_loopback",
-    "is_private", "match", "netloc", "resolve", "scheme", "search", "startswith",
-    "urlparse", "urlsplit",
+    "is_private", "match", "netloc", "resolve", "scheme", "search", "startswith", "urlparse", "urlsplit",
 })
-
-# Names that hold something a value can be checked against: ALLOWED_HOSTS,
-# PUBLIC_HOSTS, SAFE_SCHEMES. Used only for comparisons, so a differently-named
-# constant merely loses this particular silence -- it does not create a finding.
 _COMPARISON_TARGET_WORDS = frozenset({"allow", "domain", "host", "pattern", "prefix", "safe", "scheme"})
-
-# Mirrors app/scan/sql_injection.py: bounded so a generated or vendored file
-# cannot turn one archive into a parse storm.
 _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 400
 _MAX_FINDINGS = 32
+_MAX_AST_NODES = 20_000
+_MAX_AST_DEPTH = 100
+# Bound repeated local string expansion as well as the input file itself.
+_MAX_TEMPLATE_BYTES = 16_000
+_MAX_SLOTS = 256
+_MARKER = "\x00"
+_PERCENT = re.compile(r"%(?:\((?P<key>[^)]+)\))?[#0 +\-]*\d*(?:\.\d+)?[sradifgGouxXeE%]")
 
 
-def _name(node: ast.AST) -> str:
-    return node.id if isinstance(node, ast.Name) else ""
+@dataclass
+class _State:
+    bindings: dict[str, str] = field(default_factory=dict)
+    values: dict[str, tuple[str, list[set[str]]]] = field(default_factory=dict)
+    requests: set[str] = field(default_factory=set)
+    checked: set[str] = field(default_factory=set)
+
+    def copy(self) -> _State:
+        return _State(self.bindings.copy(), self.values.copy(), self.requests.copy(), self.checked.copy())
 
 
 def _attr_name(node: ast.AST) -> str:
     if isinstance(node, ast.Attribute):
         return node.attr
-    if isinstance(node, ast.Name):
-        return node.id
-    return ""
+    return node.id if isinstance(node, ast.Name) else ""
 
 
-def _annotation_name(node: ast.AST | None) -> str:
-    if node is None:
-        return ""
+def _qualified(node: ast.AST | None, bindings: dict[str, str]) -> str:
     if isinstance(node, ast.Name):
-        return node.id
+        return bindings.get(node.id, "")
     if isinstance(node, ast.Attribute):
-        return node.attr
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
+        base = _qualified(node.value, bindings)
+        return base + "." + node.attr if base else ""
     return ""
 
 
-def _assigned_name(node: ast.Assign | ast.AnnAssign) -> str:
-    """The simple local an assignment binds, or "" when it binds something else."""
-    if isinstance(node, ast.AnnAssign):
-        return node.target.id if isinstance(node.target, ast.Name) else ""
-    if node.targets and isinstance(node.targets[0], ast.Name):
-        return node.targets[0].id
-    return ""
-
-
-def _request_inputs(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[dict[str, frozenset[str]], set[str]]:
-    """(names carrying caller input -> the request names behind them, Request holders).
-
-    The mapping is what lets a finding name the PARAMETER rather than a local the
-    handler happened to copy it into: `url = f"http://{target}/status"` makes
-    `url` an input that originates at `target`, and the report says `target`. The
-    hop from a value read off the Request object to a local is included, and so
-    is a chain of plain assignments -- bounded, intra-procedural, and admitted in
-    the finding's text. A call in the middle of the chain is NOT followed: it
-    could sanitise the value, and guessing there is how a rule starts reporting
-    code that already defends itself.
-    """
-    origins: dict[str, frozenset[str]] = {}
-    containers: set[str] = set()
-    args = fn.args
-    positional = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
-    defaults: list[ast.expr | None] = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
-    for arg, default in zip(positional, defaults):
-        if arg.arg in ("self", "cls"):
+def _walk(node: ast.AST):
+    """Visit one expression/statement, never an inner callable or class scope."""
+    pending = [node]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda,
+                             ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             continue
-        if _annotation_name(arg.annotation) in _REQUEST_CONTAINER_TYPES:
-            containers.add(arg.arg)
-            continue
-        if default is None or (isinstance(default, ast.Constant) and default.value is None):
-            # `host: str | None = None` is the ordinary optional parameter, and it
-            # is an ast.Constant holding None -- NOT the Python None a missing
-            # default gives. Reading only the latter made the hunt's rewrite of
-            # the positive fixture silent while the defect sat right there.
-            origins[arg.arg] = frozenset({arg.arg})
-            continue
-        if isinstance(default, ast.Call) and _attr_name(default.func) in _INPUT_MARKERS:
-            origins[arg.arg] = frozenset({arg.arg})
-    pairs: list[tuple[ast.Assign | ast.AnnAssign, ast.expr]] = []
-    for node in ast.walk(fn):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        value = node.value
-        if value is not None:
-            pairs.append((node, value))
-    # A value read off the Request object is an origin of its own -- `body` is
-    # the name a reader can point at in the handler.
-    for node, value in pairs:
-        name = _assigned_name(node)
-        if not name:
-            continue
-        for inner in ast.walk(value):
-            if (isinstance(inner, ast.Attribute) and inner.attr in _REQUEST_ATTRS
-                    and (not _name(inner.value) or _name(inner.value) in containers
-                         or _name(inner.value).lower() in {"request", "req"})):
-                origins[name] = frozenset({name})
-    # Plain assignment chains, to a fixed point. Bounded so a pathological file
-    # cannot spin: three rounds cover the shapes seen in real code and in the hunt.
-    for _ in range(3):
-        changed = False
-        for node, value in pairs:
-            name = _assigned_name(node)
-            if not name:
-                continue
-            carried: set[str] = set()
-            for referenced in _referenced_names(value):
-                carried |= origins.get(referenced, frozenset())
-            if carried and origins.get(name, frozenset()) != frozenset(carried):
-                origins[name] = frozenset(carried)
-                changed = True
-        if not changed:
-            break
-    return origins, containers
-
-
-def _local_clients(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """Locals assigned from an HTTP client constructor."""
-    clients: set[str] = set()
-    for node in ast.walk(fn):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        name = _assigned_name(node)
-        if name and isinstance(node.value, ast.Call) and _attr_name(node.value.func) in _ADDRESS_CONSTRUCTORS:
-            clients.add(name)
-    return clients
+        yield item
+        pending.extend(reversed(list(ast.iter_child_nodes(item))))
 
 
 def _referenced_names(expr: ast.AST) -> set[str]:
-    return {node.id for node in ast.walk(expr) if isinstance(node, ast.Name)}
+    return {node.id for node in _walk(expr) if isinstance(node, ast.Name)}
 
 
-def _origins_of(names: set[str], inputs: dict[str, frozenset[str]]) -> set[str]:
-    """The request names behind these locals, so a finding can name the PARAMETER
-    the caller fills rather than the variable the handler copied it into."""
-    carried: set[str] = set()
-    for name in names:
-        carried |= set(inputs.get(name, frozenset()))
-    return carried
+def _bounded_tree(tree: ast.AST) -> bool:
+    pending = [(tree, 0)]
+    count = 0
+    while pending:
+        node, depth = pending.pop()
+        count += 1
+        if count > _MAX_AST_NODES or depth > _MAX_AST_DEPTH:
+            return False
+        pending.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
+    return True
 
 
-_MARKER = "\x00"
-_FIELD = re.compile(r"\{[0-9]*\}")
-_PERCENT = re.compile(r"%\([^)]*\)[sdrf]|%[sdrf]")
-
-
-def _skeleton(expr: ast.AST, inputs: dict[str, frozenset[str]]) -> tuple[str, list[set[str]]] | None:
-    """The address as literal text with a MARKER where a value is interpolated.
-
-    Returns the skeleton and, per marker in order, the REQUEST names behind the
-    values that reach it. None means the expression is not string assembly this
-    rule can read (a call to a builder, a subscript, anything else) -- silence,
-    not a guess.
-    """
-    if isinstance(expr, ast.Constant):
-        return (expr.value, []) if isinstance(expr.value, str) else None
-    if isinstance(expr, ast.JoinedStr):
-        text, slots = "", []
-        for value in expr.values:
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                text += value.value
-            elif isinstance(value, ast.FormattedValue):
-                text += _MARKER
-                slots.append(_origins_of(_referenced_names(value.value), inputs))
-        return text, slots
-    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
-        left, right = _skeleton(expr.left, inputs), _skeleton(expr.right, inputs)
-        if left is None or right is None:
-            return None
-        return left[0] + right[0], left[1] + right[1]
-    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Mod):
-        left = _skeleton(expr.left, inputs)
-        if left is None:
-            return None
-        args = list(expr.right.elts) if isinstance(expr.right, (ast.Tuple, ast.List)) else [expr.right]
-        text, slots = left
-        for arg in args:
-            sub = _skeleton(arg, inputs)
-            if sub is None:
-                continue
-            text, _ = _replace_first_marker(text, sub[0])
-            slots.append(sub[1][0] if sub[1] else set())
-        return text, slots
-    if isinstance(expr, ast.Call) and _attr_name(expr.func) == "format":
-        receiver = _skeleton(expr.func.value, inputs)  # type: ignore[attr-defined]
-        if receiver is None:
-            return None
-        text, slots = receiver
-        provided = [*expr.args, *(kw.value for kw in expr.keywords)]
-        for arg in provided:
-            sub = _skeleton(arg, inputs)
-            if sub is None:
-                continue
-            text, matched = _replace_first_field(text, sub[0])
-            if matched:
-                slots.append(sub[1][0] if sub[1] else set())
-        return text, slots
-    if isinstance(expr, ast.Name) and expr.id in inputs:
-        return _MARKER, [set(inputs[expr.id])]
-    if isinstance(expr, ast.Call) and _attr_name(expr.func) == "urljoin" and expr.args:
-        # The base decides the host, so only the base is read; a literal base
-        # makes the host fixed however caller-controlled the path is.
-        base = _skeleton(expr.args[0], inputs)
-        if base is None:
-            return None
-        return base[0] + "/*", base[1]
+def _field_key(expr: ast.AST | None) -> str | None:
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, (str, int)):
+        key = repr(expr.value)
+        return key if len(key) <= 120 else None
     return None
 
 
-def _replace_first_marker(text: str, replacement: str) -> tuple[str, bool]:
-    """Put the value where the template asked for it.
-
-    `%`-formatting spells its slots as `%s`, so the marker goes AT the slot, not
-    at the end of the string -- appending would place a caller-controlled host
-    outside the authority and turn the defect into silence.
-    """
-    if _MARKER in text:
-        return text.replace(_MARKER, replacement, 1), True
-    match = _PERCENT.search(text)
-    if match:
-        return text[:match.start()] + replacement + text[match.end():], True
-    return text + replacement, False
-
-
-def _replace_first_field(text: str, replacement: str) -> tuple[str, bool]:
-    if _FIELD.search(text):
-        return _FIELD.sub(replacement, text, count=1), True
-    return text, False
+def _request_read(expr: ast.AST, state: _State) -> set[str]:
+    if isinstance(expr, ast.Await):
+        return _request_read(expr.value, state)
+    if isinstance(expr, ast.Subscript):
+        key = _field_key(expr.slice)
+        return {f"{origin}[{key}]" for origin in _request_read(expr.value, state)} if key else set()
+    if isinstance(expr, ast.Attribute):
+        if isinstance(expr.value, ast.Name) and expr.value.id in state.requests and expr.attr in _REQUEST_ATTRS:
+            return {f"{expr.value.id}.{expr.attr}"}
+        return {f"{origin}.{expr.attr}" for origin in _request_read(expr.value, state)}
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute):
+        if expr.func.attr in {"get", "getlist"} and expr.args:
+            key = _field_key(expr.args[0])
+            return {f"{origin}[{key}]" for origin in _request_read(expr.func.value, state)} if key else set()
+        if expr.func.attr in {"body", "form", "json"}:
+            return {origin + "()" for origin in _request_read(expr.func, state)}
+    return set()
 
 
-def _authority_bounds(template: str) -> tuple[int, int]:
-    """Where the host lives: after `://`, up to the next `/`, `?` or `#`."""
-    scheme = template.find("://")
-    if scheme == -1:
-        # No scheme to anchor on: the whole value is caller-chosen as far as this
-        # rule can tell, which is the conservative reading of `f"{base}/x"`.
-        return 0, len(template)
-    start = scheme + 3
-    ends = [position for position in (template.find(char, start) for char in "/?#") if position != -1]
-    return start, min(ends) if ends else len(template)
+def _combine(parts: list[tuple[str, list[set[str]]]]):
+    if sum(len(text) for text, _ in parts) > _MAX_TEMPLATE_BYTES:
+        return None
+    if sum(len(slots) for _, slots in parts) > _MAX_SLOTS:
+        return None
+    return "".join(text for text, _ in parts), [slot for _, slots in parts for slot in slots]
 
 
-def _inputs_reaching_host(expr: ast.AST, inputs: dict[str, frozenset[str]]) -> set[str]:
-    """The handler inputs that can change WHICH SERVICE the request goes to.
+def _skeleton(expr: ast.AST, state: _State) -> tuple[str, list[set[str]]] | None:
+    if isinstance(expr, ast.Constant):
+        # A literal NUL must not be confused with one of our own placeholders.
+        if isinstance(expr.value, str) and _MARKER not in expr.value:
+            return expr.value, []
+        return None
+    if isinstance(expr, ast.Name):
+        return state.values.get(expr.id)
+    read = _request_read(expr, state)
+    if read:
+        return _MARKER, [read]
+    if isinstance(expr, ast.Subscript):
+        source = _skeleton(expr.value, state)
+        # A JSON/query value can be indexed; do not turn a fixed-host URL local
+        # into a caller-controlled whole URL merely because it has a subscript.
+        key = _field_key(expr.slice)
+        if source and source[0] == _MARKER and key:
+            return _MARKER, [{f"{origin}[{key}]" for origin in source[1][0]}]
+        return None
+    if isinstance(expr, ast.JoinedStr):
+        parts = []
+        for value in expr.values:
+            if isinstance(value, ast.Constant):
+                sub = _skeleton(value, state)
+            elif isinstance(value, ast.FormattedValue) and value.format_spec is None:
+                sub = _skeleton(value.value, state)
+            else:
+                return None
+            if sub is None:
+                return None
+            parts.append(sub)
+        return _combine(parts)
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+        left, right = _skeleton(expr.left, state), _skeleton(expr.right, state)
+        return _combine([left, right]) if left is not None and right is not None else None
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Mod):
+        if not isinstance(expr.left, ast.Constant) or not isinstance(expr.left.value, str):
+            return None
+        template = expr.left.value
+        args = list(expr.right.elts) if isinstance(expr.right, ast.Tuple) else [expr.right]
+        mapping = {}
+        if isinstance(expr.right, ast.Dict):
+            mapping = {key.value: value for key, value in zip(expr.right.keys, expr.right.values)
+                       if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+        parts, offset, index = [], 0, 0
+        for match in _PERCENT.finditer(template):
+            literal = template[offset:match.start()]
+            if "%" in literal:
+                return None
+            parts.append((literal, []))
+            if match.group() == "%%":
+                parts.append(("%", []))
+            else:
+                key = match.group("key")
+                value = mapping.get(key) if key else args[index] if index < len(args) else None
+                if not key:
+                    index += 1
+                sub = _skeleton(value, state) if value is not None else None
+                if sub is None:
+                    return None
+                parts.append(sub)
+            offset = match.end()
+        if "%" in template[offset:]:
+            return None
+        parts.append((template[offset:], []))
+        return _combine(parts)
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "format":
+        receiver = expr.func.value
+        if not isinstance(receiver, ast.Constant) or not isinstance(receiver.value, str):
+            return None
+        keywords = {kw.arg: kw.value for kw in expr.keywords if kw.arg is not None}
+        parts, auto = [], 0
+        try:
+            for literal, name, spec, conversion in string.Formatter().parse(receiver.value):
+                parts.append((literal, []))
+                if name is None:
+                    continue
+                if spec or conversion:
+                    return None
+                if not name:
+                    name = str(auto)
+                    auto += 1
+                value = expr.args[int(name)] if name.isdigit() and int(name) < len(expr.args) else keywords.get(name)
+                sub = _skeleton(value, state) if value is not None else None
+                if sub is None:
+                    return None
+                parts.append(sub)
+        except (ValueError, OverflowError):
+            return None
+        return _combine(parts)
+    if isinstance(expr, ast.Call) and _qualified(expr.func, state.bindings) == "urllib.parse.urljoin":
+        args = {kw.arg: kw.value for kw in expr.keywords}
+        base_expr = expr.args[0] if expr.args else args.get("base")
+        other_expr = expr.args[1] if len(expr.args) > 1 else args.get("url")
+        base = _skeleton(base_expr, state) if base_expr is not None else None
+        other = _skeleton(other_expr, state) if other_expr is not None else None
+        if base is None or other is None:
+            return None
+        text, slots = other
+        # An absolute second URL replaces the base, including its host.
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", text) or text.startswith("//"):
+            return other
+        prefix = text.split(_MARKER, 1)[0]
+        # A value at the beginning can supply a scheme or //host. Even /{value}
+        # is unsafe: value=/other-host becomes a network-path reference.
+        scheme_prefixes = {"http", "https", "http:", "https:", "http:/", "https:/"}
+        if slots and (not prefix or prefix == "/" or prefix in scheme_prefixes):
+            origins = set().union(*slots)
+            return _MARKER, [origins | _host_inputs(base)]
+        return _combine([base, ("/", []), other])
+    # Unknown calls may validate/transform a value. Never infer their result.
+    return None
 
-    This is the whole difference between the two f-strings a text scan cannot
-    tell apart: `https://api.example.com/items/{sku}` puts the caller's value in
-    the path, and `http://{host}/status` lets the caller pick the host. Only the
-    second is reported.
-    """
-    built = _skeleton(expr, inputs)
-    if built is None:
-        return set()
+
+def _host_inputs(built: tuple[str, list[set[str]]]) -> set[str]:
     template, slots = built
-    start, end = _authority_bounds(template)
-    reaching: set[str] = set()
-    position = -1
-    for names in slots:
+    scheme = template.find("://")
+    start = scheme + 3 if scheme >= 0 else 2 if template.startswith("//") else 0
+    end = min((pos for char in "/?#" if (pos := template.find(char, start)) >= 0), default=len(template))
+    result, position = set(), -1
+    for origins in slots:
         position = template.find(_MARKER, position + 1)
-        if position == -1:
+        # A caller-provided prefix before a literal scheme may itself include a
+        # complete URL. It must not disappear just because :// occurs later.
+        if position < 0:
             break
-        if start <= position < end:
-            reaching |= names
-    return reaching
+        if position < end and (position >= start or scheme >= 0):
+            result |= origins
+    return result
 
 
-def _visible_validation(fn: ast.FunctionDef | ast.AsyncFunctionDef, names: set[str],
-                        url_expr: ast.AST) -> bool:
-    """Is a check on the value that reaches the host visible in this function?
+def _client_type(expr: ast.AST, state: _State) -> str:
+    if isinstance(expr, ast.Call):
+        constructor = _qualified(expr.func, state.bindings)
+        return constructor if constructor in _CONSTRUCTORS else ""
+    bound = _qualified(expr, state.bindings)
+    return bound.removeprefix("client:") if bound.startswith("client:") else ""
 
-    Three shapes count, and all of them are readings of the source rather than
-    proof of safety: a call whose own name says it validates and which is handed
-    one of the names; a guarded branch whose condition inspects one of them
-    (`if not host.startswith("api.")`); and a comparison against a literal or a
-    named collection (`if host in ALLOWED_HOSTS`). All three are about the value
-    that reaches the host, so a check on some other parameter does not silence
-    the finding. A check in a helper, a wrapper, a proxy or a network policy is
-    invisible here, and the finding says so rather than assuming it away.
+
+def _outbound_argument(call: ast.Call, state: _State) -> tuple[ast.AST, bool] | None:
+    qualified = _qualified(call.func, state.bindings)
+    constructor = qualified in _CONSTRUCTORS
+    if constructor:
+        keys = {"host"} if qualified.startswith("http.client.") else {"base_url"}
+        positional = 0 if qualified.startswith("http.client.") or qualified == "aiohttp.ClientSession" else None
+    elif qualified in _URL_FUNCTIONS:
+        keys, positional = {"url", "fullurl"}, 0
+    elif isinstance(call.func, ast.Attribute) and call.func.attr in _METHODS:
+        module = _qualified(call.func.value, state.bindings)
+        client = _client_type(call.func.value, state)
+        if module not in _HTTP_MODULES and not client:
+            return None
+        # HTTPConnection.request receives a path. The host sink is its constructor.
+        if client.startswith("http.client."):
+            return None
+        keys, positional = {"url"}, 1 if call.func.attr in {"request", "stream"} else 0
+    elif qualified.rsplit(".", 1)[0] in _HTTP_MODULES and qualified.rsplit(".", 1)[-1] in _METHODS:
+        keys, positional = {"url"}, 1 if qualified.rsplit(".", 1)[-1] in {"request", "stream"} else 0
+    else:
+        return None
+    for keyword in call.keywords:
+        if keyword.arg in keys:
+            return keyword.value, constructor
+    if positional is not None and len(call.args) > positional:
+        return call.args[positional], constructor
+    return None
+
+
+def _request_inputs(fn: ast.FunctionDef | ast.AsyncFunctionDef, state: _State) -> None:
+    positional = [*fn.args.posonlyargs, *fn.args.args]
+    defaults = [None] * (len(positional) - len(fn.args.defaults)) + list(fn.args.defaults)
+    arguments = list(zip(positional, defaults)) + list(zip(fn.args.kwonlyargs, fn.args.kw_defaults))
+    for arg, default in arguments:
+        state.bindings.pop(arg.arg, None)
+        annotation = arg.annotation
+        if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+            try:
+                annotation = ast.parse(annotation.value, mode="eval").body
+            except (SyntaxError, ValueError, RecursionError):
+                annotation = None
+        annotations = list(_walk(annotation)) if annotation is not None else []
+        if any(isinstance(node, ast.Call) and _qualified(node.func, state.bindings) in _DEPENDENCIES
+               for node in annotations) or (isinstance(default, ast.Call)
+                                            and _qualified(default.func, state.bindings) in _DEPENDENCIES):
+            continue
+        if (isinstance(annotation, ast.Subscript)
+                and _qualified(annotation.value, state.bindings) in {"typing.Annotated", "typing_extensions.Annotated"}
+                and isinstance(annotation.slice, ast.Tuple) and annotation.slice.elts):
+            annotation = annotation.slice.elts[0]
+        if _qualified(annotation, state.bindings) in _REQUEST_TYPES:
+            state.requests.add(arg.arg)
+            continue
+        if arg.arg not in {"self", "cls"}:
+            # A literal default is still a caller-overridable FastAPI parameter.
+            state.values[arg.arg] = (_MARKER, [{arg.arg}])
+
+
+def _import(stmt: ast.Import | ast.ImportFrom, state: _State) -> None:
+    if isinstance(stmt, ast.Import):
+        for alias in stmt.names:
+            local = alias.asname or alias.name.split(".")[0]
+            state.bindings[local] = alias.name if alias.asname else local
+    elif stmt.level == 0:
+        for alias in stmt.names:
+            if alias.name != "*":
+                state.bindings[alias.asname or alias.name] = f"{stmt.module}.{alias.name}"
+
+
+def _bind(target: ast.AST, value: ast.AST | None, state: _State) -> None:
+    if not isinstance(target, ast.Name):
+        for name in _referenced_names(target):
+            state.values.pop(name, None)
+            state.bindings.pop(name, None)
+            state.checked.discard(name)
+        return
+    name = target.id
+    built = _skeleton(value, state) if value is not None else None
+    client = _client_type(value, state) if value is not None else ""
+    qualified = _qualified(value, state.bindings) if value is not None else ""
+    router = isinstance(value, ast.Call) and _qualified(value.func, state.bindings) in _ROUTERS
+    request = isinstance(value, ast.Name) and value.id in state.requests
+    # Rebinding an origin invalidates earlier checks of that source.
+    old_origins = set().union(*state.values.get(name, ("", []))[1])
+    state.checked -= old_origins | {name}
+    state.values.pop(name, None)
+    state.bindings.pop(name, None)
+    state.requests.discard(name)
+    if built is not None:
+        state.values[name] = built
+    if client:
+        state.bindings[name] = "client:" + client
+    elif router:
+        state.bindings[name] = "router"
+    elif qualified:
+        state.bindings[name] = qualified
+    if request:
+        state.requests.add(name)
+
+
+def _checked_names(expr: ast.AST, state: _State) -> set[str]:
+    value = _skeleton(expr, state)
+    if value is not None:
+        return set().union(*value[1])
+    # Preserve field identity: checking request.email must not check request.url.
+    # Unknown attributes/subscripts are not collapsed back to their container.
+    if isinstance(expr, (ast.Attribute, ast.Subscript)):
+        return set()
+    if isinstance(expr, ast.Call):
+        children = [*expr.args, *(kw.value for kw in expr.keywords)]
+        if isinstance(expr.func, ast.Attribute):
+            children.append(expr.func.value)
+    else:
+        children = list(ast.iter_child_nodes(expr))
+    names = set()
+    for child in children:
+        names |= _checked_names(child, state)
+    return names
+
+
+def _check_call(expr: ast.AST, state: _State) -> set[str]:
+    # Only a standalone, preceding check is considered. An unknown builder used
+    # as the URL expression stops tracing; it is not evidence of validation.
+    if isinstance(expr, ast.Await):
+        expr = expr.value
+    if isinstance(expr, ast.Call) and any(word in _attr_name(expr.func).lower() for word in _VALIDATION_WORDS):
+        return _checked_names(expr, state)
+    return set()
+
+
+def _terminates(body: list[ast.stmt]) -> bool:
+    return bool(body) and isinstance(body[-1], (ast.Raise, ast.Return))
+
+
+def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[CheckFinding]) -> None:
+    for stmt in body:
+        if len(findings) >= _MAX_FINDINGS:
+            return
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            state.bindings.pop(stmt.name, None)
+            state.values.pop(stmt.name, None)
+            continue
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            _import(stmt, state)
+            continue
+        # Handle control-flow bodies independently. Only checks on the executed
+        # path apply; a later/nested/dead check cannot suppress an earlier sink.
+        if isinstance(stmt, ast.If):
+            _scan_expr(stmt.test, state, path, findings)
+            inspected = (_checked_names(stmt.test, state)
+                         if _test_inspects(stmt.test, set(state.values) | state.requests) else set())
+            branch_states = []
+            for branch in (stmt.body, stmt.orelse):
+                branch_state = state.copy()
+                branch_state.checked |= inspected
+                _scan_block(branch, branch_state, path, findings)
+                if not _terminates(branch):
+                    branch_states.append(branch_state)
+            if not branch_states:
+                return
+            if len(branch_states) > 1:
+                for branch_state in branch_states:
+                    branch_state.checked -= inspected - state.checked
+            _join_states(state, branch_states)
+            continue
+        if isinstance(stmt, (ast.With, ast.AsyncWith)):
+            for item in stmt.items:
+                _scan_expr(item.context_expr, state, path, findings)
+                if item.optional_vars:
+                    _bind(item.optional_vars, item.context_expr, state)
+            _scan_block(stmt.body, state, path, findings)
+            continue
+        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While, ast.Try, ast.TryStar, ast.Match)):
+            # These control-flow joins are outside this deliberately small trace.
+            # Scan each lexical arm in isolation, and forget locals assigned by
+            # the construct before scanning subsequent statements.
+            for child in ast.iter_child_nodes(stmt):
+                if isinstance(child, ast.expr):
+                    _scan_expr(child, state, path, findings)
+            bodies = [getattr(stmt, key, []) for key in ("body", "orelse", "finalbody")]
+            bodies += [handler.body for handler in getattr(stmt, "handlers", [])]
+            bodies += [case.body for case in getattr(stmt, "cases", [])]
+            for branch in bodies:
+                branch_state = state.copy()
+                if isinstance(stmt, (ast.For, ast.AsyncFor)):
+                    _bind(stmt.target, None, branch_state)
+                for handler in getattr(stmt, "handlers", []):
+                    if handler.body is branch and handler.name:
+                        _bind(ast.Name(id=handler.name), None, branch_state)
+                for case in getattr(stmt, "cases", []):
+                    if case.body is branch:
+                        for node in _walk(case.pattern):
+                            name = getattr(node, "name", None) or getattr(node, "rest", None)
+                            if isinstance(name, str):
+                                _bind(ast.Name(id=name), None, branch_state)
+                _scan_block(branch, branch_state, path, findings)
+            for node in _walk(stmt):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    _bind(node, None, state)
+            continue
+        _scan_expr(stmt, state, path, findings)
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                _bind(target, stmt.value, state)
+        elif isinstance(stmt, ast.AnnAssign):
+            _bind(stmt.target, stmt.value, state)
+        elif isinstance(stmt, ast.AugAssign):
+            _bind(stmt.target, None, state)
+        elif isinstance(stmt, ast.Expr):
+            state.checked |= _check_call(stmt.value, state)
+        elif isinstance(stmt, ast.Assert) and _test_inspects(stmt.test, set(state.values) | state.requests):
+            state.checked |= _checked_names(stmt.test, state)
+        elif isinstance(stmt, (ast.Return, ast.Raise)):
+            return
+
+
+def _join_states(state: _State, branches: list[_State]) -> None:
+    # Retain only facts shared by every continuing path; unknown merges stop the
+    # trace instead of manufacturing an unproven data-flow relationship.
+    first = branches[0]
+    state.values = {key: value for key, value in first.values.items()
+                    if all(branch.values.get(key) == value for branch in branches[1:])}
+    state.bindings = {key: value for key, value in first.bindings.items()
+                      if all(branch.bindings.get(key) == value for branch in branches[1:])}
+    state.requests = set.intersection(*(branch.requests for branch in branches))
+    state.checked = set.intersection(*(branch.checked for branch in branches))
+
+
+def _scan_expr(expr: ast.AST, state: _State, path: str, findings: list[CheckFinding]) -> None:
+    for call in _walk(expr):
+        if len(findings) >= _MAX_FINDINGS:
+            return
+        if not isinstance(call, ast.Call):
+            continue
+        outbound = _outbound_argument(call, state)
+        if outbound is None:
+            continue
+        url, constructor = outbound
+        built = _skeleton(url, state)
+        reaching = _host_inputs(built) if built is not None else set()
+        if reaching and not reaching <= state.checked:
+            findings.append(_finding(path, call, reaching, constructor))
+
+
+def _forget_stores(stmt: ast.AST, state: _State) -> None:
+    """Discard provenance changed by syntax whose value we cannot trace."""
+    pending = [stmt]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _bind(ast.Name(id=node.name), None, state)
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            _bind(node, None, state)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            _bind(ast.Name(id=node.name), None, state)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            _bind(ast.Name(id=node.name), None, state)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            _bind(ast.Name(id=node.rest), None, state)
+        pending.extend(ast.iter_child_nodes(node))
+
+
+def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
+                       findings: list[CheckFinding]) -> None:
+    """Discover routes inside lexical factories without following any calls.
+
+    Factory arguments have unknown provenance; only the nested handler's own
+    request inputs enter its trace. Unsupported scope/assignment forms discard
+    imported names instead of pretending the original HTTP binding survived.
     """
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Call):
-            callee = _attr_name(node.func).lower()
-            if any(word in callee for word in _VALIDATION_WORDS):
-                passed: set[str] = set()
-                for arg in [*node.args, *(kw.value for kw in node.keywords)]:
-                    passed |= _referenced_names(arg)
-                if passed & names:
-                    return True
-        if isinstance(node, (ast.If, ast.While, ast.Assert)) and _test_inspects(node.test, names):
-            return True
-    return False
+    for stmt in body:
+        if len(findings) >= _MAX_FINDINGS:
+            return
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            _import(stmt, state)
+        elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            for target in targets:
+                _bind(target, stmt.value, state)
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+                   and dec.func.attr in _METHODS | {"route", "api_route", "websocket"}
+                   and _qualified(dec.func.value, state.bindings) == "router"
+                   for dec in stmt.decorator_list):
+                local = state.copy()
+                _request_inputs(stmt, local)
+                _scan_block(stmt.body, local, path, findings)
+            # A factory is inspected lexically, never called. This also sees a
+            # factory nested in another factory, within the file's AST budget.
+            nested = state.copy()
+            args = [*stmt.args.posonlyargs, *stmt.args.args, *stmt.args.kwonlyargs]
+            args += [arg for arg in (stmt.args.vararg, stmt.args.kwarg) if arg is not None]
+            for arg in args:
+                _bind(ast.Name(id=arg.arg), None, nested)
+            _scan_declarations(stmt.body, nested, path, findings)
+            _bind(ast.Name(id=stmt.name), None, state)
+        else:
+            _forget_stores(stmt, state)
+
+
+def scan_outbound_url(fileobj: BinaryIO) -> list[CheckFinding]:
+    findings: list[CheckFinding] = []
+    with zipfile.ZipFile(fileobj) as archive:
+        count = 0
+        for info in archive.infolist():
+            if (not info.filename.endswith(".py") or info.is_dir() or info.file_size > _MAX_FILE_BYTES
+                    or is_non_production_path(info.filename)):
+                continue
+            count += 1
+            if count > _MAX_FILES or len(findings) >= _MAX_FINDINGS:
+                break
+            try:
+                tree = ast.parse(archive.read(info).decode("utf-8"))
+            except (SyntaxError, UnicodeError, ValueError, RecursionError):
+                continue
+            if not _bounded_tree(tree):
+                continue
+            _scan_declarations(tree.body, _State(), info.filename, findings)
+    return findings
+
+
+def _finding(path: str, call: ast.Call, reaching: set[str], constructor: bool) -> CheckFinding:
+    names = ", ".join(sorted(reaching))
+    action = "client address configured" if constructor else "outbound address passed"
+    return CheckFinding(
+        rule_id=RULE_ID,
+        title="Outbound request built from request input",
+        severity="high",
+        confidence=0.7,
+        category="Security",
+        file=path,
+        line=call.lineno,
+        explanation=(
+            f"The {action} at {_attr_name(call.func)}() on line {call.lineno} contains "
+            f"request input ({names}) in a position that can influence the URL authority. "
+            "No recognised preceding address check was found on this local path. If that "
+            "value is not constrained elsewhere, a later request could reach an unintended "
+            "service, including internal or cloud metadata endpoints. This is an unverified "
+            "source signal, not proof that a request was sent or an SSRF is exploitable. "
+            "The value is traced only inside this function; unknown calls, complex control "
+            "flow, helpers, redirects, DNS and network policies are outside this trace."
+        ),
+        fix_hint=(
+            "Validate the final URL immediately before use against the expected schemes and "
+            "hosts. Reject unexpected resolved addresses, including private and link-local "
+            "ranges, and recheck redirect destinations. Build the URL from validated parts."
+        ),
+    )
 
 
 def _test_inspects(test: ast.AST, names: set[str]) -> bool:
@@ -419,7 +638,7 @@ def _test_inspects(test: ast.AST, names: set[str]) -> bool:
     A bare truthiness test (`if host:`) is not, and neither is a condition that
     never mentions the value.
     """
-    for node in ast.walk(test):
+    for node in _walk(test):
         if isinstance(node, ast.Compare) and _referenced_names(node) & names:
             operands = [node.left, *node.comparators]
             if any(_is_a_comparison_target(operand) and not _is_one_of(operand, names)
@@ -459,161 +678,3 @@ def _is_a_comparison_target(node: ast.AST) -> bool:
         lowered = node.id.lower()
         return node.id.isupper() or any(word in lowered for word in _COMPARISON_TARGET_WORDS)
     return False
-
-
-def _url_argument(call: ast.Call) -> ast.AST | None:
-    """The argument that becomes the target address."""
-    for keyword in call.keywords:
-        if keyword.arg in ("url", "uri", "target", "endpoint", "base_url"):
-            return keyword.value
-    if _attr_name(call.func) == "request" and not isinstance(call.func, ast.Attribute):
-        # requests.request(method, url, ...)
-        return call.args[1] if len(call.args) > 1 else None
-    if _attr_name(call.func) in _ADDRESS_CONSTRUCTORS:
-        # HTTPConnection(host), ClientSession() -- no positional address means
-        # the client is configured later or not at all.
-        return call.args[0] if call.args else None
-    return call.args[0] if call.args else None
-
-
-def _is_a_client(expr: ast.AST, clients: set[str]) -> bool:
-    """Is this receiver an HTTP client?
-
-    A local assigned from a constructor, a client-shaped name, a module-rooted
-    path (`urllib.request`), or a constructor called INLINE
-    (`aiohttp.ClientSession().get(...)`) -- the hunt produced that last one, and
-    every shape here is a reading of the name, which is what the finding admits
-    to.
-    """
-    if isinstance(expr, ast.Name):
-        return expr.id in clients or expr.id in _CLIENT_NAMES
-    if isinstance(expr, ast.Call):
-        return _attr_name(expr.func) in _ADDRESS_CONSTRUCTORS
-    rooted: ast.AST = expr
-    while isinstance(rooted, ast.Attribute):
-        rooted = rooted.value
-    return _name(rooted) in _CLIENT_NAMES
-
-
-def _outbound_calls(fn: ast.FunctionDef | ast.AsyncFunctionDef, clients: set[str]):
-    """(call, address expression) for every outbound request made in this function."""
-    for node in ast.walk(fn):
-        if not isinstance(node, ast.Call):
-            continue
-        callee = _attr_name(node.func)
-        if callee in _OUTBOUND_FUNCTIONS:
-            url = _url_argument(node)
-            if url is not None:
-                yield node, url
-            continue
-        if callee in _ADDRESS_CONSTRUCTORS:
-            url = _url_argument(node)
-            if url is not None:
-                yield node, url
-            continue
-        if callee not in _OUTBOUND_METHODS:
-            continue
-        if not isinstance(node.func, ast.Attribute):
-            continue
-        if _is_a_client(node.func.value, clients):
-            url = _url_argument(node)
-            if url is not None:
-                yield node, url
-
-
-def scan_outbound_url(fileobj: BinaryIO) -> list[CheckFinding]:
-    findings: list[CheckFinding] = []
-    with zipfile.ZipFile(fileobj) as archive:
-        infos = [i for i in archive.infolist()
-                 if i.filename.endswith(".py") and not i.is_dir()
-                 and i.file_size <= _MAX_FILE_BYTES and not is_non_production_path(i.filename)]
-        for info in infos[:_MAX_FILES]:
-            if len(findings) >= _MAX_FINDINGS:
-                break
-            try:
-                tree = ast.parse(archive.read(info).decode("utf-8"))
-            except (SyntaxError, UnicodeError, ValueError, RecursionError):
-                # An unparseable file is not a clean file; it is one this rule
-                # could not read. Skipping is the honest answer, and the check
-                # key's coverage text says parseable files only.
-                continue
-            for fn in ast.walk(tree):
-                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                findings.extend(_function_findings(fn, info.filename))
-                if len(findings) >= _MAX_FINDINGS:
-                    break
-    return findings
-
-
-def _function_findings(fn: ast.FunctionDef | ast.AsyncFunctionDef, path: str) -> list[CheckFinding]:
-    if not _declares_a_route(fn):
-        return []
-    inputs, _ = _request_inputs(fn)
-    if not inputs:
-        return []
-    clients = _local_clients(fn)
-    findings = []
-    for call, url_expr in _outbound_calls(fn, clients):
-        reaching = _inputs_reaching_host(url_expr, inputs)
-        if not reaching:
-            continue
-        # A check may name the parameter or the local the handler copied it into,
-        # so both are offered to the validation reader.
-        carried = set(reaching) | {name for name, origin in inputs.items() if origin & reaching}
-        if _visible_validation(fn, carried, url_expr):
-            continue
-        findings.append(_finding(path, call, reaching, _attr_name(call.func)))
-    return findings
-
-
-def _declares_a_route(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Does this function declare an HTTP route?
-
-    The route decorator is what makes the parameters caller-controlled rather
-    than whatever the author passed. A helper called by a handler is out of scope
-    on purpose, and the finding's text says the trace stops inside one function.
-    """
-    for decorator in fn.decorator_list:
-        if not isinstance(decorator, ast.Call):
-            continue
-        if not isinstance(decorator.func, ast.Attribute):
-            continue
-        if decorator.func.attr in {"delete", "get", "head", "options", "patch", "post", "put",
-                                  "route", "websocket"}:
-            return True
-    return False
-
-
-def _finding(path: str, call: ast.Call, reaching: set[str], callee: str) -> CheckFinding:
-    names = ", ".join(sorted(reaching))
-    return CheckFinding(
-        rule_id=RULE_ID,
-        title="Outbound request built from request input",
-        severity="high",
-        # Not critical, and not lower. The source fact is certain -- ast saw the
-        # interpolation and saw which parameter it came from. What is uncertain
-        # is whether anything outside this function already restrains the value,
-        # which this rule does not read. 0.7 is that split: a real defect in the
-        # code, unproven as a reachable exploit.
-        confidence=0.7,
-        category="Security",
-        file=path,
-        line=call.lineno,
-        explanation=(
-            f"The address handed to {callee}() at line {call.lineno} is assembled from "
-            f"{names}, which this handler receives from the request, and no check on that "
-            "address was visible in the same function. A caller who controls that value can "
-            "choose what the server fetches -- an internal address, a cloud metadata "
-            "endpoint, or a service that trusts this host's network position. Whether the "
-            "value is constrained elsewhere (a wrapper, a proxy, a network policy) has NOT "
-            "been verified; the assembly and the absence of a local check are what was "
-            "observed. The value is traced only inside this function."
-        ),
-        fix_hint=(
-            "Check the value immediately before the call: allow only the scheme and hosts you "
-            "expect (https, and a fixed host list), refuse private ranges and link-local "
-            "addresses, and do the check on the RESOLVED host rather than the string. Build "
-            "the URL from the validated parts instead of interpolating the raw value."
-        ),
-    )
