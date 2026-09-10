@@ -136,6 +136,126 @@ def test_python_reaching_query_values(source, lines):
 
 @pytest.mark.parametrize("source, lines", [
     pytest.param('''
+        def recover(conn, request, apply):
+            suffix = " FOR UPDATE" if apply else ""
+            conn.execute("SELECT id FROM payments WHERE id = %s" + suffix,
+                         (request.payment_id,))
+            conn.execute("SELECT id FROM fixpack_jobs WHERE id = %s" + suffix,
+                         (request.job_id,))
+    ''', [], id="recovery-lock-suffix-with-separate-parameters"),
+    pytest.param('''
+        cur.execute("SELECT * FROM users WHERE id = %s" + (" FOR UPDATE" if apply else ""),
+                    (user_id,))
+    ''', [], id="inline-fixed-suffix"),
+    pytest.param('''
+        suffix = " FOR UPDATE" if apply else ""
+        query = f"SELECT * FROM users WHERE id = %s{suffix}"
+        cur.execute(query, (user_id,))
+    ''', [], id="fixed-suffix-through-f-string"),
+    pytest.param('''
+        LOCK = " FOR UPDATE"
+        suffix = LOCK if apply else ""
+        cur.execute("SELECT * FROM users WHERE id = %s" + suffix, (user_id,))
+    ''', [], id="proven-literal-name-in-arm"),
+    pytest.param('''
+        suffix = " FOR UPDATE" if apply else (" FOR SHARE" if shared else "")
+        cur.execute("SELECT * FROM users WHERE id = %s" + suffix, (user_id,))
+    ''', [], id="nested-fixed-choices"),
+    pytest.param('''
+        suffix = " FOR UPDATE" if request.args.get("lock") else ""
+        cur.execute("SELECT * FROM users WHERE id = %s" + suffix, (user_id,))
+    ''', [], id="input-selects-only-fixed-fragments"),
+    pytest.param('''
+        suffix = " FOR UPDATE" if apply else request.args.get("suffix")
+        cur.execute("SELECT * FROM users WHERE id = %s" + suffix, (user_id,))
+    ''', [2], id="unsafe-alternate-arm"),
+    pytest.param('''
+        suffix = request.args.get("suffix") if apply else ""
+        cur.execute("SELECT * FROM users WHERE id = %s" + suffix, (user_id,))
+    ''', [2], id="unsafe-body-arm"),
+    pytest.param('''
+        suffix = " FOR UPDATE" if apply else ""
+        suffix = request.args.get("suffix")
+        cur.execute("SELECT * FROM users WHERE id = %s" + suffix, (user_id,))
+    ''', [3], id="reassigned-fixed-choice-is-not-trusted"),
+    pytest.param('''
+        suffix = " FOR UPDATE"
+        def query(cur, suffix, apply):
+            cur.execute("SELECT * FROM users" + (suffix if apply else ""))
+    ''', [3], id="parameter-shadows-literal-arm"),
+    pytest.param('''
+        suffix = request.args.get("suffix")
+        cur.execute("SELECT * FROM users" + (suffix if apply else ""))
+    ''', [2], id="unknown-name-in-arm"),
+    pytest.param('''
+        query = "SELECT * FROM users WHERE id = " + user_id if filtered else "SELECT 1"
+        cur.execute(query)
+    ''', [2], id="conditional-query-preserves-unsafe-assembly"),
+    pytest.param('''
+        cur.execute("SELECT 1" if safe else "SELECT * FROM users WHERE id = " + user_id)
+    ''', [1], id="direct-conditional-query-preserves-unsafe-assembly"),
+    pytest.param('''
+        suffix = user_input
+        suffix if apply else (suffix := " FOR UPDATE")
+        cur.execute("SELECT * FROM users" + suffix)
+    ''', [3], id="walrus-arm-cannot-erase-skipped-unsafe-value"),
+    pytest.param('''
+        suffix = " FOR UPDATE"
+        (suffix := user_input) if apply else (suffix := "")
+        cur.execute("SELECT * FROM users" + suffix)
+    ''', [3], id="walrus-arms-remain-separate-paths"),
+    pytest.param('''
+        query = "SELECT * FROM users WHERE id = " + user_id
+        query if filtered else (query := "SELECT 1")
+        cur.execute(query)
+    ''', [3], id="conditional-side-effects-preserve-assembly-origin"),
+    pytest.param('''
+        suffix = user_input
+        query = f"SELECT * FROM users{suffix}" if apply else (suffix := "SELECT 1")
+        cur.execute(query)
+    ''', [3], id="query-arm-observes-value-before-other-arm-walrus"),
+    pytest.param('''
+        suffix = " FOR UPDATE"
+        cur.execute("SELECT * FROM users" + (suffix if (suffix := user_input) else ""))
+    ''', [2], id="condition-walrus-invalidates-literal-arm"),
+    pytest.param('''
+        suffix = user_input
+        cur.execute("SELECT * FROM users" + (suffix if (apply or (suffix := "")) else ""))
+    ''', [2], id="short-circuit-condition-cannot-prove-literal-arm"),
+    pytest.param('''
+        suffix = user_input
+        apply and (suffix := " FOR UPDATE")
+        cur.execute("SELECT * FROM users" + (suffix if locked else ""))
+    ''', [3], id="short-circuit-assignment-may-not-run"),
+    pytest.param('''
+        suffix = user_input
+        cur.execute("SELECT * FROM users" + (suffix if apply else ""),
+                    (suffix := " FOR UPDATE",))
+    ''', [2], id="later-argument-cannot-retroactively-sanitize-query"),
+    pytest.param('''
+        suffix = user_input
+        cur.execute("SELECT * FROM users WHERE id = %s" + (" FOR UPDATE" if (suffix := "") else ""),
+                    (user_id,))
+    ''', [], id="condition-side-effect-does-not-taint-fixed-arms"),
+    pytest.param('''
+        suffix = user_input
+        cur.execute(f"SELECT * FROM users{suffix}{'' if (suffix := ' FOR UPDATE') else ''}")
+    ''', [2], id="later-condition-cannot-sanitize-earlier-f-string-part"),
+    pytest.param('''
+        suffix = user_input
+        cur.execute("SELECT * FROM users" + suffix + ("" if (suffix := " FOR UPDATE") else ""))
+    ''', [2], id="later-condition-cannot-sanitize-earlier-concatenation"),
+    pytest.param('''
+        suffix = user_input
+        cur.execute(" ".join(("SELECT * FROM users", suffix, "" if (suffix := " FOR UPDATE") else "")))
+    ''', [2], id="literal-helper-cannot-reinterpret-earlier-join-element"),
+])
+def test_python_conditional_sql_fragments(source, lines):
+    assert [finding.line for finding in scan(source, "py")] == lines
+
+
+@pytest.mark.parametrize("source, lines", [
+    pytest.param('''
         const key = "user:" + userId;
         new Map().get(key);
         cache.get(key);

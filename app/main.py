@@ -1270,10 +1270,11 @@ async def _deep_review_section(
             f"?token={access_token}")
     return (
         "### Your full review\n\n"
-        "Your free audit was a static scan. This one adds the depth it left "
-        "out -- authentication and access rules, injection risk in your "
-        "queries -- and carries a readiness score, which a static-only audit "
-        "deliberately does not:\n\n"
+        "The free audit includes static checks and a limited model security "
+        "preview when available. This review adds broader model analysis of "
+        "authentication, access rules and security risks in selected code. "
+        "The report states its source coverage and verification limits; it "
+        "does not establish that every file or vulnerability was covered:\n\n"
         f"{link}\n\n"
         "It was run against the code fetched for this pull request, so it "
         "reflects your repository as it is now, not as it was when you first "

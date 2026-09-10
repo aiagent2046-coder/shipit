@@ -3,62 +3,39 @@ import { AuditForm } from "@/components/AuditForm";
 import { DemoReport } from "@/components/DemoReport";
 
 /**
- * Landing copy. Two rules held on purpose.
- *
- * 1. Everything listed here maps to something the pipeline actually runs: the
- *    static checks in app/scan/checks.py (env-file-committed,
- *    gitignore-missing-secrets, no-tests, no-ci, no-dockerfile), the secret
- *    rules in app/scan/secrets.py, and the two LLM rubrics in
- *    app/scan/llm_scan.py (auth, security). Nothing aspirational, and the
- *    Correctness and Config score categories are not advertised because no
- *    producer assigns findings to them yet.
- *
- * 2. The free/paid line is stated together with what the paid thing does and
- *    does not change. The previous copy named "missing auth" and "no tests"
- *    and then said it "ships the fix as a pull request", which reads as a
- *    promise to fix those. A Fix Pack rewrites secrets and secret hygiene
- *    (FixpackPlan carries exactly secret_fixes and config_fixes) and touches
- *    nothing else. Selling the wider promise is how you earn a refund from
- *    someone who trusted you.
+ * Keep scope aligned with app/scan/static.py and app/scan/pipeline.py:
+ * anonymous audits run static checks plus a limited security model preview
+ * when available. The full auth/security model review is included in Fix Pack.
+ * Detection coverage and the set of supported automatic fixes are different.
  *
  * No prices here: /pricing owns the numbers so they change in one place.
  */
 
-// `free` marks what the static scan finds on its own. The two that are not free
-// are the LLM rubrics in app/scan/llm_scan.py, which anonymous audits no longer
-// run: they cost about $0.81 an audit, where everything else costs nothing.
-// Flagged item by item rather than hidden, because a visitor who reads this list
-// and then gets four of the six has been misled by omission.
-const LOOKS_FOR: { title: string; body: string; free: boolean }[] = [
+// Examples of supported static checks, not a promise of exhaustive coverage.
+const LOOKS_FOR: { title: string; body: string }[] = [
   {
     title: "Credentials sitting in the code",
-    free: true,
     body: "AWS keys, GitHub tokens, Stripe live keys, Supabase service keys, bot tokens, private keys — committed to the repository, where anyone who gets the code gets them too.",
   },
   {
     title: "Secrets that slipped into git",
-    free: true,
     body: "A .env committed by mistake, or a .gitignore that never covered the files holding your keys. Both are quiet until they aren't.",
   },
   {
-    title: "Authentication that isn't",
-    free: false,
-    body: "Routes that change data without checking who asked, hand-rolled token verification, passwords compared without hashing, a server trusting whatever user id the browser sends it, row-level security left switched off.",
+    title: "Access checks that may be missing",
+    body: "Inconsistent identity checks between related Python/FastAPI routes, and supported Supabase patterns where row-level security is missing or a service key reaches browser code. These are source signals to verify, not proof that a route is publicly reachable.",
   },
   {
-    title: "Ways in for a stranger",
-    free: false,
-    body: "SQL and command injection, user input reaching somewhere dangerous unchecked, CORS open to any site with credentials, secrets shipped to the browser in NEXT_PUBLIC_ variables, webhooks that accept anything.",
+    title: "Risky queries, requests and file access",
+    body: "Supported patterns for SQL injection, caller-controlled outbound URLs, disabled TLS verification, unsafe deserialization and path traversal. Coverage depends on the language, framework and code structure.",
   },
   {
-    title: "Nothing catching mistakes",
-    free: true,
-    body: "No tests at all, so nothing tells you the login broke — until a user does.",
+    title: "No recognised test files",
+    body: "No test files matching the scanner's supported conventions in the submitted source. Tests maintained elsewhere or in an unrecognised format may be outside this check.",
   },
   {
-    title: "No way to run it anywhere else",
-    free: true,
-    body: "No CI and no Dockerfile, so the app only really exists inside the tool that generated it.",
+    title: "Gaps in project setup",
+    body: "No recognised CI workflow or Dockerfile in the submitted source. These are configuration inventory findings: the app may use another build or deployment process.",
   },
 ];
 
@@ -101,9 +78,9 @@ export default function LandingPage() {
             What we go looking for
           </h2>
           <p className="mt-3 text-muted">
-            The things that turn a working demo into an incident: money spent by
-            someone else&apos;s hands, a database anyone can read, an app nobody
-            can redeploy. Every item below is a check that runs, not a plan.
+            Security risks and project setup gaps worth checking before a demo
+            handles real users. These are examples of the static checks included in
+            the free audit; each report explains what was checked and its limits.
           </p>
         </div>
 
@@ -115,11 +92,6 @@ export default function LandingPage() {
             >
               <div className="flex flex-wrap items-baseline gap-2">
                 <h3 className="font-medium">{item.title}</h3>
-                {!item.free && (
-                  <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-                    not in the free scan
-                  </span>
-                )}
               </div>
               <p className="mt-2 text-sm text-muted">{item.body}</p>
             </li>
@@ -139,11 +111,16 @@ export default function LandingPage() {
             <div className="rounded-xl border border-border bg-elevated p-6">
               <h3 className="font-medium">Free, no account, no card</h3>
               <p className="mt-3 text-sm text-muted">
-                The static scan and its full report: credentials committed to
-                the repository, a committed .env, a .gitignore that misses
-                secret files, no tests, no CI, no Dockerfile — each with the
-                file, the line, what a stranger could do with it, and how to fix
-                it yourself.
+                Static checks for secrets, supported security and access-control
+                patterns, and project setup. The report includes source references,
+                explanations and guidance where available.
+              </p>
+              <p className="mt-3 text-sm text-muted">
+                A limited model security preview reviews selected code when
+                available. It does not cover every file or the full authentication
+                review. Static results remain available if the preview is
+                unavailable or incomplete. The report shows which model analysis
+                completed and any limits that affected it.
               </p>
               <p className="mt-3 text-sm text-muted">
                 Every report shows findings and verification limits. Neither the
@@ -189,10 +166,12 @@ export default function LandingPage() {
               </span>
             </div>
             <p className="mt-3 text-sm text-muted">
-              Whether your routes verify who is calling them, whether passwords
-              are hashed, whether row-level security is on, whether user input
-              reaches somewhere dangerous. Model findings are hypotheses to verify,
-              with source references and stated limitations. You
+              The full model review adds broader authentication and security
+              analysis to the static checks and limited free preview. It examines
+              selected source code for access-control and injection risks; it
+              does not establish that every file or vulnerability was covered.
+              Model findings are hypotheses to verify, with source references
+              and stated limitations. You
               can&apos;t buy it on its own — buy a Fix Pack and the pull request
               arrives with a link to the full review of the same code.
             </p>

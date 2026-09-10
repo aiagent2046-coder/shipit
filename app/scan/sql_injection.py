@@ -85,6 +85,12 @@ def _is_literal(node: ast.AST, known: frozenset[str] = frozenset()) -> bool:
         return True
     if isinstance(node, ast.Name):
         return node.id in known
+    if isinstance(node, ast.IfExp):
+        # A runtime condition may select fixed SQL fragments without adding
+        # runtime data to the query. Do not resolve side effects from a final
+        # state snapshot; expression() handles those in evaluation order.
+        return (not any(isinstance(child, ast.NamedExpr) for child in ast.walk(node))
+                and _is_literal(node.body, known) and _is_literal(node.orelse, known))
     if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
         return _is_literal(node.left, known) and _is_literal(node.right, known)
     if isinstance(node, ast.JoinedStr):
@@ -234,9 +240,15 @@ class _QueryFlow:
             return _UNKNOWN
         if isinstance(node, ast.Name):
             return state.get(node.id, _UNKNOWN)
-        if _is_literal(node, self.known(state)):
+        if isinstance(node, ast.Constant):
             return _LITERAL
-        kind = _assembly_kind(node, self.known(state))
+        if not isinstance(node, (ast.BinOp, ast.JoinedStr, ast.Tuple, ast.List,
+                                 ast.Set, ast.Dict, ast.Call, ast.IfExp)):
+            return _UNKNOWN
+        known = self.known(state)
+        if _is_literal(node, known):
+            return _LITERAL
+        kind = _assembly_kind(node, known)
         return _Binding(assembly=(node.lineno, kind)) if kind else _UNKNOWN
 
     def assign(self, target, value, state):
@@ -268,11 +280,48 @@ class _QueryFlow:
 
     def expression(self, node, state, stable):
         if node is None or self.remaining <= 0:
-            return
+            return _UNKNOWN
         self.remaining -= 1
         if isinstance(node, ast.Lambda):
             self.scope(node, {k: v for k, v in state.items() if k in stable})
-            return
+            return _UNKNOWN
+        if isinstance(node, ast.IfExp):
+            self.expression(node.test, state, stable)
+            paths, values = [], []
+            for arm in (node.body, node.orelse):
+                branch = state.copy()
+                values.append(self.expression(arm, branch, stable))
+                paths.append(branch)
+            # The arms are mutually exclusive. In particular, a walrus in
+            # one arm cannot replace the value observed in the other arm.
+            state.update(_merge_states(*paths))
+            return _Binding(all(value.literal for value in values),
+                            next((value.assembly for value in values if value.assembly), None))
+        if isinstance(node, ast.BoolOp):
+            self.expression(node.values[0], state, stable)
+            for item in node.values[1:]:
+                branch = state.copy()
+                self.expression(item, branch, stable)
+                # Later operands may not execute. Keep the path that skips
+                # a conditional assignment as well as the path that runs it.
+                state.update(_merge_states(state, branch))
+            return _UNKNOWN
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+            left = self.expression(node.left, state, stable)
+            right = self.expression(node.right, state, stable)
+            if left.literal and right.literal:
+                return _LITERAL
+            kind = "string concatenation with +" if isinstance(node.op, ast.Add) else "%-formatting"
+            return _Binding(assembly=(node.lineno, kind))
+        if isinstance(node, ast.JoinedStr):
+            values = [self.expression(part, state, stable) for part in node.values]
+            return (_LITERAL if all(value.literal for value in values)
+                    else _Binding(assembly=(node.lineno, "an f-string")))
+        if isinstance(node, ast.FormattedValue):
+            value = self.expression(node.value, state, stable)
+            spec = (self.expression(node.format_spec, state, stable)
+                    if node.format_spec is not None else _LITERAL)
+            return _LITERAL if value.literal and spec.literal else _UNKNOWN
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             inner = state.copy()
             for generator in node.generators:
@@ -283,18 +332,26 @@ class _QueryFlow:
                     self.expression(condition, inner, stable)
             for item in ([node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]):
                 self.expression(item, inner, stable)
-            return
+            return self.value(node, state)
         if isinstance(node, ast.NamedExpr):
-            self.expression(node.value, state, stable)
-            self.assign(node.target, self.value(node.value, state), state)
-            return
-        for child in ast.iter_child_nodes(node):
-            self.expression(child, state, stable)
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-            return
+            value = self.expression(node.value, state, stable)
+            self.assign(node.target, value, state)
+            return value
+        if not isinstance(node, ast.Call):
+            for child in ast.iter_child_nodes(node):
+                self.expression(child, state, stable)
+            return self.value(node, state)
+        self.expression(node.func, state, stable)
+        arguments = [self.expression(argument, state, stable) for argument in node.args]
+        for keyword in node.keywords:
+            self.expression(keyword.value, state, stable)
+        if not isinstance(node.func, ast.Attribute):
+            return self.value(node, state)
         if node.func.attr in _SINKS and node.args:
             argument = node.args[0]
-            value = self.value(argument, state)
+            # Later arguments can reassign names, but cannot change the query
+            # text already evaluated as the first argument.
+            value = arguments[0]
             if value.assembly:
                 line, kind = value.assembly
                 if isinstance(argument, ast.Name):
@@ -303,6 +360,7 @@ class _QueryFlow:
         # A literal container stops being a constant after an opaque mutation.
         if node.func.attr in {"append", "extend", "insert", "update", "add", "setdefault"}:
             self.assign(node.func.value, _UNKNOWN, state)
+        return self.value(node, state)
 
     def block(self, statements, state, stable, captures=None):
         for node in statements:
@@ -325,8 +383,7 @@ class _QueryFlow:
             elif isinstance(node, (ast.Assign, ast.AnnAssign)):
                 if node.value is None:  # An annotation alone does not rebind.
                     continue
-                self.expression(node.value, state, stable)
-                value = self.value(node.value, state)
+                value = self.expression(node.value, state, stable)
                 for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
                     self.assign(target, value, state)
             elif isinstance(node, ast.AugAssign):
