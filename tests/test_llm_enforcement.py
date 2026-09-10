@@ -163,7 +163,7 @@ class FakeAuditRepo:
 
     async def create(self, *, stack, file_count, score_total, score_json,
                      findings_json, repo_url=None, content_hash=None,
-                     engine_version=None):
+                     engine_version=None, dependency_inventory=None):
         row = {"id": str(uuid.uuid4()), "stack": stack, "status": "completed",
                "file_count": file_count, "score_total": score_total,
                "score_json": score_json, "findings_json": findings_json,
