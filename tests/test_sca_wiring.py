@@ -169,6 +169,40 @@ def test_the_report_distinguishes_every_reason_the_check_is_missing():
     assert "not a clean result" in rows["Dependencies checked"]
 
 
+def test_the_report_says_why_a_lockfile_alone_answered_nothing():
+    rows = dict(manifest_rows({"scan_manifest": {
+        "archive_sha256": "x", "engine_version": AUDIT_ENGINE_VERSION,
+        "archive_files": 1, "sca_skipped_reason": "no_resolvable_lockfile",
+        "sca_unusable_lockfiles": ["go.sum"]}}))
+    text = rows["Dependencies checked"]
+    assert "go.sum" in text and "every module version the build ever verified" in text
+
+
+def test_the_report_keeps_an_unreadable_lockfile_apart_from_no_lockfile():
+    unreadable = dict(manifest_rows({"scan_manifest": {
+        "archive_sha256": "x", "engine_version": AUDIT_ENGINE_VERSION,
+        "archive_files": 1, "sca_skipped_reason": "lockfile_unreadable: RecursionError"}}))
+    assert "could not be read" in unreadable["Dependencies checked"]
+    assert "Nothing about the dependencies was established" in unreadable["Dependencies checked"]
+
+    absent = dict(manifest_rows({"scan_manifest": {
+        "archive_sha256": "x", "engine_version": AUDIT_ENGINE_VERSION,
+        "archive_files": 1, "sca_skipped_reason": "no_lockfile"}}))
+    assert "No lockfile was found" in absent["Dependencies checked"]
+
+
+def test_the_report_admits_when_some_advisory_details_could_not_be_fetched():
+    from datetime import datetime as dt
+    rows = dict(manifest_rows({"scan_manifest": {
+        "archive_sha256": "x", "engine_version": AUDIT_ENGINE_VERSION,
+        "archive_files": 1, "sca_dependencies": 2, "sca_dependencies_found": 2,
+        "sca_findings": 1, "sca_unreadable_advisories": 1,
+        "sca_asked_at": dt.now(timezone.utc).isoformat(timespec="seconds")}}))
+    text = rows["Dependencies checked"]
+    assert "1 reported" in text
+    assert "could not be fetched" in text and "without their details" in text
+
+
 def test_an_audit_from_before_the_stage_existed_says_so():
     rows = dict(manifest_rows({"scan_manifest": {
         "archive_sha256": "x", "engine_version": "2026-09-09-32",

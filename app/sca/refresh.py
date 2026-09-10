@@ -229,13 +229,22 @@ async def refresh_stale_dependency_audits(
             summary.reasons["no_client"] = summary.reasons.get("no_client", 0) + 1
             continue
 
-        hits, records, reason = await _ask(dependencies, client)
+        hits, records, unreadable, reason = await _ask(dependencies, client)
         if reason is not None:
             # The older answer stays. Replacing it with nothing would turn a
             # database outage into a clean dependency report.
             summary.unavailable += 1
             summary.reasons[reason.split(":")[0]] = (
                 summary.reasons.get(reason.split(":")[0], 0) + 1)
+            continue
+        if not records and unreadable:
+            # The batch answered and every detail lookup failed. The stage
+            # reports that as "nothing was established"; a REFRESH has a better
+            # option -- leaving the older, detailed answer in place rather than
+            # overwriting it with rows that know less.
+            summary.unavailable += 1
+            summary.reasons["details_unavailable"] = (
+                summary.reasons.get("details_unavailable", 0) + 1)
             continue
 
         stats = _empty_stats()

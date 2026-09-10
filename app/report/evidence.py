@@ -383,6 +383,18 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
                 "No lockfile was found, so there were no resolved versions to "
                 "look up. A range in a manifest is not a version, and guessing "
                 "one would report on software the project may not install.")
+    if skipped == "no_resolvable_lockfile":
+        unusable = ", ".join(manifest.get("sca_unusable_lockfiles") or []) or "a lockfile"
+        return ("Dependencies checked",
+                f"Not checked: {unusable} was found, and it lists every module "
+                "version the build ever verified rather than what this build "
+                "installs. A go.mod is what names the build's own dependencies; "
+                "without one there is nothing to look up without guessing.")
+    if isinstance(skipped, str) and skipped.startswith("lockfile_unreadable"):
+        return ("Dependencies checked",
+                "Not checked: a lockfile was present and could not be read "
+                f"({skipped.removeprefix('lockfile_unreadable: ')}). Nothing "
+                "about the dependencies was established.")
     if isinstance(skipped, str) and skipped.startswith("osv_unavailable"):
         return ("Dependencies checked",
                 f"Not checked: the vulnerability database could not be reached "
@@ -398,6 +410,10 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
     findings = manifest.get("sca_findings")
     found_text = (f"; {findings} reported" if isinstance(findings, int) and findings
                   else "; no known vulnerabilities for those versions")
+    unclear = manifest.get("sca_unreadable_advisories")
+    if isinstance(unclear, int) and unclear:
+        found_text += (f"; {unclear} advisory record(s) could not be fetched, "
+                       "and those matches are reported without their details")
     aged = ("" if state == "fresh" else
             " This answer was true of that date; advisories published since are "
             "not in it.")

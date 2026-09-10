@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.scan.checks import CheckFinding
-from app.sca.lockfiles import Dependency, collect_dependencies
+from app.sca.lockfiles import Dependency, collect_dependencies, unusable_lockfiles
 from app.sca.osv import OsvClient, OsvUnavailable
 
 # One rule id for the whole stage: the reader's action is the same for every
@@ -216,6 +216,11 @@ class Advisory:
     published: str
     url: str
     fixed: list[str] = field(default_factory=list)
+    # True when the batch named this advisory but its record could not be
+    # fetched. The match itself is confirmed -- the database listed this exact
+    # version -- and only the detail is missing, so the finding stays and says
+    # which part is unverified instead of disappearing.
+    details_missing: bool = False
 
     def absorb(self, other: "Advisory") -> None:
         if _rank(other.severity) > _rank(self.severity):
@@ -231,8 +236,14 @@ class Advisory:
                 self.fixed.append(version)
 
 
-def _advisories(dependency: Dependency, records: list[dict]) -> list[Advisory]:
-    """Every vulnerability of one dependency, worst first."""
+def _advisories(dependency: Dependency, records: list[dict],
+                missing: tuple[str, ...] = ()) -> list[Advisory]:
+    """Every vulnerability of one dependency, worst first.
+
+    `missing` names advisories the batch reported and whose records could not
+    be fetched. They are kept at the floor severity, flagged as unreadable, so
+    the row exists and says what is unknown instead of vanishing.
+    """
     merged: dict[str, Advisory] = {}
     for record in records:
         severity, declared = _severity(record)
@@ -249,6 +260,16 @@ def _advisories(dependency: Dependency, records: list[dict]) -> list[Advisory]:
             merged[advisory.identifier].absorb(advisory)
         else:
             merged[advisory.identifier] = advisory
+    for advisory_id in missing:
+        merged.setdefault(advisory_id, Advisory(
+            identifier=advisory_id,
+            severity=MIN_SEVERITY,
+            declared=False,
+            summary="",
+            published="",
+            url=f"https://osv.dev/vulnerability/{advisory_id}",
+            details_missing=True,
+        ))
     return sorted(merged.values(), key=lambda a: (-_rank(a.severity), a.identifier))
 
 
@@ -269,16 +290,23 @@ def _scope_sentence(dependency: Dependency) -> str:
 def build_finding(dependency: Dependency, advisories: list[Advisory]) -> CheckFinding:
     worst = advisories[0]
     others = advisories[1:]
-    # The furthest fix across every listed advisory is the one that satisfies
-    # all of them: upgrading to a point that clears one and not the next would
-    # send the reader back for a second upgrade.
+    # ONE target: the furthest fix across the advisories listed. Offering the
+    # earlier ones as alternatives ("upgrade to 2.0.0, or 1.5.0 or later") reads
+    # as a choice between equals, and taking 1.5.0 leaves the advisory that
+    # needed 2.0.0 -- advice that undoes itself. The earlier lines are named,
+    # but as what they are: not sufficient.
     furthest: list[str] = []
     for advisory in advisories:
         for version in advisory.fixed:
             if version not in furthest:
                 furthest.append(version)
-    candidates = sorted(furthest, key=_version_key, reverse=True)[:2]
-    upgrade = f" Upgrade to {', or '.join(candidates)} or later." if candidates else ""
+    ordered = sorted(furthest, key=_version_key, reverse=True)
+    upgrade = f" Upgrade to {ordered[0]} or later." if ordered else ""
+    shortfall = ""
+    if len(ordered) > 1:
+        shortfall = (" The database also lists earlier fixes ("
+                     + ", ".join(ordered[1:3])
+                     + "), which do not clear every advisory above.")
 
     listed = [f"{worst.identifier} ({worst.severity}): {worst.summary or 'known vulnerability'}"]
     for advisory in others[:MAX_LISTED_ADVISORIES - 1]:
@@ -299,9 +327,17 @@ def build_finding(dependency: Dependency, advisories: list[Advisory]) -> CheckFi
             "reason to look, not a proven exploit.")
     if worst.published:
         risk += f" Worst published {worst.published}."
-    fix = (f"{upgrade.strip()} That upgrade clears every advisory listed here. "
-           f"Then reinstall and run your tests: a lockfile change reaches "
-           f"production only after the build that reads it. "
+    if any(advisory.details_missing for advisory in advisories):
+        # The batch named these advisories; the records that would say what they
+        # are and what fixes them could not be fetched. Say exactly that -- an
+        # unfetched detail is not a reason to drop a confirmed match, and it is
+        # not a reason to invent a severity either.
+        risk += (" At least one advisory's details could not be fetched from the "
+                 "database, so its nature and its worst rating are unknown; the "
+                 "match against your version is what was confirmed.")
+    fix = (f"{upgrade.strip()}{shortfall} That upgrade clears every advisory "
+           f"listed here. Then reinstall and run your tests: a lockfile change "
+           f"reaches production only after the build that reads it. "
            f"Reference: {worst.url}")
 
     if len(advisories) == 1:
@@ -315,9 +351,9 @@ def build_finding(dependency: Dependency, advisories: list[Advisory]) -> CheckFi
         title=title,
         severity=worst.severity,
         # 0.9 when the worst advisory states its rating, 0.6 when the rating
-        # had to be assumed. The finding's own fact -- this version is listed
-        # as affected -- is not in doubt either way.
-        confidence=0.9 if worst.declared else 0.6,
+        # had to be assumed, 0.4 when the record itself was unreadable: the
+        # match is certain, everything about it is not.
+        confidence=(0.4 if worst.details_missing else 0.9 if worst.declared else 0.6),
         category="Security",
         file=dependency.manifest,
         line=dependency.line,
@@ -354,7 +390,16 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         "asked_at": None,
         "skipped_reason": None,
     }
-    dependencies, manifests, found = collect_dependencies(data)
+    try:
+        dependencies, manifests, found = collect_dependencies(data)
+    except Exception as exc:            # noqa: BLE001 -- see below
+        # A lockfile is INPUT, and no input may abort the audit it was
+        # submitted to: this stage promises the audit it belongs to that it
+        # never raises, and that promise has to cover the parsing too. The
+        # reason is recorded, so the result says the dependencies were not
+        # examined rather than that they were fine.
+        stats["skipped_reason"] = f"lockfile_unreadable: {type(exc).__name__}"
+        return [], stats
     stats["lockfiles"] = manifests
     # `found` and `dependencies` differ only when the cap bit. Both are
     # recorded: a repository whose 300th dependency was silently never asked
@@ -362,17 +407,31 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
     stats["dependencies_found"] = found
     stats["dependencies"] = len(dependencies)
     if not dependencies:
-        # No lockfile is not "no vulnerabilities": it is nothing to look up.
-        stats["skipped_reason"] = "no_lockfile"
+        unusable = unusable_lockfiles(data)
+        stats["unusable_lockfiles"] = unusable
+        # Neither case is "no vulnerabilities": one is nothing to look up, the
+        # other is a lockfile that cannot answer the question at all (go.sum
+        # lists every version the build ever verified, not the build's list).
+        stats["skipped_reason"] = ("no_resolvable_lockfile" if unusable
+                                   else "no_lockfile")
         return [], stats
     if client is None:
         stats["skipped_reason"] = "no_client"
         return [], stats
 
-    hits, records, skip_reason = query_dependencies(dependencies, client)
+    hits, records, unreadable, skip_reason = query_dependencies(dependencies, client)
     if skip_reason is not None:
         stats["skipped_reason"] = skip_reason
         stats["requests"] = client.requests_made
+        return [], stats
+    if not records and unreadable:
+        # The batch answered, the detail lookups did not. Reporting nothing here
+        # would turn a database failure into a clean dependency report, and the
+        # score would IMPROVE for it -- the one direction a failure must never
+        # move. So nothing is claimed at all.
+        stats["skipped_reason"] = "osv_unavailable: advisory details"
+        stats["requests"] = client.requests_made
+        stats["unreadable_advisories"] = len(unreadable)
         return [], stats
 
     stats["asked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -382,8 +441,15 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
 
 def query_dependencies(
     dependencies: list[Dependency], client: OsvClient
-) -> tuple[dict[int, list[str]], dict[str, dict], str | None]:
-    """Ask the database about a resolved list: (hits, records, skip_reason).
+) -> tuple[dict[int, list[str]], dict[str, dict], set[str], str | None]:
+    """Ask the database about a resolved list.
+
+    Returns (hits, records, unreadable advisory ids, skip_reason). The two
+    failure modes are kept apart on purpose: a batch that never answered is a
+    reason to skip the stage, while a batch that answered and a detail lookup
+    that did not is a PARTIAL answer the caller has to describe honestly --
+    measured by reproducing an HTTP 503 on one detail fetch, which used to
+    delete a confirmed vulnerability from the report and raise the score.
 
     Split out from run_sca_stage because a REFRESH has the dependency list and
     not the archive: the versions are stored with the audit (migration 0039),
@@ -399,24 +465,31 @@ def query_dependencies(
                 wanted.setdefault(advisory, None)
         records = client.details(list(wanted))
     except OsvUnavailable as exc:
-        return {}, {}, f"osv_unavailable: {exc}"
-    return hits, records, None
+        return {}, {}, set(), f"osv_unavailable: {exc}"
+    return hits, records, set(wanted) - set(records), None
 
 
 def findings_for(
     dependencies: list[Dependency], hits: dict[int, list[str]],
     records: dict[str, dict], stats: dict,
 ) -> list[CheckFinding]:
-    """Turn answers into rows, counting what was seen and what was filtered."""
+    """Turn answers into rows, counting what was seen and what was filtered.
+
+    An advisory the batch named but whose record could not be fetched is NOT
+    dropped: the match is confirmed, so it becomes a row that says its details
+    are missing rather than a row that does not exist.
+    """
     answers = {advisory for indexes in hits.values() for advisory in indexes}
     stats["advisories"] = len(answers)
-    stats["unreadable_advisories"] = max(0, len(answers) - len(records))
+    stats["unreadable_advisories"] = len(answers - set(records))
 
     findings: list[CheckFinding] = []
+    unreadable = set(records) ^ answers
     for index, advisory_ids in hits.items():
         dependency = dependencies[index]
         served = [records[a] for a in advisory_ids if a in records]
-        advisories = _advisories(dependency, served)
+        missing = tuple(a for a in advisory_ids if a in unreadable)
+        advisories = _advisories(dependency, served, missing)
         if not advisories:
             continue
         if _rank(advisories[0].severity) < _rank(MIN_SEVERITY):

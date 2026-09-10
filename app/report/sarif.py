@@ -48,8 +48,19 @@ FINGERPRINT_KEY = "drydock/finding/v1"
 
 
 def _uri(path: str) -> str:
-    """An archive-relative path as a URI reference."""
-    cleaned = path.lstrip("./").lstrip("/")
+    """An archive-relative path as a URI reference.
+
+    A LITERAL prefix is removed, never a set of characters: `lstrip("./")`
+    strips any leading '.' and '/' characters, so `.env` became `env` and
+    `..env` became `env` too -- a location pointing at a file that does not
+    exist, which is exactly what a SARIF consumer uses to attach a result to a
+    file. GitHub matches on these paths.
+    """
+    cleaned = path
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    if cleaned.startswith("/"):
+        cleaned = cleaned[1:]
     return urllib.parse.quote(cleaned, safe="/")
 
 

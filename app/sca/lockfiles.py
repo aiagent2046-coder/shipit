@@ -45,13 +45,41 @@ _REQUIREMENT = re.compile(
     r"==\s*(?P<version>[A-Za-z0-9][A-Za-z0-9.!+_-]*)"
 )
 
-_GO_SUM = re.compile(r"^(?P<module>\S+)\s+(?P<version>v\S+)\s+(?P<hash>h1:\S+)$")
+# Files that ARE lockfiles but cannot answer "what is installed", so their
+# presence must not read as "the dependencies were checked and look fine":
+# go.sum lists every module version the build ever verified, not the build.
+_UNUSABLE = ("go.sum",)
+
+
+def unusable_lockfiles(data: bytes) -> list[str]:
+    """Lockfiles present in the archive that this module deliberately does not
+    read, so the caller can say WHY nothing was resolved instead of reporting
+    an empty dependency list as if the repository had none."""
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        return sorted(
+            info.filename for info in archive.infolist()
+            if not info.is_dir()
+            and info.filename.rsplit("/", 1)[-1] in _UNUSABLE
+            and not is_non_production_path(info.filename)
+            and not _vendored(info.filename))
+
+# go.mod's require directive, in both shapes it is written:
+#     require github.com/x/y v1.2.3
+#     require ( github.com/x/y v1.2.3 // indirect ... )
+_GO_REQUIRE_SINGLE = re.compile(
+    r"^\s*require\s+(?P<module>\S+)\s+(?P<version>v\S+)\s*(?://.*)?$")
+_GO_REQUIRE_ENTRY = re.compile(
+    r"^\s*(?P<module>[^\s()]+)\s+(?P<version>v\S+)\s*$")
 
 OSV_ECOSYSTEM = {
     "package-lock.json": "npm",
     "requirements.txt": "PyPI",
     "poetry.lock": "PyPI",
-    "go.sum": "Go",
+    # go.sum is NOT in this map on purpose: it is a checksum log of every
+    # module version the build ever verified, not a statement of what is
+    # installed. It is read only to CONFIRM a version go.mod already named --
+    # see _go_mod.
+    "go.mod": "Go",
 }
 
 
@@ -124,6 +152,22 @@ def _read(archive: zipfile.ZipFile, name: str) -> str:
     return archive.read(name).decode("utf-8", "replace")
 
 
+def _package_location(location: str) -> str:
+    """'node_modules/x', 'apps/web/node_modules/x', 'node_modules/a/node_modules/x'
+    -> 'x'; '' when the entry is not an installed package.
+
+    The LAST `node_modules/` segment names the package and everything before it
+    says who installed it: the root, a workspace that resolved its own copy, or
+    a package that nested one. Reading only the first shape silently skipped
+    every workspace-resolved and nested package, which is under-reporting that
+    looks exactly like a clean dependency tree.
+    """
+    marker = "node_modules/"
+    if marker not in location:
+        return ""                   # the root, or a workspace's own directory
+    return location.rsplit(marker, 1)[1]
+
+
 def _json_dependencies(name: str, text: str, direct_names: set[str],
                        out: list[Dependency]) -> None:
     try:
@@ -135,14 +179,14 @@ def _json_dependencies(name: str, text: str, direct_names: set[str],
     packages = data.get("packages")
     if isinstance(packages, dict):          # lockfileVersion 2 and 3
         for location, entry in packages.items():
-            if not isinstance(entry, dict) or not location.startswith("node_modules/"):
+            if not isinstance(entry, dict) or "version" not in entry:
                 continue
             version = entry.get("version")
             if not isinstance(version, str) or not version:
                 continue
-            # `node_modules/a/node_modules/b` is b -- the last segment names the
-            # package, and the earlier ones only say who depends on it.
-            dep_name = location.rsplit("node_modules/", 1)[-1]
+            dep_name = _package_location(location)
+            if not dep_name:
+                continue            # the root project or a workspace directory
             out.append(Dependency("npm", dep_name, version, name,
                                   direct=dep_name in direct_names,
                                   development=entry.get("dev") is True))
@@ -162,12 +206,26 @@ def _json_dependencies(name: str, text: str, direct_names: set[str],
 def _requirement_lines(name: str, text: str, out: list[Dependency]) -> None:
     for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.split("#", 1)[0].rstrip()
-        if not line or line.lstrip().startswith("-") or "@" in line:
-            # Options (-r, -e), comments and direct references carry no
+        if not line:
+            continue
+        # A pip-compile pin ENDS with the continuation backslash and its hashes
+        # follow on their own lines:
+        #
+        #     annotated-doc==0.0.5 \
+        #         --hash=sha256:117bac... \
+        #
+        # Skipping every line that ends with a backslash -- which is what this
+        # did -- therefore skipped every package in the file this project
+        # generates for itself: 37 pins read as 0 dependencies. The backslash is
+        # removed here and the `--hash` lines that follow are dropped by the
+        # option check below.
+        line = line.rstrip("\\").rstrip()
+        if not line or line.lstrip().startswith("-"):
+            # Options (-r, -e, --hash), comments and direct references carry no
             # resolvable version, and a URL is not a version either.
             continue
-        if line.endswith("\\"):
-            continue                     # a hash continuation, not a package
+        if "@" in line:
+            continue
         match = _REQUIREMENT.match(line)
         if not match:
             continue                     # a range (>=, ~=) is not a version
@@ -192,18 +250,43 @@ def _poetry_packages(name: str, text: str, out: list[Dependency]) -> None:
                                   development=True if category == "dev" else None))
 
 
-def _go_sum_lines(name: str, text: str, out: list[Dependency]) -> None:
+def _go_mod_packages(name: str, text: str, out: list[Dependency]) -> None:
+    """The Go dependencies the build actually uses.
+
+    go.mod is the source, NOT go.sum. go.sum is a checksum log: it holds an
+    entry for every module version the build ever verified, including versions
+    that were later upgraded away, so reading it reports retired software as an
+    installed dependency -- measured here with a two-line file, where a module
+    named `retired` came back as a finding. Both shapes of the require
+    directive are read, since both are written by `go mod tidy`:
+
+        require github.com/x/y v1.2.3
+        require (
+            github.com/x/y v1.2.3 // indirect
+        )
+    """
+    in_block = False
     for number, raw in enumerate(text.splitlines(), start=1):
-        match = _GO_SUM.match(raw.strip())
-        if not match:
+        line = raw.split("//", 1)[0].rstrip()
+        stripped = line.strip()
+        if not stripped:
             continue
-        # Each module appears twice: the module itself and its go.mod. The
-        # go.mod entry is the same version, so counting it would double every
-        # lookup and every finding.
-        if match.group("version").endswith("/go.mod"):
+        if stripped.startswith("require ("):
+            in_block = True
             continue
-        out.append(Dependency("Go", match.group("module"), match.group("version"),
-                              name, line=number))
+        if in_block:
+            if stripped.startswith(")"):
+                in_block = False
+                continue
+            match = _GO_REQUIRE_ENTRY.match(stripped)
+            if match:
+                out.append(Dependency("Go", match.group("module"),
+                                      match.group("version"), name, line=number))
+            continue
+        match = _GO_REQUIRE_SINGLE.match(stripped)
+        if match:
+            out.append(Dependency("Go", match.group("module"),
+                                  match.group("version"), name, line=number))
 
 
 def _direct_names(archive: zipfile.ZipFile, manifest_path: str) -> set[str]:
@@ -249,8 +332,8 @@ def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str], int]
                 _requirement_lines(manifest, text, collected)
             elif basename == "poetry.lock":
                 _poetry_packages(manifest, text, collected)
-            elif basename == "go.sum":
-                _go_sum_lines(manifest, text, collected)
+            elif basename == "go.mod":
+                _go_mod_packages(manifest, text, collected)
 
     unique: dict[tuple[str, str, str], Dependency] = {}
     for dependency in collected:

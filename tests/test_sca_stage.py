@@ -203,6 +203,83 @@ def test_an_unreadable_advisory_does_not_discard_the_readable_one():
     assert stats["unreadable_advisories"] == 1
 
 
+def test_a_confirmed_match_survives_a_failed_detail_fetch():
+    """Reproduced end to end: an HTTP 503 on a detail lookup used to delete a
+    confirmed vulnerability from the report and RAISE the score (1 finding ->
+    0, 9.3 -> 9.6). A failure must never move the report in the good direction.
+
+    Two packages: one advisory loads, one does not. The loaded match keeps its
+    rating; the unloaded one is reported as a match whose details are unknown --
+    at the floor severity, with a confidence that says so.
+    """
+    class OneDetailDown(FakeTransport):
+        def __init__(self):
+            super().__init__(
+                [[{"vulns": [{"id": "GHSA-35jh-r3h4-6jhm"}]},
+                  {"vulns": [{"id": "GHSA-gone-0000-0000"}]}]],
+                {"GHSA-35jh-r3h4-6jhm": LODASH_ADVISORY})
+
+        def get(self, url):
+            record = self.details.get(url.rsplit("/", 1)[-1])
+            return FakeResponse(200, record) if record else FakeResponse(503, {})
+
+    repo = make_zip({"package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
+        "node_modules/lodash": {"version": "4.17.4"},
+        "node_modules/other": {"version": "1.0.0"}}})})
+    findings, stats = run_sca_stage(repo, OsvClient(transport=OneDetailDown()))
+
+    by_name = {f.title.split()[-2]: f for f in findings}
+    assert set(by_name) == {"lodash", "other"}, "both confirmed matches survive"
+    assert by_name["lodash"].severity == "high"
+    assert by_name["lodash"].confidence == 0.9, "its record loaded"
+    assert by_name["other"].severity == "medium", (
+        "an unknown rating is reported at the floor, never invented upward")
+    assert by_name["other"].confidence == 0.4
+    assert "details could not be fetched" in by_name["other"].explanation
+    assert stats["asked_at"], "the batch did answer"
+    assert stats["unreadable_advisories"] == 1
+
+
+def test_when_no_detail_could_be_fetched_nothing_is_claimed():
+    class AllDetailsDown(FakeTransport):
+        def __init__(self):
+            super().__init__([[{"vulns": [{"id": "GHSA-aaaa-0000-0000"}]},
+                              {"vulns": [{"id": "GHSA-bbbb-0000-0000"}]}]], {})
+
+        def get(self, url):
+            return FakeResponse(503, {})
+
+    findings, stats = run_sca_stage(repo_with(), OsvClient(transport=AllDetailsDown()))
+    assert findings == []
+    assert str(stats["skipped_reason"]).startswith("osv_unavailable"), (
+        "a database that answered nothing is not a clean dependency report")
+    assert stats["asked_at"] is None, "nothing was established, so nothing is dated"
+
+
+def test_the_upgrade_advice_names_one_target_and_flags_the_earlier_fix():
+    """Fixes on two branches used to be offered as equals -- "upgrade to 2.0.0,
+    or 1.5.0 or later" -- and taking 1.5.0 leaves the advisory that needed
+    2.0.0. Advice that undoes itself."""
+    records = {
+        "GHSA-aaaa-0000-0000": {**LODASH_ADVISORY, "id": "GHSA-aaaa-0000-0000",
+                                "aliases": ["CVE-2020-0001"],
+                                "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
+                                              "ranges": [{"events": [{"fixed": "1.5.0"}]}]}]},
+        "GHSA-bbbb-0000-0000": {**LODASH_ADVISORY, "id": "GHSA-bbbb-0000-0000",
+                                "aliases": ["CVE-2020-0002"],
+                                "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
+                                              "ranges": [{"events": [{"fixed": "2.0.0"}]}]}]},
+    }
+    transport = FakeTransport([[{"vulns": [{"id": k} for k in records]}]], records)
+    findings, _stats = run_sca_stage(repo_with(), client_for(transport))
+
+    fix = findings[0].fix_hint
+    assert "Upgrade to 2.0.0 or later" in fix
+    assert "or 1.5.0 or later" not in fix, "an earlier fix is not an equal option"
+    assert "1.5.0" in fix and "do not clear every advisory" in fix, (
+        "the earlier fix is named, and named as insufficient")
+
+
 def test_batches_are_split_and_results_line_up_with_dependencies():
     packages = {f"node_modules/pkg{i}": {"version": "1.0.0"} for i in range(3)}
     advisory = {**LODASH_ADVISORY, "affected": []}
@@ -325,6 +402,27 @@ def test_the_row_says_where_the_package_came_from(development, expected):
                      "package-lock.json": lock})
     findings, _ = run_sca_stage(repo, client_for(one_advisory()))
     assert expected in findings[0].explanation
+
+
+def test_a_lockfile_that_cannot_be_parsed_does_not_abort_the_audit(monkeypatch):
+    """The stage promises the audit never fails because of it, and that promise
+    has to cover parsing too: a lockfile is input, and no input may take an
+    audit down. Whatever the shape turns out to be, the reason is recorded."""
+    def exploding(_data):
+        raise RecursionError("nested deeper than this parser can walk")
+
+    monkeypatch.setattr("app.sca.stage.collect_dependencies", exploding)
+    findings, stats = run_sca_stage(repo_with(), client_for(one_advisory()))
+    assert findings == []
+    assert stats["skipped_reason"] == "lockfile_unreadable: RecursionError"
+
+
+def test_an_archive_with_only_go_sum_says_why_nothing_was_asked():
+    gosum = make_zip({"go.sum": "github.com/example/retired v1.0.0 h1:aaa=\n"})
+    findings, stats = run_sca_stage(gosum, client_for(one_advisory()))
+    assert findings == []
+    assert stats["skipped_reason"] == "no_resolvable_lockfile"
+    assert stats["unusable_lockfiles"] == ["go.sum"]
 
 
 def test_query_raises_unavailable_when_the_body_is_not_the_documented_shape():

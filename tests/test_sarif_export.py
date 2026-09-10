@@ -195,6 +195,21 @@ def test_a_finding_with_a_line_points_at_it():
     assert physical["artifactLocation"]["uri"] == "src/config.ts"
 
 
+def test_a_dotfile_path_is_kept_intact():
+    """`lstrip("./")` strips CHARACTERS, so `.env` came out as `env` -- a
+    location pointing at a file that does not exist, which is what a SARIF
+    consumer matches results against. GitHub uses these paths."""
+    for path, expected in [(".env", ".env"), ("..env", "..env"),
+                           ("./.env", ".env"), ("/src/.env", "src/.env"),
+                           ("./src/config.ts", "src/config.ts"),
+                           ("src/config.ts", "src/config.ts")]:
+        document = build_sarif([{**SECRET, "file": path, "line": 1}],
+                               engine_version=AUDIT_ENGINE_VERSION)
+        uri = document["runs"][0]["results"][0]["locations"][0][
+            "physicalLocation"]["artifactLocation"]["uri"]
+        assert uri == expected, f"{path!r} became {uri!r}"
+
+
 def test_a_path_that_is_not_a_uri_is_encoded():
     document = build_sarif([SPACED], engine_version=AUDIT_ENGINE_VERSION)
     uri = document["runs"][0]["results"][0]["locations"][0]["physicalLocation"][

@@ -73,6 +73,9 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         reasons.append("dependency_check_not_run")
     elif skipped.startswith("osv_unavailable"):
         reasons.append("dependency_database_unavailable")
+    elif skipped.startswith("lockfile_unreadable"):
+        # Not "no dependencies": a lockfile was there and could not be read.
+        reasons.append("dependency_lockfile_unreadable")
     return {
         "archive_sha256": hashlib.sha256(data).hexdigest(),
         "engine_version": engine,
@@ -87,6 +90,8 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         "sca_dependencies_found": sca.get("dependencies_found"),
         "sca_asked_at": sca.get("asked_at"),
         "sca_findings": sca.get("findings"),
+        "sca_unreadable_advisories": sca.get("unreadable_advisories"),
+        "sca_unusable_lockfiles": sca.get("unusable_lockfiles"),
         "sca_skipped_reason": sca.get("skipped_reason") or None,
         "static_limits": static.get("coverage", {}),
         "secrets_coverage": _file_counts(static.get("secrets_coverage")),
