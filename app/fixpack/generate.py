@@ -54,6 +54,8 @@ from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
 from app.scan.secrets import (
     NON_PRODUCTION_CONTEXTS,
     RULES,
+    SecretFinding,
+    is_non_production_path,
     iter_secret_matches,
 )
 
@@ -272,6 +274,30 @@ def _env_key_names(body: str) -> set[str]:
     return names
 
 
+def _secret_format_supported(path: str) -> bool:
+    """Only emit secret expressions in languages with a supported rewrite.
+
+    Balanced delimiters do not establish runtime interpolation: SQL, JSON,
+    YAML and shell require different configuration contracts. They still
+    belong in the audit, but must not receive a placeholder pretending to be
+    an executable fix.
+    """
+    return path.lower().endswith((".py",) + _JS_SUFFIXES)
+
+
+def _secret_finding_formats_supported(finding: dict) -> bool:
+    if not _secret_format_supported(finding.get("file", "")):
+        return False
+    paths = finding.get("occurrence_files")
+    # A supported representative does not make its SQL/shell copies fixable.
+    # Those live copies would still fail the proof gate after a partial edit.
+    # Known documentation/test paths are intentionally preserved by the plan.
+    return not isinstance(paths, list) or all(
+        _secret_format_supported(path) or is_non_production_path(path)
+        for path in paths if isinstance(path, str)
+    )
+
+
 def _env_reference(path: str, env_var: str) -> str:
     """The idiomatic way to read an env var in this file's language."""
     lower = path.lower()
@@ -288,10 +314,7 @@ def _env_reference(path: str, env_var: str) -> str:
         return f"process.env.{env_var}"
     if lower.endswith(".py"):
         return f'os.environ["{env_var}"]'
-    # Unknown language: a shell/interpolation-style reference removes the
-    # secret and clearly signals "an env var goes here" without pretending
-    # to know the syntax.
-    return f"${{{env_var}}}"
+    raise ValueError("unsupported format for automatic secret replacement")
 
 
 def _sensitive_literals(rule_id: str, raw_match: str) -> list[str]:
@@ -722,6 +745,8 @@ def has_auto_fixable_findings(findings: list[dict]) -> bool:
     return any(
         f.get("fixpack_eligible") is not False
         and _is_fixable_rule(f) and _is_production_code(f)
+        and (f.get("rule_id") not in SECRET_RULE_IDS
+             or _secret_finding_formats_supported(f))
         for f in findings
     )
 
@@ -734,11 +759,9 @@ def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict
     with no repo bytes and no business fetching any, so the question has to be
     answered here or answered wrong.
 
-    ONLY THE RLS READ RULE NEEDS THIS. For a secret, a committed .env or a
-    missing gitignore pattern, the rule id and the file's context settle it —
-    which is what _is_fixable_rule and _is_production_code already check.
-    propose_read_policy is the one decision that reads the schema, so it is
-    the one that can disagree with the rule id, and it did.
+    RLS reads need the schema. Secret findings also need a supported file
+    format: a literal in SQL or YAML is detectable without having a safe
+    runtime environment expression to replace it with.
 
     Stamped rather than filtered: the finding is REAL and stays in the report
     in full. What changes is only whether we offer to sell a fix for it.
@@ -747,6 +770,12 @@ def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict
     before this existed keep the old behaviour rather than silently becoming
     unsellable.
     """
+    findings = [
+        {**f, "fixpack_eligible": False}
+        if f.get("rule_id") in SECRET_RULE_IDS
+        and not _secret_finding_formats_supported(f) else f
+        for f in findings
+    ]
     if not any(f.get("rule_id") == RLS_RULE_ID for f in findings):
         return findings
 
@@ -772,6 +801,44 @@ def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict
         else:
             marked.append({**finding, "fixpack_eligible": False})
     return marked
+
+
+def _grouped_secret_occurrences(
+    finding: dict,
+    raw_value: str,
+    fresh_by_file: dict[tuple[str, str], list[tuple[SecretFinding, str]]],
+) -> list[tuple[dict, str, str]]:
+    """Recover a collapsed finding's other locations from current source.
+
+    Report masks are not secret identities: unrelated credentials can have
+    the same prefix and length. Use the representative's freshly matched
+    literal, and limit expansion to the group's recorded files. Every added
+    location must still be production code; collapse can combine examples
+    and tests with a production representative.
+    """
+    paths = finding.get("occurrence_files")
+    if not isinstance(paths, list):
+        return []
+    rule_id = finding["rule_id"]
+    sensitive = _sensitive_literals(rule_id, raw_value)
+    if not sensitive:
+        return []
+    occurrences = []
+    for path in paths:
+        if not isinstance(path, str):
+            continue
+        for fresh, raw in fresh_by_file.get((rule_id, _repo_relative(path)), []):
+            current = {
+                **finding,
+                "file": fresh.file,
+                "line": fresh.line,
+                "context": fresh.context,
+                "title": fresh.title,
+            }
+            if (_is_production_code(current)
+                    and _sensitive_literals(rule_id, raw) == sensitive):
+                occurrences.append((current, fresh.file, raw))
+    return occurrences
 
 
 def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
@@ -828,14 +895,17 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
 
     # --- Secret findings: relocate each against a fresh re-scan to get the
     # real value, then scrub it out of the file. ------------------------
-    fresh_index: dict[tuple[str, str, int], tuple[str, str]] = {}
+    fresh_index: dict[tuple[str, str, int], tuple[SecretFinding, str]] = {}
+    fresh_by_file: dict[tuple[str, str], list[tuple[SecretFinding, str]]] = {}
     for finding, raw_value in iter_secret_matches(io.BytesIO(zip_bytes)):
         key = (finding.rule_id, _repo_relative(finding.file), finding.line)
-        fresh_index.setdefault(key, (finding.file, raw_value))
+        fresh_index.setdefault(key, (finding, raw_value))
+        fresh_by_file.setdefault(key[:2], []).append((finding, raw_value))
 
     # Group the wanted secret fixes by repo-relative file so overlapping
     # findings on one file are applied together in a single edit.
     per_file: dict[str, list[tuple[dict, str, str]]] = {}
+    selected_locations: set[tuple[str, str, int]] = set()
     for f in eligible:
         if f.get("rule_id") not in SECRET_RULE_IDS:
             continue
@@ -847,8 +917,24 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                 f, "finding no longer matches on re-fetch (repo changed)",
                 file=repo_rel))
             continue
-        raw_entry, raw_value = match
-        per_file.setdefault(repo_rel, []).append((f, raw_entry, raw_value))
+        fresh, raw_value = match
+        current = {**f, "file": fresh.file, "line": fresh.line,
+                   "context": fresh.context}
+        if not _is_production_code(current):
+            plan.skipped.append(_skipped(
+                current, f"{fresh.context or 'test path'} on fresh scan — "
+                "non-production context; file left unchanged", file=repo_rel))
+            continue
+        occurrences = [(current, fresh.file, raw_value)] + _grouped_secret_occurrences(
+            current, raw_value, fresh_by_file
+        )
+        for current, entry, value in occurrences:
+            current_rel = _repo_relative(entry)
+            location = (current["rule_id"], current_rel, current.get("line", 0))
+            if location in selected_locations:
+                continue
+            selected_locations.add(location)
+            per_file.setdefault(current_rel, []).append((current, entry, value))
 
     env_vars_used: set[str] = set()
     for repo_rel, items in per_file.items():
@@ -860,23 +946,14 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                     f, "file not readable on re-fetch", file=repo_rel))
             continue
 
-        # Quoted keys can occur in JSON, YAML, TOML and other data formats.
-        # JSON has the syntax gate below; other formats have no verified way
-        # to evaluate an environment expression, so do not emit a pretend fix.
-        if not repo_rel.lower().endswith((".py", ".json", ".jsonc") + _JS_SUFFIXES):
-            quoted_key = any(
-                f["rule_id"] == "generic-assignment"
-                and (match := _ASSIGNMENT_RULES["generic-assignment"].pattern.fullmatch(raw))
-                and match.group("k") is not None
-                for f, _, raw in items
-            )
-            if quoted_key:
-                for f, _, _ in items:
-                    plan.skipped.append(_skipped(
-                        f, "quoted credential key in an unsupported format; "
-                        "environment substitution requires a manual change",
-                        file=repo_rel))
-                continue
+        if not _secret_format_supported(repo_rel):
+            for f, _, _ in items:
+                plan.skipped.append(_skipped(
+                    f, "unsupported format for automatic secret replacement; "
+                    "configure the credential manually using this format's "
+                    "runtime configuration mechanism, then rotate it",
+                    file=repo_rel))
+            continue
 
         new_text = text
         all_sensitive: list[str] = []

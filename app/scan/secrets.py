@@ -18,6 +18,7 @@ import json
 import re
 import stat
 import zipfile
+import yaml
 from bisect import bisect_right
 from dataclasses import dataclass
 from typing import BinaryIO, Iterator
@@ -449,8 +450,9 @@ RULES: tuple[SecretRule, ...] = (
         # `connection-string-password` documents what that costs when a span
         # and its literal disagree.
         #
-        # Only backtick templates exclude ${...} interpolation. Ordinary
-        # quoted values may contain dollar signs and braces as secret bytes.
+        # Backtick templates exclude ${...} here. Shell expansion is checked
+        # against its source context below; ordinary Python/JS quoted values
+        # may contain dollar signs and braces as secret bytes.
         # The NAME vocabulary is the other half of the rule, and it shipped
         # narrower than the things people actually call a credential:
         #   const authToken = "...."      scanned clean
@@ -562,6 +564,145 @@ RULES: tuple[SecretRule, ...] = (
         "high", 0.5,
     ),
 )
+
+
+# Pure parameter references carry no literal credential. In particular an
+# empty fallback in `${!token_env_name:-}` is not a hardcoded default. A
+# nonempty fallback or literal prefix stays reportable rather than having
+# potentially secret bytes discarded merely because a dollar sign occurs.
+_SHELL_VARIABLE_VALUE = re.compile(
+    r"(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{!?[A-Za-z_][A-Za-z0-9_]*(?::?[-+?])?\})+"
+)
+_SHELL_SHEBANG = re.compile(r"^#![^\n]*\b(?:ba|da|k|z)?sh(?:\s|$)")
+_SHELL_NAMES = frozenset(("sh", "bash", "dash", "ksh", "zsh"))
+_HEREDOC_START = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+
+
+def _shell_variable_offsets(script: str, base: int = 0) -> set[int]:
+    """Locate active quoted assignments without executing shell code.
+
+    Single-quoted strings, comments and heredoc bodies are not executable
+    assignments. This small lexical filter declines ambiguous constructs;
+    it only removes candidates whose entire value is parameter expansion.
+    """
+    generic = next(rule for rule in RULES if rule.id == "generic-assignment")
+    candidates = {
+        match.start() for match in generic.pattern.finditer(script)
+        if match.group("q") == '"'
+        and _SHELL_VARIABLE_VALUE.fullmatch(match.group("value"))
+    }
+    ignored: set[int] = set()
+    quote = ""
+    comment = False
+    heredocs: list[tuple[str, bool]] = []
+    in_heredoc = False
+    index = 0
+    while index < len(script):
+        if in_heredoc:
+            end = script.find("\n", index)
+            end = len(script) if end < 0 else end
+            line = script[index:end].rstrip("\r")
+            delimiter, strip_tabs = heredocs[0]
+            if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                heredocs.pop(0)
+                in_heredoc = bool(heredocs)
+            index = end + 1
+            continue
+        char = script[index]
+        if index in candidates and not quote and not comment:
+            ignored.add(base + index)
+        if char == "\n":
+            comment = False
+            if heredocs and not quote:
+                in_heredoc = True
+        elif not comment:
+            if char == "\\" and quote != "'":
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            elif not quote:
+                if char in "'\"`":
+                    quote = char
+                elif char == "#" and (index == 0 or script[index - 1].isspace()):
+                    comment = True
+                elif script.startswith("<<", index):
+                    marker = _HEREDOC_START.match(script, index)
+                    if marker is None:
+                        # Here strings and computed delimiters need a fuller
+                        # parser; do not suppress later candidates by guessing.
+                        break
+                    heredocs.append((marker.group(3), bool(marker.group(1))))
+                    index = marker.end()
+                    continue
+        index += 1
+    return ignored
+
+
+def _shell_substitution_offsets(name: str, text: str) -> set[int]:
+    """Recognise shell files and the shell run fields of GitHub workflows.
+
+    YAML configuration values and Python/JS run steps are literal data in
+    their own languages. Treating the entire workflow as shell would hide
+    genuine credentials there, so use YAML node spans to delimit run code.
+    """
+    lower = name.lower()
+    if (lower.endswith((".sh", ".bash", ".zsh", ".ksh"))
+            or lower.rsplit("/", 1)[-1] in {".bashrc", ".bash_profile", ".profile", ".zshrc"}
+            or _SHELL_SHEBANG.match(text)):
+        return _shell_variable_offsets(text)
+    if not (_is_ci_workflow_path(name) and lower.endswith((".yml", ".yaml"))):
+        return set()
+    if len(text) > MAX_PYTHON_BYTES or len(text.encode("utf-8")) > MAX_PYTHON_BYTES:
+        return set()  # retain findings when parsing exceeds the source-context budget
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except (yaml.YAMLError, RecursionError):
+        return set()
+    ignored: set[int] = set()
+    pending = [(root, "bash")]
+    seen: set[int] = set()
+    while pending:
+        node, inherited_shell = pending.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.SequenceNode):
+            pending.extend((child, inherited_shell) for child in node.value)
+            continue
+        if not isinstance(node, yaml.MappingNode):
+            continue
+        fields = {key.value: value for key, value in node.value if isinstance(key, yaml.ScalarNode)}
+        shell = inherited_shell
+        runner = fields.get("runs-on")
+        if runner is not None and "windows" in text[runner.start_mark.index:runner.end_mark.index].lower():
+            shell = "pwsh"
+        defaults = fields.get("defaults")
+        if isinstance(defaults, yaml.MappingNode):
+            for key, value in defaults.value:
+                if (isinstance(key, yaml.ScalarNode) and key.value == "run"
+                        and isinstance(value, yaml.MappingNode)):
+                    shell = next((item.value for key, item in value.value
+                                  if isinstance(key, yaml.ScalarNode) and key.value == "shell"
+                                  and isinstance(item, yaml.ScalarNode)), shell)
+        explicit_shell = fields.get("shell")
+        if isinstance(explicit_shell, yaml.ScalarNode):
+            shell = explicit_shell.value
+        run = fields.get("run")
+        if isinstance(run, yaml.ScalarNode) and shell.split(" ", 1)[0] in _SHELL_NAMES:
+            start, end = run.start_mark.index, run.end_mark.index
+            raw = text[start:end]
+            if run.style in {"'", '"'}:
+                # Escaped YAML content needs its own source map. Retain a
+                # candidate when that mapping is uncertain.
+                if raw[1:-1] != run.value:
+                    raw = ""
+                else:
+                    raw = raw[1:-1]
+                    start += 1
+            ignored.update(_shell_variable_offsets(raw, start))
+        pending.extend((child, shell) for child in fields.values())
+    return ignored
 
 
 # These tokens locate SQL predicate clauses without reading keywords inside
@@ -971,6 +1112,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
         for name, text in _iter_text_files(zf, coverage):
             regions = None
             comparison_ranges = None
+            shell_substitutions = None
             next_line_offset = 0
             for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
                 line_offset = next_line_offset
@@ -978,32 +1120,48 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                 line = raw_line.rstrip("\r\n")
                 for rule in RULES:
                     m = rule.pattern.search(line)
-                    if m and rule.id == "sql-secret-assignment" and name.lower().endswith(".sql"):
-                        if comparison_ranges is None:
-                            comparison_ranges = _sql_comparison_ranges(text)
-                        for candidate in rule.pattern.finditer(line):
-                            offset = line_offset + candidate.start()
-                            index = bisect_right(comparison_ranges, offset, key=lambda span: span[0]) - 1
-                            if index < 0 or offset >= comparison_ranges[index][1]:
-                                m = candidate
-                                break
-                        else:
-                            m = None
                     if not m:
                         continue
-                    source_role = None
-                    if rule.id == "connection-string-password":
-                        if regions is None:
-                            regions = []
-                            size = len(text.encode("utf-8"))
-                            if name.endswith(".py") and size <= min(MAX_PYTHON_BYTES, remaining):
-                                remaining -= size
-                                regions = python_regions(text)
-                        # AST columns are UTF-8 byte offsets; regex offsets are characters.
-                        start = (lineno, len(line[:m.start()].encode("utf-8")))
-                        end = (lineno, len(line[:m.end()].encode("utf-8")))
-                        source_role = next((role for lo, col, hi, end_col, role in regions
-                                            if (lo, col) <= start and end <= (hi, end_col)), None)
+                    if regions is None:
+                        regions = []
+                        size = len(text.encode("utf-8"))
+                        if name.endswith(".py") and size <= min(MAX_PYTHON_BYTES, remaining):
+                            remaining -= size
+                            regions = python_regions(text)
+                    for candidate in rule.pattern.finditer(line):
+                        if rule.id == "sql-secret-assignment" and name.lower().endswith(".sql"):
+                            if comparison_ranges is None:
+                                comparison_ranges = _sql_comparison_ranges(text)
+                            offset = line_offset + candidate.start()
+                            index = bisect_right(comparison_ranges, offset, key=lambda span: span[0]) - 1
+                            if index >= 0 and offset < comparison_ranges[index][1]:
+                                continue
+                        if (rule.id == "generic-assignment" and candidate.group("q") == '"'
+                                and _SHELL_VARIABLE_VALUE.fullmatch(candidate.group("value"))):
+                            if shell_substitutions is None:
+                                shell_substitutions = _shell_substitution_offsets(name, text)
+                            if line_offset + candidate.start() in shell_substitutions:
+                                continue
+                        if rule.id in {"generic-assignment", "sql-secret-assignment"}:
+                            value_start = (lineno, len(line[:candidate.start("value")].encode("utf-8")))
+                            value_end = (lineno, len(line[:candidate.end("value")].encode("utf-8")))
+                            # Only an entire formatted field is nonliteral;
+                            # real secret bytes inside its expression or next
+                            # to the field must remain visible.
+                            if any(role == "formatted_value"
+                                   and value_start == (lo, col) and value_end == (hi, end_col)
+                                   for lo, col, hi, end_col, role in regions):
+                                continue
+                        m = candidate
+                        break
+                    else:
+                        continue
+                    # AST columns are UTF-8 byte offsets; regex offsets are characters.
+                    start = (lineno, len(line[:m.start()].encode("utf-8")))
+                    end = (lineno, len(line[:m.end()].encode("utf-8")))
+                    source_role = next((role for lo, col, hi, end_col, role in regions
+                                        if role != "formatted_value"
+                                        and (lo, col) <= start and end <= (hi, end_col)), None)
                     yield (
                         _classify_match(name, lineno, rule, m.group(0), line, source_role),
                         m.group(0),

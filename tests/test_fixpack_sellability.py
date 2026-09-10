@@ -133,14 +133,17 @@ def test_the_finding_still_appears_in_the_report() -> None:
     assert "users" in exposed[0]["title"]
 
 
-def test_findings_from_other_rules_are_left_alone() -> None:
-    """Only propose_read_policy reads the schema, so only its rule can
-    disagree with the rule id. Stamping anything else would be this function
-    inventing a second opinion about rules it does not consult."""
+def test_unsupported_secret_is_stamped_without_disabling_env_file_removal() -> None:
+    """A dotenv value cannot become a Python/JS expression, but removing the
+    committed dotenv file is independently supported and stays sellable."""
     _data, findings = audit({**UNFIXABLE, "r/.env": "STRIPE_SECRET_KEY=sk_live_" + "a" * 30})
     for f in findings:
-        if f["rule_id"] != "rls-table-anon-readable":
+        if f["rule_id"] == "stripe-live-key":
+            assert f["fixpack_eligible"] is False
+        elif f["rule_id"] != "rls-table-anon-readable":
             assert "fixpack_eligible" not in f, f["rule_id"]
+    assert has_auto_fixable_findings(findings)
+    assert ".env" in build_fixpack_plan(_data, findings).deletions
 
 
 def test_an_unreadable_schema_does_not_refuse_the_sale() -> None:

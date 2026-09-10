@@ -133,7 +133,16 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-09-11: require external-operation idempotency and retry-budget prerequisites in advice.
 # 2026-09-09-13: bind fact limits, local Intl handlers and parsed-string guards to individual claims.
 # 2026-09-09-14: bind retry and duplicate-call premises, preserving conditional concurrency context.
-AUDIT_ENGINE_VERSION = "2026-09-10-33"
+# 2026-09-10-1: distinguish source interpolation from literal credentials and
+# refuse secret Fix Packs for formats without a verified environment rewrite.
+# 2026-09-10-2: dependency-known-vulnerability -- a new PAID stage that resolves
+# the lockfiles' versions and asks the OSV database about them. It changes what
+# a paid audit reports for unchanged bytes (and a new rule id is exactly the
+# case this constant exists for), so the bump is not optional. Its answers are
+# true of the day they were asked: the manifest records `sca_asked_at`, and a
+# cached row older than SCA_FRESHNESS_TTL_DAYS is reported as stale rather than
+# presented as current.
+AUDIT_ENGINE_VERSION = "2026-09-10-2"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

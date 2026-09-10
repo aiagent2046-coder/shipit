@@ -1,6 +1,6 @@
 """Mechanical CORS / SQLi rewrites for Fix Pack plans.
 
-Complements secret scrubbing: pure text transforms over repo-relative
+Complements secret scrubbing: source-preserving transforms over repo-relative
 file bodies. Callers run ``_validate_syntax`` before accepting a rewrite
 into ``plan.files``.
 
@@ -14,8 +14,14 @@ that needs multi-statement understanding is left alone.
 
 from __future__ import annotations
 
+import ast
+import json
 import re
 from dataclasses import dataclass
+
+import tree_sitter_javascript
+import tree_sitter_typescript
+from tree_sitter import Language, Parser
 
 
 @dataclass(frozen=True)
@@ -26,56 +32,31 @@ class StaticFix:
     detail: str
 
 
-_FASTAPI_ORIGINS_STAR = re.compile(
-    r"(allow_origins\s*=\s*)\[\s*[\"']\*[\"']\s*\]",
-    re.IGNORECASE,
-)
-_FASTAPI_CRED = re.compile(r"allow_credentials\s*=\s*True", re.IGNORECASE)
-
-_EXPRESS_ORIGIN_TRUE = re.compile(
-    r"(origin\s*:\s*)true\b",
-    re.IGNORECASE,
-)
-_EXPRESS_ORIGIN_STAR = re.compile(
-    r"(origin\s*:\s*)[\"']\*[\"']",
-    re.IGNORECASE,
-)
-_EXPRESS_CRED = re.compile(r"credentials\s*:\s*true", re.IGNORECASE)
-
-_FLASK_ORIGINS_STAR = re.compile(
-    r"(origins\s*=\s*)[\"']\*[\"']",
-    re.IGNORECASE,
-)
-_FLASK_CRED = re.compile(r"supports_credentials\s*=\s*True", re.IGNORECASE)
-
-_HEADER_ORIGIN_STAR = re.compile(
-    r"(Access-Control-Allow-Origin[\"'\s:=]+)[\"']?\*",
-    re.IGNORECASE,
-)
-_HEADER_CRED_TRUE = re.compile(
-    r"Access-Control-Allow-Credentials[\"'\s:=]+[\"']?true",
-    re.IGNORECASE,
-)
-
-# A PLACEHOLDER, and every `details` string that reports one of these says so.
-#
-# Locking an app to localhost:3000 closes the hole and breaks the customer's
-# production frontend if the PR is merged unread. The diff shows it, but the
-# summary line used to read only "pinned FastAPI allow_origins away from `*`",
-# which describes the safety half and hides the breaking half -- a reader
-# skimming the fix list would merge it. Naming the placeholder is what makes
-# the fix list agree with the diff underneath it.
-#
-# Why not substitute an env lookup on the Python paths, as the JS one does:
-# `os.environ[...]` is only valid where `os` is already imported, and
-# _validate_syntax parses the file rather than resolving names, so an injected
-# lookup would pass validation and raise NameError in production -- trading a
-# CORS hole for a crash. An inline "change me" comment is out for the same
-# class of reason: _HEADER_ORIGIN_STAR also matches .json and .yml config,
-# where a comment is a syntax error. Disclosure is the honest fix here.
-_CORS_SAFE_ORIGIN_PY = '["http://localhost:3000"]'
-_CORS_SAFE_ORIGIN_JS = "process.env.CORS_ORIGIN || 'http://localhost:3000'"
-_CORS_SAFE_ORIGIN_HEADER = "http://localhost:3000"
+# These placeholders require customer configuration before the PR is merged.
+# Keep that consequence explicit in every reported fix.
+_CORS_DETAILS = {
+    "fastapi": (
+        'replaced FastAPI allow_origins=["*"] with the placeholder '
+        "http://localhost:3000 — set your real origin before merging"
+    ),
+    "express": (
+        "replaced Express wildcard origin with process.env.CORS_ORIGIN "
+        "(falls back to http://localhost:3000 — set CORS_ORIGIN)"
+    ),
+    "flask": (
+        "replaced Flask CORS origins='*' with the placeholder "
+        "http://localhost:3000 — set your real origin before merging"
+    ),
+    "header": (
+        "replaced Access-Control-Allow-Origin * with the placeholder "
+        "http://localhost:3000 — set your real origin before merging"
+    ),
+}
+_SAFE_ORIGIN = "http://localhost:3000"
+_ORIGIN_HEADER = "access-control-allow-origin"
+_CRED_HEADER = "access-control-allow-credentials"
+# Each edit targets a value node; its byte coordinates come from a parser.
+_CorsEdit = tuple[int, int, str, str]
 
 
 def apply_cors_fixes(files: dict[str, str]) -> tuple[dict[str, str], list[StaticFix]]:
@@ -97,74 +78,182 @@ def apply_cors_fixes(files: dict[str, str]) -> tuple[dict[str, str], list[Static
     return updates, fixes
 
 
+def _python_cors_edits(text: str) -> list[_CorsEdit]:
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return []
+    data = text.encode("utf-8")
+    line_offsets = [0] + [match.end() for match in re.finditer(rb"\r\n|\r|\n", data)]
+    edits: list[_CorsEdit] = []
+
+    def replace(node: ast.AST, value: str, kind: str) -> None:
+        edits.append((line_offsets[node.lineno - 1] + node.col_offset,
+                      line_offsets[node.end_lineno - 1] + node.end_col_offset,
+                      value, kind))
+
+    def literal(node: ast.AST | None, value: object) -> bool:
+        return isinstance(node, ast.Constant) and type(node.value) is type(value) and node.value == value
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            # Pair options within one call, never with text in another call,
+            # a docstring, a comment, or a nested string example.
+            options = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+            origins = options.get("allow_origins")
+            if (literal(options.get("allow_credentials"), True)
+                    and isinstance(origins, ast.List) and len(origins.elts) == 1
+                    and literal(origins.elts[0], "*")):
+                replace(origins, f'["{_SAFE_ORIGIN}"]', "fastapi")
+            origins = options.get("origins")
+            if literal(options.get("supports_credentials"), True) and literal(origins, "*"):
+                replace(origins, f'"{_SAFE_ORIGIN}"', "flask")
+        elif isinstance(node, ast.Dict):
+            if any(key is None for key in node.keys):
+                continue  # Unpacked values may override the apparent headers.
+            options = {key.value.lower(): value for key, value in zip(node.keys, node.values)
+                       if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+            origin = options.get(_ORIGIN_HEADER)
+            credentials = options.get(_CRED_HEADER)
+            if literal(origin, "*") and literal(credentials, "true"):
+                replace(origin, f'"{_SAFE_ORIGIN}"', "header")
+    return edits
+
+
+def _javascript_cors_edits(path: str, text: str) -> list[_CorsEdit]:
+    data = text.encode("utf-8")
+    if len(data) > 256_000:
+        return []
+    is_json = path.endswith(".json")
+    if is_json:
+        try:
+            json.loads(text)
+        except (ValueError, RecursionError):
+            return []
+        # JSON objects are JS expressions, but at statement level braces can
+        # mean a block. The wrapper is used only for parsing, never persisted.
+        data = b"(" + data + b")"
+    try:
+        grammar = (tree_sitter_typescript.language_tsx() if path.endswith(".tsx")
+                   else tree_sitter_typescript.language_typescript() if path.endswith(".ts")
+                   else tree_sitter_javascript.language())
+        root = Parser(Language(grammar)).parse(data).root_node
+    except (ValueError, OverflowError):
+        return []
+    if root.has_error:
+        return []
+    edits: list[_CorsEdit] = []
+    pending = [root]
+
+    def raw(node) -> str:
+        return data[node.start_byte:node.end_byte].decode("utf-8")
+
+    def string_value(node) -> str | None:
+        if node is None or node.type != "string":
+            return None
+        # The relevant option names and values need no escape sequences.
+        value = raw(node)[1:-1]
+        return value if "\\" not in value else None
+
+    def replace(node, value: str, kind: str) -> None:
+        offset = 1 if is_json else 0
+        edits.append((node.start_byte - offset, node.end_byte - offset, value, kind))
+
+    while pending:
+        node = pending.pop()
+        pending.extend(node.named_children)
+        if node.type != "object":
+            continue
+        if any(child.type not in {"pair", "comment"} for child in node.named_children):
+            continue  # Spreads/accessors can override a literal option.
+        options = {}
+        for pair in node.named_children:
+            if pair.type != "pair":
+                continue
+            key = pair.child_by_field_name("key")
+            value = pair.child_by_field_name("value")
+            if key is None or value is None:
+                continue
+            name = string_value(key) if key.type == "string" else raw(key)
+            if name is not None:
+                options[name.lower()] = value
+        origin = options.get("origin")
+        cred = options.get("credentials")
+        if (not is_json and origin is not None and cred is not None and cred.type == "true"
+                and (origin.type == "true" or string_value(origin) == "*")):
+            replace(origin, f"process.env.CORS_ORIGIN || '{_SAFE_ORIGIN}'", "express")
+        origin = options.get(_ORIGIN_HEADER)
+        cred = options.get(_CRED_HEADER)
+        if string_value(origin) == "*" and string_value(cred) == "true":
+            replace(origin, f'"{_SAFE_ORIGIN}"', "header")
+    return edits
+
+
+def _nginx_cors_edits(text: str) -> list[_CorsEdit]:
+    # Tokenize complete strings (including multiline examples) and comments
+    # before recognizing directives. Pair headers only within the same block.
+    token_re = re.compile(
+        r"(?P<comment>\#[^\r\n]*)|(?P<string>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')"
+        r"|(?P<delimiter>[{};])|(?P<word>[^\s{};\"'\#]+)", re.DOTALL,
+    )
+    stack = [0]
+    next_scope = 0
+    statement: list[re.Match[str]] = []
+    directives: list[tuple[int, str, re.Match[str]]] = []
+    previous_end = 0
+    for token in token_re.finditer(text):
+        if text[previous_end:token.start()].strip():
+            return []  # Unmatched quote or another unsupported token.
+        previous_end = token.end()
+        if token.lastgroup == "comment":
+            continue
+        value = token.group()
+        if token.lastgroup != "delimiter":
+            statement.append(token)
+        elif value == "{":
+            next_scope += 1
+            stack.append(next_scope)
+            statement = []
+        elif value == "}":
+            if len(stack) == 1 or statement:
+                return []
+            stack.pop()
+        else:
+            if (len(statement) in {3, 4} and statement[0].group() == "add_header"
+                    and (len(statement) == 3 or statement[3].group() == "always")):
+                name = statement[1].group().lower()
+                if name in {_ORIGIN_HEADER, _CRED_HEADER}:
+                    directives.append((stack[-1], name, statement[2]))
+            statement = []
+    if len(stack) != 1 or statement or text[previous_end:].strip():
+        return []
+    credential_scopes = {scope for scope, name, value in directives
+                         if name == _CRED_HEADER and value.group().strip("\"'").lower() == "true"}
+    return [(len(text[:value.start()].encode("utf-8")), len(text[:value.end()].encode("utf-8")),
+             f'"{_SAFE_ORIGIN}"', "header")
+            for scope, name, value in directives if scope in credential_scopes
+            and name == _ORIGIN_HEADER and value.group().strip("\"'") == "*"]
+
+
 def _fix_cors_in_text(path: str, text: str) -> tuple[str | None, str]:
-    changed = False
-    details: list[str] = []
-    out = text
-
-    if _FASTAPI_CRED.search(out) and _FASTAPI_ORIGINS_STAR.search(out):
-        out2, n = _FASTAPI_ORIGINS_STAR.subn(
-            r"\1" + _CORS_SAFE_ORIGIN_PY, out, count=1,
-        )
-        if n:
-            out = out2
-            changed = True
-            details.append(
-                "replaced FastAPI allow_origins=[\"*\"] with the placeholder "
-                "http://localhost:3000 — set your real origin before merging"
-            )
-
-    if _EXPRESS_CRED.search(out):
-        if _EXPRESS_ORIGIN_TRUE.search(out):
-            out2, n = _EXPRESS_ORIGIN_TRUE.subn(
-                r"\1" + _CORS_SAFE_ORIGIN_JS, out, count=1,
-            )
-            if n:
-                out = out2
-                changed = True
-                details.append(
-                    "replaced Express origin:true with process.env.CORS_ORIGIN "
-                    "(falls back to http://localhost:3000 — set CORS_ORIGIN)"
-                )
-        if _EXPRESS_ORIGIN_STAR.search(out):
-            out2, n = _EXPRESS_ORIGIN_STAR.subn(
-                r"\1" + _CORS_SAFE_ORIGIN_JS, out, count=1,
-            )
-            if n:
-                out = out2
-                changed = True
-                details.append(
-                    "replaced Express origin:'*' with process.env.CORS_ORIGIN "
-                    "(falls back to http://localhost:3000 — set CORS_ORIGIN)"
-                )
-
-    if _FLASK_CRED.search(out) and _FLASK_ORIGINS_STAR.search(out):
-        out2, n = _FLASK_ORIGINS_STAR.subn(
-            r'\1"http://localhost:3000"', out, count=1,
-        )
-        if n:
-            out = out2
-            changed = True
-            details.append(
-                "replaced Flask CORS origins='*' with the placeholder "
-                "http://localhost:3000 — set your real origin before merging"
-            )
-
-    if _HEADER_CRED_TRUE.search(out) and _HEADER_ORIGIN_STAR.search(out):
-        out2, n = _HEADER_ORIGIN_STAR.subn(
-            r"\1" + _CORS_SAFE_ORIGIN_HEADER, out, count=1,
-        )
-        if n:
-            out = out2
-            changed = True
-            details.append(
-                "replaced Access-Control-Allow-Origin * with the placeholder "
-                "http://localhost:3000 — set your real origin before merging"
-            )
-
-    if not changed:
+    lower = path.lower()
+    if lower.endswith(".py"):
+        edits = _python_cors_edits(text)
+    elif lower.endswith((".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx", ".json")):
+        edits = _javascript_cors_edits(lower, text)
+    elif lower.endswith(".conf"):
+        edits = _nginx_cors_edits(text)
+    else:
+        # Documentation and unsupported syntaxes cannot supply executable
+        # CORS evidence. Leave them untouched instead of guessing at syntax.
         return None, ""
-    return out, "; ".join(details)
+    if not edits:
+        return None, ""
+    out = text.encode("utf-8")
+    for start, end, value, _kind in sorted(edits, reverse=True):
+        out = out[:start] + value.encode("utf-8") + out[end:]
+    detail = "; ".join(dict.fromkeys(_CORS_DETAILS[kind] for _, _, _, kind in edits))
+    return out.decode("utf-8"), detail
 
 
 _PY_EXECUTE_FSTRING = re.compile(
