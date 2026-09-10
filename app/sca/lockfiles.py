@@ -28,8 +28,12 @@ MAX_LOCKFILE_BYTES = 2_000_000
 
 # The bound is on the LOOKUP, not on the repository: every dependency costs one
 # entry in a network request, and an audit must not become unbounded work
-# because a submitted archive happens to be a monorepo.
-MAX_DEPENDENCIES = 300
+# because a submitted archive happens to be a monorepo. Raised from 300 after
+# measuring this repository's own lockfile at 327 entries -- a cap that low
+# truncates an ordinary monorepo, and every entry past it is silently never
+# asked about. 2000 is eight batches, which the caller's own bounds already
+# dwarf; what it truncates is reported, not swallowed.
+MAX_DEPENDENCIES = 2000
 
 # Root-first, so a nested lockfile (a vendored copy, a fixture) never displaces
 # the one at the repository root when both are present and the cap is reached.
@@ -60,6 +64,13 @@ class Dependency:
     manifest: str          # archive-relative path of the lockfile it came from
     line: int = 0          # 1-based, and only where the file is line-oriented
     direct: bool = False   # named in package.json; unknown for other ecosystems
+    # True when the lockfile says the package is installed for development
+    # only, False when the lockfile says otherwise, and None when the format
+    # does not record it. The three are kept apart because "not a production
+    # dependency" and "we cannot tell" lead a reader to different actions:
+    # measured on this repository's own package-lock.json, 170 of 327 entries
+    # carry dev: true, so the distinction is not a formality.
+    development: bool | None = None
 
 
 def normalize_pypi(name: str) -> str:
@@ -133,7 +144,8 @@ def _json_dependencies(name: str, text: str, direct_names: set[str],
             # package, and the earlier ones only say who depends on it.
             dep_name = location.rsplit("node_modules/", 1)[-1]
             out.append(Dependency("npm", dep_name, version, name,
-                                  direct=dep_name in direct_names))
+                                  direct=dep_name in direct_names,
+                                  development=entry.get("dev") is True))
         return
     dependencies = data.get("dependencies")
     if isinstance(dependencies, dict):      # lockfileVersion 1
@@ -143,7 +155,8 @@ def _json_dependencies(name: str, text: str, direct_names: set[str],
             version = entry.get("version")
             if isinstance(version, str) and version:
                 out.append(Dependency("npm", dep_name, version, name,
-                                      direct=dep_name in direct_names))
+                                      direct=dep_name in direct_names,
+                                      development=entry.get("dev") is True))
 
 
 def _requirement_lines(name: str, text: str, out: list[Dependency]) -> None:
@@ -172,7 +185,11 @@ def _poetry_packages(name: str, text: str, out: list[Dependency]) -> None:
             continue
         package, version = entry.get("name"), entry.get("version")
         if isinstance(package, str) and isinstance(version, str) and version:
-            out.append(Dependency("PyPI", normalize_pypi(package), version, name))
+            # Poetry 1.x wrote `category = "dev"`; poetry 2.x stopped. Absence
+            # is therefore "not recorded", not "production".
+            category = entry.get("category")
+            out.append(Dependency("PyPI", normalize_pypi(package), version, name,
+                                  development=True if category == "dev" else None))
 
 
 def _go_sum_lines(name: str, text: str, out: list[Dependency]) -> None:
@@ -212,8 +229,8 @@ def _direct_names(archive: zipfile.ZipFile, manifest_path: str) -> set[str]:
     return names
 
 
-def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str]]:
-    """(dependencies, lockfiles read), deduplicated and capped.
+def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str], int]:
+    """(dependencies, lockfiles read, found before the cap), deduplicated.
 
     Two lockfiles may record the same package at the same version -- a
     monorepo's root and a workspace, say. That is one dependency to look up,
@@ -237,7 +254,14 @@ def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str]]:
 
     unique: dict[tuple[str, str, str], Dependency] = {}
     for dependency in collected:
-        unique.setdefault(
-            (dependency.ecosystem, dependency.name, dependency.version), dependency)
+        key = (dependency.ecosystem, dependency.name, dependency.version)
+        kept = unique.get(key)
+        if kept is None:
+            unique[key] = dependency
+        elif kept.development is True and dependency.development is False:
+            # The same package recorded as both a development and a production
+            # dependency: it IS in the production install, so the weaker claim
+            # must not win just because it was read first.
+            unique[key] = dependency
     ordered = list(unique.values())
-    return ordered[:MAX_DEPENDENCIES], manifests
+    return ordered[:MAX_DEPENDENCIES], manifests, len(ordered)

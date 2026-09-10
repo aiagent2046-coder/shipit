@@ -41,7 +41,7 @@ def lockfile_v3() -> str:
 
 
 def test_package_lock_resolves_installed_versions():
-    deps, manifests = collect_dependencies(make_zip({
+    deps, manifests, _found = collect_dependencies(make_zip({
         "package.json": json.dumps({"dependencies": {"lodash": "^4.17.0"}}),
         "package-lock.json": lockfile_v3(),
     }))
@@ -53,14 +53,14 @@ def test_package_lock_resolves_installed_versions():
 
 
 def test_entries_that_are_not_packages_are_skipped():
-    deps, _ = collect_dependencies(make_zip({"package-lock.json": lockfile_v3()}))
+    deps, _, _found = collect_dependencies(make_zip({"package-lock.json": lockfile_v3()}))
     assert all(d.version for d in deps)
     assert "app" not in {d.name for d in deps}, "the root project is not a dependency"
     assert "workspace" not in {d.name for d in deps}, "a link entry has no version"
 
 
 def test_direct_dependency_flag_comes_from_package_json():
-    deps, _ = collect_dependencies(make_zip({
+    deps, _, _found = collect_dependencies(make_zip({
         "package.json": json.dumps({"dependencies": {"lodash": "^4.17.0"}}),
         "package-lock.json": lockfile_v3(),
     }))
@@ -76,13 +76,13 @@ def test_legacy_lockfile_version_one_is_read():
         "dependencies": {"lodash": {"version": "4.17.4"},
                          "chalk": {"version": "2.4.2"}},
     })
-    deps, _ = collect_dependencies(make_zip({"package-lock.json": legacy}))
+    deps, _, _found = collect_dependencies(make_zip({"package-lock.json": legacy}))
     assert {(d.name, d.version) for d in deps} == {("lodash", "4.17.4"),
                                                   ("chalk", "2.4.2")}
 
 
 def test_unreadable_lockfile_is_not_an_empty_repository():
-    deps, manifests = collect_dependencies(make_zip({
+    deps, manifests, _found = collect_dependencies(make_zip({
         "package-lock.json": "{ this is not json"}))
     assert deps == []
     assert manifests == ["package-lock.json"], "the file was found and could not be read"
@@ -95,7 +95,7 @@ def test_unreadable_lockfile_is_not_an_empty_repository():
     ("my_package==1.0.0", ("my-package", "1.0.0")),
 ])
 def test_requirements_pins_are_resolved_and_normalized(line, expected):
-    deps, _ = collect_dependencies(make_zip({"requirements.txt": line + "\n"}))
+    deps, _, _found = collect_dependencies(make_zip({"requirements.txt": line + "\n"}))
     assert [(d.name, d.version) for d in deps] == [expected]
     assert deps[0].ecosystem == "PyPI"
 
@@ -112,13 +112,13 @@ def test_requirements_pins_are_resolved_and_normalized(line, expected):
     "django",                           # unpinned
 ])
 def test_requirements_lines_without_a_resolved_version_are_skipped(line):
-    deps, manifests = collect_dependencies(make_zip({"requirements.txt": line + "\n"}))
+    deps, manifests, _found = collect_dependencies(make_zip({"requirements.txt": line + "\n"}))
     assert deps == []
     assert manifests == ["requirements.txt"]
 
 
 def test_requirements_records_the_line_it_read():
-    deps, _ = collect_dependencies(make_zip({
+    deps, _, _found = collect_dependencies(make_zip({
         "requirements.txt": "\n".join(["# first", "flask==1.0.0", "django==2.0.0"]) + "\n"}))
     assert {d.line for d in deps} == {2, 3}
 
@@ -133,7 +133,7 @@ def test_poetry_lock_packages_are_read():
         'name = "requests"',
         'version = "2.19.0"',
     ])
-    deps, manifests = collect_dependencies(make_zip({"poetry.lock": poetry}))
+    deps, manifests, _found = collect_dependencies(make_zip({"poetry.lock": poetry}))
     assert {(d.name, d.version, d.ecosystem) for d in deps} == {
         ("django", "2.0.0", "PyPI"), ("requests", "2.19.0", "PyPI")}
     assert manifests == ["poetry.lock"]
@@ -145,7 +145,7 @@ def test_go_sum_reads_modules_and_ignores_the_go_mod_hashes():
         "github.com/gin-gonic/gin v1.6.3/go.mod h1:def=",
         "golang.org/x/text v0.3.3 h1:ghi=",
     ])
-    deps, manifests = collect_dependencies(make_zip({"go.sum": go}))
+    deps, manifests, _found = collect_dependencies(make_zip({"go.sum": go}))
     assert [(d.name, d.version, d.ecosystem) for d in deps] == [
         ("github.com/gin-gonic/gin", "v1.6.3", "Go"),
         ("golang.org/x/text", "v0.3.3", "Go"),
@@ -154,14 +154,14 @@ def test_go_sum_reads_modules_and_ignores_the_go_mod_hashes():
 
 
 def test_vendored_lockfiles_inside_node_modules_are_ignored():
-    deps, manifests = collect_dependencies(make_zip({
+    deps, manifests, _found = collect_dependencies(make_zip({
         "web/node_modules/some-package/package-lock.json": lockfile_v3()}))
     assert deps == []
     assert manifests == []
 
 
 def test_the_root_lockfile_wins_over_a_nested_one():
-    deps, manifests = collect_dependencies(make_zip({
+    deps, manifests, _found = collect_dependencies(make_zip({
         "package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
             "node_modules/rootdep": {"version": "1.0.0"}}}),
         "apps/web/package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
@@ -172,7 +172,7 @@ def test_the_root_lockfile_wins_over_a_nested_one():
 
 
 def test_the_same_version_twice_is_one_dependency():
-    deps, _ = collect_dependencies(make_zip({
+    deps, _, _found = collect_dependencies(make_zip({
         "package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
             "node_modules/a": {"version": "1.0.0"}}}),
         "apps/api/package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
@@ -181,16 +181,18 @@ def test_the_same_version_twice_is_one_dependency():
     assert len(deps) == 1
 
 
-def test_the_lookup_is_bounded():
+def test_the_lookup_is_bounded_and_reports_what_the_cap_dropped():
     packages = {f"node_modules/pkg{i}": {"version": "1.0.0"}
                 for i in range(MAX_DEPENDENCIES + 50)}
-    deps, _ = collect_dependencies(make_zip({
+    deps, _, found = collect_dependencies(make_zip({
         "package-lock.json": json.dumps({"lockfileVersion": 3, "packages": packages})}))
     assert len(deps) == MAX_DEPENDENCIES
+    assert found == MAX_DEPENDENCIES + 50, (
+        "the number seen is what makes the truncation visible to a reader")
 
 
 def test_an_archive_with_no_lockfile_yields_nothing():
-    deps, manifests = collect_dependencies(make_zip({"src/app.py": "print(1)\n"}))
+    deps, manifests, _found = collect_dependencies(make_zip({"src/app.py": "print(1)\n"}))
     assert (deps, manifests) == ([], [])
 
 
@@ -200,3 +202,46 @@ def test_an_archive_with_no_lockfile_yields_nothing():
 ])
 def test_pypi_normalization(raw, expected):
     assert normalize_pypi(raw) == expected
+
+
+def test_npm_dev_flag_is_carried_and_its_absence_means_production():
+    """Measured on this repository's own lockfile: 170 of 327 entries carry
+    dev: true, so the flag is common enough to change what a reader sees."""
+    deps, _, _found = collect_dependencies(make_zip({"package-lock.json": json.dumps({
+        "lockfileVersion": 3, "packages": {
+            "node_modules/devdep": {"version": "1.0.0", "dev": True},
+            "node_modules/proddep": {"version": "1.0.0"}}})}))
+    by_name = {d.name: d for d in deps}
+    assert by_name["devdep"].development is True
+    assert by_name["proddep"].development is False
+
+
+def test_formats_that_do_not_record_development_say_unknown_not_production():
+    for entries in ({"requirements.txt": "django==2.0.0\n"},
+                    {"go.sum": "github.com/x/y v1.0.0 h1:abc=\n"}):
+        deps, _, _found = collect_dependencies(make_zip(entries))
+        assert deps[0].development is None, (
+            "silence about development is not a claim that it is production")
+
+
+def test_poetry_category_dev_is_read_and_its_absence_is_unknown():
+    poetry = "\n".join([
+        "[[package]]", 'name = "pytest"', 'version = "7.0.0"', 'category = "dev"',
+        "", "[[package]]", 'name = "requests"', 'version = "2.19.0"', "",
+    ])
+    deps, _, _found = collect_dependencies(make_zip({"poetry.lock": poetry}))
+    by_name = {d.name: d for d in deps}
+    assert by_name["pytest"].development is True
+    assert by_name["requests"].development is None
+
+
+def test_a_package_recorded_as_dev_and_production_counts_as_production():
+    nested = json.dumps({"lockfileVersion": 3, "packages": {
+        "node_modules/shared": {"version": "1.0.0"}}})
+    root = json.dumps({"lockfileVersion": 3, "packages": {
+        "node_modules/shared": {"version": "1.0.0", "dev": True}}})
+    deps, _, _found = collect_dependencies(make_zip({
+        "package-lock.json": root, "apps/api/package-lock.json": nested}))
+    assert len(deps) == 1
+    assert deps[0].development is False, (
+        "it IS in the production install; the weaker claim must not win")

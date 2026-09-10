@@ -18,6 +18,7 @@ from pathlib import Path
 from app.logging_config import configure_logging
 from app.ingest.stack_detect import detect_stack
 from app.ingest.validators import ArchiveValidationError, validate_zip
+from app.sca.stage import sca_client_for
 from app.llm.client import LLMClient
 from app.scan.pipeline import run_scan
 
@@ -30,12 +31,19 @@ def main() -> int:
     # lastResort also drops anything under WARNING -- one WARNING carrying a
     # token is all that stands between "safe by accident" and the journal.
     configure_logging()
-    if len(sys.argv) not in (2, 3):
-        print("usage: python -m app.audit_cli <archive.zip> [report.html]",
+    # `--sca` is an explicit opt-in, and deliberately not the default: this
+    # tool audits a repository that is usually someone else's, and the
+    # dependency check is the one part of a scan that sends anything to a
+    # third party. The operator decides that per run; the service decides it
+    # per entitlement (see app/sca/stage.py:sca_client_for).
+    with_sca = "--sca" in sys.argv[1:]
+    args = [a for a in sys.argv[1:] if a != "--sca"]
+    if len(args) not in (1, 2):
+        print("usage: python -m app.audit_cli <archive.zip> [report.html] [--sca]",
               file=sys.stderr)
         return 2
 
-    raw = Path(sys.argv[1]).read_bytes()
+    raw = Path(args[0]).read_bytes()
     buf = io.BytesIO(raw)
 
     try:
@@ -47,20 +55,22 @@ def main() -> int:
     buf.seek(0)
     stack = detect_stack(buf)
 
-    scan = run_scan(raw, LLMClient())
+    scan = run_scan(raw, LLMClient(),
+                    sca_client=sca_client_for(paid=True, requested=with_sca))
 
     report = {
         "stack": stack.value,
         "score": scan["score"],
         "findings": scan["findings"],
         "llm": scan["llm"],
+        "sca": scan.get("sca"),
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
     if len(sys.argv) == 3:
         from app.report.html import render_report
-        out = Path(sys.argv[2])
-        out.write_text(render_report(report, project_name=Path(sys.argv[1]).stem))
+        out = Path(args[1])
+        out.write_text(render_report(report, project_name=Path(args[0]).stem))
         print(f"html report: {out}", file=sys.stderr)
     return 0
 

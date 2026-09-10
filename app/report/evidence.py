@@ -9,6 +9,7 @@ import json
 import re
 
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
+from app.sca.stage import freshness
 from app.scan.claim_evidence import (
     narrative_review_checks, partial_contradicted, source_assessments, syntax_contradicted, unsupported_transport,
 )
@@ -358,6 +359,54 @@ def coverage_rows(score: dict, findings: list[dict]) -> list[tuple[str, str]]:
     return rows
 
 
+def _dependency_row(manifest: dict) -> tuple[str, str]:
+    """What was asked about the dependencies, and when.
+
+    Computed HERE, at read time, and not stored with the score: the same
+    stored row is served today and in three weeks, and an answer about
+    advisories ages. A date recorded at scan time would keep calling itself
+    current forever.
+    """
+    skipped = manifest.get("sca_skipped_reason")
+    resolved = manifest.get("sca_dependencies")
+    found = manifest.get("sca_dependencies_found")
+    if skipped == "no_client":
+        if resolved:
+            return ("Dependencies checked",
+                    "Not checked in this audit. The resolved versions were read "
+                    f"from the lockfile ({resolved} packages), but the "
+                    "vulnerability database was not queried.")
+        return ("Dependencies checked",
+                "Not checked in this audit. This check is part of a paid audit.")
+    if skipped == "no_lockfile":
+        return ("Dependencies checked",
+                "No lockfile was found, so there were no resolved versions to "
+                "look up. A range in a manifest is not a version, and guessing "
+                "one would report on software the project may not install.")
+    if isinstance(skipped, str) and skipped.startswith("osv_unavailable"):
+        return ("Dependencies checked",
+                f"Not checked: the vulnerability database could not be reached "
+                f"({skipped.removeprefix('osv_unavailable: ')}). A missing "
+                "answer here is not a clean result.")
+    if not manifest.get("sca_asked_at"):
+        return ("Dependencies checked", "Not recorded for this audit")
+    asked = str(manifest["sca_asked_at"])[:10]
+    state = freshness(str(manifest["sca_asked_at"]))
+    counted = (f"{resolved} of {found} resolved packages"
+               if isinstance(found, int) and found > (resolved or 0)
+               else f"{resolved} resolved packages")
+    findings = manifest.get("sca_findings")
+    found_text = (f"; {findings} reported" if isinstance(findings, int) and findings
+                  else "; no known vulnerabilities for those versions")
+    aged = ("" if state == "fresh" else
+            " This answer was true of that date; advisories published since are "
+            "not in it.")
+    return ("Dependencies checked",
+            f"Queried {asked} against the OSV database: {counted}{found_text}. "
+            f"Lockfile versions only; whether vulnerable code is reachable from "
+            f"this application was not checked.{aged}")
+
+
 def manifest_rows(score: dict) -> list[tuple[str, str]]:
     manifest = score.get("scan_manifest")
     if not isinstance(manifest, dict):
@@ -368,6 +417,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Scan engine", manifest.get("engine_version") or "Not recorded"),
         ("Files in archive", str(manifest.get("archive_files", "Not recorded"))),
         ("Static checks run", ", ".join(manifest.get("static_checks", [])) or "Not recorded"),
+        _dependency_row(manifest),
         ("Last responding model", manifest.get("model") or "No model response recorded"),
         ("Model responses", str(manifest.get("model_calls", 0))),
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),

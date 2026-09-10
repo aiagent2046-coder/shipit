@@ -117,7 +117,9 @@ def test_a_vulnerable_pinned_version_is_reported():
     assert finding.confidence == 0.9
     assert stats["checks_run"] == [CHECKS_RUN_KEY]
     assert stats["dependencies"] == 1 and stats["advisories"] == 1
+    assert stats["dependencies_found"] == 1
     assert stats["findings"] == 1 and stats["skipped_reason"] is None
+    assert stats["asked_at"], "an answer that is true only of today must say when"
 
 
 def test_the_finding_does_not_claim_the_code_is_exploitable():
@@ -141,6 +143,7 @@ def test_no_lockfile_asks_nothing_and_says_so():
                                    client_for(transport))
     assert findings == []
     assert stats["skipped_reason"] == "no_lockfile"
+    assert stats["asked_at"] is None, "nobody was asked, so there is no date"
     assert transport.posts == [], "nothing to look up means no request"
 
 
@@ -216,15 +219,20 @@ def test_batches_are_split_and_results_line_up_with_dependencies():
     assert stats["requests"] == 4, "three batches and one detail lookup"
 
 
-def test_findings_are_ordered_by_severity_then_stable():
-    critical = {**LODASH_ADVISORY, "id": "GHSA-crit-0000-0000", "aliases": [],
+def test_two_packages_are_ordered_by_severity_and_the_order_is_stable():
+    repo = make_zip({"package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
+        "node_modules/aaa-high": {"version": "1.0.0"},
+        "node_modules/zzz-critical": {"version": "1.0.0"}}})})
+    critical = {**LODASH_ADVISORY, "id": "GHSA-crit-0000-0000",
+                "aliases": ["CVE-2020-9999"], "affected": [],
                 "database_specific": {"severity": "CRITICAL"}}
     transport = FakeTransport(
-        [[{"vulns": [{"id": "GHSA-35jh-r3h4-6jhm"}, {"id": "GHSA-crit-0000-0000"}]}]],
+        [[{"vulns": [{"id": "GHSA-35jh-r3h4-6jhm"}]}, {"vulns": [{"id": "GHSA-crit-0000-0000"}]}]],
         {"GHSA-35jh-r3h4-6jhm": LODASH_ADVISORY, "GHSA-crit-0000-0000": critical})
-    findings, _ = run_sca_stage(repo_with(), client_for(transport))
+    findings, _ = run_sca_stage(repo, client_for(transport))
     assert [f.severity for f in findings] == ["critical", "high"]
-    again, _ = run_sca_stage(repo_with(), client_for(transport))
+    assert "zzz-critical" in findings[0].title
+    again, _ = run_sca_stage(repo, client_for(transport))
     assert [f.title for f in again] == [f.title for f in findings]
 
 
@@ -250,25 +258,73 @@ def test_two_records_for_one_cve_become_one_finding_with_the_furthest_fix():
     assert len(findings) == 1, "one CVE is one row"
     assert findings[0].severity == "high", "the higher of the merged ratings"
     assert "4.18.0" in findings[0].fix_hint, "the furthest fix satisfies both"
-    assert "2 database entries" in findings[0].explanation
     assert stats["advisories"] == 2
 
 
-def test_distinct_identifiers_stay_separate_rows():
-    other = {**LODASH_ADVISORY, "id": "GHSA-cccc-0000-0000",
-             "aliases": ["CVE-2021-23337"]}
-    transport = FakeTransport(
-        [[{"vulns": [{"id": "GHSA-35jh-r3h4-6jhm"}, {"id": "GHSA-cccc-0000-0000"}]}]],
-        {"GHSA-35jh-r3h4-6jhm": LODASH_ADVISORY, "GHSA-cccc-0000-0000": other})
-    findings, _ = run_sca_stage(repo_with(), client_for(transport))
-    assert len(findings) == 1, "the same CVE from two entries is still one row"
+def test_a_package_with_many_advisories_is_one_row_that_names_the_worst():
+    """Measured live: django==2.0.0 matches 24 advisories whose fix is one
+    action. Twenty-four rows bury that action, so the unit is the package."""
+    records = {}
+    ids = []
+    for index, (alias, severity) in enumerate(
+            [("CVE-2020-0001", "MODERATE"), ("CVE-2020-0002", "CRITICAL"),
+             ("CVE-2020-0003", "LOW")]):
+        advisory_id = f"GHSA-{index:04d}-0000-0000"
+        ids.append(advisory_id)
+        records[advisory_id] = {**LODASH_ADVISORY, "id": advisory_id,
+                                "aliases": [alias],
+                                "database_specific": {"severity": severity}}
+    transport = FakeTransport([[{"vulns": [{"id": i} for i in ids]}]], records)
+    findings, stats = run_sca_stage(repo_with(), client_for(transport))
 
-    distinct = {**other, "aliases": ["CVE-2019-10744"], "summary": "Prototype pollution"}
-    transport = FakeTransport(
-        [[{"vulns": [{"id": "GHSA-35jh-r3h4-6jhm"}, {"id": "GHSA-cccc-0000-0000"}]}]],
-        {"GHSA-35jh-r3h4-6jhm": LODASH_ADVISORY, "GHSA-cccc-0000-0000": distinct})
+    assert len(findings) == 1, "one package is one row"
+    finding = findings[0]
+    assert finding.severity == "critical", "the worst advisory sets the row"
+    assert "3 known vulnerabilities" in finding.title
+    for alias in ("CVE-2020-0001", "CVE-2020-0002", "CVE-2020-0003"):
+        assert alias in finding.explanation, "every advisory is still named"
+    assert stats["reported_advisories"] == 3
+    assert stats["below_severity_floor"] == 0, (
+        "the floor is about the package's worst rating, not its mildest")
+
+
+def test_a_package_whose_worst_advisory_is_low_is_still_filtered():
+    low = {**LODASH_ADVISORY, "database_specific": {"severity": "LOW"}}
+    transport = FakeTransport([[{"vulns": [{"id": "GHSA-35jh-r3h4-6jhm"}]}]],
+                              {"GHSA-35jh-r3h4-6jhm": low})
+    findings, stats = run_sca_stage(repo_with(), client_for(transport))
+    assert findings == []
+    assert stats["below_severity_floor"] == 1
+
+
+def test_at_most_four_advisories_are_named_and_the_rest_are_counted():
+    records = {}
+    ids = []
+    for index in range(6):
+        advisory_id = f"GHSA-{index:04d}-0000-0000"
+        ids.append(advisory_id)
+        records[advisory_id] = {**LODASH_ADVISORY, "id": advisory_id,
+                                "aliases": [f"CVE-2020-000{index}"],
+                                "database_specific": {"severity": "HIGH"}}
+    transport = FakeTransport([[{"vulns": [{"id": i} for i in ids]}]], records)
     findings, _ = run_sca_stage(repo_with(), client_for(transport))
-    assert len(findings) == 2
+    assert len(findings) == 1
+    assert "6 known vulnerabilities" in findings[0].title
+    assert "and 2 more" in findings[0].explanation, (
+        "a cap on what is named must say how much was not")
+
+
+@pytest.mark.parametrize("development,expected", [
+    (True, "installed for development only"),
+    (False, "lists this dependency directly"),
+])
+def test_the_row_says_where_the_package_came_from(development, expected):
+    lock = json.dumps({"lockfileVersion": 3, "packages": {
+        "node_modules/lodash": {"version": "4.17.4", "dev": development}}})
+    repo = make_zip({"package.json": json.dumps({"dependencies": {"lodash": "^4.17.0"}}),
+                     "package-lock.json": lock})
+    findings, _ = run_sca_stage(repo, client_for(one_advisory()))
+    assert expected in findings[0].explanation
 
 
 def test_query_raises_unavailable_when_the_body_is_not_the_documented_shape():

@@ -67,6 +67,7 @@ from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                               FREE_TIER_MODEL_BY_KIND,
                               FREE_TIER_RUBRICS, PAID_AUDIT_PASSES,
                               basis_for_account, content_digest)
+from app.sca.stage import sca_client_for
 
 # Reused rather than reimplemented, which is the whole point: the worker must
 # run the same scan, under the same concurrency bound, with the same spend
@@ -355,7 +356,15 @@ async def _execute_job(
         llm_passes=llm_passes,
         llm_skip_reason=llm_skip_reason,
         llm_rubrics=FREE_TIER_RUBRICS if depth == BASIS_PREVIEW else None,
-        depth=depth))
+        depth=depth,
+        # Variant A: the dependency check is the paid depth. It is also the
+        # only part of an audit that sends anything to a third party, so the
+        # free tier -- anonymous, unauthenticated, unbounded -- must not make
+        # that call on a visitor's behalf, and an account can opt out.
+        sca_client=sca_client_for(
+            paid=depth == BASIS_FULL and bool(job.get("account_id")),
+            opt_out=bool(job.get("sca_opt_out"))),
+        ))
 
     # The audit still finalises as succeeded; the operator is the only one
     # who can act, and until now nothing told them. See _alert_llm_stage_failed.

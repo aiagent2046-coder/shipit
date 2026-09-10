@@ -96,9 +96,16 @@ class OsvClient:
             body = response.json()
         except OsvUnavailable:
             raise
-        except (httpx.HTTPError, ValueError, TypeError) as exc:
+        except (httpx.HTTPError, OSError, ValueError, TypeError) as exc:
             # A refused connection, a timeout, a truncated body: all one thing
             # to the caller -- no answer, so no claim may be made.
+            #
+            # OSError is here and not only httpx.HTTPError because a transport
+            # other than httpx (a test double, a future client) raises the plain
+            # socket errors -- ConnectionError, TimeoutError, gaierror -- and
+            # this stage promises the audit it belongs to that it never raises.
+            # A test double caught the gap: the promise held only as long as
+            # nobody replaced the transport.
             raise OsvUnavailable(f"{type(exc).__name__}: {exc}") from exc
         if not isinstance(body, dict):
             raise OsvUnavailable(f"{method} {path} -> unexpected body type")

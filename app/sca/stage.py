@@ -10,17 +10,25 @@ shaped like the LLM stage instead: it runs when a client is supplied, it
 degrades to a recorded reason when the network is gone, and the audit it
 belongs to continues either way.
 
+ONE ROW PER PACKAGE, NOT ONE PER ADVISORY. Measured against the live API:
+django==2.0.0 matches 24 advisories whose fix is a single action -- upgrade
+Django. Twenty-four rows bury that decision, and they also distort the score,
+because every row weighs on the same category. The row names the worst
+advisory, lists several, and says how many were counted, so nothing is hidden.
+
 WHAT IT CLAIMS, AND WHAT IT DOES NOT. A finding here says: this exact version
-is listed as affected by this advisory. It does not say the vulnerable code
+is listed as affected by these advisories. It does not say the vulnerable code
 path is reachable from the application -- that needs the call graph, not a
 database. The wording of every finding keeps that boundary visible, because
-"your dependency has a CVE" and "your application is exploitable" are
-different claims and only the first one was verified.
+"your dependency has a CVE" and "your application is exploitable" are different
+claims and only the first one was verified.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from app.scan.checks import CheckFinding
 from app.sca.lockfiles import Dependency, collect_dependencies
@@ -52,6 +60,68 @@ _SOURCE_SEVERITY = {
 
 # Bounded because one ancient dependency tree can match hundreds of advisories.
 MAX_FINDINGS = 25
+
+# How many advisories a package's row names before it says "and N more".
+MAX_LISTED_ADVISORIES = 4
+
+# The dependency answer is true of the day it was asked, so a cached audit has
+# to say how old its answer is. A week is a policy choice, not a measurement:
+# advisory data changes on the order of days, and past this point "we checked
+# your dependencies" stops being a claim a reader should lean on.
+SCA_FRESHNESS_TTL_DAYS = 7
+
+
+def freshness(asked_at: str | None, now: datetime | None = None) -> str:
+    """'fresh' | 'stale' | 'unknown' for a recorded `asked_at`.
+
+    Unknown is kept apart from stale: an audit from before this stage existed
+    has no date at all, and reporting it as "stale" would invent one.
+    """
+    if not asked_at:
+        return "unknown"
+    try:
+        asked = datetime.fromisoformat(asked_at)
+    except ValueError:
+        return "unknown"
+    if asked.tzinfo is None:
+        asked = asked.replace(tzinfo=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    return "stale" if (reference - asked).days >= SCA_FRESHNESS_TTL_DAYS else "fresh"
+
+
+# Deployment-level switch. Set SCA_ENABLED=0 on a host that must not contact a
+# third party at all (an air-gapped or contract-bound deployment); the stage
+# then records the same "nobody asked" reason the free tier produces, so the
+# absence is visible rather than silent.
+SCA_ENABLED_ENV = "SCA_ENABLED"
+
+
+def sca_enabled(env: dict | None = None) -> bool:
+    source = os.environ if env is None else env
+    return str(source.get(SCA_ENABLED_ENV, "1")).strip().lower() not in {
+        "0", "false", "no", "off"}
+
+
+def sca_client_for(*, paid: bool, opt_out: bool = False,
+                   requested: bool | None = None) -> "OsvClient | None":
+    """Who gets their dependency list sent to a third party.
+
+    One place, because three separate decisions all end in the same outward
+    call: whether this audit is one the customer paid for (variant A runs the
+    check only there), whether the deployment has forbidden it outright, and
+    whether the customer has asked to be left out. `requested` is the caller's
+    OWN opt-in -- None means "whatever the deployment policy says", which is
+    the audit service, while an explicit True/False is a local decision (the
+    CLI, where the operator is looking at someone else's repository and the
+    default must be to send nothing).
+    """
+    if requested is False:
+        return None
+    if not paid or opt_out:
+        return None
+    if requested is None and not sca_enabled():
+        return None
+    return OsvClient()
 
 
 def _version_key(version: str) -> tuple[int, ...]:
@@ -129,27 +199,25 @@ def _advisory_url(record: dict) -> str:
 
 
 @dataclass
-class Reported:
-    """One vulnerability OF one dependency, after merging the records that
-    describe it.
+class Advisory:
+    """One vulnerability, after the database entries that describe it are
+    merged.
 
-    Two database entries frequently carry the same CVE alias -- measured
-    against the live API: lodash 4.17.21 matched two records that both resolve
-    to CVE-2025-13465, and reporting them separately printed the same
-    identifier twice with two different upgrade targets. One vulnerability is
-    one row, and the upgrade that satisfies every record is the furthest one.
+    Two entries frequently carry the same CVE alias -- measured against the
+    live API: lodash 4.17.21 matched two records that both resolve to
+    CVE-2025-13465 with different fixed versions (4.17.21 and 4.18.0). One
+    vulnerability is one entry here, and the fixes are unioned so the reported
+    upgrade is the one that satisfies every record.
     """
-    dependency: Dependency
     identifier: str
     severity: str
     declared: bool
     summary: str
     published: str
-    url: str = ""
+    url: str
     fixed: list[str] = field(default_factory=list)
-    records: int = 1
 
-    def merge(self, other: "Reported") -> None:
+    def absorb(self, other: "Advisory") -> None:
         if _rank(other.severity) > _rank(self.severity):
             self.severity = other.severity
         self.declared = self.declared or other.declared
@@ -161,16 +229,14 @@ class Reported:
         for version in other.fixed:
             if version not in self.fixed:
                 self.fixed.append(version)
-        self.records += other.records
 
 
-def _reported(dependency: Dependency, records: list[dict]) -> list[Reported]:
-    """Merge the records for one dependency by the identifier a reader searches."""
-    merged: dict[tuple[str, str], Reported] = {}
+def _advisories(dependency: Dependency, records: list[dict]) -> list[Advisory]:
+    """Every vulnerability of one dependency, worst first."""
+    merged: dict[str, Advisory] = {}
     for record in records:
         severity, declared = _severity(record)
-        reported = Reported(
-            dependency=dependency,
+        advisory = Advisory(
             identifier=_identifier(record),
             severity=severity,
             declared=declared,
@@ -179,52 +245,79 @@ def _reported(dependency: Dependency, records: list[dict]) -> list[Reported]:
             url=_advisory_url(record),
             fixed=_fixed_versions(record, dependency),
         )
-        key = (reported.identifier, dependency.name.lower())
-        if key in merged:
-            merged[key].merge(reported)
+        if advisory.identifier in merged:
+            merged[advisory.identifier].absorb(advisory)
         else:
-            merged[key] = reported
-    return list(merged.values())
+            merged[advisory.identifier] = advisory
+    return sorted(merged.values(), key=lambda a: (-_rank(a.severity), a.identifier))
 
 
-def build_finding(reported: Reported) -> CheckFinding:
-    dependency = reported.dependency
-    identifier = reported.identifier
-    summary = reported.summary or "known vulnerability"
-    # The furthest fix among the merged records is the one that satisfies all
-    # of them: upgrading to a point that clears one advisory but not its
-    # neighbour would send the reader back for a second upgrade.
-    fixed = sorted(reported.fixed, key=_version_key, reverse=True)[:2]
-    upgrade = f" Upgrade to {', or '.join(fixed)} or later." if fixed else ""
-    published = reported.published
-    if reported.records > 1:
-        summary += (f" ({reported.records} database entries describe this "
-                    f"identifier)")
+def _scope_sentence(dependency: Dependency) -> str:
+    """Where this package came from, in the three distinct cases.
 
-    scope = ("your project lists this dependency directly"
-             if dependency.direct else
-             "this dependency arrives through another one")
-    how = (f"The lockfile {dependency.manifest} resolves "
-           f"{dependency.name} to {dependency.version}, and the vulnerability "
-           f"database lists that exact version as affected.")
-    risk = (f"{scope}. {identifier}: {summary}. "
-            f"A dependency with a known vulnerability is a piece of software "
-            f"someone else has already been told how to break; whether the "
-            f"broken part is reachable from your code was NOT checked here, so "
-            f"treat this as a reason to look, not a proven exploit.")
-    if published:
-        risk += f" Published {published}."
-    fix = (f"{upgrade.strip()} Then reinstall and run your tests: a lockfile "
-           f"change reaches production only after the build that reads it. "
-           f"Reference: {reported.url}")
+    "Not a production dependency" and "the lockfile does not say" lead to
+    different actions, so they are not collapsed into one sentence.
+    """
+    if dependency.development is True:
+        return ("The lockfile marks this package as installed for development "
+                "only, so it does not reach the running application")
+    if dependency.direct:
+        return "Your project lists this dependency directly"
+    return "This dependency arrives through another one"
+
+
+def build_finding(dependency: Dependency, advisories: list[Advisory]) -> CheckFinding:
+    worst = advisories[0]
+    others = advisories[1:]
+    # The furthest fix across every listed advisory is the one that satisfies
+    # all of them: upgrading to a point that clears one and not the next would
+    # send the reader back for a second upgrade.
+    furthest: list[str] = []
+    for advisory in advisories:
+        for version in advisory.fixed:
+            if version not in furthest:
+                furthest.append(version)
+    candidates = sorted(furthest, key=_version_key, reverse=True)[:2]
+    upgrade = f" Upgrade to {', or '.join(candidates)} or later." if candidates else ""
+
+    listed = [f"{worst.identifier} ({worst.severity}): {worst.summary or 'known vulnerability'}"]
+    for advisory in others[:MAX_LISTED_ADVISORIES - 1]:
+        listed.append(f"{advisory.identifier} ({advisory.severity}): "
+                      f"{advisory.summary or 'known vulnerability'}")
+    hidden = len(others) - (len(listed) - 1)
+    if hidden > 0:
+        listed.append(f"and {hidden} more")
+
+    how = (f"The lockfile {dependency.manifest} resolves {dependency.name} to "
+           f"{dependency.version}, and the vulnerability database lists that "
+           f"exact version as affected by {len(advisories)} "
+           f"{'advisory' if len(advisories) == 1 else 'advisories'}.")
+    risk = (f"{_scope_sentence(dependency)}. " + "; ".join(listed) +
+            ". A dependency with a known vulnerability is software someone has "
+            "already been told how to break; whether the broken part is "
+            "reachable from your code was NOT checked here, so treat this as a "
+            "reason to look, not a proven exploit.")
+    if worst.published:
+        risk += f" Worst published {worst.published}."
+    fix = (f"{upgrade.strip()} That upgrade clears every advisory listed here. "
+           f"Then reinstall and run your tests: a lockfile change reaches "
+           f"production only after the build that reads it. "
+           f"Reference: {worst.url}")
+
+    if len(advisories) == 1:
+        title = f"{worst.identifier} in {dependency.name} {dependency.version}"
+    else:
+        title = (f"{len(advisories)} known vulnerabilities in "
+                 f"{dependency.name} {dependency.version}")
+
     return CheckFinding(
         rule_id=RULE_ID,
-        title=f"{identifier} in {dependency.name} {dependency.version}",
-        severity=reported.severity,
-        # 0.9 when the advisory itself states the rating, 0.6 when the rating
+        title=title,
+        severity=worst.severity,
+        # 0.9 when the worst advisory states its rating, 0.6 when the rating
         # had to be assumed. The finding's own fact -- this version is listed
         # as affected -- is not in doubt either way.
-        confidence=0.9 if reported.declared else 0.6,
+        confidence=0.9 if worst.declared else 0.6,
         category="Security",
         file=dependency.manifest,
         line=dependency.line,
@@ -240,21 +333,33 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
     The caller decides whether to run this at all; passing no client is how it
     says no, and the stats then record that the dependencies were never asked
     about -- which the report must not present as a clean result.
+
+    `asked_at` is recorded whenever the database actually answered, because
+    this stage's answer is only true of the day it was asked. A report that
+    does not say when will read as current forever.
     """
     stats: dict = {
         "checks_run": [CHECKS_RUN_KEY],
         "lockfiles": [],
+        "dependencies_found": 0,
         "dependencies": 0,
         "advisories": 0,
+        "reported_advisories": 0,
+        "packages_reported": 0,
         "below_severity_floor": 0,
         "unreadable_advisories": 0,
         "requests": 0,
         "findings": 0,
         "truncated": 0,
+        "asked_at": None,
         "skipped_reason": None,
     }
-    dependencies, manifests = collect_dependencies(data)
+    dependencies, manifests, found = collect_dependencies(data)
     stats["lockfiles"] = manifests
+    # `found` and `dependencies` differ only when the cap bit. Both are
+    # recorded: a repository whose 300th dependency was silently never asked
+    # about must not read as a repository that was fully checked.
+    stats["dependencies_found"] = found
     stats["dependencies"] = len(dependencies)
     if not dependencies:
         # No lockfile is not "no vulnerabilities": it is nothing to look up.
@@ -276,22 +381,27 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         stats["requests"] = client.requests_made
         return [], stats
 
+    stats["asked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     stats["requests"] = client.requests_made
     stats["advisories"] = len(wanted)
     stats["unreadable_advisories"] = max(0, len(wanted) - len(records))
 
     findings: list[CheckFinding] = []
-    for index, advisories in hits.items():
+    for index, advisory_ids in hits.items():
         dependency = dependencies[index]
-        served = [records[a] for a in advisories if a in records]
-        for reported in _reported(dependency, served):
-            if _rank(reported.severity) < _rank(MIN_SEVERITY):
-                stats["below_severity_floor"] += 1
-                continue
-            findings.append(build_finding(reported))
+        served = [records[a] for a in advisory_ids if a in records]
+        advisories = _advisories(dependency, served)
+        if not advisories:
+            continue
+        if _rank(advisories[0].severity) < _rank(MIN_SEVERITY):
+            stats["below_severity_floor"] += 1
+            continue
+        stats["reported_advisories"] += len(advisories)
+        findings.append(build_finding(dependency, advisories))
 
     findings.sort(key=lambda f: (-_rank(f.severity), f.file, f.line, f.title))
     stats["truncated"] = max(0, len(findings) - MAX_FINDINGS)
     findings = findings[:MAX_FINDINGS]
+    stats["packages_reported"] = len(findings)
     stats["findings"] = len(findings)
     return findings, stats
