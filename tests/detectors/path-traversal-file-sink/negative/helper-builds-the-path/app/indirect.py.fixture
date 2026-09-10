@@ -1,0 +1,12 @@
+from fastapi import APIRouter, Depends, Request
+import os
+import shutil
+from pathlib import Path
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+@router.get("/indirect/{name}")
+async def indirect(name: str):
+    return open(build_path(name)).read()

@@ -1,0 +1,10 @@
+{
+  "description": "The framework's own file response, which is the shortest way to serve a path and therefore the most common one.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "The same defect one layer up: the joined path goes to the response helper instead of to open(). Reading is only the quieter half of it -- the write direction is what turns this into a webshell.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

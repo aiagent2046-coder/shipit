@@ -1,0 +1,7 @@
+{
+  "description": "Imported secure_filename sanitizes its own result, including when applied after basename. basename alone can return '..' and is not containment. The mutation removes secure_filename from the first path, which must fire.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

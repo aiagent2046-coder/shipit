@@ -1,0 +1,7 @@
+{
+  "description": "The path is configuration injected by a dependency, not a value the caller sent. The mutation turns the same parameter into one the request fills, which must fire.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

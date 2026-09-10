@@ -1,0 +1,10 @@
+{
+  "description": "The modern spelling, where the join is an operator and the sink is a method on the result. A rule that only knew os.path.join would be silent here.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

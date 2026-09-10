@@ -1,0 +1,16 @@
+from fastapi import APIRouter
+import os
+import shutil
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+@router.post("/cleanup/{name}")
+async def cleanup(name: str):
+    try:
+        target = os.path.join(UPLOAD_DIR, name)
+        shutil.rmtree(target)
+        return {"ok": True}
+    except OSError as exc:
+        return {"error": str(exc)}

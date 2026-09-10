@@ -1,0 +1,10 @@
+{
+  "description": "The two-token traversal: a name out of the path parameter, joined to a fixed directory, handed to open(). Nothing here stops ../../../etc/passwd.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

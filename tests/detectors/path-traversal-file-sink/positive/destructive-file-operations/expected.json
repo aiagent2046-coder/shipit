@@ -1,0 +1,10 @@
+{
+  "description": "Deleting by a caller-supplied name: the traversal reads as a cleanup feature and removes whatever the process can reach.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

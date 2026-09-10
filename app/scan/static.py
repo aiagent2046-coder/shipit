@@ -24,6 +24,7 @@ from app.scan.sql_injection import scan_sql_injection
 from app.scan.sql_injection_js import scan_sql_injection_js
 from app.scan.tls_verification import scan_tls_verification
 from app.scan.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.path_traversal import scan_path_traversal
 from app.scan.source_facts import collect_source_facts
 
 
@@ -110,6 +111,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=d.rule_id, title=d.title, severity=d.severity,
             confidence=d.confidence, category=d.category, file=d.file,
             line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for t in scan_path_traversal(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=t.rule_id, title=t.title, severity=t.severity,
+            confidence=t.confidence, category=t.category, file=t.file,
+            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
             claim_evidence=static_claim_evidence(),
         ))
 
@@ -237,6 +247,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             'outbound_url',
             'tls_verification',
             'unsafe_deserialization',
+            'path_traversal',
         ],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
@@ -274,6 +285,13 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                      "imports, mutated modules, custom YAML loaders, stored Unpickler instances, "
                      "cross-file resolution, bare torch.load and TS/JS are not covered; at most "
                      "32 findings are reported",
+                     "path_traversal": "Local FastAPI route handlers in parseable Python files up to "
+                     "400 KB; imported file operations and proven pathlib receivers are traced "
+                     "locally with bounded expansion. Path construction alone is not a sink. "
+                     "Containment recognizes imported secure_filename results and a resolved Path "
+                     "checked against a fixed absolute base on the branch reaching the operation. "
+                     "Unknown helpers, general control-flow joins, other validation patterns, "
+                     "runtime symlinks and TS/JS file handling are NOT covered",
                      "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
                      "runtime fetch bindings and HTTP failures are not verified. "
                      "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},

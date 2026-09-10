@@ -173,7 +173,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-10-14: import-resolved deserialization with lexical shadowing and real
 # YAML loader provenance; distinguish object construction, marshal values and
 # version-dependent YAML defaults. Each changed rule set invalidates the cache.
-AUDIT_ENGINE_VERSION = "2026-09-10-14"
+# 2026-09-10-15: bounded request-to-filesystem traces with proven sink signatures,
+# value-specific normalized-path guards and checks before template allocation.
+AUDIT_ENGINE_VERSION = "2026-09-10-15"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt
