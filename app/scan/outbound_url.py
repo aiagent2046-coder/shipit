@@ -30,6 +30,7 @@ _CONSTRUCTORS = frozenset({
 _URL_FUNCTIONS = frozenset({"urllib.request.urlopen", "urllib.request.urlretrieve"})
 _ROUTERS = frozenset({"fastapi.FastAPI", "fastapi.APIRouter"})
 _REQUEST_TYPES = frozenset({"fastapi.Request", "starlette.requests.Request"})
+_MODEL_BASES = frozenset({"pydantic.BaseModel", "pydantic.main.BaseModel", "pydantic.v1.BaseModel"})
 _DEPENDENCIES = frozenset({"fastapi.Depends", "fastapi.Security"})
 _REQUEST_ATTRS = frozenset({"body", "form", "json", "path_params", "query_params", "headers", "cookies", "url"})
 _VALIDATION_WORDS = frozenset({
@@ -59,9 +60,14 @@ class _State:
     values: dict[str, tuple[str, list[set[str]]]] = field(default_factory=dict)
     requests: set[str] = field(default_factory=set)
     checked: set[str] = field(default_factory=set)
+    model_types: dict[str, frozenset[str]] = field(default_factory=dict)
+    models: dict[str, str] = field(default_factory=dict)
+    model_fields: dict[str, tuple[str, list[set[str]]] | None] = field(default_factory=dict)
+    strings: set[str] = field(default_factory=set)
 
     def copy(self) -> _State:
-        return _State(self.bindings.copy(), self.values.copy(), self.requests.copy(), self.checked.copy())
+        return _State(self.bindings.copy(), self.values.copy(), self.requests.copy(), self.checked.copy(),
+                      self.model_types.copy(), self.models.copy(), self.model_fields.copy(), self.strings.copy())
 
 
 def _attr_name(node: ast.AST) -> str:
@@ -114,6 +120,66 @@ def _field_key(expr: ast.AST | None) -> str | None:
     return None
 
 
+def _annotation(expr: ast.AST | None, state: _State) -> ast.AST | None:
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        try:
+            expr = ast.parse(expr.value, mode="eval").body
+        except (SyntaxError, ValueError, RecursionError):
+            return None
+    if (isinstance(expr, ast.Subscript)
+            and _qualified(expr.value, state.bindings) in {"typing.Annotated", "typing_extensions.Annotated"}
+            and isinstance(expr.slice, ast.Tuple) and expr.slice.elts):
+        return _annotation(expr.slice.elts[0], state)
+    return expr
+
+
+def _string_annotation(expr: ast.AST | None, state: _State) -> bool:
+    expr = _annotation(expr, state)
+    return ((isinstance(expr, ast.Name) and expr.id == "str" and "str" not in state.bindings)
+            or _qualified(expr, state.bindings) == "builtins.str")
+
+
+def _model_field(expr: ast.AST, state: _State) -> str | None:
+    if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+        origin = state.models.get(expr.value.id)
+        key = f"{origin}.{expr.attr}" if origin is not None else None
+        if key in state.model_fields:
+            return key
+    return None
+
+
+def _string_value(expr: ast.AST, state: _State) -> bool:
+    """Only known strings may use the small, non-validating strip() transfer."""
+    if isinstance(expr, ast.Constant):
+        return isinstance(expr.value, str)
+    if isinstance(expr, ast.Name):
+        return expr.id in state.strings
+    key = _model_field(expr, state)
+    if key is not None:
+        return key in state.strings
+    receiver = None
+    if isinstance(expr, ast.Subscript) and _field_key(expr.slice):
+        receiver = expr.value
+    elif (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
+          and expr.func.attr == "get" and expr.args and _field_key(expr.args[0])):
+        # An unknown default may be a custom object with an unrelated strip().
+        if (len(expr.args) > 2 or (len(expr.args) > 1 and not _string_value(expr.args[1], state))
+                or any(kw.arg != "default" or not _string_value(kw.value, state) for kw in expr.keywords)):
+            return False
+        receiver = expr.func.value
+    if (isinstance(receiver, ast.Attribute) and isinstance(receiver.value, ast.Name)
+            and receiver.value.id in state.requests and receiver.attr in {"query_params", "headers", "cookies"}):
+        return True
+    if isinstance(expr, ast.JoinedStr):
+        return True
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+        return _string_value(expr.left, state) and _string_value(expr.right, state)
+    if (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr == "strip" and not expr.args and not expr.keywords):
+        return _string_value(expr.func.value, state)
+    return False
+
+
 def _request_read(expr: ast.AST, state: _State) -> set[str]:
     if isinstance(expr, ast.Await):
         return _request_read(expr.value, state)
@@ -149,6 +215,9 @@ def _skeleton(expr: ast.AST, state: _State) -> tuple[str, list[set[str]]] | None
         return None
     if isinstance(expr, ast.Name):
         return state.values.get(expr.id)
+    key = _model_field(expr, state)
+    if key is not None:
+        return state.model_fields[key]
     read = _request_read(expr, state)
     if read:
         return _MARKER, [read]
@@ -160,6 +229,12 @@ def _skeleton(expr: ast.AST, state: _State) -> tuple[str, list[set[str]]] | None
         if source and source[0] == _MARKER and key:
             return _MARKER, [{f"{origin}[{key}]" for origin in source[1][0]}]
         return None
+    if (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr == "strip" and not expr.args and not expr.keywords
+            and _string_value(expr.func.value, state)):
+        value = _skeleton(expr.func.value, state)
+        # Whitespace removal preserves each source slot; it is not validation.
+        return (value[0].strip(), value[1]) if value is not None else None
     if isinstance(expr, ast.JoinedStr):
         parts = []
         for value in expr.values:
@@ -313,8 +388,9 @@ def _request_inputs(fn: ast.FunctionDef | ast.AsyncFunctionDef, state: _State) -
     positional = [*fn.args.posonlyargs, *fn.args.args]
     defaults = [None] * (len(positional) - len(fn.args.defaults)) + list(fn.args.defaults)
     arguments = list(zip(positional, defaults)) + list(zip(fn.args.kwonlyargs, fn.args.kw_defaults))
+    declarations = state.copy()
     for arg, default in arguments:
-        state.bindings.pop(arg.arg, None)
+        _bind(ast.Name(id=arg.arg), None, state)
         annotation = arg.annotation
         if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
             try:
@@ -322,39 +398,64 @@ def _request_inputs(fn: ast.FunctionDef | ast.AsyncFunctionDef, state: _State) -
             except (SyntaxError, ValueError, RecursionError):
                 annotation = None
         annotations = list(_walk(annotation)) if annotation is not None else []
-        if any(isinstance(node, ast.Call) and _qualified(node.func, state.bindings) in _DEPENDENCIES
+        if any(isinstance(node, ast.Call) and _qualified(node.func, declarations.bindings) in _DEPENDENCIES
                for node in annotations) or (isinstance(default, ast.Call)
-                                            and _qualified(default.func, state.bindings) in _DEPENDENCIES):
+                                            and _qualified(default.func, declarations.bindings) in _DEPENDENCIES):
             continue
-        if (isinstance(annotation, ast.Subscript)
-                and _qualified(annotation.value, state.bindings) in {"typing.Annotated", "typing_extensions.Annotated"}
-                and isinstance(annotation.slice, ast.Tuple) and annotation.slice.elts):
-            annotation = annotation.slice.elts[0]
-        if _qualified(annotation, state.bindings) in _REQUEST_TYPES:
+        annotation = _annotation(annotation, declarations)
+        annotation_type = _qualified(annotation, declarations.bindings)
+        if annotation_type in _REQUEST_TYPES:
             state.requests.add(arg.arg)
+            continue
+        if annotation_type in declarations.model_types:
+            fields = declarations.model_types[annotation_type]
+            if len(fields) + len(state.model_fields) > _MAX_SLOTS:
+                continue
+            state.models[arg.arg] = arg.arg
+            for name in fields:
+                key = f"{arg.arg}.{name}"
+                state.model_fields[key] = (_MARKER, [{key}])
+                state.strings.add(key)
             continue
         if arg.arg not in {"self", "cls"}:
             # A literal default is still a caller-overridable FastAPI parameter.
             state.values[arg.arg] = (_MARKER, [{arg.arg}])
+            if _string_annotation(annotation, declarations):
+                state.strings.add(arg.arg)
 
 
 def _import(stmt: ast.Import | ast.ImportFrom, state: _State) -> None:
     if isinstance(stmt, ast.Import):
         for alias in stmt.names:
             local = alias.asname or alias.name.split(".")[0]
+            _bind(ast.Name(id=local), None, state)
             state.bindings[local] = alias.name if alias.asname else local
-    elif stmt.level == 0:
+    else:
         for alias in stmt.names:
             if alias.name != "*":
-                state.bindings[alias.asname or alias.name] = f"{stmt.module}.{alias.name}"
+                local = alias.asname or alias.name
+                _bind(ast.Name(id=local), None, state)
+                if stmt.level == 0:
+                    state.bindings[local] = f"{stmt.module}.{alias.name}"
 
 
 def _bind(target: ast.AST, value: ast.AST | None, state: _State) -> None:
+    key = _model_field(target, state)
+    if key is not None:
+        built = _skeleton(value, state) if value is not None else None
+        string_value = value is not None and _string_value(value, state)
+        # Keep an explicit unknown so the original request field cannot reappear
+        # after an untraceable assignment. Aliases share this field storage, but
+        # saved immutable strings keep their old origins and preceding checks.
+        # A replacement field brings its own origins, without the old checks.
+        state.model_fields[key] = built
+        state.strings.discard(key)
+        if string_value:
+            state.strings.add(key)
+        return
     if not isinstance(target, ast.Name):
         for name in _referenced_names(target):
-            state.values.pop(name, None)
-            state.bindings.pop(name, None)
-            state.checked.discard(name)
+            _bind(ast.Name(id=name), None, state)
         return
     name = target.id
     built = _skeleton(value, state) if value is not None else None
@@ -362,12 +463,16 @@ def _bind(target: ast.AST, value: ast.AST | None, state: _State) -> None:
     qualified = _qualified(value, state.bindings) if value is not None else ""
     router = isinstance(value, ast.Call) and _qualified(value.func, state.bindings) in _ROUTERS
     request = isinstance(value, ast.Name) and value.id in state.requests
+    model = state.models.get(value.id) if isinstance(value, ast.Name) else None
+    string_value = value is not None and _string_value(value, state)
     # Rebinding an origin invalidates earlier checks of that source.
     old_origins = set().union(*state.values.get(name, ("", []))[1])
     state.checked -= old_origins | {name}
     state.values.pop(name, None)
     state.bindings.pop(name, None)
     state.requests.discard(name)
+    state.models.pop(name, None)
+    state.strings.discard(name)
     if built is not None:
         state.values[name] = built
     if client:
@@ -376,8 +481,14 @@ def _bind(target: ast.AST, value: ast.AST | None, state: _State) -> None:
         state.bindings[name] = "router"
     elif qualified:
         state.bindings[name] = qualified
+    elif name == "str":
+        state.bindings[name] = ""  # A shadowed builtin is not a string annotation.
     if request:
         state.requests.add(name)
+    if model is not None:
+        state.models[name] = model
+    if string_value:
+        state.strings.add(name)
 
 
 def _checked_names(expr: ast.AST, state: _State) -> set[str]:
@@ -419,8 +530,7 @@ def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[C
         if len(findings) >= _MAX_FINDINGS:
             return
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            state.bindings.pop(stmt.name, None)
-            state.values.pop(stmt.name, None)
+            _bind(ast.Name(id=stmt.name), None, state)
             continue
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
             _import(stmt, state)
@@ -430,7 +540,8 @@ def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[C
         if isinstance(stmt, ast.If):
             _scan_expr(stmt.test, state, path, findings)
             inspected = (_checked_names(stmt.test, state)
-                         if _test_inspects(stmt.test, set(state.values) | state.requests) else set())
+                         if _test_inspects(stmt.test, set(state.values) | state.requests | state.models.keys())
+                         else set())
             branch_states = []
             for branch in (stmt.body, stmt.orelse):
                 branch_state = state.copy()
@@ -477,7 +588,7 @@ def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[C
                                 _bind(ast.Name(id=name), None, branch_state)
                 _scan_block(branch, branch_state, path, findings)
             for node in _walk(stmt):
-                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                if isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Store):
                     _bind(node, None, state)
             continue
         _scan_expr(stmt, state, path, findings)
@@ -488,9 +599,13 @@ def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[C
             _bind(stmt.target, stmt.value, state)
         elif isinstance(stmt, ast.AugAssign):
             _bind(stmt.target, None, state)
+        elif isinstance(stmt, ast.Delete):
+            for target in stmt.targets:
+                _bind(target, None, state)
         elif isinstance(stmt, ast.Expr):
             state.checked |= _check_call(stmt.value, state)
-        elif isinstance(stmt, ast.Assert) and _test_inspects(stmt.test, set(state.values) | state.requests):
+        elif isinstance(stmt, ast.Assert) and _test_inspects(
+                stmt.test, set(state.values) | state.requests | state.models.keys()):
             state.checked |= _checked_names(stmt.test, state)
         elif isinstance(stmt, (ast.Return, ast.Raise)):
             return
@@ -506,6 +621,13 @@ def _join_states(state: _State, branches: list[_State]) -> None:
                       if all(branch.bindings.get(key) == value for branch in branches[1:])}
     state.requests = set.intersection(*(branch.requests for branch in branches))
     state.checked = set.intersection(*(branch.checked for branch in branches))
+    state.model_types = {key: value for key, value in first.model_types.items()
+                         if all(branch.model_types.get(key) == value for branch in branches[1:])}
+    state.models = {key: value for key, value in first.models.items()
+                    if all(branch.models.get(key) == value for branch in branches[1:])}
+    state.model_fields = {key: value for key, value in first.model_fields.items()
+                          if all(branch.model_fields.get(key) == value for branch in branches[1:])}
+    state.strings = set.intersection(*(branch.strings for branch in branches))
 
 
 def _scan_expr(expr: ast.AST, state: _State, path: str, findings: list[CheckFinding]) -> None:
@@ -532,7 +654,7 @@ def _forget_stores(stmt: ast.AST, state: _State) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind(ast.Name(id=node.name), None, state)
             continue
-        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        if isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
             _bind(node, None, state)
         elif isinstance(node, ast.ExceptHandler) and node.name:
             _bind(ast.Name(id=node.name), None, state)
@@ -541,6 +663,32 @@ def _forget_stores(stmt: ast.AST, state: _State) -> None:
         elif isinstance(node, ast.MatchMapping) and node.rest:
             _bind(ast.Name(id=node.rest), None, state)
         pending.extend(ast.iter_child_nodes(node))
+
+
+def _declare_model(stmt: ast.ClassDef, state: _State) -> None:
+    # Only a local, undecorated model with an imported Pydantic base is known.
+    # Cross-file models, inheritance chains and custom field types remain out of
+    # scope. A matching class/attribute name alone never establishes provenance.
+    known = (len(stmt.bases) == 1 and _qualified(stmt.bases[0], state.bindings) in _MODEL_BASES
+             and not stmt.decorator_list and not stmt.keywords)
+    fields = set()
+    if known:
+        for member in stmt.body:
+            if isinstance(member, ast.AnnAssign) and isinstance(member.target, ast.Name):
+                if not member.target.id.startswith("_") and _string_annotation(member.annotation, state):
+                    fields.add(member.target.id)
+                else:
+                    fields.discard(member.target.id)
+            elif isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                fields.discard(member.name)
+            elif isinstance(member, ast.Assign):
+                for target in member.targets:
+                    fields -= _referenced_names(target)
+    _bind(ast.Name(id=stmt.name), None, state)
+    if known:
+        key = f"model:{stmt.lineno}:{stmt.name}"
+        state.bindings[stmt.name] = key
+        state.model_types[key] = frozenset(fields)
 
 
 def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
@@ -560,6 +708,8 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
             targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
             for target in targets:
                 _bind(target, stmt.value, state)
+        elif isinstance(stmt, ast.ClassDef):
+            _declare_model(stmt, state)
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
                    and dec.func.attr in _METHODS | {"route", "api_route", "websocket"}
@@ -581,6 +731,21 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
             _forget_stores(stmt, state)
 
 
+def _has_route_declaration(body: list[ast.stmt]) -> bool:
+    # Match only scopes _scan_declarations can reach. This is a necessary
+    # syntactic condition, never a substitute for router import provenance.
+    pending = list(body)
+    while pending:
+        stmt = pending.pop()
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+                   and dec.func.attr in _METHODS | {"route", "api_route", "websocket"}
+                   for dec in stmt.decorator_list):
+                return True
+            pending.extend(stmt.body)
+    return False
+
+
 def scan_outbound_url(fileobj: BinaryIO) -> list[CheckFinding]:
     findings: list[CheckFinding] = []
     with zipfile.ZipFile(fileobj) as archive:
@@ -593,10 +758,13 @@ def scan_outbound_url(fileobj: BinaryIO) -> list[CheckFinding]:
             if count > _MAX_FILES or len(findings) >= _MAX_FINDINGS:
                 break
             try:
-                tree = ast.parse(archive.read(info).decode("utf-8"))
+                raw = archive.read(info)
+                if b"@" not in raw:
+                    continue
+                tree = ast.parse(raw.decode("utf-8"))
             except (SyntaxError, UnicodeError, ValueError, RecursionError):
                 continue
-            if not _bounded_tree(tree):
+            if not _has_route_declaration(tree.body) or not _bounded_tree(tree):
                 continue
             _scan_declarations(tree.body, _State(), info.filename, findings)
     return findings

@@ -218,13 +218,18 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                        "tls_verification"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
-                     "tls_verification": "Python and JS/TS source files up to 400 KB; literal evidence "
-                     "only (verify=False, ssl.CERT_NONE, check_hostname, _create_unverified_context, "
-                     "TCPConnector(ssl=False), rejectUnauthorized: false, NODE_TLS_REJECT_UNAUTHORIZED). "
-                     "Shell scripts, CI/YAML definitions and dynamically assembled SSL contexts are NOT "
-                     "read; a commented-out line is not a finding, and a clean read is not a certificate "
-                     "that every connection in the repository is verified",
+                     "tls_verification": "At most 400 non-test/vendor Python and JS/TS files, each up to "
+                     "400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Local imports and "
+                     "client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, "
+                     "Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and "
+                     "process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 "
+                     "are read; hostname and certificate-chain checks have distinct explanations. "
+                     "Comments, strings, types, malformed/oversized files, unknown wrappers, cross-file "
+                     "and dynamic configuration, shell/CI YAML and runtime connections are unresolved. "
+                     "A clean result does not establish that every connection is verified",
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
+                     "object lookups compared with protected reads on the same router and repository binding, "
+                     "including recognized identity dependencies and imported aliases; "
                      "test/vendor files excluded; middleware and runtime access not resolved",
                      "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in "
                      "parseable Python files up to 2 MB, compared with sibling routes on the same router; "
@@ -234,7 +239,8 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                      "outbound_url": "Known HTTP clients in locally declared FastAPI routes; "
                      "at most 400 eligible Python files up to 400 KB each, excluding test/vendor files; "
                      "20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, "
-                     "32 findings total. Supported request fields, URL expressions and preceding local "
+                     "32 findings total. Supported Request fields, locally declared Pydantic string fields, "
+                     "known-string strip(), URL expressions and preceding local "
                      "checks are traced within one handler; complex control flow, unknown calls/helpers, "
                      "validation correctness, DNS, redirects, network policy and TS/JS are not resolved",
                      "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "

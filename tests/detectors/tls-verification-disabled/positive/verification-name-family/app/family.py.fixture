@@ -1,8 +1,8 @@
+import aiohttp
 import httpx
-import requests
 
 
-def probe(url):
-    first = requests.get(url, verify_ssl=False).json()
-    second = httpx.get(url, ssl_validation=False).json()
+def probe():
+    first = aiohttp.TCPConnector(verify_ssl=False)
+    second = httpx.Client(verify=False)
     return first, second

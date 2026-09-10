@@ -1,0 +1,7 @@
+{
+  "description": "The exact local Pydantic string field is allowlisted on every continuing path before the outbound call. Replacing the address check with a presence check must emit a finding.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

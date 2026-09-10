@@ -21,14 +21,14 @@ TIERS = {
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
     "tls-verification-disabled": (
-        "A connection is set up to accept any certificate.",
-        "Certificate verification is switched off on this line. The traffic is still encrypted, but "
-        "the code no longer checks WHO it is talking to, so anything able to answer for that address "
-        "is accepted as the party you meant to reach. Why it was turned off has not been read -- an "
-        "internal service with a self-signed certificate looks the same as a debugging leftover.",
-        "Turn verification back on and make the trust explicit: tell the client which certificate "
-        "authority signed your service's certificate (REQUESTS_CA_BUNDLE / SSL_CERT_FILE / "
-        "NODE_EXTRA_CA_CERTS) instead of accepting every certificate.",
+        "TLS certificate or hostname verification is weakened.",
+        "A recognised client/context setting weakens peer-identity checks. Disabling hostname matching "
+        "can leave certificate-chain validation enabled; disabling chain validation is a different "
+        "setting. The finding identifies the control seen in source. Runtime use and exposure have "
+        "not been verified.",
+        "Restore the affected check: require a trusted certificate chain and match the expected "
+        "hostname. Configure the client's supported CA/context option for private certificates "
+        "instead of disabling verification.",
     ),
     "python-outbound-request-unvalidated-url": (
         "An HTTP client receives an address derived from request input.",

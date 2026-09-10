@@ -1,13 +1,14 @@
 """Local AST consistency signal for Python/FastAPI object reads.
 
-Compare get(id) with get_authorized(id, token) on the same repository name
-in sibling routes. This neither resolves middleware in other modules nor
+Compare get(id) with a protected read on the same repository binding in
+sibling routes. This neither resolves middleware in other modules nor
 proves public reachability. It never runs uploaded code or calls an LLM.
 """
 from __future__ import annotations
 
 import ast
-from collections import deque
+from collections import Counter, deque
+from dataclasses import dataclass, field
 import stat
 import zipfile
 from typing import BinaryIO
@@ -124,18 +125,174 @@ def _handler_nodes(fn: ast.FunctionDef | ast.AsyncFunctionDef, *, signature: boo
         pending.extend(ast.iter_child_nodes(node))
 
 
-def _guard_role(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+@dataclass
+class _ScopeBindings:
+    dependencies: dict[str, str]
+    repositories: dict[str, tuple[int, str]]
+    uncertain: frozenset[str] = frozenset()
+    non_dependencies: dict[str, int] = field(default_factory=dict)
+
+
+def _scope_stores(scope: ast.AST) -> Counter:
+    """Visible bindings in one lexical scope, without entering child scopes."""
+    names: Counter = Counter()
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        names.update(arg.arg for arg in ast.walk(scope.args) if isinstance(arg, ast.arg))
+    pending = list(scope.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names[node.name] += 1
+            continue
+        if isinstance(node, ast.Lambda):
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names[node.id] += 1
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            owner = _name(node.value)
+            if owner:
+                names[owner] += 1
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            names.update(node.names)
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+            names[node.name] += 1
+        pending.extend(ast.iter_child_nodes(node))
+    return names
+
+
+def _scope_bindings(scope: ast.AST, inherited: _ScopeBindings | None = None) -> _ScopeBindings:
+    """Only stable, direct imports establish FastAPI dependency provenance.
+
+    Rebindings, conditional imports and parameter collisions stay unknown.
+    Keeping the old alias as unknown matters: it can still guard a target, but
+    cannot provide the positive identity witness needed to accuse a sibling.
+    """
+    dependencies = dict(inherited.dependencies) if inherited else {}
+    repositories = dict(inherited.repositories) if inherited else {}
+    non_dependencies = dict(inherited.non_dependencies) if inherited else {}
+    stores = _scope_stores(scope)
+    uncertain = set(inherited.uncertain) if inherited else set()
+    uncertain.update(stores)
+    for name in stores:
+        repositories.pop(name, None)
+        non_dependencies.pop(name, None)
+        if name in dependencies:
+            dependencies[name] = "unknown_module" if "module" in dependencies[name] else "unknown"
+    for node in scope.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                name = alias.asname or alias.name.split(".")[0]
+                kind = None
+                if isinstance(node, ast.Import) and alias.name == "fastapi":
+                    kind = "module"
+                elif isinstance(node, ast.ImportFrom) and alias.name in {"Depends", "Security"}:
+                    kind = alias.name if node.module == "fastapi" and not node.level else "unknown"
+                if kind:
+                    dependencies[name] = kind if stores[name] == 1 else (
+                        "unknown_module" if kind == "module" else "unknown")
+                if stores[name] == 1:
+                    repositories[name] = (id(scope), name)
+                    uncertain.discard(name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if len(targets) == 1 and isinstance(targets[0], ast.Name) and stores[targets[0].id] == 1:
+                repositories[targets[0].id] = (id(scope), targets[0].id)
+                uncertain.discard(targets[0].id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and stores[node.name] == 1:
+            uncertain.discard(node.name)
+    # One bounded exception to unknown rebinding: a visible undecorated helper
+    # whose entire body returns literal None cannot return a FastAPI marker or
+    # run an identity check. Do not infer anything about wrappers with calls,
+    # decorators, additional statements or later/conditional rebindings.
+    for node in scope.body:
+        if (not isinstance(node, ast.FunctionDef) or node.decorator_list or len(node.body) != 1
+                or not isinstance(node.body[0], ast.Return)
+                or not isinstance(node.body[0].value, ast.Constant) or node.body[0].value.value is not None
+                or node.name not in dependencies):
+            continue
+        prior_imports = sum(
+            1 for declaration in scope.body
+            if isinstance(declaration, ast.ImportFrom) and declaration.module == "fastapi"
+            and not declaration.level and declaration.lineno < node.lineno
+            for alias in declaration.names
+            if alias.name in {"Depends", "Security"} and (alias.asname or alias.name) == node.name)
+        if stores[node.name] == 1 + prior_imports:
+            non_dependencies[node.name] = node.lineno
+    return _ScopeBindings(dependencies, repositories, frozenset(uncertain), non_dependencies)
+
+
+def _route_candidates(scope, methods: set[str]) -> bool:
+    return any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and len(node.decorator_list) == 1
+        and isinstance(node.decorator_list[0], ast.Call)
+        and isinstance(node.decorator_list[0].func, ast.Attribute)
+        and node.decorator_list[0].func.attr in methods
+        for node in scope.body
+    )
+
+
+def _auth_scopes(tree: ast.Module):
+    """Resolve lexical bindings lazily, only for scopes declaring route candidates."""
+    parents = {}
+    contexts = {}
+
+    def context(scope):
+        if scope not in contexts:
+            parent = parents.get(scope)
+            contexts[scope] = _scope_bindings(scope, context(parent) if parent else None)
+        return contexts[scope]
+
+    pending = deque([(tree, None)])
+    while pending:
+        node, parent = pending.popleft()
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
+            parents[node] = parent
+            if _route_candidates(node, _METHODS):
+                yield node, context(node)
+            parent = node
+        pending.extend((child, parent) for child in ast.iter_child_nodes(node))
+
+
+def _dependency_kind(call: ast.Call, bindings: dict[str, str], non_dependencies: dict[str, int] | None = None) -> str:
+    if isinstance(call.func, ast.Name):
+        definition_line = non_dependencies.get(call.func.id) if non_dependencies else None
+        if definition_line is not None and call.lineno > definition_line:
+            return ""
+        kind = bindings.get(call.func.id, "unknown" if call.func.id in {"Depends", "Security"} else "")
+        return kind if kind in {"Depends", "Security", "unknown"} else ""
+    if isinstance(call.func, ast.Attribute) and call.func.attr in {"Depends", "Security"}:
+        owner = bindings.get(_name(call.func.value), "")
+        if owner == "module":
+            return call.func.attr
+        return "unknown" if owner == "unknown_module" else ""
+    return ""
+
+
+def _dependency_argument(call: ast.Call) -> ast.AST | None:
+    return call.args[0] if call.args else next(
+        (keyword.value for keyword in call.keywords if keyword.arg == "dependency"), None)
+
+
+def _nodes_guard_role(nodes, bindings: dict[str, str], *, named_calls: bool,
+                      non_dependencies: dict[str, int] | None = None) -> str:
     role = "none"
-    for node in _handler_nodes(fn, signature=True):
+    for node in nodes:
         if not isinstance(node, ast.Call):
             continue
         name = _name(node.func) or (node.func.attr if isinstance(node.func, ast.Attribute) else "")
-        if name == "get_authorized" or name.startswith(("require_", "authorize", "check_auth", "verify_token")):
+        if named_calls and (name == "get_authorized"
+                            or name.startswith(("require_", "authorize", "check_auth", "verify_token"))):
             return "identity"
-        if name in {"Depends", "Security"}:
-            dependency = node.args[0] if node.args else next(
-                (keyword.value for keyword in node.keywords if keyword.arg == "dependency"), None)
-            dependency_role = _dependency_role(_name(dependency))
+        kind = _dependency_kind(node, bindings, non_dependencies)
+        if kind:
+            # Constructing a Depends/Security marker inside a running handler
+            # does not execute its dependency. Only signature declarations can
+            # supply the positive identity witness; unresolved body uses remain
+            # conservative target guards, as other unknown dependencies do.
+            dependency_role = "unknown" if named_calls or kind == "unknown" else (
+                _dependency_role(_name(_dependency_argument(node))))
             if dependency_role == "identity":
                 return "identity"
             if dependency_role == "unknown":
@@ -145,8 +302,31 @@ def _guard_role(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     return role
 
 
-def _guarded(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    return _guard_role(fn) != "none"
+def _guard_role(fn: ast.FunctionDef | ast.AsyncFunctionDef, bindings: _ScopeBindings | None = None) -> str:
+    bindings = bindings or _ScopeBindings({}, {})
+    signature = _nodes_guard_role(ast.walk(fn.args), bindings.dependencies, named_calls=False,
+                                  non_dependencies=bindings.non_dependencies)
+    body_bindings = _scope_bindings(fn, bindings)
+    body = _nodes_guard_role(_handler_nodes(fn), body_bindings.dependencies, named_calls=True,
+                             non_dependencies=body_bindings.non_dependencies)
+    return "identity" if "identity" in (signature, body) else "unknown" if "unknown" in (signature, body) else "none"
+
+
+def _repository_key(fn, name: str, bindings: _ScopeBindings):
+    """A stable enclosing object or the same explicit storage dependency."""
+    stores = _scope_stores(fn)
+    params = [*fn.args.posonlyargs, *fn.args.args]
+    defaults = [*zip(params[len(params) - len(fn.args.defaults):], fn.args.defaults),
+                *zip(fn.args.kwonlyargs, fn.args.kw_defaults)]
+    for parameter, default in defaults:
+        if parameter.arg != name or stores[name] != 1 or not isinstance(default, ast.Call):
+            continue
+        if _dependency_kind(default, bindings.dependencies, bindings.non_dependencies) not in {"Depends", "Security"}:
+            continue
+        dependency = _name(_dependency_argument(default))
+        if dependency and dependency not in bindings.uncertain and _dependency_role(dependency) == "storage":
+            return ("dependency", dependency)
+    return bindings.repositories.get(name) if not stores[name] else None
 
 
 def _scope_routes(scope, factories: set[str], methods: set[str]):
@@ -156,6 +336,8 @@ def _scope_routes(scope, factories: set[str], methods: set[str]):
     objects. Unsupported bindings invalidate that name instead of borrowing a
     sibling from a router whose identity is no longer known.
     """
+    if not _route_candidates(scope, methods):
+        return []
     routers: dict[str, tuple[str, int]] = {}
     available_factories = set(factories)
     if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -217,7 +399,10 @@ def scan_auth_read(fileobj: BinaryIO) -> list[CheckFinding]:
                     or any(p in path.split("/") for p in ("vendor", "venv", ".venv", "node_modules"))):
                 continue
             try:
-                tree = ast.parse(archive.read(info).decode("utf-8"))
+                raw = archive.read(info)
+                if b"@" not in raw:
+                    continue
+                tree = ast.parse(raw.decode("utf-8"))
             except (SyntaxError, UnicodeError, ValueError, RecursionError):
                 continue
             factories = {
@@ -246,28 +431,37 @@ def scan_auth_read(fileobj: BinaryIO) -> list[CheckFinding]:
             # router built inside another -- flattening would pair routes that
             # never share an object and report a disagreement that does not
             # exist. Each scope is therefore analysed on its own terms.
-            scopes = [tree]
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    scopes.append(node)
-
-            for scope in scopes:
-                findings.extend(_scope_findings(scope, factories, path))
+            for scope, bindings in _auth_scopes(tree):
+                findings.extend(_scope_findings(scope, factories, path, bindings))
     return findings
 
 
-def _scope_findings(scope, factories: set[str], filename: str) -> list[CheckFinding]:
+def _scope_findings(scope, factories: set[str], filename: str,
+                    bindings: _ScopeBindings | None = None) -> list[CheckFinding]:
     """Routes declared directly in one scope's body, and their disagreements."""
     findings: list[CheckFinding] = []
     routes = _scope_routes(scope, factories, _METHODS)
+    bindings = bindings or _scope_bindings(scope)
+    roles = {fn: _guard_role(fn, bindings) for fn, _, _, _ in routes}
     protected = {}
-    for fn, route, _, router in routes:
+    for fn, route, method, router in routes:
+        identity_dependency = (
+            _nodes_guard_role(ast.walk(fn.args), bindings.dependencies, named_calls=False,
+                              non_dependencies=bindings.non_dependencies) == "identity")
         for node in _handler_nodes(fn):
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "get_authorized" and _name(node.func.value)):
-                protected.setdefault((router, _name(node.func.value)), (route, node.lineno))
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            repo = _name(node.func.value)
+            key = _repository_key(fn, repo, bindings) if repo else None
+            if key is None:
+                continue
+            if node.func.attr == "get_authorized":
+                protected.setdefault((router, key), (route, node.lineno, f"calls {repo}.get_authorized"))
+            elif method == "get" and identity_dependency and node.func.attr in {"get", "list"}:
+                protected.setdefault((router, key), (
+                    route, node.lineno, f"declares an identity dependency and calls {repo}.{node.func.attr}"))
     for fn, route, _, router in routes:
-        if _guarded(fn) or len(fn.decorator_list) != 1:
+        if roles[fn] != "none" or len(fn.decorator_list) != 1:
             continue
         for node in _handler_nodes(fn):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -275,10 +469,11 @@ def _scope_findings(scope, factories: set[str], filename: str) -> list[CheckFind
                 continue
             repo = _name(node.func.value)
             arg = _name(node.args[0])
-            if (router, repo) not in protected or not arg or "{" + arg + "}" not in route:
+            key = _repository_key(fn, repo, bindings) if repo else None
+            if (router, key) not in protected or not arg or "{" + arg + "}" not in route:
                 continue
-            sibling, line = protected[router, repo]
-            findings.append(_finding(filename, node.lineno, route, sibling, line, repo, arg))
+            sibling, line, evidence = protected[router, key]
+            findings.append(_finding(filename, node.lineno, route, sibling, line, repo, arg, evidence))
             # One finding per route. The loop is over every `.get(` in the
             # handler, and a route that reads twice has one disagreement.
             break
@@ -286,12 +481,12 @@ def _scope_findings(scope, factories: set[str], filename: str) -> list[CheckFind
 
 
 def _finding(path: str, lineno: int, route: str, sibling: str,
-             line: int, repo: str, arg: str) -> CheckFinding:
+             line: int, repo: str, arg: str, evidence: str) -> CheckFinding:
     return CheckFinding(
         RULE_ID, "Object lookup differs from protected sibling routes",
         "medium", 0.8, "Auth", file=path, line=lineno,
         explanation=(f"{route} calls {repo}.get({arg}); sibling {sibling} "
-                     f"calls {repo}.get_authorized at line {line}. "
+                     f"{evidence} on the same repository binding at line {line}. "
                      "No local authorization guard was recognized. Global middleware, "
                      "router mounting and public reachability have not been resolved."),
         fix_hint=("Inspect route and middleware authorization. If the sibling's ownership "

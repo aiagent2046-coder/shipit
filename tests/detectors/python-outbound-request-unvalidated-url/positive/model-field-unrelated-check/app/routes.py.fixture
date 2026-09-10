@@ -1,0 +1,16 @@
+import requests
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class FetchRequest(BaseModel):
+    primary: str
+    fallback: str
+
+@app.post('/fetch')
+def fetch(payload: FetchRequest):
+    if payload.primary not in {'https://api.example.test/status'}:
+        raise HTTPException(status_code=400, detail='Unsupported destination')
+    response = requests.get(payload.fallback, timeout=2)
+    return {'status': response.status_code}

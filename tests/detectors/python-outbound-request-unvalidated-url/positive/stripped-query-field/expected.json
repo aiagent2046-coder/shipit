@@ -1,0 +1,10 @@
+{
+  "description": "Diagnostic: direct query indexing and a string method feed the HTTP URL.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

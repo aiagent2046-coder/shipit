@@ -1,1 +1,2 @@
-const agent = { rejectUnauthorized: true };
+import https from "node:https";
+const agent = new https.Agent({ rejectUnauthorized: true });
