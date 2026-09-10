@@ -1,0 +1,11 @@
+{
+  "description": "An identity dependency on a collection read witnesses an unguarded path-id lookup of the same repository.",
+  "expect": [
+    {
+      "rule_id": "python-route-read-auth-consistency",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}

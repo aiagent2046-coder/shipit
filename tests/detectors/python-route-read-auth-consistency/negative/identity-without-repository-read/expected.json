@@ -1,0 +1,7 @@
+{
+  "description": "An identity-guarded response that never reads this repository is not a read witness.",
+  "expect": [],
+  "forbid": [
+    "python-route-read-auth-consistency"
+  ]
+}
