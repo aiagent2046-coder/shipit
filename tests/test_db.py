@@ -9,6 +9,7 @@ module docstring for why asyncpg was replaced).
 """
 
 import datetime
+import json
 import uuid
 
 import pytest
@@ -311,6 +312,17 @@ class TestAuditRepositoryWithFakePool:
         assert "score_json->>'basis' = %s" in query
         assert params == ("o/r", "static+llm")
 
+    async def test_cache_lookup_selects_and_decodes_private_inventory(self, monkeypatch):
+        inventory = {"version": 1, "dependencies": [{"name": "private-package"}]}
+        fake = FakePool(fetchone_result={
+            "id": uuid.uuid4(), "score_json": {"basis": "static+llm"},
+            "findings_json": [], "dependency_inventory": json.dumps(inventory),
+        })
+        monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
+        cached = await AuditRepository().get_by_content_hash("digest", "engine", "static+llm")
+        assert cached["dependency_inventory"] == inventory
+        assert "dependency_inventory" in fake.calls[0][0].split("from audits")[0]
+
     async def test_get_returns_none_for_missing_row(self, monkeypatch):
         fake = FakePool(fetchone_result=None)
         monkeypatch.setattr(db_mod, "get_pool", lambda: _async_return(fake))
@@ -342,6 +354,7 @@ class TestAuditRepositoryWithFakePool:
         query, params = fake.calls[0]
         assert "where id = %s and access_token = %s" in query
         assert "access_token" not in query.split("where")[0]  # not in select list
+        assert "dependency_inventory" not in query.split("where")[0]
         assert params == (audit_id, "sekret-token")
 
     async def test_get_authorized_without_token_never_queries(self, monkeypatch):

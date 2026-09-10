@@ -89,6 +89,27 @@ async def test_different_content_engine_or_incomplete_preview_is_not_attached(ov
 
 
 @pytest.mark.asyncio
+async def test_a_history_snapshot_keeps_the_dependency_inventory():
+    """The copy IS the newest row for this content, so it is the row a repeat
+    audit reuses -- and the background refresh only looks at rows that carry an
+    inventory. Dropping it here froze the dependency answer at the moment of the
+    copy, for every audit that came through this path."""
+    inventory = {"version": 1, "asked_at": "2026-09-10T00:00:00+00:00",
+                 "found": 1,
+                 "dependencies": [{"ecosystem": "npm", "name": "lodash",
+                                   "version": "4.17.4", "manifest": "package-lock.json"}]}
+    preview = row("static+preview", [STATIC, PREVIEW])
+    paid = row("static+llm", [STATIC], dependency_inventory=inventory)
+    repo = Repo(preview, paid)
+
+    enriched = await refresh_cached_preview_history(repo, paid)
+    assert enriched is not None
+    assert enriched["id"] != paid["id"]
+    assert enriched.get("dependency_inventory") == inventory, (
+        "without this the refresh sweep can never re-ask about this content")
+
+
+@pytest.mark.asyncio
 async def test_cached_history_is_a_new_snapshot_and_second_reuse_is_free():
     preview, paid = row("static+preview", [STATIC, PREVIEW]), row("static+llm", [STATIC])
     repo = Repo(preview, paid)

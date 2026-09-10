@@ -42,6 +42,7 @@ import httpx
 import pytest
 
 import app.db as db_mod
+from app.audit_history import refresh_cached_preview_history
 from app.accounts import api_key_prefix, generate_api_key
 from app.billing import bank_transfer
 from app.db import (
@@ -1839,3 +1840,69 @@ async def test_legacy_job_with_multiple_completed_payments_has_no_guessed_owner(
         )
     assert await payments.get_completed_fixpack_for_job(job["id"]) is None
     await jobs.mark_status(job["id"], "failed", "smoke cleanup")
+
+
+async def test_history_copy_remains_refreshable_without_exposing_inventory(real_db):
+    """Exercise real SELECT/RETURNING and refresh supersession, not a broad fake row."""
+    repo = AuditRepository()
+    digest = f"inventory-history-{uuid.uuid4().hex}"
+    engine = "history-inventory-smoke"
+    inventory = {"version": 1, "asked_at": "2026-01-01T00:00:00+00:00", "found": 1,
+                 "dependencies": [{"ecosystem": "npm", "name": "private-package",
+                                   "version": "1.0.0", "manifest": "package-lock.json"}]}
+    paid = await repo.create(
+        stack="nextjs", file_count=1, score_total=9.0,
+        score_json={"total": 9.0, "categories": {}, "basis": "static+llm",
+                    "scan_manifest": {"sca_asked_at": inventory["asked_at"]}},
+        findings_json=[], content_hash=digest, engine_version=engine,
+        dependency_inventory=inventory)
+    assert paid["dependency_inventory"] == inventory
+    await repo.create(
+        stack="nextjs", file_count=1, score_total=9.0,
+        score_json={"total": 9.0, "categories": {}, "basis": "static+preview"},
+        findings_json=[], content_hash=digest, engine_version=engine)
+    cached = await repo.get_by_content_hash(digest, engine, "static+llm")
+    assert cached["dependency_inventory"] == inventory
+    copied = await refresh_cached_preview_history(repo, cached)
+    assert copied["id"] != paid["id"]
+    assert copied["dependency_inventory"] == inventory
+    current = await repo.get_by_content_hash(digest, engine, "static+llm")
+    assert current["id"] == copied["id"]
+    assert current["dependency_inventory"] == inventory
+    candidates = await repo.stale_dependency_audits(
+        created_before=datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7),
+        limit=10000)
+    matching = [a for a in candidates if a["content_hash"] == digest]
+    assert [a["id"] for a in matching] == [copied["id"]]
+    for readable in (await repo.get(copied["id"]),
+                     await repo.get_authorized(copied["id"], copied["access_token"])):
+        assert "dependency_inventory" not in readable
+
+
+async def test_recent_history_copy_uses_answer_age_before_batch_limit(real_db):
+    repo = AuditRepository()
+    run = uuid.uuid4().hex
+    # Dates before the other smoke fixtures isolate this limit=1 assertion.
+    # The newer answer is inserted first: created_at ordering gets this wrong.
+    for label, asked in (("fresh", "1970-01-20T00:00:00+00:00"),
+                         ("stale", "1970-01-01T00:00:00+00:00")):
+        audit = await repo.create(
+            stack="nextjs", file_count=1, score_total=9.0,
+            score_json={"total": 9.0, "categories": {}, "basis": "static+llm",
+                        "analysis_reused_from": "prior-analysis",
+                        "scan_manifest": {"sca_asked_at": asked}},
+            findings_json=[], content_hash=f"age-order-{run}-{label}", engine_version="smoke",
+            dependency_inventory={"version": 1, "asked_at": asked, "dependencies": []})
+        if label == "stale":
+            stale_id = audit["id"]
+    try:
+        candidates = await repo.stale_dependency_audits(
+            created_before=datetime.datetime(1970, 1, 10, tzinfo=datetime.timezone.utc), limit=1)
+        assert [audit["id"] for audit in candidates] == [stale_id]
+    finally:
+        # These deliberately ancient candidates must not occupy the next run's
+        # global batch when the disposable database is reused locally.
+        pool = await db_mod.get_pool()
+        async with pool.connection() as conn:
+            await conn.execute("delete from audits where content_hash in (%s, %s)",
+                               (f"age-order-{run}-fresh", f"age-order-{run}-stale"))
