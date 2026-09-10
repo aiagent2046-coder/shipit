@@ -1,0 +1,7 @@
+{
+  "description": "Authorization is declared on the router itself. The scanner cannot read what that list does, so it excludes the router rather than pairing routes whose guard it never saw -- the read rule makes the same call.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

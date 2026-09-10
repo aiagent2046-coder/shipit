@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.put("/audits/{audit_id}")
+async def update_audit(audit_id, payload, actor=Depends(current_actor), audit_repo=Depends(get_audit_repo)):
+    return audit_repo.update(audit_id, payload)
+
+
+@router.post("/audits")
+async def create_audit(payload, audit_repo=Depends(get_audit_repo)):
+    return audit_repo.create(payload)

@@ -1,0 +1,7 @@
+{
+  "description": "The target route's dependency is named something this scanner cannot classify (handler). Unknown counts as authorization, so no gap is claimed -- the rule reports what it can read, and a name it cannot place is not evidence of absence. Both routes carry a dependency, so this is not the 'no dependency at all' case either.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

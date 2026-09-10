@@ -1,0 +1,7 @@
+{
+  "description": "The guarded and unguarded routes live in two different router factories. They never share a router object, so there is nothing for them to disagree about; flattening the scopes would invent a pair.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

@@ -148,7 +148,20 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # production credentials and allocate independent environment keys per secret.
 # 2026-09-10-5: integrate paid dependency evidence and freshness handling with
 # the released harness-fixture classification and independent secret rewrites.
-AUDIT_ENGINE_VERSION = "2026-09-10-5"
+# 2026-09-10-6: python-route-write-auth-consistency -- a route that changes data
+# is compared with a sibling route on the same router that shows an identity
+# check. A new rule id is exactly the case this constant exists for: a paid or
+# free audit reports something it did not report before, for unchanged bytes.
+# The dependency vocabulary both route rules share was widened in the same
+# change, so the read rule's findings move with it: two hunt rounds through
+# scripts/hunt_detector_escapes.py showed a storage dependency renamed
+# fetch_record_repository, and a write call named createRecord or executed as
+# raw SQL, escaping a vocabulary built from one naming convention.
+# 2026-09-10-8: reviewed route checks distinguish an unknown dependency from an
+# identity witness, keep different router objects and nested function bodies
+# separate, and report recognized write calls without claiming runtime effects.
+# -7 was allocated to the sibling outbound rule before this review.
+AUDIT_ENGINE_VERSION = "2026-09-10-8"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

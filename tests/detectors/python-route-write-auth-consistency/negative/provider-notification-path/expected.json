@@ -1,0 +1,7 @@
+{
+  "description": "A payment provider's notification endpoint, which arrives from the provider rather than from a signed-in person -- the product's own YooKassa route has this shape. The path segment is what excludes it, and the mutation renames the segment to one that is not conventionally public.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

@@ -1,0 +1,17 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.delete("/notes/{note_id}")
+async def drop_note(note_id, actor=Depends(require_actor), db_repo=Depends(fetch_notes_repository)):
+    return await db_repo.query("DELETE FROM notes WHERE id = $id", {"id": note_id}).run()
+
+
+@router.post("/notes")
+async def add_note(data, connections=Depends(get_connection_pool)):
+    conn = connections.getconn()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO notes (data) VALUES (%s)", (data,))
+    connections.putconn(conn)
+    return cursor.lastrowid

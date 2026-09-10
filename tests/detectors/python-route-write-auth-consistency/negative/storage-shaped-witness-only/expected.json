@@ -1,0 +1,7 @@
+{
+  "description": "The residual the vocabulary cannot close: the only visible difference between the two routes is resolve_manager, whose name is storage-shaped. A scanner reading names cannot tell that from a storage injection, so it stays silent rather than assert a gap the code does not show.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

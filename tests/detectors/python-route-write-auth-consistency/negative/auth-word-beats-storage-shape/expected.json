@@ -1,0 +1,7 @@
+{
+  "description": "Both routes depend on get_auth_service, which is SHAPED like storage (get_ + service) but names authorization. A vocabulary that widened storage by suffix alone would fire here and invent a gap on a route that plainly requires authorization.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

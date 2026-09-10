@@ -1,0 +1,21 @@
+from fastapi import APIRouter, Depends
+
+
+def build_admin_router():
+    router = APIRouter()
+
+    @router.post("/admin/audits")
+    async def create_audit(payload, actor=Depends(require_actor), audit_repo=Depends(get_audit_repo)):
+        return audit_repo.create(payload)
+
+    return router
+
+
+def build_public_router():
+    router = APIRouter()
+
+    @router.post("/audits")
+    async def submit_audit(payload, audit_repo=Depends(get_audit_repo)):
+        return audit_repo.create(payload)
+
+    return router

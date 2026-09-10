@@ -7,6 +7,7 @@ from typing import BinaryIO
 
 from app.ingest.validators import validate_zip
 from app.scan.auth_read import scan_auth_read
+from app.scan.auth_write import scan_auth_write
 from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
@@ -114,6 +115,14 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             line=a.line, explanation=a.explanation, fix_hint=a.fix_hint,
         ))
 
+    fileobj.seek(0)
+    for w in scan_auth_write(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=w.rule_id, title=w.title, severity=w.severity,
+            confidence=w.confidence, category=w.category, file=w.file,
+            line=w.line, explanation=w.explanation, fix_hint=w.fix_hint,
+        ))
+
     # The first static producer for Frontend. Wired on a number measured in
     # this repository (DRYDOCK_LENS_PLAN.md): 11 of 12 mounted apps in the
     # audited corpus ship no error boundary above their routes, the hits on
@@ -184,11 +193,17 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # the follow-up; here it is preserved so it can be.
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
+                       "auth_write_consistency",
                        "http_success", "sql_injection", "sql_injection_js"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
                      "test/vendor files excluded; middleware and runtime access not resolved",
+                     "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in "
+                     "parseable Python files up to 2 MB, compared with sibling routes on the same router; "
+                     "potential writes are recognized by leading call-name tokens or literal mutating SQL; "
+                     "actual storage effects, conventionally public paths, "
+                     "test/vendor files, router-level dependencies and middleware are not resolved",
                      "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
                      "runtime fetch bindings and HTTP failures are not verified. "
                      "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},

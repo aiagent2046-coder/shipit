@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.delete("/notes/{note_id}")
+async def drop_note(note_id, actor=Depends(current_actor), notes_repo=Depends(get_notes_repo)):
+    return notes_repo.table("notes").delete().eq("id", note_id).execute()
+
+
+@router.post("/notes")
+async def add_note(payload, notes_repo=Depends(get_notes_repo)):
+    return notes_repo.table("notes").insert(payload).execute()

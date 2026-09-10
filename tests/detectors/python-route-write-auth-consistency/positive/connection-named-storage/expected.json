@@ -1,0 +1,10 @@
+{
+  "description": "The storage dependency is named get_db_connection rather than get_*_repo, which the first vocabulary read as a possible identity check. Injecting a connection is not authorising a caller.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.post("/sessions")
+async def start_session(payload, actor=Depends(current_actor), session_repo=Depends(get_session_repo)):
+    return session_repo.create(payload)
+
+
+@router.post("/auth/login")
+async def login(payload, session_repo=Depends(get_session_repo)):
+    return session_repo.create(payload)

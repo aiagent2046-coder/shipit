@@ -1,0 +1,7 @@
+{
+  "description": "The unguarded route carries a second decorator that this scanner does not recognize. It could be the guard (a rate limiter, a custom auth wrapper), so the route is left alone rather than asserted about -- the read rule skips these for the same reason.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

@@ -351,6 +351,23 @@ def test_coverage_distinguishes_skipped_partial_and_legacy():
     assert dict(coverage_rows({"categories": {}}, []))["Auth"] == "Coverage not recorded"
 
 
+@pytest.mark.parametrize("checks", [
+    ["auth_read_consistency"],
+    ["auth_write_consistency"],
+    ["auth_read_consistency", "auth_write_consistency"],
+])
+def test_local_route_coverage_does_not_claim_broader_authorization(checks):
+    from app.report.evidence import coverage_rows
+
+    score = {"basis": "static_only", "categories": {},
+             "scan_manifest": {"static_checks": checks}}
+    rows = dict(coverage_rows(score, []))
+    assert rows["Auth"] == "Local Python route check ran — broader auth not checked"
+    assert rows["Money & Data"] == "Not checked"
+    html = render_report({"score": score, "findings": []})
+    assert rows["Auth"] in html
+
+
 def test_zero_findings_is_not_a_safety_verdict():
     html = render_report(result([]))
     assert "Absence of a finding does not establish safety" in html

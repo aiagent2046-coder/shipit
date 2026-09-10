@@ -20,6 +20,15 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "python-route-write-auth-consistency": (
+        "A route contains a call recognized as a write and shows no local identity check.",
+        "A sibling write route on the same router declares an identity check. This is a local "
+        "consistency signal based on calls and dependency names; actual changes to stored data, "
+        "middleware, router mounting and runtime access have not been verified.",
+        "Confirm whether this route is meant to be reachable without an identity -- a webhook or an "
+        "onboarding step would be. If not, apply the sibling route's identity contract, then test a "
+        "write with a foreign or absent credential against synthetic records.",
+    ),
     "python-route-read-auth-consistency": (
         "Object lookup differs from protected sibling routes.",
         'A local route uses a different lookup from protected sibling routes. Global '

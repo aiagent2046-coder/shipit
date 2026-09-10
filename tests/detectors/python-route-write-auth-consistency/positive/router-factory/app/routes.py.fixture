@@ -1,0 +1,15 @@
+from fastapi import APIRouter, Depends
+
+
+def build_records_router():
+    router = APIRouter()
+
+    @router.delete("/records/{record_id}")
+    async def remove_record(record_id, actor=Depends(require_actor), record_repo=Depends(get_record_repo)):
+        return record_repo.delete(record_id)
+
+    @router.patch("/records/{record_id}")
+    async def edit_record(record_id, payload, record_repo=Depends(get_record_repo)):
+        return record_repo.update(record_id, payload)
+
+    return router

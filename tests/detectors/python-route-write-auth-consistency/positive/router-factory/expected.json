@@ -1,0 +1,10 @@
+{
+  "description": "The identical disagreement, declared inside a router factory instead of at module level. Reading only the module body missed the read-side rule's factory case, so the write rule is pinned on it too.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
