@@ -1,0 +1,10 @@
+{
+  "description": "The loader named explicitly, which is the deliberate version of the same decision. Loader=yaml.Loader is the unsafe one; SafeLoader is not.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

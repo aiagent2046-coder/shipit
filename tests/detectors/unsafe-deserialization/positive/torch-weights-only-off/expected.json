@@ -1,0 +1,10 @@
+{
+  "description": "A model file is a pickle with tensors around it. Asking for arbitrary objects back is how `torch.load` on a downloaded checkpoint becomes code execution; the rule reports the explicit switch and leaves the bare call alone, because the default changed in torch 2.6.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

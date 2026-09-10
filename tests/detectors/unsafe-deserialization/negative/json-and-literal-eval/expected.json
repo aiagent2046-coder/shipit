@@ -1,0 +1,7 @@
+{
+  "description": "Formats that carry values: json, and ast.literal_eval, which parses Python literals without calling anything. The mutation swaps json.loads for pickle.loads, which must fire.",
+  "expect": [],
+  "forbid": [
+    "unsafe-deserialization"
+  ]
+}

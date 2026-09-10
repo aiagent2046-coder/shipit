@@ -1,0 +1,6 @@
+import pickle
+
+
+def write_cache(path, obj):
+    with open(path, "wb") as handle:
+        pickle.dump(obj, handle)

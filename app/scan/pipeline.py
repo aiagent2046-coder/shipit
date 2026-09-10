@@ -170,7 +170,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-10-13: bounded TLS configuration analysis with imported client/context
 # provenance, real Python signatures and JS/TS syntax. Certificate-chain and
 # hostname checks have separate explanations; escaped literals remain in scope.
-AUDIT_ENGINE_VERSION = "2026-09-10-13"
+# 2026-09-10-14: import-resolved deserialization with lexical shadowing and real
+# YAML loader provenance; distinguish object construction, marshal values and
+# version-dependent YAML defaults. Each changed rule set invalidates the cache.
+AUDIT_ENGINE_VERSION = "2026-09-10-14"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

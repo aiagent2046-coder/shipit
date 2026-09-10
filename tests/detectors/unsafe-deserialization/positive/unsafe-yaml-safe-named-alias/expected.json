@@ -1,0 +1,10 @@
+{
+  "description": "The imported UnsafeLoader remains unsafe even when its alias is SafeLoader.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

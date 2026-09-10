@@ -1,0 +1,6 @@
+import pickle
+
+
+def read_cache(path):
+    with open(path, "rb") as handle:
+        return pickle.load(handle)

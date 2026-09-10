@@ -23,6 +23,7 @@ from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.sql_injection_js import scan_sql_injection_js
 from app.scan.tls_verification import scan_tls_verification
+from app.scan.unsafe_deserialization import scan_unsafe_deserialization
 from app.scan.source_facts import collect_source_facts
 
 
@@ -100,6 +101,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=t.rule_id, title=t.title, severity=t.severity,
             confidence=t.confidence, category=t.category, file=t.file,
             line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for d in scan_unsafe_deserialization(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=d.rule_id, title=d.title, severity=d.severity,
+            confidence=d.confidence, category=d.category, file=d.file,
+            line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
             claim_evidence=static_claim_evidence(),
         ))
 
@@ -211,11 +221,23 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # repository. A scanner that found nothing and one that gave up must
         # not look identical (#392). Consuming this in the pipeline/report is
         # the follow-up; here it is preserved so it can be.
-        "checks_run": ["secrets", "rls", "schema_drift", "project_files",
-                       "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
-                       "auth_write_consistency",
-                       "http_success", "sql_injection", "sql_injection_js", "outbound_url",
-                       "tls_verification"],
+        "checks_run": [
+            'secrets',
+            'rls',
+            'schema_drift',
+            'project_files',
+            'ci_deploy_source',
+            'service_role',
+            'error_boundary',
+            'auth_read_consistency',
+            'auth_write_consistency',
+            'http_success',
+            'sql_injection',
+            'sql_injection_js',
+            'outbound_url',
+            'tls_verification',
+            'unsafe_deserialization',
+        ],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
                      "tls_verification": "At most 400 non-test/vendor Python and JS/TS files, each up to "
@@ -243,6 +265,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                      "known-string strip(), URL expressions and preceding local "
                      "checks are traced within one handler; complex control flow, unknown calls/helpers, "
                      "validation correctness, DNS, redirects, network policy and TS/JS are not resolved",
+                     "unsafe_deserialization": "At most 400 non-test/vendor Python files up to "
+                     "400 KB, 20,000 AST nodes and depth 100; import-resolved loads with lexical "
+                     "shadowing and stable outer bindings. Unsafe YAML classes must have confirmed "
+                     "library provenance; Base/Safe/Full loaders are silent. Marshal and missing "
+                     "YAML Loader produce separate, conditional risk descriptions. Input trust "
+                     "and dependency versions are not verified. Assignment aliases, conditional "
+                     "imports, mutated modules, custom YAML loaders, stored Unpickler instances, "
+                     "cross-file resolution, bare torch.load and TS/JS are not covered; at most "
+                     "32 findings are reported",
                      "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
                      "runtime fetch bindings and HTTP failures are not verified. "
                      "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},

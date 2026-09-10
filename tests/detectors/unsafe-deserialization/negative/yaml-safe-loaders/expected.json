@@ -1,0 +1,7 @@
+{
+  "description": "Every safe spelling: the helper, the loader named explicitly, and the full loader passed positionally. None of them can construct arbitrary objects, and reporting them would flag the fix.",
+  "expect": [],
+  "forbid": [
+    "unsafe-deserialization"
+  ]
+}

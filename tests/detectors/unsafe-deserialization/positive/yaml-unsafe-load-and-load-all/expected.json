@@ -1,0 +1,10 @@
+{
+  "description": "The helper that exists for this purpose, and the multi-document variant.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 2
+    }
+  ],
+  "forbid": []
+}
