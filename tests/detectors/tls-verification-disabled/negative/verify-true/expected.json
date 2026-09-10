@@ -1,0 +1,7 @@
+{
+  "description": "Verification asked for explicitly. The mutation flips the literal, which must fire.",
+  "expect": [],
+  "forbid": [
+    "tls-verification-disabled"
+  ]
+}

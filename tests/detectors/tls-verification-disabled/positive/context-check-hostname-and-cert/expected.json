@@ -1,0 +1,10 @@
+{
+  "description": "A hand-built context, which is what code does when it wants to keep encryption but skip authentication. Two lines, two findings: each is a place to fix.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 2
+    }
+  ],
+  "forbid": []
+}

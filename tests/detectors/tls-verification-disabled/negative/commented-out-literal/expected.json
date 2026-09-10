@@ -1,0 +1,7 @@
+{
+  "description": "A comment explaining that the flag was removed, plus the same words inside a string. Neither is code that disables anything; a scanner that reads text instead of statements reports the comment. The mutation uncomments the line, which must fire.",
+  "expect": [],
+  "forbid": [
+    "tls-verification-disabled"
+  ]
+}

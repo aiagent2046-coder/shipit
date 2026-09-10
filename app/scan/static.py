@@ -22,6 +22,7 @@ from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.sql_injection_js import scan_sql_injection_js
+from app.scan.tls_verification import scan_tls_verification
 from app.scan.source_facts import collect_source_facts
 
 
@@ -90,6 +91,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=u.rule_id, title=u.title, severity=u.severity,
             confidence=u.confidence, category=u.category, file=u.file,
             line=u.line, explanation=u.explanation, fix_hint=u.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for t in scan_tls_verification(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=t.rule_id, title=t.title, severity=t.severity,
+            confidence=t.confidence, category=t.category, file=t.file,
+            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
             claim_evidence=static_claim_evidence(),
         ))
 
@@ -204,9 +214,19 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
                        "auth_write_consistency",
-                       "http_success", "sql_injection", "sql_injection_js", "outbound_url"],
+                       "http_success", "sql_injection", "sql_injection_js", "outbound_url",
+                       "tls_verification"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
+                     "tls_verification": "At most 400 non-test/vendor Python and JS/TS files, each up to "
+                     "400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Local imports and "
+                     "client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, "
+                     "Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and "
+                     "process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 "
+                     "are read; hostname and certificate-chain checks have distinct explanations. "
+                     "Comments, strings, types, malformed/oversized files, unknown wrappers, cross-file "
+                     "and dynamic configuration, shell/CI YAML and runtime connections are unresolved. "
+                     "A clean result does not establish that every connection is verified",
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
                      "object lookups compared with protected reads on the same router and repository binding, "
                      "including recognized identity dependencies and imported aliases; "

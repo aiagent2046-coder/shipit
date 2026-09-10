@@ -20,6 +20,16 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "tls-verification-disabled": (
+        "TLS certificate or hostname verification is weakened.",
+        "A recognised client/context setting weakens peer-identity checks. Disabling hostname matching "
+        "can leave certificate-chain validation enabled; disabling chain validation is a different "
+        "setting. The finding identifies the control seen in source. Runtime use and exposure have "
+        "not been verified.",
+        "Restore the affected check: require a trusted certificate chain and match the expected "
+        "hostname. Configure the client's supported CA/context option for private certificates "
+        "instead of disabling verification.",
+    ),
     "python-outbound-request-unvalidated-url": (
         "An HTTP client receives an address derived from request input.",
         "A caller-controlled value reaches the host portion of a request target or client "

@@ -1,0 +1,7 @@
+{
+  "description": "The recommended fix: the client is told which authority to trust instead of being told to trust everyone. The mutation replaces the path with False, which must fire.",
+  "expect": [],
+  "forbid": [
+    "tls-verification-disabled"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Two actual supported APIs: aiohttp TCPConnector verify_ssl and HTTPX Client verify.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 2
+    }
+  ],
+  "forbid": []
+}

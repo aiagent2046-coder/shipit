@@ -167,7 +167,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # This supersedes the outbound branch preview version 2026-09-10-7.
 # 2026-09-10-10: skip unrelated Python route scopes; retain imported dependency
 # aliases, same-repository guarded reads, and bounded model/string URL origins.
-AUDIT_ENGINE_VERSION = "2026-09-10-10"
+# 2026-09-10-13: bounded TLS configuration analysis with imported client/context
+# provenance, real Python signatures and JS/TS syntax. Certificate-chain and
+# hostname checks have separate explanations; escaped literals remain in scope.
+AUDIT_ENGINE_VERSION = "2026-09-10-13"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

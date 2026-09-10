@@ -1,0 +1,7 @@
+{
+  "description": "A real plain HTTP request does not switch off certificate verification on HTTPS. The mutation selects HTTPS and explicitly disables its verification.",
+  "expect": [],
+  "forbid": [
+    "tls-verification-disabled"
+  ]
+}

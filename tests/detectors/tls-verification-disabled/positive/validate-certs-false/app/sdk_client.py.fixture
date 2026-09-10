@@ -1,0 +1,5 @@
+import elasticsearch
+
+
+def client(host):
+    return elasticsearch.Elasticsearch(host, verify_certs=False)

@@ -1,0 +1,10 @@
+{
+  "description": "The third spelling, from the SDKs that name the argument after the action rather than the object.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
