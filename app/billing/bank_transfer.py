@@ -330,10 +330,8 @@ async def create_invoice(
     """Open a bank-transfer invoice for the Pro tier.
 
     `account_id` is deliberately None, as in every invoice flow here:
-    the account does not exist yet and is minted by grant_pro_tier at
-    confirmation time, which overwrites this column anyway (see
-    PaymentRepository.mark_completed). Setting it here would be a value nobody
-    reads.
+    the account does not exist yet. Confirmation creates and links it in the
+    same transaction through PaymentRepository.grant_pro_account.
 
     `payer_name`/`payer_email` are how the operator finds this payment when the
     kopeck suffix on the amount does not survive the payer's bank converting it:
@@ -430,7 +428,7 @@ async def invoice_status(
     There is deliberately no distinct "awaiting confirmation" state here even
     though the payer may already have pressed "I've paid". Recording that would
     mean moving the row off status='pending', and the CAS predicate in
-    mark_completed / mark_completed_fixpack only admits 'pending' (or a replay
+    Pro settlement / mark_completed_fixpack only admits 'pending' (or a replay
     of the same external_ref) -- a third status would make every such payment
     permanently unconfirmable. The frontend tracks "I pressed it" locally; the
     database keeps the one status that keeps the money safe.
@@ -594,11 +592,10 @@ async def confirm(
     """The operator confirmed the money arrived: grant what was bought.
 
     Dispatches on `product` the way the USDT poller did, and always
-    passes `invoice_payment_id` so the grant runs through the CAS-gated
-    mark_completed / mark_completed_fixpack rather than inserting a second
-    payment row. That is what makes pressing the button twice safe: the replay
-    matches the same external_ref, the CAS predicate admits it, and the caller
-    gets the original account or job back with no second key and no second job.
+    passes `invoice_payment_id` so Pro's atomic settlement or Fix Pack's
+    completion gate transitions the existing invoice. A replay matches the
+    same external_ref and returns the original account or job, with no second
+    key and no second job.
 
     `external_ref` is the invoice's own reference code, already on the row. It
     is deliberately not the bank's transaction id: a second press would then
@@ -608,8 +605,8 @@ async def confirm(
     Expiry is not consulted. A transfer that took nine days is still a transfer.
 
     Returns None when there's no such bank-transfer payment. Otherwise a dict
-    with `granted` False only if persistence refused (no DATABASE_URL), which
-    the caller reports rather than swallowing.
+    with `granted` False if storage is unconfigured or the grant refuses the
+    invoice's state or identity. Database errors propagate for a retry.
 
     THE CUSTOMER IS TOLD HERE, not by the caller. This confirmation happens
     hours after the payer closed their tab -- that is the whole shape of a
@@ -647,7 +644,7 @@ async def confirm(
         )
     else:
         granted = await grant_pro_tier(
-            account_repo=account_repo, payment_repo=payment_repo,
+            payment_repo=payment_repo,
             provider=PROVIDER, external_ref=reference,
             amount=row.get("amount"), currency=row.get("currency") or CURRENCY,
             invoice_payment_id=str(row["id"]),
