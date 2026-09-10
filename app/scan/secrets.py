@@ -139,6 +139,19 @@ _TEST_PATH_CONFIDENCE_FACTOR = 0.35        # path alone: same as doc context
 _TEST_PLACEHOLDER_CONFIDENCE_FACTOR = 0.1  # path + self-labelled placeholder
 _TEST_PLACEHOLDER_SEVERITY = "low"
 
+# Standalone harnesses do not live under tests/, but their filename alone
+# cannot establish that a credential is disposable. Require a self-labelled
+# value as well, with marker boundaries so arbitrary secret bytes containing
+# "fake" or a variable NAME containing "test" do not qualify.
+_TEST_HARNESS_VALUE_MARKER = re.compile(
+    r"(?:^|[-_])(?:"
+    + "|".join(re.escape(marker) for marker in (
+        *_PLACEHOLDER_MARKERS, "not-a-real", "not_a_real", "smoke-test", "smoke_test",
+    ))
+    + r")(?:$|[-_])",
+    re.IGNORECASE,
+)
+
 # A match on a comment line is documentation that happens to live in a source
 # file: a commented-out example, or a rule declaration describing the shape of
 # the thing being searched for. This scanner's own pattern comments were
@@ -183,6 +196,31 @@ def value_has_placeholder_marker(value: str) -> bool:
     """
     low = value.lower()
     return any(marker in low for marker in _PLACEHOLDER_MARKERS)
+
+
+def _is_labelled_test_harness_value(name: str, rule: SecretRule, matched: str) -> bool:
+    """Recognize disposable literals without treating scripts/ as test code.
+
+    Only Python e2e/smoke harness assignments qualify. Provider credentials,
+    signed tokens and connection strings keep their ordinary classification,
+    even when another substring of the value labels it as a test.
+    """
+    parts = name.lower().split("/")
+    if ("scripts" not in parts[:-1] or not parts[-1].endswith(".py")
+            or not parts[-1].startswith(("e2e_", "smoke_"))
+            or rule.id not in {"generic-assignment", "sql-secret-assignment"}):
+        return False
+    assignment = rule.pattern.fullmatch(matched)
+    if assignment is None:
+        return False
+    value = assignment.group("value")
+    if not _TEST_HARNESS_VALUE_MARKER.search(value):
+        return False
+    return not any(
+        other.pattern.search(value)
+        for other in RULES
+        if other.id not in {"generic-assignment", "sql-secret-assignment"}
+    )
 
 
 def _is_comment_line(line_text: str) -> bool:
@@ -1056,7 +1094,8 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
         title = f"{title} (CI service container)"
         context = "ci_service"
-    elif _is_test_fixture_path(name) and value_has_placeholder_marker(matched):
+    elif ((_is_test_fixture_path(name) and value_has_placeholder_marker(matched))
+          or _is_labelled_test_harness_value(name, rule, matched)):
         severity = _TEST_PLACEHOLDER_SEVERITY
         confidence = round(confidence * _TEST_PLACEHOLDER_CONFIDENCE_FACTOR, 2)
         title = f"{title} (test fixture/placeholder context)"
