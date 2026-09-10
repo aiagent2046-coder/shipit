@@ -102,9 +102,9 @@ jobs:
       with:
         category: "/language:${{matrix.language}}"
 
-    # Keep data-flow locations available in job logs for report-leak reviews.
+    # Keep finding locations available in job logs for security reviews.
     # Print source positions only, never snippets or potentially secret values.
-    - name: Summarize Python report-leak paths
+    - name: Summarize Python finding locations
       if: matrix.language == 'python'
       shell: bash
       run: |
@@ -115,11 +115,6 @@ jobs:
         report = json.loads(Path("../results/python.sarif").read_text())
         for run in report.get("runs", []):
             for result in run.get("results", []):
-                if result.get("ruleId") not in {
-                    "py/clear-text-storage-sensitive-data",
-                    "py/clear-text-logging-sensitive-data",
-                }:
-                    continue
                 print(result["ruleId"])
                 locations = list(result.get("locations", []))
                 for flow in result.get("codeFlows", [])[:1]:

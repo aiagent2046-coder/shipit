@@ -28,15 +28,17 @@ from tests.conftest import (
     FakeAccountRepo,
     FakeCompletionCasMixin,
     FakeKeyDeliveryMixin,
+    FakeProGrantMixin,
     fixpack_live_job,
 )
 
 client = TestClient(app, raise_server_exceptions=False)
 
 
-class Payments(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
-    def __init__(self) -> None:
+class Payments(FakeProGrantMixin, FakeKeyDeliveryMixin, FakeCompletionCasMixin):
+    def __init__(self, *, account_repo=None) -> None:
         self.rows: dict[str, dict] = {}
+        self.account_repo = account_repo if account_repo is not None else FakeAccountRepo()
 
     async def create(self, **kwargs):
         row = {"id": str(uuid.uuid4()), **kwargs}
@@ -129,7 +131,8 @@ def _clear():
 async def test_the_payer_is_told_their_transfer_was_confirmed() -> None:
     """The operator taps Confirm hours later. That tap is the only moment
     somebody who is not watching a page can be told anything."""
-    payments, accounts = Payments(), FakeAccountRepo()
+    accounts = FakeAccountRepo()
+    payments = Payments(account_repo=accounts)
     captured = Captured()
     invoice = await payments.create(
         provider=bank_transfer.PROVIDER, external_ref="DRY-ABC123",
@@ -154,7 +157,8 @@ async def test_the_message_says_what_happens_next() -> None:
     """"Confirmed" on its own leaves them waiting without knowing for what.
     A Fix Pack runs and opens a pull request; Pro hands over a key. Those are
     different sentences and the payer needs the right one."""
-    payments, accounts = Payments(), FakeAccountRepo()
+    accounts = FakeAccountRepo()
+    payments = Payments(account_repo=accounts)
     captured = Captured()
     invoice = await payments.create(
         provider=bank_transfer.PROVIDER, external_ref="DRY-FIXPCK",
@@ -179,7 +183,8 @@ async def test_a_failed_notification_does_not_unwind_the_grant() -> None:
     confirmation, the operator would be invited to press Confirm again — and
     the thing that must never happen on a money path is a retry that looks
     necessary but is not."""
-    payments, accounts = Payments(), FakeAccountRepo()
+    accounts = FakeAccountRepo()
+    payments = Payments(account_repo=accounts)
     captured = Captured(refuse=True)
     invoice = await payments.create(
         provider=bank_transfer.PROVIDER, external_ref="DRY-NOTELL",
@@ -200,7 +205,8 @@ async def test_a_failed_notification_does_not_unwind_the_grant() -> None:
 async def test_a_notification_that_raises_outright_is_swallowed() -> None:
     """The transports promise never to raise, and the wrapper does not depend
     on that promise being kept by another module on this path."""
-    payments, accounts = Payments(), FakeAccountRepo()
+    accounts = FakeAccountRepo()
+    payments = Payments(account_repo=accounts)
     invoice = await payments.create(
         provider=bank_transfer.PROVIDER, external_ref="DRY-BOOM",
         account_id=None, amount=5.0, currency="USD", tier_granted="pro",
@@ -225,7 +231,8 @@ async def test_a_russian_payer_is_confirmed_in_russian() -> None:
     """The whole point of migration 0033. The operator confirms hours after
     the tab closed, so the language cannot be recovered then -- it has to come
     off the row."""
-    payments, accounts = Payments(), FakeAccountRepo()
+    accounts = FakeAccountRepo()
+    payments = Payments(account_repo=accounts)
     captured = Captured()
     invoice = await payments.create(
         provider=bank_transfer.PROVIDER, external_ref="DRY-RUSSIAN",
@@ -248,7 +255,8 @@ async def test_a_russian_payer_is_confirmed_in_russian() -> None:
 async def test_a_payment_with_no_locale_is_confirmed_in_english() -> None:
     """Every row written before 0033 arrives here with None, and there are
     real ones. Silence about somebody's language is not a vote for Russian."""
-    payments, accounts = Payments(), FakeAccountRepo()
+    accounts = FakeAccountRepo()
+    payments = Payments(account_repo=accounts)
     captured = Captured()
     invoice = await payments.create(
         provider=bank_transfer.PROVIDER, external_ref="DRY-NOLOCALE",
