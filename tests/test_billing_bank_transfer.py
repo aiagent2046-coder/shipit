@@ -38,6 +38,7 @@ from tests.conftest import (
     FakeAccountRepo,
     FakeCompletionCasMixin,
     FakeKeyDeliveryMixin,
+    FakeProGrantMixin,
     fixpack_live_job,
 )
 
@@ -93,9 +94,10 @@ def _no_network() -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
-    def __init__(self):
+class FakePaymentRepo(FakeProGrantMixin, FakeKeyDeliveryMixin, FakeCompletionCasMixin):
+    def __init__(self, *, account_repo=None):
         self.rows: dict[str, dict] = {}
+        self.account_repo = account_repo if account_repo is not None else FakeAccountRepo()
 
     async def create(self, *, account_id, provider, external_ref, amount,
                      currency, status, tier_granted, product="pro_tier",
@@ -614,7 +616,8 @@ def test_report_paid_is_rate_limited(monkeypatch):
 async def test_callback_from_stranger_is_rejected_and_grants_nothing(monkeypatch):
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
 
     result = await _tap_confirm(
@@ -638,7 +641,8 @@ async def test_callback_rejected_when_no_admin_chat_id_is_configured(monkeypatch
     into a stranger-operated Confirm button handing out pro access."""
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch, chat_id=None)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
 
     for sender in (STRANGER_CHAT_ID, int(ADMIN_CHAT_ID)):
@@ -677,7 +681,8 @@ async def test_webhook_secret_alone_does_not_authorize_a_confirm(monkeypatch):
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "fake-test-webhook-secret")
-    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    accounts = FakeAccountRepo()
+    payments = FakePaymentRepo(account_repo=accounts)
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     _override({get_account_repo: accounts, get_payment_repo: payments,
                  get_billing_transport: _telegram_transport([])})
@@ -696,7 +701,8 @@ async def test_webhook_secret_alone_does_not_authorize_a_confirm(monkeypatch):
 
 async def test_unknown_callback_data_is_ignored(monkeypatch):
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _tap_confirm(
         {"update_id": 1, "callback_query": {
             "id": "cbq-1", "from": {"id": int(ADMIN_CHAT_ID)}, "data": "something-else"}},
@@ -711,7 +717,8 @@ async def test_unknown_callback_data_is_ignored(monkeypatch):
 async def test_operator_confirm_grants_pro_and_reveals_key_once(monkeypatch):
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
 
     result = await _tap_confirm(
@@ -747,7 +754,8 @@ async def test_double_confirm_grants_once(monkeypatch):
     through the CAS gate: same account, no second key, no second payment row."""
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     update = _confirm_update(invoice["payment_id"], from_id=int(ADMIN_CHAT_ID))
 
@@ -765,7 +773,8 @@ async def test_double_confirm_grants_once(monkeypatch):
 async def test_operator_confirm_creates_one_fixpack_job(monkeypatch):
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    accounts = FakeAccountRepo()
+    payments = FakePaymentRepo(account_repo=accounts)
     audits, fixpacks, calls = FakeAuditRepo(), FakeFixpackRepo(), []
     audit = audits.add()
     invoice = await bank_transfer.create_fixpack_invoice(
@@ -796,7 +805,8 @@ async def test_operator_confirm_creates_one_fixpack_job(monkeypatch):
 
 async def test_confirm_unknown_payment_reports_not_found(monkeypatch):
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _tap_confirm(
         _confirm_update(str(uuid.uuid4()), from_id=int(ADMIN_CHAT_ID)),
         accounts=accounts, payments=payments, calls=calls,
@@ -808,7 +818,8 @@ async def test_confirm_unknown_payment_reports_not_found(monkeypatch):
 async def test_report_paid_after_confirmation_does_not_page_again(monkeypatch):
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     await _tap_confirm(
         _confirm_update(invoice["payment_id"], from_id=int(ADMIN_CHAT_ID)),
@@ -830,7 +841,8 @@ async def test_expired_invoice_is_still_confirmable(monkeypatch):
     they paid for."""
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     row = payments.rows[invoice["payment_id"]]
     row["created_at"] = datetime.datetime.now(datetime.timezone.utc) - (
@@ -849,7 +861,8 @@ async def test_expired_invoice_is_still_confirmable(monkeypatch):
 
 async def test_pending_status_carries_what_the_page_needs(monkeypatch):
     _configure_bank(monkeypatch)
-    payments, accounts = FakePaymentRepo(), FakeAccountRepo()
+    accounts = FakeAccountRepo()
+    payments = FakePaymentRepo(account_repo=accounts)
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     status = await bank_transfer.invoice_status(
         payments, accounts, invoice["reference"], details=dict(BANK_DETAILS))
@@ -885,7 +898,8 @@ async def test_link_with_reference_delivers_the_key(monkeypatch):
     got round to the statement."""
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     await _tap_confirm(
         _confirm_update(invoice["payment_id"], from_id=int(ADMIN_CHAT_ID)),
@@ -900,7 +914,8 @@ async def test_link_with_reference_delivers_the_key(monkeypatch):
 async def test_link_accepts_a_lowercased_reference(monkeypatch):
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     text = await _link(
         f"/link {invoice['reference'].lower()}", accounts, payments, calls)
@@ -911,7 +926,8 @@ async def test_link_accepts_a_lowercased_reference(monkeypatch):
 async def test_link_pending_reference_explains_the_wait(monkeypatch):
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     text = await _link(f"/link {invoice['reference']}", accounts, payments, calls)
     assert "business days" in text
@@ -919,7 +935,8 @@ async def test_link_pending_reference_explains_the_wait(monkeypatch):
 
 async def test_link_unknown_reference_says_so(monkeypatch):
     _configure_alerts(monkeypatch)
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     text = await _link("/link DRY-ZZZZZZ", accounts, payments, calls)
     assert "reference code wasn't found" in text
 
@@ -1183,7 +1200,8 @@ async def test_confirming_a_second_payment_warns_the_operator(monkeypatch):
     """
     _configure_bank(monkeypatch)
     _configure_alerts(monkeypatch)
-    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    accounts = FakeAccountRepo()
+    payments = FakePaymentRepo(account_repo=accounts)
     audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
     audit = audits.add()
 
@@ -1235,7 +1253,8 @@ async def test_a_pro_confirmation_never_carries_the_warning(monkeypatch):
     grant_pro_tier's replay path returns a row with no `inserted` key at all --
     "we don't know" must not render as "we double-charged"."""
     _configure_bank(monkeypatch)
-    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    accounts = FakeAccountRepo()
+    payments = FakePaymentRepo(account_repo=accounts)
     audits, fixpacks = FakeAuditRepo(), FakeFixpackRepo()
     invoice = await bank_transfer.create_invoice(payments, details=dict(BANK_DETAILS))
     result = await bank_transfer.confirm(

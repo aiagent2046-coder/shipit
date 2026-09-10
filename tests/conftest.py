@@ -23,6 +23,7 @@ explicitly, per test, where it wants the configured-path behavior.
 from __future__ import annotations
 
 import os
+import copy
 import urllib.parse
 import uuid
 
@@ -30,7 +31,7 @@ import pytest
 
 import app.audit_spool as spool_mod
 import app.db as db_mod
-from app.accounts import api_key_prefix, generate_api_key
+from app.accounts import TIER_PRO, api_key_prefix, generate_api_key
 from app.main import app, get_audit_job_repo, get_rate_limiter
 from app.ratelimit import RateLimiter
 
@@ -247,6 +248,75 @@ class FakeAccountRepo:
             return None
         self.rotations.append(account_id)
         return self._issue(account_id, generate_api_key())
+
+
+class FakeProGrantMixin:
+    """The atomic Pro operation's contract for provider and delivery tests.
+
+    The payment fake is constructed with the account store used for delivery.
+    Real transaction rollback and concurrent grants are tested on PostgreSQL,
+    not inferred from this in-memory implementation.
+    """
+
+    rows: dict[str, dict]
+    account_repo: FakeAccountRepo
+
+    async def grant_pro_account(
+        self, *, provider, external_ref, amount, currency,
+        invoice_payment_id=None,
+    ):
+        if not provider or not external_ref:
+            return None
+        invoice = self.rows.get(invoice_payment_id)
+        if invoice_payment_id is not None:
+            if (invoice is None or invoice.get("provider") != provider
+                    or invoice.get("product") != "pro_tier"
+                    or invoice.get("external_ref") not in (None, external_ref)):
+                return None
+        existing = await self.get_by_external_ref(provider, external_ref)
+        if (invoice_payment_id is not None and existing is not None
+                and existing["id"] != invoice_payment_id):
+            return None
+        payment = invoice if invoice is not None else existing
+        if payment is not None:
+            if (payment.get("provider") != provider
+                    or payment.get("product") != "pro_tier"):
+                return None
+            if payment.get("status") == "completed":
+                if (not payment.get("account_id")
+                        or payment.get("external_ref") != external_ref):
+                    return None
+                account = await self.account_repo.get_by_id(payment["account_id"])
+                return account if account and account["tier"] == TIER_PRO else None
+            if (payment.get("status") != "pending" or payment.get("account_id")
+                    or invoice_payment_id is None):
+                return None
+
+        saved_accounts = copy.deepcopy(self.account_repo.by_id)
+        saved_payments = copy.deepcopy(self.rows)
+        try:
+            account = await self.account_repo.create(
+                api_key=generate_api_key(), tier=TIER_PRO)
+            if account is None:
+                return None
+            if invoice is not None:
+                invoice.update(status="completed", account_id=account["id"],
+                               external_ref=external_ref, tier_granted=TIER_PRO)
+            else:
+                created = await self.create(
+                    account_id=account["id"], provider=provider,
+                    external_ref=external_ref, amount=amount, currency=currency,
+                    status="completed", tier_granted=TIER_PRO, product="pro_tier",
+                )
+                if created is None:
+                    raise RuntimeError("fake Pro payment settlement was refused")
+        except BaseException:
+            self.account_repo.by_id.clear()
+            self.account_repo.by_id.update(saved_accounts)
+            self.rows.clear()
+            self.rows.update(saved_payments)
+            raise
+        return account
 
 
 class FakeKeyDeliveryMixin:
