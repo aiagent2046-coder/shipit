@@ -804,9 +804,9 @@ async def _dependency_refresh_loop(
 async def _dependency_refresh_once(audit_repo: AuditRepository) -> None:
     """One sweep, under an advisory lock so two workers never duplicate it.
 
-    The client is built per row by refresh_stale_dependency_audits, which is
-    what keeps the entitlement policy live: an account that has opted out since
-    its audit was written is not asked about again.
+    The client is built per row by refresh_stale_dependency_audits, which
+    rechecks the deployment's SCA_ENABLED switch. There is no persisted
+    per-account opt-out setting in this implementation.
     """
     try:
         async with dependency_refresh_lock():

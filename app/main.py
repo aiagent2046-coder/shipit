@@ -1490,9 +1490,9 @@ async def _process_one_paid_job(
             body = f"{body}\n\n---\n\n{review}"
         else:
             await alerts.notify_operator(
-                f"Drydock: Fix Pack {job_id} delivered WITHOUT the full "
-                "review the purchase includes. The PR is fine; the review "
-                "is owed. Re-run it manually and send the buyer the link."
+                f"Drydock: Fix Pack {job_id} generated WITHOUT the full "
+                "review the purchase includes. The full review is still "
+                "owed. Re-run it manually and send the buyer the link."
             )
         token = await _resolve_pr_token(owner, repo)
         opened = await run_in_threadpool(

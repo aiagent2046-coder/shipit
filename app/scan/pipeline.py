@@ -144,7 +144,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # presented as current.
 # 2026-09-10-3: preserve dependency findings on incomplete OSV refreshes,
 # report unresolved inventory honestly, and fill missing SCA on paid cache hits.
-AUDIT_ENGINE_VERSION = "2026-09-10-3"
+# 2026-09-10-4: distinguish explicitly labelled local harness fixtures from
+# production credentials and allocate independent environment keys per secret.
+# 2026-09-10-5: integrate paid dependency evidence and freshness handling with
+# the released harness-fixture classification and independent secret rewrites.
+AUDIT_ENGINE_VERSION = "2026-09-10-5"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt
