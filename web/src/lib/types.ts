@@ -495,6 +495,10 @@ export interface FixpackStatus {
   // repo was at fault. null for a genuine generation failure, and for every
   // other status.
   failure_kind?: "infrastructure" | null;
+  // On "blocked" only; older APIs omit these fields. Raw verification output
+  // stays server-side, while job_id is a support reference for the owner.
+  block_reason?: "proof_failed" | "verification_failed" | null;
+  job_id?: string | null;
 }
 
 // GET /v1/github/installation-status?owner=&repo=
