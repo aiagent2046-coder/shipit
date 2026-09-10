@@ -1,0 +1,10 @@
+{
+  "description": "The most common spelling there is: one keyword turns verification off for that request. The connection is still encrypted, which is why nothing breaks and why it survives into production.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

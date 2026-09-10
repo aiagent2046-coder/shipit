@@ -1,0 +1,10 @@
+{
+  "description": "The Node spelling of the same decision, in the language most audited repositories are written in -- which is why this rule reads both halves.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

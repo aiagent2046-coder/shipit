@@ -22,6 +22,7 @@ from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.sql_injection_js import scan_sql_injection_js
+from app.scan.tls_verification import scan_tls_verification
 from app.scan.source_facts import collect_source_facts
 
 
@@ -90,6 +91,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=u.rule_id, title=u.title, severity=u.severity,
             confidence=u.confidence, category=u.category, file=u.file,
             line=u.line, explanation=u.explanation, fix_hint=u.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for t in scan_tls_verification(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=t.rule_id, title=t.title, severity=t.severity,
+            confidence=t.confidence, category=t.category, file=t.file,
+            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
             claim_evidence=static_claim_evidence(),
         ))
 
@@ -204,9 +214,16 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
                        "auth_write_consistency",
-                       "http_success", "sql_injection", "sql_injection_js", "outbound_url"],
+                       "http_success", "sql_injection", "sql_injection_js", "outbound_url",
+                       "tls_verification"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
+                     "tls_verification": "Python and JS/TS source files up to 400 KB; literal evidence "
+                     "only (verify=False, ssl.CERT_NONE, check_hostname, _create_unverified_context, "
+                     "TCPConnector(ssl=False), rejectUnauthorized: false, NODE_TLS_REJECT_UNAUTHORIZED). "
+                     "Shell scripts, CI/YAML definitions and dynamically assembled SSL contexts are NOT "
+                     "read; a commented-out line is not a finding, and a clean read is not a certificate "
+                     "that every connection in the repository is verified",
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
                      "test/vendor files excluded; middleware and runtime access not resolved",
                      "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in "

@@ -1,0 +1,10 @@
+{
+  "description": "Two spellings from the client-name family the hunt produced: ssl_validation=False and validate_certs=False. They mean exactly what verify=False means, and a vocabulary built from one library would miss them.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 2
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,7 @@
+{
+  "description": "use_ssl=False turns TLS off entirely rather than switching off the check on the certificate. That is a different claim -- and this rule states one -- so a connector written that way is not reported. The mutation swaps it for ssl=False, which IS the verification switch, and must fire.",
+  "expect": [],
+  "forbid": [
+    "tls-verification-disabled"
+  ]
+}

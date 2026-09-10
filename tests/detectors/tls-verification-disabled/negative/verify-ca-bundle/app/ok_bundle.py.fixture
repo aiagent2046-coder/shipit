@@ -1,0 +1,7 @@
+import requests
+
+CA_BUNDLE = "/etc/ssl/certs/internal-ca.pem"
+
+
+def fetch(url):
+    return requests.get(url, verify=CA_BUNDLE).json()

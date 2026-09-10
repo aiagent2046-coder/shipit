@@ -165,7 +165,13 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # HTTP import provenance, statement order and field-specific check identity;
 # bound AST/template work and report unresolved runtime/network controls.
 # This supersedes the outbound branch preview version 2026-09-10-7.
-AUDIT_ENGINE_VERSION = "2026-09-10-9"
+# 2026-09-10-10: tls-verification-disabled -- literals that switch certificate
+# verification off, in Python (verify=False, ssl.CERT_NONE, check_hostname,
+# _create_unverified_context, TCPConnector(ssl=False)) and in JS/TS
+# (rejectUnauthorized: false, NODE_TLS_REJECT_UNAUTHORIZED=0). A new rule id is
+# exactly the case this constant exists for: an audit reports something it did not
+# report before, for unchanged bytes.
+AUDIT_ENGINE_VERSION = "2026-09-10-10"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

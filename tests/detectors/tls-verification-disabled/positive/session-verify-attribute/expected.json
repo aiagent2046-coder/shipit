@@ -1,0 +1,10 @@
+{
+  "description": "On a shared Session the flag is an attribute, set once and inherited by every request the session ever makes -- a wider blast radius than a single call.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,7 @@
+{
+  "description": "The Node flag asked for, not against. The mutation flips it, which must fire.",
+  "expect": [],
+  "forbid": [
+    "tls-verification-disabled"
+  ]
+}

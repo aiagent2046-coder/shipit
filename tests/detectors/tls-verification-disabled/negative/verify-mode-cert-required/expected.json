@@ -1,0 +1,7 @@
+{
+  "description": "A context that demands a certificate. The mutation swaps CERT_REQUIRED for CERT_NONE, which must fire.",
+  "expect": [],
+  "forbid": [
+    "tls-verification-disabled"
+  ]
+}
