@@ -30,6 +30,7 @@ from tests.conftest import (
     FakeAccountRepo,
     FakeCompletionCasMixin,
     FakeKeyDeliveryMixin,
+    FakeProGrantMixin,
 )
 
 client = TestClient(app)
@@ -37,9 +38,10 @@ client = TestClient(app)
 
 # --- in-memory repo fakes ---
 
-class FakePaymentRepo(FakeKeyDeliveryMixin, FakeCompletionCasMixin):
-    def __init__(self):
+class FakePaymentRepo(FakeProGrantMixin, FakeKeyDeliveryMixin, FakeCompletionCasMixin):
+    def __init__(self, *, account_repo=None):
         self.rows: dict[str, dict] = {}
+        self.account_repo = account_repo if account_repo is not None else FakeAccountRepo()
 
     async def create(self, *, account_id, provider, external_ref, amount,
                      currency, status, tier_granted, product="pro_tier",
@@ -239,7 +241,8 @@ async def test_pre_checkout_answer_uses_timeout_under_telegram_deadline(monkeypa
 async def test_successful_payment_grants_pro_and_dms_key():
     calls: list = []
     transport = _telegram_transport(calls)
-    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    accounts = FakeAccountRepo()
+    payments = FakePaymentRepo(account_repo=accounts)
 
     result = await telegram_stars.handle_update(
         _successful_payment_update("charge_abc"),
@@ -276,7 +279,8 @@ async def test_successful_payment_grants_pro_and_dms_key():
 async def test_duplicate_successful_payment_is_idempotent():
     calls: list = []
     transport = _telegram_transport(calls)
-    accounts, payments = FakeAccountRepo(), FakePaymentRepo()
+    accounts = FakeAccountRepo()
+    payments = FakePaymentRepo(account_repo=accounts)
 
     for _ in range(2):  # Telegram retries the webhook until it gets 200
         await telegram_stars.handle_update(
@@ -345,7 +349,8 @@ def test_webhook_503_when_not_configured(monkeypatch):
 def test_webhook_correct_secret_processes_payment(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "s3cret")
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     _override(accounts, payments, _telegram_transport(calls))
     try:
         r = client.post(
@@ -390,7 +395,8 @@ def _delivered_key(msg):
 
 
 async def test_mykey_shows_prefix_and_never_the_full_key():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     # A Stars purchase links this chat_id (555) to the account automatically.
     await _send(_successful_payment_update("charge_mykey", 555),
                 accounts, payments, calls)
@@ -409,7 +415,8 @@ async def test_mykey_shows_prefix_and_never_the_full_key():
 
 
 async def test_mykey_no_account_returns_helpful_message():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _send(_text_update("/mykey", 999), accounts, payments, calls)
     assert result["handled"] == "mykey" and result["found"] is False
     msg = _last_text(calls)
@@ -419,7 +426,8 @@ async def test_mykey_no_account_returns_helpful_message():
 
 
 async def test_rotatekey_mints_new_key_for_linked_account():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     await _send(_successful_payment_update("charge_rot", 555),
                 accounts, payments, calls)
     account = next(iter(accounts.by_id.values()))
@@ -438,7 +446,8 @@ async def test_rotatekey_mints_new_key_for_linked_account():
 
 
 async def test_rotatekey_no_account_returns_helpful_message():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _send(_text_update("/rotatekey", 999), accounts, payments, calls)
     assert result["handled"] == "rotatekey" and result["found"] is False
     assert "sk_live_" not in _last_text(calls)
@@ -469,7 +478,8 @@ async def _completed_usdt_payment(payments, accounts, tx_hash, *, chat_id=None):
 
 
 async def test_link_valid_unlinked_payment_links_and_returns_key():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     acct, row = await _completed_usdt_payment(payments, accounts, "0xabc")
 
     result = await _send(_text_update("/link 0xabc", 777),
@@ -487,7 +497,8 @@ async def test_link_valid_unlinked_payment_links_and_returns_key():
 
 
 async def test_link_is_idempotent_for_same_chat():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     await _completed_usdt_payment(payments, accounts, "0xdup")
     first = await _send(_text_update("/link 0xdup", 777), accounts, payments, calls)
     assert first["result"] == "linked"
@@ -514,7 +525,8 @@ async def test_link_after_another_door_already_took_the_key():
     the test goes through deliver_key_once directly, which is what BOTH doors
     always called: the one-shot claim is the invariant, not the endpoint that
     happened to be on the other side of it."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     acct, row = await _completed_usdt_payment(payments, accounts, "0xweb")
 
     # Somewhere else claimed the delivery first and was handed the key.
@@ -536,7 +548,8 @@ async def test_link_after_another_door_already_took_the_key():
 
 
 async def test_link_already_claimed_by_other_chat_is_rejected():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     acct, _ = await _completed_usdt_payment(
         payments, accounts, "0xowned", chat_id="111")
 
@@ -552,7 +565,8 @@ async def test_link_already_claimed_by_other_chat_is_rejected():
 async def test_link_unknown_hash_reports_not_found():
     """A real TRC20 hash that matches nothing. The claim is 64 hex, which is
     the actual shape, because the answer now depends on that shape."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _send(_text_update(f"/link {'a1' * 32}", 333),
                          accounts, payments, calls)
     assert result["result"] == "not_found"
@@ -573,7 +587,8 @@ async def test_a_mistyped_order_reference_is_not_answered_with_usdt():
     answer was CONFIDENT. It named a payment method, so the reader's next
     thought is "did I pay the wrong way?" rather than "did I mistype?".
     """
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _send(_text_update("/link DRY=D22NFJ", 333),
                          accounts, payments, calls)
     assert result["result"] == "not_found"
@@ -591,7 +606,8 @@ async def test_a_claim_that_is_neither_shape_still_gets_looked_up():
     paid for it, in order to improve an error message. A search that finds
     nothing costs a query; a search never made costs a customer their purchase.
     """
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     acct, row = await _completed_usdt_payment(payments, accounts, "0xodd")
 
     result = await _send(_text_update("/link 0xodd", 777),
@@ -600,7 +616,8 @@ async def test_a_claim_that_is_neither_shape_still_gets_looked_up():
 
 
 async def test_link_pending_payment_reports_pending():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     # A payment row that carries the tx hash but isn't credited yet.
     await payments.create(
         account_id=None, provider=telegram_stars.RETIRED_USDT_PROVIDER, external_ref="0xpending",
@@ -617,7 +634,8 @@ async def test_link_pending_payment_reports_pending():
 
 
 async def test_link_without_hash_shows_usage():
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _send(_text_update("/link", 555), accounts, payments, calls)
     assert result["result"] == "missing_hash"
     assert "Usage" in _last_text(calls)
@@ -630,7 +648,8 @@ async def test_upgrade_mints_nothing_and_says_where_to_pay():
     where the Pay button is. Saying WHY matters: "not available" reads as an
     outage, and a payer who thinks the bot is broken retries here instead of
     going to the site."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _send(_text_update("/upgrade", 888), accounts, payments, calls)
 
     assert result == {"ok": True, "handled": "upgrade",
@@ -647,7 +666,8 @@ async def test_fixpack_command_points_at_the_report_for_that_audit():
     """The audit lookup is kept even though nothing is sold here: a deep link
     to the wrong audit, or to a zip upload with no repository behind it, wastes
     the payer's time at the site rather than here."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
 
     class Audits:
         async def get(self, audit_id):
@@ -667,7 +687,8 @@ async def test_fixpack_command_still_refuses_a_zip_audit():
     """The gate that would be confusing at the far end. A zip upload has no
     repository to open a pull request against, and the site would refuse it --
     but only after the payer had gone there expecting to buy."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
 
     class Audits:
         async def get(self, audit_id):
@@ -999,7 +1020,8 @@ async def test_link_finds_an_order_paid_by_card():
     from the day ЮKassa went live, somebody who had genuinely just paid was
     told "That reference code wasn't found" and sent to support over an order
     that existed."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     await _completed_fixpack_payment(payments, "DRY-CARD23", provider="yookassa")
 
     result = await _send(_text_update("/link DRY-CARD23", 777),
@@ -1011,7 +1033,8 @@ async def test_link_finds_an_order_paid_by_card():
 
 async def test_link_still_finds_an_order_paid_by_transfer():
     """The rail that was already working must not be traded for the new one."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     await _completed_fixpack_payment(payments, "DRY-BANK24")
 
     result = await _send(_text_update("/link DRY-BANK24", 777),
@@ -1022,7 +1045,8 @@ async def test_link_still_finds_an_order_paid_by_transfer():
 
 async def test_an_unknown_reference_is_still_unknown():
     """Searching more rails must not turn "no such order" into a match."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
 
     result = await _send(_text_update("/link DRY-NPQR25", 777),
                          accounts, payments, calls)
@@ -1038,7 +1062,8 @@ async def test_the_bot_answers_hello():
     first time, and every one of them used to land in the dispatcher's
     `ignored` branch. A product whose bot is silent on hello does not look
     like a product with a bot."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
 
     result = await _send(_text_update("/start", 777), accounts, payments, calls)
 
@@ -1055,7 +1080,8 @@ async def test_a_deep_link_subscribes_the_chat_to_that_order():
     never written to the bot -- so one tap on t.me/<bot>?start=DRY-XXXXXX is
     the only way to establish the chat, and the payload says which order it
     belongs to."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     row = await _completed_fixpack_payment(payments, "DRY-DEEP26",
                                            provider="yookassa")
 
@@ -1070,7 +1096,8 @@ async def test_a_deep_link_cannot_steal_an_order_already_claimed():
     """/start delegates to /link rather than reimplementing the claim, so the
     anti-hijack rule -- first successful link wins, then permanently locked --
     holds across both doors or across neither."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     row = await _completed_fixpack_payment(payments, "DRY-DEEP27")
     await _send(_text_update("/start DRY-DEEP27", 111), accounts, payments, calls)
 
@@ -1090,7 +1117,8 @@ async def test_link_with_a_fixpack_reference_subscribes_this_chat_to_it():
     file's fake repo did not mirror until today: the read side skips
     account-less payments, so this row cannot shadow a Pro purchase. The test
     below holds that end of it."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     row = await _completed_fixpack_payment(payments, "DRY-FXPK23")
 
     result = await _send(_text_update("/link DRY-FXPK23", 777),
@@ -1107,7 +1135,8 @@ async def test_a_fix_pack_on_this_chat_does_not_hide_a_pro_key():
     it. Reading "the newest completed payment for this chat" would hand /mykey
     a payment with no account, permanently, because nothing unlinks a chat.
     The predicate on the read is what makes stamping the write side safe."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     _acct, pro = await _completed_usdt_payment(payments, accounts, "0xprokey")
     await _send(_text_update("/link 0xprokey", 777), accounts, payments, calls)
 
@@ -1124,7 +1153,8 @@ async def test_link_with_a_fixpack_reference_explains_instead_of_alarming():
     """The old text said the account 'could not be loaded' and sent the payer
     to support -- describing a failure to someone whose payment worked, about a
     key that was never meant to exist."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     await _completed_fixpack_payment(payments, "DRY-FXPK24")
 
     await _send(_text_update("/link DRY-FXPK24", 777), accounts, payments, calls)
@@ -1141,7 +1171,8 @@ async def test_link_with_a_fixpack_reference_explains_instead_of_alarming():
 async def test_a_pro_link_is_untouched_by_the_new_check():
     """The guard sits above the claim, so it must not intercept the ordinary
     path -- a Pro payment still links and still delivers exactly one key."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     _acct, row = await _completed_usdt_payment(payments, accounts, "0xpro")
 
     result = await _send(_text_update("/link 0xpro", 777),
@@ -1159,7 +1190,8 @@ async def test_a_stars_charge_is_still_honoured_after_the_withdrawal():
     invoice, but by the time successful_payment arrives Telegram has already
     moved the money -- refusing to handle it does not refund anybody, it only
     means the payer gets nothing for what they paid."""
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
 
     result = await _send(_successful_payment_update("charge_after_withdrawal"),
                          accounts, payments, calls)
@@ -1186,7 +1218,8 @@ async def test_that_charge_pages_the_operator(monkeypatch):
 
     monkeypatch.setattr("app.alerts.notify_operator", fake_notify)
 
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     await _send(_successful_payment_update("charge_paged"), accounts, payments, calls)
 
     assert len(seen) == 1
@@ -1207,7 +1240,8 @@ async def test_the_alert_cannot_cost_the_payer_their_key(monkeypatch):
 
     monkeypatch.setattr("app.alerts.notify_operator", exploding_notify)
 
-    accounts, payments, calls = FakeAccountRepo(), FakePaymentRepo(), []
+    accounts = FakeAccountRepo()
+    payments, calls = FakePaymentRepo(account_repo=accounts), []
     result = await _send(_successful_payment_update("charge_alert_broken"),
                          accounts, payments, calls)
 

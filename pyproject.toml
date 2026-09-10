@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.16.6"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.16.6", "jsonschema>=4.21"]
 
 [tool.ruff]
 # 120, not the ruff default of 88: this codebase already reads comfortably at

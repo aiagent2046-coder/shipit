@@ -437,18 +437,17 @@ async def handle_update(
             )
         chat_id = message["chat"]["id"]
         account = await grant_pro_tier(
-            account_repo=account_repo, payment_repo=payment_repo,
+            payment_repo=payment_repo,
             provider=PROVIDER, external_ref=sp["telegram_payment_charge_id"],
             amount=sp.get("total_amount"), currency=sp.get("currency", CURRENCY),
         )
         if account is None:
-            # DATABASE_URL not configured -- we took the payment but can't
-            # persist an account. Tell the payer plainly rather than go
-            # silent; an operator misconfiguration, not the payer's fault.
+            # Storage is unconfigured or the recorded charge is inconsistent.
+            # No grant was made, and the payer needs a support path.
             await send_message(
                 chat_id,
-                "Payment received, but pro access could not be provisioned "
-                "(server misconfiguration). Please contact support with this "
+                "Payment received, but pro access could not be provisioned. "
+                "Please contact support with this "
                 f"charge id: {sp['telegram_payment_charge_id']}",
                 token=token, transport=transport,
             )
@@ -1285,7 +1284,7 @@ async def _handle_link(
         return {"ok": True, "handled": "link", "result": "not_found"}
 
     # "completed" is the credited state both providers converge on (via
-    # grant_pro_tier -> mark_completed); reuse it rather than invent a new
+    # grant_pro_tier -> grant_pro_account); reuse it rather than invent a new
     # status. Anything else means it hasn't been credited yet.
     if row.get("status") != "completed":
         await send_message(

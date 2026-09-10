@@ -9,6 +9,7 @@ import json
 import re
 
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
+from app.sca.stage import freshness
 from app.scan.claim_evidence import (
     narrative_review_checks, partial_contradicted, source_assessments, syntax_contradicted, unsupported_transport,
 )
@@ -364,6 +365,89 @@ def coverage_rows(score: dict, findings: list[dict]) -> list[tuple[str, str]]:
     return rows
 
 
+def _dependency_row(manifest: dict) -> tuple[str, str]:
+    """What was asked about the dependencies, and when.
+
+    Computed HERE, at read time, and not stored with the score: the same
+    stored row is served today and in three weeks, and an answer about
+    advisories ages. A date recorded at scan time would keep calling itself
+    current forever.
+    """
+    skipped = manifest.get("sca_skipped_reason")
+    resolved = manifest.get("sca_dependencies")
+    found = manifest.get("sca_dependencies_found")
+    if skipped == "no_client":
+        if resolved:
+            return ("Dependencies checked",
+                    "Not checked in this audit. The resolved versions were read "
+                    f"from the lockfile ({resolved} packages), but the "
+                    "vulnerability database was not queried.")
+        return ("Dependencies checked",
+                "Not checked in this audit. This check is part of a paid audit.")
+    if skipped == "no_lockfile":
+        return ("Dependencies checked",
+                "No lockfile was found, so there were no resolved versions to "
+                "look up. A range in a manifest is not a version, and guessing "
+                "one would report on software the project may not install.")
+    if skipped == "no_resolved_dependencies":
+        return ("Dependencies checked",
+                "Supported lockfiles were read but contained no resolved packages "
+                "to query. The vulnerability database was not contacted.")
+    if skipped == "no_resolvable_lockfile":
+        incomplete = manifest.get("sca_incomplete_lockfiles") or {}
+        unusable = ", ".join(incomplete or manifest.get("sca_unusable_lockfiles") or []) or "a lockfile"
+        return ("Dependencies checked",
+                f"Not checked: {unusable} was found, but this scanner could not "
+                "establish its resolved dependency inventory. Malformed, unsupported "
+                "or unpinned entries are not a clean result. For Go, go.sum lists "
+                "every module version the build ever verified; go.mod alone does "
+                "not establish the complete selected dependency graph.")
+    if isinstance(skipped, str) and skipped.startswith("lockfile_unreadable"):
+        return ("Dependencies checked",
+                "Not checked: a lockfile was present and could not be read "
+                f"({skipped.removeprefix('lockfile_unreadable: ')}). Nothing "
+                "about the dependencies was established.")
+    if isinstance(skipped, str) and skipped.startswith("osv_unavailable"):
+        return ("Dependencies checked",
+                f"Not checked: the vulnerability database could not be reached "
+                f"or did not provide a complete answer "
+                f"({skipped.removeprefix('osv_unavailable: ')}). A missing "
+                "answer here is not a clean result.")
+    if not manifest.get("sca_asked_at"):
+        return ("Dependencies checked", "Not recorded for this audit")
+    asked = str(manifest["sca_asked_at"])[:10]
+    state = freshness(str(manifest["sca_asked_at"]))
+    counted = (f"{resolved} of {found} resolved packages"
+               if isinstance(found, int) and found > (resolved or 0)
+               else f"{resolved} resolved packages")
+    findings = manifest.get("sca_findings")
+    found_text = (f"; {findings} reported" if isinstance(findings, int) and findings
+                  else "; no medium-or-higher findings reported")
+    filtered = manifest.get("sca_below_severity_floor")
+    if isinstance(filtered, int) and filtered:
+        found_text += f"; {filtered} package(s) had only below-threshold advisories"
+    unclear = manifest.get("sca_unreadable_advisories")
+    if isinstance(unclear, int) and unclear:
+        found_text += (f"; {unclear} advisory record(s) could not be fetched, "
+                       "and those matches are reported without their details")
+    truncated = manifest.get("sca_findings_truncated")
+    if isinstance(truncated, int) and truncated:
+        found_text += f"; {truncated} additional package finding(s) omitted by the report limit"
+    incomplete = manifest.get("sca_incomplete_lockfiles") or {}
+    if isinstance(incomplete, dict) and incomplete:
+        found_text += (f"; dependency inventory incomplete for {len(incomplete)} "
+                       "lockfile(s), so this is not a complete repository check")
+    elif manifest.get("sca_coverage_incomplete"):
+        found_text += "; coverage is incomplete"
+    aged = ("" if state == "fresh" else
+            " This answer was true of that date; advisories published since are "
+            "not in it.")
+    return ("Dependencies checked",
+            f"Queried {asked} against the OSV database: {counted}{found_text}. "
+            f"Lockfile versions only; whether vulnerable code is reachable from "
+            f"this application was not checked.{aged}")
+
+
 def manifest_rows(score: dict) -> list[tuple[str, str]]:
     manifest = score.get("scan_manifest")
     if not isinstance(manifest, dict):
@@ -374,6 +458,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Scan engine", manifest.get("engine_version") or "Not recorded"),
         ("Files in archive", str(manifest.get("archive_files", "Not recorded"))),
         ("Static checks run", ", ".join(manifest.get("static_checks", [])) or "Not recorded"),
+        _dependency_row(manifest),
         ("Last responding model", manifest.get("model") or "No model response recorded"),
         ("Model responses", str(manifest.get("model_calls", 0))),
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),

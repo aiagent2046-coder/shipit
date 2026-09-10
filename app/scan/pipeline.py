@@ -23,6 +23,8 @@ from app.scan.manifest import scan_manifest
 from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
+from app.sca.osv import OsvClient
+from app.sca.stage import run_sca_stage
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +135,20 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-09-14: bind retry and duplicate-call premises, preserving conditional concurrency context.
 # 2026-09-10-1: distinguish source interpolation from literal credentials and
 # refuse secret Fix Packs for formats without a verified environment rewrite.
+# 2026-09-10-2: dependency-known-vulnerability -- a new PAID stage that resolves
+# the lockfiles' versions and asks the OSV database about them. It changes what
+# a paid audit reports for unchanged bytes (and a new rule id is exactly the
+# case this constant exists for), so the bump is not optional. Its answers are
+# true of the day they were asked: the manifest records `sca_asked_at`, and a
+# cached row older than SCA_FRESHNESS_TTL_DAYS is reported as stale rather than
+# presented as current.
+# 2026-09-10-3: preserve dependency findings on incomplete OSV refreshes,
+# report unresolved inventory honestly, and fill missing SCA on paid cache hits.
 # 2026-09-10-4: distinguish explicitly labelled local harness fixtures from
 # production credentials and allocate independent environment keys per secret.
-# 2026-09-10-5: python-route-write-auth-consistency -- a route that changes data
+# 2026-09-10-5: integrate paid dependency evidence and freshness handling with
+# the released harness-fixture classification and independent secret rewrites.
+# 2026-09-10-6: python-route-write-auth-consistency -- a route that changes data
 # is compared with a sibling route on the same router that shows an identity
 # check. A new rule id is exactly the case this constant exists for: a paid or
 # free audit reports something it did not report before, for unchanged bytes.
@@ -144,7 +157,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # scripts/hunt_detector_escapes.py showed a storage dependency renamed
 # fetch_record_repository, and a write call named createRecord or executed as
 # raw SQL, escaping a vocabulary built from one naming convention.
-AUDIT_ENGINE_VERSION = "2026-09-10-5"
+AUDIT_ENGINE_VERSION = "2026-09-10-6"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt
@@ -426,11 +439,38 @@ def content_digest(data: bytes) -> str:
     return h.hexdigest()
 
 
+def score_findings(findings: list[dict], *, llm_ran: bool,
+                   llm_categories: frozenset[str],
+                   incomplete_static: frozenset[str]) -> dict:
+    """The single place a finding list becomes a score.
+
+    Extracted so the dependency refresh can rescore an audit it did not run
+    (app/sca/refresh.py) without owning a second copy of this expression: a
+    second copy is how the refreshed total would drift from the total a full
+    scan of the same findings produces, silently, one rule at a time.
+    """
+    return compute_scores(
+        [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
+         for f in findings],
+        llm_ran=llm_ran,
+        # Derived from the rubrics that ran, never written out: a preview
+        # covers one of them, and a category no rubric looked at must not
+        # score 10.0 off the back of the ones that did. Reading RUBRICS is
+        # what keeps this correct when the free tier's rubric list is changed
+        # by an env var.
+        llm_categories=llm_categories,
+        # A static producer that ran out of read budget did not finish, so the
+        # absence of its finding is not evidence of a clean category.
+        incomplete_static=incomplete_static,
+    )
+
+
 def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
              llm_skip_reason: str | None = None,
              llm_rubrics: tuple[str, ...] | None = None,
-             depth: str = BASIS_FULL, llm_cost_cap: Decimal | None = None) -> dict:
-    """Returns {"score", "findings", "llm": <stats | status>, "llm_usage"}.
+             depth: str = BASIS_FULL, llm_cost_cap: Decimal | None = None,
+             sca_client: "OsvClient | None" = None) -> dict:
+    """Returns {"score", "findings", "llm": <stats | status>, "llm_usage", "sca"}.
 
     `llm` is a stats dict when the stage ran, and also a stats-shaped dict
     (all-zero, with `skipped_reason` set) when it never ran because no
@@ -462,6 +502,16 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
     fails, the result says BASIS_STATIC_ONLY regardless, because that is what
     it then is. Keeping the two apart is what stops a preview that never
     reached the provider from being cached and served as one.
+
+    `sca_client` turns on the dependency stage: it resolves the archive's
+    lockfile versions and asks the OSV database about them. No client means the
+    stage is skipped with a recorded reason (for example the free tier or a
+    deployment with SCA disabled), and a database
+    that cannot be reached degrades the same way -- never a failed audit, and
+    never a clean bill of health. It is a separate argument from `llm_client`
+    because the two decisions are separate: one is about spending money on a
+    model, the other about sending a customer's dependency list to a third
+    party.
     """
     static = run_static_scan(io.BytesIO(data))
     findings = static["findings"]
@@ -489,6 +539,13 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             llm_summary = vars(stats)
 
     findings = collapse_repeats(findings)
+
+    # After the LLM stage and outside its try/except on purpose: a provider
+    # failure must not cost the dependency check, and the dependency check's
+    # failure must not degrade the basis. They answer different questions.
+    sca_findings, sca_summary = run_sca_stage(data, sca_client)
+    if sca_findings:
+        findings = findings + [vars(finding) for finding in sca_findings]
 
     # Here and nowhere else, because here is the last place the repository is
     # in memory. Whether the Fix Pack's RLS generator can actually write a
@@ -530,23 +587,11 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
 
     return {
         "score": {
-            **compute_scores(
-                [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
-                 for f in findings],
+            **score_findings(
+                findings,
                 llm_ran=llm_ran,
-                # Derived from the rubrics that ran, never written out: a
-                # preview covers one of them, and a category no rubric looked
-                # at must not score 10.0 off the back of the ones that did.
-                # Reading RUBRICS is what keeps this correct when the free
-                # tier's rubric list is changed by an env var.
                 llm_categories=frozenset(
                     RUBRICS[r]["category"] for r in ran if r in RUBRICS),
-                # A static producer that ran out of read budget did not finish,
-                # so the absence of its finding is not evidence of a clean
-                # category. The error-boundary scan reports this in
-                # static["coverage"]; here is where it stops Frontend scoring a
-                # clean 10.0 off a look that never completed. Other analyzers
-                # can join by reporting their own coverage the same way.
                 incomplete_static=frozenset(
                     {"Frontend"}
                     if static.get("coverage", {}).get("error_boundary")
@@ -558,7 +603,8 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             # calibration decision costs money to get wrong.
             "scan_manifest": scan_manifest(data, AUDIT_ENGINE_VERSION, static,
                                            llm_summary if isinstance(llm_summary, dict) else vars(spend),
-                                           llm_failure_kind(llm_summary)),
+                                           llm_failure_kind(llm_summary),
+                                           sca_summary),
             "frontend_scan": static.get("score", {}).get("frontend_scan", {}),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0
@@ -583,4 +629,8 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
         "findings": findings,
         "llm": llm_summary,
         "llm_usage": vars(spend),
+        # The dependency stage's facts, including WHY it did not run. Callers
+        # that persist a scan carry this into the manifest; a caller that drops
+        # it turns "we never asked" into "we found nothing".
+        "sca": sca_summary,
     }
