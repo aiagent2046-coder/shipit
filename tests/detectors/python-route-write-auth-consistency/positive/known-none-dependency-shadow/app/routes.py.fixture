@@ -1,0 +1,20 @@
+import fastapi
+from fastapi import APIRouter, Depends as Guard, FastAPI
+from app.support import Repo, User, get_current_user
+
+def Guard(dependency):
+    return None
+
+repo = Repo()
+router = APIRouter()
+
+@router.post("/notes")
+def create_note(payload: dict, user: User = fastapi.Depends(get_current_user)):
+    return repo.create(payload)
+
+@router.delete("/notes/{note_id}")
+def delete_note(note_id: int, user: User | None = Guard(get_current_user)):
+    return repo.delete(note_id)
+
+app = FastAPI()
+app.include_router(router)

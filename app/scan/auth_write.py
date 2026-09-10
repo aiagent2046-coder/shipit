@@ -80,7 +80,7 @@ import stat
 import zipfile
 from typing import BinaryIO
 
-from app.scan.auth_read import _guard_role, _handler_nodes, _scope_routes
+from app.scan.auth_read import _ScopeBindings, _auth_scopes, _guard_role, _handler_nodes, _scope_bindings, _scope_routes
 from app.scan.checks import CheckFinding
 from app.scan.secrets import is_non_production_path
 
@@ -173,7 +173,10 @@ def scan_auth_write(fileobj: BinaryIO) -> list[CheckFinding]:
                     or any(p in path.split("/") for p in ("vendor", "venv", ".venv", "node_modules"))):
                 continue
             try:
-                tree = ast.parse(archive.read(info).decode("utf-8"))
+                raw = archive.read(info)
+                if b"@" not in raw:
+                    continue
+                tree = ast.parse(raw.decode("utf-8"))
             except (SyntaxError, UnicodeError, ValueError, RecursionError):
                 continue
             factories = {
@@ -186,20 +189,18 @@ def scan_auth_write(fileobj: BinaryIO) -> list[CheckFinding]:
             # disagree, and a router built inside one function is not the router
             # built inside another. Flattening would pair routes that never
             # share an object and report a disagreement that does not exist.
-            scopes: list[ast.AST] = [tree]
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    scopes.append(node)
-            for scope in scopes:
-                findings.extend(_scope_findings(scope, factories, path))
+            for scope, bindings in _auth_scopes(tree):
+                findings.extend(_scope_findings(scope, factories, path, bindings))
     return findings
 
 
-def _scope_findings(scope, factories: set[str], filename: str) -> list[CheckFinding]:
+def _scope_findings(scope, factories: set[str], filename: str,
+                    bindings: _ScopeBindings | None = None) -> list[CheckFinding]:
     """Write routes declared in one scope, and their disagreement with siblings."""
     findings: list[CheckFinding] = []
     routes = _scope_routes(scope, factories, _MUTATION_METHODS)
-    roles = {fn: _guard_role(fn) for fn, _, _, _ in routes}
+    bindings = bindings or _scope_bindings(scope)
+    roles = {fn: _guard_role(fn, bindings) for fn, _, _, _ in routes}
     # Unknown dependencies suppress a target finding, but cannot establish an
     # identity check on a sibling. Each router keeps its own first witness.
     siblings = {}

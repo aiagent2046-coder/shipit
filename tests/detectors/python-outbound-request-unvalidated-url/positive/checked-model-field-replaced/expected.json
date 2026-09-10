@@ -1,0 +1,10 @@
+{
+  "description": "Diagnostic: one checked field is overwritten from a different unvalidated field.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -299,3 +299,124 @@ def test_factory_argument_shadowing_the_constructor_stays_unresolved():
         "    " + line for line in body.splitlines())
     assert scan_auth_write(archive(source)) == []
     assert scan_auth_write(archive(source.replace("build_router(APIRouter)", "build_router(unused)")))
+
+
+@pytest.mark.parametrize("imports,dependency", [
+    ("from fastapi import Depends as Inject", "Inject(current_actor)"),
+    ("from fastapi import Depends as Inject", "Inject(dependency=current_actor)"),
+    ("from fastapi import Security as Permit", "Permit(current_actor)"),
+    ("import fastapi as api", "api.Depends(current_actor)"),
+    ("import fastapi as api", "api.Security(current_actor)"),
+])
+def test_fastapi_import_aliases_supply_identity_witnesses(imports, dependency):
+    source = imports + "\n" + GUARDED.replace("Depends(current_actor)", dependency) + UNGUARDED
+    hits = scan_auth_write(archive(source))
+    assert len(hits) == 1
+    assert "create(payload)" in source.splitlines()[hits[0].line - 1]
+    fixed = source.replace("payload, audit_repo", f"payload, actor={dependency}, audit_repo")
+    assert scan_auth_write(archive(fixed)) == []
+
+
+def test_annotated_aliased_security_is_a_signature_guard():
+    source = "from typing import Annotated\nfrom fastapi import Security as Permit\n" + GUARDED.replace(
+        "actor=Depends(current_actor)", "actor: Annotated[Actor, Permit(current_actor)]") + UNGUARDED
+    assert len(scan_auth_write(archive(source))) == 1
+
+
+@pytest.mark.parametrize("shadow", [
+    "Inject = ordinary_factory",
+    "from another_package import Depends as Inject",
+    "def Inject(value):\n    return value",
+    "class Inject:\n    pass",
+    "if use_alternative:\n    Inject = ordinary_factory",
+    "try:\n    load_configuration()\nexcept Exception as Inject:\n    pass",
+])
+def test_rebound_dependency_alias_cannot_establish_an_identity_witness(shadow):
+    source = "from fastapi import Depends as Inject\n" + shadow + "\n" + GUARDED.replace(
+        "Depends(current_actor)", "Inject(current_actor)") + UNGUARDED
+    assert scan_auth_write(archive(source)) == []
+    assert len(scan_auth_write(archive(source.replace(shadow + "\n", "", 1)))) == 1
+
+
+@pytest.mark.parametrize("shadow", ["api = ordinary_module", "api.Depends = ordinary_factory"])
+def test_rebound_fastapi_module_does_not_establish_an_identity_witness(shadow):
+    source = "import fastapi as api\n" + shadow + "\n" + GUARDED.replace(
+        "Depends(current_actor)", "api.Depends(current_actor)") + UNGUARDED
+    assert scan_auth_write(archive(source)) == []
+    assert len(scan_auth_write(archive(source.replace(shadow + "\n", "", 1)))) == 1
+
+
+@pytest.mark.parametrize("parameter", ["Inject", "**Inject", "*, Inject"])
+def test_router_factory_parameter_cannot_inherit_a_dependency_alias(parameter):
+    body = (GUARDED + UNGUARDED).split("\n", 1)[1].replace("Depends(current_actor)", "Inject(current_actor)")
+    source = "from fastapi import APIRouter, Depends, Depends as Inject\n" + f"def build_router({parameter}):\n"
+    source += "\n".join("    " + line for line in body.splitlines())
+    assert scan_auth_write(archive(source)) == []
+    assert len(scan_auth_write(archive(source.replace(f"build_router({parameter})", "build_router()")))) == 1
+
+
+def test_unknown_aliased_dependency_still_suppresses_a_target_finding():
+    source = "from fastapi import Depends as Inject\n" + GUARDED + UNGUARDED.replace(
+        "payload, audit_repo", "payload, guard=Inject(handler), audit_repo")
+    assert scan_auth_write(archive(source)) == []
+    assert len(scan_auth_write(archive(source.replace("Inject(handler)", "Inject(get_storage_repo)")))) == 1
+
+
+def test_nested_alias_rebinding_does_not_change_the_enclosing_router_guard():
+    source = "from fastapi import Depends as Inject\n" + GUARDED.replace(
+        "Depends(current_actor)", "Inject(current_actor)") + UNGUARDED
+    source += "\ndef unrelated():\n    Inject = another_factory\n    return Inject\n"
+    assert len(scan_auth_write(archive(source))) == 1
+
+
+def test_imported_fastapi_module_itself_is_not_a_dependency_constructor():
+    source = "import fastapi as Inject\n" + GUARDED.replace(
+        "Depends(current_actor)", "Inject(current_actor)") + UNGUARDED
+    assert scan_auth_write(archive(source)) == []
+    actual_dependency = source.replace("import fastapi as Inject", "from fastapi import Depends as Inject")
+    assert len(scan_auth_write(archive(actual_dependency))) == 1
+
+
+@pytest.mark.parametrize("constructor", ["Depends", "Inject"])
+def test_constructing_a_dependency_marker_in_the_body_does_not_enforce_it(constructor):
+    source = "from fastapi import Depends as Inject\n" + GUARDED.replace(
+        "actor=Depends(current_actor), ", "").replace(
+            "    return audit_repo.update", f"    marker = {constructor}(current_actor)\n    return audit_repo.update")
+    assert scan_auth_write(archive(source + UNGUARDED)) == []
+    declaration = f"actor={constructor}(current_actor), audit_repo=Depends(get_audit_repo)"
+    fixed_witness = source.replace("audit_repo=Depends(get_audit_repo)", declaration)
+    assert len(scan_auth_write(archive(fixed_witness + UNGUARDED))) == 1
+
+
+NONE_GUARD = "def Guard(dependency):\n    return None\n"
+
+
+def none_guard_routes():
+    guarded = GUARDED.replace("Depends(current_actor)", "fastapi.Depends(current_actor)")
+    target = UNGUARDED.replace("payload, audit_repo", "payload, actor=Guard(current_actor), audit_repo")
+    return guarded + target
+
+
+def test_shadowed_dependency_alias_returning_literal_none_does_not_hide_a_write_gap():
+    source = "import fastapi\nfrom fastapi import Depends as Guard\n" + NONE_GUARD + none_guard_routes()
+    hits = scan_auth_write(archive(source))
+    assert len(hits) == 1
+    assert "create(payload)" in source.splitlines()[hits[0].line - 1]
+
+
+@pytest.mark.parametrize("helper", [
+    "def Guard(dependency):\n    return fastapi.Depends(dependency)\n",
+    "@wrap_dependency\ndef Guard(dependency):\n    return None\n",
+    "def Guard(dependency):\n    check_access()\n    return None\n",
+    NONE_GUARD + "Guard = configured_guard\n",
+    NONE_GUARD + "if use_guard:\n    Guard = configured_guard\n",
+])
+def test_rebound_dependency_wrappers_remain_unknown_target_guards(helper):
+    source = "import fastapi\nfrom fastapi import Depends as Guard\n" + helper + none_guard_routes()
+    assert scan_auth_write(archive(source)) == []
+    assert len(scan_auth_write(archive(source.replace(helper, NONE_GUARD)))) == 1
+
+
+def test_later_none_helper_cannot_erase_an_already_evaluated_dependency_default():
+    source = "import fastapi\nfrom fastapi import Depends as Guard\n" + none_guard_routes() + "\n" + NONE_GUARD
+    assert scan_auth_write(archive(source)) == []
