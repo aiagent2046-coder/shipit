@@ -31,6 +31,28 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "base with resolve() and is_relative_to(). Never serve a file by a path that came straight "
         "from the request.",
     ),
+    "unsafe-deserialization": (
+        'A deserialization call requires trusted input or an explicit loader.',
+        'Pickle-family and confirmed unsafe YAML loaders can invoke code while reconstructing '
+        'objects. Marshal reconstructs values or code objects without executing those objects; YAML '
+        'without Loader depends on the installed version and raises TypeError in modern PyYAML. The '
+        'finding describes which case was observed. Input trust and runtime exploitability have not '
+        'been verified.',
+        'Prefer json (or msgpack/cbor) with an explicit schema, or yaml.safe_load for YAML values. '
+        'If object serialization is unavoidable, accept only trusted producers and verify an HMAC '
+        'or digital signature before loading. A checksum supplied with untrusted bytes does not '
+        'authenticate them; an expected digest must come from a trusted source.',
+    ),
+    "tls-verification-disabled": (
+        "TLS certificate or hostname verification is weakened.",
+        "A recognised client/context setting weakens peer-identity checks. Disabling hostname matching "
+        "can leave certificate-chain validation enabled; disabling chain validation is a different "
+        "setting. The finding identifies the control seen in source. Runtime use and exposure have "
+        "not been verified.",
+        "Restore the affected check: require a trusted certificate chain and match the expected "
+        "hostname. Configure the client's supported CA/context option for private certificates "
+        "instead of disabling verification.",
+    ),
     "python-outbound-request-unvalidated-url": (
         "An HTTP client receives an address derived from request input.",
         "A caller-controlled value reaches the host portion of a request target or client "

@@ -1,0 +1,9 @@
+from pickle import loads
+
+import pandas as pd
+
+
+def restore_all(blob, path):
+    first = loads(blob)
+    second = pd.read_pickle(path)
+    return first, second

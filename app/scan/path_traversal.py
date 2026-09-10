@@ -1,57 +1,18 @@
-"""A filesystem path assembled from the caller's input, without a containment check.
+"""Bounded, local request-to-filesystem traces in declared FastAPI handlers.
 
-WHY THIS EXISTS. The classic path traversal is two tokens long: take a name out of
-the request, join it to an upload directory, hand it to open(). `../../../../etc/passwd`
-or a `.py` written into a served directory turns a file feature into a read of
-anything the process can read, or a write of anything it can write. The static stage
-read none of it: measured before writing, no rule in app/scan matched open,
-os.path.join, send_file, FileResponse or secure_filename.
-
-WHAT IT REPORTS, AND WHAT IT DOES NOT CLAIM. Inside a function that declares an HTTP
-route, a call that hands a filesystem path to a sink -- open, Path, os.open,
-send_file, FileResponse, ZipFile, tarfile, shutil, the os removal/rename family,
-read_text/write_text -- where the path is assembled from one of that handler's own
-request inputs and no containment check on it is visible in the same function. That
-is a fact about the source. It is NOT proof of a reachable traversal: a check in a
-wrapper, a filesystem that cannot escape a mount, or a caller that only ever sends
-safe names are all invisible here, and the finding says so. Silence is not a
-certificate either -- a path built in a helper and passed in, or reached through a
-variable this rule does not resolve, is not covered.
-
-WHY IT IS NOT A GREP, and what counts as containment:
-
-    open(os.path.join(UPLOAD_DIR, name))                  the defect
-    open(os.path.join(UPLOAD_DIR, secure_filename(name))) contained
-    open(os.path.join(UPLOAD_DIR, os.path.basename(name))) contained
-    target = (BASE / name).resolve(); target.relative_to(BASE)   contained
-    open(os.path.join(UPLOAD_DIR, "report.csv"))          a literal
-
-The first and the second differ by one call, and the second and third by which call.
-A regex over `open(` reports all four. Containment is therefore a vocabulary read at
-the expression AND at the statement level: `secure_filename`, `basename`, `.name`,
-`relative_to`, `is_relative_to`, `commonpath`, and the shared validation words
-(validate/check/sanitize/allow/...), applied either inside the path expression or in
-a test that runs before the sink. `resolve()` alone is NOT containment -- it
-normalises a path without restricting it, and treating it as a check would silence
-the very case this rule exists for.
-
-THE MACHINERY IS IMPORTED, NOT COPIED. The state, the import binding, the request
-input model, the string skeleton and the check vocabulary come from
-app/scan/outbound_url.py, the sink rule that shares this family; a second copy of
-them would drift and the family would disagree with itself about what a request input
-is. What is separate here is the sink judgement (which calls touch the filesystem) and
-the containment vocabulary (which calls make a path safe), because those are what a
-path rule and a URL rule do NOT share. A follow-up worth doing: the statement-ordered
-loop below mirrors the sibling's, and belongs in one place for the whole family.
-
-NEVER EXECUTES THE UPLOADED CODE. ast.parse builds a tree over the bytes in the
-archive; nothing is imported, run or opened.
+Imported filesystem functions and proven pathlib receivers are sinks; constructing
+a Path is only propagation. Unknown helpers and objects stop this trace. Imported
+secure_filename sanitizes only its own result. basename/commonprefix, validation
+names, and a lexical is_relative_to are not containment proofs. A supported guard
+checks a resolved Path against a fixed absolute base on the path that reaches the
+sink. All uploaded source is parsed, never imported or executed.
 """
 
 from __future__ import annotations
 
 import ast
 import zipfile
+from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
@@ -62,8 +23,7 @@ from app.scan.outbound_url import (
     _State,
     _bind,
     _bounded_tree,
-    _check_call,
-    _checked_names,
+    _combine,
     _import,
     _qualified,
     _request_inputs,
@@ -73,363 +33,346 @@ from app.scan.outbound_url import (
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "path-traversal-file-sink"
-
-# Calls that take a filesystem path as their dangerous argument. Matched as
-# qualified names after import binding (`from os import open as o_open` resolves),
-# so the same call is judged however the file spells it.
-_PATH_FIRST_SINKS = frozenset({
-    "builtins.open",  # open() lives here in the qualified form
-    # The bare names cover `from pathlib import Path` read in a snippet whose import
-    # this trace did not bind, and the star-import case that binds nothing readable.
-    "Path", "PurePath", "PosixPath", "WindowsPath", "FileResponse", "ZipFile",
-    "os.open",
-    "os.listdir", "os.mkdir", "os.makedirs", "os.remove", "os.rename", "os.replace",
-    "os.rmdir", "os.scandir", "os.stat", "os.unlink", "os.utime",
-    "pathlib.Path", "pathlib.PosixPath", "pathlib.WindowsPath", "pathlib.PurePath",
-    "shutil.copy", "shutil.copy2", "shutil.copyfile", "shutil.copytree", "shutil.move",
-    "shutil.rmtree",
-    "send_file",
-    "zipfile.ZipFile", "tarfile.open",
-    "pandas.read_csv", "pandas.read_excel", "pandas.read_json", "pandas.read_table",
-    "numpy.load", "numpy.loadtxt", "numpy.genfromtxt",
-})
-
-# Classes that are constructed with a path and then written or read through.
-_FILE_RESPONSE = frozenset({"starlette.responses.FileResponse", "fastapi.responses.FileResponse"})
-
-# Methods on a path-like object. The receiver is not resolved beyond the parameter
-# it was bound to, so these are matched on the method name and judged on the
-# argument the same way a bare call is.
-_PATH_METHODS = frozenset({
-    "read_bytes", "read_text", "write_bytes", "write_text", "open", "unlink", "rename",
-    "replace", "touch", "mkdir", "rmdir", "iterdir", "glob", "rglob",
-})
-
-# The containment vocabulary. Anything here, applied to the value before it reaches
-# the sink, is a check in the sense this rule means: it constrains WHERE the path can
-# point. `resolve`/`normpath` are deliberately absent -- they normalise, they do not
-# restrict, and `resolve()` immediately before a sink is exactly the case a naive
-# vocabulary would silence.
-_CONTAINMENT_WORDS = frozenset({
-    "basename", "commonpath", "commonprefix", "is_relative_to", "name", "relative_to",
-    "secure_filename", "safe_join", "scrub",
-})
+_PATH_CLASSES = frozenset(f"pathlib.{name}" for name in
+                          ("Path", "PosixPath", "WindowsPath", "PurePath", "PurePosixPath", "PureWindowsPath"))
+_CONCRETE_PATHS = frozenset({"pathlib.Path", "pathlib.PosixPath", "pathlib.WindowsPath"})
+_JOINS = frozenset({"os.path.join", "posixpath.join", "ntpath.join"})
+_NORMALIZERS = frozenset({f"{module}.{name}" for module in ("os.path", "posixpath", "ntpath")
+                          for name in ("normpath", "abspath", "realpath", "expanduser", "basename")})
+_PATH_TRANSFORMS = frozenset({"resolve", "absolute", "expanduser", "joinpath", "with_name", "with_stem",
+                            "with_suffix"})
+_SANITIZERS = frozenset({"werkzeug.utils.secure_filename"})
+_METHOD_SINKS = frozenset({"read_text", "read_bytes", "write_text", "write_bytes", "open", "unlink",
+                         "touch", "mkdir", "rmdir", "iterdir", "stat", "lstat", "chmod"})
+# Position and keyword are API signatures, not guesses from a method's name.
+_FIRST_SINKS = {
+    "builtins.open": "file", "os.open": "path",
+    **{f"os.{name}": "path" for name in ("listdir", "mkdir", "makedirs", "remove", "rmdir", "scandir",
+                                        "stat", "unlink", "utime")},
+    "shutil.rmtree": "path", "zipfile.ZipFile": "file", "tarfile.open": "name",
+    "flask.send_file": "path_or_file", "flask.helpers.send_file": "path_or_file",
+    "werkzeug.utils.send_file": "path_or_file",
+    "starlette.responses.FileResponse": "path", "fastapi.responses.FileResponse": "path",
+    "pandas.read_csv": "filepath_or_buffer", "pandas.read_table": "filepath_or_buffer",
+    "pandas.read_excel": "io", "pandas.read_json": "path_or_buf",
+    "numpy.load": "file", "numpy.loadtxt": "fname", "numpy.genfromtxt": "fname",
+}
+_TWO_PATH_SINKS = frozenset({"os.rename", "os.replace", "shutil.copy", "shutil.copy2", "shutil.copyfile",
+                            "shutil.copytree", "shutil.move"})
 
 
-def _qualified_sink(node: ast.AST, state: _State) -> str:
-    """The imported name of a call target, falling back to the dotted source text.
+@dataclass
+class _PathState(_State):
+    paths: set[str] = field(default_factory=set)
+    concrete: set[str] = field(default_factory=set)
+    normalized: set[str] = field(default_factory=set)
+    checked_paths: set[str] = field(default_factory=set)
+    shadowed: set[str] = field(default_factory=set)
 
-    `_qualified` answers only for names this file BOUND (through an import or an
-    assignment), which is right for deciding whether a call is `httpx.get` and wrong
-    for `open(...)`: a builtin is never bound, and the first version of this module
-    returned an empty name for every builtin call, so the rule was silent on all of
-    them. The fallback reads the name as written -- `open`, `shutil.rmtree` -- which
-    is also what makes `secure_filename(...)` recognisable as containment.
-    """
-    qualified = _qualified(node, state.bindings)
+    def copy(self) -> _PathState:
+        result = _PathState()
+        # Keep compatibility with additional provenance fields in outbound_url.
+        for name, value in vars(self).items():
+            setattr(result, name, value.copy())
+        return result
+
+
+def _call_name(call: ast.Call, state: _PathState) -> str:
+    qualified = _qualified(call.func, state.bindings)
     if qualified:
-        return "builtins.open" if qualified == "open" else qualified
-    return _dotted_text(node)
-
-
-def _dotted_text(node: ast.AST) -> str:
-    """The name as the source spells it, for a call target that resolves to nothing.
-
-    A module used without an import in this file (`shutil.rmtree(...)` in a snippet,
-    or one imported inside a function) still says what it is; refusing to read it
-    would make the rule's silence depend on import style rather than on the call.
-    """
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        base = _dotted_text(node.value)
-        return f"{base}.{node.attr}" if base else node.attr
+        return qualified
+    if isinstance(call.func, ast.Name) and call.func.id in {"open", "str"} \
+            and call.func.id not in state.shadowed:
+        return "builtins." + call.func.id
     return ""
 
 
-def _call_name(call: ast.Call, state: _State) -> str:
-    if isinstance(call.func, (ast.Name, ast.Attribute)):
-        return _qualified_sink(call.func, state)
-    return ""
-
-
-def _contains_containment(call: ast.Call, state: _State) -> bool:
-    """Does the path expression itself apply a containment call?
-
-    `secure_filename(name)` inside the argument is the standard fix, and it is the
-    shape the corpus pins: the same statement, one call deeper.
-    """
-    for node in _walk(call):
-        if not isinstance(node, ast.Call):
-            continue
-        name = _call_name(node, state)
-        leaf = name.rsplit(".", 1)[-1].lower()
-        if leaf in _CONTAINMENT_WORDS or any(word in leaf for word in _CONTAINMENT_WORDS):
+def _path_type(expr: ast.AST, state: _PathState, *, concrete: bool = False) -> bool:
+    if isinstance(expr, ast.Name):
+        return expr.id in (state.concrete if concrete else state.paths)
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
+        return _path_type(expr.left, state, concrete=concrete)
+    if isinstance(expr, ast.Attribute) and expr.attr in {"parent"}:
+        return _path_type(expr.value, state, concrete=concrete)
+    if isinstance(expr, ast.Call):
+        if _call_name(expr, state) in (_CONCRETE_PATHS if concrete else _PATH_CLASSES):
             return True
+        if isinstance(expr.func, ast.Attribute) and expr.func.attr in _PATH_TRANSFORMS | {"relative_to"}:
+            return _path_type(expr.func.value, state, concrete=concrete)
     return False
 
 
-# Pure path TRANSFORMS: they change how a path is spelled, not where it points, so the
-# caller's influence survives them and the trace follows the receiver. `resolve` and
-# `normpath` are here and NOT in the containment vocabulary on purpose -- the shape
-# `(BASE / name).resolve().read_text()` is exactly the defect, and a rule that read
-# `resolve` as a check would silence it.
-_PATH_TRANSFORMS = frozenset({
-    "absolute", "expanduser", "joinpath", "normpath", "realpath", "resolve",
-    "with_name", "with_stem", "with_suffix", "parent", "os.path.normpath",
-    "os.path.abspath", "os.path.realpath", "pathlib.Path.resolve",
-})
+def _normalized(expr: ast.AST, state: _PathState) -> bool:
+    if isinstance(expr, ast.Name):
+        return expr.id in state.normalized
+    return (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr == "resolve" and _path_type(expr.func.value, state, concrete=True))
 
 
-def _path_skeleton(expr: ast.AST, state: _State) -> tuple[str, list[set[str]]] | None:
-    """`_skeleton` plus the two ways this family assembles a path.
+def _path_parts(parts: list[ast.AST], state: _PathState):
+    result = ("", [])
+    for part in parts:
+        piece = _path_skeleton(part, state)
+        if piece is None:
+            return None
+        # _combine checks BOTH budgets before joining text or copying slots.
+        result = _combine([result, ("/" if result[0] else "", []), piece])
+        if result is None:
+            return None
+    return result
 
-    The sibling rule needed `urljoin`; a filesystem path is assembled with
-    `os.path.join(BASE, name)` and with `BASE / name`. Both are treated as
-    concatenation, because both produce a path whose components are the caller's
-    when the caller's value is one of them.
-    """
-    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
-        left = _path_skeleton(expr.left, state)
-        right = _path_skeleton(expr.right, state)
-        if left is not None and right is not None:
-            text_left = left[0] + ("/" if left[0] and not left[0].endswith("/") else "")
-            return text_left + right[0], [*left[1], *right[1]]
-        return None
+
+def _path_skeleton(expr: ast.AST, state: _PathState) -> tuple[str, list[set[str]]] | None:
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div) and _path_type(expr.left, state):
+        return _path_parts([expr.left, expr.right], state)
+    if isinstance(expr, ast.Attribute) and expr.attr in {"parent", "name"} and _path_type(expr.value, state):
+        return _path_skeleton(expr.value, state)
     if isinstance(expr, ast.Call):
         qualified = _call_name(expr, state)
-        if qualified in {"os.path.join", "posixpath.join", "ntpath.join"} or qualified.endswith(".join"):
-            text, slots = "", []
-            for part in expr.args:
-                piece = _path_skeleton(part, state)
-                if piece is None:
-                    return None
-                if text and not text.endswith("/"):
-                    text += "/"
-                text += piece[0]
-                slots.extend(piece[1])
-            return text, slots
-        leaf = qualified.rsplit(".", 1)[-1]
-        if leaf in _PATH_TRANSFORMS or qualified in _PATH_TRANSFORMS:
-            # A transform is transparent to the trace: `.resolve()` normalises
-            # without restricting, so what it returns still carries the caller's
-            # value -- and reading it as a check is the mistake this rule exists to
-            # avoid.
-            if expr.args:
-                return _path_skeleton(expr.args[0], state)
-            if isinstance(expr.func, ast.Attribute):
-                return _path_skeleton(expr.func.value, state)
-            return None
-        if (qualified in _FILE_RESPONSE or qualified in _PATH_FIRST_SINKS) and expr.args:
-            # `Path(BASE)` / `FileResponse(BASE / name)`: the wrapper's own argument is
-            # the path, and the wrapper adds no structure to read.
+        if qualified in _JOINS | _PATH_CLASSES:
+            return _path_parts(expr.args, state) if not expr.keywords else None
+        if qualified in _SANITIZERS and len(expr.args) == 1 and not expr.keywords:
+            # Sanitize this expression only; another raw component keeps its origin.
+            return "sanitized-name", []
+        if qualified in _NORMALIZERS and expr.args:
             return _path_skeleton(expr.args[0], state)
-    return _skeleton(expr, state)
+        if qualified == "builtins.str" and len(expr.args) == 1 and _path_type(expr.args[0], state):
+            return _path_skeleton(expr.args[0], state)
+        if isinstance(expr.func, ast.Attribute) and _path_type(expr.func.value, state):
+            if expr.func.attr in {"resolve", "absolute", "expanduser"}:
+                return _path_skeleton(expr.func.value, state)
+            if expr.func.attr in {"joinpath", "with_name", "with_stem", "with_suffix"}:
+                return _path_parts([expr.func.value, *expr.args], state) if not expr.keywords else None
+    built = _skeleton(expr, state)
+    return _combine([built]) if built is not None else None
 
 
-def _reaching_inputs(call: ast.Call, argument: ast.AST, state: _State,
-                     containment_in_expression: bool) -> set[str]:
-    built = _path_skeleton(argument, state)
-    if built is None:
-        return set()
-    reaching = set().union(*built[1]) if built[1] else set()
-    if not reaching:
-        return set()
-    if containment_in_expression:
-        return set()
-    return {name for name in reaching if name not in state.checked}
+def _argument(call: ast.Call, position: int, keyword: str) -> ast.AST | None:
+    if any(isinstance(arg, ast.Starred) for arg in call.args) or any(kw.arg is None for kw in call.keywords):
+        return None
+    for kw in call.keywords:
+        if kw.arg == keyword:
+            return kw.value
+    return call.args[position] if len(call.args) > position else None
 
 
-_MODULE_PREFIXES = ("os.", "shutil.", "zipfile.", "tarfile.", "pandas.", "numpy.", "pathlib.", "builtins.")
-
-
-def _path_argument(call: ast.Call, state: _State) -> ast.AST | None:
-    """The expression used as a path, for each sink shape.
-
-    A method that is called ON a path takes its path from the receiver
-    (`(BASE / name).read_text()`), while a function-style sink takes it as the first
-    argument (`open(path)`, `shutil.rmtree(path)`). Confusing the two made the
-    inline method form invisible.
-    """
+def _path_arguments(call: ast.Call, state: _PathState) -> list[ast.AST]:
     qualified = _call_name(call, state)
-    if not qualified:
-        return None
-    leaf = qualified.rsplit(".", 1)[-1]
-    if leaf in _PATH_METHODS and not qualified.startswith(_MODULE_PREFIXES) and not qualified.startswith(
-            ("os.", "shutil.", "zipfile.", "tarfile.", "pandas.", "numpy.")):
-        if call.args:
-            return call.args[0]
-        if isinstance(call.func, ast.Attribute):
-            return call.func.value
-        return None
-    if qualified in _PATH_FIRST_SINKS or qualified in _FILE_RESPONSE:
-        return call.args[0] if call.args else None
-    return None
+    arguments = []
+    if qualified in _FIRST_SINKS:
+        arguments = [_argument(call, 0, _FIRST_SINKS[qualified])]
+    elif qualified in _TWO_PATH_SINKS:
+        arguments = [_argument(call, 0, "src"), _argument(call, 1, "dst")]
+    elif isinstance(call.func, ast.Attribute) and _path_type(call.func.value, state, concrete=True):
+        if call.func.attr in _METHOD_SINKS:
+            arguments = [call.func.value]
+        elif call.func.attr in {"rename", "replace"}:
+            arguments = [call.func.value, _argument(call, 0, "target")]
+    return [arg for arg in arguments if arg is not None]
 
 
-def _scan_expression(expr: ast.AST, state: _State, path: str, findings: list[CheckFinding]) -> None:
+def _scan_expression(expr: ast.AST, state: _PathState, path: str, findings: list[CheckFinding]) -> None:
     for call in _walk(expr):
         if len(findings) >= _MAX_FINDINGS:
             return
         if not isinstance(call, ast.Call):
             continue
-        argument = _path_argument(call, state)
-        if argument is None:
-            continue
-        reaching = _reaching_inputs(call, argument, state, _contains_containment(call, state))
+        reaching = set()
+        for argument in _path_arguments(call, state):
+            if isinstance(argument, ast.Name) and argument.id in state.checked_paths:
+                continue
+            built = _path_skeleton(argument, state)
+            if built is not None:
+                reaching.update(set().union(*built[1]))
         if reaching:
             findings.append(_finding(path, call, reaching))
 
 
-def _bind_path(target: ast.AST, value: ast.AST | None, state: _State) -> None:
-    """Bind a local the way the family does, then keep a PATH reading of it too.
-
-    The sibling's binding stores what its own skeleton can read, and that skeleton
-    knows `urljoin` but not `.resolve()`. Without this, `candidate = (BASE /
-    name).resolve()` loses the caller's value at the assignment -- and `candidate`
-    is exactly how the guarded case is written in real code.
-    """
+def _bind_path(target: ast.AST, value: ast.AST | None, state: _PathState) -> None:
+    # Capture RHS before rebinding, including x = x.resolve().
+    built = _path_skeleton(value, state) if value is not None else None
+    path = value is not None and _path_type(value, state)
+    concrete = value is not None and _path_type(value, state, concrete=True)
+    normalized = value is not None and _normalized(value, state)
+    checked = isinstance(value, ast.Name) and value.id in state.checked_paths
     _bind(target, value, state)
-    if value is None or not isinstance(target, ast.Name):
-        return
-    if target.id in state.values:
-        return  # the family already read this one; do not overwrite its structure
-    built = _path_skeleton(value, state)
-    if built is not None:
-        state.values[target.id] = built
+    names = {node.id for node in _walk(target) if isinstance(node, ast.Name)}
+    for attr in (state.paths, state.concrete, state.normalized, state.checked_paths):
+        attr.difference_update(names)
+    state.shadowed.update(names)
+    if isinstance(target, ast.Name):
+        # Do not retain a sibling skeleton when path expansion exceeded its budget.
+        state.values.pop(target.id, None)
+        if built is not None:
+            state.values[target.id] = built
+        for enabled, attribute in ((path, state.paths), (concrete, state.concrete),
+                                   (normalized, state.normalized), (checked, state.checked_paths)):
+            if enabled:
+                attribute.add(target.id)
 
 
-def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[CheckFinding]) -> None:
-    """Statements in order, so a check only counts if it runs BEFORE the sink.
+def _containment_call(expr: ast.AST, state: _PathState, method: str) -> str | None:
+    if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr == method and isinstance(expr.func.value, ast.Name)
+            and expr.func.value.id in state.normalized and len(expr.args) == 1 and not expr.keywords):
+        return None
+    base = _path_skeleton(expr.args[0], state)
+    if base is None or base[1] or not base[0].startswith("/") or ".." in base[0].split("/"):
+        return None
+    return expr.func.value.id
 
-    A check after the call is not a check, and a check in a branch that does not
-    execute is not one either. The sibling rule's loop is the model; it is repeated
-    here in the compact form this rule needs.
-    """
+
+def _guard(test: ast.AST, state: _PathState) -> tuple[str | None, bool]:
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _containment_call(test.operand, state, "is_relative_to"), False
+    return _containment_call(test, state, "is_relative_to"), True
+
+
+def _join_states(state: _PathState, branches: list[_PathState]) -> None:
+    for attr, value in vars(branches[0]).items():
+        if attr == "shadowed":
+            merged = set.union(*(branch.shadowed for branch in branches))
+        elif isinstance(value, dict):
+            merged = {key: item for key, item in value.items()
+                      if all(getattr(branch, attr).get(key) == item for branch in branches[1:])}
+        else:
+            merged = set.intersection(*(getattr(branch, attr) for branch in branches))
+        setattr(state, attr, merged)
+
+
+def _forget_stores(stmt: ast.AST, state: _PathState) -> None:
+    for node in _walk(stmt):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            _bind_path(node, None, state)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                _bind_path(ast.Name(id=alias.asname or alias.name.split(".")[0]), None, state)
+
+
+def _import_path(stmt: ast.Import | ast.ImportFrom, state: _PathState) -> None:
+    for alias in stmt.names:
+        _bind_path(ast.Name(id=alias.asname or alias.name.split(".")[0]), None, state)
+    _import(stmt, state)
+
+
+def _scan_block(body: list[ast.stmt], state: _PathState, path: str, findings: list[CheckFinding]) -> bool:
     for stmt in body:
         if len(findings) >= _MAX_FINDINGS:
-            return
+            return True
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            _bind(ast.Name(id=stmt.name), None, state)
+            _bind_path(ast.Name(id=stmt.name), None, state)
             continue
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-            _import(stmt, state)
+            _import_path(stmt, state)
             continue
         if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
             if stmt.value is not None:
                 _scan_expression(stmt.value, state, path, findings)
-            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
-            for target in targets:
+            for target in stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]:
                 _bind_path(target, stmt.value, state)
             continue
         if isinstance(stmt, ast.If):
             _scan_expression(stmt.test, state, path, findings)
-            if _test_contains_check(stmt.test, state):
-                state.checked |= _checked_from_test(stmt.test, state)
-            for branch in (stmt.body, stmt.orelse):
-                branch_state = state.copy()
-                _scan_block(branch, branch_state, path, findings)
+            checked, safe_when_true = _guard(stmt.test, state)
+            continuing = []
+            for truth, branch in ((True, stmt.body), (False, stmt.orelse)):
+                local = state.copy()
+                if checked and truth == safe_when_true:
+                    local.checked_paths.add(checked)
+                if _scan_block(branch, local, path, findings):
+                    continuing.append(local)
+            if not continuing:
+                return False
+            _join_states(state, continuing)
             continue
         if isinstance(stmt, (ast.With, ast.AsyncWith)):
+            local = state.copy()
             for item in stmt.items:
-                _scan_expression(item.context_expr, state, path, findings)
+                _scan_expression(item.context_expr, local, path, findings)
                 if item.optional_vars is not None:
-                    _bind_path(item.optional_vars, item.context_expr, state)
-            _scan_block(stmt.body, state, path, findings)
+                    _bind_path(item.optional_vars, None, local)
+            _scan_block(stmt.body, local, path, findings)
+            # __exit__ can swallow an exception; do not prove termination here.
+            _forget_stores(stmt, state)
             continue
-        if isinstance(stmt, (ast.Try, ast.TryStar)):
-            # `ast.iter_child_nodes` YIELDS THE ELEMENTS of list fields, not the lists,
-            # so a driver that looks for `isinstance(child, list)` descends into
-            # nothing -- and every endpoint that wraps its work in try/except goes
-            # unreported. Six of nine hunt candidates sat in exactly that shape.
-            for arm in (stmt.body, stmt.orelse, stmt.finalbody):
-                _scan_block(arm, state.copy(), path, findings)
-            for handler in stmt.handlers:
-                _scan_block(handler.body, state.copy(), path, findings)
-            continue
-        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+        if isinstance(stmt, (ast.Try, ast.TryStar, ast.For, ast.AsyncFor, ast.While, ast.Match)):
             for child in ast.iter_child_nodes(stmt):
                 if isinstance(child, ast.expr):
                     _scan_expression(child, state, path, findings)
-            _scan_block(stmt.body, state.copy(), path, findings)
-            if getattr(stmt, "orelse", None):
-                _scan_block(stmt.orelse, state.copy(), path, findings)
+            arms = [getattr(stmt, key, []) for key in ("body", "orelse", "finalbody")]
+            arms += [handler.body for handler in getattr(stmt, "handlers", [])]
+            arms += [case.body for case in getattr(stmt, "cases", [])]
+            for arm in arms:
+                local = state.copy()
+                if isinstance(stmt, (ast.For, ast.AsyncFor)):
+                    _bind_path(stmt.target, None, local)
+                for handler in getattr(stmt, "handlers", []):
+                    if handler.body is arm and handler.name:
+                        _bind_path(ast.Name(id=handler.name), None, local)
+                for case in getattr(stmt, "cases", []):
+                    if case.body is arm:
+                        for node in _walk(case.pattern):
+                            name = getattr(node, "name", None) or getattr(node, "rest", None)
+                            if isinstance(name, str):
+                                _bind_path(ast.Name(id=name), None, local)
+                _scan_block(arm, local, path, findings)
+            _forget_stores(stmt, state)
             continue
         _scan_expression(stmt, state, path, findings)
+        if isinstance(stmt, ast.Expr):
+            checked = _containment_call(stmt.value, state, "relative_to")
+            if checked:
+                state.checked_paths.add(checked)
+        elif isinstance(stmt, ast.AugAssign):
+            _bind_path(stmt.target, None, state)
+        elif isinstance(stmt, (ast.Return, ast.Raise)):
+            return False
+    return True
 
 
-def _checked_from_test(test: ast.AST, state: _State) -> set[str]:
-    """Names a containment test constrains, when the test inspects them."""
-    checked = _check_call(test, state)
-    if checked:
-        return checked
-    for node in _walk(test):
-        if isinstance(node, ast.Call):
-            name = _call_name(node, state)
-            leaf = name.rsplit(".", 1)[-1].lower()
-            if leaf in _CONTAINMENT_WORDS or any(word in leaf for word in _CONTAINMENT_WORDS):
-                target = node.args[1] if len(node.args) > 1 else node
-                return _checked_names(target, state)
-    return _checked_names(test, state) if _test_looks_like_containment(test, state) else set()
+def _declares_route(fn: ast.FunctionDef | ast.AsyncFunctionDef, state: _PathState) -> bool:
+    return any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+               and dec.func.attr in {"delete", "get", "head", "options", "patch", "post", "put",
+                                     "route", "api_route", "websocket"}
+               and _qualified(dec.func.value, state.bindings) == "router" for dec in fn.decorator_list)
 
 
-def _test_looks_like_containment(test: ast.AST, state: _State) -> bool:
-    for node in _walk(test):
-        if isinstance(node, ast.Call):
-            leaf = _call_name(node, state).rsplit(".", 1)[-1].lower()
-            if leaf in _CONTAINMENT_WORDS or any(word in leaf for word in _CONTAINMENT_WORDS):
-                return True
-    return False
+def _import_context(body: list[ast.stmt], state: _PathState) -> None:
+    for stmt in body:
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            _import_path(stmt, state)
+        elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            for target in stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]:
+                _bind_path(target, stmt.value, state)
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _bind_path(ast.Name(id=stmt.name), None, state)
+        else:
+            _forget_stores(stmt, state)
 
 
-def _test_contains_check(test: ast.AST, state: _State) -> bool:
-    if _test_looks_like_containment(test, state):
-        return True
-    return bool(_check_call(test, state))
-
-
-def _scan_file(tree: ast.Module, path: str, findings: list[CheckFinding]) -> None:
-    """Route handlers, declared at module level or inside a lexical factory."""
-    for stmt in tree.body:
-        if isinstance(stmt, (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign)):
-            continue
+def _scan_scope(body: list[ast.stmt], inherited: _PathState, path: str, findings: list[CheckFinding]) -> None:
+    context = inherited.copy()
+    _import_context(body, context)
+    for stmt in body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if _declares_route(stmt):
-                local = _State()
-                _import_context(tree, local)
+            declares_route = _declares_route(stmt, context)
+            nested = any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) for child in stmt.body)
+            if not declares_route and not nested:
+                continue
+            local = context.copy()
+            args = [*stmt.args.posonlyargs, *stmt.args.args, *stmt.args.kwonlyargs,
+                    stmt.args.vararg, stmt.args.kwarg]
+            for arg in (arg for arg in args if arg is not None):
+                _bind_path(ast.Name(id=arg.arg), None, local)
+            for child in stmt.body:
+                _forget_stores(child, local)
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    _bind_path(ast.Name(id=child.name), None, local)
+            if declares_route:
                 _request_inputs(stmt, local)
                 _scan_block(stmt.body, local, path, findings)
-            _scan_factory(stmt, path, findings)
-
-
-def _declares_route(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    return any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
-               and dec.func.attr in {"delete", "get", "head", "options", "patch", "post",
-                                     "put", "route", "api_route", "websocket"}
-               for dec in fn.decorator_list)
-
-
-def _import_context(tree: ast.Module, state: _State) -> None:
-    for stmt in tree.body:
-        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-            _import(stmt, state)
-        elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
-            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
-            for target in targets:
-                _bind_path(target, stmt.value, state)
-
-
-def _scan_factory(fn: ast.FunctionDef | ast.AsyncFunctionDef, path: str,
-                  findings: list[CheckFinding]) -> None:
-    """A router factory is read lexically; the handler inside it is still a handler."""
-    for stmt in fn.body:
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and _declares_route(stmt):
-            local = _State()
-            _import_context(ast.Module(body=fn.body, type_ignores=[]), local)
-            _request_inputs(stmt, local)
-            _scan_block(stmt.body, local, path, findings)
-        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            _scan_factory(stmt, path, findings)
+            if nested:
+                _scan_scope(stmt.body, local, path, findings)
 
 
 def scan_path_traversal(fileobj: BinaryIO) -> list[CheckFinding]:
@@ -437,18 +380,19 @@ def scan_path_traversal(fileobj: BinaryIO) -> list[CheckFinding]:
     with zipfile.ZipFile(fileobj) as archive:
         infos = [info for info in archive.infolist()
                  if not info.is_dir() and info.filename.endswith(".py")
-                 and info.file_size <= _MAX_FILE_BYTES
-                 and not is_non_production_path(info.filename)]
+                 and info.file_size <= _MAX_FILE_BYTES and not is_non_production_path(info.filename)]
         for info in infos[:_MAX_FILES]:
             if len(findings) >= _MAX_FINDINGS:
                 break
             try:
-                tree = ast.parse(archive.read(info).decode("utf-8"))
+                source = archive.read(info)
+                if b"@" not in source:
+                    continue
+                tree = ast.parse(source.decode("utf-8"))
             except (SyntaxError, UnicodeError, ValueError, RecursionError):
                 continue
-            if not _bounded_tree(tree):
-                continue
-            _scan_file(tree, info.filename, findings)
+            if _bounded_tree(tree):
+                _scan_scope(tree.body, _PathState(), info.filename, findings)
     return findings
 
 
@@ -468,10 +412,11 @@ def _finding(path: str, call: ast.Call, reaching: set[str]) -> CheckFinding:
         line=call.lineno,
         explanation=(
             f"The path handed to {_attr(call)} at line {call.lineno} is assembled from {names}, "
-            "which this handler receives from the request, and no containment check on it was "
-            "visible in the same function. A value like `../../etc/passwd` -- or a name that ends "
-            "in a served extension -- turns this into reading or writing files the application "
-            "never intended to touch. Whether anything outside this function constrains the path "
+            "which this handler receives from the request, and no supported containment guard was "
+            "established before this operation. If other controls do not constrain it, a value like "
+            "`../../etc/passwd` can cause access to unintended files. Runtime filesystem access, "
+            "symlinks and containment patterns outside this bounded trace are unresolved. "
+            "Whether anything outside this function constrains the path "
             "has NOT been verified, and the value is traced only inside this function."
         ),
         fix_hint=(

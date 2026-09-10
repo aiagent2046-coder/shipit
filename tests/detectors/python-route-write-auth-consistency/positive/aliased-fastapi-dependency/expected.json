@@ -1,0 +1,11 @@
+{
+  "description": "A proven FastAPI Depends alias preserves the guarded same-router write witness.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}

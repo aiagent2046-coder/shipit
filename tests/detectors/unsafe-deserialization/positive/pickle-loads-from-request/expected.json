@@ -1,0 +1,10 @@
+{
+  "description": "The class in its plainest form: bytes that arrived from a request are handed to a loader that can name classes and call them. This is remote code execution with extra steps.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "The stdlib helper that exists only to skip verification, reached through urllib.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

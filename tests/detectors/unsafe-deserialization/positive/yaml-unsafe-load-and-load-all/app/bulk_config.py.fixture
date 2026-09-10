@@ -1,0 +1,6 @@
+import yaml
+
+
+def load_docs(text):
+    docs = list(yaml.load_all(text, Loader=yaml.UnsafeLoader))
+    return docs, yaml.unsafe_load(text)

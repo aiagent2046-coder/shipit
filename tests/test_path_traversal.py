@@ -22,6 +22,7 @@ from app.scan.static import run_static_scan
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 POSITIVE = '''from fastapi import APIRouter, Depends
+from werkzeug.utils import secure_filename
 import os
 
 router = APIRouter()
@@ -62,7 +63,8 @@ def test_a_path_built_from_caller_input_is_a_high_severity_signal():
 @pytest.mark.parametrize("source", [
     # containment inside the expression
     POSITIVE.replace("os.path.join(UPLOAD_DIR, name)", "os.path.join(UPLOAD_DIR, secure_filename(name))"),
-    POSITIVE.replace("os.path.join(UPLOAD_DIR, name)", "os.path.join(UPLOAD_DIR, os.path.basename(name))"),
+    POSITIVE.replace("os.path.join(UPLOAD_DIR, name)",
+                     "os.path.join(UPLOAD_DIR, secure_filename(os.path.basename(name)))"),
     # a literal path, with the caller's name used for something else
     POSITIVE.replace("os.path.join(UPLOAD_DIR, name)", 'os.path.join(UPLOAD_DIR, "report.csv")'),
     # the path is injected configuration, not a request input
@@ -169,3 +171,159 @@ def test_the_product_own_code_reports_nothing():
         + len(re.findall(r"os\.path\.join", text))
     assert file_calls > 40, f"expected the product to work with files; found {file_calls}"
     assert scan_path_traversal(archive(sources)) == []
+
+
+def route(body: str, extra: str = "", parameters: str = "name: str") -> str:
+    return ("from fastapi import APIRouter\nfrom pathlib import Path, PurePath\n"
+            "from werkzeug.utils import secure_filename\nimport os\nimport shutil\n"
+            "router = APIRouter()\nBASE = '/srv/uploads'\n" + extra
+            + f"@router.get('/file')\ndef handle({parameters}):\n" + body)
+
+
+@pytest.mark.parametrize("body", [
+    "    (Path(BASE) / name).write_text('fixed content')\n",
+    "    (Path(BASE) / name).write_bytes(b'fixed content')\n",
+    "    return (Path(BASE) / name).open('r')\n",
+    "    return (Path(BASE) / name).read_text('utf-8')\n",
+    "    return open(file=os.path.join(BASE, name)).read()\n",
+    "    os.rename(os.path.join(BASE, name), '/srv/archive/file')\n",
+    "    os.rename(src='/srv/source', dst=os.path.join(BASE, name))\n",
+    "    shutil.copyfile('/srv/source', os.path.join(BASE, name))\n",
+    "    shutil.copyfile(src=os.path.join(BASE, name), dst='/srv/archive/file')\n",
+    "    Path('/srv/source').rename(target=Path(BASE) / name)\n",
+    "    return (Path(BASE) / name).with_suffix('.txt').read_text()\n",
+    "    return (Path(BASE) / name).with_name('fixed.txt').read_text()\n",
+    "    return (Path(BASE) / name).with_stem('fixed').read_text()\n",
+    "    return Path(BASE).joinpath('subdir', name).read_text()\n",
+    "    return Path(BASE, name).read_text()\n",
+    "    return (Path(BASE) / name).resolve(False).read_text()\n",
+    "    return open(os.path.join(BASE, name), encoding=os.path.basename('utf-8')).read()\n",
+    "    return open(os.path.join(BASE, secure_filename(name), name)).read()\n",
+    "    shutil.rmtree(os.path.join(BASE, os.path.basename(name)))\n",
+])
+def test_real_filesystem_signatures_and_transforms(body):
+    findings = scan_path_traversal(archive(route(body)))
+    assert len(findings) == 1
+    assert findings[0].line == len(route(body).splitlines())
+
+
+@pytest.mark.parametrize("body", [
+    "    (Path(BASE) / 'fixed.txt').write_text(name)\n",
+    "    (Path(BASE) / 'fixed.txt').write_bytes(name.encode())\n",
+    "    return str(Path(name))\n",
+    "    return PurePath(name)\n",
+    "    return (PurePath(BASE) / name).name\n",
+    "    return open(os.path.join(BASE, secure_filename(name))).read()\n",
+])
+def test_contents_and_pure_construction_are_not_filesystem_paths(body):
+    assert scan_path_traversal(archive(route(body))) == []
+
+
+@pytest.mark.parametrize("check", [
+    "    if not p.is_relative_to(BASE):\n        print('escape')\n",
+    "    if p.is_relative_to(BASE):\n        print('inside')\n",
+    "    if p.is_relative_to(BASE):\n        return 'inside'\n",
+    "    if os.path.commonprefix([str(p), BASE]) != BASE:\n        raise ValueError('escape')\n",
+    "    if validate_path(p):\n        print('validated')\n",
+])
+def test_only_an_enforcing_containment_branch_suppresses_the_later_sink(check):
+    body = "    p = (Path(BASE) / name).resolve()\n" + check + "    return p.read_text()\n"
+    assert len(scan_path_traversal(archive(route(body)))) == 1
+
+
+@pytest.mark.parametrize("check", [
+    "    if not p.is_relative_to(BASE):\n        raise ValueError('escape')\n",
+    "    if not p.is_relative_to(BASE):\n        return 'escape'\n",
+    "    p.relative_to(BASE)\n",
+])
+def test_known_normalized_path_with_enforced_containment(check):
+    body = "    p = Path(BASE) / name\n    p = p.resolve()\n" + check + "    return p.read_text()\n"
+    assert scan_path_traversal(archive(route(body))) == []
+
+
+@pytest.mark.parametrize("body", [
+    "    p = Path(BASE) / name\n    if not p.is_relative_to(BASE):\n        raise ValueError('escape')\n"
+    "    return p.read_text()\n",
+    "    p = (Path(BASE) / name).resolve()\n    if not p.is_relative_to(BASE):\n"
+    "        return p.read_text()\n    return 'inside'\n",
+    "    p = (Path(BASE) / name).resolve()\n    if not p.is_relative_to(BASE):\n"
+    "        raise ValueError('escape')\n    p = Path(BASE) / other\n    return p.read_text()\n",
+    "    p = (Path(BASE) / name).resolve()\n    if not p.is_relative_to(BASE):\n"
+    "        raise ValueError('escape')\n    return (Path('/other') / name).read_text()\n",
+    "    p = (Path(BASE) / name).resolve()\n    if not p.is_relative_to(other):\n"
+    "        raise ValueError('escape')\n    return p.read_text()\n",
+])
+def test_containment_preserves_path_identity_normalization_and_fixed_base(body):
+    assert len(scan_path_traversal(archive(route(body, parameters="name: str, other: str")))) == 1
+
+
+def test_positive_branch_can_read_inside_while_rejecting_outside():
+    body = ("    p = (Path(BASE) / name).resolve()\n    if p.is_relative_to(BASE):\n"
+            "        return p.read_text()\n    raise ValueError('escape')\n")
+    assert scan_path_traversal(archive(route(body))) == []
+
+
+@pytest.mark.parametrize("extra, body, parameters", [
+    ("def open(value):\n    return value\n", "    return open(name)\n", "name: str"),
+    ("", "    return open(name)\n", "name: str, open: str"),
+    ("from custom import Path\n", "    return Path(name).read_text()\n", "name: str"),
+    ("", "    return client.write_text(name)\n", "name: str, client: object"),
+])
+def test_unknown_or_shadowed_filesystem_targets_do_not_acquire_library_provenance(extra, body, parameters):
+    assert scan_path_traversal(archive(route(body, extra, parameters))) == []
+
+
+def test_sanitizer_alias_is_proven_and_cannot_sanitize_an_unrelated_raw_component():
+    source = route("    return open(os.path.join(BASE, clean(name), other)).read()\n",
+                   "from werkzeug.utils import secure_filename as clean\n", "name: str, other: str")
+    findings = scan_path_traversal(archive(source))
+    assert len(findings) == 1
+    assert "assembled from other," in findings[0].explanation
+
+
+def test_a_context_manager_that_swallows_the_rejection_does_not_establish_containment():
+    body = ("    p = (Path(BASE) / name).resolve()\n    with suppress(ValueError):\n"
+            "        p.relative_to(BASE)\n    return p.read_text()\n")
+    assert len(scan_path_traversal(archive(route(body, "from contextlib import suppress\n")))) == 1
+
+
+def test_import_rebinding_drops_path_receiver_provenance():
+    body = "    p = Path(name)\n    import custom as p\n    return p.read_text()\n"
+    assert scan_path_traversal(archive(route(body))) == []
+
+
+def test_future_local_assignment_does_not_misclassify_an_unbound_builtin_as_a_sink():
+    body = "    open(name)\n    open = custom\n"
+    assert scan_path_traversal(archive(route(body))) == []
+
+
+@pytest.mark.parametrize("operator", ["join", "division"])
+@pytest.mark.parametrize("initial", ["name", "'x'"])
+def test_path_expansion_is_bounded_before_allocation_in_the_real_static_pipeline(monkeypatch, operator, initial):
+    from app.scan import path_traversal as detector
+    from app.scan.outbound_url import _MAX_SLOTS, _MAX_TEMPLATE_BYTES
+
+    original = detector._path_skeleton
+    seen = []
+
+    def observe(expr, state):
+        result = original(expr, state)
+        if result is not None:
+            assert len(result[0]) <= _MAX_TEMPLATE_BYTES
+            assert len(result[1]) <= _MAX_SLOTS
+            seen.append((len(result[0]), len(result[1])))
+        return result
+
+    monkeypatch.setattr(detector, "_path_skeleton", observe)
+    # 15 doublings suffice to reproduce the old limit violation safely.
+    body = f"    v0 = {initial if operator == 'join' else f'Path({initial})'}\n"
+    for i in range(1, 16):
+        expression = f"os.path.join(v{i-1}, v{i-1})" if operator == "join" else f"v{i-1} / v{i-1}"
+        body += f"    v{i} = {expression}\n"
+    body += "    return open(v15).read()\n"
+    run_static_scan(archive(route(body)))
+    assert seen
+    if initial == "name":
+        assert max(slots for _, slots in seen) == _MAX_SLOTS
+    else:
+        assert max(size for size, _ in seen) > _MAX_TEMPLATE_BYTES // 4

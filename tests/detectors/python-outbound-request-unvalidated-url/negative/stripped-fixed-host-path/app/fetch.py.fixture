@@ -1,0 +1,9 @@
+from fastapi import FastAPI
+import httpx
+
+app = FastAPI()
+
+@app.get("/fetch")
+def fetch(item: str):
+    target = ("https://api.example.test/items/" + item).strip()
+    return httpx.get(target)

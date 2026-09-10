@@ -14,7 +14,6 @@ from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.outbound_url import scan_outbound_url
-from app.scan.path_traversal import scan_path_traversal
 from app.scan.rls import scan_rls
 from app.scan.recommendations import prepare_recommendation
 from app.scan.schema_drift import scan_schema_drift
@@ -23,6 +22,9 @@ from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.sql_injection_js import scan_sql_injection_js
+from app.scan.tls_verification import scan_tls_verification
+from app.scan.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.path_traversal import scan_path_traversal
 from app.scan.source_facts import collect_source_facts
 
 
@@ -95,6 +97,33 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         ))
 
     fileobj.seek(0)
+    for t in scan_tls_verification(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=t.rule_id, title=t.title, severity=t.severity,
+            confidence=t.confidence, category=t.category, file=t.file,
+            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for d in scan_unsafe_deserialization(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=d.rule_id, title=d.title, severity=d.severity,
+            confidence=d.confidence, category=d.category, file=d.file,
+            line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for t in scan_path_traversal(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=t.rule_id, title=t.title, severity=t.severity,
+            confidence=t.confidence, category=t.category, file=t.file,
+            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
     for c in run_checks(fileobj):
         findings.append(ScoredFinding(
             rule_id=c.rule_id, title=c.title, severity=c.severity,
@@ -132,15 +161,6 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=w.rule_id, title=w.title, severity=w.severity,
             confidence=w.confidence, category=w.category, file=w.file,
             line=w.line, explanation=w.explanation, fix_hint=w.fix_hint,
-        ))
-
-    fileobj.seek(0)
-    for t in scan_path_traversal(fileobj):
-        findings.append(ScoredFinding(
-            rule_id=t.rule_id, title=t.title, severity=t.severity,
-            confidence=t.confidence, category=t.category, file=t.file,
-            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
-            claim_evidence=static_claim_evidence(),
         ))
 
     # The first static producer for Frontend. Wired on a number measured in
@@ -211,19 +231,38 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # repository. A scanner that found nothing and one that gave up must
         # not look identical (#392). Consuming this in the pipeline/report is
         # the follow-up; here it is preserved so it can be.
-        "checks_run": ["secrets", "rls", "schema_drift", "project_files",
-                       "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
-                       "auth_write_consistency",
-                       "http_success", "sql_injection", "sql_injection_js", "outbound_url",
-                       "path_traversal"],
+        "checks_run": [
+            'secrets',
+            'rls',
+            'schema_drift',
+            'project_files',
+            'ci_deploy_source',
+            'service_role',
+            'error_boundary',
+            'auth_read_consistency',
+            'auth_write_consistency',
+            'http_success',
+            'sql_injection',
+            'sql_injection_js',
+            'outbound_url',
+            'tls_verification',
+            'unsafe_deserialization',
+            'path_traversal',
+        ],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
-                     "path_traversal": "Local FastAPI route handlers in parseable Python files up to "
-                     "400 KB; a path is traced inside the handler that builds it, and a containment "
-                     "check counts only when it runs BEFORE the sink in the same function. A path "
-                     "built in a helper, a check in another module, a mount, a caller that only sends "
-                     "safe names, and TS/JS file handling are NOT covered",
+                     "tls_verification": "At most 400 non-test/vendor Python and JS/TS files, each up to "
+                     "400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Local imports and "
+                     "client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, "
+                     "Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and "
+                     "process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 "
+                     "are read; hostname and certificate-chain checks have distinct explanations. "
+                     "Comments, strings, types, malformed/oversized files, unknown wrappers, cross-file "
+                     "and dynamic configuration, shell/CI YAML and runtime connections are unresolved. "
+                     "A clean result does not establish that every connection is verified",
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
+                     "object lookups compared with protected reads on the same router and repository binding, "
+                     "including recognized identity dependencies and imported aliases; "
                      "test/vendor files excluded; middleware and runtime access not resolved",
                      "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in "
                      "parseable Python files up to 2 MB, compared with sibling routes on the same router; "
@@ -233,9 +272,26 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                      "outbound_url": "Known HTTP clients in locally declared FastAPI routes; "
                      "at most 400 eligible Python files up to 400 KB each, excluding test/vendor files; "
                      "20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, "
-                     "32 findings total. Supported request fields, URL expressions and preceding local "
+                     "32 findings total. Supported Request fields, locally declared Pydantic string fields, "
+                     "known-string strip(), URL expressions and preceding local "
                      "checks are traced within one handler; complex control flow, unknown calls/helpers, "
                      "validation correctness, DNS, redirects, network policy and TS/JS are not resolved",
+                     "unsafe_deserialization": "At most 400 non-test/vendor Python files up to "
+                     "400 KB, 20,000 AST nodes and depth 100; import-resolved loads with lexical "
+                     "shadowing and stable outer bindings. Unsafe YAML classes must have confirmed "
+                     "library provenance; Base/Safe/Full loaders are silent. Marshal and missing "
+                     "YAML Loader produce separate, conditional risk descriptions. Input trust "
+                     "and dependency versions are not verified. Assignment aliases, conditional "
+                     "imports, mutated modules, custom YAML loaders, stored Unpickler instances, "
+                     "cross-file resolution, bare torch.load and TS/JS are not covered; at most "
+                     "32 findings are reported",
+                     "path_traversal": "Local FastAPI route handlers in parseable Python files up to "
+                     "400 KB; imported file operations and proven pathlib receivers are traced "
+                     "locally with bounded expansion. Path construction alone is not a sink. "
+                     "Containment recognizes imported secure_filename results and a resolved Path "
+                     "checked against a fixed absolute base on the branch reaching the operation. "
+                     "Unknown helpers, general control-flow joins, other validation patterns, "
+                     "runtime symlinks and TS/JS file handling are NOT covered",
                      "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
                      "runtime fetch bindings and HTTP failures are not verified. "
                      "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},

@@ -1,0 +1,10 @@
+{
+  "description": "Both alias shapes a reader would not think twice about: pandas imported as pd, and a member imported straight into the namespace. The import map exists because the smoke test found pd.read_pickle slipping past a rule keyed on the real module name.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 2
+    }
+  ],
+  "forbid": []
+}

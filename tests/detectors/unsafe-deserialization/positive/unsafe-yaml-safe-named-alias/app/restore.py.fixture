@@ -1,0 +1,5 @@
+import yaml
+from yaml import UnsafeLoader as SafeLoader
+
+def restore(data):
+    return yaml.load(data, Loader=SafeLoader)

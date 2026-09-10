@@ -1,0 +1,7 @@
+{
+  "description": "SafeLoader remains a value loader when imported under another name.",
+  "expect": [],
+  "forbid": [
+    "unsafe-deserialization"
+  ]
+}

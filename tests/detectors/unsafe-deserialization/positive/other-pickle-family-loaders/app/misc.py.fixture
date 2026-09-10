@@ -1,0 +1,7 @@
+import dill
+import jsonpickle
+import marshal
+
+
+def restore(a, b, c):
+    return dill.loads(a), marshal.loads(b), jsonpickle.decode(c)

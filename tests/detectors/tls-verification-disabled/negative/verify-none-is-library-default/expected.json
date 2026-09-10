@@ -1,0 +1,7 @@
+{
+  "description": "verify=None is not a disabled check: for requests and httpx it means use the default, which is verification ON. Reporting it would be an accusation with a fix that changes nothing. The mutation makes it False, which must fire.",
+  "expect": [],
+  "forbid": [
+    "tls-verification-disabled"
+  ]
+}

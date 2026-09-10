@@ -1,0 +1,10 @@
+{
+  "description": "Implicit YAML Loader behavior depends on the dependency version. Older versions allowed unsafe loaders; modern PyYAML raises TypeError. The finding is conditional and does not assert execution.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

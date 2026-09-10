@@ -1,0 +1,7 @@
+{
+  "description": "Whitespace removal from a known string does not make the fixed authority caller controlled. Moving the caller value into the authority must emit a finding.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

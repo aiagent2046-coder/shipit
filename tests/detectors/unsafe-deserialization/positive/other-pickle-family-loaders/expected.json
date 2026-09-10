@@ -1,0 +1,10 @@
+{
+  "description": "Dill and jsonpickle can reconstruct arbitrary objects. Marshal is a separate warning about untrusted binary values; loading a code object does not execute it.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 3
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Turning verification off process-wide, for every TLS connection the process makes, including ones written later by someone who never sees this line.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,7 @@
+{
+  "description": "An imported module alias shadowed by a handler argument has unknown provenance.",
+  "expect": [],
+  "forbid": [
+    "unsafe-deserialization"
+  ]
+}

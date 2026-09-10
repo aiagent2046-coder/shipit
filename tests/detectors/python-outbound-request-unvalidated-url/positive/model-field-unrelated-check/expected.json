@@ -1,0 +1,10 @@
+{
+  "description": "An exact allowlist checks one body field while the request uses another.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

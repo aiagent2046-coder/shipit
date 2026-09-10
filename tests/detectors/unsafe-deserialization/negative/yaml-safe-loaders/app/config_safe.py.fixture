@@ -1,0 +1,8 @@
+import yaml
+
+
+def load_config(text):
+    first = yaml.safe_load(text)
+    second = yaml.load(text, Loader=yaml.SafeLoader)
+    third = yaml.load(text, yaml.FullLoader)
+    return first, second, third

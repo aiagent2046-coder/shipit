@@ -1,0 +1,5 @@
+import ssl
+import urllib.request
+
+OPENER = urllib.request.build_opener(
+    urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))

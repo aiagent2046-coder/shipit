@@ -62,6 +62,8 @@ WIRED_SCANNERS = (
     "scan_service_role",
     "scan_sql_injection",
     "scan_sql_injection_js",
+    "scan_tls_verification",
+    "scan_unsafe_deserialization",
 )
 
 # Every rule id a static finding can reach the reader under. Taken from the
@@ -98,6 +100,8 @@ EMITTED_RULE_IDS = (
     "supabase-anon-key",
     "supabase-demo-key",
     "telegram-bot-token",
+    "tls-verification-disabled",
+    "unsafe-deserialization",
 )
 
 # The damping vocabulary. A context decides which section of the report a
@@ -109,7 +113,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-10-12"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-10-15"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

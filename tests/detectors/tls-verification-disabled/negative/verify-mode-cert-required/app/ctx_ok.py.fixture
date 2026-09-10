@@ -1,0 +1,7 @@
+import ssl
+
+
+def secure_context():
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+    context.verify_mode = ssl.CERT_REQUIRED
+    return context

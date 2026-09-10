@@ -1,0 +1,6 @@
+import ast
+import json
+
+
+def parse(text):
+    return json.loads(text), ast.literal_eval(text)
