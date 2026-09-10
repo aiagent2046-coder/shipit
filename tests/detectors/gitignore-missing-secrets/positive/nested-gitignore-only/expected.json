@@ -1,0 +1,10 @@
+{
+  "description": "A monorepo whose only .gitignore lives in apps/web/. It covers that package and nothing else, so the repository root is unprotected -- but the rule read any path ending in /.gitignore, a test written for the folder GitHub wraps archives in, and called the whole repository covered.",
+  "expect": [
+    {
+      "rule_id": "gitignore-missing-secrets",
+      "severity": "high"
+    }
+  ],
+  "forbid": []
+}

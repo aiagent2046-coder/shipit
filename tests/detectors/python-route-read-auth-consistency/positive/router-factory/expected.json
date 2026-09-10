@@ -1,0 +1,11 @@
+{
+  "description": "The same disagreeing pair, declared inside a router factory instead of at module level. Reading only the module body missed this, and a factory is ordinary FastAPI structure -- the routes are identical to the module-level fixture beside it.",
+  "expect": [
+    {
+      "rule_id": "python-route-read-auth-consistency",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}

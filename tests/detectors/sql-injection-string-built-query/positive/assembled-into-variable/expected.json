@@ -1,0 +1,11 @@
+{
+  "description": "The same defect with the assembly moved one line up, into a local variable -- which is how the code usually reads. Looking only at the call argument missed this, and the model reached for exactly this shape in most of its rewrites.",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "severity": "high",
+      "file_endswith": "queries.py"
+    }
+  ],
+  "forbid": []
+}

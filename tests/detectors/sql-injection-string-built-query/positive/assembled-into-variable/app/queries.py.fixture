@@ -1,0 +1,18 @@
+import psycopg
+
+
+def find_user(conn, user_id):
+    """The query is assembled one line before it is executed."""
+    with conn.cursor() as cur:
+        query = "SELECT id, email FROM users WHERE id = " + user_id
+        cur.execute(query)
+        return cur.fetchone()
+
+
+def search(conn, term):
+    with conn.cursor() as cur:
+        sql = "SELECT id FROM users WHERE name LIKE '%"
+        sql += term
+        sql += "%'"
+        cur.execute(sql)
+        return cur.fetchall()

@@ -1,0 +1,10 @@
+{
+  "description": "No Dockerfile, but docker-compose.yml and Terraform are right there. The finding is an inventory, and the list it drew on was vercel/netlify/fly/Procfile/*.service only -- so a project deployed by compose or Terraform was told no deployment configuration was found, and concluded the scanner had not looked.",
+  "expect": [
+    {
+      "rule_id": "no-dockerfile",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

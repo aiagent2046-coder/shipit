@@ -225,6 +225,28 @@ def test_custom_hidden_dynamic_or_negative_label_is_not_a_supported_success(jsx)
     assert not findings("await fetch('/save'); setSaved(true);", jsx=jsx)
 
 
+@pytest.mark.parametrize("label", [
+    "Waiting for success", "Almost done", "Will be saved", "Awaiting success",
+    "Nearly complete", "Changes might be saved", "Expected success", "If saved",
+    "Ready to be saved", "Please mark done", "Saved?", "Будет сохранено",
+    "Почти готово", "Данные будут сохранены", "Если сохранено", "Не сохранено",
+])
+def test_pending_conditional_or_requested_outcome_does_not_assert_http_success(label):
+    jsx = "<div>{saved && <p>" + label + "</p>}</div>"
+    assert not findings("await fetch('/save'); setSaved(true);", jsx=jsx)
+
+
+@pytest.mark.parametrize("label", [
+    "Profile saved", "Your profile was saved", "Changes saved successfully", "Done",
+    "Changes to profile saved", "Changes to settings saved", "Expected values saved",
+    "Профиль сохранён", "Данные обновлены", "Сообщение отправлено", "Готово",
+])
+def test_completed_outcome_still_requires_http_success_check(label):
+    jsx = "<div>{saved && <p>" + label + "</p>}</div>"
+    assert len(findings("await fetch('/save'); setSaved(true);", jsx=jsx)) == 1
+    assert not findings("const r = await fetch('/save'); if (!r.ok) return; setSaved(true);", jsx=jsx)
+
+
 @pytest.mark.parametrize("body", [
     "await fetch('/save'); setSaved(true); setSaved(false);",
     "await fetch('/save');setSaved(true);setSaved(false);",

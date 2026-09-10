@@ -1,0 +1,7 @@
+{
+  "description": "An `=` inside WHERE is a comparison, not a stored secret. Dropping the type requirement to reach UPDATE SET makes these look identical to an assignment, and reporting them would call an ordinary login query a leak.",
+  "expect": [],
+  "forbid": [
+    "sql-secret-assignment"
+  ]
+}

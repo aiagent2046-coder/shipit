@@ -1,0 +1,10 @@
+import { useState } from 'react';
+
+export default function ProfileForm() {
+  const [updated, setUpdated] = useState(false);
+  const save = async () => {
+    await fetch('/api/profile', { method: 'PUT' });
+    setUpdated(true);
+  };
+  return <><button onClick={save}>Save</button>{updated && <p>Профиль обновлён</p>}</>;
+}

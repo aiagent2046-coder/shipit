@@ -131,7 +131,44 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-09-11: require external-operation idempotency and retry-budget prerequisites in advice.
 # 2026-09-09-13: bind fact limits, local Intl handlers and parsed-string guards to individual claims.
 # 2026-09-09-14: bind retry and duplicate-call premises, preserving conditional concurrency context.
-AUDIT_ENGINE_VERSION = "2026-09-09-17"
+AUDIT_ENGINE_VERSION = "2026-09-09-32"
+
+# 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
+#               negation excluded -- react_async_context is part of the prompt
+#               surface, so what the model is shown changed with it.
+# 2026-09-09-19: sql-injection-string-built-query, a new static scanner.
+# 2026-09-09-20: auth_read reads nested scopes, so routes declared in a router
+#               factory are analysed instead of skipped.
+# 2026-09-09-21: Russian success copy recognised in all its inflections, not
+#               only the neuter -- react_async_context is in the prompt surface.
+
+# 2026-09-09-22: generic-assignment reads a credential word as a component of an
+#               identifier (db_password, adminToken), plus encryption_key.
+
+# 2026-09-09-23: sql-injection-string-built-query now reads TypeScript and
+#               JavaScript, which is what most audited repositories are written in.
+
+# 2026-09-09-24: gitignore-missing-secrets reads the root .gitignore only, so a
+#               nested one no longer reads as covering the whole repository.
+# 2026-09-09-25: ci-deploys-a-different-repository ignores URLs that name no
+#               deploy target; no-dockerfile's inventory covers compose,
+#               Kubernetes, Terraform, Render, Railway and Dockerfile variants.
+
+# 2026-09-09-26: sql-secret-assignment reads UPDATE/ALTER/DEFAULT assignments,
+#               not only typed declarations; generic-assignment tolerates a
+#               trailing separator before the value.
+# 2026-09-09-27: sql-injection trusts a loop variable bound to a literal list,
+#               which was reporting fixed table-name loops on real code.
+# 2026-09-09-28: the same trust for a literal dict and its .items()/.keys().
+# 2026-09-09-29: generic-assignment reads a credential word that STARTS the
+#               name (tokenForAdmin, secretOne), not only one that ends it.
+# 2026-09-09-30: generic-assignment reads a QUOTED object key
+#               ({"db_password": "..."}); pwd dropped from the vocabulary.
+# 2026-09-09-31: sql-secret-assignment reads DEFAULT(...) with parentheses, the
+#               form ALTER TABLE actually wears.
+# 2026-09-09-32: preserve credential values through Fix Pack planning; distinguish
+#               SQL expressions from comparisons and non-SQL calls; scope SQL
+#               assignments, deploy commands and completed-success labels.
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo

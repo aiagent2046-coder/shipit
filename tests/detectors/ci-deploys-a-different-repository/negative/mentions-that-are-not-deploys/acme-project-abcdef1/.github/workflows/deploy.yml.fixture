@@ -1,0 +1,16 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # adapted from https://github.com/actions/starter-workflows
+      - uses: actions/checkout@v4
+      - run: pip install git+https://github.com/psf/black.git
+      - run: npm i -g github:tj/n
+      - name: Deploy via SSH
+        run: |
+          git clone https://github.com/acme/project.git $APP_DIR
+          cd $APP_DIR && git fetch origin main && git reset --hard origin/main

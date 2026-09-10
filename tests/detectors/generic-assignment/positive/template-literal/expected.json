@@ -1,0 +1,11 @@
+{
+  "description": "A backtick is a quote: the same credential in a template literal is the same credential. This shipped unreported while the single-quoted line beside it was caught.",
+  "expect": [
+    {
+      "rule_id": "generic-assignment",
+      "severity": "high",
+      "file_endswith": "config.ts"
+    }
+  ],
+  "forbid": []
+}

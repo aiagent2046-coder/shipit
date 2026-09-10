@@ -1,0 +1,7 @@
+{
+  "description": "Two routers built in two different factories. The rule's claim is that sibling routes on THE SAME router disagree, so these must not be paired -- flattening scopes to reach factories would report a disagreement between objects that never meet.",
+  "expect": [],
+  "forbid": [
+    "python-route-read-auth-consistency"
+  ]
+}

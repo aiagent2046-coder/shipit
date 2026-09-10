@@ -1,0 +1,7 @@
+# A Python string whose apostrophe is unrelated to the double quote inside it:
+# the "quotes" do not form a pair around api-key, so this is not an object key.
+ENV = 'api-key": "ANTHROPIC_API_KEY"'
+
+# An environment variable name, not a secret. pwd was dropped from the
+# vocabulary because of this shape; passwd remains.
+pwd_env = {"PWD": "/Users/maciej"}

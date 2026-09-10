@@ -138,6 +138,10 @@ _PEM_BLOCK_RE = re.compile(
 # Inner quoted literal of an assignment-style match (generic/sql rules
 # match the whole `name = "value"` span; we only want the value).
 _QUOTED_LITERAL_RE = re.compile(r"['\"`]([^'\"`\s]+)['\"`]")
+_ASSIGNMENT_RULES = {
+    rule.id: rule for rule in RULES
+    if rule.id in {"generic-assignment", "sql-secret-assignment"}
+}
 
 
 @dataclass
@@ -301,6 +305,9 @@ def _sensitive_literals(rule_id: str, raw_match: str) -> list[str]:
     """
     if rule_id == "private-key-block":
         return []  # handled specially against the full file text
+    if rule_id in _ASSIGNMENT_RULES:
+        match = _ASSIGNMENT_RULES[rule_id].pattern.fullmatch(raw_match)
+        return [match.group("value")] if match else [raw_match]
     m = _QUOTED_LITERAL_RE.search(raw_match)
     if m:
         return [m.group(1)]
@@ -320,6 +327,16 @@ def _apply_secret_fix(text: str, rule_id: str, raw_match: str,
         return new_text, blocks
 
     sensitive = _sensitive_literals(rule_id, raw_match)
+    if rule_id in _ASSIGNMENT_RULES:
+        match = _ASSIGNMENT_RULES[rule_id].pattern.fullmatch(raw_match)
+        if match is None:
+            return text, sensitive  # the unchanged span fails the scrub gate
+        # The scanner identifies the VALUE, even when the key is quoted too.
+        # Replace only its surrounding literal within the matched assignment;
+        # a global replacement could also rewrite an unrelated dictionary key.
+        start, end = match.span("value")
+        replacement = raw_match[:start - 1] + env_ref + raw_match[end + 1:]
+        return text.replace(raw_match, replacement), sensitive
     new_text = text
     for secret in sensitive:
         replaced = False
@@ -337,6 +354,68 @@ def _verify_scrubbed(text: str, sensitive: list[str]) -> bool:
     """No secret we were meant to remove may survive into the emitted file
     — this is the last line of defence behind the never-leak rule."""
     return all(secret not in text for secret in sensitive)
+
+
+def _ensure_python_os_import(text: str) -> str | None:
+    """Supply the generated os.environ reference, or decline ambiguous names."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "os" and not isinstance(node.ctx, ast.Load):
+            return None
+        if isinstance(node, ast.arg) and node.arg == "os":
+            return None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "os":
+            return None
+        if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name == "os":
+            return None
+        if isinstance(node, ast.MatchMapping) and node.rest == "os":
+            return None
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and "os" in node.names:
+            return None
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".", 1)[0]
+                if alias.name == "*":
+                    return None
+                if bound != "os":
+                    continue
+                if isinstance(node, ast.Import) and alias.name == "os" and node in tree.body:
+                    imports.append(node.lineno)
+                else:
+                    return None
+    first_use = min((node.lineno for node in ast.walk(tree)
+                     if isinstance(node, ast.Name) and node.id == "os"), default=0)
+    if imports and min(imports) < first_use:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    insertion = 0
+    while insertion < len(lines) and (
+        not lines[insertion].strip() or lines[insertion].lstrip().startswith("#")
+    ):
+        insertion += 1
+    body = tree.body
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)):
+        insertion = body[0].end_lineno
+        body = body[1:]
+    for node in body:
+        if not isinstance(node, ast.ImportFrom) or node.module != "__future__":
+            break
+        insertion = node.end_lineno
+    if first_use and insertion >= first_use:
+        # A docstring/future import and the changed assignment can share a
+        # semicolon-delimited line. Inserting after that line would be too late.
+        return None
+    newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+    prefix = "".join(lines[:insertion])
+    if prefix and not prefix.endswith(("\n", "\r")):
+        prefix += newline
+    return prefix + "import os" + newline + "".join(lines[insertion:])
 
 
 def _brackets_balanced(text: str) -> bool:
@@ -781,6 +860,24 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                     f, "file not readable on re-fetch", file=repo_rel))
             continue
 
+        # Quoted keys can occur in JSON, YAML, TOML and other data formats.
+        # JSON has the syntax gate below; other formats have no verified way
+        # to evaluate an environment expression, so do not emit a pretend fix.
+        if not repo_rel.lower().endswith((".py", ".json", ".jsonc") + _JS_SUFFIXES):
+            quoted_key = any(
+                f["rule_id"] == "generic-assignment"
+                and (match := _ASSIGNMENT_RULES["generic-assignment"].pattern.fullmatch(raw))
+                and match.group("k") is not None
+                for f, _, raw in items
+            )
+            if quoted_key:
+                for f, _, _ in items:
+                    plan.skipped.append(_skipped(
+                        f, "quoted credential key in an unsupported format; "
+                        "environment substitution requires a manual change",
+                        file=repo_rel))
+                continue
+
         new_text = text
         all_sensitive: list[str] = []
         applied: list[tuple[dict, str]] = []
@@ -801,6 +898,16 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                     f, "could not safely remove the value; file left unchanged",
                     file=repo_rel))
             continue
+
+        if repo_rel.lower().endswith(".py"):
+            imported = _ensure_python_os_import(new_text)
+            if imported is None:
+                for f, _ in applied:
+                    plan.skipped.append(_skipped(
+                        f, "invalid syntax or ambiguous Python os binding; "
+                        "file excluded from Fix Pack", file=repo_rel))
+                continue
+            new_text = imported
 
         # Root-cause safety net: never ship a file our edit made
         # unparseable. A value-span replacement can corrupt the surrounding

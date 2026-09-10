@@ -1,0 +1,3 @@
+const API_KEY_COOKIE = "drydock_api_key_v2"
+const TOKEN_HEADER = "x-next-preview-token"
+const password_hash = "abcdefghijklmnop"

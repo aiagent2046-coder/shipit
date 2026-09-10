@@ -100,8 +100,22 @@ def test_the_explanations_reach_the_scan_output() -> None:
     """
     result = run_static_scan(make_zip(BARE_REPO))
 
-    assert len(result["findings"]) == len(ALL_RULES)
+    # A superset of ALL_RULES, not an equality. The fixture's .env carries
+    # DB_PASSWORD=*** so that env-file-committed has something to find, and
+    # generic-assignment now reads the credential word as a COMPONENT of a
+    # name -- so it reports that line too, correctly. Pinning a count here
+    # pinned the old blind spot.
+    reported = {f["rule_id"] for f in result["findings"]}
+    assert reported >= ALL_RULES
+
+    # Only the run_checks findings are asserted on. The secret rules carry no
+    # explanation out of static.py at all -- they get theirs later, from
+    # app/report/plain_language.py -- so requiring one here would be asserting
+    # a different module's contract and would fail for a rule that is behaving
+    # exactly as designed.
     for finding in result["findings"]:
+        if finding["rule_id"] not in ALL_RULES:
+            continue
         assert finding["explanation"].strip(), (
             f"{finding['rule_id']} lost its explanation between "
             "run_checks and run_static_scan"

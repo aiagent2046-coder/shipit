@@ -1,0 +1,7 @@
+{
+  "description": "GitHub wraps a downloaded archive in one folder, so the repository root arrives as myproject-main/.gitignore. That IS the root file and covers .env. Tightening the match to the real root must not turn every wrapped export into a false report -- which is the failure mode of fixing this carelessly.",
+  "expect": [],
+  "forbid": [
+    "gitignore-missing-secrets"
+  ]
+}

@@ -1,0 +1,4 @@
+const key = "modifierAltGraph"
+const value = "abcdefghijklmnop"
+const name = "qrstuvwxyz012345"
+const url = "https://example.com/x"

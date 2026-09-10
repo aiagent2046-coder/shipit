@@ -1,0 +1,10 @@
+import { useState } from 'react';
+
+export default function ProfileForm() {
+  const [failed, setFailed] = useState(false);
+  const persist = async () => {
+    const res = await fetch('/api/profile', { method: 'POST' });
+    setFailed(!res.ok);
+  };
+  return <><button onClick={persist}>Save</button>{failed && <p>Не сохранено</p>}</>;
+}

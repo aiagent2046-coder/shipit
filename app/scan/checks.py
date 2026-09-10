@@ -83,6 +83,32 @@ _DEPENDENCY_DIRS = ("venv/", ".venv/", "node_modules/", "vendor/",
 # describes. Below this it is not worth a finding of its own.
 _DEPENDENCY_DIR_MIN_FILES = 20
 
+# What no-dockerfile lists as deployment configuration it DID find. The rule is
+# an inventory, not a demand for containers -- severity low, and the whole point
+# of the list is that the reader sees their own setup named back to them.
+#
+# It began as vercel/netlify/fly/Procfile/*.service, which meant a project
+# deployed by docker-compose, Kubernetes, Terraform or Render was told "no
+# deployment configuration found" while its config sat in the archive. Naming
+# nothing is worse here than naming something imprecisely: the reader concludes
+# the scanner did not look.
+_DEPLOY_CONFIG_NAMES = frozenset({
+    # Ordering note: tests/test_plain_language.py collects rule ids from this
+    # file by regex, and `"name", "` reads as a declaration to it. Keep
+    # hyphenated entries away from that shape -- `captain-definition` was in
+    # this set and surfaced as a rule id with no plain-language entry.
+    "vercel.json", "netlify.toml", "fly.toml", "Procfile",
+    "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml",
+    "Containerfile", "render.yaml", "render.yml", "railway.json", "railway.toml",
+    "app.yaml", "app.json", "serverless.yml", "serverless.yaml",
+    "Chart.yaml", "skaffold.yaml", "dokku-scale",
+})
+
+# Suffixes rather than exact names: a systemd unit, a Terraform file, or a
+# Dockerfile variant (Dockerfile.prod, Dockerfile.dev) each vary in the part
+# before the marker.
+_DEPLOY_CONFIG_SUFFIXES = (".service", ".tf", ".tfvars")
+
 
 def _committed_dependency_dirs(files: list[str]) -> list[tuple[str, int]]:
     """(directory, tracked file count) for each dependency tree in the repo.
@@ -252,13 +278,24 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     with zipfile.ZipFile(fileobj) as zf:
         raw_names = zf.namelist()
         names = _strip_root(raw_names)
-        # Read the root .gitignore's bytes while the zip is open. After
-        # root-stripping it is exactly ".gitignore"; the original entry is
-        # either top-level or prefixed by the single wrapping folder.
+        # Read the ROOT .gitignore's bytes while the zip is open.
+        #
+        # `endswith("/.gitignore")` was the test here, written for the folder
+        # GitHub wraps an archive in (repo-main/.gitignore). It also matched
+        # apps/web/.gitignore, and a nested one only covers its own directory:
+        # a monorepo ignoring .env inside one package was read as protecting
+        # the whole repository, and the rule stayed silent about the root.
+        #
+        # _strip_root removes the wrapping folder, so the root file is the one
+        # whose stripped name is exactly ".gitignore". It also DROPS the entry
+        # equal to the root itself, so the two lists are not the same length --
+        # zip(strict=True) over them raises. Recomputing the prefix here is the
+        # honest way to pair them.
         gitignore_body = ""
+        root_prefix = archive_root(raw_names) or ""
         gitignore_raw = next(
-            (n for n in raw_names
-             if n == ".gitignore" or n.endswith("/.gitignore")),
+            (raw for raw in raw_names
+             if raw.startswith(root_prefix) and raw[len(root_prefix):] == ".gitignore"),
             None,
         )
         if gitignore_raw is not None:
@@ -410,8 +447,12 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
         ))
 
     if not any(n.rsplit("/", 1)[-1] == "Dockerfile" for n in files):
-        alternatives = sorted(n for n in files if n.endswith(".service")
-                              or n.rsplit("/", 1)[-1] in {"vercel.json", "netlify.toml", "fly.toml", "Procfile"})
+        alternatives = sorted(n for n in files
+                              if n.endswith(_DEPLOY_CONFIG_SUFFIXES)
+                              or n.rsplit("/", 1)[-1] in _DEPLOY_CONFIG_NAMES
+                              # Dockerfile.prod / Dockerfile.dev: containers
+                              # exist, just not under the exact name above.
+                              or n.rsplit("/", 1)[-1].startswith("Dockerfile."))
         findings.append(CheckFinding(
             "no-dockerfile", "No Dockerfile found in the archive",
             severity="low", confidence=0.9, category="Deploy",
