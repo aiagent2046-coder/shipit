@@ -133,7 +133,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-09-14: bind retry and duplicate-call premises, preserving conditional concurrency context.
 # 2026-09-10-1: distinguish source interpolation from literal credentials and
 # refuse secret Fix Packs for formats without a verified environment rewrite.
-AUDIT_ENGINE_VERSION = "2026-09-10-1"
+# 2026-09-10-4: distinguish explicitly labelled local harness fixtures from
+# production credentials and allocate independent environment keys per secret.
+AUDIT_ENGINE_VERSION = "2026-09-10-4"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt
