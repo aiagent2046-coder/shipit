@@ -1,0 +1,17 @@
+Where sarif-schema-2.1.0.json came from, and why it is checked in.
+
+URL:      https://json.schemastore.org/sarif-2.1.0.json
+Fetched:  2026-09-10
+SHA-256:  7c9688f0a1c4a4e1649ecc78521087e664729c1dff56ee8212ff195c7b16132a
+Title:    Static Analysis Results Format (SARIF) Version 2.1.0 JSON Schema
+
+The file is the OASIS SARIF 2.1.0 schema, unmodified. Do not edit it: every
+consumer of a SARIF document -- GitHub's code scanning, VS Code, CI plugins --
+validates against this schema, so a local edit would make our output "valid"
+against something nobody else implements.
+
+It is checked in rather than fetched because tests must not depend on the
+network, and because a schema that changes under the suite would turn a
+regression into a remote event. The OASIS repository path that hosts it
+(https://github.com/oasis-tcs/sarif-spec) returned 404 at the time of fetch;
+schemastore mirrors the same document and is what the URL above records.
