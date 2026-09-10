@@ -50,11 +50,10 @@ from typing import Any
 from app.scan.pipeline import BASIS_STATIC_ONLY
 from app.scan.scoring import CATEGORIES
 
-import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from app.accounts import api_key_prefix, generate_api_key, hash_api_key
+from app.accounts import TIER_PRO, api_key_prefix, generate_api_key, hash_api_key
 # app.monitor is pure (re + typing) and imports nothing from here, so this
 # does not close a cycle. The interval lives there because it is a monitoring
 # policy decision, not a database one -- this module only enforces it.
@@ -72,6 +71,14 @@ class DatabaseNotConfigured(Exception):
     """DATABASE_URL isn't set. Distinct from a real connection failure
     (bad host, bad password, etc.), which should propagate as a loud
     error, not get treated as "not configured"."""
+
+
+class ProGrantConflict(RuntimeError):
+    """A Pro settlement was refused after its transaction started writing.
+
+    Propagating this exception rolls back the account as well as the payment;
+    callers must never turn it into a successfully provisioned entitlement.
+    """
 
 
 def database_url_from_env() -> str | None:
@@ -173,7 +180,7 @@ async def _advisory_processor_lock(key: int):
 _GRANT_LOCK_NAMESPACE = 0x47524E54
 
 # How long to wait for another confirmation of the same charge before giving up
-# on the lock. The section it guards is three short queries, so anything near
+# on the lock. The section it guards is a few short queries, so anything near
 # this means something is wrong; five seconds is long enough that ordinary
 # contention never reaches it.
 GRANT_LOCK_TIMEOUT_MS = 5000
@@ -188,61 +195,6 @@ def _grant_lock_key(provider: str, external_ref: str) -> int:
     """
     digest = hashlib.sha256(f"{provider}:{external_ref}".encode()).digest()
     return int.from_bytes(digest[:4], "big", signed=True)
-
-
-@asynccontextmanager
-async def grant_lock(provider: str, external_ref: str):
-    """Serialize the grant of ONE charge across concurrent handlers.
-
-    grant_pro_tier reads the payment, sees no account, mints one, then links
-    it. Two handlers running that concurrently -- an operator double-tapping
-    Confirm, a retried Telegram webhook, a transfer seen by two polls -- both
-    passed the read and both minted an account, and the second link overwrote
-    the first's account_id. Two Pro accounts, one orphaned, and its key
-    already in a payer's hands.
-
-    Blocking, not try-and-skip like _advisory_processor_lock: skipping a
-    processor run is harmless because a timer will fire again, while skipping a
-    grant would drop a paid-for entitlement on the floor. The loser waits,
-    then re-reads and takes the idempotent path.
-
-    Two ways this yields WITHOUT a lock, both deliberate:
-      * DATABASE_URL isn't configured -- nothing to serialize, same contract as
-        the repositories and what keeps fake-backed tests working;
-      * the wait timed out -- proceeding unserialized is still money-safe,
-        because mark_completed refuses to overwrite an account_id that is
-        already set. Better a logged anomaly and a redundant account row than a
-        confirmed payment that grants nothing.
-    """
-    try:
-        pool = await get_pool()
-    except DatabaseNotConfigured:
-        yield
-        return
-
-    key2 = _grant_lock_key(provider, external_ref)
-    async with pool.connection() as conn:
-        await conn.execute(f"set lock_timeout = {GRANT_LOCK_TIMEOUT_MS}")
-        try:
-            await conn.execute(
-                "select pg_advisory_lock(%s, %s)",
-                (_GRANT_LOCK_NAMESPACE, key2),
-            )
-        except psycopg.errors.LockNotAvailable:
-            logger.warning(
-                "grant lock for %s/%s not acquired within %sms; proceeding "
-                "unserialized (mark_completed still refuses to overwrite)",
-                provider, external_ref, GRANT_LOCK_TIMEOUT_MS,
-            )
-            yield
-            return
-        try:
-            yield
-        finally:
-            await conn.execute(
-                "select pg_advisory_unlock(%s, %s)",
-                (_GRANT_LOCK_NAMESPACE, key2),
-            )
 
 
 _confirmation_slots: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
@@ -1841,11 +1793,164 @@ class ServiceFlagsRepository:
 
 
 class PaymentRepository:
-    """Generic purchase records for the paywall foundation. Schema only in
-    Stage 1 -- no payment provider writes here yet; this exists so Stage
-    2's providers have a place to record attempts/completions. Minimal
-    create/get pair, matching AuditRepository's shape and not-configured
-    contract."""
+    """Purchase records and atomic Pro settlement, with the repositories'
+    usual None result when persistence is not configured."""
+
+    async def grant_pro_account(
+        self, *, provider: str, external_ref: str,
+        amount: float | None, currency: str | None,
+        invoice_payment_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Create a Pro account and settle its payment in one transaction.
+
+        A completed replay returns the same account without plaintext. A new
+        account's key is returned only after commit and is never stored.
+        Invalid invoice/charge associations return None before writing. SQL
+        failures, lock timeouts and cancellation propagate, rolling back both
+        writes; an unexpected settlement refusal raises ProGrantConflict.
+        This operation owns its charge lock and must not be called while a
+        separate connection holds the same advisory lock.
+        """
+        try:
+            pool = await get_pool()
+        except DatabaseNotConfigured:
+            return None
+
+        def refuse(reason: str) -> None:
+            logger.error(
+                "Pro grant refused for %s/%s (invoice %s): %s",
+                provider, external_ref, invoice_payment_id, reason,
+            )
+
+        if not provider or not external_ref:
+            return refuse("provider and charge reference are required")
+        try:
+            invoice_id = (
+                uuid.UUID(invoice_payment_id)
+                if invoice_payment_id is not None else None
+            )
+        except (ValueError, TypeError, AttributeError):
+            return refuse("invalid invoice id")
+
+        api_key = None
+        async with pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    f"set local lock_timeout = {GRANT_LOCK_TIMEOUT_MS}"
+                )
+                # Reuse the old session lock's namespace so an older worker
+                # still finishing a grant serializes with this transaction.
+                # Unlike that implementation, this uses just one connection
+                # and never proceeds without the lock on timeout.
+                await conn.execute(
+                    "select pg_advisory_xact_lock(%s, %s)",
+                    (_GRANT_LOCK_NAMESPACE, _grant_lock_key(provider, external_ref)),
+                )
+                invoice = None
+                if invoice_id is not None:
+                    cur = await conn.execute(
+                        """
+                        select id, account_id, provider, external_ref,
+                               status, product
+                          from payments where id = %s for update
+                        """, (invoice_id,),
+                    )
+                    invoice = await cur.fetchone()
+                    if invoice is None:
+                        return refuse("invoice does not exist")
+                    if (invoice["provider"] != provider
+                            or invoice["product"] != "pro_tier"):
+                        return refuse("invoice provider or product does not match")
+                    if invoice["external_ref"] not in (None, external_ref):
+                        return refuse("invoice belongs to another charge")
+
+                cur = await conn.execute(
+                    """
+                    select id, account_id, provider, external_ref, status, product
+                      from payments
+                     where provider = %s and external_ref = %s for update
+                    """, (provider, external_ref),
+                )
+                existing = await cur.fetchone()
+                if (invoice_id is not None and existing is not None
+                        and existing["id"] != invoice_id):
+                    return refuse("charge belongs to another invoice")
+
+                payment = invoice if invoice is not None else existing
+                if payment is not None:
+                    if (payment["provider"] != provider
+                            or payment["product"] != "pro_tier"):
+                        return refuse("charge provider or product does not match")
+                    if payment["status"] == "completed":
+                        if (not payment["account_id"]
+                                or payment["external_ref"] != external_ref):
+                            return refuse("completed payment has no matching grant")
+                        cur = await conn.execute(
+                            """
+                            select id, key_prefix, key_hash, tier, created_at
+                              from accounts where id = %s
+                            """, (payment["account_id"],),
+                        )
+                        row = await cur.fetchone()
+                        if row is None or row["tier"] != TIER_PRO:
+                            return refuse("completed payment has no Pro account")
+                        account = _row_to_account(row)
+                    elif (payment["status"] != "pending"
+                          or payment["account_id"] is not None
+                          or invoice_id is None):
+                        return refuse("payment is not an ungranted pending invoice")
+                    else:
+                        account = None
+                else:
+                    account = None
+
+                if account is None:
+                    api_key = generate_api_key()
+                    cur = await conn.execute(
+                        """
+                        insert into accounts (key_prefix, key_hash, tier)
+                        values (%s, %s, %s)
+                        returning id, key_prefix, key_hash, tier, created_at
+                        """,
+                        (api_key_prefix(api_key), hash_api_key(api_key), TIER_PRO),
+                    )
+                    row = await cur.fetchone()
+                    if row is None:
+                        raise ProGrantConflict("Pro account insertion was refused")
+                    account = _row_to_account(row)
+                    if invoice_id is not None:
+                        cur = await conn.execute(
+                            """
+                            update payments
+                               set status = 'completed', account_id = %s,
+                                   external_ref = %s, tier_granted = %s
+                             where id = %s and provider = %s
+                               and product = 'pro_tier' and status = 'pending'
+                               and account_id is null
+                               and (external_ref is null or external_ref = %s)
+                            returning id
+                            """,
+                            (uuid.UUID(account["id"]), external_ref, TIER_PRO,
+                             invoice_id, provider, external_ref),
+                        )
+                    else:
+                        cur = await conn.execute(
+                            """
+                            insert into payments
+                                (account_id, provider, external_ref, amount,
+                                 currency, status, tier_granted, product)
+                            values (%s, %s, %s, %s, %s, 'completed', %s, 'pro_tier')
+                            returning id
+                            """,
+                            (uuid.UUID(account["id"]), provider, external_ref,
+                             amount, currency, TIER_PRO),
+                        )
+                    if await cur.fetchone() is None:
+                        raise ProGrantConflict("Pro payment settlement was refused")
+
+        if api_key is not None:
+            account["api_key"] = api_key
+        return account
 
     async def create(
         self, *, account_id: str | None, provider: str,
@@ -2063,8 +2168,8 @@ class PaymentRepository:
         self, payment_id: str, *, account_id: str, external_ref: str
     ) -> dict[str, Any] | None:
         """Transition a pending invoice to completed and link the account
-        it granted. The invoice flow's counterpart to creating a completed row
-        outright -- see app/billing/grant_pro_tier.
+        it granted. This low-level method links an existing account; payment
+        providers use grant_pro_account to create and link one atomically.
 
         Compare-and-set, the same first-writer-wins shape as
         link_telegram_chat_id: the predicate is part of the UPDATE, so the
@@ -2092,16 +2197,16 @@ class PaymentRepository:
         charge both read a payment with no account, both minted one, and the
         second was admitted by the same-external_ref branch above -- overwriting
         the first's account_id and orphaning an account whose key had already
-        gone out. grant_lock now stops them meeting at all; this makes the
-        overwrite impossible even if it doesn't.
+        gone out. Atomic Pro grants now serialize those confirmations, while
+        this predicate also protects callers of the low-level method.
 
         Note the `or account_id = %s`: re-linking the SAME account is still
         allowed, so a replay that reaches here with the account it already
         granted gets the idempotent row back. Only reassignment to a DIFFERENT
         account is refused, which is the actual anomaly. Writing this as a bare
-        `account_id is null` looked equivalent -- grant_pro_tier returns before
+        `account_id is null` looked equivalent -- grant_pro_account returns before
         the UPDATE once it sees an account_id -- but this method's contract is
-        the repository's, not grant_pro_tier's, and CI's real-Postgres suite
+        the repository's, not grant_pro_account's, and CI's real-Postgres suite
         asserts the replay directly."""
         try:
             pool = await get_pool()
