@@ -317,6 +317,81 @@ def _env_reference(path: str, env_var: str) -> str:
     raise ValueError("unsupported format for automatic secret replacement")
 
 
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_ENV_REFERENCE_RE = re.compile(
+    r"(?:\b(?:os\s*\.\s*)?getenv\s*\("
+    r"|\b(?:os\s*\.\s*)?environ(?:\s*\.\s*get\s*\(|\s*\[)"
+    r"|\bprocess\s*\.\s*env\s*\[)\s*['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]"
+    r"|\bprocess\s*\.\s*env\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _reserved_env_names(contents: dict[str, str]) -> set[str]:
+    """Do not give a new credential a name already used by the repository.
+
+    Only names are retained. Conservatively reserving a reference in a
+    comment costs a numeric suffix; reusing a live name could change which
+    credential an existing integration receives.
+    """
+    names: set[str] = set()
+    for path, text in contents.items():
+        if path.rsplit("/", 1)[-1].startswith(".env"):
+            names.update(name for name in _env_key_names(text)
+                         if _ENV_NAME_RE.fullmatch(name))
+        for match in _ENV_REFERENCE_RE.finditer(text):
+            names.add(match.group(1) or match.group(2))
+    return names
+
+
+def _env_for_secret(rule_id: str, raw_match: str, text: str) -> str:
+    """Prefer the assignment's complete name, never its displayed mask.
+
+    The generic rule may start at PASSWORD inside PG_PASSWORD; recover the
+    adjacent identifier prefix from the fresh source before naming the env
+    variable. Provider-specific rules keep their conventional names.
+    """
+    if rule_id in _ASSIGNMENT_RULES:
+        match = _ASSIGNMENT_RULES[rule_id].pattern.fullmatch(raw_match)
+        if match:
+            lhs = raw_match[:match.start("value") - 1]
+            key = re.fullmatch(r"\s*(['\"]?)([A-Za-z_$][A-Za-z0-9_$-]*)\1\s*[:=]\s*", lhs)
+            if key:
+                name = key.group(2)
+                if not key.group(1):
+                    offset = text.find(raw_match)
+                    if offset >= 0:
+                        prefix = re.search(r"[A-Za-z_$][A-Za-z0-9_$]*$", text[:offset])
+                        if prefix:
+                            name = prefix.group() + name
+                name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+                name = re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+                if _ENV_NAME_RE.fullmatch(name):
+                    return name
+    return ENV_VAR_BY_RULE.get(rule_id, "APP_SECRET")
+
+
+def _allocate_secret_env(
+    preferred: str, sensitive: tuple[str, ...],
+    allocated: dict[tuple[str, ...], str], reserved: set[str],
+) -> str:
+    """One actual credential per new env name, stable across its copies.
+
+    These literal identities stay local to plan generation, just like the
+    existing scrub checks. Neither values nor derived hashes enter output.
+    A provider or assignment name alone is not a credential identity.
+    """
+    if sensitive in allocated:
+        return allocated[sensitive]
+    name = preferred
+    suffix = 2
+    while name in reserved:
+        name = f"{preferred}_{suffix}"
+        suffix += 1
+    allocated[sensitive] = name
+    reserved.add(name)
+    return name
+
+
 def _sensitive_literals(rule_id: str, raw_match: str) -> list[str]:
     """The actual secret substring(s) to scrub for one match.
 
@@ -937,7 +1012,10 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
             per_file.setdefault(current_rel, []).append((current, entry, value))
 
     env_vars_used: set[str] = set()
-    for repo_rel, items in per_file.items():
+    reserved_env_names = _reserved_env_names(contents)
+    allocated_env_names: dict[tuple[str, ...], str] = {}
+    for repo_rel, items in sorted(per_file.items()):
+        items = sorted(items, key=lambda item: (item[0].get("line", 0), item[0]["rule_id"]))
         raw_entry = items[0][1]
         text = contents.get(raw_entry)
         if text is None:
@@ -955,11 +1033,29 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                     file=repo_rel))
             continue
 
+        private_keys = tuple(dict.fromkeys(_PEM_BLOCK_RE.findall(text)))
+        if (any(f["rule_id"] == "private-key-block" for f, _, _ in items)
+                and len(private_keys) != 1):
+            # That rewrite replaces every PEM block in a file. Decline the
+            # entire file rather than combine distinct keys or emit one of
+            # their unchanged values alongside another credential's fix.
+            for f, _, _ in items:
+                plan.skipped.append(_skipped(
+                    f, "multiple or incomplete private keys; configure each "
+                    "credential separately before rotating it", file=repo_rel))
+            continue
+
         new_text = text
         all_sensitive: list[str] = []
         applied: list[tuple[dict, str]] = []
         for f, _, raw_value in items:
-            env_var = ENV_VAR_BY_RULE.get(f["rule_id"], "APP_SECRET")
+            sensitive_values = tuple(_sensitive_literals(f["rule_id"], raw_value))
+            if f["rule_id"] == "private-key-block":
+                sensitive_values = private_keys
+            env_var = _allocate_secret_env(
+                _env_for_secret(f["rule_id"], raw_value, text), sensitive_values,
+                allocated_env_names, reserved_env_names,
+            )
             env_ref = _env_reference(repo_rel, env_var)
             new_text, sensitive = _apply_secret_fix(
                 new_text, f["rule_id"], raw_value, env_ref
