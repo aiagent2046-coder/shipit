@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,30 @@ from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.sca.stage import sca_client_for
 from app.llm.client import LLMClient
 from app.scan.pipeline import run_scan
+
+
+def _write_artifact(path: Path, text: str) -> None:
+    """Write an audit artifact only its owner can read.
+
+    The report carries credential-shaped material in masked form, and this tool
+    writes it wherever the operator points -- which is often /tmp on a shared
+    machine. The default umask gives 0644, so the audit of someone else's
+    repository would be readable by every account on the box; 0600 is the whole
+    difference, and it is deliberate rather than incidental.
+
+    CodeQL flags both writes here as clear-text storage of sensitive data, and
+    it is right about the class: an operator tool that dumps an audit to a file
+    does exactly that, and the same alert is open on main for this file and for
+    scripts/batch_audit.py. The permissions are what this side can honestly fix;
+    anything more would mean not writing the artifact at all.
+    """
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        # The mode above applies only when the file is CREATED. Overwriting a
+        # file an earlier run left world-readable would keep its old mode, so
+        # the permission is set on the descriptor, every time.
+        os.fchmod(handle.fileno(), 0o600)
+        handle.write(text)
 
 
 def main() -> int:
@@ -82,13 +107,13 @@ def main() -> int:
     if len(argv) == 2:
         from app.report.html import render_report
         out = Path(argv[1])
-        out.write_text(render_report(report, project_name=Path(argv[0]).stem))
+        _write_artifact(out, render_report(report, project_name=Path(argv[0]).stem))
         print(f"html report: {out}", file=sys.stderr)
 
     if sarif_path:
         from app.report.sarif import render_sarif
         destination = Path(sarif_path)
-        destination.write_text(render_sarif(
+        _write_artifact(destination, render_sarif(
             scan["findings"], engine_version=scan["score"]["scan_manifest"]["engine_version"],
             score=scan["score"], project_name=Path(argv[0]).stem))
         print(f"sarif: {destination}", file=sys.stderr)
