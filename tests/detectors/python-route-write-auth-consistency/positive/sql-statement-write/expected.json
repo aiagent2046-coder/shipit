@@ -1,0 +1,10 @@
+{
+  "description": "The write is raw SQL: the handler opens its own connection and runs cursor.execute(\"INSERT ...\"). The hunt found this shape repeatedly, and a rule that only knew repository methods reported nothing. The statement is a literal in the handler, so this is still a reading of the code and not a run of it.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

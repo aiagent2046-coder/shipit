@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.put("/data/{data_id}")
+async def update_data(data_id, payload, manager=Depends(resolve_manager), data_repo=Depends(fetch_data_repository)):
+    return data_repo.update(data_id, payload)
+
+
+@router.post("/data")
+async def create_data(payload, data_repo=Depends(fetch_data_repository)):
+    return data_repo.create(payload)

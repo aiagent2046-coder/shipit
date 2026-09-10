@@ -1,0 +1,10 @@
+{
+  "description": "The escape class a local model found ten times out of ten: the same defect, with the storage dependency renamed fetch_record_repository. The old vocabulary recognised only get_*_repo as storage, so an unguarded create looked guarded. The identity dependency here is also renamed (get_admin).",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

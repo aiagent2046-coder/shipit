@@ -1,0 +1,7 @@
+{
+  "description": "The handler runs SQL, but it SELECTs. Only the OPENING keyword decides, so a read stays a read -- the mutation replaces INSERT for SELECT and the rule must then fire.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

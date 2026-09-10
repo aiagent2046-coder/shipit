@@ -1,0 +1,10 @@
+{
+  "description": "The storage dependency ends in SERVICE, which the old vocabulary also missed. Nothing about load_item_service says identity, and the sibling route's dependency is the only reason to look here.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

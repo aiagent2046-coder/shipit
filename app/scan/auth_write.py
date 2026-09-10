@@ -13,30 +13,54 @@ handler?" -- and two copies would be free to drift until the same route counted
 as guarded in one finding and unguarded in another, in one report, for
 unchanged bytes.
 
-Silent, deliberately, in three shapes:
+Silent, deliberately, in these shapes:
 
   * a write route with no guarded sibling. The read-side rule pairs two routes
     that disagree; with nothing to disagree with, "no guard visible" is a claim
     about middleware this scanner cannot see, and an unguarded POST is ordinary
     code. Silence here is not a clean bill.
-  * conventionally public paths (login, webhook, health, ...), matched as whole
-    path SEGMENTS. A login route that demanded an identity first could not let
-    anybody log in; flagging it would be a claim about intent, not about code.
-    Matching a segment rather than a substring keeps /auth/login-count from
-    being excused by /auth/login.
+  * conventionally public paths (login, webhook, notification, health, ...),
+    matched as whole path SEGMENTS. A login route that demanded an identity
+    first could not let anybody log in, and a provider's payment notification
+    arrives from the provider; flagging either would be a claim about intent,
+    not about code. Matching a segment rather than a substring keeps
+    /auth/login-count from being excused by /auth/login.
   * a route whose handler carries more than one decorator, matching the read
     rule: an unrecognized decorator could be the guard, and guessing which is
     how a scanner starts asserting what it cannot see.
 
-A route that writes through a method name outside _WRITE_CALLS is not reported
-either. Deriving "this changes stored state" from the HTTP verb alone would
-catch a POST that only computes a response, so the corpus pins that difference
-both ways.
+What counts as a write was measured, not assumed. Round one of
+scripts/hunt_detector_escapes.py escaped ten times out of ten against a
+`Depends(get_*_repo)` vocabulary; round two, against the fixed one, escaped with
+`createRecord`, `modify`, `erase` and handlers that open their own connection and
+run `cursor.execute("INSERT ...")`. So the write evidence is now the leading
+token of the call name (createRecord and create_record both read as `create`),
+or a statement runner whose first argument OPENS with a mutating SQL keyword --
+and a SELECT does not count. Deriving it from the HTTP verb alone would catch a
+POST that only computes a response, so the corpus pins that difference both ways.
+
+A scheduler is not storage: `add_task`/`create_task` are excluded by full name,
+because the product's own YooKassa handler was reported for scheduling a
+coroutine.
+
+WHAT REMAINS SILENT, measured over three hunt rounds (116 scored variations, 36
+candidates, every judgeable one read by hand): the rewrites that escape are the
+ones where the rewrite itself removed the evidence -- both routes protected, or
+the guard moved into the route's own `dependencies=[...]` list, which this rule
+declares it does not read. Where the defect survived, the rule caught it. The one
+accepted loss is a storage injection named with an unplaceable verb in front of a
+tail that mentions something else (`handle_security`, `manage_assets`): unknown
+names count as authorization, so those stay silent, and reading `handle_security`
+as storage would let the rule assert a gap on a route whose dependency plainly
+names security. One tail was measured OUT for the same reason: `handler` appeared
+as a guard (`resolve_handler`) and as storage (`get_repository_handler`) in
+different rounds, and including it gained one body while losing two.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 import stat
 import zipfile
 from typing import BinaryIO
@@ -51,27 +75,71 @@ RULE_ID = "python-route-write-auth-consistency"
 # else's record is the same argument it needs before it may create one.
 _MUTATION_METHODS = {"post", "put", "patch", "delete"}
 
-# Method names that change stored state. Kept as a plain list of names so a
-# reviewer can read what the rule knows; a name that is missing from it costs a
+# Method names that change stored state. Matched on the LEADING token, so
+# createRecord, create_record and createRecordWithAudit all read as `create`
+# (scripts/hunt_detector_escapes.py produced camelCase rewrites that the exact
+# match missed -- the corpus only ever wrote snake_case). Kept as a plain list
+# so a reviewer can read what the rule knows; a name missing from it costs a
 # missed finding, not a wrong one.
-_WRITE_CALLS = frozenset({
-    "add", "commit", "create", "delete", "grant", "insert", "mutate", "persist",
-    "remove", "replace", "revoke", "save", "store", "update", "upsert", "write",
+_WRITE_VERBS = frozenset({
+    "add", "commit", "create", "delete", "drop", "erase", "insert", "modify",
+    "mutate", "persist", "remove", "replace", "revoke", "save", "store", "update",
+    "upsert", "write",
 })
+
+# Raw SQL is write evidence too, and the hunt showed how much of it there is:
+# a handler that opens its own connection and calls cursor.execute("INSERT ...")
+# names no repository method at all. The statement is a string literal in the
+# handler, so this stays a reading of the code rather than a run of it -- and it
+# is deliberately narrow: the call must be a known statement runner AND its
+# first argument must OPEN with a mutating keyword, so a SELECT does not count.
+_SQL_METHODS = frozenset({"execute", "executemany", "execute_sql", "query", "raw", "run", "sql"})
+_SQL_MUTATION = re.compile(r"^\s*\(*\s*(insert|update|delete|replace|upsert|merge|truncate)\b", re.IGNORECASE)
+
+_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 
 _PUBLIC_SEGMENTS = frozenset({
-    "callback", "callbacks", "health", "healthz", "login", "logout", "oauth",
-    "ready", "readyz", "refresh", "register", "sign-in", "sign-up", "signin",
-    "signup", "token", "webhook", "webhooks",
+    "callback", "callbacks", "health", "healthz", "hooks", "ipn", "login",
+    "logout", "notification", "notifications", "oauth", "ready", "readyz",
+    "refresh", "register", "sign-in", "sign-up", "signin", "signup", "token",
+    "webhook", "webhooks",
+})
+
+# A scheduler is not storage. `background.add_task(...)` and `create_task(...)`
+# came out of the hunt as write evidence on the leading verb `add`/`create`, and
+# the product's own YooKassa route was reported for it: the handler schedules a
+# coroutine, and whether anything is stored depends on code this scanner never
+# reads. Excluded by FULL name before the verb is considered.
+_NOT_WRITE_CALLS = frozenset({
+    "add_background_task", "add_task", "apply_async", "create_task", "delay",
+    "enqueue", "schedule", "schedule_task",
 })
 
 
-def _write_call(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, int] | None:
-    """The first call in the handler that changes stored state, and its line."""
+def _write_call(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, int, str] | None:
+    """The first call in the handler that changes stored state, its line, and the
+    evidence in the words the report uses. The evidence is attributed rather than
+    asserted: `modify` is a name this scanner READS as a write, and saying so is
+    the difference between an observation and a claim about the code's intent."""
     for node in ast.walk(fn):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr in _WRITE_CALLS):
-            return node.func.attr, node.lineno
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        attr = (func.attr if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name) else "")
+        if not attr:
+            continue
+        snake = _CAMEL_BOUNDARY.sub("_", attr).lower()
+        if snake in _NOT_WRITE_CALLS:
+            continue
+        if snake.split("_")[0] in _WRITE_VERBS:
+            return attr, node.lineno, f"the handler calls {attr}()"
+        if (attr in _SQL_METHODS and node.args and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            statement = _SQL_MUTATION.match(node.args[0].value)
+            if statement:
+                return attr, node.lineno, (f"the handler runs a {statement.group(1).upper()} statement "
+                                           f"through {attr}()")
     return None
 
 
@@ -152,13 +220,13 @@ def _scope_findings(scope, factories: set[str], filename: str) -> list[CheckFind
     return findings
 
 
-def _finding(path: str, route: str, method: str, call: tuple[str, int],
+def _finding(path: str, route: str, method: str, call: tuple[str, int, str],
              sibling_route: str, sibling_method: str, sibling_line: int) -> CheckFinding:
-    name, line = call
+    name, line, evidence = call
     return CheckFinding(
         RULE_ID, "Write route shows no local identity check",
         "medium", 0.8, "Auth", file=path, line=line,
-        explanation=(f"{method.upper()} {route} changes stored state ({name}) and no local identity "
+        explanation=(f"{method.upper()} {route} changes stored state ({evidence}) and no local identity "
                      f"check was recognized in its handler, while sibling {sibling_method.upper()} "
                      f"{sibling_route} on the same router declares one at line {sibling_line}. "
                      "Router mounting, global middleware and public reachability have not been resolved."),

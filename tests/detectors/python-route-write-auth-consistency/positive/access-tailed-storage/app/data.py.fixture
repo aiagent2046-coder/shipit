@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.delete("/data/{item_id}")
+async def delete_item(item_id, user=Depends(require_user), data_access=Depends(fetch_data_access)):
+    return data_access.remove(item_id)
+
+
+@router.patch("/data/{item_id}")
+async def modify_item(item_id, content, data_access=Depends(fetch_data_access)):
+    return data_access.update(item_id, content)

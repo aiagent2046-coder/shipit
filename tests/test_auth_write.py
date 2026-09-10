@@ -85,8 +85,9 @@ def test_unprotected_write_beside_a_guarded_sibling_is_an_unverified_signal():
     GUARDED + UNGUARDED.replace('@router.post("/audits")',
                                '@router.post("/audits")\n@limiter.limit("5/minute")'),
     # an imported router is not a router this file builds
-    UNGUARDED.replace("router = APIRouter()", "").replace("from fastapi import APIRouter, Depends",
-                                                          "from app.routers import router\nfrom fastapi import Depends"),
+    UNGUARDED.replace("router = APIRouter()", "").replace(
+        "from fastapi import APIRouter, Depends",
+        "from app.routers import router\nfrom fastapi import Depends"),
     "not valid python (",
 ])
 def test_write_routes_without_a_disagreement_are_silent(source):
@@ -128,7 +129,43 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
         return audit_repo.create(payload)
 
     @router.post("/audits")'''),
+    # the identity word that also looks like storage: drop it and the route is
+    # left with nothing but repository injection
+    "auth-word-beats-storage-shape": ("app/routes.py",
+                                      "async def create_audit(payload, guard=Depends(get_auth_service),",
+                                      "async def create_audit(payload,"),
+    # the residual limitation: rename the witness to a name that is NOT
+    # storage-shaped and the disagreement becomes visible
+    "storage-shaped-witness-only": ("app/data.py", "manager=Depends(resolve_manager)",
+                                    "manager=Depends(resolve_actor)"),
+    # an unclassifiable name counts as authorization; name it storage and the
+    # pair disagrees again
+    "unknown-dependency-name": ("app/logs.py", "handler=Depends(handler)",
+                                "handler=Depends(fetch_handler_repository)"),
+    # SQL is only write evidence when the statement OPENS with a mutation
+    "select-statement": ("app/reports.py", '"SELECT * FROM reports',
+                         '"INSERT INTO reports'),
+    # a scheduler is not storage
+    "scheduler-is-not-a-write": ("app/billing.py", "background.add_task(",
+                                 "background.add("),
+    # conventionally public segment: rename it and the route is ordinary again
+    "provider-notification-path": ("app/payments.py", '"/payments/notifications"',
+                                   '"/payments/charge"'),
+    # an ambiguous tail plus a person noun is not evidence; a repository tail is
+    "person-noun-ambiguous-tail": ("app/audits.py", "Depends(get_user_session)",
+                                   "Depends(get_user_session_repo)"),
+    # the documented limit: an unplaceable verb in front of a security-sounding
+    # tail is not read as storage; name it a repository and the pair disagrees
+    "unplaceable-storage-verb": ("app/checks.py", "Depends(handle_security)",
+                                 "Depends(get_security_repo)"),
 }
+
+
+def test_every_corpus_negative_has_a_mutation():
+    """Guards the guard: a negative with no mutation above is only pinned by the
+    detector's silence, which is the one thing silence cannot prove."""
+    on_disk = {case.name for case in CORPUS_NEGATIVES.iterdir() if case.is_dir()}
+    assert on_disk == set(MUTATIONS), f"no mutation for: {on_disk - set(MUTATIONS)}"
 
 
 @pytest.mark.parametrize("case", sorted(MUTATIONS))

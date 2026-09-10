@@ -1,0 +1,7 @@
+{
+  "description": "The residual the vocabulary cannot close, and the reason it is left alone: the storage injection is named handle_security -- an unplaceable verb in front of a tail that mentions security. Reading that as storage would let the rule assert a gap on a route whose dependency plainly names security, so unknown counts as authorization and the route stays silent. The mutation renames the dependency to a repository, which is where the rule's evidence actually lives.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

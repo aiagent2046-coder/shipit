@@ -139,6 +139,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # is compared with a sibling route on the same router that shows an identity
 # check. A new rule id is exactly the case this constant exists for: a paid or
 # free audit reports something it did not report before, for unchanged bytes.
+# The dependency vocabulary both route rules share was widened in the same
+# change, so the read rule's findings move with it: two hunt rounds through
+# scripts/hunt_detector_escapes.py showed a storage dependency renamed
+# fetch_record_repository, and a write call named createRecord or executed as
+# raw SQL, escaping a vocabulary built from one naming convention.
 AUDIT_ENGINE_VERSION = "2026-09-10-5"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
