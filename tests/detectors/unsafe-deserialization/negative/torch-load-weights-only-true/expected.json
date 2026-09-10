@@ -1,0 +1,7 @@
+{
+  "description": "The hardened call. The mutation flips the flag to False, which must fire.",
+  "expect": [],
+  "forbid": [
+    "unsafe-deserialization"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "PyYAML before 5.1 executed objects by default, and the call that leaves the loader out is still the one people write.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

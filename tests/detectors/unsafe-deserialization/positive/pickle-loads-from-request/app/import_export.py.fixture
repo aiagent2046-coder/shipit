@@ -1,0 +1,11 @@
+import pickle
+
+from fastapi import APIRouter, UploadFile
+
+router = APIRouter()
+
+
+@router.post("/restore")
+async def restore(archive: UploadFile):
+    payload = await archive.read()
+    return pickle.loads(payload)

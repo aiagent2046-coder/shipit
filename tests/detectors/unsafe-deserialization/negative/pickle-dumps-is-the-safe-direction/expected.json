@@ -1,0 +1,7 @@
+{
+  "description": "Serialising is not deserialising: dumps writes the payload out and executes nothing. The mutation swaps dumps for loads, which must fire.",
+  "expect": [],
+  "forbid": [
+    "unsafe-deserialization"
+  ]
+}

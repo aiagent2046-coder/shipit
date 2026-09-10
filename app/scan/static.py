@@ -22,6 +22,7 @@ from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.sql_injection_js import scan_sql_injection_js
+from app.scan.unsafe_deserialization import scan_unsafe_deserialization
 from app.scan.source_facts import collect_source_facts
 
 
@@ -90,6 +91,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=u.rule_id, title=u.title, severity=u.severity,
             confidence=u.confidence, category=u.category, file=u.file,
             line=u.line, explanation=u.explanation, fix_hint=u.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for d in scan_unsafe_deserialization(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=d.rule_id, title=d.title, severity=d.severity,
+            confidence=d.confidence, category=d.category, file=d.file,
+            line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
             claim_evidence=static_claim_evidence(),
         ))
 
@@ -204,9 +214,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
                        "auth_write_consistency",
-                       "http_success", "sql_injection", "sql_injection_js", "outbound_url"],
+                       "http_success", "sql_injection", "sql_injection_js", "outbound_url",
+                       "unsafe_deserialization"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
+                     "unsafe_deserialization": "Parseable Python files up to 400 KB; call names only, "
+                     "resolved through this file's own imports (so `import pandas as pd` reads as "
+                     "pandas). Whether the bytes come from an untrusted source is NOT verified, and "
+                     "TS/JS deserialisation, a loader reached through a variable, and a bare "
+                     "`torch.load` without `weights_only=True` (version-dependent) are not covered",
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
                      "test/vendor files excluded; middleware and runtime access not resolved",
                      "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in "

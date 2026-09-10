@@ -1,0 +1,7 @@
+{
+  "description": "A bare torch.load: since 2.6 the default is weights_only=True, and before that it was not. This rule reads names rather than versions, so it reports only the explicit switch and leaves this alone -- the coverage text names the gap.",
+  "expect": [],
+  "forbid": [
+    "unsafe-deserialization"
+  ]
+}

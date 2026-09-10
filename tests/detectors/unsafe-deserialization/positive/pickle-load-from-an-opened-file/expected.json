@@ -1,0 +1,10 @@
+{
+  "description": "The stream form, which reads as ordinary file handling until you know what the format can do.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

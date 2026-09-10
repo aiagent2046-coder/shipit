@@ -20,6 +20,17 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "unsafe-deserialization": (
+        "Data is turned back into objects through a format that can run code.",
+        "This call loads data through a format that can name classes and call them while it "
+        "loads, so bytes chosen by somebody else run with this process's privileges. Where the "
+        "bytes come from has not been checked -- a payload this same process wrote is ordinary "
+        "code, and the call looks identical either way.",
+        "Use a format that carries values rather than objects (json, msgpack, cbor) with an "
+        "explicit schema. Where a pickle-based format is unavoidable, check a signature or "
+        "checksum over the payload first, and never load data that arrived in a request, an "
+        "upload or a message from another system.",
+    ),
     "python-outbound-request-unvalidated-url": (
         "An HTTP client receives an address derived from request input.",
         "A caller-controlled value reaches the host portion of a request target or client "
