@@ -189,3 +189,113 @@ def test_the_product_own_write_routes_report_nothing():
     files = {p.relative_to(REPO_ROOT).as_posix(): p.read_text()
              for p in sorted((REPO_ROOT / "app").rglob("*.py")) if "__pycache__" not in p.parts}
     assert scan_auth_write(archive(files)) == []
+
+
+@pytest.mark.parametrize("declaration", [
+    "other = APIRouter()",
+    "other = APIRouter(dependencies=[Depends(require_actor)])",
+    "other = imported_router",
+])
+def test_different_router_objects_cannot_supply_a_guarded_sibling(declaration):
+    source = GUARDED + "\n" + declaration + "\n" + UNGUARDED.replace("@router.", "@other.")
+    assert scan_auth_write(archive(source)) == []
+    # Removing only the router distinction restores the original disagreement.
+    assert scan_auth_write(archive(source.replace("@other.", "@router.")))
+
+
+@pytest.mark.parametrize("assignment", [
+    "router = APIRouter()",
+    "router = APIRouter(dependencies=[Depends(require_actor)])",
+    "router = imported_router",
+])
+def test_rebinding_a_router_does_not_reuse_an_old_object_witness(assignment):
+    assert scan_auth_write(archive(GUARDED + "\n" + assignment + "\n" + UNGUARDED)) == []
+
+
+def test_sibling_is_selected_from_the_targets_router():
+    second = GUARDED[GUARDED.index("@router.put"):].replace("@router.", "@other.")
+    source = GUARDED + "\nother = APIRouter()\n" + second
+    source += UNGUARDED.replace("@router.", "@other.")
+    hits = scan_auth_write(archive(source))
+    assert len(hits) == 1
+    second_witness_line = source.index("@other.put")
+    line = source[:second_witness_line].count("\n") + 2
+    assert f"declares one at line {line}." in hits[0].explanation
+
+
+@pytest.mark.parametrize("body", [
+    "    def unused():\n        return repo.create(payload)\n    return payload",
+    "    async def unused():\n        return repo.create(payload)\n    return payload",
+    "    class Unused:\n        def write(self):\n            return repo.create(payload)\n    return payload",
+    "    unused = lambda: repo.create(payload)\n    return payload",
+])
+def test_unexecuted_nested_code_is_not_write_evidence(body):
+    source = GUARDED + '\n@router.post("/items")\nasync def preview(payload):\n' + body + "\n"
+    assert scan_auth_write(archive(source)) == []
+    before_return, _ = source.rsplit("    return payload", 1)
+    assert scan_auth_write(archive(before_return + "    return repo.create(payload)\n"))
+
+
+def test_definition_time_default_is_not_a_handler_write():
+    source = GUARDED + '\n@router.post("/items")\nasync def preview(payload=create_default()):\n    return payload\n'
+    assert scan_auth_write(archive(source)) == []
+
+
+@pytest.mark.parametrize("dependency", [
+    "Depends(dependency=require_actor)",
+    "Depends()",
+    "Depends(dependency=handler)",
+    "Security(require_actor)",
+])
+def test_uncertain_or_keyword_dependencies_suppress_target_findings(dependency):
+    source = GUARDED + UNGUARDED.replace("payload, audit_repo", f"payload, actor={dependency}, audit_repo")
+    assert scan_auth_write(archive(source)) == []
+
+
+@pytest.mark.parametrize("dependency", ["Depends(settings)", "Depends()", "Depends(dependency=handler)"])
+def test_unknown_dependencies_cannot_supply_an_identity_witness(dependency):
+    source = GUARDED.replace("Depends(current_actor)", dependency) + UNGUARDED
+    assert scan_auth_write(archive(source)) == []
+    assert scan_auth_write(archive(source.replace(dependency, "Depends(require_actor)", 1)))
+
+
+def test_keyword_identity_dependency_can_supply_a_witness():
+    assert scan_auth_write(archive(GUARDED.replace("Depends(current_actor)",
+                                               "Depends(dependency=require_actor)") + UNGUARDED))
+
+
+def test_unexecuted_nested_guard_cannot_supply_a_sibling_witness():
+    source = GUARDED.replace("actor=Depends(current_actor), ", "").replace(
+        "    return audit_repo.update", "    def unused():\n        require_actor()\n    return audit_repo.update")
+    assert scan_auth_write(archive(source + UNGUARDED)) == []
+
+
+def test_unexecuted_nested_guard_does_not_hide_a_target_disagreement():
+    source = GUARDED + UNGUARDED.replace(
+        "    return audit_repo.create", "    def unused():\n        require_actor()\n    return audit_repo.create")
+    assert scan_auth_write(archive(source))
+
+
+@pytest.mark.parametrize("decorator", ['@audit_wrapper\n', '@router.put("/alias")\n'])
+def test_handler_with_additional_decorators_is_not_a_sibling_witness(decorator):
+    source = GUARDED.replace('@router.put("/audits/{audit_id}")',
+                             decorator + '@router.put("/audits/{audit_id}")') + UNGUARDED
+    assert scan_auth_write(archive(source)) == []
+    assert scan_auth_write(archive(source.replace(decorator, "", 1)))
+
+
+@pytest.mark.parametrize("shadow", [
+    "APIRouter = unknown_constructor\n", "from another_package import APIRouter\n",
+])
+def test_shadowed_router_constructor_does_not_establish_a_router(shadow):
+    source = (GUARDED + UNGUARDED).replace("router = APIRouter()", shadow + "router = APIRouter()")
+    assert scan_auth_write(archive(source)) == []
+    assert scan_auth_write(archive(source.replace(shadow, "", 1)))
+
+
+def test_factory_argument_shadowing_the_constructor_stays_unresolved():
+    body = (GUARDED + UNGUARDED).split("\n", 1)[1]
+    source = "from fastapi import APIRouter, Depends\ndef build_router(APIRouter):\n" + "\n".join(
+        "    " + line for line in body.splitlines())
+    assert scan_auth_write(archive(source)) == []
+    assert scan_auth_write(archive(source.replace("build_router(APIRouter)", "build_router(unused)")))

@@ -80,7 +80,7 @@ import stat
 import zipfile
 from typing import BinaryIO
 
-from app.scan.auth_read import _guarded, _name
+from app.scan.auth_read import _guard_role, _handler_nodes, _scope_routes
 from app.scan.checks import CheckFinding
 from app.scan.secrets import is_non_production_path
 
@@ -136,7 +136,7 @@ def _write_call(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, int, s
     evidence in the words the report uses. The evidence is attributed rather than
     asserted: `modify` is a name this scanner READS as a write, and saying so is
     the difference between an observation and a claim about the code's intent."""
-    for node in ast.walk(fn):
+    for node in _handler_nodes(fn):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
@@ -198,35 +198,21 @@ def scan_auth_write(fileobj: BinaryIO) -> list[CheckFinding]:
 def _scope_findings(scope, factories: set[str], filename: str) -> list[CheckFinding]:
     """Write routes declared in one scope, and their disagreement with siblings."""
     findings: list[CheckFinding] = []
-    routers = {
-        _name(node.targets[0]) for node in scope.body
-        if isinstance(node, ast.Assign) and len(node.targets) == 1
-        and isinstance(node.value, ast.Call) and _name(node.value.func) in factories
-        and not any(k.arg == "dependencies" for k in node.value.keywords)
-    }
-    if not routers:
-        return findings
-    routes: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str, str]] = []
-    for fn in scope.body:
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    routes = _scope_routes(scope, factories, _MUTATION_METHODS)
+    roles = {fn: _guard_role(fn) for fn, _, _, _ in routes}
+    # Unknown dependencies suppress a target finding, but cannot establish an
+    # identity check on a sibling. Each router keeps its own first witness.
+    siblings = {}
+    for fn, route, method, router in routes:
+        if roles[fn] == "identity":
+            siblings.setdefault(router, (fn, route, method))
+    for fn, route, method, router in routes:
+        if roles[fn] != "none" or len(fn.decorator_list) != 1 or _public_path(route):
             continue
-        for dec in fn.decorator_list:
-            if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
-                    and _name(dec.func.value) in routers and dec.func.attr in _MUTATION_METHODS
-                    and dec.args and isinstance(dec.args[0], ast.Constant)
-                    and isinstance(dec.args[0].value, str)
-                    and not any(k.arg == "dependencies" for k in dec.keywords)):
-                routes.append((fn, dec.args[0].value, dec.func.attr))
-    # One sibling is enough to make the disagreement observable, and the FIRST
-    # one in source order is cited so the same repository always produces the
-    # same finding text.
-    sibling = next(((fn, route, method) for fn, route, method in routes if _guarded(fn)), None)
-    if sibling is None:
-        return findings
-    sibling_fn, sibling_route, sibling_method = sibling
-    for fn, route, method in routes:
-        if _guarded(fn) or len(fn.decorator_list) != 1 or _public_path(route):
+        sibling = siblings.get(router)
+        if sibling is None:
             continue
+        sibling_fn, sibling_route, sibling_method = sibling
         call = _write_call(fn)
         if call is None:
             continue
@@ -241,10 +227,12 @@ def _finding(path: str, route: str, method: str, call: tuple[str, int, str],
     return CheckFinding(
         RULE_ID, "Write route shows no local identity check",
         "medium", 0.8, "Auth", file=path, line=line,
-        explanation=(f"{method.upper()} {route} changes stored state ({evidence}) and no local identity "
-                     f"check was recognized in its handler, while sibling {sibling_method.upper()} "
-                     f"{sibling_route} on the same router declares one at line {sibling_line}. "
-                     "Router mounting, global middleware and public reachability have not been resolved."),
+        explanation=(f"{method.upper()} {route} contains a call recognized as a write ({evidence}) "
+                     "and no local identity check was recognized in its handler, while sibling "
+                     f"{sibling_method.upper()} {sibling_route} on the same router declares one "
+                     f"at line {sibling_line}. "
+                     "Names and literal SQL are static evidence; actual writes, router mounting, "
+                     "global middleware and public reachability have not been resolved."),
         fix_hint=("Confirm whether this route is meant to be reachable without an identity -- a webhook "
                   "or an onboarding step would be. If not, require the contract its sibling route uses, "
                   "and test a write with a foreign or absent credential against synthetic records."),

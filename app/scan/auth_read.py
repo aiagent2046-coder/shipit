@@ -7,6 +7,7 @@ proves public reachability. It never runs uploaded code or calls an LLM.
 from __future__ import annotations
 
 import ast
+from collections import deque
 import stat
 import zipfile
 from typing import BinaryIO
@@ -47,12 +48,10 @@ def _name(node: ast.AST) -> str:
 # connector and the heads gained provide/obtain/retrieve/connect. The first
 # round's ten escapes are in the write rule's corpus.
 #
-# A PERSON NOUN in the middle turns a storage-shaped name back into an unknown
-# one, and that is a deliberate trade in the other direction. `get_user_session`
-# and `fetch_user_repository` are indistinguishable by shape, and reading the
-# second as storage while the first is a guard would put a wrong claim in a
-# report; the cost is silence on a genuinely unguarded route that injects a
-# users' repository. Silence is the side this rule errs on.
+# A person noun makes an ambiguous tail such as session unknown. Explicit
+# storage tails such as repository still identify storage; an identity word
+# always takes precedence. Unknown suppresses a target finding, but cannot
+# establish that a sibling has an identity check.
 _IDENTITY_WORDS = frozenset({
     "auth", "authenticated", "authorization", "authorize", "authorized", "claims",
     "current", "identity", "permission", "permissions", "principal", "require",
@@ -98,6 +97,8 @@ def _dependency_role(dependency: str) -> str:
         return "unknown"
     if _IDENTITY_WORDS & set(tokens):
         return "identity"
+    if tokens[0] in _STORAGE_HEADS and tokens[-1] in _PERSON_NOUNS:
+        return "identity"  # get_admin, get_acting_user, resolve_actor
     # A plural tail is the same tail: the hunt produced manage_services and
     # fetch_notes_collection(s), and refusing to read the plural lost them.
     tail = tokens[-1][:-1] if tokens[-1].endswith("s") and tokens[-1][:-1] in _STORAGE_TAILS else tokens[-1]
@@ -108,18 +109,101 @@ def _dependency_role(dependency: str) -> str:
     return "storage"
 
 
-def _guarded(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    for node in ast.walk(fn):
+def _handler_nodes(fn: ast.FunctionDef | ast.AsyncFunctionDef, *, signature: bool = False):
+    """Walk one handler, excluding code owned by nested functions/classes.
+
+    Dependency declarations belong to the signature; write/read evidence must
+    come from the body. No nested callable is assumed to execute here.
+    """
+    pending = deque([fn.args, *fn.body] if signature else fn.body)
+    while pending:
+        node = pending.popleft()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        yield node
+        pending.extend(ast.iter_child_nodes(node))
+
+
+def _guard_role(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    role = "none"
+    for node in _handler_nodes(fn, signature=True):
         if not isinstance(node, ast.Call):
             continue
         name = _name(node.func) or (node.func.attr if isinstance(node.func, ast.Attribute) else "")
         if name == "get_authorized" or name.startswith(("require_", "authorize", "check_auth", "verify_token")):
-            return True
-        if name == "Depends" and node.args:
-            # Repository injection supplies storage, not caller identity.
-            if _dependency_role(_name(node.args[0])) != "storage":
-                return True  # identity, or a name this scanner cannot classify
-    return False
+            return "identity"
+        if name in {"Depends", "Security"}:
+            dependency = node.args[0] if node.args else next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "dependency"), None)
+            dependency_role = _dependency_role(_name(dependency))
+            if dependency_role == "identity":
+                return "identity"
+            if dependency_role == "unknown":
+                # Includes Depends() with an inferred or unresolved callable.
+                # It may authorize, but is not evidence that a sibling does.
+                role = "unknown"
+    return role
+
+
+def _guarded(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    return _guard_role(fn) != "none"
+
+
+def _scope_routes(scope, factories: set[str], methods: set[str]):
+    """Keep direct route declarations attached to their router assignment.
+
+    Separate names and successive assignments to the same name are separate
+    objects. Unsupported bindings invalidate that name instead of borrowing a
+    sibling from a router whose identity is no longer known.
+    """
+    routers: dict[str, tuple[str, int]] = {}
+    available_factories = set(factories)
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        available_factories.difference_update(arg.arg for arg in ast.walk(scope.args) if isinstance(arg, ast.arg))
+    routes = []
+    for node in scope.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if len(node.decorator_list) != 1:
+                # Another decorator can change the callable or its contract.
+                # Ignoring it also avoids rescanning one body per decorator.
+                routers.pop(node.name, None)
+                available_factories.discard(node.name)
+                continue
+            for dec in node.decorator_list:
+                if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+                        and _name(dec.func.value) in routers and dec.func.attr in methods
+                        and dec.args and isinstance(dec.args[0], ast.Constant)
+                        and isinstance(dec.args[0].value, str)
+                        and not any(k.arg == "dependencies" for k in dec.keywords)):
+                    routes.append((node, dec.args[0].value, dec.func.attr, routers[_name(dec.func.value)]))
+            routers.pop(node.name, None)
+            available_factories.discard(node.name)
+            continue
+        # Only direct assignments from a known factory establish an object.
+        # Any other visible store to an existing router invalidates it.
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                routers.pop(child.id, None)
+                available_factories.discard(child.id)
+        if isinstance(node, ast.ClassDef):
+            routers.pop(node.name, None)
+            available_factories.discard(node.name)
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                name = alias.asname or alias.name.split(".")[0]
+                routers.pop(name, None)
+                if (isinstance(node, ast.ImportFrom) and node.module == "fastapi"
+                        and alias.name in {"APIRouter", "FastAPI"}):
+                    available_factories.add(name)
+                else:
+                    available_factories.discard(name)
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Call) and _name(node.value.func) in available_factories
+                and not any(k.arg == "dependencies" for k in node.value.keywords)):
+            name = node.targets[0].id
+            routers[name] = (name, node.lineno)
+    return routes
 
 
 def scan_auth_read(fileobj: BinaryIO) -> list[CheckFinding]:
@@ -175,43 +259,25 @@ def scan_auth_read(fileobj: BinaryIO) -> list[CheckFinding]:
 def _scope_findings(scope, factories: set[str], filename: str) -> list[CheckFinding]:
     """Routes declared directly in one scope's body, and their disagreements."""
     findings: list[CheckFinding] = []
-    routers = {
-        _name(node.targets[0]) for node in scope.body
-        if isinstance(node, ast.Assign) and len(node.targets) == 1
-        and isinstance(node.value, ast.Call) and _name(node.value.func) in factories
-        and not any(k.arg == "dependencies" for k in node.value.keywords)
-    }
-    if not routers:
-        return findings
-    routes = []
-    for fn in scope.body:
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for dec in fn.decorator_list:
-            if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
-                    and _name(dec.func.value) in routers and dec.func.attr in _METHODS
-                    and dec.args and isinstance(dec.args[0], ast.Constant)
-                    and isinstance(dec.args[0].value, str)
-                    and not any(k.arg == "dependencies" for k in dec.keywords)):
-                routes.append((fn, dec.args[0].value))
+    routes = _scope_routes(scope, factories, _METHODS)
     protected = {}
-    for fn, route in routes:
-        for node in ast.walk(fn):
+    for fn, route, _, router in routes:
+        for node in _handler_nodes(fn):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "get_authorized" and _name(node.func.value)):
-                protected.setdefault(_name(node.func.value), (route, node.lineno))
-    for fn, route in routes:
+                protected.setdefault((router, _name(node.func.value)), (route, node.lineno))
+    for fn, route, _, router in routes:
         if _guarded(fn) or len(fn.decorator_list) != 1:
             continue
-        for node in ast.walk(fn):
+        for node in _handler_nodes(fn):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "get" and node.args):
                 continue
             repo = _name(node.func.value)
             arg = _name(node.args[0])
-            if repo not in protected or not arg or "{" + arg + "}" not in route:
+            if (router, repo) not in protected or not arg or "{" + arg + "}" not in route:
                 continue
-            sibling, line = protected[repo]
+            sibling, line = protected[router, repo]
             findings.append(_finding(filename, node.lineno, route, sibling, line, repo, arg))
             # One finding per route. The loop is over every `.get(` in the
             # handler, and a route that reads twice has one disagreement.

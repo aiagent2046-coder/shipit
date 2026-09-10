@@ -269,6 +269,18 @@ it("does not invent execution records for old audits", () => {
     .toEqual([["Scan record", "Not recorded for this older audit"]]);
 });
 
+it.each([
+  { checks: ["auth_read_consistency"] },
+  { checks: ["auth_write_consistency"] },
+  { checks: ["auth_read_consistency", "auth_write_consistency"] },
+])("keeps local route coverage distinct from broader authorization: $checks", ({ checks }) => {
+  const score: Score = { total: 0, categories: {}, basis: "static_only",
+    scan_manifest: { ...acceptanceManifest, static_checks: checks } };
+  const rows = Object.fromEntries(coverageRows(score, []));
+  expect(rows.Auth).toBe("Local Python route check ran — broader auth not checked");
+  expect(rows["Money & Data"]).toBe("Not checked");
+});
+
 it("counts underlying observations in display-only schema groups", () => {
   expect(findingCounts([{ ...source, occurrence_titles: ["Table A", "Table B"] },
     { ...source, file: "tests/schema.sql" }])).toEqual({ source: 2, examples: 1 });

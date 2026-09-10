@@ -201,7 +201,8 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                      "test/vendor files excluded; middleware and runtime access not resolved",
                      "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in "
                      "parseable Python files up to 2 MB, compared with sibling routes on the same router; "
-                     "handler writes are read from a fixed method-name list; conventionally public paths, "
+                     "potential writes are recognized by leading call-name tokens or literal mutating SQL; "
+                     "actual storage effects, conventionally public paths, "
                      "test/vendor files, router-level dependencies and middleware are not resolved",
                      "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
                      "runtime fetch bindings and HTTP failures are not verified. "

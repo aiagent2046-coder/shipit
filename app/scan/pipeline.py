@@ -157,7 +157,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # scripts/hunt_detector_escapes.py showed a storage dependency renamed
 # fetch_record_repository, and a write call named createRecord or executed as
 # raw SQL, escaping a vocabulary built from one naming convention.
-AUDIT_ENGINE_VERSION = "2026-09-10-6"
+# 2026-09-10-8: reviewed route checks distinguish an unknown dependency from an
+# identity witness, keep different router objects and nested function bodies
+# separate, and report recognized write calls without claiming runtime effects.
+# -7 was allocated to the sibling outbound rule before this review.
+AUDIT_ENGINE_VERSION = "2026-09-10-8"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt
