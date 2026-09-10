@@ -1,0 +1,10 @@
+from fastapi import APIRouter
+
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/go")
+async def go(url: str):
+    return httpx.get(build_url(url)).text

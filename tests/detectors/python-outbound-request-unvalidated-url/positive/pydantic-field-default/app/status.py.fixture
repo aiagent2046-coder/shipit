@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+from pydantic import Field
+
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/proxy/{location}")
+async def get_server_status(location: str = Field(...)):
+    return httpx.get(f"http://{location}/status").json()

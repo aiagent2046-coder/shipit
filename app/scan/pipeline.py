@@ -160,8 +160,12 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-10-8: reviewed route checks distinguish an unknown dependency from an
 # identity witness, keep different router objects and nested function bodies
 # separate, and report recognized write calls without claiming runtime effects.
-# -7 was allocated to the sibling outbound rule before this review.
-AUDIT_ENGINE_VERSION = "2026-09-10-8"
+# 2026-09-10-9: integrate the reviewed outbound URL rule with the reviewed
+# route checks. Trace supported local request values to URL authority using
+# HTTP import provenance, statement order and field-specific check identity;
+# bound AST/template work and report unresolved runtime/network controls.
+# This supersedes the outbound branch preview version 2026-09-10-7.
+AUDIT_ENGINE_VERSION = "2026-09-10-9"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

@@ -1,0 +1,9 @@
+from fastapi import FastAPI, Path
+import urllib.request
+
+app = FastAPI()
+
+
+@app.get("/query/{destination}")
+async def get_remote_data(destination: str = Path(...)):
+    return urllib.request.urlopen(f"http://{destination}/check").read()

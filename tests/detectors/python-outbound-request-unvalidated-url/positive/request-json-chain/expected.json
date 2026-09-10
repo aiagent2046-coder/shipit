@@ -1,0 +1,10 @@
+{
+  "description": "The value is read off the request body into a local, taken out of it, and handed to a client built in the handler. The hunt produced this shape three times in one round; before the assignment chain was followed, all three escaped.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

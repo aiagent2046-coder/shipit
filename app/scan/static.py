@@ -13,6 +13,7 @@ from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
 from app.scan.error_boundary import scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
+from app.scan.outbound_url import scan_outbound_url
 from app.scan.rls import scan_rls
 from app.scan.recommendations import prepare_recommendation
 from app.scan.schema_drift import scan_schema_drift
@@ -80,6 +81,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=q.rule_id, title=q.title, severity=q.severity,
             confidence=q.confidence, category=q.category, file=q.file,
             line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for u in scan_outbound_url(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=u.rule_id, title=u.title, severity=u.severity,
+            confidence=u.confidence, category=u.category, file=u.file,
+            line=u.line, explanation=u.explanation, fix_hint=u.fix_hint,
             claim_evidence=static_claim_evidence(),
         ))
 
@@ -194,7 +204,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         "checks_run": ["secrets", "rls", "schema_drift", "project_files",
                        "ci_deploy_source", "service_role", "error_boundary", "auth_read_consistency",
                        "auth_write_consistency",
-                       "http_success", "sql_injection", "sql_injection_js"],
+                       "http_success", "sql_injection", "sql_injection_js", "outbound_url"],
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
                      "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
@@ -204,6 +214,12 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                      "potential writes are recognized by leading call-name tokens or literal mutating SQL; "
                      "actual storage effects, conventionally public paths, "
                      "test/vendor files, router-level dependencies and middleware are not resolved",
+                     "outbound_url": "Known HTTP clients in locally declared FastAPI routes; "
+                     "at most 400 eligible Python files up to 400 KB each, excluding test/vendor files; "
+                     "20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, "
+                     "32 findings total. Supported request fields, URL expressions and preceding local "
+                     "checks are traced within one handler; complex control flow, unknown calls/helpers, "
+                     "validation correctness, DNS, redirects, network policy and TS/JS are not resolved",
                      "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
                      "runtime fetch bindings and HTTP failures are not verified. "
                      "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},

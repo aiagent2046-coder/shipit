@@ -1,0 +1,10 @@
+{
+  "description": "A caller-controlled second urljoin argument can replace even a literal base URL with an absolute or network-path URL. This source signal does not execute a request or prove reachability.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

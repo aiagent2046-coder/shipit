@@ -1,0 +1,7 @@
+{
+  "description": "The base address comes from configuration, not from the request. The mutation puts the caller's value back into it, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

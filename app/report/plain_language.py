@@ -20,6 +20,16 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "python-outbound-request-unvalidated-url": (
+        "An HTTP client receives an address derived from request input.",
+        "A caller-controlled value reaches the host portion of a request target or client "
+        "configuration without a preceding local address check recognized by the scanner. "
+        "If external controls do not restrict it, a request may reach unintended services. "
+        "Runtime requests, network reachability and checks outside this handler have not been verified.",
+        "Allow only approved schemes and hosts. Check resolved addresses against the permitted "
+        "destinations, including private and link-local ranges, and ensure the connection uses the "
+        "address that was checked. Disable redirects or validate every redirect destination too.",
+    ),
     "python-route-write-auth-consistency": (
         "A route contains a call recognized as a write and shows no local identity check.",
         "A sibling write route on the same router declares an identity check. This is a local "

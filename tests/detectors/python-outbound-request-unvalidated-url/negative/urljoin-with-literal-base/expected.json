@@ -1,0 +1,7 @@
+{
+  "description": "The literal docs/ prefix makes the second urljoin argument a relative path, preserving the fixed base host. A literal base alone is not sufficient: removing docs/ allows a caller value such as //other.example/ to replace the authority, and the mutation must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

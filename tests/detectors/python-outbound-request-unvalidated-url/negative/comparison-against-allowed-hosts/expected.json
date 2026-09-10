@@ -1,0 +1,7 @@
+{
+  "description": "The value is checked against a named allowlist before the call, which is the fix the finding asks for. A truthiness test would not be a check on the address; the mutation replaces the membership test with one, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

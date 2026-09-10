@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+
+import requests
+
+router = APIRouter()
+
+
+@router.get("/proxy/{server}")
+async def get_server_status(server: str):
+    url = f"http://{server}/status"
+    return requests.get(url, timeout=5).json()

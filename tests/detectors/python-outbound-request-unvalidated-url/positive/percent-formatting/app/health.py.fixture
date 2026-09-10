@@ -1,0 +1,10 @@
+from fastapi import APIRouter
+
+import requests
+
+router = APIRouter()
+
+
+@router.get("/health/{host}")
+async def health(host: str):
+    return requests.get("http://%s/health" % host, timeout=3).json()

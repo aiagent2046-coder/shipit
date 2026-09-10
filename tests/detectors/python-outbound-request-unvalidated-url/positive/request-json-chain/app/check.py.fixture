@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Request
+
+import httpx
+
+router = APIRouter()
+
+
+@router.post("/endpoint-check")
+async def check_endpoint(request: Request):
+    body = await request.json()
+    url_to_test = body["endpoint_url"]
+    client = httpx.Client(timeout=7)
+    return client.get(url_to_test).json()

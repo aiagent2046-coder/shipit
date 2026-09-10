@@ -1,0 +1,10 @@
+{
+  "description": "The address is built into a local first and passed afterwards, and the caller's parameter never appears in the call itself. The finding names the PARAMETER (server), not the local, because that is the value a reader has to follow.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

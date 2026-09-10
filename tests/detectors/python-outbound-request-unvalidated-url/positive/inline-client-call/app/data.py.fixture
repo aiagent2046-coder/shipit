@@ -1,0 +1,10 @@
+from fastapi import APIRouter
+
+import aiohttp
+
+router = APIRouter()
+
+
+@router.get("/fetch/{site}")
+async def request_data(site: str):
+    return await (await aiohttp.ClientSession().get(f"http://{site}/data")).json()

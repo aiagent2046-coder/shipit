@@ -1,0 +1,7 @@
+{
+  "description": "The caller's value is used elsewhere -- here it is not in the address at all. The mutation puts it back into the authority, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

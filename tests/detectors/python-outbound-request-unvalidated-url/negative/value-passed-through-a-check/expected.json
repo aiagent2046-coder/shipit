@@ -1,0 +1,7 @@
+{
+  "description": "The value goes through a validating call before it is used, so nothing this rule can read is missing. A call in the middle of the chain is not followed, and here that is exactly right; the mutation renames the call so its name no longer says it validates, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

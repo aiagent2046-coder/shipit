@@ -1,0 +1,10 @@
+from fastapi import APIRouter
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/status/{host}")
+async def status(host: str):
+    client = httpx.Client(base_url=settings.API_URL, timeout=5)
+    return client.get("/status").json()

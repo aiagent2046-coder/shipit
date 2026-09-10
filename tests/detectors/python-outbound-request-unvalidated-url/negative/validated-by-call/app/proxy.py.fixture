@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+
+import httpx
+
+router = APIRouter()
+
+
+@router.get("/proxy/{host}")
+async def proxy(host: str):
+    validate_public_host(host)
+    return httpx.get(f"http://{host}/status").json()

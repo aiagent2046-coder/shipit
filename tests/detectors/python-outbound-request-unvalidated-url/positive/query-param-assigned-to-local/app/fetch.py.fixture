@@ -1,0 +1,11 @@
+from fastapi import APIRouter, Request
+
+import requests
+
+router = APIRouter()
+
+
+@router.post("/fetch")
+async def fetch(request: Request):
+    target = request.query_params["url"]
+    return requests.get(target).text

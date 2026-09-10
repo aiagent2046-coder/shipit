@@ -1,0 +1,7 @@
+{
+  "description": "The value is handed to the client only after a branch that inspects it. The mutation replaces the inspection with a plain truthiness test, which is not a check on the address, and must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}
