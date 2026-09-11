@@ -166,6 +166,19 @@ def _scope_bindings(scope: ast.AST, inherited: _ScopeBindings | None = None) -> 
     """Only stable, direct imports establish FastAPI dependency provenance.
 
     Rebindings, conditional imports and parameter collisions stay unknown.
+
+    Measured, and this is why the conservatism stays: across twelve pinned public
+    FastAPI projects (569 Python files; the measurement ships as
+    scripts/measure_route_block_impact.py in the block-declaration change),
+    the only provenance-bearing import written inside a block was
+    `if TYPE_CHECKING: from fastapi import ...` -- a typing-only import that binds
+    nothing at run time -- plus one docs generator's `try: from fastapi import ...`.
+    Reading the first as a runtime binding would invent provenance for code that
+    never binds the name, and a rule that accuses a caller-filled value on an
+    invented binding is worse than one that stays silent. A runtime fallback
+    import in `try:` is the shape where widening would be defensible; nothing
+    measured yet depends on it.
+
     Keeping the old alias as unknown matters: it can still guard a target, but
     cannot provide the positive identity witness needed to accuse a sibling.
     """
