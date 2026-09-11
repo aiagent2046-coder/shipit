@@ -471,6 +471,61 @@ def metadata_input(ref=REF):
 
 
 @pytest.mark.parametrize("audit_route", [False, True])
+def test_publishable_key_and_project_reach_probe_and_full_metadata_ledger(client, ledger, audit_route):
+    key = "sb_publishable_syntheticPublicKeyForEndpoint"
+    use_audits({"id": AUDIT_ID, "repo_url": "https://github.com/acme/app"})
+    use_fetcher(lambda *_: REPO)
+    calls = []
+    use_fetch(lambda *args: (calls.append(args), (200, [{"id": "private-row-value"}]))[1])
+    response = (post_audit if audit_route else post)(
+        client, anon_key=key, project_url=f"https://{REF}.supabase.co/",
+        access_review=json.dumps(metadata_input()))
+    assert response.status_code == 200
+    result = response.json()
+    assert calls == [(f"https://{REF}.supabase.co", key, "users", 3)]
+    assert result["status"] == "checked" and result["persisted"] is True
+    assert result["project_ref"] == REF and result["key_source"] == "supplied"
+    assert result["access_review"]["project_ref"] == REF
+    assert ledger.completed[-1]["result"] == {k: v for k, v in result.items() if k != "persisted"}
+    assert key not in response.text and key not in repr(ledger.completed)
+    assert "private-row-value" not in response.text
+
+
+@pytest.mark.parametrize("audit_route", [False, True])
+@pytest.mark.parametrize("key,url,metadata_ref", [
+    ("sb_publishable_syntheticPublicKey", None, REF),
+    ("sb_publishable_syntheticPublicKey", "http://127.0.0.1:8000", REF),
+    ("sb_secret_syntheticPrivateKey", f"https://{REF}.supabase.co", REF),
+    ("sb_publishable_syntheticPublicKey", f"https://{REF}.supabase.co", "abcdefghijklmnopqrst"),
+    (jwt(), "https://abcdefghijklmnopqrst.supabase.co", REF),
+    (jwt().replace(".", "\r\n.", 1), f"https://{REF}.supabase.co", REF),
+])
+def test_bad_key_project_pair_or_snapshot_is_refused_without_live_requests(
+        client, ledger, audit_route, key, url, metadata_ref):
+    use_audits({"id": AUDIT_ID, "repo_url": "https://github.com/acme/app"})
+    use_fetcher(lambda *_: REPO)
+    # The autouse transport raises if any database request escapes refusal.
+    response = (post_audit if audit_route else post)(
+        client, anon_key=key, project_url=url,
+        access_review=json.dumps(metadata_input(metadata_ref)))
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "refused" and result["attempts"] == []
+    assert result["checked"] == [] and ledger.completed[-1]["outcome"] == "refused"
+    assert key not in response.text and key not in repr(ledger.completed)
+
+
+def test_publishable_key_for_another_project_is_inconclusive_when_supabase_rejects_it(client, ledger):
+    use_fetch(lambda *_: (401, {"message": "Invalid API key"}))
+    result = post(client, anon_key="sb_publishable_syntheticWrongProjectKey",
+                  project_url=f"https://{REF}.supabase.co").json()
+    assert result["status"] == "checked" and result["inconclusive"] == 1
+    assert result["exposed_tables"] == [] and result["empty_but_unproven"] == 0
+    assert result["attempts"][0]["evidence"]["reason"] == "authentication_failed"
+    assert ledger.completed[-1]["result"]["inconclusive"] == 1
+
+
+@pytest.mark.parametrize("audit_route", [False, True])
 def test_metadata_is_reviewed_and_persisted_without_changing_live_targets(client, ledger, audit_route):
     from copy import deepcopy
     data = metadata_input()

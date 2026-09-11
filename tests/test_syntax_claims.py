@@ -110,7 +110,12 @@ def test_sql_statement_binding_with_unicode_and_multiple_statements():
 
 def test_real_report_counterexamples():
     react = Path("web/src/components/RlsCheck.tsx").read_text()
-    assert check(react, start=96, end=118)["result"] == "contradicted"
+    lines = react.splitlines()
+    # Keep the report counterexample bound to the component after helpers are
+    # added above it. Fixed line numbers can silently select a different scope.
+    start = next(i for i, line in enumerate(lines, 1) if "const [phrase, setPhrase]" in line)
+    end = next(i for i, line in enumerate(lines, 1) if "if (!repoUrl) return null" in line)
+    assert check(react, start=start, end=end)["result"] == "contradicted"
     sql = Path("migrations/0035_payments_fixpack_job_id.sql").read_text()
     assert check(sql, sql=True, start=56, end=67)["result"] == "contradicted"
 

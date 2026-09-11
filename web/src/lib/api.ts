@@ -344,7 +344,7 @@ export async function getInstallationStatus(
 export async function runRlsCheck(
   auditId: string,
   input: {
-    consent: string; token?: string | null; anonKey?: string;
+    consent: string; token?: string | null; anonKey?: string; projectUrl?: string;
     accessReview?: import("./types").RlsAccessReviewInput | null;
   },
 ): Promise<RlsCheckResult> {
@@ -352,6 +352,7 @@ export async function runRlsCheck(
   form.append("consent", input.consent);
   if (input.token) form.append("token", input.token);
   if (input.anonKey) form.append("anon_key", input.anonKey);
+  if (input.projectUrl) form.append("project_url", input.projectUrl);
   if (input.accessReview) form.append("access_review", JSON.stringify(input.accessReview));
   const res = await request(
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/rls-check`,

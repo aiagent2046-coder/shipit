@@ -18,7 +18,7 @@ AT MOST THREE ROWS, NO VALUES. app.proof.rls_oracle.summarise_rows keeps
 columns, a count and value LENGTHS. Nothing a person wrote or that identifies
 them leaves the process.
 
-    export SUPABASE_ANON_KEY=...            # not echoed anywhere
+    export SUPABASE_PUBLISHABLE_KEY=...     # or SUPABASE_ANON_KEY for legacy JWT
     export RLS_PROBE_CONSENT=i-own-this-project
     python scripts/probe_supabase_rls_live.py <project-ref> table [table ...]
 """
@@ -32,6 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.proof.rls_probe import run_rls_probe  # noqa: E402
+from app.proof.supabase_target import TargetRefusal, target_from_key  # noqa: E402
 
 CONSENT_PHRASE = "i-own-this-project"
 
@@ -47,9 +48,15 @@ def main(argv: list[str]) -> int:
               f"this project is yours to probe", file=sys.stderr)
         return 2
 
-    key = (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
+    publishable_key = (os.environ.get("SUPABASE_PUBLISHABLE_KEY") or "").strip()
+    legacy_key = (os.environ.get("SUPABASE_ANON_KEY") or "").strip()
+    if publishable_key and legacy_key and publishable_key != legacy_key:
+        print("refusing: set only one of SUPABASE_PUBLISHABLE_KEY and "
+              "SUPABASE_ANON_KEY", file=sys.stderr)
+        return 2
+    key = publishable_key or legacy_key
     if not key:
-        print("refusing: SUPABASE_ANON_KEY is not set", file=sys.stderr)
+        print("refusing: SUPABASE_PUBLISHABLE_KEY or SUPABASE_ANON_KEY is not set", file=sys.stderr)
         return 2
     if not key.isascii():
         # MEASURED 2026-08-18: the key arrived with its characters replaced
@@ -63,21 +70,25 @@ def main(argv: list[str]) -> int:
         # in a header is a configuration mistake the operator can fix in ten
         # seconds, not an infrastructure failure, and the two must not read
         # the same. Caught here, before any request, and named.
-        bad = sorted({c for c in key if not c.isascii()})[:5]
-        print(f"refusing: SUPABASE_ANON_KEY contains non-ASCII characters "
-              f"({''.join(bad)!r}). This is almost always a MASKED value that "
-              f"was copied instead of the key itself — the mask preserves the "
-              f"length, so it looks right.", file=sys.stderr)
+        print("refusing: the public key contains non-ASCII characters. "
+              "This is almost always a MASKED value that was copied instead "
+              "of the key itself — the mask preserves the length, so it looks right.",
+              file=sys.stderr)
         return 2
 
     url = f"https://{ref}.supabase.co"
-    print(f"project: {url}")
-    print(f"key    : anon, {len(key)} chars (not shown)\n")
+    target = target_from_key(key, project_url=url)
+    if isinstance(target, TargetRefusal):
+        print(f"refusing: {target.reason}", file=sys.stderr)
+        return 2
+    print(f"project: {target.project_url}")
+    key_kind = "publishable" if key.startswith("sb_publishable_") else "anon JWT"
+    print(f"key    : {key_kind}, {len(key)} chars (not shown)\n")
 
     exposed = 0
     for table in tables:
         attempt = run_rls_probe(
-            project_url=url, anon_key=key, table=table,
+            project_url=target.project_url, anon_key=target.anon_key, table=table,
             consent=True, limit=3,
         )
         mark = {"success": "EXPOSED ", "failure": "closed  ",
@@ -91,7 +102,7 @@ def main(argv: list[str]) -> int:
         if attempt.status == "success":
             exposed += 1
 
-    print(f"{exposed} of {len(tables)} tables readable by the anon key.")
+    print(f"{exposed} of {len(tables)} tables readable anonymously.")
     # Non-zero when something is exposed: this is a finding, and a wrapper
     # should be able to notice without parsing the text.
     return 1 if exposed else 0

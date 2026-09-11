@@ -7,6 +7,7 @@ The process boundary is covered separately in test_proof_rls_worker.py.
 from __future__ import annotations
 
 import asyncio
+import base64
 import gzip
 import json
 
@@ -17,6 +18,14 @@ from app.proof import rls_probe as probe
 
 PROJECT = "https://abcdefghijklmnopqrst.supabase.co"
 KEY = "synthetic-public-test-key"
+PUBLISHABLE_KEY = "sb_publishable_syntheticPublicTestKey_12345678"
+
+
+def jwt(role="anon"):
+    payload = base64.urlsafe_b64encode(json.dumps({
+        "iss": "supabase", "ref": "abcdefghijklmnopqrst", "role": role,
+    }).encode()).decode().rstrip("=")
+    return f"eyJhbGciOiJIUzI1NiJ9.{payload}.synthetic-signature"
 
 
 @pytest.fixture(autouse=True)
@@ -61,28 +70,46 @@ def use_response(monkeypatch, stream, *, status=200, headers=None):
     return requests
 
 
-def run(**kwargs):
+def run(*, anon_key=KEY, **kwargs):
     return probe.run_rls_probe(
-        project_url=PROJECT, anon_key=KEY, table="users", consent=True, **kwargs)
+        project_url=PROJECT, anon_key=anon_key, table="users", consent=True, **kwargs)
 
 
-def test_actual_client_sends_read_only_bounded_request_and_sanitizes_rows(monkeypatch):
+@pytest.mark.parametrize("key", [KEY, jwt(), PUBLISHABLE_KEY])
+def test_actual_client_sends_read_only_bounded_request_and_sanitizes_rows(monkeypatch, key):
     value = "synthetic-private-row-value"
     stream = Stream([json.dumps([{"email": value}]).encode()])
     requests = use_response(monkeypatch, stream)
-    result = run(limit=500)
+    result = run(anon_key=key, limit=500)
     assert result.status == "success"
     assert result.evidence["rows_read"] == 1
     assert value not in repr(result)
-    assert KEY not in repr(result)
+    assert key not in repr(result)
     assert stream.closed
     assert len(requests) == 1
     request = requests[0]
     assert request.method == "GET"
     assert request.url == f"{PROJECT}/rest/v1/users?select=%2A&limit=3"
-    assert request.headers["apikey"] == KEY
-    assert request.headers["Authorization"] == f"Bearer {KEY}"
+    assert request.headers["apikey"] == key
+    if key == PUBLISHABLE_KEY:
+        assert "Authorization" not in request.headers
+    else:
+        assert request.headers["Authorization"] == f"Bearer {key}"
     assert request.headers["Accept-Encoding"] == "identity"
+
+
+@pytest.mark.parametrize("key", [
+    "sb_secret_syntheticPrivilegedTestKey", jwt("service_role"), jwt("authenticated"),
+    "sb_publishable_invalid\r\nAuthorization: injected", "sb_publishable_",
+])
+def test_worker_transport_refuses_unsafe_keys_before_opening_a_client(monkeypatch, key):
+    def no_client(**kwargs):
+        pytest.fail("an unsafe credential must never reach an HTTP client")
+
+    monkeypatch.setattr(httpx, "AsyncClient", no_client)
+    with pytest.raises(ValueError) as failure:
+        asyncio.run(probe._fetch_response(PROJECT, key, "users", 3, 1))
+    assert key not in str(failure.value)
 
 
 @pytest.mark.parametrize("headers", [None, {"content-length": "2"}])
@@ -136,11 +163,12 @@ def test_small_valid_body_at_the_byte_limit_is_evaluated(monkeypatch):
     assert stream.closed
 
 
-def test_redirect_is_not_followed_with_credentials(monkeypatch):
+@pytest.mark.parametrize("key", [KEY, PUBLISHABLE_KEY])
+def test_redirect_is_not_followed_with_credentials(monkeypatch, key):
     stream = Stream([b"{}"])
     requests = use_response(monkeypatch, stream, status=302,
                             headers={"location": "http://169.254.169.254/"})
-    result = run()
+    result = run(anon_key=key)
     assert len(requests) == 1
     assert result.status == "error"
     assert stream.closed
@@ -172,14 +200,15 @@ def test_deadline_also_cancels_waiting_for_response_headers(monkeypatch):
     assert cancelled == [True]
 
 
-def test_transport_exception_never_exposes_a_key_or_error_text(monkeypatch):
+@pytest.mark.parametrize("key", [KEY, PUBLISHABLE_KEY])
+def test_transport_exception_never_exposes_a_key_or_error_text(monkeypatch, key):
     def fail(**kwargs):
-        raise httpx.ConnectError(f"synthetic-private-error {KEY}")
+        raise httpx.ConnectError(f"synthetic-private-error {key}")
 
     monkeypatch.setattr(httpx, "AsyncClient", fail)
-    result = run()
+    result = run(anon_key=key)
     assert result.evidence["reason"] == "request_failed"
-    assert KEY not in repr(result)
+    assert key not in repr(result)
     assert "synthetic-private-error" not in repr(result)
 
 

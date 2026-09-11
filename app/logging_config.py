@@ -74,6 +74,8 @@ _REDACTIONS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\d{6,10}:[A-Za-z0-9_-]{30,40}"), REDACTED),
     # Anthropic / OpenAI style keys.
     (re.compile(r"sk-[A-Za-z0-9_-]{20,}"), REDACTED),
+    # Opaque Supabase keys are not JWTs. The public key is request-only too.
+    (re.compile(r"sb_(?:publishable|secret)_[A-Za-z0-9_-]+"), REDACTED),
     # Any JWT, which covers the App JWT we mint and any bearer token echoed
     # back to us by an upstream.
     (re.compile(

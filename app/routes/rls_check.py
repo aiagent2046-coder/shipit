@@ -129,22 +129,22 @@ async def create_rls_check(
     token: str | None = Form(None),
     anon_key: str | None = Form(
         None,
-        description="Your project's PUBLIC anon key, if the repository does "
-                    "not commit it. Optional — we look in the repository "
-                    "first. Never a service_role key: that one is refused.",
+        description="Your public sb_publishable_ key or legacy anon JWT. "
+                    "Publishable keys require project_url. Secret and service_role keys are refused.",
     ),
+    project_url: str | None = Form(
+        None, description="Supabase Project URL (https://<ref>.supabase.co); required for publishable keys."),
     access_review: str | None = Form(None, description="Version 1 metadata snapshot and expected access JSON."),
     limiter: RateLimiter = Depends(get_rate_limiter),
     check_repo: RlsLiveCheckRepository = Depends(get_rls_live_check_repo),
     audit_repo: AuditRepository = Depends(get_audit_repo),
     rls_fetch=Depends(get_rls_fetch),
 ) -> dict:
-    """Ask a customer's own Supabase project for rows it should not hand out.
+    """Check rows with a public key and, for opaque keys, an explicit Project URL.
 
-    The project and the key are derived from the uploaded repository, never
-    supplied by the caller — see app/proof/supabase_target.py for why the URL
-    is built from the key's own `ref` claim rather than read out of the tree,
-    and why a service_role key is refused rather than used.
+    The target resolver validates the hosted origin and refuses privileged
+    credentials before any database requests. The anon_key field name remains
+    compatible with existing clients and accepts both public key formats.
     """
     if consent != CONSENT_PHRASE:
         # 422 rather than 403: nothing was denied, the request did not carry
@@ -203,7 +203,7 @@ async def create_rls_check(
     # seconds, and every other request to this process with it.
     result = await run_in_threadpool(
         run_live_rls_check, raw, consent=True, anon_key=anon_key,
-        fetch=rls_fetch, access_review=metadata)
+        fetch=rls_fetch, access_review=metadata, project_url=project_url)
 
     payload = _payload(result)
 
@@ -226,6 +226,8 @@ async def create_rls_check_for_audit(
     token: str | None = Form(None),
     consent: str = Form(...),
     anon_key: str | None = Form(None),
+    project_url: str | None = Form(
+        None, description="Supabase Project URL (https://<ref>.supabase.co); required for publishable keys."),
     access_review: str | None = Form(None),
     limiter: RateLimiter = Depends(get_rate_limiter),
     audit_repo: AuditRepository = Depends(get_audit_repo),
@@ -315,7 +317,7 @@ async def create_rls_check_for_audit(
 
     result = await run_in_threadpool(
         run_live_rls_check, raw, consent=True, anon_key=anon_key,
-        fetch=rls_fetch, access_review=metadata)
+        fetch=rls_fetch, access_review=metadata, project_url=project_url)
     payload = _payload(result)
 
     if ledger_row:

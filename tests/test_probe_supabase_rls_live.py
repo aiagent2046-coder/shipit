@@ -11,12 +11,27 @@ read has already happened is decoration.
 
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 
 import scripts.probe_supabase_rls_live as live
 
 REF = "egoprezwkjaqacxtjwfl"
 GOOD_KEY = "sb_publishable_" + "a" * 24
+
+
+def jwt(*, role="anon", ref=REF):
+    payload = base64.urlsafe_b64encode(json.dumps({
+        "iss": "supabase", "ref": ref, "role": role,
+    }).encode()).decode().rstrip("=")
+    return f"eyJhbGciOiJIUzI1NiJ9.{payload}.synthetic-signature"
+
+
+@pytest.fixture(autouse=True)
+def clear_publishable_environment(monkeypatch):
+    monkeypatch.delenv("SUPABASE_PUBLISHABLE_KEY", raising=False)
 
 
 @pytest.fixture
@@ -66,6 +81,8 @@ def test_the_exact_phrase_lets_the_probe_run(monkeypatch):
     assert live.main([REF, "agent_projects"]) == 0
     assert seen and seen[0]["consent"] is True
     assert seen[0]["table"] == "agent_projects"
+    assert seen[0]["project_url"] == f"https://{REF}.supabase.co"
+    assert seen[0]["anon_key"] == GOOD_KEY
 
 
 # --- the key ----------------------------------------------------------------
@@ -97,6 +114,60 @@ def test_the_key_is_never_printed(monkeypatch, capsys):
     out = capsys.readouterr()
     assert GOOD_KEY not in out.out + out.err
     assert str(len(GOOD_KEY)) in out.out       # the length, and only that
+
+
+@pytest.mark.parametrize("key", [GOOD_KEY, jwt()])
+def test_public_key_formats_reach_probe_without_being_printed(monkeypatch, capsys, key):
+    seen = []
+
+    def fake(**kwargs):
+        seen.append(kwargs)
+        return _Attempt("failure")
+
+    monkeypatch.setattr(live, "run_rls_probe", fake)
+    _env(monkeypatch, consent="i-own-this-project", key=None)
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", key)
+    assert live.main([REF, "agent_projects"]) == 0
+    assert seen[0]["anon_key"] == key
+    assert seen[0]["project_url"] == f"https://{REF}.supabase.co"
+    output = capsys.readouterr()
+    assert key not in output.out + output.err
+
+
+@pytest.mark.parametrize("key", [
+    "sb_secret_syntheticPrivilegedTestKey", jwt(role="service_role"),
+    jwt(role="authenticated"), "sb_publishable_", "not-a-public-key",
+    "sb_publishable_bad\r\nAuthorization: injected",
+])
+def test_unsafe_keys_are_refused_without_printing_them(monkeypatch, no_requests, capsys, key):
+    _env(monkeypatch, consent="i-own-this-project", key=key)
+    assert live.main([REF, "agent_projects"]) == 2
+    output = capsys.readouterr()
+    assert key not in output.out + output.err
+
+
+@pytest.mark.parametrize("key", [GOOD_KEY, jwt()])
+def test_invalid_project_is_refused_without_printing_it(monkeypatch, no_requests, capsys, key):
+    ref = "user:synthetic-password@attacker.example/"
+    _env(monkeypatch, consent="i-own-this-project", key=key)
+    assert live.main([ref, "agent_projects"]) == 2
+    output = capsys.readouterr()
+    assert ref not in output.out + output.err
+
+
+def test_legacy_key_project_mismatch_stops_before_a_request(monkeypatch, no_requests):
+    _env(monkeypatch, consent="i-own-this-project", key=jwt(ref="abcdefghijklmnopqrst"))
+    assert live.main([REF, "agent_projects"]) == 2
+
+
+def test_conflicting_environment_keys_stop_before_a_request(monkeypatch, no_requests, capsys):
+    legacy_key = jwt()
+    _env(monkeypatch, consent="i-own-this-project", key=legacy_key)
+    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", GOOD_KEY)
+    assert live.main([REF, "agent_projects"]) == 2
+    output = capsys.readouterr()
+    assert legacy_key not in output.out + output.err
+    assert GOOD_KEY not in output.out + output.err
 
 
 # --- the exit code carries the finding --------------------------------------
