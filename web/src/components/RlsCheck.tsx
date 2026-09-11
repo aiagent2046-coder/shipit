@@ -22,8 +22,9 @@
 
 import { useState } from "react";
 import { runRlsCheck, ApiError } from "@/lib/api";
-import type { RlsAttempt, RlsCheckResult } from "@/lib/types";
+import type { RlsAccessReviewInput, RlsAttempt, RlsCheckResult } from "@/lib/types";
 import { Spinner } from "./Spinner";
+import { RlsMetadataInput, RlsMetadataOutcome } from "./RlsMetadata";
 
 const CONSENT_PHRASE = "i-own-this-project";
 
@@ -88,6 +89,8 @@ export function RlsCheck({
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RlsCheckResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [metadata, setMetadata] = useState<RlsAccessReviewInput | null>(null);
+  const [metadataValid, setMetadataValid] = useState(true);
 
   // The audit-scoped route re-reads the repository from its stored URL. An
   // audit created from a zip upload has none, and the backend refuses with a
@@ -104,6 +107,7 @@ export function RlsCheck({
           consent: phrase.trim(),
           token,
           anonKey: anonKey.trim() || undefined,
+          accessReview: metadata,
         }),
       );
     } catch (e) {
@@ -144,6 +148,7 @@ export function RlsCheck({
 
       {!result && (
         <div className="mt-4 space-y-3">
+          <RlsMetadataInput value={metadata} onChange={setMetadata} onValidity={setMetadataValid} disabled={running} />
           <label className="block text-sm">
             <span className="text-muted">
               Your project&apos;s public key, if it is not in the repository
@@ -204,7 +209,7 @@ export function RlsCheck({
 
           <button
             onClick={run}
-            disabled={running || phrase.trim() !== CONSENT_PHRASE}
+            disabled={running || !metadataValid || phrase.trim() !== CONSENT_PHRASE}
             className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
           >
             {running ? <Spinner /> : "Run the check"}
@@ -215,6 +220,9 @@ export function RlsCheck({
       {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
 
       {result && <Outcome result={result} />}
+      {result && <button type="button" className="mt-3 text-xs underline" onClick={() => {
+        setResult(null); setError(null); setPhrase("");
+      }}>Prepare another check</button>}
     </div>
   );
 }
@@ -275,6 +283,8 @@ function Outcome({ result }: { result: RlsCheckResult }) {
           ))}
         </ul>
       )}
+
+      {result.access_review && <RlsMetadataOutcome review={result.access_review} />}
 
       <div className="text-muted">
         <p>

@@ -343,12 +343,16 @@ export async function getInstallationStatus(
 // hardcoded the phrase behind a click would be that boolean with extra steps.
 export async function runRlsCheck(
   auditId: string,
-  input: { consent: string; token?: string | null; anonKey?: string },
+  input: {
+    consent: string; token?: string | null; anonKey?: string;
+    accessReview?: import("./types").RlsAccessReviewInput | null;
+  },
 ): Promise<RlsCheckResult> {
   const form = new FormData();
   form.append("consent", input.consent);
   if (input.token) form.append("token", input.token);
   if (input.anonKey) form.append("anon_key", input.anonKey);
+  if (input.accessReview) form.append("access_review", JSON.stringify(input.accessReview));
   const res = await request(
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/rls-check`,
     { method: "POST", headers: { ...authHeaders() }, body: form },

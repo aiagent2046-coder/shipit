@@ -94,6 +94,9 @@ jobs:
       - name: "Real-Postgres migration ledger parsing"
         run: pytest -q tests/test_migration_ledger_postgres.py
 
+      - name: "Real-Postgres live database metadata collector"
+        run: pytest -q tests/test_rls_metadata_postgres.py
+
       # Races in the money paths, which fakes cannot express: every one of
       # them lives in the gap between a read and a write on one row, and a
       # fake dict has no such gap.

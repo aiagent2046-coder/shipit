@@ -459,3 +459,77 @@ def test_partial_check_reason_and_unasked_names_reach_response_and_ledger(client
     stored = ledger.completed[-1]["result"]
     assert stored["stop_reason"] == result["stop_reason"]
     assert stored["not_checked"] == result["not_checked"]
+
+
+def metadata_input(ref=REF):
+    from tests.test_rls_metadata import metadata
+    data = metadata()
+    data["snapshot"]["project_ref"] = ref
+    data["snapshot"]["tables"][0]["name"] = "users"
+    data["expectations"][0]["table"] = "users"
+    return data
+
+
+@pytest.mark.parametrize("audit_route", [False, True])
+def test_metadata_is_reviewed_and_persisted_without_changing_live_targets(client, ledger, audit_route):
+    from copy import deepcopy
+    data = metadata_input()
+    extra = deepcopy(data["snapshot"]["tables"][0])
+    extra["name"] = "not_in_repository"
+    data["snapshot"]["tables"].append(extra)
+    calls = []
+    use_audits({"id": AUDIT_ID, "repo_url": "https://github.com/acme/app"})
+    use_fetcher(lambda *_: REPO)
+    use_fetch(lambda *args: (calls.append(args), (200, [{"id": "private-row-value"}]))[1])
+    response = (post_audit if audit_route else post)(client, access_review=json.dumps(data))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["checked"] == ["users"] and len(calls) == 1
+    assert body["access_review"]["tables"][1]["observation"] == "not_checked"
+    assert body["access_review"]["auth_model"] == "backend"
+    assert ledger.completed[-1]["result"]["access_review"] == body["access_review"]
+    stored = repr(ledger.completed)
+    assert "private-row-value" not in stored and jwt() not in stored
+    assert "policies" not in body["access_review"]  # only conclusions/digest, not raw import
+
+
+@pytest.mark.parametrize("audit_route", [False, True])
+def test_mismatched_snapshot_refuses_before_live_requests(client, ledger, audit_route):
+    use_audits({"id": AUDIT_ID, "repo_url": "https://github.com/acme/app"})
+    use_fetcher(lambda *_: REPO)
+    data = metadata_input("abcdefghijklmnopqrst")
+    response = (post_audit if audit_route else post)(client, access_review=json.dumps(data))
+    assert response.status_code == 200
+    assert response.json()["status"] == "refused"
+    assert "different project" in response.json()["reason"]
+    assert response.json()["checked"] == []
+    assert ledger.completed[-1]["outcome"] == "refused"
+
+
+@pytest.mark.parametrize("audit_route", [False, True])
+def test_invalid_metadata_is_rejected_before_ledger_or_repository_fetch(client, ledger, audit_route):
+    use_audits({"id": AUDIT_ID, "repo_url": "https://github.com/acme/app"})
+    calls = []
+    use_fetcher(lambda *args: calls.append(args))
+    response = (post_audit if audit_route else post)(client, access_review='{"password":"synthetic-private-input"}')
+    assert response.status_code == 422
+    assert response.json()["detail"]["reason"] == "invalid_metadata"
+    assert "synthetic-private-input" not in response.text
+    assert ledger.started == [] and calls == []
+
+
+@pytest.mark.parametrize("audit_route", [False, True])
+def test_metadata_is_not_consent_or_audit_authorization(client, ledger, audit_route):
+    use_audits(None)
+    submit = post_audit if audit_route else post
+    extra = {} if audit_route else {"audit_id": AUDIT_ID}
+    assert submit(client, consent="true", access_review=json.dumps(metadata_input()), **extra).status_code == 422
+    assert submit(client, token="wrong", access_review=json.dumps(metadata_input()), **extra).status_code == 404
+    assert ledger.started == []
+
+
+def test_authorized_standalone_link_still_works(client, ledger):
+    use_audits({"id": AUDIT_ID})
+    use_fetch(lambda *_: (200, []))
+    assert post(client, audit_id=AUDIT_ID, token="valid").status_code == 200
+    assert ledger.started[0]["audit_id"] == AUDIT_ID

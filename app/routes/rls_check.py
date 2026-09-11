@@ -40,6 +40,7 @@ from app.proof.rls_live_check import (
     LiveCheckResult,
     run_live_rls_check,
 )
+from app.proof.rls_metadata import MetadataInputError, parse_access_review
 from app.ratelimit import RateLimitExceeded, RateLimiter
 from app.routes._shared import _client_key, _parse_github_repo_url
 from app.routes.dependencies import (
@@ -86,6 +87,7 @@ def _payload(result: LiveCheckResult) -> dict:
             {"status": a.status, "detail": a.detail, "evidence": a.evidence}
             for a in result.attempts
         ],
+        "access_review": result.access_review,
     }
 
 
@@ -99,7 +101,16 @@ def _refusal(reason: str, *, persisted: bool) -> dict:
         "stop_reason": "",
         "exposed_tables": [], "inconclusive": 0, "empty_but_unproven": 0,
         "max_tables": MAX_TABLES, "attempts": [],
+        "access_review": None,
     }
+
+
+def _metadata(raw: str | None):
+    try:
+        return parse_access_review(raw)
+    except MetadataInputError as exc:
+        # Do not return Pydantic errors: they include submitted values.
+        raise HTTPException(status_code=422, detail={"reason": "invalid_metadata", "detail": str(exc)}) from exc
 
 
 @router.post("/v1/rls-check", status_code=200)
@@ -113,16 +124,19 @@ async def create_rls_check(
                     "by a client default, and this is not.",
     ),
     audit_id: str | None = Form(
-        None, description="Link the check to a persisted audit, if you have one.",
+        None, description="Link to a persisted audit; its access token is required.",
     ),
+    token: str | None = Form(None),
     anon_key: str | None = Form(
         None,
         description="Your project's PUBLIC anon key, if the repository does "
                     "not commit it. Optional — we look in the repository "
                     "first. Never a service_role key: that one is refused.",
     ),
+    access_review: str | None = Form(None, description="Version 1 metadata snapshot and expected access JSON."),
     limiter: RateLimiter = Depends(get_rate_limiter),
     check_repo: RlsLiveCheckRepository = Depends(get_rls_live_check_repo),
+    audit_repo: AuditRepository = Depends(get_audit_repo),
     rls_fetch=Depends(get_rls_fetch),
 ) -> dict:
     """Ask a customer's own Supabase project for rows it should not hand out.
@@ -143,6 +157,9 @@ async def create_rls_check(
             },
         )
 
+    if audit_id and await audit_repo.get_authorized(audit_id, token) is None:
+        raise HTTPException(status_code=404, detail={"reason": "not_found", "detail": "audit not found"})
+
     try:
         limiter.check(_client_key(request))
     except RateLimitExceeded as exc:
@@ -153,6 +170,7 @@ async def create_rls_check(
             headers={"Retry-After": str(exc.retry_after)},
         ) from exc
 
+    metadata = _metadata(access_review)
     raw = await archive.read(MAX_ARCHIVE_BYTES + 1)
     try:
         validate_zip(io.BytesIO(raw), size_bytes=len(raw))
@@ -185,7 +203,7 @@ async def create_rls_check(
     # seconds, and every other request to this process with it.
     result = await run_in_threadpool(
         run_live_rls_check, raw, consent=True, anon_key=anon_key,
-        fetch=rls_fetch)
+        fetch=rls_fetch, access_review=metadata)
 
     payload = _payload(result)
 
@@ -208,6 +226,7 @@ async def create_rls_check_for_audit(
     token: str | None = Form(None),
     consent: str = Form(...),
     anon_key: str | None = Form(None),
+    access_review: str | None = Form(None),
     limiter: RateLimiter = Depends(get_rate_limiter),
     audit_repo: AuditRepository = Depends(get_audit_repo),
     check_repo: RlsLiveCheckRepository = Depends(get_rls_live_check_repo),
@@ -254,6 +273,8 @@ async def create_rls_check_for_audit(
             headers={"Retry-After": str(exc.retry_after)},
         ) from exc
 
+    metadata = _metadata(access_review)
+
     # An audit created from a zip upload has no URL to re-fetch. That is a
     # REFUSAL with a reason, not an error: the customer can still use
     # POST /v1/rls-check with the archive, and saying so is more useful than a
@@ -294,7 +315,7 @@ async def create_rls_check_for_audit(
 
     result = await run_in_threadpool(
         run_live_rls_check, raw, consent=True, anon_key=anon_key,
-        fetch=rls_fetch)
+        fetch=rls_fetch, access_review=metadata)
     payload = _payload(result)
 
     if ledger_row:
