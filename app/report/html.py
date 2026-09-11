@@ -14,7 +14,8 @@ from app.scan.claim_evidence import (
 
 from app.report.evidence import (
     is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
-    model_status_notice, source_severity_counts, claim_evidence_rows, observation_summary, review_contribution_rows,
+    model_status_notice, non_model_status_notices, source_severity_counts, claim_evidence_rows,
+    observation_summary, review_contribution_rows,
     model_acceptance_notice,
 )
 from app.report.grouping import group_for_display
@@ -234,6 +235,11 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         '<aside aria-label="Model review status" style="border:1px solid #d9a441;padding:16px;margin:16px 0">'
         f'<strong>{escape(notice[0])}</strong><p>{escape(notice[1])}</p></aside>'
         if notice else ""
+    )
+    status_note += "".join(
+        f'<aside aria-label="{escape(title)}" style="border:1px solid #d9a441;padding:16px;margin:16px 0">'
+        f'<strong>{escape(title)}</strong><p>{escape(detail)}</p></aside>'
+        for title, detail in non_model_status_notices(score)
     )
     acceptance = model_acceptance_notice(score)
     acceptance_note = (

@@ -29,6 +29,19 @@ outcome:
 
 You pay for the **fix**, not for a PDF of findings.
 
+The **free audit** includes static checks for secrets, supported SQL, outbound
+URL, TLS, deserialization and file-path risks, local access-check inconsistencies,
+and project setup. When available, it also includes a limited model security
+preview of selected code (`basis: static+preview`). Static results remain
+available if the preview is unavailable or incomplete, including provider
+failures and usage limits. The report records which model analysis completed
+and any limits that affected it; its `basis` reflects the actual result.
+
+The **Fix Pack** includes a separate full model review of authentication and
+security in addition to its supported fixes. Both scopes disclose source
+coverage and verification limits: neither promises review of every file,
+exhaustive vulnerability detection, or a validated readiness score.
+
 ## Production today
 
 Live on [drydock.co](https://drydock.co) with:

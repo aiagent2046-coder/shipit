@@ -10,18 +10,9 @@ import type { Pricing } from "@/lib/types";
 /**
  * The storefront.
  *
- * Rewritten around the Fix Pack. The page it replaced sold Pro: an "Upgrade to
- * Pro" header, a Free-vs-Pro table and a Pro checkout. Two things were wrong
- * with that. It carried no price at all, so the only way to learn what
- * anything cost was to start a checkout; and its table had been stale since
- * the free tier became static-only at 3 audits a day, so it advertised "Free:
- * 5 audits" and "Severity-scored findings: yes" — neither true.
- *
- * Pro is no longer offered here at all. Its one live benefit is a higher daily
- * audit limit, and since free audits are static-only they cost us nothing to
- * run: charging for more of something that is free to serve is not a product.
- * The Pro purchase routes stay reachable for the existing customer and through
- * the bot, they are just not advertised.
+ * The free audit combines static checks with a limited security model preview
+ * when available. Fix Pack includes a full auth/security model review; neither
+ * scope promises exhaustive coverage. Pro is not offered on this page.
  *
  * The price is fetched from the backend that charges it — see getPricing — so
  * an env override on the deployment is reflected here without a rebuild. What
@@ -36,23 +27,19 @@ import type { Pricing } from "@/lib/types";
  * number, held to the same source, by a test that fails when they part.
  */
 
-// What the free static scan actually detects today, from app/scan/checks.py
-// and the secret rules. Claims here must be things the free tier really
-// returns: this page is read by someone deciding whether to trust us.
+// Scope follows app/scan/static.py and app/scan/pipeline.py.
 const FREE_FINDS = [
   "Secrets committed in code or in a tracked .env",
   "A .gitignore that does not cover secret-bearing files",
-  "No test suite",
-  "No CI workflow",
-  "No Dockerfile",
+  "Supported patterns for SQL injection, outbound URL risks, disabled TLS verification, unsafe deserialization and path traversal",
+  "Local access-check inconsistencies in Python/FastAPI routes and supported Supabase security patterns",
+  "Missing recognised test files, CI workflow or Dockerfile in the submitted source",
+  "A limited model security preview of selected code, when available",
 ];
 
-// Deliberately explicit about what the free scan does NOT do, because the
-// score is the thing people expect and we no longer show one for it.
 const FREE_OMITS = [
-  "No readiness score out of 10",
-  "No review of authentication or access rules",
-  "No review of injection risk in your queries",
+  "The full model review of authentication and security included with Fix Pack",
+  "A pull request with fixes",
 ];
 
 // What the Fix Pack adds on top of the fix itself (#188). Kept as its own list
@@ -60,8 +47,8 @@ const FREE_OMITS = [
 // does, this one is a separate deliverable that arrives as a link.
 const FIXPACK_REVIEW = [
   "Findings with source references and verification limits",
-  "Authentication and access rules reviewed",
-  "Injection risk in your queries reviewed",
+  "Broader model analysis of authentication and access rules in selected code",
+  "Broader model analysis of security risks, including injection in queries",
 ];
 
 // Everything the paid pull request contains. Each line maps to real generator
@@ -110,8 +97,8 @@ export default function PricingPage() {
           You pay for the fix, not the finding
         </h1>
         <p className="mt-3 max-w-2xl text-muted">
-          Finding problems is cheap, so we do it for free. Fixing them takes
-          real work, and that is the only thing we charge for.
+          Start with a free audit. A Fix Pack adds a pull request for supported
+          fixes and the full model review of authentication and security.
         </p>
       </header>
 
@@ -127,7 +114,7 @@ export default function PricingPage() {
           </p>
 
           <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted">
-            Finds
+            Includes
           </p>
           <ul className="mt-2 space-y-1.5 text-sm">
             {FREE_FINDS.map((item) => (
@@ -139,6 +126,13 @@ export default function PricingPage() {
               </li>
             ))}
           </ul>
+
+          <p className="mt-3 text-sm text-muted">
+            The preview has limited code coverage. Static results remain available
+            if the preview is unavailable or incomplete, including when a usage
+            limit is reached. The report shows which model analysis completed
+            and any limits that affected it.
+          </p>
 
           <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted">
             Does not include
@@ -215,7 +209,7 @@ export default function PricingPage() {
           </ul>
 
           <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted">
-            Plus the full review the free scan leaves out
+            Plus the full model review
           </p>
           <ul className="mt-2 space-y-1.5 text-sm">
             {FIXPACK_REVIEW.map((item) => (
@@ -229,7 +223,9 @@ export default function PricingPage() {
           </ul>
           <p className="mt-2 text-sm text-muted">
             Linked from the pull request, run against the same code. One review
-            per Fix Pack — it is not a subscription.
+            per Fix Pack — it is not a subscription. The report states its code
+            coverage and limitations; a full review does not mean every file or
+            vulnerability was covered.
           </p>
 
           <p className="mt-4 text-sm text-muted">
@@ -238,6 +234,12 @@ export default function PricingPage() {
           </p>
         </div>
       </section>
+
+      <p className="mt-5 text-sm text-muted">
+        Both audit scopes show findings and verification limits. Neither provides
+        a validated readiness score out of 10, and no findings does not establish
+        that the application is safe.
+      </p>
 
       {/* The two preconditions. Both are real refusals in the API, so a buyer
           who cannot be served should learn it here rather than at checkout. */}

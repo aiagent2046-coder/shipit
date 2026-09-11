@@ -212,6 +212,35 @@ describe("audit evidence", () => {
     expect(screen.getByText(manifest.archive_sha256).getAttribute("translate")).toBe("no");
   });
 
+  it("shows unqueried dependencies separately after a valid empty preview", () => {
+    render(<AuditCoverage findings={[]} score={{ total: 0, categories: {}, basis: "static+preview",
+      scan_manifest: { ...manifest, model_calls: 1, limitations: ["dependency_check_not_run"],
+        model_findings: [{ model: "preview", responses: 1, invalid_responses: 0, empty_responses: 1,
+          received: 0, rejected: 0, accepted: 0, merged: 0, saved: 0, rejection_reasons: {} }] } }} />);
+    expect(screen.queryByRole("complementary", { name: "Model review status" })).toBeNull();
+    const notice = screen.getByRole("complementary", { name: "Dependency check not run" });
+    expect(notice.closest("details")).toBeNull();
+    expect(notice.textContent).toContain("vulnerability database was not queried");
+    expect(screen.getByText(/valid empty: 1/)).toBeTruthy();
+    expect(screen.getByText("Model limits / skip reasons").nextElementSibling?.textContent).toBe("None recorded");
+  });
+
+  it("keeps mixed failures and escaped unknown reasons visible outside scan details", () => {
+    const reason = "<script>new_stage_limit</script>";
+    const { container } = render(<AuditCoverage findings={[]} score={{ total: 0, categories: {}, basis: "static+partial",
+      scan_manifest: { ...manifest, model_calls: 1,
+        limitations: ["billing", "provider_failure", "dependency_database_unavailable", reason] } }} />);
+    const model = screen.getByRole("complementary", { name: "Model review status" });
+    expect(model.textContent).toContain("billing or quota limit");
+    expect(model.textContent).toContain("A model request failed");
+    expect(model.textContent).not.toContain(reason);
+    for (const title of ["Dependency check incomplete", "Additional audit limitations recorded"]) {
+      expect(screen.getByRole("complementary", { name: title }).closest("details")).toBeNull();
+    }
+    expect(screen.getByRole("complementary", { name: "Additional audit limitations recorded" }).textContent).toContain(reason);
+    expect(container.querySelector("script")).toBeNull();
+  });
+
   it("counts the paid report's 26 source observations separately from its 49 examples", () => {
     const source = (["high", "medium", "low"] as const).flatMap((severity, i) =>
       Array.from({ length: [4, 10, 12][i] }, () => ({ ...finding, severity, file: "app.py" })));

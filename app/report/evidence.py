@@ -15,6 +15,7 @@ from app.scan.claim_evidence import (
 )
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
+from app.scan.manifest import SCA_LIMITATIONS
 
 
 def is_non_production(finding: dict) -> bool:
@@ -92,10 +93,66 @@ def source_severity_counts(findings: list[dict]) -> dict[str, int]:
     return counts
 
 
+# Mirror the producer's model flags and known skip/failure reasons, including
+# legacy free-tier skips. Unknown reasons retain their own audit notice instead
+# of being assigned to a model failure by exclusion.
+MODEL_LIMITATIONS = frozenset({
+    "billing", "provider", "provider_failure", "cost_cap_exceeded", "daily_spend_cap",
+    "input_truncated", "invalid_responses", "no_providers_configured", "free_tier",
+})
+
+
+def _classified_limits(score: dict) -> tuple[list[str], list[str], list[str]]:
+    model, dependency, other = [], [], []
+    for reason in (score.get("scan_manifest") or {}).get("limitations") or []:
+        if reason in MODEL_LIMITATIONS or reason.startswith("rubric_failed:"):
+            model.append(reason)
+        elif reason in SCA_LIMITATIONS:
+            dependency.append(reason)
+        else:
+            other.append(reason)
+    return model, dependency, other
+
+
+def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
+    """Keep dependency gaps and unclassified reasons visible above the findings."""
+    _, dependency, other = _classified_limits(score)
+    notices = []
+    if dependency:
+        details = []
+        if "dependency_check_not_run" in dependency:
+            details.append("The dependency vulnerability database was not queried in this audit.")
+        if "dependency_database_unavailable" in dependency:
+            details.append("The dependency vulnerability database did not provide a complete answer.")
+        if "dependency_lockfile_unreadable" in dependency:
+            details.append("A dependency lockfile could not be read.")
+        if "dependency_coverage_incomplete" in dependency:
+            details.append("Dependency coverage is incomplete; some dependencies could not be checked.")
+        title = ("Dependency check not run" if set(dependency) == {"dependency_check_not_run"}
+                 else "Dependency check incomplete")
+        notices.append((title, " ".join(details) +
+                        " This does not establish the absence of vulnerable dependencies."))
+    if other:
+        notices.append(("Additional audit limitations recorded",
+                        "Recorded reasons: " + ", ".join(other) +
+                        ". The affected check is not classified; these reasons do not establish a model failure."))
+    return notices
+
+
+def _limitation_rows(score: dict) -> list[tuple[str, str]]:
+    model, dependency, other = _classified_limits(score)
+    rows = [("Model limits / skip reasons", ", ".join(model) or "None recorded")]
+    if dependency:
+        rows.append(("Dependency limits / skip reasons", ", ".join(dependency)))
+    if other:
+        rows.append(("Other audit limits / skip reasons", ", ".join(other)))
+    return rows
+
+
 def model_status_notice(score: dict) -> tuple[str, str] | None:
     """Describe recorded execution, never infer a payment tier or a project defect."""
     manifest = score.get("scan_manifest") or {}
-    reasons = manifest.get("limitations", [])
+    reasons, _, _ = _classified_limits(score)
     limited = bool(reasons) or score.get("basis") == "static+partial"
     if not limited and score.get("basis") != "static_only":
         return None
@@ -108,13 +165,15 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
               if responded else "No model response is recorded. Only static observations are available.")
     if "billing" in reasons:
         detail += " The model provider reported a billing or quota limit."
-    elif ("provider" in reasons or "provider_failure" in reasons
-          or any(r.startswith("rubric_failed:") for r in reasons)):
+    if ("provider" in reasons or "provider_failure" in reasons
+            or any(r.startswith("rubric_failed:") for r in reasons)):
         detail += " A model request failed."
     if "cost_cap_exceeded" in reasons or "daily_spend_cap" in reasons:
         detail += " A review spending limit was reached."
     if "input_truncated" in reasons:
         detail += " Token accounting suggests possible input truncation; this is not independently verified."
+    if "invalid_responses" in reasons:
+        detail += " Some model responses could not be read as valid review results."
     if not manifest:
         detail = "The review is recorded as limited. The reason and model execution details were not recorded."
     return title, detail + " This is a limit of the audit, not evidence of a defect in your project."
@@ -507,8 +566,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
                     for key, label in labels.items())
     elif manifest.get("llm_files_not_submitted"):
         rows.append(("File exclusion reasons", "Not recorded for this audit"))
-    limitations = manifest.get("limitations", [])
-    rows.append(("Model limits / skip reasons", ", ".join(limitations) or "None recorded"))
+    rows.extend(_limitation_rows(score))
     for check, status in manifest.get("static_limits", {}).items():
         rows.append((f"Static scope: {check}", str(status)))
     facts = manifest.get("source_facts")

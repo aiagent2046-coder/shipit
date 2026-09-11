@@ -291,10 +291,66 @@ export function sourceSeverityCounts(findings: Finding[]): Record<Severity, numb
   return counts;
 }
 
+// Mirrors app/report/evidence.py and the known producer reasons in
+// app/scan/manifest.py. New reasons remain visible without assuming their stage.
+const modelLimitations = new Set([
+  "billing", "provider", "provider_failure", "cost_cap_exceeded", "daily_spend_cap",
+  "input_truncated", "invalid_responses", "no_providers_configured", "free_tier",
+]);
+const dependencyLimitations = new Set([
+  "dependency_check_not_run", "dependency_database_unavailable",
+  "dependency_lockfile_unreadable", "dependency_coverage_incomplete",
+]);
+
+function classifiedLimits(score: Score): [string[], string[], string[]] {
+  const model: string[] = [], dependency: string[] = [], other: string[] = [];
+  for (const reason of score.scan_manifest?.limitations ?? []) {
+    if (modelLimitations.has(reason) || reason.startsWith("rubric_failed:")) model.push(reason);
+    else if (dependencyLimitations.has(reason)) dependency.push(reason);
+    else other.push(reason);
+  }
+  return [model, dependency, other];
+}
+
+export function nonModelStatusNotices(score: Score): [string, string][] {
+  const [, dependency, other] = classifiedLimits(score);
+  const notices: [string, string][] = [];
+  if (dependency.length) {
+    const details: string[] = [];
+    if (dependency.includes("dependency_check_not_run")) {
+      details.push("The dependency vulnerability database was not queried in this audit.");
+    }
+    if (dependency.includes("dependency_database_unavailable")) {
+      details.push("The dependency vulnerability database did not provide a complete answer.");
+    }
+    if (dependency.includes("dependency_lockfile_unreadable")) {
+      details.push("A dependency lockfile could not be read.");
+    }
+    if (dependency.includes("dependency_coverage_incomplete")) {
+      details.push("Dependency coverage is incomplete; some dependencies could not be checked.");
+    }
+    const title = dependency.every(reason => reason === "dependency_check_not_run")
+      ? "Dependency check not run" : "Dependency check incomplete";
+    notices.push([title, details.join(" ") + " This does not establish the absence of vulnerable dependencies."]);
+  }
+  if (other.length) notices.push(["Additional audit limitations recorded",
+    "Recorded reasons: " + other.join(", ")
+    + ". The affected check is not classified; these reasons do not establish a model failure."]);
+  return notices;
+}
+
+function limitationRows(score: Score): [string, string][] {
+  const [model, dependency, other] = classifiedLimits(score);
+  const rows: [string, string][] = [["Model limits / skip reasons", model.join(", ") || "None recorded"]];
+  if (dependency.length) rows.push(["Dependency limits / skip reasons", dependency.join(", ")]);
+  if (other.length) rows.push(["Other audit limits / skip reasons", other.join(", ")]);
+  return rows;
+}
+
 // Mirrors model_status_notice: reasons describe the audit service, not the project.
 export function modelStatusNotice(score: Score): [string, string] | null {
   const manifest = score.scan_manifest;
-  const reasons = manifest?.limitations ?? [];
+  const [reasons] = classifiedLimits(score);
   const limited = reasons.length > 0 || score.basis === "static+partial";
   if (!limited && score.basis !== "static_only") return null;
   const responded = (manifest?.model_calls ?? 0) > 0;
@@ -304,7 +360,7 @@ export function modelStatusNotice(score: Score): [string, string] | null {
     ? "Model responses are available, but review limits were recorded."
     : "No model response is recorded. Only static observations are available.";
   if (reasons.includes("billing")) detail += " The model provider reported a billing or quota limit.";
-  else if (reasons.includes("provider") || reasons.includes("provider_failure") || reasons.some((r) => r.startsWith("rubric_failed:"))) {
+  if (reasons.includes("provider") || reasons.includes("provider_failure") || reasons.some((r) => r.startsWith("rubric_failed:"))) {
     detail += " A model request failed.";
   }
   if (reasons.includes("cost_cap_exceeded") || reasons.includes("daily_spend_cap")) {
@@ -312,6 +368,9 @@ export function modelStatusNotice(score: Score): [string, string] | null {
   }
   if (reasons.includes("input_truncated")) {
     detail += " Token accounting suggests possible input truncation; this is not independently verified.";
+  }
+  if (reasons.includes("invalid_responses")) {
+    detail += " Some model responses could not be read as valid review results.";
   }
   if (!manifest) detail = "The review is recorded as limited. The reason and model execution details were not recorded.";
   return [title, detail + " This is a limit of the audit, not evidence of a defect in your project."];
@@ -435,7 +494,7 @@ export function manifestRows(score: Score): [string, string][] {
     ["Files eligible for model review", String(m.llm_candidate_files ?? "Not recorded")],
     ["Unique files submitted to model", String(m.llm_submitted_files ?? "Not recorded")],
     ["Eligible files not submitted", String(m.llm_files_not_submitted ?? "Not recorded")],
-    ["Model limits / skip reasons", m.limitations.join(", ") || "None recorded"],
+    ...limitationRows(score),
   ];
   if (m.model_findings == null) {
     rows.push(["Model finding processing", "Not recorded for this audit"]);

@@ -1,0 +1,397 @@
+[
+  {
+    "name": "dependency_check_not_run",
+    "basis": "static+preview",
+    "calls": 1,
+    "limitations": [
+      "dependency_check_not_run"
+    ],
+    "model_title": null,
+    "model_reasons": [],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": []
+  },
+  {
+    "name": "dependency_database_unavailable",
+    "basis": "static+preview",
+    "calls": 1,
+    "limitations": [
+      "dependency_database_unavailable"
+    ],
+    "model_title": null,
+    "model_reasons": [],
+    "dependency_reasons": [
+      "dependency_database_unavailable"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check incomplete",
+    "dependency_detail": "The dependency vulnerability database did not provide a complete answer.",
+    "model_details": []
+  },
+  {
+    "name": "dependency_lockfile_unreadable",
+    "basis": "static+preview",
+    "calls": 1,
+    "limitations": [
+      "dependency_lockfile_unreadable"
+    ],
+    "model_title": null,
+    "model_reasons": [],
+    "dependency_reasons": [
+      "dependency_lockfile_unreadable"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check incomplete",
+    "dependency_detail": "A dependency lockfile could not be read.",
+    "model_details": []
+  },
+  {
+    "name": "dependency_coverage_incomplete",
+    "basis": "static+preview",
+    "calls": 1,
+    "limitations": [
+      "dependency_coverage_incomplete"
+    ],
+    "model_title": null,
+    "model_reasons": [],
+    "dependency_reasons": [
+      "dependency_coverage_incomplete"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check incomplete",
+    "dependency_detail": "Dependency coverage is incomplete; some dependencies could not be checked.",
+    "model_details": []
+  },
+  {
+    "name": "mixed_billing",
+    "basis": "static_only",
+    "calls": 0,
+    "limitations": [
+      "billing",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review unavailable",
+    "model_reasons": [
+      "billing"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "billing or quota limit"
+    ]
+  },
+  {
+    "name": "mixed_provider",
+    "basis": "static+partial",
+    "calls": 2,
+    "limitations": [
+      "provider",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review incomplete",
+    "model_reasons": [
+      "provider"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "A model request failed."
+    ]
+  },
+  {
+    "name": "mixed_provider_failure",
+    "basis": "static+llm",
+    "calls": 2,
+    "limitations": [
+      "provider_failure",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review incomplete",
+    "model_reasons": [
+      "provider_failure"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "A model request failed."
+    ]
+  },
+  {
+    "name": "mixed_rubric_failed: money",
+    "basis": "static+partial",
+    "calls": 2,
+    "limitations": [
+      "rubric_failed: money",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review incomplete",
+    "model_reasons": [
+      "rubric_failed: money"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "A model request failed."
+    ]
+  },
+  {
+    "name": "mixed_cost_cap_exceeded",
+    "basis": "static+llm",
+    "calls": 1,
+    "limitations": [
+      "cost_cap_exceeded",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review incomplete",
+    "model_reasons": [
+      "cost_cap_exceeded"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "A review spending limit was reached."
+    ]
+  },
+  {
+    "name": "mixed_daily_spend_cap",
+    "basis": "static_only",
+    "calls": 0,
+    "limitations": [
+      "daily_spend_cap",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review unavailable",
+    "model_reasons": [
+      "daily_spend_cap"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "A review spending limit was reached."
+    ]
+  },
+  {
+    "name": "mixed_input_truncated",
+    "basis": "static+llm",
+    "calls": 1,
+    "limitations": [
+      "input_truncated",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review may be incomplete",
+    "model_reasons": [
+      "input_truncated"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "possible input truncation"
+    ]
+  },
+  {
+    "name": "mixed_invalid_responses",
+    "basis": "static+partial",
+    "calls": 1,
+    "limitations": [
+      "invalid_responses",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review incomplete",
+    "model_reasons": [
+      "invalid_responses"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "Some model responses could not be read as valid review results."
+    ]
+  },
+  {
+    "name": "mixed_no_providers_configured",
+    "basis": "static_only",
+    "calls": 0,
+    "limitations": [
+      "no_providers_configured",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review unavailable",
+    "model_reasons": [
+      "no_providers_configured"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "No model response is recorded."
+    ]
+  },
+  {
+    "name": "mixed_free_tier",
+    "basis": "static_only",
+    "calls": 0,
+    "limitations": [
+      "free_tier",
+      "dependency_check_not_run"
+    ],
+    "model_title": "Model review unavailable",
+    "model_reasons": [
+      "free_tier"
+    ],
+    "dependency_reasons": [
+      "dependency_check_not_run"
+    ],
+    "other_reasons": [],
+    "dependency_title": "Dependency check not run",
+    "dependency_detail": "The dependency vulnerability database was not queried in this audit.",
+    "model_details": [
+      "No model response is recorded."
+    ]
+  },
+  {
+    "name": "unknown_only",
+    "basis": "static+preview",
+    "calls": 1,
+    "limitations": [
+      "new_stage_limit"
+    ],
+    "model_title": null,
+    "model_reasons": [],
+    "dependency_reasons": [],
+    "other_reasons": [
+      "new_stage_limit"
+    ],
+    "model_details": []
+  },
+  {
+    "name": "unknown_with_model_failure",
+    "basis": "static+partial",
+    "calls": 1,
+    "limitations": [
+      "new_stage_limit",
+      "billing"
+    ],
+    "model_title": "Model review incomplete",
+    "model_reasons": [
+      "billing"
+    ],
+    "dependency_reasons": [],
+    "other_reasons": [
+      "new_stage_limit"
+    ],
+    "model_details": [
+      "billing or quota limit"
+    ]
+  },
+  {
+    "name": "all_stages_and_failures",
+    "basis": "static+partial",
+    "calls": 2,
+    "limitations": [
+      "billing",
+      "provider_failure",
+      "daily_spend_cap",
+      "invalid_responses",
+      "input_truncated",
+      "dependency_database_unavailable",
+      "new_stage_limit"
+    ],
+    "model_title": "Model review incomplete",
+    "model_reasons": [
+      "billing",
+      "provider_failure",
+      "daily_spend_cap",
+      "invalid_responses",
+      "input_truncated"
+    ],
+    "dependency_reasons": [
+      "dependency_database_unavailable"
+    ],
+    "other_reasons": [
+      "new_stage_limit"
+    ],
+    "dependency_title": "Dependency check incomplete",
+    "dependency_detail": "The dependency vulnerability database did not provide a complete answer.",
+    "model_details": [
+      "billing or quota limit",
+      "A model request failed.",
+      "A review spending limit was reached.",
+      "Some model responses could not be read as valid review results.",
+      "possible input truncation"
+    ]
+  },
+  {
+    "name": "healthy_full",
+    "basis": "static+llm",
+    "calls": 2,
+    "limitations": [],
+    "model_title": null,
+    "model_reasons": [],
+    "dependency_reasons": [],
+    "other_reasons": [],
+    "model_details": []
+  },
+  {
+    "name": "legacy_partial",
+    "basis": "static+partial",
+    "no_manifest": true,
+    "model_title": "Model review incomplete",
+    "model_reasons": [],
+    "dependency_reasons": [],
+    "other_reasons": [],
+    "model_details": [
+      "details were not recorded"
+    ]
+  },
+  {
+    "name": "legacy_static",
+    "basis": "static_only",
+    "no_manifest": true,
+    "model_title": "Model review unavailable",
+    "model_reasons": [],
+    "dependency_reasons": [],
+    "other_reasons": [],
+    "model_details": [
+      "details were not recorded"
+    ]
+  }
+]
