@@ -91,14 +91,43 @@ def test_a_partly_readable_inventory_cannot_authorize_a_partial_refresh():
 
 # -- rescoring --------------------------------------------------------------
 
+def score_without_the_ask_time(score: dict) -> dict:
+    """The score with the manifest's wall-clock reading removed.
+
+    `scan_manifest.sca_asked_at` records WHEN the vulnerability database was
+    asked, at one-second resolution, so two scans of the same bytes a second
+    apart differ by that field and nothing else. Comparing it as part of the
+    score made this test fail on CI whenever the two runs straddled a second
+    boundary:
+
+        - 'sca_asked_at': '2026-09-11T06:40:23+00:00'
+        + 'sca_asked_at': '2026-09-11T06:40:24+00:00'
+
+    That is a property of the clock, not of the scoring, so it is excluded here
+    and checked for shape by the caller instead: still recorded, still a
+    timezone-aware reading of the same run.
+    """
+    manifest = dict(score.get("scan_manifest") or {})
+    manifest.pop("sca_asked_at", None)
+    return {**score, "scan_manifest": manifest}
+
+
 def test_the_refresh_rescore_matches_a_full_scan_of_the_same_findings():
     """The whole point: the refreshed total must equal what run_scan would have
     produced for exactly these findings, or the refresh silently invents a
-    different audit."""
-    scan = run_scan(repo_bytes(), LLMClient(), sca_client=advisory_client())
-    rerun = run_scan(repo_bytes(), LLMClient(), sca_client=advisory_client())
-    assert rerun["score"] == scan["score"], (
+    different audit. Everything the clock does not decide is compared; the one
+    field it does decide is verified as a reading, not as an equality."""
+    audit = repo_bytes()
+    scan = run_scan(audit, LLMClient(), sca_client=advisory_client())
+    rerun = run_scan(audit, LLMClient(), sca_client=advisory_client())
+    assert score_without_the_ask_time(rerun["score"]) == score_without_the_ask_time(scan["score"]), (
         "the same inputs must score identically before this test means anything")
+
+    readings = [datetime.fromisoformat(result["score"]["scan_manifest"]["sca_asked_at"])
+                for result in (scan, rerun)]
+    assert all(reading.tzinfo is not None for reading in readings), "the reading must carry its timezone"
+    assert max(readings) - min(readings) < timedelta(minutes=5), (
+        "both readings describe the same run, not two different days")
 
     recomputed = score_findings(scan["findings"], **score_inputs_from_stored(scan["score"]))
     assert recomputed == {k: v for k, v in scan["score"].items()
