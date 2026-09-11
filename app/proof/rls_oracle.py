@@ -1,4 +1,4 @@
-"""Judge one PostgREST answer: did the anon key read rows it should not have?
+"""Judge one PostgREST answer: did the anon key read rows?
 
 Part B of SUPABASE_RLS_YIELD_PLAN.md. Separated from the probe for the reason
 app/proof/cors_oracle.py was: the judgement is the part that can be wrong in a
@@ -22,12 +22,9 @@ it alone as "we checked, your data is protected" would be the same defect this
 project removed from the CORS oracle, where `*` without credentials was scored
 as an exploit: a verdict stated more strongly than the evidence supports.
 
-So `empty_result` never proves protection on its own. It means something only
-as the AFTER half of a pair whose BEFORE half read real rows out of that same
-table — at which point the table is known to be non-empty and the same request
-returning nothing is a genuine before/after. `app/proof/compare.py` already
-enforces exactly that shape, which is why this returns a verdict rather than a
-conclusion.
+An empty result never proves protection on its own, even when a previous
+request read rows. Data, policies, or the deployment may have changed between
+requests. A controlled before/after stand must independently preserve its data.
 """
 
 from __future__ import annotations
@@ -66,11 +63,7 @@ def summarise_rows(rows: list[dict[str, Any]], limit: int = 3) -> dict[str, Any]
     there, while "email" alone could be an empty column.
     """
     sample = rows[:limit]
-    columns: list[str] = []
-    for row in sample:
-        for key in row:
-            if key not in columns:
-                columns.append(key)
+    columns = list(dict.fromkeys(key for row in sample for key in row))
     shapes = {
         key: _shape(next((r[key] for r in sample if r.get(key) is not None), None))
         for key in columns
@@ -106,6 +99,14 @@ def evaluate_rls_response(
 ) -> RlsVerdict:
     """Decide what one anon `select` says about a table's protection."""
     if status_code == 200 and isinstance(body, list):
+        if any(not isinstance(row, dict)
+               or any(not isinstance(key, str) for key in row) for row in body):
+            return RlsVerdict(
+                exposed=False, reason="invalid_response",
+                detail="ответ не является списком строк таблицы",
+                evidence={"table": table, "status": status_code},
+                conclusive=False,
+            )
         if body:
             summary = summarise_rows(body)
             return RlsVerdict(
@@ -130,38 +131,39 @@ def evaluate_rls_response(
             },
         )
 
-    code = ""
-    message = ""
-    if isinstance(body, dict):
-        code = str(body.get("code") or "")
-        message = str(body.get("message") or "")
-
-    if status_code in (401, 403) or code == PG_INSUFFICIENT_PRIVILEGE:
-        # A real denial, and unlike an empty result it stands on its own: the
-        # database refused rather than returning nothing.
+    # Error bodies can echo credentials and database values. Match only known
+    # status/code pairs; never retain an upstream message or an arbitrary code.
+    code = body.get("code") if isinstance(body, dict) else None
+    evidence = {"table": table, "status": status_code}
+    if status_code in (401, 403) and code == PG_INSUFFICIENT_PRIVILEGE:
         return RlsVerdict(
             exposed=False,
             reason="permission_denied",
-            detail="база отказала анонимному ключу в доступе к таблице",
-            evidence={"table": table, "status": status_code, "code": code},
-            # A 401 with no PostgREST code is more likely OUR key being wrong
-            # than their table being safe, and guessing between the two is how
-            # a broken probe reports every customer as secure.
-            conclusive=bool(code),
+            detail="база отказала этому запросу в доступе к таблице",
+            evidence={**evidence, "code": PG_INSUFFICIENT_PRIVILEGE},
         )
 
-    if status_code == 404 or code == PGRST_UNDEFINED_TABLE:
+    if status_code == 404 and code == PGRST_UNDEFINED_TABLE:
         return RlsVerdict(
             exposed=False,
             reason="table_not_exposed",
-            detail="таблица не опубликована через PostgREST",
-            evidence={"table": table, "status": status_code, "code": code},
+            detail="PostgREST не нашёл таблицу в опубликованной схеме",
+            evidence={**evidence, "code": PGRST_UNDEFINED_TABLE},
         )
 
+    if status_code in (401, 403):
+        reason = "authentication_failed"
+        detail = "ключ или авторизация запроса отклонены; доступ к таблице не проверен"
+    elif status_code == 429:
+        reason = "rate_limited"
+        detail = "проект ограничил частоту запросов; доступ к таблице не проверен"
+    elif 500 <= status_code <= 599:
+        reason = "server_error"
+        detail = "сервер проекта вернул ошибку; доступ к таблице не проверен"
+    else:
+        reason = "unexpected_response"
+        detail = "ответ проекта не позволяет определить доступ к таблице"
     return RlsVerdict(
-        exposed=False,
-        reason="unexpected_response",
-        detail=f"неожиданный ответ: HTTP {status_code} {code or message}"[:200],
-        evidence={"table": table, "status": status_code, "code": code},
-        conclusive=False,
+        exposed=False, reason=reason, detail=detail,
+        evidence=evidence, conclusive=False,
     )
