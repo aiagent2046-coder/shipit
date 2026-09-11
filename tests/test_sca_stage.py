@@ -79,10 +79,22 @@ class FakeTransport:
 
 
 def make_zip(entries: dict[str, str]) -> bytes:
+    """Zip the entries with FIXED timestamps.
+
+    `zf.writestr(name, text)` stamps every entry with the wall clock, so two calls
+    a second apart return DIFFERENT bytes -- and therefore a different
+    `archive_sha256` in the scan manifest. Any test that asserts "the same inputs
+    behave the same" then depends on how fast the machine is: measured, the SCA
+    refresh equivalence test diverged on `archive_sha256` in attempts that were
+    forced a second apart. A fixture has to be byte-identical across calls; entry
+    timestamps are not part of anything these tests claim.
+    """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for name, text in entries.items():
-            zf.writestr(name, text)
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            zf.writestr(info, text)
     return buf.getvalue()
 
 
