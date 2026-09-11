@@ -14,6 +14,7 @@ import zipfile
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
+from app.scan.scope_statements import BLOCK_STATEMENTS, scope_statements
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "python-route-read-auth-consistency"
@@ -224,12 +225,15 @@ def _scope_bindings(scope: ast.AST, inherited: _ScopeBindings | None = None) -> 
 
 
 def _route_candidates(scope, methods: set[str]) -> bool:
+    # Block statements included: a module-level `if:`/`try:` is not a scope, so a
+    # route declared inside one belongs to this scope's router. See
+    # app/scan/scope_statements.py for the measurement behind this.
     return any(
         isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and len(node.decorator_list) == 1
         and isinstance(node.decorator_list[0], ast.Call)
         and isinstance(node.decorator_list[0].func, ast.Attribute)
         and node.decorator_list[0].func.attr in methods
-        for node in scope.body
+        for node in scope_statements(scope)
     )
 
 
@@ -329,12 +333,36 @@ def _repository_key(fn, name: str, bindings: _ScopeBindings):
     return bindings.repositories.get(name) if not stores[name] else None
 
 
+def _route_declaration(node, routers: dict[str, tuple[str, int]], methods: set[str]):
+    """The route a decorated function declares on a router this scope built.
+
+    One decorator only: an unrecognized second decorator could be the guard, and
+    guessing which is how a scanner starts asserting what it cannot see.
+    """
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or len(node.decorator_list) != 1:
+        return None
+    for dec in node.decorator_list:
+        if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+                and _name(dec.func.value) in routers and dec.func.attr in methods
+                and dec.args and isinstance(dec.args[0], ast.Constant)
+                and isinstance(dec.args[0].value, str)
+                and not any(k.arg == "dependencies" for k in dec.keywords)):
+            return (node, dec.args[0].value, dec.func.attr, routers[_name(dec.func.value)])
+    return None
+
+
 def _scope_routes(scope, factories: set[str], methods: set[str]):
-    """Keep direct route declarations attached to their router assignment.
+    """Route declarations of one scope, blocks included, attached to their router.
 
     Separate names and successive assignments to the same name are separate
     objects. Unsupported bindings invalidate that name instead of borrowing a
     sibling from a router whose identity is no longer known.
+
+    A route declared inside a module-level `try:`/`if:`/`with:`/`for:` is read,
+    because the block opens no scope and the route still hangs on the router
+    built here. An ASSIGNMENT inside such a block is not read: a router built
+    conditionally has an uncertain identity, so the invalidation pass below keeps
+    that name unknown rather than attributing routes to a guessed object.
     """
     if not _route_candidates(scope, methods):
         return []
@@ -351,13 +379,9 @@ def _scope_routes(scope, factories: set[str], methods: set[str]):
                 routers.pop(node.name, None)
                 available_factories.discard(node.name)
                 continue
-            for dec in node.decorator_list:
-                if (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
-                        and _name(dec.func.value) in routers and dec.func.attr in methods
-                        and dec.args and isinstance(dec.args[0], ast.Constant)
-                        and isinstance(dec.args[0].value, str)
-                        and not any(k.arg == "dependencies" for k in dec.keywords)):
-                    routes.append((node, dec.args[0].value, dec.func.attr, routers[_name(dec.func.value)]))
+            found = _route_declaration(node, routers, methods)
+            if found:
+                routes.append(found)
             routers.pop(node.name, None)
             available_factories.discard(node.name)
             continue
@@ -385,6 +409,11 @@ def _scope_routes(scope, factories: set[str], methods: set[str]):
                 and not any(k.arg == "dependencies" for k in node.value.keywords)):
             name = node.targets[0].id
             routers[name] = (name, node.lineno)
+        if isinstance(node, BLOCK_STATEMENTS):
+            for inner in scope_statements(node):
+                found = _route_declaration(inner, routers, methods)
+                if found:
+                    routes.append(found)
     return routes
 
 
@@ -431,6 +460,15 @@ def scan_auth_read(fileobj: BinaryIO) -> list[CheckFinding]:
             # router built inside another -- flattening would pair routes that
             # never share an object and report a disagreement that does not
             # exist. Each scope is therefore analysed on its own terms.
+            #
+            # Within one scope, block statements ARE read: `try:`, `if:`,
+            # `with:` and `for:` open no scope in Python, so a conditionally
+            # registered route still hangs on the router built here. Reading only
+            # a scope's direct statements made every such route invisible --
+            # measured, the same pair wrapped in `try:` / `if True:` /
+            # `with suppress(...)` reported nothing while the flat form reported
+            # the disagreement. An assignment inside a block still does not
+            # establish a router: see _scope_routes.
             for scope, bindings in _auth_scopes(tree):
                 findings.extend(_scope_findings(scope, factories, path, bindings))
     return findings
@@ -438,7 +476,7 @@ def scan_auth_read(fileobj: BinaryIO) -> list[CheckFinding]:
 
 def _scope_findings(scope, factories: set[str], filename: str,
                     bindings: _ScopeBindings | None = None) -> list[CheckFinding]:
-    """Routes declared directly in one scope's body, and their disagreements."""
+    """Routes declared in one scope, blocks included, and their disagreements."""
     findings: list[CheckFinding] = []
     routes = _scope_routes(scope, factories, _METHODS)
     bindings = bindings or _scope_bindings(scope)

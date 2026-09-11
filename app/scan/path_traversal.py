@@ -30,6 +30,7 @@ from app.scan.outbound_url import (
     _skeleton,
     _walk,
 )
+from app.scan.scope_statements import scope_statements
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "path-traversal-file-sink"
@@ -353,7 +354,13 @@ def _import_context(body: list[ast.stmt], state: _PathState) -> None:
 def _scan_scope(body: list[ast.stmt], inherited: _PathState, path: str, findings: list[CheckFinding]) -> None:
     context = inherited.copy()
     _import_context(body, context)
-    for stmt in body:
+    # scope_statements, not `body`: a module-level `if:`/`try:`/`with:`/`for:`
+    # opens no scope in Python, so a route declared inside one still hangs on the
+    # router built here and its handler still reads request input. Reading direct
+    # statements only made every conditionally registered route invisible --
+    # measured on the sibling outbound-URL rule, and this scanner shares the
+    # discovery shape.
+    for stmt in scope_statements(body):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             declares_route = _declares_route(stmt, context)
             nested = any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) for child in stmt.body)

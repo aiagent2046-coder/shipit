@@ -1,0 +1,7 @@
+{
+  "description": "The unprotected read is mounted on a different router object than the protected one, so they are not siblings and nothing is claimed. Reported here because reading blocks is exactly the change that can start pairing routes that never shared a router.",
+  "expect": [],
+  "forbid": [
+    "python-route-read-auth-consistency"
+  ]
+}

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
+from app.scan.scope_statements import BLOCK_STATEMENTS, block_arms
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "python-outbound-request-unvalidated-url"
@@ -570,9 +571,7 @@ def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[C
             for child in ast.iter_child_nodes(stmt):
                 if isinstance(child, ast.expr):
                     _scan_expr(child, state, path, findings)
-            bodies = [getattr(stmt, key, []) for key in ("body", "orelse", "finalbody")]
-            bodies += [handler.body for handler in getattr(stmt, "handlers", [])]
-            bodies += [case.body for case in getattr(stmt, "cases", [])]
+            bodies = list(block_arms(stmt))
             for branch in bodies:
                 branch_state = state.copy()
                 if isinstance(stmt, (ast.For, ast.AsyncFor)):
@@ -698,6 +697,14 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
     Factory arguments have unknown provenance; only the nested handler's own
     request inputs enter its trace. Unsupported scope/assignment forms discard
     imported names instead of pretending the original HTTP binding survived.
+
+    Block statements (`try:`, `if:`, `with:`, loops, `match`) are read as part of
+    the SAME scope, because Python gives them no scope of their own: a route a
+    feature flag registers conditionally still hangs on the router built here.
+    Measured, a file whose every route sat inside a module-level `if:` went from
+    zero findings to the flat case's finding. Each arm is scanned against its own
+    copy of the state, so a name assigned only inside the block does not become
+    known to the statements that follow it.
     """
     for stmt in body:
         if len(findings) >= _MAX_FINDINGS:
@@ -710,6 +717,16 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
                 _bind(target, stmt.value, state)
         elif isinstance(stmt, ast.ClassDef):
             _declare_model(stmt, state)
+        elif isinstance(stmt, BLOCK_STATEMENTS):
+            for arm in block_arms(stmt):
+                _scan_declarations(arm, state.copy(), path, findings)
+            # A name stored anywhere inside the block may have been rebound by a
+            # branch that ran, so its provenance is no longer known to the
+            # statements that follow -- the same rule the fallthrough below
+            # applies to any other untraceable syntax. Measured: without this,
+            # `if enabled: httpx = other_client` kept the imported client's
+            # provenance and a later call through it was still traced.
+            _forget_stores(stmt, state)
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
                    and dec.func.attr in _METHODS | {"route", "api_route", "websocket"}
@@ -734,15 +751,17 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
 def _has_route_declaration(body: list[ast.stmt]) -> bool:
     # Match only scopes _scan_declarations can reach. This is a necessary
     # syntactic condition, never a substitute for router import provenance.
-    pending = list(body)
-    while pending:
-        stmt = pending.pop()
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
-                   and dec.func.attr in _METHODS | {"route", "api_route", "websocket"}
-                   for dec in stmt.decorator_list):
-                return True
-            pending.extend(stmt.body)
+    # Blocks are included because they open no scope: a file whose every route
+    # sits inside a module-level `if:`/`try:` would otherwise be dropped here and
+    # the whole file would go unread. Nested callables are included too, because a
+    # router factory declares its routes inside the function that builds it.
+    for root in body:
+        for stmt in ast.walk(root):
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if any(isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+                       and dec.func.attr in _METHODS | {"route", "api_route", "websocket"}
+                       for dec in stmt.decorator_list):
+                    return True
     return False
 
 

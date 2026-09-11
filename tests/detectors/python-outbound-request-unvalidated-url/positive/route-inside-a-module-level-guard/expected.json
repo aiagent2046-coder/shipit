@@ -1,0 +1,10 @@
+{
+  "description": "The caller still chooses the client's base address; the only difference from the flat case is that the route is registered inside a module-level conditional. This rule skips a file with no route declaration at all, so a block-blind discovery pass drops the whole file.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
