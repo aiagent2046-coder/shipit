@@ -5,8 +5,9 @@ customer's repository, and somebody deciding whether the audit is worth buying
 should be able to read what it covers without an account first.
 
 The answer comes from `app.capabilities`, the same declaration that backs the
-`checks_run` list and the per-check scope sentences a report carries, so this
-endpoint cannot describe a different engine than the one that ran the audit.
+`checks_run` list and the per-check scope sentences a report carries. This is
+the currently deployed engine; historical audits retain their own engine
+revision and per-scan evidence.
 """
 
 from __future__ import annotations

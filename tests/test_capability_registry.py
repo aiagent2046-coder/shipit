@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from app.capabilities import (CAPABILITIES, CHECKS_RUN, DECLARED_RULE_IDS,
                               EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE, manifest)
 from app.main import app
+from app.scan import static
 from app.scan.pipeline import AUDIT_ENGINE_VERSION
 from app.scan.static import run_static_scan
 from tests.detectors.test_golden_corpus import emitted_rule_ids
@@ -29,6 +30,27 @@ CORPUS = REPO_ROOT / "tests" / "detectors"
 # Checks whose scope sentence the scan composes at run time instead of reporting
 # the declared sentence verbatim.
 COMPOSED_CHECKS = {"secrets", "error_boundary", "http_success"}
+
+# Independent mapping from invoked scanner names to the public report keys.
+# A registry-only comparison would keep passing if a scanner stopped running.
+SCANNER_CHECKS = {
+    "scan_secrets": "secrets",
+    "scan_rls": "rls",
+    "scan_schema_drift": "schema_drift",
+    "run_checks": "project_files",
+    "scan_ci_deploy_source": "ci_deploy_source",
+    "scan_service_role": "service_role",
+    "scan_error_boundary": "error_boundary",
+    "scan_auth_read": "auth_read_consistency",
+    "scan_auth_write": "auth_write_consistency",
+    "scan_http_success": "http_success",
+    "scan_sql_injection": "sql_injection",
+    "scan_sql_injection_js": "sql_injection_js",
+    "scan_outbound_url": "outbound_url",
+    "scan_tls_verification": "tls_verification",
+    "scan_unsafe_deserialization": "unsafe_deserialization",
+    "scan_path_traversal": "path_traversal",
+}
 
 
 def _archive() -> io.BytesIO:
@@ -61,10 +83,24 @@ def test_every_declared_rule_id_has_a_positive_and_a_negative_case(rule_id):
         assert cases, f"{rule_id}: {polarity} directory holds no case"
 
 
-def test_the_registry_lists_exactly_the_checks_a_scan_reports_running():
-    """Order included: the report's `checks_run` is built from this list, so a
-    check added to the stage without a registry entry shows up here."""
+def test_the_registry_lists_exactly_the_checks_a_scan_actually_runs(monkeypatch):
+    """Observe invocation, so removing a scanner call cannot leave a false claim
+    in both the manifest and the report while this contract stays green."""
+    called = []
+    for name, scanner in list(vars(static).items()):
+        if (name == "run_static_scan" or not name.startswith(("scan_", "run_"))
+                or not callable(scanner)):
+            continue
+
+        def observe(*args, _name=name, _scanner=scanner, **kwargs):
+            called.append(_name)
+            return _scanner(*args, **kwargs)
+
+        monkeypatch.setattr(static, name, observe)
+
     result = run_static_scan(_archive())
+    assert set(called) == set(SCANNER_CHECKS), "scanner wiring changed; review the manifest mapping"
+    assert {SCANNER_CHECKS[name] for name in called} == set(CHECKS_RUN)
     assert result["checks_run"] == list(CHECKS_RUN)
 
 

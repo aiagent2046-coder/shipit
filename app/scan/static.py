@@ -232,7 +232,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # repository. A scanner that found nothing and one that gave up must
         # not look identical (#392). Consuming this in the pipeline/report is
         # the follow-up; here it is preserved so it can be.
-        # Every check this stage runs, in the order it runs them; declared in
+        # Every check this stage runs, in stable report order; declared in
         # app/capabilities.py, which is also what GET /v1/capabilities serves.
         "checks_run": list(CHECKS_RUN),
         "coverage": {"secrets": scope_description,

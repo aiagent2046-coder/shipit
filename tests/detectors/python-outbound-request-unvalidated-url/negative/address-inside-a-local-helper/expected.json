@@ -1,0 +1,7 @@
+{
+  "description": "The address is built inside a local helper that takes the value as a parameter. The trace is documented as staying inside one function, so the crossing is not followed; the mutation inlines the call into the handler, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-outbound-request-unvalidated-url"
+  ]
+}

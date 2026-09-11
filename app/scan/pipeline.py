@@ -177,7 +177,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # value-specific normalized-path guards and checks before template allocation.
 # 2026-09-10-16: distinguish fixed SQL conditional fragments from input-built
 # queries while preserving possible assembly paths across expression branches.
-AUDIT_ENGINE_VERSION = "2026-09-10-16"
+# 2026-09-11-1: read route declarations inside block statements -- a module-level
+# `if:`/`try:`/`with:`/`for:` opens no scope, so a conditionally registered route
+# still hangs on the router built in that scope and its handler still reads
+# request input. Read-auth, write-auth, outbound-URL and path-traversal rules.
+AUDIT_ENGINE_VERSION = "2026-09-11-1"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

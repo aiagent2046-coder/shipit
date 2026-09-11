@@ -1,0 +1,15 @@
+from fastapi import APIRouter, Depends
+
+router = APIRouter()
+admin = APIRouter()
+
+
+@router.get("/audits/{audit_id}")
+async def detail(audit_id, token, audit_repo=Depends(get_audit_repo)):
+    return await audit_repo.get_authorized(audit_id, token)
+
+
+if settings.EXPORTS_ENABLED:
+    @admin.get("/audits/{audit_id}/status")
+    async def status(audit_id, token, admin_repo=Depends(get_admin_repo)):
+        return await admin_repo.get(audit_id)
