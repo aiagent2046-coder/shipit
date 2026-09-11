@@ -96,7 +96,7 @@ class _Value:
 _UNKNOWN = _Value()
 
 
-def js_evidence(text, tsx=False):
+def js_evidence(text, tsx=False, *, incomplete_reason: dict[str, str] | None = None):
     # With ASCII bytes and no escapes, every supported setting must contain one
     # of these exact property names. Escaped or Unicode source always reaches
     # the parser, so spelling a key as "reject\\u0055nauthorized" cannot hide it.
@@ -112,12 +112,16 @@ def js_evidence(text, tsx=False):
     tree = parser.parse(text.encode("utf-8"))
     # A malformed tree cannot certify that a literal is executable code.
     if tree.root_node.has_error:
+        if incomplete_reason is not None:
+            incomplete_reason["reason"] = "parse_error"
         return []
     pending, count = [(tree.root_node, 0)], 0
     while pending:
         node, depth = pending.pop()
         count += 1
         if count > _MAX_NODES or depth > _MAX_DEPTH:
+            if incomplete_reason is not None:
+                incomplete_reason["reason"] = "ast_limit"
             return []
         pending.extend((child, depth + 1) for child in node.named_children)
     found = []
@@ -125,6 +129,8 @@ def js_evidence(text, tsx=False):
     def emit(node, what):
         if len(found) < 32:
             found.append((node.start_point.row + 1, what, "certificate"))
+        elif incomplete_reason is not None:
+            incomplete_reason["reason"] = "finding_limit"
 
     def resolve(node, bindings):
         node = _unwrap(node)

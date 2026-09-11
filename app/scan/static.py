@@ -18,6 +18,7 @@ from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.outbound_url import scan_outbound_url
 from app.scan.rls import scan_rls
 from app.scan.recommendations import prepare_recommendation
+from app.scan.rule_coverage import RULE_COVERAGE_KEYS
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
@@ -44,6 +45,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     size = fileobj.seek(0, 2)
     validate_zip(fileobj, size_bytes=size)
     findings: list[ScoredFinding] = []
+    rule_coverage = {name: {} for name in RULE_COVERAGE_KEYS}
 
     fileobj.seek(0)
     file_coverage: dict = {}
@@ -90,7 +92,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         ))
 
     fileobj.seek(0)
-    for u in scan_outbound_url(fileobj):
+    for u in scan_outbound_url(fileobj, coverage=rule_coverage["outbound_url"]):
         findings.append(ScoredFinding(
             rule_id=u.rule_id, title=u.title, severity=u.severity,
             confidence=u.confidence, category=u.category, file=u.file,
@@ -99,7 +101,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         ))
 
     fileobj.seek(0)
-    for t in scan_tls_verification(fileobj):
+    for t in scan_tls_verification(fileobj, coverage=rule_coverage["tls_verification"]):
         findings.append(ScoredFinding(
             rule_id=t.rule_id, title=t.title, severity=t.severity,
             confidence=t.confidence, category=t.category, file=t.file,
@@ -108,7 +110,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         ))
 
     fileobj.seek(0)
-    for d in scan_unsafe_deserialization(fileobj):
+    for d in scan_unsafe_deserialization(fileobj, coverage=rule_coverage["unsafe_deserialization"]):
         findings.append(ScoredFinding(
             rule_id=d.rule_id, title=d.title, severity=d.severity,
             confidence=d.confidence, category=d.category, file=d.file,
@@ -117,7 +119,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         ))
 
     fileobj.seek(0)
-    for t in scan_path_traversal(fileobj):
+    for t in scan_path_traversal(fileobj, coverage=rule_coverage["path_traversal"]):
         findings.append(ScoredFinding(
             rule_id=t.rule_id, title=t.title, severity=t.severity,
             confidence=t.confidence, category=t.category, file=t.file,
@@ -206,6 +208,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         + EXCLUSIONS_NOTE
     )
     return {
+        "rule_coverage": rule_coverage,
         "secrets_coverage": file_coverage,
         "source_facts": source_facts,
         # llm_ran=False, not the default: no LLM stage runs inside this

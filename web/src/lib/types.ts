@@ -56,6 +56,22 @@ export interface ModelAcceptance {
   state: "partially_accepted" | "none_accepted" | "all_accepted" | "no_candidates";
 }
 
+export type StaticCoverageRule = "outbound_url" | "tls_verification"
+  | "unsafe_deserialization" | "path_traversal";
+export interface StaticRuleCoverage {
+  version: 1;
+  files_total: number;
+  eligible_files: number;
+  attempted_files: number;
+  analyzed_files: number;
+  excluded_files: number;
+  skipped_files: number;
+  exclusion_reasons: Partial<Record<"unsupported_extension" | "non_production_path" | "dependency_tree", number>>;
+  skip_reasons: Partial<Record<"file_size_limit" | "file_limit" | "finding_limit" | "read_error"
+    | "decode_error" | "parse_error" | "ast_limit" | "analysis_limit", number>>;
+  partial: boolean;
+}
+
 export interface RejectionDiagnostic {
   response: number;
   rubric: string;
@@ -104,6 +120,8 @@ export interface ScanManifest {
   archive_files: number;
   static_checks: string[];
   static_limits: Record<string, string>;
+  // Absent on older stored audits; absence must not become zero or complete.
+  rule_coverage?: Partial<Record<StaticCoverageRule, StaticRuleCoverage>> | null;
   inventory: Record<string, string[]>;
   model: string | null;
   model_calls: number;

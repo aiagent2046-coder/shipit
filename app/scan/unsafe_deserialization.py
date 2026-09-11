@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
-from app.scan.secrets import is_dependency_path, is_non_production_path
+from app.scan.rule_coverage import RuleCoverage
 
 RULE_ID = "unsafe-deserialization"
 
@@ -346,36 +346,50 @@ def _evidence(tree: ast.Module) -> list[_Evidence]:
     return found
 
 
-def scan_unsafe_deserialization(fileobj: BinaryIO) -> list[CheckFinding]:
+def scan_unsafe_deserialization(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
     findings: list[CheckFinding] = []
     with zipfile.ZipFile(fileobj) as archive:
-        infos = [info for info in archive.infolist()
-                 if not info.is_dir() and info.filename.endswith(".py")
-                 and info.file_size <= _MAX_FILE_BYTES
-                 and not is_non_production_path(info.filename)
-                 and not is_dependency_path(info.filename)]
-        for info in infos[:_MAX_FILES]:
-            if len(findings) >= _MAX_FINDINGS:
-                break
+        accounting = RuleCoverage(archive, extensions=(".py",),
+                                  max_file_bytes=_MAX_FILE_BYTES, coverage=coverage)
+        for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
             try:
-                tree = ast.parse(archive.read(info).decode("utf-8"))
-            except (SyntaxError, UnicodeError, ValueError, RecursionError):
-                # Unparseable is "not read", not "clean"; the coverage text says so.
+                source = archive.read(info).decode("utf-8")
+            except UnicodeError:
+                accounting.skip("decode_error")
+                continue
+            try:
+                tree = ast.parse(source)
+            except (SyntaxError, ValueError):
+                accounting.skip("parse_error")
+                continue
+            except RecursionError:
+                accounting.skip("ast_limit")
                 continue
             pending = [(tree, 0)]
             count = 0
-            while pending and count <= _MAX_AST_NODES:
+            bounded = True
+            while pending:
                 node, depth = pending.pop()
                 count += 1
-                if depth > _MAX_AST_DEPTH:
+                if count > _MAX_AST_NODES or depth > _MAX_AST_DEPTH:
+                    bounded = False
                     break
                 pending.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
+            if not bounded:
+                accounting.skip("ast_limit")
+                continue
+            try:
+                evidence = _evidence(tree)
+            except RecursionError:
+                accounting.skip("ast_limit")
+                continue
+            remaining = _MAX_FINDINGS - len(findings)
+            findings.extend(_finding(info.filename, item) for item in evidence[:remaining])
+            if len(evidence) > remaining:
+                accounting.skip("finding_limit")
             else:
-                if not pending and count <= _MAX_AST_NODES:
-                    for item in _evidence(tree):
-                        if len(findings) >= _MAX_FINDINGS:
-                            break
-                        findings.append(_finding(info.filename, item))
+                accounting.analyzed()
+        accounting.finish()
     return findings
 
 

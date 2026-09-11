@@ -4,6 +4,7 @@ import { AuditCoverage } from "./AuditCoverage";
 import { FindingsList, SeveritySummary } from "./FindingsList";
 import type { Finding, Score, ScanManifest } from "@/lib/types";
 import { findingCounts, sourceSeverityCounts } from "@/lib/evidence";
+import ruleCoverageCases from "@/lib/fixtures/rule_coverage_cases.json";
 
 afterEach(cleanup);
 
@@ -42,6 +43,29 @@ const manifest: ScanManifest = {
 };
 
 describe("audit evidence", () => {
+  it("shows incomplete static work outside scan details even with zero findings", () => {
+    const item = ruleCoverageCases[0];
+    const score = { total: 0, categories: {}, basis: "static+llm", scan_manifest: {
+      ...manifest, model_calls: 1, static_checks: [item.rule], rule_coverage: { [item.rule]: item.record },
+    } } as Score;
+    render(<AuditCoverage score={score} findings={[]} />);
+    const notice = screen.getByRole("complementary", { name: "Static checks incomplete" });
+    expect(notice.closest("details")).toBeNull();
+    expect(notice.textContent).toContain(item.notice);
+    expect(screen.getByText(item.summary).closest("details")?.querySelector("summary")?.textContent)
+      .toBe("Scan record");
+    expect(screen.queryByRole("complementary", { name: "Model review status" })).toBeNull();
+  });
+
+  it("shows unknown file coverage for older checks without inventing a partial result", () => {
+    render(<AuditCoverage score={{ total: 0, categories: {}, scan_manifest: {
+      ...manifest, static_checks: ["tls_verification"],
+    } }} findings={[]} />);
+    expect(screen.getByText("File coverage: TLS verification").nextElementSibling?.textContent)
+      .toBe("Not recorded for this audit");
+    expect(screen.queryByRole("complementary", { name: "Static checks incomplete" })).toBeNull();
+  });
+
   it("shows a grouped handler-label disagreement beside the model evidence with escaped originals", () => {
     const { container } = render(<FindingsList findings={[{ ...finding, claim_evidence: {
       version: 1, source_check: { kind: "not_recorded" }, observation: null, required_conditions: null,

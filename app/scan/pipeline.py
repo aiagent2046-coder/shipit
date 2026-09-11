@@ -187,7 +187,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # explicit SameSite=None. Reads Python and TS/JS; dependency trees excluded.
 # 2026-09-11-3: exclude dependency trees before TLS, deserialization, outbound-URL
 # and path-traversal file budgets so bundled dependencies do not displace own code.
-AUDIT_ENGINE_VERSION = "2026-09-11-3"
+# 2026-09-11-4: persist actual bounded-rule file coverage, including incomplete
+# files, so old cached audits cannot stand in for a newly measured scan.
+AUDIT_ENGINE_VERSION = "2026-09-11-4"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

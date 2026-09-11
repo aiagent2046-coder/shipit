@@ -1,4 +1,4 @@
-import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment } from "./types";
+import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment, StaticCoverageRule, StaticRuleCoverage } from "./types";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -302,6 +302,90 @@ const dependencyLimitations = new Set([
   "dependency_lockfile_unreadable", "dependency_coverage_incomplete",
 ]);
 
+const ruleCoverageLabels: Record<StaticCoverageRule, string> = {
+  outbound_url: "Outbound request URLs",
+  tls_verification: "TLS verification",
+  unsafe_deserialization: "Unsafe deserialization",
+  path_traversal: "Filesystem paths",
+};
+const ruleExclusionLabels = {
+  unsupported_extension: "unsupported file types",
+  non_production_path: "test/example paths",
+  dependency_tree: "dependency directories",
+};
+const ruleSkipLabels = {
+  file_size_limit: "file size limit",
+  file_limit: "file count limit",
+  finding_limit: "finding limit",
+  read_error: "read errors",
+  decode_error: "decoding errors",
+  parse_error: "syntax errors",
+  ast_limit: "syntax-analysis budget",
+  analysis_limit: "expression analysis limit",
+};
+
+function coverageReasons(value: unknown, labels: Record<string, string>): Record<string, number> | null {
+  if (!record(value)) return null;
+  const reasons: Record<string, number> = {};
+  for (const key of Object.keys(labels)) {
+    if (!(key in value)) continue;
+    if (!count(value[key])) return null;
+    if (value[key]) reasons[key] = value[key];
+  }
+  return reasons;
+}
+
+// Stored reports can predate this schema. Mirror normalize_rule_coverage and
+// expose fixed counters/reason labels only, never opaque scanner metadata.
+function normalizedRuleCoverage(value: unknown): Partial<Record<StaticCoverageRule, StaticRuleCoverage>> {
+  const result: Partial<Record<StaticCoverageRule, StaticRuleCoverage>> = {};
+  if (!record(value)) return result;
+  for (const rule of Object.keys(ruleCoverageLabels) as StaticCoverageRule[]) {
+    const item = value[rule];
+    if (!record(item) || item.version !== 1) continue;
+    const { files_total: total, eligible_files: eligible, attempted_files: attempted,
+      analyzed_files: analyzed, excluded_files: excluded, skipped_files: skipped } = item;
+    if (!count(total) || !count(eligible) || !count(attempted) || !count(analyzed)
+      || !count(excluded) || !count(skipped)) continue;
+    const exclusions = coverageReasons(item.exclusion_reasons, ruleExclusionLabels);
+    const skips = coverageReasons(item.skip_reasons, ruleSkipLabels);
+    if (!exclusions || !skips || total !== eligible + excluded || eligible !== analyzed + skipped
+      || analyzed > attempted || attempted > eligible
+      || excluded !== Object.values(exclusions).reduce((sum, n) => sum + n, 0)
+      || skipped !== Object.values(skips).reduce((sum, n) => sum + n, 0)) continue;
+    result[rule] = { version: 1, files_total: total, eligible_files: eligible, attempted_files: attempted,
+      analyzed_files: analyzed, excluded_files: excluded, skipped_files: skipped,
+      exclusion_reasons: exclusions, skip_reasons: skips, partial: skipped > 0 };
+  }
+  return result;
+}
+
+function ruleReasons(reasons: Record<string, number>, labels: Record<string, string>): string {
+  return Object.entries(labels).filter(([key]) => reasons[key])
+    .map(([key, label]) => `${label}: ${reasons[key]}`).join(", ") || "None recorded";
+}
+
+function ruleCoverageRows(score: Score): [string, string][] {
+  const coverage = normalizedRuleCoverage(score.scan_manifest?.rule_coverage);
+  const rows: [string, string][] = [];
+  for (const [rule, label] of Object.entries(ruleCoverageLabels)) {
+    const item = coverage[rule as StaticCoverageRule];
+    if (!item) {
+      if (score.scan_manifest?.static_checks.includes(rule)) rows.push([`File coverage: ${label}`, "Not recorded for this audit"]);
+      continue;
+    }
+    const status = item.partial ? "Partial check." : item.eligible_files
+      ? "No file-processing gaps recorded within this rule's scope." : "No eligible files for this rule.";
+    rows.push([`File coverage: ${label}`,
+      `${item.analyzed_files} of ${item.eligible_files} eligible files analyzed; ` +
+      `${item.attempted_files} attempted; ${item.skipped_files} not fully analyzed; ` +
+      `${item.excluded_files} excluded from ${item.files_total} archive files. ${status}`]);
+    rows.push([`Files excluded: ${label}`, ruleReasons(item.exclusion_reasons, ruleExclusionLabels)]);
+    rows.push([`Files not fully analyzed: ${label}`, ruleReasons(item.skip_reasons, ruleSkipLabels)]);
+  }
+  return rows;
+}
+
 function classifiedLimits(score: Score): [string[], string[], string[]] {
   const model: string[] = [], dependency: string[] = [], other: string[] = [];
   for (const reason of score.scan_manifest?.limitations ?? []) {
@@ -315,6 +399,17 @@ function classifiedLimits(score: Score): [string[], string[], string[]] {
 export function nonModelStatusNotices(score: Score): [string, string][] {
   const [, dependency, other] = classifiedLimits(score);
   const notices: [string, string][] = [];
+  const coverage = normalizedRuleCoverage(score.scan_manifest?.rule_coverage);
+  const incomplete: string[] = [];
+  for (const [rule, label] of Object.entries(ruleCoverageLabels)) {
+    const item = coverage[rule as StaticCoverageRule];
+    if (item?.partial) incomplete.push(
+      `${label}: ${item.analyzed_files} of ${item.eligible_files} eligible files analyzed ` +
+      `(${ruleReasons(item.skip_reasons, ruleSkipLabels)}).`);
+  }
+  if (incomplete.length) notices.push(["Static checks incomplete", incomplete.join(" ") +
+    " These counts cover the named rules only. Files not fully analyzed may contain " +
+    "additional findings; an empty result does not establish safety."]);
   if (dependency.length) {
     const details: string[] = [];
     if (dependency.includes("dependency_check_not_run")) {
@@ -520,6 +615,7 @@ export function manifestRows(score: Score): [string, string][] {
       rows.push([`Files not submitted: ${label}`, String(m.llm_selection_exclusions[key] ?? 0)]);
   } else if (m.llm_files_not_submitted) rows.push(["File exclusion reasons", "Not recorded for this audit"]);
   for (const [check, status] of Object.entries(m.static_limits)) rows.push([`Static scope: ${check}`, status]);
+  rows.push(...ruleCoverageRows(score));
   const facts = m.source_facts;
   if (facts) {
     const indexes = [["guards", "Guard evidence"], ["cost_context", "Cost evidence"],
