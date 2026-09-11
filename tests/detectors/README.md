@@ -19,11 +19,33 @@ Credential payloads use `@DRYDOCK_SAMPLE:NAME@` placeholders. The test-only
 signing seed. No complete account credential is stored in the corpus. Secret
 protection remains enabled; an interpolated URI has a line-specific explanation.
 
-The corpus currently covers 27 rule IDs with 59 examples. Both polarities are
-mandatory for each ID in the report vocabulary or declared by a wired scanner.
-Engine wiring is independently checked by `test_engine_version_pins_the_scanners`.
-This is coverage of the current rule vocabulary, not a measure of how many real
-vulnerabilities Drydock can detect.
+The corpus currently covers 34 rule IDs with 204 examples (107 positive, 97
+negative). Both polarities are mandatory for each ID in the report vocabulary or
+declared by a wired scanner. Engine wiring is independently checked by
+`test_engine_version_pins_the_scanners`. This is coverage of the current rule
+vocabulary, not a measure of how many real vulnerabilities Drydock can detect.
+
+## Nested callables: which rules read them, and why
+
+Two families disagree here on purpose, and both directions are pinned by cases
+rather than left to taste:
+
+- A LITERAL rule states something about the configuration or the call SITE it
+  sees. `verify=False` inside a nested `def` is the same defect as a top-level
+  one, so `tls-verification-disabled` and `unsafe-deserialization` descend into
+  nested functions (`positive/config-inside-a-nested-function`,
+  `positive/loader-inside-a-nested-function`).
+- A VALUE-tracing rule follows request input to a sink. A local helper's
+  parameter is not the handler's parameter, and that helper is callable from
+  anywhere in the file, so connecting the two needs a call graph these rules do
+  not build. `python-outbound-request-unvalidated-url` and
+  `path-traversal-file-sink` stop at the definition boundary
+  (`negative/address-inside-a-local-helper`,
+  `negative/sink-inside-a-local-helper`), each with a mutation that inlines the
+  helper and must fire.
+
+Silence there is a stated boundary, not a clean bill: an inlined helper is
+reported, one reached through a call is not.
 
 Example expectations:
 

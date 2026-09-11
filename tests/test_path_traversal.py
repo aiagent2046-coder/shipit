@@ -137,6 +137,15 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "input-used-as-content-not-a-path": ("app/write_content.py",
                                          'os.path.join(UPLOAD_DIR, "notes.txt")',
                                          "os.path.join(UPLOAD_DIR, name)"),
+    # the value crosses a DEFINITION boundary: a local helper's parameter is not
+    # the handler's parameter, and the helper is callable from anywhere in the
+    # file, so connecting them needs a call graph this rule does not build
+    "sink-inside-a-local-helper": ("app/files.py",
+                                   "    def read(p):\n"
+                                   "        return open(os.path.join(UPLOAD_DIR, p)).read()\n"
+                                   "\n"
+                                   "    return read(name)",
+                                   "    return open(os.path.join(UPLOAD_DIR, name)).read()"),
 }
 
 

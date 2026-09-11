@@ -4,8 +4,10 @@ Only locally declared FastAPI routes and HTTP clients with visible import or
 constructor provenance are read. A function's statements are visited in order;
 plain assignments preserve literal URL structure, while unknown calls stop the
 trace. No uploaded code is imported or executed, and helpers are not analysed
-across calls. A recognised local check suppresses this signal without certifying
-that the check, redirects, DNS resolution or the network boundary are safe.
+across calls -- a local `def` opens its own scope, and its parameter is not this
+handler's parameter (corpus: negative/address-inside-a-local-helper). A
+recognised local check suppresses this signal without certifying that the check,
+redirects, DNS resolution or the network boundary are safe.
 """
 
 from __future__ import annotations
