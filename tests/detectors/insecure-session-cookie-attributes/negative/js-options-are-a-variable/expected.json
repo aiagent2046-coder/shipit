@@ -1,0 +1,7 @@
+{
+  "description": "The options object lives in a variable, so the flags cannot be read from this call. Unknown is not unprotected. The mutation inlines an object with httpOnly: false, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

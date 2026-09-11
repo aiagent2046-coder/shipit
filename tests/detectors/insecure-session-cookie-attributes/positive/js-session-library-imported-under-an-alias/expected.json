@@ -1,0 +1,10 @@
+{
+  "description": "Seven of eight rewrites of the session-config case imported the library under an alias, and a vocabulary of canonical names went silent on all of them. The import is in the file, so the alias is evidence.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

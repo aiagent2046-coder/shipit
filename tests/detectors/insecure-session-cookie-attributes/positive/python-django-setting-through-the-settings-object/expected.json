@@ -1,0 +1,10 @@
+{
+  "description": "The same setting reached through the settings object, which is how code mutates Django configuration at run time. The setting name is the evidence, so the target's spelling does not change the claim.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

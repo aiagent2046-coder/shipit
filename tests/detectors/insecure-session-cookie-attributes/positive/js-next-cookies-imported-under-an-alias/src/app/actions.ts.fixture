@@ -1,0 +1,7 @@
+import { cookies as getCookies } from "next/headers";
+
+export async function authorize(token: string) {
+  const sessionStore = await getCookies();
+  sessionStore.set("userSession", token, { httpOnly: false });
+  return { valid: true };
+}

@@ -1,0 +1,7 @@
+{
+  "description": "express-session defaults httpOnly to TRUE, so an omitted option here is the safe default and reporting it would be an accusation whose fix changes nothing. The mutation adds httpOnly: false, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

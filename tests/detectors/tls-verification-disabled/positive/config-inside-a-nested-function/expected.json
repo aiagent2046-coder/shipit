@@ -1,0 +1,10 @@
+{
+  "description": "The claim of this rule is about the configuration written at the call site, not about where a value came from, so a nested function is the same defect as a top-level one. This case pins the asymmetry with the value-tracing rules: those stop at a function boundary, this one does not, and both are deliberate.",
+  "expect": [
+    {
+      "rule_id": "tls-verification-disabled",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

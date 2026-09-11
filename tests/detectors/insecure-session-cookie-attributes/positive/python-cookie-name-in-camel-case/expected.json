@@ -1,0 +1,10 @@
+{
+  "description": "userSession is an authentication name written in camelCase. A vocabulary splitting only on underscores reads it as one unknown word and stays silent.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

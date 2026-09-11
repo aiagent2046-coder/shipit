@@ -1,0 +1,9 @@
+from fastapi import APIRouter, Response
+
+router = APIRouter()
+
+
+@router.get("/form")
+async def form(response: Response, token: str):
+    response.set_cookie("csrf_token", token)
+    return {"ok": True}

@@ -1,0 +1,7 @@
+{
+  "description": "A preference cookie is read by scripts on purpose. Reporting it would make the rule noise, which is why the name decides. The mutation renames it to a session name, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

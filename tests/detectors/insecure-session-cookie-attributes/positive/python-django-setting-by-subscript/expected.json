@@ -1,0 +1,10 @@
+{
+  "description": "The settings mapping mutated by key. The setting name is still the evidence; only the route to it changed.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

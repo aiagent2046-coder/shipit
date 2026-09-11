@@ -31,6 +31,18 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "base with resolve() and is_relative_to(). Never serve a file by a path that came straight "
         "from the request.",
     ),
+    "insecure-session-cookie-attributes": (
+        "A session cookie is set without the protection the browser offers.",
+        "The cookie that carries the session is created without HttpOnly, which keeps it out of reach of "
+        "scripts, or with SameSite=None, which tells the browser to send it on cross-site requests too. "
+        "Either way a flaw elsewhere -- a script that reaches the page, or a form on another site -- can "
+        "use the session. Whether the value is a live session token, whether another layer rewrites the "
+        "cookie, and whether the request is reachable have not been verified.",
+        "Set HttpOnly on the session cookie (httponly=True in Python, httpOnly: true in TypeScript) and "
+        "leave SameSite at its default or set it to Lax/Strict. Use SameSite=None only when the cookie "
+        "must cross sites, keep Secure on, and verify the request origin wherever the cookie authorizes "
+        "a change.",
+    ),
     "unsafe-deserialization": (
         'A deserialization call requires trusted input or an explicit loader.',
         'Pickle-family and confirmed unsafe YAML loaders can invoke code while reconstructing '

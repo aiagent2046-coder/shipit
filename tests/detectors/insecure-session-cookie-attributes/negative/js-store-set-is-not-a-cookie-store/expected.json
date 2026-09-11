@@ -1,0 +1,7 @@
+{
+  "description": "The receiver gate exists because of this shape: a Redis or Map store called set with a session-shaped key is not a cookie. The mutation adds the binding that makes it one, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

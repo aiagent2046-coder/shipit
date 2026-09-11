@@ -1,0 +1,6 @@
+const app = express();
+
+app.post("/api/authenticate/user", function (incomingReq, outgoingRes) {
+  outgoingRes.cookie("session", incomingReq.body.token);
+  outgoingRes.json({ result: "login confirmed" });
+});

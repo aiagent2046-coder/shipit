@@ -1,0 +1,8 @@
+const express = require("express");
+
+const server = express();
+server.use(require("express-session")({
+  secret: process.env.SESSION_PASSPHRASE,
+  name: "user_sid",
+  cookie: { httpOnly: false, secure: false },
+}));

@@ -44,6 +44,7 @@ from app.ops_endpoints import router as ops_router
 from app.routes.accounts import router as accounts_router
 from app.routes.bank_transfer import router as bank_transfer_router
 from app.routes.billing import router as billing_router
+from app.routes.capabilities import router as capabilities_router
 from app.routes.operator import router as operator_router
 from app.routes.reads import router as reads_router
 from app.routes.bundle_check import router as bundle_check_router
@@ -2442,6 +2443,7 @@ async def create_fixpack(
 # Routers are imported at the top of the module; include_router must run here,
 # after `app` is constructed. Extracted route modules live in app/routes/.
 app.include_router(ops_router)
+app.include_router(capabilities_router)
 app.include_router(accounts_router)
 app.include_router(bank_transfer_router)
 app.include_router(github_router)

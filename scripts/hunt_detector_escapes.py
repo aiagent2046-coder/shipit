@@ -215,7 +215,7 @@ def parse_variations(raw: str, expected: int) -> list[str]:
     anything outside the fence is the model talking to itself.
     """
     out = []
-    for part in SEPARATOR_RE.split(raw):
+    for part in _split_variations(raw):
         body = part.strip()
         if not body:
             continue
@@ -224,10 +224,30 @@ def parse_variations(raw: str, expected: int) -> list[str]:
             body = fenced.group(1)
         elif body.startswith("```"):        # opened a fence and never closed it
             body = body.split("\n", 1)[-1].removesuffix("```")
+        # A stray CLOSING fence, with no opening one, is the model ending a block
+        # it never started. Left in, it makes the body unparseable, and an
+        # unparseable body is silence for a reason that has nothing to do with the
+        # rule -- measured: two of the eighteen cookie-rule candidates in one
+        # round, which would have read as escapes.
+        body = re.sub(r"\n\s*```[a-zA-Z]*\s*$", "", body)
         body = FILE_MARKER.sub("", body).strip("\n")
         if body.strip():
             out.append(body)
     return out[:expected]
+
+
+def _split_variations(raw: str) -> list[str]:
+    """Split the model's answer into candidate bodies.
+
+    Two separators, because the model uses both: the one it was asked for
+    (`=== VARIATION N ===`), and a bare rule line between snippets -- measured,
+    a whole answer of six variations joined by `===`, which arrived as a single
+    unparseable body and would have counted as one escape.
+    """
+    parts: list[str] = []
+    for chunk in SEPARATOR_RE.split(raw):
+        parts.extend(re.split(r"(?m)^\s*=+\s*$", chunk))
+    return parts
 
 
 def variation_is_broken(body: str, filename: str) -> str | None:

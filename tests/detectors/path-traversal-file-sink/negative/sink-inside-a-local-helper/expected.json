@@ -1,0 +1,7 @@
+{
+  "description": "The caller's value reaches the sink, but only through a function boundary: connecting `name` to the helper's parameter `p` requires a call graph this rule does not build, and the helper is equally callable from anywhere else in the file. The documented boundary is \"unknown helpers and objects stop this trace\". The mutation inlines the helper, which must fire.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

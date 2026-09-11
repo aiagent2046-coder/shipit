@@ -1,0 +1,10 @@
+{
+  "description": "SameSite=None tells the browser to attach the cookie to cross-site requests, which is the protection browsers apply by default. HttpOnly is set here, so the finding is about the other attribute.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

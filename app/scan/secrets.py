@@ -308,10 +308,32 @@ def is_non_production_path(name: str) -> bool:
     come from this scanner (the LLM pass) carry no `context` field to group on
     — only a path. Migration paths are excluded: a migration is applied state,
     which is as production as it gets.
+
+    Dependency trees are NOT non-production by this predicate on purpose: a
+    credential committed inside `node_modules` is still committed bytes, and
+    damping it as a test fixture would understate a real leak. Scanners that read
+    source for a defect instead use `is_dependency_path`, because vendored code is
+    not the repository's own code.
     """
     if _is_migration_context(name):
         return False
     return _is_test_fixture_path(name) or _is_doc_context(name)
+
+
+# Vendored and dependency trees: code the repository did not write, and the
+# scanners that read source for a defect must not report on it. Measured, four
+# shipped scanners (tls_verification, unsafe_deserialization, path_traversal,
+# outbound_url) reported a defect planted under `node_modules/` and `vendor/`,
+# and two of them promise "non-test/vendor" in the coverage sentence they show a
+# customer. The route rules in auth_read/auth_write already carried this list
+# inline; it lives here now so the fifth copy is not written by hand.
+_DEPENDENCY_SEGMENTS = frozenset({"node_modules", "vendor", "venv", ".venv", "site-packages",
+                                 "bower_components", ".tox", ".nox"})
+
+
+def is_dependency_path(name: str) -> bool:
+    """True for a file inside a dependency or vendored tree."""
+    return any(segment in _DEPENDENCY_SEGMENTS for segment in name.replace("\\", "/").split("/"))
 
 
 def damp_for_non_production_path(

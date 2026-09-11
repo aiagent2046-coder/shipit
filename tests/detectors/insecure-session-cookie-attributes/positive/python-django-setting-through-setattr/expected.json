@@ -1,0 +1,10 @@
+{
+  "description": "The setting reached through setattr with its literal name. The name is the evidence, so the route to it does not change the claim.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Six of eight rewrites of one case moved the options object into a local variable and wrote the flag as the number 0. The object is one hop away in the same file, and 0 is a false.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

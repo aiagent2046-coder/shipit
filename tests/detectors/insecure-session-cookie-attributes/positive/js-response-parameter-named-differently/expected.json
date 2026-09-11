@@ -1,0 +1,10 @@
+{
+  "description": "Four of four rewrites renamed the response parameter, and a receiver allow-list of res/reply/response missed every one. The check now excludes request-shaped receivers instead of requiring a response-shaped one.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

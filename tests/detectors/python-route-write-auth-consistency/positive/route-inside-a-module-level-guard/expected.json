@@ -1,0 +1,10 @@
+{
+  "description": "Two write routes on one router disagree, and both are registered inside a module-level conditional. A conditional registration is still the module scope and the same router, so the POST creating through the same repository without the actor dependency is the same defect.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

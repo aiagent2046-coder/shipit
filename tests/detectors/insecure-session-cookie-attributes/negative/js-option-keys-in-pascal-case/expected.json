@@ -1,0 +1,7 @@
+{
+  "description": "Express ignores SameSite with an uppercase S. The real httpOnly option remains true, and no cross-site attribute is emitted. The mutation uses the actual sameSite key.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

@@ -139,6 +139,14 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
                              "if not payload.target:"),
     "stripped-fixed-host-path": ("app/fetch.py", '"https://api.example.test/items/" + item',
                                  '"https://" + item + "/items"'),
+    # same boundary as the file-sink rule's local-helper case: the address is built
+    # inside a definition whose parameter is not the handler's
+    "address-inside-a-local-helper": ("app/client.py",
+                                      "    def fetch(target):\n"
+                                      '        return httpx.get(f"http://{target}/status")\n'
+                                      "\n"
+                                      "    return fetch(host)",
+                                      '    return httpx.get(f"http://{host}/status")'),
 }
 
 

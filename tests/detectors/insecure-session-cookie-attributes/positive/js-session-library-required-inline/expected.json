@@ -1,0 +1,10 @@
+{
+  "description": "The CommonJS form calls the required module inline, so there is no import binding to resolve -- the require text itself is the evidence.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

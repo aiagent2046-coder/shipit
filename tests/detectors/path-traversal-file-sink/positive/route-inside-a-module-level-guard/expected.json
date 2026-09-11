@@ -1,0 +1,10 @@
+{
+  "description": "The same two-token traversal as the flat case, with the whole route declared inside a module-level conditional. Python gives the block no scope of its own: the handler's parameter is still request input and the sink is still reachable, so silence here is a miss.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
