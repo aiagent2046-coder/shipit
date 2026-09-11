@@ -534,6 +534,7 @@ export interface RlsAttempt {
 }
 
 export interface RlsCheckResult {
+  access_review?: RlsAccessReview | null;
   persisted: boolean;
   status: "checked" | "refused";
   reason: string;
@@ -554,4 +555,55 @@ export interface RlsCheckResult {
   empty_but_unproven: number;
   max_tables: number;
   attempts: RlsAttempt[];
+}
+
+export type RlsReadAccess = "unknown" | "public" | "public_subset" | "owner" | "backend_only";
+export type RlsWriteAccess = Exclude<RlsReadAccess, "public_subset">;
+export interface RlsAccessReviewInput {
+  // All other collector fields pass unchanged to strict server validation.
+  snapshot: {
+    version: 1;
+    project_ref: string;
+    captured_at: string;
+    tables: { name: string; [key: string]: unknown }[];
+    [key: string]: unknown;
+  };
+  auth_model: "unknown" | "supabase_auth" | "backend";
+  expectations: { table: string; read: RlsReadAccess; write: RlsWriteAccess }[];
+}
+
+export interface RlsAccessReview {
+  version: 1;
+  source: "owner_supplied_metadata";
+  project_ref: string;
+  captured_at: string;
+  snapshot_sha256: string;
+  collector_role: string;
+  auth_model: RlsAccessReviewInput["auth_model"];
+  limitations: string[];
+  tables: {
+    table: string;
+    expected: { read: RlsReadAccess; write: RlsWriteAccess };
+    observation: string;
+    interpretation: string;
+    evidence_conflict: boolean;
+    collector_rls_applies: boolean;
+    row_count: number | null;
+    policy_summaries: {
+      name: string;
+      command: string;
+      permissive: boolean;
+      applies_to: ("anon" | "authenticated")[];
+      using: "always" | "never" | "conditional" | null;
+      with_check: "always" | "never" | "conditional" | null;
+    }[];
+    operations: {
+      role: "anon" | "authenticated";
+      operation: "SELECT" | "INSERT" | "UPDATE" | "DELETE";
+      scope: "blocked" | "unrestricted" | "conditional" | "unknown";
+      reason: string;
+      assessment: "mismatch" | "consistent" | "review_needed" | "expectation_missing";
+      column_limited: boolean;
+    }[];
+  }[];
 }

@@ -40,10 +40,11 @@ from __future__ import annotations
 import io
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.proof.rls_probe import run_rls_probe
+from app.proof.rls_metadata import AccessReviewInput, review_metadata
 from app.proof.supabase_tables import TableCandidate, find_probe_tables
 from app.proof.supabase_target import (
     SupabaseTarget,
@@ -75,6 +76,7 @@ class LiveCheckResult:
     not_checked: list[str] = field(default_factory=list)
     # Why the remaining candidates were not requested. Empty for a full pass.
     stop_reason: str = ""              # table_limit | time_budget_exceeded
+    access_review: dict | None = None
 
     @property
     def exposed_tables(self) -> list[str]:
@@ -127,6 +129,7 @@ def run_live_rls_check(
     anon_key: str | None = None,
     max_tables: int = MAX_TABLES,
     fetch: Callable[..., tuple[int, Any]] | None = None,
+    access_review: AccessReviewInput | None = None,
 ) -> LiveCheckResult:
     """Identify the project, pick the tables, ask about each one.
 
@@ -146,6 +149,13 @@ def run_live_rls_check(
     if isinstance(target, TargetRefusal):
         return LiveCheckResult(status="refused", reason=target.reason)
 
+    if access_review and access_review.snapshot.project_ref != target.ref:
+        return LiveCheckResult(
+            status="refused", project_ref=target.ref,
+            reason=("The metadata snapshot belongs to a different project than the public key; "
+                    "no database requests sent."),
+        )
+
     candidates = find_probe_tables(io.BytesIO(zip_bytes))
     if not candidates:
         return LiveCheckResult(
@@ -158,7 +168,10 @@ def run_live_rls_check(
             ),
         )
 
-    return _ask(target, candidates, max_tables, fetch, deadline)
+    result = _ask(target, candidates, max_tables, fetch, deadline)
+    if access_review:
+        result = replace(result, access_review=review_metadata(access_review, result.attempts))
+    return result
 
 
 def _ask(target: SupabaseTarget, candidates: list[TableCandidate],
