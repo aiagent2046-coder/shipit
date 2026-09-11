@@ -232,6 +232,7 @@ POST   /v1/fixpacks/{id}/unlock  # инициировать оплату (crypto
 GET    /v1/fixpacks/{id}/artifact  # signed URL, только status=paid+
 POST   /v1/webhooks/payments     # верификация подписи → paid → открыть PR
 GET    /healthz
+GET    /v1/capabilities      # статический аудит: проверки, их rule_id и границы
 ```
 
 Auth: Supabase Auth (JWT), верификация через `supabase.auth.getUser(token)` — тот же проверенный паттерн, что в SyndiAI, никакого самописного декодинга. Rate limiting: Redis, 5 аудитов/день на free.

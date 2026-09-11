@@ -58,7 +58,7 @@ Live on [drydock.co](https://drydock.co) with:
 | Ops | Postgres queues, leases, `/internal/stats`, operator Telegram alerts (including paid backlog not draining) |
 | Proof | Registry + templates (e.g. secrets); soft/hard gate modes available |
 
-Release identity for a running host: `GET /version` (commit + `source` tree URL + CalVer tag).
+Release identity for a running host: `GET /version` (commit + `source` tree URL + CalVer tag). What the static audit can look for — every check, the rule ids it can emit, and what it does not resolve — is `GET /v1/capabilities`, served without authentication so it can be read before buying.
 
 ## What Drydock deliberately does not claim
 
