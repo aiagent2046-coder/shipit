@@ -11,10 +11,11 @@ WHAT IT IS. One entry per check the static stage runs: the key the report alread
 uses in `checks_run`, a customer-facing title, the rule ids that check can emit,
 and the scope sentence -- what it reads, and what it does not resolve. The rule
 ids are the ones the scanner modules declare; the scope sentences come from the
-scanner that owns the claim: seven were moved here verbatim from
-`app/scan/static.py`, where they were inline, and the rest already existed as
-constants (`app/scan/rls_recommendations.SCOPE`) or were written from the owning
-module's own docstring. `tests/test_capability_registry.py` enforces the rest.
+scanner that owns the claim: existing descriptions were moved here from
+`app/scan/static.py` and corrected where their exclusions exceeded those
+actually applied by the scanner. The remaining descriptions follow the owning
+scanner's implementation and limitations.
+`tests/test_capability_registry.py` guards the registry against wiring drift.
 
 WHAT IT IS NOT. Not a promise about a repository. It says what the engine can look
 at; it never says a project is clean, and never that these checks ran on a project
@@ -25,8 +26,6 @@ and the scan reports which happened.
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from app.scan.rls_recommendations import SCOPE as RLS_SCOPE
 
 # Shared by the declared secrets scope and by the per-scan description in
 # `app/scan/static.py`, so the sentence has one home.
@@ -83,16 +82,23 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     Capability(
         "rls",
-        "Supabase tables the anonymous key can read or write",
+        "Committed SQL suggesting anonymous table access",
         ("rls-table-anon-readable", "rls-table-anon-writable"),
-        RLS_SCOPE,
+        "Committed SQL in recognized schema/migration paths, processed in filename order: "
+        "table declarations, RLS flags and supported policy expressions. Read findings use "
+        "private-looking table/column heuristics and public-by-design exclusions; write findings "
+        "do not share those exclusions. Missing schema produces no finding. Applied migrations, "
+        "effective database grants, runtime identities and actual row access are not verified; "
+        "these are source-based access candidates, not observed database exposure.",
     ),
     Capability(
         "schema_drift",
         "Tables the code names that no migration declares",
         ("schema-drift-undeclared-table",),
-        "Table names the repository's code and configuration mention, compared with the tables its "
-        "committed migrations declare. This reports the GAP, not exposure: a table created outside "
+        "Literal table references in client code and generated-type-shaped declarations, compared "
+        "with public tables in committed SQL. No comparison is reported when no public table is "
+        "declared; dynamic references and views are not comprehensively resolved. This reports "
+        "the GAP, not exposure: a table created outside "
         "the repository, for example through a dashboard, is invisible here, and a missing "
         "declaration does not prove a missing protection.",
     ),
@@ -124,10 +130,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "service_role",
         "A request handler holding the Supabase service-role key",
         ("supabase-service-role-route",),
-        "Server-side request handlers in Python and JavaScript/TypeScript that construct a client "
-        "with a service-role key, including a key one import away. RLS is not the boundary for such "
-        "a handler. Whether the key is resolved at run time, and what the queries then reach, is not "
-        "verified; a file that reads the key outside a handler is not reported.",
+        "Files matching Next.js, SvelteKit or Nuxt handler path conventions that read a "
+        "service-role environment variable or import a module with that read. One-hop imports "
+        "are matched by module basename; equal basenames are not distinguished. General Python "
+        "decorator routes, Express routing and Supabase Edge Functions are outside this check. "
+        "Client construction, runtime key resolution, authentication and query access are not "
+        "verified. A service-role client, if used, bypasses RLS; the source match alone does not "
+        "prove a reachable vulnerability.",
     ),
     Capability(
         "error_boundary",
@@ -188,7 +197,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         "An outbound request whose address comes from the caller",
         ("python-outbound-request-unvalidated-url",),
         "Known HTTP clients in locally declared FastAPI routes; "
-        "at most 400 eligible Python files up to 400 KB each, excluding test/vendor files; "
+        "at most 400 eligible Python files up to 400 KB each. Recognized test/example/documentation "
+        "paths are skipped, except migration paths; vendor and dependency trees are not excluded; "
         "20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, "
         "32 findings total. Supported Request fields, locally declared Pydantic string fields, "
         "known-string strip(), URL expressions and preceding local "
@@ -199,8 +209,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "tls_verification",
         "TLS certificate or hostname verification switched off",
         ("tls-verification-disabled",),
-        "At most 400 non-test/vendor Python and JS/TS files, each up to "
-        "400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Local imports and "
+        "At most 400 Python and JS/TS files, each up to "
+        "400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Recognized "
+        "test/example/documentation paths are skipped, except migration paths; vendor and "
+        "dependency trees are not excluded. Local imports and "
         "client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, "
         "Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and "
         "process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 "
@@ -213,8 +225,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "unsafe_deserialization",
         "Data turned back into objects through a format that can run code",
         ("unsafe-deserialization",),
-        "At most 400 non-test/vendor Python files up to "
-        "400 KB, 20,000 AST nodes and depth 100; import-resolved loads with lexical "
+        "At most 400 Python files up to "
+        "400 KB, 20,000 AST nodes and depth 100. Recognized test/example/documentation paths "
+        "are skipped, except migration paths; vendor and dependency trees are not excluded. "
+        "Import-resolved loads with lexical "
         "shadowing and stable outer bindings. Unsafe YAML classes must have confirmed "
         "library provenance; Base/Safe/Full loaders are silent. Marshal and missing "
         "YAML Loader produce separate, conditional risk descriptions. Input trust "
@@ -228,7 +242,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         "A file path built from a value the caller sent",
         ("path-traversal-file-sink",),
         "Local FastAPI route handlers in parseable Python files up to "
-        "400 KB; imported file operations and proven pathlib receivers are traced "
+        "400 KB; recognized test/example/documentation paths are skipped, except migration paths. "
+        "Vendor and dependency trees are not excluded. Imported file operations and proven pathlib receivers "
+        "are traced "
         "locally with bounded expansion. Path construction alone is not a sink. "
         "Containment recognizes imported secure_filename results and a resolved Path "
         "checked against a fixed absolute base on the branch reaching the operation. "
@@ -241,22 +257,25 @@ CAPABILITIES: tuple[Capability, ...] = (
         ("insecure-session-cookie-attributes",),
         "Cookie-setting calls and settings whose cookie name says it carries identity: "
         "Python `set_cookie`/`set_signed_cookie` with the name as a literal or a "
-        "module-level constant, the Django settings that decide the session cookie's "
+        "unambiguous module-level constant, the Django settings that decide the session cookie's "
         "flags, and in TypeScript/JavaScript `res.cookie`, a Next.js cookie store, an "
-        "express-session/cookie-session configuration object and `document.cookie` "
-        "writes. Which default each API has decides whether an absent option is "
+        "express-session nested cookie options, cookie-session top-level options and `document.cookie` "
+        "writes. JavaScript names and option objects resolve one hop only when stable, "
+        "unambiguous and visible in the current scope. Option keys are case-sensitive. "
+        "Which default each API has decides whether an absent option is "
         "reported: `res.cookie` defaults HttpOnly to false, express-session defaults it "
         "to true. Not covered: a missing `secure` attribute (a developer's localhost is "
         "the ordinary reason, and browsers treat localhost as secure), a missing "
         "SameSite (browsers default to Lax; only an explicit SameSite=None removes the "
         "protection), `csrf`/`xsrf`/`state` cookie names (the double-submit pattern "
         "requires script access), raw Set-Cookie header strings, framework config "
-        "files, dependency and test paths, cookies set through a wrapper, and any "
-        "option whose value is a variable rather than a literal",
+        "files, dependency and test paths, cookies set through a wrapper, Python "
+        "positional flag arguments, unknown option spreads, and any option whose value "
+        "is a variable rather than a literal",
     ),
 )
 
-# The checks the static stage reports running, in the order it reports them.
+# The checks the static stage reports running, in stable report order.
 CHECKS_RUN: tuple[str, ...] = tuple(capability.check for capability in CAPABILITIES)
 
 # Declared scope per check, for the scan to report alongside its findings.

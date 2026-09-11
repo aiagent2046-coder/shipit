@@ -14,12 +14,12 @@ nothing here executes uploaded code.
 
 SHAPES READ, and the API decides the DEFAULT:
 
-  * `res.cookie(name, value, options?)` -- Express/Koa/Fastify. Express's own
+  * `res.cookie(name, value, options?)` -- Express's own
     default is `httpOnly: false`, so an ABSENT option is the defect, not a
-    silence. Gated on a response-shaped receiver (`res`, `reply`, `response`,
-    `ctx`): a differently named response object is a miss, and the docstring says so.
+    silence. Request-shaped receivers are excluded; a custom `.cookie` method
+    unrelated to HTTP can still be mistaken for a setter.
   * `cookies().set(name, value, options?)` and `cookieStore.set(...)` (Next.js,
-    Cookie Store API) -- same default, same treatment. Gated on a receiver whose
+    server cookie store) -- same default, same treatment. Gated on a receiver whose
     text contains `cookie`.
   * `session({ name: "sid", cookie: { ... } })` and `cookieSession({ ... })` --
     express-session and cookie-session, where `httpOnly` defaults to TRUE: an
@@ -37,8 +37,7 @@ through a wrapper function.
 
 WHAT THE FIRST HUNT ROUND CHANGED HERE, all measured on model rewrites of the
 corpus positives: the cookie NAME moved into a local `const` (8 of 8 rewrites of
-one case, now resolved one hop), option keys were written `SameSite`/`HttpOnly`
-rather than camelCase (8 of 8 of another, now read), response objects were named
+one case, now resolved one hop), response objects were named
 `resParam`/`outgoingRes`/`resData`/`responseBody` rather than `res` (4 of 4 of a
 third, so the receiver check now excludes request-shaped names instead of
 requiring a response-shaped one), and `document.cookie` was handed a template
@@ -67,10 +66,11 @@ _PARSERS = {
 _REQUEST_PREFIXES = ("req", "request")
 _SESSION_FUNCTIONS = frozenset({"session", "cookieSession", "cookie_session", "expressSession",
                                "sessionMiddleware"})
-_HTTPONLY_KEYS = frozenset({"httpOnly", "httponly", "http_only", "http-only",
-                            "HttpOnly", "HTTPOnly", "Http_Only"})
-_SAMESITE_KEYS = frozenset({"sameSite", "samesite", "same_site", "same-site",
-                            "SameSite", "SAMESITE", "Same-Site"})
+# JavaScript option names are case-sensitive. Header spellings such as
+# `HttpOnly` / `SameSite` are ignored by these APIs, not aliases for their options.
+_HTTPONLY_KEYS = frozenset({"httpOnly"})
+_SAMESITE_KEYS = frozenset({"sameSite"})
+_UNKNOWN_OPTION = object()
 _MAX_NODES = 60_000
 
 
@@ -92,7 +92,7 @@ def _text(node) -> str:
 
 def _string_value(node) -> str:
     """The literal a string/template node holds, or '' when it is not a plain one."""
-    if node is None:
+    if node is None or node is _UNKNOWN_OPTION:
         return ""
     if node.type == "string":
         text = _text(node)
@@ -112,14 +112,20 @@ def _bool_value(node):
     which only knew the `true`/`false` keywords -- went silent on a flag that is
     plainly off.
     """
-    if node is None:
+    if node is None or node is _UNKNOWN_OPTION:
         return None
-    if node.type == "false":
+    if node.type in {"false", "null"}:
         return False
     if node.type == "true":
         return True
     if node.type == "number":
-        return _text(node).strip() not in ("0", "0.0")
+        number = _text(node).replace("_", "").strip()
+        try:
+            return bool(int(number, 0)) if number.lower().startswith(("0x", "0o", "0b")) else bool(float(number))
+        except ValueError:
+            return None
+    if node.type == "string":
+        return bool(_string_value(node))
     return None
 
 
@@ -129,10 +135,28 @@ def _options(node) -> dict[str, object]:
         return {}
     options: dict[str, object] = {}
     for child in node.named_children:
+        if child.type == "spread_element":
+            # A later spread can replace earlier literals, while literals after
+            # the spread are authoritative. Keep that order for each flag.
+            options.update({key: _UNKNOWN_OPTION for key in
+                            (*options, "httpOnly", "sameSite", "cookie", "name")})
+            continue
+        if child.type == "shorthand_property_identifier":
+            options[_text(child)] = _UNKNOWN_OPTION
+            continue
+        if child.type == "method_definition":
+            name = child.child_by_field_name("name")
+            if name is not None:
+                options[_text(name)] = _UNKNOWN_OPTION
+            continue
         if child.type == "pair":
             key = child.child_by_field_name("key")
             value = child.child_by_field_name("value")
             if key is None:
+                continue
+            if key.type == "computed_property_name":
+                options.update({key: _UNKNOWN_OPTION for key in
+                                (*options, "httpOnly", "sameSite", "cookie", "name")})
                 continue
             name = _string_value(key) if key.type == "string" else _text(key)
             options[name] = value
@@ -140,12 +164,12 @@ def _options(node) -> dict[str, object]:
 
 
 def _first_argument(arguments) -> object:
-    named = arguments.named_children if arguments is not None else []
+    named = [node for node in arguments.named_children if node.type != "comment"] if arguments is not None else []
     return named[0] if named else None
 
 
 def _nth_argument(arguments, index: int):
-    named = arguments.named_children if arguments is not None else []
+    named = [node for node in arguments.named_children if node.type != "comment"] if arguments is not None else []
     return named[index] if len(named) > index else None
 
 
@@ -157,6 +181,8 @@ def _problem_for(options_node, default_http_only: bool) -> tuple[str, str]:
     is NOT an object literal (a variable, a spread) cannot be read, so nothing is
     claimed; an object literal is read key by key.
     """
+    if options_node is _UNKNOWN_OPTION:
+        return "", ""
     if options_node is None:
         options: dict[str, object] = {}
     elif options_node.type == "object":
@@ -173,7 +199,7 @@ def _problem_for(options_node, default_http_only: bool) -> tuple[str, str]:
         http_only_problem = "HttpOnly switched off"
     same_site_problem = ""
     same_site_key = next((key for key in options if key in _SAMESITE_KEYS), None)
-    if same_site_key is not None and normalise(_string_value(options[same_site_key])) == "none":
+    if same_site_key is not None and _string_value(options[same_site_key]).lower() == "none":
         same_site_problem = "SameSite=None"
     problems = [problem for problem in (http_only_problem, same_site_problem) if problem]
     if not problems:
@@ -269,7 +295,62 @@ def _local_object_bindings(root, budget: list[int]) -> dict[str, object]:
     return bindings
 
 
-def _session_config_names(root, budget: list[int]) -> set[str]:
+def _stable_declarations(root) -> dict[str, object]:
+    """Keep one-hop names only when their binding is unambiguous in this file.
+
+    This is deliberately conservative: duplicate declarations, parameters and
+    mutations invalidate a name instead of borrowing a value from another scope.
+    Object mutation also invalidates a const binding: const does not freeze it.
+    """
+    declarations: dict[str, object] = {}
+    invalid: set[str] = set()
+    for node in _walk(root, [_MAX_NODES]):
+        if node.type == "variable_declarator":
+            name = node.child_by_field_name("name")
+            if name is None or name.type != "identifier":
+                if name is not None:
+                    invalid.update(_text(part) for part in _walk(name, [500])
+                                   if part.type in {"identifier", "shorthand_property_identifier_pattern"})
+                continue
+            text = _text(name)
+            if text in declarations:
+                invalid.add(text)
+            declarations[text] = node
+        elif node.type == "formal_parameters":
+            invalid.update(_text(part) for part in _walk(node, [500]) if part.type == "identifier")
+        elif node.type == "arrow_function":
+            parameter = node.child_by_field_name("parameter")
+            if parameter is not None:
+                invalid.add(_text(parameter))
+        elif node.type == "catch_clause":
+            parameter = node.child_by_field_name("parameter")
+            if parameter is not None:
+                invalid.update(_text(part) for part in _walk(parameter, [500]) if part.type == "identifier")
+        elif node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression"}:
+            target = node.child_by_field_name("left") or node.child_by_field_name("argument")
+            while target is not None and target.type in {"member_expression", "subscript_expression"}:
+                target = target.child_by_field_name("object")
+            if target is not None and target.type == "identifier":
+                invalid.add(_text(target))
+    return {name: node for name, node in declarations.items() if name not in invalid}
+
+
+def _visible_binding(name: str, use, declarations: dict[str, object]) -> bool:
+    declaration = declarations.get(name)
+    if declaration is None or declaration.end_byte > use.start_byte:
+        return False
+    scope = declaration.parent
+    while scope is not None and scope.type not in {"statement_block", "program"}:
+        scope = scope.parent
+    parent = use.parent
+    while parent is not None:
+        if parent == scope:
+            return True
+        parent = parent.parent
+    return False
+
+
+def _session_config_names(root, budget: list[int]) -> dict[str, str]:
     """Names bound to express-session / cookie-session by this file's own imports.
 
     MEASURED: seven of eight rewrites of the session-config case imported the
@@ -278,7 +359,8 @@ def _session_config_names(root, budget: list[int]) -> set[str]:
     binding is evidence -- the same resolution the TLS rule does for client
     names.
     """
-    names: set[str] = set(_SESSION_FUNCTIONS)
+    names = {name: "cookie-session" if name in {"cookieSession", "cookie_session"}
+             else "express-session" for name in _SESSION_FUNCTIONS}
     for node in _walk(root, budget):
         if node.type != "import_statement":
             continue
@@ -293,14 +375,15 @@ def _session_config_names(root, budget: list[int]) -> set[str]:
                 if inner.type == "import_specifier":
                     alias = inner.child_by_field_name("alias") or inner.child_by_field_name("name")
                     if alias is not None:
-                        names.add(_text(alias))
+                        names[_text(alias)] = module
                 elif inner.type == "identifier":
-                    names.add(_text(inner))
+                    names[_text(inner)] = module
     return names
 
 
 def _call_evidence(node, store_names: set[str], literals: dict[str, str],
-                   session_names: set[str], object_bindings: dict[str, object]) -> list[tuple[int, str, str]]:
+                   session_names: dict[str, str], object_bindings: dict[str, object],
+                   declarations: dict[str, object]) -> list[tuple[int, str, str]]:
     function = node.child_by_field_name("function")
     arguments = node.child_by_field_name("arguments")
     if function is None:
@@ -314,18 +397,23 @@ def _call_evidence(node, store_names: set[str], literals: dict[str, str],
         receiver_text = _text(receiver) if receiver is not None else ""
         last = normalise(receiver_text).split("_")[-1]
         looks_like_request = last.startswith(_REQUEST_PREFIXES)
-        is_cookie_store = receiver_text in store_names or "cookie" in receiver_text.lower()
+        is_cookie_store = (receiver_text in store_names
+                           and _visible_binding(receiver_text, node, declarations)) or "cookie" in receiver_text.lower()
         if looks_like_request:
             return []
         sets_a_cookie = method == "cookie" or (method == "set" and is_cookie_store)
         if not sets_a_cookie:
             return []
         first = _first_argument(arguments)
-        name = _string_value(first) or literals.get(_text(first) if first is not None else "", "")
+        name = _string_value(first)
+        if not name and first is not None and _visible_binding(_text(first), node, declarations):
+            name = literals.get(_text(first), "")
         if not is_auth_cookie(name):
             return []
         options_node = _nth_argument(arguments, 2)
         if options_node is not None and options_node.type == "identifier":
+            if not _visible_binding(_text(options_node), node, declarations):
+                return []
             resolved = object_bindings.get(_text(options_node))
             if resolved is None:
                 return []   # options exist but cannot be read: do not guess
@@ -336,19 +424,26 @@ def _call_evidence(node, store_names: set[str], literals: dict[str, str],
         return [(line, f"sets the authentication cookie {name!r} with {problem}", kind)]
 
     if function.type == "identifier" or function.type == "call_expression":
-        # `sess({...})` and the CommonJS inline form `require('express-session')({...})`
-        # reach the same function; the require text is the evidence.
+        # `sess({...})` and the CommonJS inline form reach the same function.
         callee = _text(function)
-        if function.type == "call_expression" and not any(
-                module in callee for module in ("express-session", "cookie-session")):
+        module = session_names.get(callee, "")
+        if function.type == "call_expression":
+            called = function.child_by_field_name("function")
+            if called is None or _text(called) != "require":
+                return []
+            module = _string_value(_first_argument(function.child_by_field_name("arguments")))
+        if module not in {"express-session", "cookie-session"}:
             return []
-        if function.type == "identifier" and callee not in session_names:
-            return []
-        config = _options(_first_argument(arguments))
-        cookie_options = config.get("cookie") if config else None
+        config_node = _first_argument(arguments)
+        config = _options(config_node)
+        # cookie-session passes top-level options to cookies.set; express-session
+        # keeps them in its nested `cookie` object. Their HttpOnly default is true.
+        cookie_options = config_node if module == "cookie-session" else config.get("cookie")
         if cookie_options is None:
             return []
-        declared = _string_value(config.get("name")) if config else ""
+        declared = _string_value(config.get("name"))
+        if "name" in config and not declared:
+            return []  # An explicit but unknown name is not the library default.
         # express-session names its cookie `connect.sid` and cookie-session uses
         # `session`; both are authentication-shaped, so an absent name is assumed
         # to be the library default rather than treated as unresolvable.
@@ -378,14 +473,17 @@ def _leading_string(node) -> str:
     return ""
 
 
-def _document_cookie_evidence(node, literals: dict[str, str]) -> list[tuple[int, str, str]]:
+def _document_cookie_evidence(node, literals: dict[str, str],
+                              declarations: dict[str, object]) -> list[tuple[int, str, str]]:
     left = node.child_by_field_name("left")
     right = node.child_by_field_name("right")
     if left is None or left.type != "member_expression" or right is None:
         return []
     if _text(left) != "document.cookie":
         return []
-    literal = _leading_string(right) or literals.get(_text(right), "")
+    literal = _leading_string(right)
+    if not literal and _visible_binding(_text(right), node, declarations):
+        literal = literals.get(_text(right), "")
     # The leading text is the name itself in `"auth_token" + "=" + value`, and
     # `name=value` in `document.cookie = "auth_token=..."`. Requiring an `=` was
     # wrong: MEASURED, the concatenated form escaped for that reason alone.
@@ -408,10 +506,11 @@ def js_evidence(text: str, tsx: bool = False) -> list[tuple[int, str, str]]:
     literals = _local_string_bindings(root, [_MAX_NODES])
     session_names = _session_config_names(root, [_MAX_NODES])
     object_bindings = _local_object_bindings(root, [_MAX_NODES])
+    declarations = _stable_declarations(root)
     evidence: list[tuple[int, str, str]] = []
     for node in _walk(root, [_MAX_NODES]):
         if node.type == "call_expression":
-            evidence += _call_evidence(node, store_names, literals, session_names, object_bindings)
+            evidence += _call_evidence(node, store_names, literals, session_names, object_bindings, declarations)
         elif node.type == "assignment_expression":
-            evidence += _document_cookie_evidence(node, literals)
+            evidence += _document_cookie_evidence(node, literals, declarations)
     return sorted(evidence)

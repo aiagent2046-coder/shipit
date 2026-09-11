@@ -105,10 +105,10 @@ def _finding(path: str, line: int, what: str, kind: str) -> CheckFinding:
                 "reaches the page cannot read the session. Without it, any cross-site "
                 "scripting flaw turns into session theft. "
                 if script
-                else "SameSite=None tells the browser to attach the cookie to requests "
-                "coming from other sites, which is the protection most browsers apply by "
-                "default and the reason a state-changing route stops needing a CSRF token "
-                "check. "
+                else "SameSite=None allows the browser to attach the cookie to cross-site "
+                "requests, removing the cross-site restrictions of Lax/Strict. "
+                "SameSite is one layer of CSRF protection and does not by itself replace "
+                "CSRF token or request-origin checks. "
             )
             + "Whether the value is a live session token, whether another layer rewrites "
             "the cookie, and whether the request is reachable cross-site have NOT been "

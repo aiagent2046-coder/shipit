@@ -1,0 +1,2 @@
+import sessions from "cookie-session";
+app.use(sessions({ name: "session", httpOnly: false }));

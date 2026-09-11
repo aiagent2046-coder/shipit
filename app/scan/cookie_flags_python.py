@@ -31,9 +31,8 @@ EXCLUSIONS, each one a claim this rule must not make:
 WHAT IT DOES NOT RESOLVE. Middleware that rewrites the cookie on the way out,
 framework defaults changing between versions, a name built at run time, a local
 constant declared inside the handler (module-level constants are resolved, one
-hop), a settings dict mutated by subscript
-(`settings['SESSION_COOKIE_HTTPONLY'] = False`), and any value that arrives as a
-variable instead of a literal.
+hop), and any value that arrives as a variable instead of a literal. Positional
+attribute arguments and unpacked keyword arguments are not treated as omissions.
 
 WHAT THE FIRST HUNT ROUND CHANGED HERE, measured on model rewrites: the cookie
 name arrived as `set_cookie(name=..., value=...)` (a keyword the signature
@@ -45,8 +44,9 @@ camelCase split now lives in `cookie_names.normalise`.
 from __future__ import annotations
 
 import ast
+from collections import Counter
 
-from app.scan.cookie_names import is_auth_cookie, normalise
+from app.scan.cookie_names import is_auth_cookie
 
 _COOKIE_CALLS = frozenset({"set_cookie", "set_signed_cookie"})
 _HTTPONLY_KEYS = ("httponly", "http_only")
@@ -66,6 +66,14 @@ def _module_string_constants(tree: ast.Module) -> dict[str, str]:
                 and isinstance(node.targets[0], ast.Name)
                 and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
             constants[node.targets[0].id] = node.value.value
+    # A module literal is not evidence for a same-named function parameter or a
+    # value reassigned elsewhere. Resolve only unambiguous, stable names.
+    writes = Counter(node.id for node in ast.walk(tree)
+                     if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store))
+    arguments = {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
+    for name in list(constants):
+        if writes[name] != 1 or name in arguments:
+            constants.pop(name)
     return constants
 
 
@@ -112,10 +120,11 @@ def _call_evidence(call: ast.Call, constants: dict[str, str]) -> list[tuple[int,
     callee = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
     if callee not in _COOKIE_CALLS:
         return []
-    # The name is positional in every client's signature, but the hunt's rewrites
-    # wrote it as `set_cookie(name=..., value=...)` and the rule went silent on a
-    # call it should read -- a keyword the signature accepts is not a new shape.
-    first = call.args[0] if call.args else _named_argument(call, "name")
+    # Django, Flask and Starlette call this argument `key`; some other APIs
+    # (for example Tornado) call it `name`.
+    first = call.args[0] if call.args else _named_argument(call, "key")
+    if first is None:
+        first = _named_argument(call, "name")
     name = _cookie_name(first, constants)
     if not is_auth_cookie(name):
         return []
@@ -124,15 +133,17 @@ def _call_evidence(call: ast.Call, constants: dict[str, str]) -> list[tuple[int,
     problems: list[str] = []
     httponly_problem = ""
     httponly_node = _keyword(call, _HTTPONLY_KEYS)
-    if httponly_node is None:
+    if (httponly_node is None and len(call.args) <= 2
+            and not any(isinstance(arg, ast.Starred) for arg in call.args)
+            and not any(keyword.arg is None for keyword in call.keywords)):
         httponly_problem = "no HttpOnly"
-    else:
+    elif httponly_node is not None:
         httponly = _literal(httponly_node)
         if httponly is not _UNKNOWN and not httponly:
             httponly_problem = "HttpOnly switched off"
     samesite_problem = ""
     samesite = _literal(_keyword(call, _SAMESITE_KEYS))
-    if isinstance(samesite, str) and normalise(samesite) == "none":
+    if isinstance(samesite, str) and samesite.lower() == "none":
         samesite_problem = "SameSite=None"
     problems = [problem for problem in (httponly_problem, samesite_problem) if problem]
     if problems:
@@ -156,7 +167,7 @@ def _setting_finding(setting: str, literal: object, lineno: int) -> list[tuple[i
             "turns SESSION_COOKIE_HTTPONLY off, so the session cookie is readable by any script on the page",
             "httponly",
         )]
-    if setting == "SESSION_COOKIE_SAMESITE" and isinstance(literal, str) and normalise(literal) == "none":
+    if setting == "SESSION_COOKIE_SAMESITE" and isinstance(literal, str) and literal.lower() == "none":
         return [(
             lineno,
             "sets SESSION_COOKIE_SAMESITE to 'None', so browsers attach the session cookie to cross-site requests",

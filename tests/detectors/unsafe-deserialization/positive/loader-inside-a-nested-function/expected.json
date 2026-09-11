@@ -1,0 +1,10 @@
+{
+  "description": "A code-executing loader is called on bytes the request supplied, whatever the enclosing scope is. The rule is about the loader being used, so descending into a nested function keeps its claim true -- unlike a value trace, which would have to connect the caller's argument to the helper's parameter.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

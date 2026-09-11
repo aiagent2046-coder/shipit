@@ -97,12 +97,97 @@ def test_one_cookie_is_one_finding_however_many_attributes_are_missing():
     assert "SameSite=None" in findings[0].explanation
 
 
+def test_python_keyword_key_matches_the_real_starlette_signature():
+    from starlette.responses import Response
+
+    response = Response()
+    response.set_cookie(key="session", value="example")
+    assert "httponly" not in response.headers["set-cookie"].lower()
+    findings = scan_cookie_flags(archive('response.set_cookie(key="session", value="example")'))
+    assert len(findings) == 1
+
+
+@pytest.mark.parametrize("source", [
+    'response.set_cookie("session", token, **options)',
+    'response.set_cookie("session", token, None, None, "/", None, True, True)',
+    'NAME = "session"\ndef preferences(response, NAME):\n    response.set_cookie(NAME, "dark")',
+    'NAME = "session"\nNAME = get_preference_name()\nresponse.set_cookie(NAME, "dark")',
+])
+def test_python_unknown_attributes_and_shadowed_names_do_not_prove_an_omission(source):
+    assert scan_cookie_flags(archive(source)) == []
+    assert scan_cookie_flags(archive(source + '\nresponse.set_cookie("session", "example", httponly=False)'))
+
+
+@pytest.mark.parametrize("options", [
+    '{ ...flags }',
+    '{ httpOnly }',
+    '{ httpOnly: false, ...flags }',
+    '{ httpOnly: false, [flagName]: value }',
+    '{ httpOnly() { return true; } }',
+])
+def test_javascript_unknown_options_are_not_default_values(options):
+    source = f'res.cookie("session", token, {options});'
+    assert scan_cookie_flags(archive(source, "src/server.ts")) == []
+    # A known final literal overrides any preceding spread/computed option.
+    source = f'res.cookie("session", token, {{ ...{options}, httpOnly: false }});'
+    assert len(scan_cookie_flags(archive(source, "src/server.ts"))) == 1
+
+
+@pytest.mark.parametrize("value", ["false", "null", "0x0", "0e0", '""'])
+def test_javascript_falsy_literals_disable_httponly(value):
+    source = f'res.cookie("session", token, {{ httpOnly: {value} }});'
+    assert len(scan_cookie_flags(archive(source, "src/server.ts"))) == 1
+
+
+def test_javascript_header_casing_does_not_enable_the_real_option():
+    bad = 'res.cookie("session", token, { HttpOnly: true });'
+    good = bad.replace("HttpOnly", "httpOnly")
+    assert len(scan_cookie_flags(archive(bad, "src/server.ts"))) == 1
+    assert scan_cookie_flags(archive(good, "src/server.ts")) == []
+
+
+def test_javascript_comments_are_not_call_arguments():
+    source = 'res.cookie(/* identity */ "session", token, /* flags */ { httpOnly: false });'
+    assert len(scan_cookie_flags(archive(source, "src/server.ts"))) == 1
+    assert scan_cookie_flags(archive(source.replace("false", "true"), "src/server.ts")) == []
+
+
+@pytest.mark.parametrize("source", [
+    'function auth(res) { const name = "session"; }\n'
+    'function preferences(res) { const name = "theme"; res.cookie(name, "dark"); }',
+    'const name = "session"; function preferences(res, name) { res.cookie(name, "dark"); }',
+    'function auth(res) { const flags = { httpOnly: false }; }\n'
+    'function preferences(res) { res.cookie("session", "example", flags); }',
+    'const flags = { httpOnly: false }; flags.httpOnly = true; res.cookie("session", "example", flags);',
+    'function auth() { const store = cookies(); }\n'
+    'function remember(store) { store.set("session", "cache"); }',
+])
+def test_javascript_bindings_do_not_cross_scopes_or_survive_mutation(source):
+    assert scan_cookie_flags(archive(source, "src/server.ts")) == []
+    assert scan_cookie_flags(archive(source + '\nres.cookie("session", "example");', "src/server.ts"))
+
+
+@pytest.mark.parametrize("callee", [
+    'cookieSession',
+    'require("cookie-session")',
+    'sessions',
+])
+def test_cookie_session_reads_top_level_flags_with_its_safe_default(callee):
+    prefix = 'import sessions from "cookie-session";\n' if callee == "sessions" else ""
+    safe = prefix + f'{callee}({{ name: "session", sameSite: "lax" }});'
+    bad = safe.replace('sameSite: "lax"', 'httpOnly: false')
+    ignored_nested = safe.replace('sameSite: "lax"', 'cookie: { httpOnly: false }')
+    assert scan_cookie_flags(archive(safe, "src/server.ts")) == []
+    assert scan_cookie_flags(archive(ignored_nested, "src/server.ts")) == []
+    assert len(scan_cookie_flags(archive(bad, "src/server.ts"))) == 1
+
+
 def test_a_dependency_directory_is_not_the_repository_own_code():
     """Measured: four shipped scanners reported a defect planted under
     node_modules/. Vendored code is not the customer's code, and a report that
     counts it is a false positive on every repository that commits its deps."""
     for path in ("repo/node_modules/pkg/index.js", "repo/vendor/lib/client.ts",
-                 "repo/web/node_modules/next/dist/x.js"):
+                 "repo/web/node_modules/next/dist/x.js", r"repo\node_modules\pkg\index.js"):
         assert scan_cookie_flags(archive(TS_POSITIVE, path)) == [], path
 
 
@@ -151,7 +236,9 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
         'res.cookie("session", token);'),
     "js-store-set-is-not-a-cookie-store": (
         "src/cache.ts", 'await store.set("session", payload, { ttl: 60 });',
-        'const store = await cookies();\n  await store.set("session", payload, { ttl: 60 });'),
+        'const jar = await cookies();\n  await jar.set("session", payload, { ttl: 60 });'),
+    "js-option-keys-in-pascal-case": (
+        "src/server.ts", 'SameSite: "none"', 'sameSite: "none"'),
     "js-per-request-session-cookie-mutation": (
         "src/app.ts", "  req.session.cookie.httpOnly = false;\n",
         "  app.use(session({ cookie: { httpOnly: false } }));\n"),

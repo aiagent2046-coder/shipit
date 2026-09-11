@@ -5,5 +5,5 @@ router = APIRouter()
 
 @router.post("/authenticate")
 async def authenticate(response: Response, session_token: str):
-    response.set_cookie(name="user_auth", value=session_token, secure=True)
+    response.set_cookie(key="user_auth", value=session_token, secure=True)
     return {"ok": True}

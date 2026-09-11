@@ -1,0 +1,10 @@
+{
+  "description": "cookie-session passes its top-level options to cookies.set; unlike express-session there is no nested cookie object.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

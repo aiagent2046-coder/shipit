@@ -333,7 +333,7 @@ _DEPENDENCY_SEGMENTS = frozenset({"node_modules", "vendor", "venv", ".venv", "si
 
 def is_dependency_path(name: str) -> bool:
     """True for a file inside a dependency or vendored tree."""
-    return any(segment in _DEPENDENCY_SEGMENTS for segment in name.split("/"))
+    return any(segment in _DEPENDENCY_SEGMENTS for segment in name.replace("\\", "/").split("/"))
 
 
 def damp_for_non_production_path(

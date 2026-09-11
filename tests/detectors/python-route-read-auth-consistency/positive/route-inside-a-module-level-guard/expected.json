@@ -1,0 +1,11 @@
+{
+  "description": "Both routes are registered inside a module-level conditional, which is still THE MODULE SCOPE and the same router object, so the disagreement is the same disagreement: the sibling reads through get_authorized, this one through get. A discovery walker that reads only a scope's direct statements cannot see either route, and the pair goes unreported.",
+  "expect": [
+    {
+      "rule_id": "python-route-read-auth-consistency",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}
