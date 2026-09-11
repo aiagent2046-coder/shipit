@@ -207,6 +207,34 @@ def test_a_block_route_on_another_router_is_not_a_sibling():
     assert len(scan_auth_read(archive(source.replace("@admin.", "@router.")))) == 1
 
 
+# The provenance boundary the block-declaration fix deliberately does NOT cross: an
+# import written inside a block establishes no dependency provenance. Measured on
+# twelve pinned public FastAPI projects (569 Python files; the measurement ships as
+# scripts/measure_route_block_impact.py in the block-declaration change): the only
+# occurrences were `if TYPE_CHECKING: from fastapi import ...` -- typing-only,
+# binding nothing at run time -- and one docs generator's try/except. Reading those
+# as runtime bindings would invent provenance and accuse a caller-filled value on it.
+CONDITIONAL_IMPORTS = {
+    "type-checking-only": ("from typing import TYPE_CHECKING\n"
+                           "if TYPE_CHECKING:\n"
+                           "    from fastapi import APIRouter, Depends\n"),
+    "runtime-fallback": ("try:\n"
+                         "    from fastapi import APIRouter, Depends\n"
+                         "except ImportError:\n"
+                         "    APIRouter = None\n"
+                         "    Depends = None\n"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(CONDITIONAL_IMPORTS))
+def test_a_conditional_import_establishes_no_dependency_provenance(shape):
+    body = "\n".join(line for line in (GUARDED_COLLECTION + OPEN_ITEM).strip().splitlines()
+                     if not line.startswith("from fastapi"))
+    assert scan_auth_read(archive(CONDITIONAL_IMPORTS[shape] + body + "\n")) == []
+    # the one change that removes the property: the same import, written directly
+    assert len(scan_auth_read(archive("from fastapi import APIRouter, Depends\n" + body + "\n"))) == 1
+
+
 @pytest.mark.parametrize("target", [
     OPEN_ITEM.replace("get_note(note_id)", "get_note(note_id, repo)"),
     OPEN_ITEM.replace("return repo.get", "repo = PublicRepository()\n    return repo.get"),

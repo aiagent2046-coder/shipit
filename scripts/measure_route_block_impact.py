@@ -29,8 +29,8 @@ SAMPLING, STATED BECAUSE IT IS NOT RANDOM. Twelve public FastAPI projects, taken
 from GitHub's star ranking for "fastapi template", pinned by commit. Templates are
 not the population of customer repositories, and they over-represent application
 factories and startup-time route registration -- precisely the shapes under
-measurement. A rate below is an UPPER bound for application code, and an
-occurrence is a demonstration that the shape is real, not a prevalence estimate.
+measurement. This non-random sample cannot establish a prevalence bound for
+application code; an occurrence demonstrates a shape, not its frequency.
 
 Usage:
     python scripts/measure_route_block_impact.py fetch

@@ -14,7 +14,7 @@ import zipfile
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
-from app.scan.scope_statements import BLOCK_STATEMENTS, scope_statements
+from app.scan.scope_statements import BLOCK_STATEMENTS, compatible_routes, route_conditions, scope_statements
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "python-route-read-auth-consistency"
@@ -159,6 +159,8 @@ def _scope_stores(scope: ast.AST) -> Counter:
             names.update(node.names)
         elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
             names[node.name] += 1
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names[node.rest] += 1
         pending.extend(ast.iter_child_nodes(node))
     return names
 
@@ -167,6 +169,19 @@ def _scope_bindings(scope: ast.AST, inherited: _ScopeBindings | None = None) -> 
     """Only stable, direct imports establish FastAPI dependency provenance.
 
     Rebindings, conditional imports and parameter collisions stay unknown.
+
+    Measured, and this is why the conservatism stays: across twelve pinned public
+    FastAPI projects (569 Python files; the measurement ships as
+    scripts/measure_route_block_impact.py in the block-declaration change),
+    the only provenance-bearing import written inside a block was
+    `if TYPE_CHECKING: from fastapi import ...` -- a typing-only import that binds
+    nothing at run time -- plus one docs generator's `try: from fastapi import ...`.
+    Reading the first as a runtime binding would invent provenance for code that
+    never binds the name, and a rule that accuses a caller-filled value on an
+    invented binding is worse than one that stays silent. A runtime fallback
+    import in `try:` is the shape where widening would be defensible; nothing
+    measured yet depends on it.
+
     Keeping the old alias as unknown matters: it can still guard a target, but
     cannot provide the positive identity witness needed to accuse a sibling.
     """
@@ -387,10 +402,9 @@ def _scope_routes(scope, factories: set[str], methods: set[str]):
             continue
         # Only direct assignments from a known factory establish an object.
         # Any other visible store to an existing router invalidates it.
-        for child in ast.walk(node):
-            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
-                routers.pop(child.id, None)
-                available_factories.discard(child.id)
+        for name in _scope_stores(ast.Module(body=[node], type_ignores=[])):
+            routers.pop(name, None)
+            available_factories.discard(name)
         if isinstance(node, ast.ClassDef):
             routers.pop(node.name, None)
             available_factories.discard(node.name)
@@ -482,6 +496,7 @@ def _scope_findings(scope, factories: set[str], filename: str,
     bindings = bindings or _scope_bindings(scope)
     roles = {fn: _guard_role(fn, bindings) for fn, _, _, _ in routes}
     protected = {}
+    conditions = route_conditions(scope)
     for fn, route, method, router in routes:
         identity_dependency = (
             _nodes_guard_role(ast.walk(fn.args), bindings.dependencies, named_calls=False,
@@ -494,10 +509,11 @@ def _scope_findings(scope, factories: set[str], filename: str,
             if key is None:
                 continue
             if node.func.attr == "get_authorized":
-                protected.setdefault((router, key), (route, node.lineno, f"calls {repo}.get_authorized"))
+                protected.setdefault((router, key), []).append(
+                    (fn, route, node.lineno, f"calls {repo}.get_authorized"))
             elif method == "get" and identity_dependency and node.func.attr in {"get", "list"}:
-                protected.setdefault((router, key), (
-                    route, node.lineno, f"declares an identity dependency and calls {repo}.{node.func.attr}"))
+                protected.setdefault((router, key), []).append((
+                    fn, route, node.lineno, f"declares an identity dependency and calls {repo}.{node.func.attr}"))
     for fn, route, _, router in routes:
         if roles[fn] != "none" or len(fn.decorator_list) != 1:
             continue
@@ -510,7 +526,11 @@ def _scope_findings(scope, factories: set[str], filename: str,
             key = _repository_key(fn, repo, bindings) if repo else None
             if (router, key) not in protected or not arg or "{" + arg + "}" not in route:
                 continue
-            sibling, line, evidence = protected[router, key]
+            witness = next((item for item in protected[router, key]
+                            if compatible_routes(conditions[fn], conditions[item[0]])), None)
+            if witness is None:
+                continue
+            _, sibling, line, evidence = witness
             findings.append(_finding(filename, node.lineno, route, sibling, line, repo, arg, evidence))
             # One finding per route. The loop is over every `.get(` in the
             # handler, and a route that reads twice has one disagreement.

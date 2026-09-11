@@ -242,12 +242,24 @@ def _join_states(state: _PathState, branches: list[_PathState]) -> None:
 
 
 def _forget_stores(stmt: ast.AST, state: _PathState) -> None:
-    for node in _walk(stmt):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+    pending = [stmt]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _bind_path(ast.Name(id=node.name), None, state)
+            continue
+        if isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             _bind_path(node, None, state)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 _bind_path(ast.Name(id=alias.asname or alias.name.split(".")[0]), None, state)
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+            _bind_path(ast.Name(id=node.name), None, state)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            _bind_path(ast.Name(id=node.rest), None, state)
+        pending.extend(ast.iter_child_nodes(node))
 
 
 def _import_path(stmt: ast.Import | ast.ImportFrom, state: _PathState) -> None:
@@ -363,7 +375,7 @@ def _scan_scope(body: list[ast.stmt], inherited: _PathState, path: str, findings
     for stmt in scope_statements(body):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             declares_route = _declares_route(stmt, context)
-            nested = any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) for child in stmt.body)
+            nested = any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) for child in scope_statements(stmt.body))
             if not declares_route and not nested:
                 continue
             local = context.copy()

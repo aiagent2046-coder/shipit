@@ -53,9 +53,10 @@ for both shapes.
 Twelve public FastAPI projects from GitHub's star ranking for "fastapi template",
 pinned by commit in the script. Templates are not the population of customer
 repositories, and they over-represent application factories and startup-time
-registration — the shapes under measurement. The zero above is therefore an upper
-bound on how common the block shape is in application code, and a single
-occurrence elsewhere would still be a real finding for that repository.
+registration — the shapes under measurement. This non-random sample cannot
+establish an upper bound on prevalence in application code. An occurrence in
+another repository must be evaluated using that repository's bindings and
+conditional registration paths.
 
 ## Reproduction
 
@@ -69,3 +70,18 @@ python scripts/measure_route_block_impact.py diff /tmp/base.json /tmp/cand.json
 
 No live contact: the only network calls fetch public repository zipballs, and no
 uploaded code is executed — every scanner parses source.
+
+## Review corrections
+
+Discovery covers `else`, exception handlers, `finally`, and `match` cases as
+well as the first body. Auth comparisons require compatible registration arms:
+a protected route in one `if` arm is not a witness for a route in its `else`.
+Normal exception handlers are also alternatives; `except*` handlers can coexist.
+Choices within a loop body can take different arms across iterations, so those
+routes remain comparable. A choice enclosing the whole loop stays exclusive.
+
+Loop targets, context manager aliases, exception names, pattern captures, imports
+and local definitions can replace a client, router, or builtin. Such bindings
+invalidate inherited provenance. Assignments inside a nested handler do not
+rebind its enclosing router. These boundaries have mutation-backed regression
+tests in `tests/test_route_block_declarations.py`.

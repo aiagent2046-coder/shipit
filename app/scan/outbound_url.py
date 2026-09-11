@@ -4,8 +4,10 @@ Only locally declared FastAPI routes and HTTP clients with visible import or
 constructor provenance are read. A function's statements are visited in order;
 plain assignments preserve literal URL structure, while unknown calls stop the
 trace. No uploaded code is imported or executed, and helpers are not analysed
-across calls. A recognised local check suppresses this signal without certifying
-that the check, redirects, DNS resolution or the network boundary are safe.
+across calls -- a local `def` opens its own scope, and its parameter is not this
+handler's parameter (corpus: negative/address-inside-a-local-helper). A
+recognised local check suppresses this signal without certifying that the check,
+redirects, DNS resolution or the network boundary are safe.
 """
 
 from __future__ import annotations
@@ -653,7 +655,12 @@ def _forget_stores(stmt: ast.AST, state: _State) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind(ast.Name(id=node.name), None, state)
             continue
-        if isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        if isinstance(node, ast.Lambda):
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                _bind(ast.Name(id=alias.asname or alias.name.split(".")[0]), None, state)
+        elif isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)) and isinstance(node.ctx, (ast.Store, ast.Del)):
             _bind(node, None, state)
         elif isinstance(node, ast.ExceptHandler) and node.name:
             _bind(ast.Name(id=node.name), None, state)
@@ -718,8 +725,12 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
         elif isinstance(stmt, ast.ClassDef):
             _declare_model(stmt, state)
         elif isinstance(stmt, BLOCK_STATEMENTS):
+            # Header bindings and stores in an earlier try/loop arm can replace
+            # an imported client or router before a declaration is reached.
+            local = state.copy()
+            _forget_stores(stmt, local)
             for arm in block_arms(stmt):
-                _scan_declarations(arm, state.copy(), path, findings)
+                _scan_declarations(arm, local.copy(), path, findings)
             # A name stored anywhere inside the block may have been rebound by a
             # branch that ran, so its provenance is no longer known to the
             # statements that follow -- the same rule the fallthrough below

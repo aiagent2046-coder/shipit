@@ -1,0 +1,10 @@
+import requests
+
+INTERNAL = "https://billing.internal.example/"
+
+
+def charge(payload):
+    def post_it():
+        return requests.post(INTERNAL, json=payload, verify=False).json()
+
+    return post_it()

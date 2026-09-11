@@ -82,6 +82,7 @@ from typing import BinaryIO
 
 from app.scan.auth_read import _ScopeBindings, _auth_scopes, _guard_role, _handler_nodes, _scope_bindings, _scope_routes
 from app.scan.checks import CheckFinding
+from app.scan.scope_statements import compatible_routes, route_conditions
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "python-route-write-auth-consistency"
@@ -202,15 +203,18 @@ def _scope_findings(scope, factories: set[str], filename: str,
     bindings = bindings or _scope_bindings(scope)
     roles = {fn: _guard_role(fn, bindings) for fn, _, _, _ in routes}
     # Unknown dependencies suppress a target finding, but cannot establish an
-    # identity check on a sibling. Each router keeps its own first witness.
+    # identity check on a sibling. Keep alternatives until the target's
+    # declaration conditions identify a compatible witness.
     siblings = {}
+    conditions = route_conditions(scope)
     for fn, route, method, router in routes:
         if roles[fn] == "identity":
-            siblings.setdefault(router, (fn, route, method))
+            siblings.setdefault(router, []).append((fn, route, method))
     for fn, route, method, router in routes:
         if roles[fn] != "none" or len(fn.decorator_list) != 1 or _public_path(route):
             continue
-        sibling = siblings.get(router)
+        sibling = next((item for item in siblings.get(router, [])
+                        if compatible_routes(conditions[fn], conditions[item[0]])), None)
         if sibling is None:
             continue
         sibling_fn, sibling_route, sibling_method = sibling

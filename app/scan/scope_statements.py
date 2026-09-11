@@ -37,7 +37,12 @@ def scope_statements(scope: ast.AST | list[ast.stmt]) -> Iterator[ast.stmt]:
     declarations themselves so the caller can decide what to do with them, but
     never descends into their bodies.
     """
-    body = scope if isinstance(scope, list) else list(getattr(scope, "body", []))
+    if isinstance(scope, list):
+        body = scope
+    elif isinstance(scope, BLOCK_STATEMENTS):
+        body = [stmt for arm in block_arms(scope) for stmt in arm]
+    else:
+        body = list(getattr(scope, "body", []))
     pending: list[ast.AST] = list(reversed(body))
     while pending:
         node = pending.pop()
@@ -64,3 +69,46 @@ def block_arms(stmt: ast.AST) -> Iterator[list[ast.stmt]]:
         yield handler.body
     for case in getattr(stmt, "cases", ()):
         yield case.body
+
+
+def route_conditions(scope: ast.AST) -> dict[ast.AST, dict[ast.AST, int]]:
+    """Keep mutually exclusive declaration arms apart when pairing routes.
+
+    This is lexical evidence, not an evaluation of feature flags. A declaration
+    outside a choice remains compatible with each of its arms. Callable bodies
+    are owned by another scope and are never entered. A choice inside a loop
+    can take different arms across iterations, registering both routes on an
+    outer router, so only choices outside the repeated body remain exclusive.
+    """
+    result = {}
+    pending = [(scope.body, {}, False)]
+    while pending:
+        body, conditions, repeated = pending.pop()
+        for stmt in body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                result[stmt] = conditions
+            elif isinstance(stmt, ast.If):
+                for index, arm in enumerate((stmt.body, stmt.orelse)):
+                    pending.append((arm, conditions if repeated else {**conditions, stmt: index}, repeated))
+            elif isinstance(stmt, ast.Match):
+                for index, case in enumerate(stmt.cases):
+                    pending.append((case.body, conditions if repeated else {**conditions, stmt: index}, repeated))
+            elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+                pending.append((stmt.body, conditions, True))
+                # Loop else runs once, unless an enclosing loop repeats it.
+                pending.append((stmt.orelse, conditions, repeated))
+            elif isinstance(stmt, ast.Try):
+                for arm in (stmt.body, stmt.orelse, stmt.finalbody):
+                    pending.append((arm, conditions, repeated))
+                # Ordinary except handlers are alternatives; except* handlers
+                # may both run and deliberately take the general path below.
+                for index, handler in enumerate(stmt.handlers):
+                    pending.append((handler.body, conditions if repeated else {**conditions, stmt: index}, repeated))
+            elif isinstance(stmt, BLOCK_STATEMENTS):
+                for arm in block_arms(stmt):
+                    pending.append((arm, conditions, repeated))
+    return result
+
+
+def compatible_routes(left: dict[ast.AST, int], right: dict[ast.AST, int]) -> bool:
+    return all(choice not in right or right[choice] == arm for choice, arm in left.items())
