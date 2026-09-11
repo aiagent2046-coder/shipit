@@ -375,7 +375,8 @@ def _scan_scope(body: list[ast.stmt], inherited: _PathState, path: str, findings
     for stmt in scope_statements(body):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             declares_route = _declares_route(stmt, context)
-            nested = any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) for child in scope_statements(stmt.body))
+            nested = any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         for child in scope_statements(stmt.body))
             if not declares_route and not nested:
                 continue
             local = context.copy()
