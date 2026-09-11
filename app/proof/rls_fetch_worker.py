@@ -13,6 +13,7 @@ from dataclasses import asdict
 
 import httpx
 
+from app.logging_config import configure_logging
 from app.proof.rls_probe import (
     MAX_WORKER_REQUEST_BYTES,
     MAX_WORKER_RESULT_BYTES,
@@ -23,6 +24,8 @@ from app.proof.rls_probe import (
 
 
 def main() -> None:
+    # The configured handler writes redacted logs to stderr, never the pipe.
+    configure_logging()
     try:
         raw = sys.stdin.buffer.read(MAX_WORKER_REQUEST_BYTES + 1)
         if len(raw) > MAX_WORKER_REQUEST_BYTES:
