@@ -21,7 +21,7 @@ from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
 from app.scan.scope_statements import BLOCK_STATEMENTS, block_arms
-from app.scan.secrets import is_non_production_path
+from app.scan.secrets import is_dependency_path, is_non_production_path
 
 RULE_ID = "python-outbound-request-unvalidated-url"
 _METHODS = frozenset({"delete", "get", "head", "options", "patch", "post", "put", "request", "stream"})
@@ -782,7 +782,7 @@ def scan_outbound_url(fileobj: BinaryIO) -> list[CheckFinding]:
         count = 0
         for info in archive.infolist():
             if (not info.filename.endswith(".py") or info.is_dir() or info.file_size > _MAX_FILE_BYTES
-                    or is_non_production_path(info.filename)):
+                    or is_non_production_path(info.filename) or is_dependency_path(info.filename)):
                 continue
             count += 1
             if count > _MAX_FILES or len(findings) >= _MAX_FINDINGS:

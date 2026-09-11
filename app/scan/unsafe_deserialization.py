@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
-from app.scan.secrets import is_non_production_path
+from app.scan.secrets import is_dependency_path, is_non_production_path
 
 RULE_ID = "unsafe-deserialization"
 
@@ -352,7 +352,8 @@ def scan_unsafe_deserialization(fileobj: BinaryIO) -> list[CheckFinding]:
         infos = [info for info in archive.infolist()
                  if not info.is_dir() and info.filename.endswith(".py")
                  and info.file_size <= _MAX_FILE_BYTES
-                 and not is_non_production_path(info.filename)]
+                 and not is_non_production_path(info.filename)
+                 and not is_dependency_path(info.filename)]
         for info in infos[:_MAX_FILES]:
             if len(findings) >= _MAX_FINDINGS:
                 break

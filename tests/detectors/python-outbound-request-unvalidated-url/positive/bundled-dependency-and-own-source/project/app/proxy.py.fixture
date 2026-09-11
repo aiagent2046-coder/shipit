@@ -1,0 +1,9 @@
+from fastapi import FastAPI
+import httpx
+
+app = FastAPI()
+
+
+@app.get("/proxy")
+def proxy(url: str):
+    return httpx.get(url)

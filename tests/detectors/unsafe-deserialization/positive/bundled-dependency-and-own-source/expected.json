@@ -1,0 +1,15 @@
+{
+  "description": "The same source signal appears in own application code and a bundled vendor library. Only the own-code signal belongs to this rule; its total finding count must remain one.",
+  "expect": [
+    {
+      "rule_id": "unsafe-deserialization",
+      "count": 1
+    },
+    {
+      "rule_id": "unsafe-deserialization",
+      "file_endswith": "project/app/restore.py",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
