@@ -8,8 +8,12 @@ and a default can.
 
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 
+from app.proof import rls_probe
 from app.proof.compare import build_proof_report
 from app.proof.rls_probe import (
     TEMPLATE_ID,
@@ -124,6 +128,47 @@ def test_a_table_name_from_parsed_sql_is_not_trusted_into_the_path() -> None:
     attempt = _probe(_fetch(200, ROWS), table="users?select=*&evil=1")
     assert attempt.status == "skipped"
     assert attempt.evidence["reason"] == "unsafe_table_name"
+
+
+@pytest.mark.parametrize("key_type", ["secret", "service_role", "authenticated"])
+def test_privileged_or_user_keys_are_refused_before_the_default_worker(monkeypatch, key_type) -> None:
+    if key_type == "secret":
+        key = "sb_secret_syntheticPrivilegedTestKey"
+    else:
+        payload = base64.urlsafe_b64encode(json.dumps({
+            "iss": "supabase", "role": key_type, "ref": "abcdefghijklmnopqrst",
+        }).encode()).decode().rstrip("=")
+        key = f"eyJhbGciOiJIUzI1NiJ9.{payload}.synthetic-signature"
+
+    def no_request(*args, **kwargs):
+        pytest.fail("a credential outside the anon role must never be sent")
+
+    monkeypatch.setattr(rls_probe, "_default_fetch", no_request)
+    attempt = _probe(None, anon_key=key)
+    assert attempt.status == "skipped"
+    assert attempt.evidence["reason"] == "invalid_public_key"
+    assert key not in repr(attempt)
+
+
+def test_trusted_bundle_proof_fetch_can_still_compare_leaked_and_public_keys() -> None:
+    from app.proof.supabase_target import decode_jwt_claims
+
+    def key(role):
+        payload = base64.urlsafe_b64encode(json.dumps({
+            "iss": "supabase", "role": role, "ref": "abcdefghijklmnopqrst",
+        }).encode()).decode().rstrip("=")
+        return f"eyJhbGciOiJIUzI1NiJ9.{payload}.synthetic-signature"
+
+    def bundle_fetch(_base, credential, _table, _limit):
+        if decode_jwt_claims(credential).get("role") == "service_role":
+            return 200, [{"id": "synthetic-private-row"}]
+        return 401, {"code": "42501"}
+
+    before = _probe(bundle_fetch, anon_key=key("service_role"))
+    after = _probe(bundle_fetch, anon_key=key("anon"))
+    assert before.status == "success" and after.status == "failure"
+    assert build_proof_report(before, after, informational=False).verified
+    assert "synthetic-private-row" not in repr(before)
 
 
 # --- the status table -------------------------------------------------------

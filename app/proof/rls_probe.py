@@ -137,6 +137,18 @@ def run_rls_probe(
             "skipped", False, "недопустимое имя таблицы",
             {"table": "", "reason": "unsafe_table_name"}, started)
 
+    if fetch is None:
+        # The production worker makes anonymous requests. Trusted injected
+        # fetchers also serve the separate leaked-key proof harness, which
+        # deliberately compares a service_role credential with an anon key.
+        # Live RLS entry points validate the public role before reaching here.
+        try:
+            _request_headers(anon_key)
+        except ValueError:
+            return _attempt(
+                "skipped", False, "для анонимной проверки нужен публичный ключ проекта",
+                {"table": table, "reason": "invalid_public_key"}, started)
+
     import httpx
 
     limit = max(1, min(int(limit), MAX_ROWS))
@@ -185,6 +197,38 @@ def _safe_table_name(table: str) -> bool:
     """A table name goes into the request path. It comes from parsed customer
     SQL, so it is untrusted input like any other."""
     return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", table or ""))
+
+
+def _request_headers(anon_key: str) -> dict[str, str]:
+    """Use public API keys without impersonating a signed-in user.
+
+    Publishable keys are opaque API keys, not JWTs. Sending one as a Bearer
+    token makes PostgREST try to validate it as a user JWT. Legacy anon JWTs
+    retain both headers for compatibility. Target selection performs the full
+    key validation; this lower-level guard also refuses privileged credentials
+    for direct probe and worker callers.
+    """
+    from app.proof.supabase_target import decode_jwt_claims, is_publishable_key
+
+    key = (anon_key or "").strip()
+    if not key or not key.isascii() or any(ord(char) <= 32 or ord(char) == 127 for char in key):
+        raise ValueError("invalid public key")
+    if key.startswith("sb_secret_"):
+        raise ValueError("invalid public key")
+    headers = {
+        "apikey": key,
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+    }
+    if key.startswith("sb_publishable_"):
+        if not is_publishable_key(key):
+            raise ValueError("invalid public key")
+    else:
+        claims = decode_jwt_claims(key)
+        if claims and claims.get("role") != "anon":
+            raise ValueError("invalid public key")
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
 
 
 def _default_fetch(base: str, anon_key: str, table: str,
@@ -252,6 +296,7 @@ async def _fetch_response(base: str, anon_key: str, table: str,
     """
     import httpx
 
+    headers = _request_headers(anon_key)
     async with asyncio.timeout(timeout_s):
         async with httpx.AsyncClient(
             timeout=timeout_s, follow_redirects=False,
@@ -259,12 +304,7 @@ async def _fetch_response(base: str, anon_key: str, table: str,
             async with client.stream(
                 "GET", f"{base}/rest/v1/{table}",
                 params={"select": "*", "limit": str(limit)},
-                headers={
-                    "apikey": anon_key,
-                    "Authorization": f"Bearer {anon_key}",
-                    "Accept": "application/json",
-                    "Accept-Encoding": "identity",
-                },
+                headers=headers,
             ) as response:
                 encoding = response.headers.get("content-encoding", "identity")
                 if encoding.strip().lower() not in ("", "identity"):

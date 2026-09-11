@@ -13,6 +13,7 @@ import pytest
 from app.proof import rls_probe as probe
 
 KEY = "synthetic-public-key-private-pipe-only"
+PUBLISHABLE_KEY = "sb_publishable_syntheticWorkerTestKey_12345678"
 
 
 @pytest.fixture
@@ -45,15 +46,16 @@ def loopback_server(monkeypatch):
         thread.join()
 
 
-def run(base, **kwargs):
+def run(base, *, anon_key=KEY, **kwargs):
     return probe.run_rls_probe(
-        project_url=base, anon_key=KEY, table="users", consent=True,
+        project_url=base, anon_key=anon_key, table="users", consent=True,
         allow_loopback=True, **kwargs,
     )
 
 
+@pytest.mark.parametrize("key", [KEY, PUBLISHABLE_KEY])
 def test_shipping_worker_reads_rows_and_returns_only_sanitized_verdict(
-    loopback_server, monkeypatch,
+    loopback_server, monkeypatch, key,
 ):
     base, response, requests = loopback_server
     value = "synthetic-private-database-value"
@@ -73,17 +75,22 @@ def test_shipping_worker_reads_rows_and_returns_only_sanitized_verdict(
             return output
 
     monkeypatch.setattr(probe.subprocess, "Popen", ObservedProcess)
-    result = run(base)
+    result = run(base, anon_key=key)
     assert result.status == "success"
     assert result.evidence["rows_read"] == 1
     assert result.evidence["columns"] == ["email"]
-    assert KEY not in repr(result)
+    assert key not in repr(result)
     assert value not in repr(result)
-    assert KEY not in repr(commands)
-    assert KEY.encode() not in b"".join(outputs)
+    assert key not in repr(commands)
+    assert key.encode() not in b"".join(outputs)
     assert value.encode() not in b"".join(outputs)
     assert requests[0][0] == "/rest/v1/users?select=%2A&limit=3"
-    assert requests[0][1]["apikey"] == KEY
+    headers = {name.lower(): value for name, value in requests[0][1].items()}
+    assert headers["apikey"] == key
+    if key == PUBLISHABLE_KEY:
+        assert "authorization" not in headers
+    else:
+        assert headers["authorization"] == f"Bearer {key}"
 
 
 @pytest.mark.parametrize(("status", "body", "headers", "reason"), [

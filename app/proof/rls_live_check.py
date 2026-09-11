@@ -127,6 +127,7 @@ def run_live_rls_check(
     *,
     consent: bool,
     anon_key: str | None = None,
+    project_url: str | None = None,
     max_tables: int = MAX_TABLES,
     fetch: Callable[..., tuple[int, Any]] | None = None,
     access_review: AccessReviewInput | None = None,
@@ -145,7 +146,8 @@ def run_live_rls_check(
             reason="no confirmed consent from the owner of the project",
         )
 
-    target = find_supabase_target(io.BytesIO(zip_bytes), supplied_key=anon_key)
+    target = find_supabase_target(
+        io.BytesIO(zip_bytes), supplied_key=anon_key, project_url=project_url)
     if isinstance(target, TargetRefusal):
         return LiveCheckResult(status="refused", reason=target.reason)
 

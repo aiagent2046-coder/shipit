@@ -140,6 +140,8 @@ FAKE_SECRETS = [
     ("telegram bot token", "1234567890:AAExampleFakeTelegramBotToken-000000"),
     ("anthropic-style key", "sk-ant-api03-0000000000000000000000000000"),
     ("openai-style key", "sk-000000000000000000000000000000"),
+    ("supabase publishable key", "sb_publishable_syntheticPublicKeyForLogs_123"),
+    ("supabase secret key", "sb_secret_syntheticSecretKeyForLogs_123"),
     ("jwt", "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiI0Mjc4NDgyIn0.ZmFrZXNpZw"),
 ]
 

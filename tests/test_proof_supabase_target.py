@@ -14,11 +14,14 @@ import io
 import json
 import zipfile
 
+import pytest
+
 from app.proof.supabase_target import (
     SupabaseTarget,
     TargetRefusal,
     decode_jwt_claims,
     find_supabase_target,
+    target_from_key,
 )
 
 REF = "egoprezwkjaqacxtjwfl"
@@ -238,6 +241,70 @@ def test_an_empty_supplied_key_falls_back_to_the_repository() -> None:
                                       supplied_key=blank)
         assert isinstance(target, SupabaseTarget), blank
         assert target.source == "repository"
+
+
+PUBLISHABLE = "sb_publishable_syntheticPublicKeyForTests_1234"
+
+
+def test_publishable_key_uses_only_the_explicit_hosted_project():
+    archive = make_zip({**env(jwt(ref=OTHER_REF)), "repo/config.ts":
+                        f"const url = 'https://{OTHER_REF}.supabase.co';"})
+    target = find_supabase_target(archive, supplied_key=PUBLISHABLE,
+                                 project_url=f" HTTPS://{REF.upper()}.SUPABASE.CO/ ")
+    assert isinstance(target, SupabaseTarget)
+    assert target.project_url == f"https://{REF}.supabase.co"
+    assert target.anon_key == PUBLISHABLE
+    assert target.source == "supplied"
+    assert PUBLISHABLE not in repr(target)
+
+
+def test_opaque_key_cannot_get_its_project_from_a_repository_or_legacy_key():
+    target = find_supabase_target(make_zip({**env(jwt()), "repo/config.ts":
+                                 f"const url = 'https://{REF}.supabase.co';"}),
+                                 supplied_key=PUBLISHABLE)
+    assert isinstance(target, TargetRefusal)
+    assert "Project URL" in target.reason
+
+
+@pytest.mark.parametrize("url", [
+    "http://169.254.169.254/latest/meta-data/", "http://127.0.0.1:8000",
+    f"http://{REF}.supabase.co", f"https://{REF}.supabase.co:443",
+    f"https://{REF}.supabase.co/rest/v1/users", f"https://{REF}.supabase.co?key=private-input",
+    f"https://{REF}.supabase.co#private-input", f"https://private-input@{REF}.supabase.co",
+    f"https://{REF}.supabase.co.evil.example", f"https://{REF}.supabase.co\\@evil.example",
+    "https://example.com", "https://short.supabase.co", "https://" + "a" * 33 + ".supabase.co",
+    "https://abcdefghijklmnopqrsK.supabase.co", f"https://{REF}.supabase.co\nprivate-input",
+])
+def test_explicit_url_cannot_expand_the_allowed_destination(url):
+    result = target_from_key(PUBLISHABLE, project_url=url)
+    assert isinstance(result, TargetRefusal)
+    assert "private-input" not in result.reason
+    assert PUBLISHABLE not in result.reason
+
+
+@pytest.mark.parametrize("key", [
+    "sb_secret_syntheticSecretKeyForTests", "sb_publishable_",
+    "sb_publishable_bad\r\nAuthorization: private-input", "sb_publishable_with space",
+    "sb_publishable_" + "x" * 4096, jwt(role="service_role"), jwt(role="private-input"),
+    jwt().replace(".", "\r\n.", 1),
+])
+def test_invalid_or_privileged_supplied_keys_are_never_echoed(key):
+    result = target_from_key(key, project_url=f"https://{REF}.supabase.co")
+    assert isinstance(result, TargetRefusal)
+    assert key not in result.reason and "private-input" not in result.reason
+
+
+@pytest.mark.parametrize("supplied", [True, False])
+def test_explicit_project_cannot_override_a_legacy_jwt_ref(supplied):
+    result = find_supabase_target(make_zip(env(jwt())),
+                                 supplied_key=jwt() if supplied else None,
+                                 project_url=f"https://{OTHER_REF}.supabase.co")
+    assert isinstance(result, TargetRefusal)
+    assert "different project" in result.reason
+    good = find_supabase_target(make_zip(env(jwt())),
+                               supplied_key=jwt() if supplied else None,
+                               project_url=f"https://{REF}.supabase.co/")
+    assert isinstance(good, SupabaseTarget) and good.ref == REF
 
 
 def test_a_supplied_key_with_a_malformed_ref_is_not_turned_into_a_hostname() -> None:

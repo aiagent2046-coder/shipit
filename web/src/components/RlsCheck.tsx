@@ -27,6 +27,36 @@ import { Spinner } from "./Spinner";
 import { RlsMetadataInput, RlsMetadataOutcome } from "./RlsMetadata";
 
 const CONSENT_PHRASE = "i-own-this-project";
+const PROJECT_URL = /^https:\/\/([a-z0-9]{16,32})\.supabase\.co\/?$/i;
+
+// Read only the public JWT claims to catch common input mistakes. Supabase
+// verifies the key when it receives a request; this is not authentication.
+function legacyClaims(key: string): { role?: unknown; ref?: unknown } | null {
+  const parts = key.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const claims: unknown = JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, "=")));
+    return claims && typeof claims === "object" ? claims : null;
+  } catch {
+    return null;
+  }
+}
+
+function keyInputError(key: string, projectRef?: string): string | null {
+  if (key.length > 4096) return "This key is too long. Copy only your project's public API key.";
+  const claims = legacyClaims(key);
+  if (key.startsWith("sb_secret_") || claims?.role === "service_role") {
+    return "Use a public publishable or legacy anon key. Secret and service_role keys are not accepted.";
+  }
+  if (key.startsWith("sb_publishable_") && !/^sb_publishable_[A-Za-z0-9_-]+$/.test(key)) {
+    return "Enter the complete public publishable key from your Supabase project.";
+  }
+  if (projectRef && typeof claims?.ref === "string" && claims.ref !== projectRef) {
+    return "The Project URL and legacy anon key belong to different projects.";
+  }
+  return null;
+}
 
 /** Why the button is off, said about what the reader actually typed.
  *
@@ -56,7 +86,7 @@ function unmetReason(typed: string): React.ReactNode {
       </>
     );
   }
-  if (value.startsWith("ey") && value.length > 40) {
+  if ((value.startsWith("ey") && value.length > 40) || value.startsWith("sb_")) {
     return (
       <>
         That looks like your key — it goes in the field above. This box wants
@@ -86,11 +116,24 @@ export function RlsCheck({
 }) {
   const [phrase, setPhrase] = useState("");
   const [anonKey, setAnonKey] = useState("");
+  const [projectUrl, setProjectUrl] = useState("");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RlsCheckResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<RlsAccessReviewInput | null>(null);
   const [metadataValid, setMetadataValid] = useState(true);
+
+  const publicKey = anonKey.trim();
+  const project = projectUrl.trim();
+  const publishable = publicKey.startsWith("sb_publishable_");
+  const projectMatch = project.match(PROJECT_URL);
+  const projectError = project && !projectMatch
+    ? "Use your Supabase Project URL: https://<project-ref>.supabase.co, without a path or query."
+    : publishable && !project
+      ? "Enter the Project URL for this publishable key so we know which database to check."
+      : null;
+  const keyError = keyInputError(publicKey, projectMatch?.[1].toLowerCase());
+  const canRun = !running && metadataValid && !projectError && !keyError && phrase.trim() === CONSENT_PHRASE;
 
   // The audit-scoped route re-reads the repository from its stored URL. An
   // audit created from a zip upload has none, and the backend refuses with a
@@ -99,6 +142,7 @@ export function RlsCheck({
   if (!repoUrl) return null;
 
   async function run() {
+    if (!canRun) return;
     setRunning(true);
     setError(null);
     try {
@@ -106,7 +150,8 @@ export function RlsCheck({
         await runRlsCheck(auditId, {
           consent: phrase.trim(),
           token,
-          anonKey: anonKey.trim() || undefined,
+          anonKey: publicKey || undefined,
+          projectUrl: project || undefined,
           accessReview: metadata,
         }),
       );
@@ -151,17 +196,48 @@ export function RlsCheck({
           <RlsMetadataInput value={metadata} onChange={setMetadata} onValidity={setMetadataValid} disabled={running} />
           <label className="block text-sm">
             <span className="text-muted">
-              Your project&apos;s public key, if it is not in the repository
-              (optional — never a service_role key, we refuse those)
+              Public key (optional for legacy anon keys in the repository)
             </span>
             <input
               type="text"
               value={anonKey}
-              onChange={(e) => setAnonKey(e.target.value)}
-              placeholder="eyJhbGciOi…"
+              onChange={(e) => { setAnonKey(e.target.value); setPhrase(""); setError(null); }}
+              disabled={running}
+              aria-invalid={!!keyError}
+              aria-describedby="rls-public-key-help"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="sb_publishable_… or eyJ…"
               className="mt-1 w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs"
             />
           </label>
+          <p id="rls-public-key-help" className="text-xs text-muted">
+            Use a publishable key or a legacy anon key from your Supabase project&apos;s API Keys settings.
+            {" "}Leave blank to look for a legacy anon key in your repository.
+          </p>
+          {keyError && <p role="alert" className="text-xs text-red-500">{keyError}</p>}
+          <label className="block text-sm">
+            <span className="text-muted">Project URL{publishable ? " (required)" : " (optional for legacy anon keys)"}</span>
+            <input
+              type="url"
+              value={projectUrl}
+              onChange={(e) => { setProjectUrl(e.target.value); setPhrase(""); setError(null); }}
+              disabled={running}
+              required={publishable}
+              aria-invalid={!!projectError}
+              aria-describedby="rls-project-url-help"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="https://your-project-ref.supabase.co"
+              className="mt-1 w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-xs"
+            />
+          </label>
+          <p id="rls-project-url-help" className="text-xs text-muted">
+            Copy the Project URL from Supabase&apos;s Connect dialog. Enter it together with your publishable key.
+          </p>
+          {projectError && <p role="alert" className="text-xs text-red-500">{projectError}</p>}
 
           {/* A BOX, NOT A THIRD FIELD. The same customer pasted their
               repository URL in here twice — the second time with the
@@ -186,6 +262,7 @@ export function RlsCheck({
               type="text"
               value={phrase}
               onChange={(e) => setPhrase(e.target.value)}
+              disabled={running}
               placeholder={CONSENT_PHRASE}
               // A phone keyboard capitalises the first letter and offers to
               // correct an unknown hyphenated word. Either turns the phrase
@@ -209,7 +286,7 @@ export function RlsCheck({
 
           <button
             onClick={run}
-            disabled={running || !metadataValid || phrase.trim() !== CONSENT_PHRASE}
+            disabled={!canRun}
             className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-black disabled:opacity-40"
           >
             {running ? <Spinner /> : "Run the check"}

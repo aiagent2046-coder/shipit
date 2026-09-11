@@ -16,7 +16,12 @@ sources of evidence. Public reading does not suppress a write-access finding.
 4. Declare the sign-in model and expected read/write access for each table.
    “Public — published rows only” differs from “Public — all rows”. Choose
    “Backend only” when your own server authorizes an operation.
-5. Supply the public anon key if needed, type the ownership phrase, and run.
+5. Supply your public **publishable key** (`sb_publishable_…`) and its **Project
+   URL** from Supabase's Connect dialog. A legacy **anon JWT** (`eyJ…`) also
+   works and identifies its project without a URL. Leave the key blank only
+   when the repository contains a legacy anon JWT to discover automatically.
+6. Type the ownership phrase and run. Changing the key or Project URL clears
+   that phrase so consent applies to the selected target.
 
 No database credentials, service keys or policy SQL are requested. The collector
 exports predicate categories (`always`, `never`, `conditional`, or null when
@@ -27,6 +32,34 @@ or non-ASCII characters in table/column identifiers are outside v1's schema.
 Policy names can contain spaces.
 
 ## API and evidence contract
+
+Both `POST /v1/rls-check` (ZIP upload) and
+`POST /v1/audits/{audit_id}/rls-check` (repository from the audit) accept:
+
+| Multipart field | Meaning |
+| --- | --- |
+| `anon_key` | Public publishable key or legacy anon JWT; the field name remains compatible with older clients. |
+| `project_url` | Required with a publishable key: `https://<project-ref>.supabase.co`. Optional with a legacy JWT; if supplied, it must match that JWT's ref. |
+| `consent` | Exact phrase `i-own-this-project`. |
+
+Only the hosted HTTPS origin is accepted, with an optional trailing slash.
+Credentials, explicit ports, paths, queries, fragments, custom domains and
+local addresses are refused before database requests. The ref is 16–32 ASCII
+letters/digits. Publishable keys are opaque, so neither repository URLs nor
+metadata silently supply their destination. A key for another project will
+be rejected by Supabase; an authentication failure remains `inconclusive`,
+never a finding of protection.
+
+Publishable keys use the `apikey` header without `Authorization`; legacy anon
+JWTs retain `apikey` and `Authorization: Bearer`. Both `sb_secret_…` and legacy
+`service_role` keys are refused. See [Supabase API keys](https://supabase.com/docs/guides/getting-started/api-keys).
+Keys are absent from results and ledger JSON, and both opaque prefixes are
+covered by log redaction. Request deadlines, response limits and redirect
+refusal are unchanged.
+
+The CLI `scripts/probe_supabase_rls_live.py <project-ref> <table>…` accepts
+`SUPABASE_PUBLISHABLE_KEY` or the existing `SUPABASE_ANON_KEY` environment
+variable. Different values in both variables are refused rather than guessed.
 
 Both existing POST endpoints accept optional multipart field `access_review`:
 
@@ -52,8 +85,9 @@ timezone-qualified capture time and no unknown fields. Raw SQL is not accepted
 or executed. Optional `row_count` is owner-supplied context, never proof of what
 the live request could see; the collector does not count rows.
 
-The snapshot's project ref must match the project derived from the existing
-public key. A mismatch refuses the run before any database request. Imports
+The snapshot's project ref must match the selected Project URL for a
+publishable key, or the project derived from a legacy anon JWT.
+A mismatch refuses the run before any database request. Imports
 cannot supply a URL, change consent, or add live targets: only the repository's
 existing candidates are probed within the existing 12-table/45-second limits.
 Metadata-only tables are explicitly marked `not_checked`. An audit access token
