@@ -1,7 +1,8 @@
-"""Exercise the shipping streaming client over a synthetic HTTP transport.
+"""Exercise the async streaming client over a synthetic HTTP transport.
 
 No project credentials, DNS, or live database are used. Timeout tests cancel a
 slow stream and check its cleanup, rather than merely faking a TimeoutError.
+The process boundary is covered separately in test_proof_rls_worker.py.
 """
 from __future__ import annotations
 
@@ -16,6 +17,18 @@ from app.proof import rls_probe as probe
 
 PROJECT = "https://abcdefghijklmnopqrst.supabase.co"
 KEY = "synthetic-public-test-key"
+
+
+@pytest.fixture(autouse=True)
+def direct_async_transport(monkeypatch):
+    """Keep MockTransport inside this process; do not pretend to cover DNS."""
+    def fetch(base, anon_key, table, limit, *, timeout_s):
+        status, body = asyncio.run(probe._fetch_response(
+            base, anon_key, table, limit, timeout_s,
+        ))
+        return probe._evaluate_response(status, body, table, limit)
+
+    monkeypatch.setattr(probe, "_default_fetch", fetch)
 
 
 class Stream(httpx.AsyncByteStream):

@@ -31,11 +31,14 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import subprocess
+import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from app.proof.rls_oracle import evaluate_rls_response
+from app.proof.rls_oracle import RlsVerdict, evaluate_rls_response
 from app.proof.types import ExploitAttempt
 
 TEMPLATE_ID = "rls_open_runtime"
@@ -43,6 +46,8 @@ TEMPLATE_ID = "rls_open_runtime"
 PROBE_TIMEOUT_S = 15
 MAX_RESPONSE_BYTES = 256 * 1024
 MAX_ROWS = 3
+MAX_WORKER_REQUEST_BYTES = 64 * 1024
+MAX_WORKER_RESULT_BYTES = 4 * MAX_RESPONSE_BYTES
 
 
 class ProbeResponseError(ValueError):
@@ -139,16 +144,14 @@ def run_rls_probe(
         if timeout_s <= 0:
             raise TimeoutError
         if fetch is None:
-            status_code, body = _default_fetch(
+            verdict = _default_fetch(
                 base, anon_key, table, limit,
                 timeout_s=min(timeout_s, PROBE_TIMEOUT_S),
             )
         else:
-            # Trusted test seam; production always uses the cancellable client.
+            # Trusted test seam; production uses the bounded worker process.
             status_code, body = fetch(base, anon_key, table, limit)
-        if status_code == 200 and isinstance(body, list) and len(body) > limit:
-            raise ProbeResponseError("invalid_response")
-        verdict = evaluate_rls_response(status_code, body, table=table)
+            verdict = _evaluate_response(status_code, body, table, limit)
     except ProbeResponseError as exc:
         return _attempt(
             "error", False, _RESPONSE_ERRORS[exc.reason],
@@ -186,17 +189,64 @@ def _safe_table_name(table: str) -> bool:
 
 def _default_fetch(base: str, anon_key: str, table: str,
                    limit: int, *, timeout_s: float = PROBE_TIMEOUT_S,
-                   ) -> tuple[int, Any]:
-    """Sync entry point used by workers and scripts, never an ASGI event loop."""
-    return asyncio.run(_fetch_response(base, anon_key, table, limit, timeout_s))
+                   ) -> RlsVerdict:
+    """Wait for a bounded worker, including startup, DNS and client cleanup.
+
+    Cancelling asyncio DNS does not stop the system resolver's executor thread.
+    A per-request process lets the parent end that work too when time runs out.
+    Credentials use stdin; stdout carries only the sanitized verdict.
+    """
+    deadline = time.monotonic() + timeout_s
+    request = json.dumps({
+        "base": base, "anon_key": anon_key, "table": table,
+        "limit": limit, "timeout_s": timeout_s,
+    }).encode()
+    if len(request) > MAX_WORKER_REQUEST_BYTES:
+        raise ValueError("invalid worker request")
+    with subprocess.Popen(
+        [sys.executable, "-m", "app.proof.rls_fetch_worker"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        cwd=Path(__file__).resolve().parents[2],
+    ) as process:
+        try:
+            output, _ = process.communicate(
+                input=request, timeout=max(0.0, deadline - time.monotonic()),
+            )
+        except BaseException as exc:
+            # Reap before returning: no DNS thread or HTTP reader survives.
+            process.kill()
+            process.communicate()
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise TimeoutError from None
+            raise
+    if process.returncode or len(output) > MAX_WORKER_RESULT_BYTES:
+        raise ValueError("invalid worker response")
+    envelope = json.loads(output)
+    error = envelope.get("error")
+    if error == "request_timeout":
+        raise TimeoutError
+    if error in _RESPONSE_ERRORS:
+        raise ProbeResponseError(error)
+    if error is not None:
+        raise ValueError("worker request failed")
+    return RlsVerdict(**envelope["verdict"])
+
+
+def _evaluate_response(status_code: int, body: Any, table: str,
+                       limit: int) -> RlsVerdict:
+    if status_code == 200 and isinstance(body, list) and len(body) > limit:
+        raise ProbeResponseError("invalid_response")
+    return evaluate_rls_response(status_code, body, table=table)
 
 
 async def _fetch_response(base: str, anon_key: str, table: str,
                           limit: int, timeout_s: float) -> tuple[int, Any]:
-    """Bound the whole request, including slow streaming and connection setup.
+    """Bound async I/O; the parent process also bounds DNS and loop shutdown.
 
     HTTPX's read timeout alone resets on each chunk. asyncio.timeout cancels
-    the in-flight request at the deadline; no background reader survives it.
+    the in-flight request at the deadline. The parent terminates the worker
+    if a blocking resolver or transport cleanup outlives that deadline.
     Request identity encoding and reject compression before reading so that a
     decompression bomb cannot allocate an unbounded decoded chunk.
     """
