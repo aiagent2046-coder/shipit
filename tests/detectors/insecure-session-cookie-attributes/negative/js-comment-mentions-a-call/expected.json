@@ -1,0 +1,7 @@
+{
+  "description": "A commented-out call is history, not code. The mutation removes the comment marker, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

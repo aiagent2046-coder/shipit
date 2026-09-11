@@ -1,0 +1,10 @@
+{
+  "description": "A cookie written by client-side script cannot carry HttpOnly: the attribute is only settable by the server. This is the shape where the protection is impossible by construction.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

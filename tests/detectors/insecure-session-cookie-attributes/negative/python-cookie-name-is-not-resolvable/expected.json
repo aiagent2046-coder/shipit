@@ -1,0 +1,7 @@
+{
+  "description": "A name that arrives as a parameter cannot be shown to be a session cookie. The mutation inlines the literal, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

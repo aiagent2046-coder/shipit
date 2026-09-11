@@ -1,0 +1,8 @@
+import express from "express";
+
+const app = express();
+
+app.post("/login", (req, res) => {
+  res.cookie("session", req.body.token);
+  res.json({ ok: true });
+});

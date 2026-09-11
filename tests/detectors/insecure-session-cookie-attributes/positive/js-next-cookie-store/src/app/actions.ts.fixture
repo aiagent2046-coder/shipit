@@ -1,0 +1,7 @@
+import { cookies } from "next/headers";
+
+export async function login(token: string) {
+  const store = await cookies();
+  store.set("session", token, { httpOnly: false });
+  return { ok: true };
+}

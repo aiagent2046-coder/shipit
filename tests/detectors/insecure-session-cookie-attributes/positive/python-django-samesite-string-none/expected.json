@@ -1,0 +1,10 @@
+{
+  "description": "The STRING None is Django's cross-site value. The Python value None in the sibling negative means something else entirely, and the pair is why this rule reads the literal's type.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

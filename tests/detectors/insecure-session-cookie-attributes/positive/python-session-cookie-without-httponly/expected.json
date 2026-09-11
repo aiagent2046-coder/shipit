@@ -1,0 +1,10 @@
+{
+  "description": "FastAPI's set_cookie defaults httponly to False, so a session cookie that names SameSite but not HttpOnly is readable by any script on the page. The omission is the defect, not a silence.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

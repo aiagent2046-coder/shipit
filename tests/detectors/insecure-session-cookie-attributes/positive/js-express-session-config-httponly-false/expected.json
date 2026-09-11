@@ -1,0 +1,10 @@
+{
+  "description": "express-session's cookie options live in a configuration object, not at a call site. This library defaults httpOnly to TRUE, so only the explicit false is reported -- the omission is the safe default here.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,9 @@
+from fastapi import APIRouter, Response
+
+router = APIRouter()
+
+
+@router.post("/login")
+async def login(response: Response, token: str):
+    response.set_cookie("session_id", token, samesite="lax")
+    return {"ok": True}

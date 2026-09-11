@@ -1,0 +1,7 @@
+{
+  "description": "The correct form, and the one the product's own code uses. The mutation drops httponly=True, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

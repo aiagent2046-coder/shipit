@@ -1,0 +1,7 @@
+{
+  "description": "The double-submit CSRF pattern REQUIRES the cookie to be readable by script, so a missing HttpOnly here is the design. The mutation renames it to a session name, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

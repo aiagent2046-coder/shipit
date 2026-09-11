@@ -1,0 +1,10 @@
+{
+  "description": "Django decides the session cookie's flags in settings, not at a call site. The setting is off, so the session cookie is readable by script.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

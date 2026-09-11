@@ -1,0 +1,7 @@
+{
+  "description": "Django's documentation: the Python value None means the attribute is not sent and the browser default applies. The sibling positive uses the STRING 'None', which is the cross-site value. The mutation swaps one for the other, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

@@ -177,7 +177,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # value-specific normalized-path guards and checks before template allocation.
 # 2026-09-10-16: distinguish fixed SQL conditional fragments from input-built
 # queries while preserving possible assembly paths across expression branches.
-AUDIT_ENGINE_VERSION = "2026-09-10-16"
+# 2026-09-11-2: insecure-session-cookie-attributes, a new static scanner for
+# session cookies set without HttpOnly (Python calls, Django settings, Express,
+# a Next.js cookie store, express-session config, document.cookie) or with an
+# explicit SameSite=None. Reads Python and TS/JS; dependency trees excluded.
+AUDIT_ENGINE_VERSION = "2026-09-11-2"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

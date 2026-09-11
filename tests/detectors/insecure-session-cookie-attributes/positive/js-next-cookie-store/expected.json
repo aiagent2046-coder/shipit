@@ -1,0 +1,10 @@
+{
+  "description": "Next.js sets cookies through a store bound from cookies(). The receiver name alone says nothing, so the rule reads the binding in the same file.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

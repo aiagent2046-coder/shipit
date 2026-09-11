@@ -1,0 +1,4 @@
+app.post("/login", (req, res) => {
+  res.setHeader("Set-Cookie", "session=" + token + "; Path=/");
+  res.json({ ok: true });
+});

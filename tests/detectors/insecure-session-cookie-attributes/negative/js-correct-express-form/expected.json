@@ -1,0 +1,7 @@
+{
+  "description": "The correct Express form. The mutation flips httpOnly to false, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}
