@@ -19,11 +19,12 @@ Credential payloads use `@DRYDOCK_SAMPLE:NAME@` placeholders. The test-only
 signing seed. No complete account credential is stored in the corpus. Secret
 protection remains enabled; an interpolated URI has a line-specific explanation.
 
-The corpus currently covers 34 rule IDs with 204 examples (107 positive, 97
-negative). Both polarities are mandatory for each ID in the report vocabulary or
-declared by a wired scanner. Engine wiring is independently checked by
-`test_engine_version_pins_the_scanners`. This is coverage of the current rule
-vocabulary, not a measure of how many real vulnerabilities Drydock can detect.
+Both polarities are mandatory for each rule ID in the report vocabulary or
+declared by a wired scanner. The corpus directories and their completeness tests
+are the source of the current inventory; counts change as cases are added.
+Engine wiring is independently checked by `test_engine_version_pins_the_scanners`.
+This is coverage of the current rule vocabulary, not a measure of how many real
+vulnerabilities Drydock can detect.
 
 ## Nested callables: which rules read them, and why
 
