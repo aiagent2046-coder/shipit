@@ -152,6 +152,9 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "js-store-set-is-not-a-cookie-store": (
         "src/cache.ts", 'await store.set("session", payload, { ttl: 60 });',
         'const store = await cookies();\n  await store.set("session", payload, { ttl: 60 });'),
+    "js-per-request-session-cookie-mutation": (
+        "src/app.ts", "  req.session.cookie.httpOnly = false;\n",
+        "  app.use(session({ cookie: { httpOnly: false } }));\n"),
 }
 
 

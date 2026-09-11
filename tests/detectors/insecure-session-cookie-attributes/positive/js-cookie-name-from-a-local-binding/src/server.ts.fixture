@@ -1,0 +1,5 @@
+app.post("/login", (req, res) => {
+  const sessionIdCookieName = "session_id";
+  res.cookie(sessionIdCookieName, req.body.token);
+  res.json({ ok: true });
+});

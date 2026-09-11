@@ -1,0 +1,10 @@
+{
+  "description": "The value handed to document.cookie sits in a local const. Reading only a literal misses the shape the model produced six times out of six.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

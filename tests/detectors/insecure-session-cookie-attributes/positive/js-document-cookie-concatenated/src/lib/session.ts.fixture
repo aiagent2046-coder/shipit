@@ -1,0 +1,3 @@
+function setAuthToken(authTk: string) {
+  document.cookie = "auth_token" + "=" + authTk;
+}

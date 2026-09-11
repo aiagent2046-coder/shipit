@@ -34,6 +34,17 @@ WHAT IT DOES NOT CLAIM. That a value that arrives as a variable is protecting or
 exposing anything: an option whose value is not a literal is left unknown. Nor
 does it read `Set-Cookie` header strings, framework config files, or a cookie set
 through a wrapper function.
+
+WHAT THE FIRST HUNT ROUND CHANGED HERE, all measured on model rewrites of the
+corpus positives: the cookie NAME moved into a local `const` (8 of 8 rewrites of
+one case, now resolved one hop), option keys were written `SameSite`/`HttpOnly`
+rather than camelCase (8 of 8 of another, now read), response objects were named
+`resParam`/`outgoingRes`/`resData`/`responseBody` rather than `res` (4 of 4 of a
+third, so the receiver check now excludes request-shaped names instead of
+requiring a response-shaped one), and `document.cookie` was handed a template
+held in a variable. A per-request mutation such as
+`req.session.cookie.httpOnly = false` is still not read: it is an assignment
+through an attribute chain, and only the configuration object is parsed.
 """
 
 from __future__ import annotations
@@ -48,11 +59,18 @@ _PARSERS = {
     True: Parser(Language(tree_sitter_typescript.language_tsx())),
 }
 
-_RESPONSE_RECEIVERS = frozenset({"res", "reply", "response", "ctx", "context", "res2"})
+# A receiver that looks like a REQUEST is excluded: `req.cookie(...)` is not the
+# Express setter, and the hunt's rewrites named their response objects
+# `resParam`, `outgoingRes`, `resData`, `responseBody` -- every one of which the
+# earlier receiver vocabulary missed. Any other `.cookie(...)` is read; a custom
+# object with a cookie() method would be a false positive, which the docstring says.
+_REQUEST_PREFIXES = ("req", "request")
 _SESSION_FUNCTIONS = frozenset({"session", "cookieSession", "cookie_session", "expressSession",
                                "sessionMiddleware"})
-_HTTPONLY_KEYS = frozenset({"httpOnly", "httponly", "http_only", "http-only"})
-_SAMESITE_KEYS = frozenset({"sameSite", "samesite", "same_site", "same-site"})
+_HTTPONLY_KEYS = frozenset({"httpOnly", "httponly", "http_only", "http-only",
+                            "HttpOnly", "HTTPOnly", "Http_Only"})
+_SAMESITE_KEYS = frozenset({"sameSite", "samesite", "same_site", "same-site",
+                            "SameSite", "SAMESITE", "Same-Site"})
 _MAX_NODES = 60_000
 
 
@@ -88,11 +106,20 @@ def _string_value(node) -> str:
 
 
 def _bool_value(node):
-    """True/False for a literal boolean, None for anything else (unknown or absent)."""
-    if node is not None and node.type == "false":
+    """True/False for a literal boolean, None for anything else (unknown or absent).
+
+    `0`/`1` are read too: MEASURED, the hunt wrote `httpOnly: 0` and the rule --
+    which only knew the `true`/`false` keywords -- went silent on a flag that is
+    plainly off.
+    """
+    if node is None:
+        return None
+    if node.type == "false":
         return False
-    if node is not None and node.type == "true":
+    if node.type == "true":
         return True
+    if node.type == "number":
+        return _text(node).strip() not in ("0", "0.0")
     return None
 
 
@@ -161,7 +188,25 @@ def _cookie_store_names(root, budget: list[int]) -> set[str]:
     code is often written, and the receiver text alone (`store`) says nothing --
     but a generic `store.set(...)` rule would fire on a Redis or Map store. The
     binding is the evidence: the file itself shows what that name holds.
+
+    The function itself is resolved through the file's imports, because the hunt
+    produced `import { cookies as getCookies } from "next/headers"` five times in
+    one round: the alias is in the file, so it is evidence too.
     """
+    function_names = {"cookies"}
+    for node in _walk(root, budget):
+        if node.type != "import_statement":
+            continue
+        source = node.child_by_field_name("source")
+        if source is None or _string_value(source) != "next/headers":
+            continue
+        for inner in _walk(node, [200]):
+            if inner.type == "import_specifier":
+                name = inner.child_by_field_name("name")
+                if name is not None and _text(name) == "cookies":
+                    alias = inner.child_by_field_name("alias") or name
+                    function_names.add(_text(alias))
+
     names: set[str] = set()
     for node in _walk(root, budget):
         if node.type != "variable_declarator":
@@ -173,14 +218,89 @@ def _cookie_store_names(root, budget: list[int]) -> set[str]:
         for inner in _walk(value, [500]):
             if inner.type != "call_expression":
                 continue
-            function = inner.child_by_field_name("function")
-            if function is not None and "cookies" in _text(function):
+            called = inner.child_by_field_name("function")
+            if called is None:
+                continue
+            called_text = _text(called)
+            if "cookies" in called_text or called_text.split(".")[-1] in function_names:
                 names.add(_text(name))
                 break
     return names
 
 
-def _call_evidence(node, store_names: set[str]) -> list[tuple[int, str, str]]:
+def _local_string_bindings(root, budget: list[int]) -> dict[str, str]:
+    """`const sessionId = "session_id"` -> {"sessionId": "session_id"}, one hop.
+
+    MEASURED: eight of eight rewrites of the Express case moved the cookie NAME
+    into a local const, and the rule went silent on all eight -- the same defect,
+    spelled the way people actually write it. The same map resolves the value
+    handed to `document.cookie`.
+    """
+    bindings: dict[str, str] = {}
+    for node in _walk(root, budget):
+        if node.type != "variable_declarator":
+            continue
+        name = node.child_by_field_name("name")
+        value = node.child_by_field_name("value")
+        if name is None or value is None or name.type != "identifier":
+            continue
+        literal = _string_value(value) or (_leading_string(value) if value.type != "string" else "")
+        if literal:
+            bindings[_text(name)] = literal
+    return bindings
+
+
+def _local_object_bindings(root, budget: list[int]) -> dict[str, object]:
+    """`const cookieOptions = { httpOnly: 0 }` -> {"cookieOptions": <object node>}.
+
+    MEASURED: six of eight rewrites of one Express case pulled the options object
+    into a local variable, which the rule treated as an unreadable value and stayed
+    silent on. The object literal is in the same file, one hop away.
+    """
+    bindings: dict[str, object] = {}
+    for node in _walk(root, budget):
+        if node.type != "variable_declarator":
+            continue
+        name = node.child_by_field_name("name")
+        value = node.child_by_field_name("value")
+        if name is None or value is None or name.type != "identifier" or value.type != "object":
+            continue
+        bindings[_text(name)] = value
+    return bindings
+
+
+def _session_config_names(root, budget: list[int]) -> set[str]:
+    """Names bound to express-session / cookie-session by this file's own imports.
+
+    MEASURED: seven of eight rewrites of the session-config case imported the
+    library under an alias (`expressSession`, `sess`, `Session`, `sessionConfig`)
+    and the rule went silent on all of them. The alias is in the file, so the
+    binding is evidence -- the same resolution the TLS rule does for client
+    names.
+    """
+    names: set[str] = set(_SESSION_FUNCTIONS)
+    for node in _walk(root, budget):
+        if node.type != "import_statement":
+            continue
+        source = node.child_by_field_name("source")
+        module = _string_value(source) if source is not None else ""
+        if module not in ("express-session", "cookie-session"):
+            continue
+        for child in node.named_children:
+            if child.type != "import_clause":
+                continue
+            for inner in _walk(child, [200]):
+                if inner.type == "import_specifier":
+                    alias = inner.child_by_field_name("alias") or inner.child_by_field_name("name")
+                    if alias is not None:
+                        names.add(_text(alias))
+                elif inner.type == "identifier":
+                    names.add(_text(inner))
+    return names
+
+
+def _call_evidence(node, store_names: set[str], literals: dict[str, str],
+                   session_names: set[str], object_bindings: dict[str, object]) -> list[tuple[int, str, str]]:
     function = node.child_by_field_name("function")
     arguments = node.child_by_field_name("arguments")
     if function is None:
@@ -193,22 +313,36 @@ def _call_evidence(node, store_names: set[str]) -> list[tuple[int, str, str]]:
         method = _text(property_node) if property_node is not None else ""
         receiver_text = _text(receiver) if receiver is not None else ""
         last = normalise(receiver_text).split("_")[-1]
-        is_response = last in _RESPONSE_RECEIVERS or "response" in receiver_text.lower()
+        looks_like_request = last.startswith(_REQUEST_PREFIXES)
         is_cookie_store = receiver_text in store_names or "cookie" in receiver_text.lower()
-        sets_a_cookie = (method == "cookie" and is_response) or (method == "set" and is_cookie_store)
+        if looks_like_request:
+            return []
+        sets_a_cookie = method == "cookie" or (method == "set" and is_cookie_store)
         if not sets_a_cookie:
             return []
-        name = _string_value(_first_argument(arguments))
+        first = _first_argument(arguments)
+        name = _string_value(first) or literals.get(_text(first) if first is not None else "", "")
         if not is_auth_cookie(name):
             return []
-        problem, kind = _problem_for(_nth_argument(arguments, 2), default_http_only=False)
+        options_node = _nth_argument(arguments, 2)
+        if options_node is not None and options_node.type == "identifier":
+            resolved = object_bindings.get(_text(options_node))
+            if resolved is None:
+                return []   # options exist but cannot be read: do not guess
+            options_node = resolved
+        problem, kind = _problem_for(options_node, default_http_only=False)
         if not problem:
             return []
         return [(line, f"sets the authentication cookie {name!r} with {problem}", kind)]
 
-    if function.type == "identifier":
+    if function.type == "identifier" or function.type == "call_expression":
+        # `sess({...})` and the CommonJS inline form `require('express-session')({...})`
+        # reach the same function; the require text is the evidence.
         callee = _text(function)
-        if callee not in _SESSION_FUNCTIONS:
+        if function.type == "call_expression" and not any(
+                module in callee for module in ("express-session", "cookie-session")):
+            return []
+        if function.type == "identifier" and callee not in session_names:
             return []
         config = _options(_first_argument(arguments))
         cookie_options = config.get("cookie") if config else None
@@ -244,15 +378,18 @@ def _leading_string(node) -> str:
     return ""
 
 
-def _document_cookie_evidence(node) -> list[tuple[int, str, str]]:
+def _document_cookie_evidence(node, literals: dict[str, str]) -> list[tuple[int, str, str]]:
     left = node.child_by_field_name("left")
     right = node.child_by_field_name("right")
     if left is None or left.type != "member_expression" or right is None:
         return []
     if _text(left) != "document.cookie":
         return []
-    literal = _leading_string(right)
-    name = literal.split("=", 1)[0] if "=" in literal else ""
+    literal = _leading_string(right) or literals.get(_text(right), "")
+    # The leading text is the name itself in `"auth_token" + "=" + value`, and
+    # `name=value` in `document.cookie = "auth_token=..."`. Requiring an `=` was
+    # wrong: MEASURED, the concatenated form escaped for that reason alone.
+    name = literal.split("=", 1)[0].strip()
     if not is_auth_cookie(name):
         return []
     return [(
@@ -268,10 +405,13 @@ def js_evidence(text: str, tsx: bool = False) -> list[tuple[int, str, str]]:
     if root.has_error:
         return []
     store_names = _cookie_store_names(root, [_MAX_NODES])
+    literals = _local_string_bindings(root, [_MAX_NODES])
+    session_names = _session_config_names(root, [_MAX_NODES])
+    object_bindings = _local_object_bindings(root, [_MAX_NODES])
     evidence: list[tuple[int, str, str]] = []
     for node in _walk(root, [_MAX_NODES]):
         if node.type == "call_expression":
-            evidence += _call_evidence(node, store_names)
+            evidence += _call_evidence(node, store_names, literals, session_names, object_bindings)
         elif node.type == "assignment_expression":
-            evidence += _document_cookie_evidence(node)
+            evidence += _document_cookie_evidence(node, literals)
     return sorted(evidence)

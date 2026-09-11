@@ -1,0 +1,9 @@
+import expressSession from "express-session";
+
+const app = require("express")();
+
+app.use(expressSession({
+  secret: process.env.SESSION_SECRET,
+  name: "sid_cookie",
+  cookie: { httpOnly: false },
+}));

@@ -1,0 +1,7 @@
+{
+  "description": "A per-request change to the session cookie through an attribute chain is a documented boundary: the rule parses the configuration object, not assignments through `session.cookie`. The mutation writes the same decision as a configuration object, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

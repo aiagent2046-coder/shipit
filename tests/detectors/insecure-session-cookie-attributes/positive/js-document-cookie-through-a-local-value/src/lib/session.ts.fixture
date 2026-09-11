@@ -1,0 +1,4 @@
+export function remember(token: string) {
+  const cookieValue = `auth_token=${token}`;
+  document.cookie = cookieValue;
+}

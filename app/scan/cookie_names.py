@@ -19,14 +19,23 @@ import re
 
 _AUTH_TOKENS = frozenset({
     "auth", "authorization", "bearer", "credential", "jwt", "login", "password",
-    "refresh", "session", "sessionid", "sid", "token",
+    "refresh", "session", "sessionid", "sess", "sid", "token",
 })
 _AUTH_PHRASES = ("api_key", "apikey", "access_token", "refresh_token", "session_id", "session_token")
 _NON_AUTH_TOKENS = frozenset({"csrf", "xsrf", "state", "nonce"})
 
 
 def normalise(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+    """A cookie name reduced to underscore-separated lower-case words.
+
+    camelCase is split before lower-casing, because that is how these names are
+    written: MEASURED, `userSession`, `jwtToken` and `apiSession` all escaped a
+    vocabulary that only split on underscores -- three hunt cases at 100% escape
+    for one reason, since every one of those names is an authentication name.
+    """
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
+    spaced = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", spaced)
+    return re.sub(r"[^a-z0-9]+", "_", spaced.strip().lower()).strip("_")
 
 
 def is_auth_cookie(name: str) -> bool:

@@ -29,8 +29,17 @@ EXCLUSIONS, each one a claim this rule must not make:
   * `delete_cookie` -- clearing a cookie is not setting one.
 
 WHAT IT DOES NOT RESOLVE. Middleware that rewrites the cookie on the way out,
-framework defaults changing between versions, a name built at run time, and any
-value that arrives as a variable instead of a literal.
+framework defaults changing between versions, a name built at run time, a local
+constant declared inside the handler (module-level constants are resolved, one
+hop), a settings dict mutated by subscript
+(`settings['SESSION_COOKIE_HTTPONLY'] = False`), and any value that arrives as a
+variable instead of a literal.
+
+WHAT THE FIRST HUNT ROUND CHANGED HERE, measured on model rewrites: the cookie
+name arrived as `set_cookie(name=..., value=...)` (a keyword the signature
+accepts, now read), and names were written in camelCase (`userSession`,
+`jwtToken`) which a vocabulary splitting only on underscores missed -- the
+camelCase split now lives in `cookie_names.normalise`.
 """
 
 from __future__ import annotations
@@ -92,11 +101,22 @@ def _literal(node: ast.AST | None) -> object:
     return _UNKNOWN
 
 
+def _named_argument(call: ast.Call, name: str) -> ast.AST | None:
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    return None
+
+
 def _call_evidence(call: ast.Call, constants: dict[str, str]) -> list[tuple[int, str, str]]:
     callee = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
-    if callee not in _COOKIE_CALLS or not call.args:
+    if callee not in _COOKIE_CALLS:
         return []
-    name = _cookie_name(call.args[0], constants)
+    # The name is positional in every client's signature, but the hunt's rewrites
+    # wrote it as `set_cookie(name=..., value=...)` and the rule went silent on a
+    # call it should read -- a keyword the signature accepts is not a new shape.
+    first = call.args[0] if call.args else _named_argument(call, "name")
+    name = _cookie_name(first, constants)
     if not is_auth_cookie(name):
         return []
 
@@ -128,27 +148,65 @@ def _call_evidence(call: ast.Call, constants: dict[str, str]) -> list[tuple[int,
     return evidence
 
 
+def _setting_finding(setting: str, literal: object, lineno: int) -> list[tuple[int, str, str]]:
+    """The finding for one setting's literal value, or nothing."""
+    if setting == "SESSION_COOKIE_HTTPONLY" and literal is not _UNKNOWN and not literal:
+        return [(
+            lineno,
+            "turns SESSION_COOKIE_HTTPONLY off, so the session cookie is readable by any script on the page",
+            "httponly",
+        )]
+    if setting == "SESSION_COOKIE_SAMESITE" and isinstance(literal, str) and normalise(literal) == "none":
+        return [(
+            lineno,
+            "sets SESSION_COOKIE_SAMESITE to 'None', so browsers attach the session cookie to cross-site requests",
+            "samesite",
+        )]
+    return []
+
+
+def _setattr_evidence(call: ast.Call) -> list[tuple[int, str, str]]:
+    """`setattr(settings, "SESSION_COOKIE_HTTPONLY", False)` -- the same setting.
+
+    MEASURED in the hunt: rewrites reached the setting through setattr, which is
+    how tests and run-time configuration change it. The literal name is the
+    evidence, so the route to the setting does not change the claim.
+    """
+    if getattr(call.func, "id", "") != "setattr" or len(call.args) < 3:
+        return []
+    name_node = call.args[1]
+    if not (isinstance(name_node, ast.Constant) and isinstance(name_node.value, str)):
+        return []
+    if name_node.value not in _SETTINGS:
+        return []
+    return _setting_finding(name_node.value, _literal(call.args[2]), call.lineno)
+
+
 def _settings_evidence(node: ast.Assign | ast.AnnAssign) -> list[tuple[int, str, str]]:
+    """Django's session-cookie settings, however the name is reached.
+
+    A bare module-level `SESSION_COOKIE_HTTPONLY = False` is the Django form; the
+    same name as an ATTRIBUTE (`settings.SESSION_COOKIE_HTTPONLY = False`) is how
+    code mutates the configuration at run time, which the first hunt round
+    produced. The setting name itself is the evidence, so the target's spelling --
+    Name or Attribute -- does not change the claim.
+    """
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-    value = node.value
     evidence: list[tuple[int, str, str]] = []
     for target in targets:
-        if not isinstance(target, ast.Name) or target.id not in _SETTINGS:
+        if isinstance(target, ast.Name):
+            name = target.id
+        elif isinstance(target, ast.Attribute):
+            name = target.attr
+        elif (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
+                and isinstance(target.slice.value, str)):
+            # `settings["SESSION_COOKIE_HTTPONLY"] = False`: a settings mapping
+            # mutated by key, which the hunt produced and which real code does too.
+            name = target.slice.value
+        else:
             continue
-        setting = target.id
-        literal = _literal(value)
-        if setting == "SESSION_COOKIE_HTTPONLY" and literal is not _UNKNOWN and not literal:
-            evidence.append((
-                node.lineno,
-                "turns SESSION_COOKIE_HTTPONLY off, so the session cookie is readable by any script on the page",
-                "httponly",
-            ))
-        if setting == "SESSION_COOKIE_SAMESITE" and isinstance(literal, str) and normalise(literal) == "none":
-            evidence.append((
-                node.lineno,
-                "sets SESSION_COOKIE_SAMESITE to 'None', so browsers attach the session cookie to cross-site requests",
-                "samesite",
-            ))
+        if name in _SETTINGS:
+            evidence += _setting_finding(name, _literal(node.value), node.lineno)
     return evidence
 
 
@@ -163,6 +221,7 @@ def python_evidence(text: str) -> list[tuple[int, str, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             evidence += _call_evidence(node, constants)
+            evidence += _setattr_evidence(node)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             evidence += _settings_evidence(node)
     return sorted(evidence)

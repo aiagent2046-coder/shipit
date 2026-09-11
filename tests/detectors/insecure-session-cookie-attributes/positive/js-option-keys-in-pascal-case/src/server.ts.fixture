@@ -1,0 +1,8 @@
+app.post("/signin", function (request, response) {
+  response.cookie("sessionToken", request.body.token, {
+    httpOnly: true,
+    SameSite: "none",
+    Secure: true,
+  });
+  response.json({ status: "success" });
+});
