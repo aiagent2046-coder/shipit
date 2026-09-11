@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import BinaryIO
 
+from app.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
 from app.ingest.validators import validate_zip
 from app.scan.auth_read import scan_auth_read
 from app.scan.auth_write import scan_auth_write
@@ -192,7 +193,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         f"{file_coverage.get('files_scanned', 0)}/{file_coverage.get('files_total', 0)} files scanned; "
         f"excluded: {excluded}; "
         f"files with invalid UTF-8 bytes omitted: {file_coverage.get('lossy_decoded_files', 0)}. "
-        "Exclusions are outside this check; no finding does not establish that excluded content is safe."
+        + EXCLUSIONS_NOTE
     )
     return {
         "secrets_coverage": file_coverage,
@@ -231,68 +232,17 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # repository. A scanner that found nothing and one that gave up must
         # not look identical (#392). Consuming this in the pipeline/report is
         # the follow-up; here it is preserved so it can be.
-        "checks_run": [
-            'secrets',
-            'rls',
-            'schema_drift',
-            'project_files',
-            'ci_deploy_source',
-            'service_role',
-            'error_boundary',
-            'auth_read_consistency',
-            'auth_write_consistency',
-            'http_success',
-            'sql_injection',
-            'sql_injection_js',
-            'outbound_url',
-            'tls_verification',
-            'unsafe_deserialization',
-            'path_traversal',
-        ],
+        # Every check this stage runs, in the order it runs them; declared in
+        # app/capabilities.py, which is also what GET /v1/capabilities serves.
+        "checks_run": list(CHECKS_RUN),
         "coverage": {"secrets": scope_description,
                      "error_boundary": boundary.coverage,
-                     "tls_verification": "At most 400 non-test/vendor Python and JS/TS files, each up to "
-                     "400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Local imports and "
-                     "client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, "
-                     "Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and "
-                     "process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 "
-                     "are read; hostname and certificate-chain checks have distinct explanations. "
-                     "Comments, strings, types, malformed/oversized files, unknown wrappers, cross-file "
-                     "and dynamic configuration, shell/CI YAML and runtime connections are unresolved. "
-                     "A clean result does not establish that every connection is verified",
-                     "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; "
-                     "object lookups compared with protected reads on the same router and repository binding, "
-                     "including recognized identity dependencies and imported aliases; "
-                     "test/vendor files excluded; middleware and runtime access not resolved",
-                     "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in "
-                     "parseable Python files up to 2 MB, compared with sibling routes on the same router; "
-                     "potential writes are recognized by leading call-name tokens or literal mutating SQL; "
-                     "actual storage effects, conventionally public paths, "
-                     "test/vendor files, router-level dependencies and middleware are not resolved",
-                     "outbound_url": "Known HTTP clients in locally declared FastAPI routes; "
-                     "at most 400 eligible Python files up to 400 KB each, excluding test/vendor files; "
-                     "20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, "
-                     "32 findings total. Supported Request fields, locally declared Pydantic string fields, "
-                     "known-string strip(), URL expressions and preceding local "
-                     "checks are traced within one handler; complex control flow, unknown calls/helpers, "
-                     "validation correctness, DNS, redirects, network policy and TS/JS are not resolved",
-                     "unsafe_deserialization": "At most 400 non-test/vendor Python files up to "
-                     "400 KB, 20,000 AST nodes and depth 100; import-resolved loads with lexical "
-                     "shadowing and stable outer bindings. Unsafe YAML classes must have confirmed "
-                     "library provenance; Base/Safe/Full loaders are silent. Marshal and missing "
-                     "YAML Loader produce separate, conditional risk descriptions. Input trust "
-                     "and dependency versions are not verified. Assignment aliases, conditional "
-                     "imports, mutated modules, custom YAML loaders, stored Unpickler instances, "
-                     "cross-file resolution, bare torch.load and TS/JS are not covered; at most "
-                     "32 findings are reported",
-                     "path_traversal": "Local FastAPI route handlers in parseable Python files up to "
-                     "400 KB; imported file operations and proven pathlib receivers are traced "
-                     "locally with bounded expansion. Path construction alone is not a sink. "
-                     "Containment recognizes imported secure_filename results and a resolved Path "
-                     "checked against a fixed absolute base on the branch reaching the operation. "
-                     "Unknown helpers, general control-flow joins, other validation patterns, "
-                     "runtime symlinks and TS/JS file handling are NOT covered",
-                     "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; "
-                     "runtime fetch bindings and HTTP failures are not verified. "
-                     "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},
+                     "tls_verification": SCOPE["tls_verification"],
+                     "auth_read_consistency": SCOPE["auth_read_consistency"],
+                     "auth_write_consistency": SCOPE["auth_write_consistency"],
+                     "outbound_url": SCOPE["outbound_url"],
+                     "unsafe_deserialization": SCOPE["unsafe_deserialization"],
+                     "path_traversal": SCOPE["path_traversal"],
+                     "http_success": HTTP_SUCCESS_SCOPE_PREFIX
+                     + "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},
     }
