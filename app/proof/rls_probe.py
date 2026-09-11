@@ -1,5 +1,4 @@
-"""Ask a live Supabase project, with its own public key, for rows it should
-not hand out.
+"""Ask a live Supabase project which rows its public key can read.
 
 Part B of SUPABASE_RLS_YIELD_PLAN.md. One `select`, judged by
 app.proof.rls_oracle, returned as an ExploitAttempt so the before/after pair
@@ -29,17 +28,42 @@ TWO RULES ARE ENFORCED IN CODE HERE, NOT IN THE PLAN DOCUMENT.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
+import subprocess
+import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from app.proof.rls_oracle import evaluate_rls_response
+from app.proof.rls_oracle import RlsVerdict, evaluate_rls_response
 from app.proof.types import ExploitAttempt
 
 TEMPLATE_ID = "rls_open_runtime"
 
 PROBE_TIMEOUT_S = 15
+MAX_RESPONSE_BYTES = 256 * 1024
+MAX_ROWS = 3
+MAX_WORKER_REQUEST_BYTES = 64 * 1024
+MAX_WORKER_RESULT_BYTES = 4 * MAX_RESPONSE_BYTES
+
+
+class ProbeResponseError(ValueError):
+    """A bounded, fixed-code response failure; never carries response content."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+_RESPONSE_ERRORS = {
+    "response_too_large": "ответ превысил лимит размера; доступ не определён",
+    "unsupported_encoding": "сжатый ответ не поддерживается; доступ не определён",
+    "invalid_response": "ответ имеет неверный формат; доступ не определён",
+}
+
 
 # `https://<20-char ref>.supabase.co`, and nothing else. Self-hosted Supabase
 # on a custom domain is deliberately unsupported rather than pattern-matched:
@@ -82,6 +106,7 @@ def run_rls_probe(
     limit: int = 3,
     allow_loopback: bool = False,
     fetch: Callable[..., tuple[int, Any]] | None = None,
+    timeout_s: float = PROBE_TIMEOUT_S,
 ) -> ExploitAttempt:
     """One anonymous `select` against ``table``, judged and returned.
 
@@ -102,26 +127,44 @@ def run_rls_probe(
 
     try:
         base = validate_project_url(project_url, allow_loopback=allow_loopback)
-    except UnsafeProjectUrl as exc:
+    except UnsafeProjectUrl:
         return _attempt(
-            "skipped", False, str(exc),
+            "skipped", False, "неподдерживаемый URL проекта",
             {"table": table, "reason": "unsafe_project_url"}, started)
 
     if not _safe_table_name(table):
         return _attempt(
-            "skipped", False, f"недопустимое имя таблицы: {table[:40]!r}",
-            {"table": table, "reason": "unsafe_table_name"}, started)
+            "skipped", False, "недопустимое имя таблицы",
+            {"table": "", "reason": "unsafe_table_name"}, started)
 
-    fetch = fetch or _default_fetch
+    import httpx
+
+    limit = max(1, min(int(limit), MAX_ROWS))
     try:
-        status_code, body = fetch(base, anon_key, table, limit)
-    except Exception as exc:  # noqa: BLE001 — infrastructure, not a verdict
+        if timeout_s <= 0:
+            raise TimeoutError
+        if fetch is None:
+            verdict = _default_fetch(
+                base, anon_key, table, limit,
+                timeout_s=min(timeout_s, PROBE_TIMEOUT_S),
+            )
+        else:
+            # Trusted test seam; production uses the bounded worker process.
+            status_code, body = fetch(base, anon_key, table, limit)
+            verdict = _evaluate_response(status_code, body, table, limit)
+    except ProbeResponseError as exc:
         return _attempt(
-            "error", False,
-            f"запрос к проекту не выполнился: {type(exc).__name__}",
+            "error", False, _RESPONSE_ERRORS[exc.reason],
+            {"table": table, "reason": exc.reason}, started)
+    except (TimeoutError, httpx.TimeoutException):
+        return _attempt(
+            "error", False, "время ожидания ответа истекло; доступ не определён",
+            {"table": table, "reason": "request_timeout"}, started)
+    except Exception:  # noqa: BLE001 — infrastructure, not a verdict
+        return _attempt(
+            "error", False, "запрос к проекту не выполнился; доступ не определён",
             {"table": table, "reason": "request_failed"}, started)
 
-    verdict = evaluate_rls_response(status_code, body, table=table)
     if not verdict.conclusive:
         # The probe ran and learned nothing — a bad key, a 5xx. `error`, never
         # `failure`: "we checked and it was fine" is a claim this has not
@@ -145,25 +188,100 @@ def _safe_table_name(table: str) -> bool:
 
 
 def _default_fetch(base: str, anon_key: str, table: str,
-                   limit: int) -> tuple[int, Any]:
-    """GET /rest/v1/<table>?select=*&limit=N as the anonymous role."""
+                   limit: int, *, timeout_s: float = PROBE_TIMEOUT_S,
+                   ) -> RlsVerdict:
+    """Wait for a bounded worker, including startup, DNS and client cleanup.
+
+    Cancelling asyncio DNS does not stop the system resolver's executor thread.
+    A per-request process lets the parent end that work too when time runs out.
+    Credentials use stdin; stdout carries only the sanitized verdict.
+    """
+    deadline = time.monotonic() + timeout_s
+    request = json.dumps({
+        "base": base, "anon_key": anon_key, "table": table,
+        "limit": limit, "timeout_s": timeout_s,
+    }).encode()
+    if len(request) > MAX_WORKER_REQUEST_BYTES:
+        raise ValueError("invalid worker request")
+    with subprocess.Popen(
+        [sys.executable, "-m", "app.proof.rls_fetch_worker"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        cwd=Path(__file__).resolve().parents[2],
+    ) as process:
+        try:
+            output, _ = process.communicate(
+                input=request, timeout=max(0.0, deadline - time.monotonic()),
+            )
+        except BaseException as exc:
+            # Reap before returning: no DNS thread or HTTP reader survives.
+            process.kill()
+            process.communicate()
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise TimeoutError from None
+            raise
+    if process.returncode or len(output) > MAX_WORKER_RESULT_BYTES:
+        raise ValueError("invalid worker response")
+    envelope = json.loads(output)
+    error = envelope.get("error")
+    if error == "request_timeout":
+        raise TimeoutError
+    if error in _RESPONSE_ERRORS:
+        raise ProbeResponseError(error)
+    if error is not None:
+        raise ValueError("worker request failed")
+    return RlsVerdict(**envelope["verdict"])
+
+
+def _evaluate_response(status_code: int, body: Any, table: str,
+                       limit: int) -> RlsVerdict:
+    if status_code == 200 and isinstance(body, list) and len(body) > limit:
+        raise ProbeResponseError("invalid_response")
+    return evaluate_rls_response(status_code, body, table=table)
+
+
+async def _fetch_response(base: str, anon_key: str, table: str,
+                          limit: int, timeout_s: float) -> tuple[int, Any]:
+    """Bound async I/O; the parent process also bounds DNS and loop shutdown.
+
+    HTTPX's read timeout alone resets on each chunk. asyncio.timeout cancels
+    the in-flight request at the deadline. The parent terminates the worker
+    if a blocking resolver or transport cleanup outlives that deadline.
+    Request identity encoding and reject compression before reading so that a
+    decompression bomb cannot allocate an unbounded decoded chunk.
+    """
     import httpx
 
-    response = httpx.get(
-        f"{base}/rest/v1/{table}",
-        params={"select": "*", "limit": str(int(limit))},
-        headers={
-            "apikey": anon_key,
-            "Authorization": f"Bearer {anon_key}",
-            "Accept": "application/json",
-        },
-        timeout=PROBE_TIMEOUT_S,
-        follow_redirects=False,
-    )
-    try:
-        return response.status_code, response.json()
-    except ValueError:
-        return response.status_code, None
+    async with asyncio.timeout(timeout_s):
+        async with httpx.AsyncClient(
+            timeout=timeout_s, follow_redirects=False,
+        ) as client:
+            async with client.stream(
+                "GET", f"{base}/rest/v1/{table}",
+                params={"select": "*", "limit": str(limit)},
+                headers={
+                    "apikey": anon_key,
+                    "Authorization": f"Bearer {anon_key}",
+                    "Accept": "application/json",
+                    "Accept-Encoding": "identity",
+                },
+            ) as response:
+                encoding = response.headers.get("content-encoding", "identity")
+                if encoding.strip().lower() not in ("", "identity"):
+                    raise ProbeResponseError("unsupported_encoding")
+                length = response.headers.get("content-length", "")
+                if length.isdigit() and int(length) > MAX_RESPONSE_BYTES:
+                    raise ProbeResponseError("response_too_large")
+                data = bytearray()
+                async for chunk in response.aiter_raw(chunk_size=4096):
+                    if len(data) + len(chunk) > MAX_RESPONSE_BYTES:
+                        raise ProbeResponseError("response_too_large")
+                    data.extend(chunk)
+                try:
+                    body = json.loads(data)
+                except (ValueError, RecursionError):
+                    raise ProbeResponseError("invalid_response") from None
+                return response.status_code, body
 
 
 def _attempt(status: str, success: bool, detail: str,

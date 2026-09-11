@@ -12,6 +12,8 @@ supports.
 
 from __future__ import annotations
 
+import pytest
+
 from app.proof.rls_oracle import evaluate_rls_response, summarise_rows
 
 ROWS = [
@@ -69,7 +71,7 @@ def test_a_server_error_tells_us_nothing() -> None:
     v = evaluate_rls_response(500, {"message": "boom"}, table="users")
     assert v.exposed is False
     assert v.conclusive is False
-    assert v.reason == "unexpected_response"
+    assert v.reason == "server_error"
 
 
 def test_postgrest_answers_200_empty_when_rls_blocks_not_403() -> None:
@@ -129,3 +131,45 @@ def test_columns_absent_from_the_first_row_are_still_reported() -> None:
     under-report which fields were reachable."""
     summary = summarise_rows([{"id": "1"}, {"id": "2", "phone": "+70000000000"}])
     assert "phone" in summary["columns"]
+
+
+@pytest.mark.parametrize("status,body,reason", [
+    (401, {"code": "PGRST301"}, "authentication_failed"),
+    (401, {"code": "PGRST302"}, "authentication_failed"),
+    (401, {"code": "PGRST303", "message": "JWT expired"}, "authentication_failed"),
+    (403, {"code": "unknown"}, "authentication_failed"),
+    (404, {}, "unexpected_response"),
+    (404, {"code": "PGRST125"}, "unexpected_response"),
+    (404, {"code": "42501"}, "unexpected_response"),
+    (200, {"code": "42501"}, "unexpected_response"),
+    (200, {"code": "PGRST205"}, "unexpected_response"),
+    (429, {}, "rate_limited"),
+    (500, {"code": "42501"}, "server_error"),
+    (503, {"code": "PGRST205"}, "server_error"),
+    (200, [None], "invalid_response"),
+    (200, [{"id": 1}, "not a row"], "invalid_response"),
+    (200, [["not", "a row"]], "invalid_response"),
+    (200, [{1: "not a JSON key"}], "invalid_response"),
+])
+def test_failures_never_prove_table_protection(status, body, reason):
+    result = evaluate_rls_response(status, body, table="users")
+    assert result.reason == reason
+    assert not result.conclusive
+    assert not result.exposed
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_only_insufficient_privilege_with_its_http_status_is_a_denial(status):
+    result = evaluate_rls_response(status, {"code": "42501"}, table="users")
+    assert result.reason == "permission_denied"
+    assert result.conclusive
+
+
+@pytest.mark.parametrize("status", [200, 401, 403, 404, 429, 500])
+def test_no_untrusted_error_field_survives(status):
+    secret = "synthetic-private-response-value"
+    for code in [secret, {secret: secret}, "42501", "PGRST205"]:
+        result = evaluate_rls_response(status, {
+            "code": code, "message": secret, "details": secret, "hint": secret,
+        }, table="users")
+        assert secret not in repr(result)

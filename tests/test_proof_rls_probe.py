@@ -159,7 +159,7 @@ def test_a_request_that_never_completed_is_an_error() -> None:
 
     attempt = _probe(_boom)
     assert attempt.status == "error"
-    assert "TimeoutError" in attempt.detail
+    assert attempt.evidence["reason"] == "request_timeout"
 
 
 def test_a_server_error_is_an_error() -> None:

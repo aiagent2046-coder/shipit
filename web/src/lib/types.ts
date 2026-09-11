@@ -544,6 +544,8 @@ export interface RlsCheckResult {
   // Named, not counted: "we checked 12 of your 40" is a different report from
   // "we checked your tables".
   not_checked: string[];
+  // Optional while a new frontend can still receive the previous API shape.
+  stop_reason?: "" | "table_limit" | "time_budget_exceeded";
   exposed_tables: string[];
   // Requests that settled nothing — a rejected key, a 5xx.
   inconclusive: number;

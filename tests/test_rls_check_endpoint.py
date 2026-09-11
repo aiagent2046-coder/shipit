@@ -411,3 +411,51 @@ def test_both_routes_answer_in_the_same_shape(client) -> None:
     from_archive = post(client).json()
     from_audit = post_audit(client).json()
     assert set(from_archive) == set(from_audit)
+
+
+@pytest.mark.parametrize("status,body,reason", [
+    (401, {"code": "PGRST303", "message": "synthetic-private-value"}, "authentication_failed"),
+    (404, {"message": "synthetic-private-value"}, "unexpected_response"),
+    (429, {"message": "synthetic-private-value"}, "rate_limited"),
+    (503, {"code": "synthetic-private-value"}, "server_error"),
+    (200, ["synthetic-private-value"], "invalid_response"),
+])
+def test_api_and_ledger_preserve_inconclusive_outcomes_without_response_values(
+        client, ledger, status, body, reason):
+    use_fetch(lambda *args: (status, body))
+    response = post(client)
+    assert response.status_code == 200
+    result = response.json()
+    assert result["inconclusive"] == 1
+    assert result["exposed_tables"] == []
+    assert result["empty_but_unproven"] == 0
+    assert result["attempts"][0]["evidence"]["reason"] == reason
+    assert ledger.completed[-1]["result"]["attempts"] == result["attempts"]
+    assert "synthetic-private-value" not in response.text
+    assert "synthetic-private-value" not in repr(ledger.completed)
+
+
+def test_partial_check_reason_and_unasked_names_reach_response_and_ledger(client, ledger, monkeypatch):
+    from types import SimpleNamespace
+    from app.proof import rls_live_check as live
+
+    now = [100.0]
+    monkeypatch.setattr(live, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    repo = make_zip({
+        "repo/.env": f"KEY={jwt()}\n",
+        "repo/src/db.ts": "supabase.from('users').select('*');supabase.from('orders').select('*');",
+    })
+
+    def slow(*args):
+        now[0] += live.MAX_CHECK_SECONDS
+        return 200, []
+
+    use_fetch(slow)
+    result = post(client, data=repo).json()
+    assert len(result["checked"]) == 1
+    assert len(result["not_checked"]) == 1
+    assert set(result["checked"] + result["not_checked"]) == {"users", "orders"}
+    assert result["stop_reason"] == "time_budget_exceeded"
+    stored = ledger.completed[-1]["result"]
+    assert stored["stop_reason"] == result["stop_reason"]
+    assert stored["not_checked"] == result["not_checked"]
