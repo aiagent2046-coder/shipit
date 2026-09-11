@@ -1,0 +1,10 @@
+{
+  "description": "The value is assembled from three parts, so the leading literal is the NAME with no `=` inside it. A rule that required the sign reported nothing -- measured, and the reason this case exists.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

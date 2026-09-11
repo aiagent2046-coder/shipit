@@ -50,6 +50,7 @@ SCANNER_CHECKS = {
     "scan_tls_verification": "tls_verification",
     "scan_unsafe_deserialization": "unsafe_deserialization",
     "scan_path_traversal": "path_traversal",
+    "scan_cookie_flags": "session_cookie",
 }
 
 

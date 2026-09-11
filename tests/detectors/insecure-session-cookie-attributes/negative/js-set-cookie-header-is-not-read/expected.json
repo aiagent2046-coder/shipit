@@ -1,0 +1,7 @@
+{
+  "description": "A raw Set-Cookie header string is a boundary this rule does not read, stated in its docstring. The mutation rewrites it as a cookie call, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

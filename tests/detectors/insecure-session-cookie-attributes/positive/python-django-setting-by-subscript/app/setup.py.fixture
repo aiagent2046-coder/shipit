@@ -1,0 +1,6 @@
+from django.conf import settings
+
+
+def modify_cookie_property():
+    settings["SESSION_COOKIE_HTTPONLY"] = False
+    return True

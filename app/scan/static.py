@@ -12,6 +12,7 @@ from app.scan.auth_write import scan_auth_write
 from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
+from app.scan.cookie_flags import scan_cookie_flags
 from app.scan.error_boundary import scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.outbound_url import scan_outbound_url
@@ -121,6 +122,15 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
             rule_id=t.rule_id, title=t.title, severity=t.severity,
             confidence=t.confidence, category=t.category, file=t.file,
             line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+            claim_evidence=static_claim_evidence(),
+        ))
+
+    fileobj.seek(0)
+    for c in scan_cookie_flags(fileobj):
+        findings.append(ScoredFinding(
+            rule_id=c.rule_id, title=c.title, severity=c.severity,
+            confidence=c.confidence, category=c.category, file=c.file,
+            line=c.line, explanation=c.explanation, fix_hint=c.fix_hint,
             claim_evidence=static_claim_evidence(),
         ))
 
@@ -243,6 +253,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
                      "outbound_url": SCOPE["outbound_url"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],
                      "path_traversal": SCOPE["path_traversal"],
+                     "session_cookie": SCOPE["session_cookie"],
                      "http_success": HTTP_SUCCESS_SCOPE_PREFIX
                      + "Parser limits: " + (", ".join(source_facts["react_async"].get("limitations", [])) or "none")},
     }

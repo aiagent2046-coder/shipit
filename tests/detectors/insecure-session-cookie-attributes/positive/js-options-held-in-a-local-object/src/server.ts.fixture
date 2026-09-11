@@ -1,0 +1,7 @@
+app.post("/user-login", processLogin);
+
+function processLogin(req, res) {
+  let cookieOptions = { httpOnly: 0, sameSite: "Lax" };
+  res.cookie("session_id", req.body.jwt, cookieOptions);
+  res.status(200).json({ ok: true });
+}

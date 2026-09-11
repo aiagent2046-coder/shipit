@@ -1,0 +1,4 @@
+app.post("/login", (req, res) => {
+  res.cookie("session_id", token, { httpOnly: false, sameSite: "lax" });
+  res.json({ ok: true });
+});

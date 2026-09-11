@@ -1,0 +1,9 @@
+from fastapi import APIRouter, Response
+
+router = APIRouter()
+
+
+@router.post("/preferences")
+async def preferences(response: Response, theme: str):
+    response.set_cookie("theme", theme)
+    return {"ok": True}

@@ -251,6 +251,28 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Unknown helpers, general control-flow joins, other validation patterns, "
         "runtime symlinks and TS/JS file handling are NOT covered",
     ),
+    Capability(
+        "session_cookie",
+        "A session cookie set without the attributes that protect it",
+        ("insecure-session-cookie-attributes",),
+        "Cookie-setting calls and settings whose cookie name says it carries identity: "
+        "Python `set_cookie`/`set_signed_cookie` with the name as a literal or a "
+        "unambiguous module-level constant, the Django settings that decide the session cookie's "
+        "flags, and in TypeScript/JavaScript `res.cookie`, a Next.js cookie store, an "
+        "express-session nested cookie options, cookie-session top-level options and `document.cookie` "
+        "writes. JavaScript names and option objects resolve one hop only when stable, "
+        "unambiguous and visible in the current scope. Option keys are case-sensitive. "
+        "Which default each API has decides whether an absent option is "
+        "reported: `res.cookie` defaults HttpOnly to false, express-session defaults it "
+        "to true. Not covered: a missing `secure` attribute (a developer's localhost is "
+        "the ordinary reason, and browsers treat localhost as secure), a missing "
+        "SameSite (browsers default to Lax; only an explicit SameSite=None removes the "
+        "protection), `csrf`/`xsrf`/`state` cookie names (the double-submit pattern "
+        "requires script access), raw Set-Cookie header strings, framework config "
+        "files, dependency and test paths, cookies set through a wrapper, Python "
+        "positional flag arguments, unknown option spreads, and any option whose value "
+        "is a variable rather than a literal",
+    ),
 )
 
 # The checks the static stage reports running, in stable report order.

@@ -1,0 +1,7 @@
+{
+  "description": "The value is a name, not a literal, so this rule cannot show that the cookie is unprotected -- and it does not guess. The mutation makes it a literal False, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "The Next.js cookie function imported under an alias, which the hunt produced five times in one round. The alias is in the file, so the binding to the store is evidence; only the name of the function changed.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

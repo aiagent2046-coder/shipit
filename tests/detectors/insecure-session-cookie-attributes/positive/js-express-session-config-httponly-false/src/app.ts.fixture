@@ -1,0 +1,7 @@
+import session from "express-session";
+
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  name: "sid",
+  cookie: { httpOnly: false },
+}));

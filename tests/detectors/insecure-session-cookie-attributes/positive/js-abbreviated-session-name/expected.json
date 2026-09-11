@@ -1,0 +1,10 @@
+{
+  "description": "`sess_id` is how people abbreviate a session cookie, and the vocabulary knew only `session`/`sid`. Measured: this exact name escaped one round.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

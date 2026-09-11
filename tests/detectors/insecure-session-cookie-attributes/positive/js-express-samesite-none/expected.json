@@ -1,0 +1,10 @@
+{
+  "description": "SameSite=None on an authentication cookie removes the browser's default cross-site protection. HttpOnly is set, so this is the other attribute.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

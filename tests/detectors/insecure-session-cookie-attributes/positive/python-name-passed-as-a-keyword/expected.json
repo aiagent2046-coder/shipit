@@ -1,0 +1,10 @@
+{
+  "description": "The name arrives as the keyword the signature accepts rather than positionally. The signature is the same call, so the rule reads it.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

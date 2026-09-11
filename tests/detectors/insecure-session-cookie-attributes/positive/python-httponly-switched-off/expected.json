@@ -1,0 +1,10 @@
+{
+  "description": "The flag is present and explicitly off. Same risk as the omission, and the evidence is stronger: the code decided.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

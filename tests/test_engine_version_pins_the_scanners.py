@@ -52,6 +52,7 @@ WIRED_SCANNERS = (
     "scan_auth_read",
     "scan_auth_write",
     "scan_ci_deploy_source",
+    "scan_cookie_flags",
     "scan_error_boundary",
     "scan_http_success",
     "scan_outbound_url",
@@ -83,6 +84,7 @@ EMITTED_RULE_IDS = (
     "generic-assignment",
     "github-pat",
     "gitignore-missing-secrets",
+    "insecure-session-cookie-attributes",
     "jwt-in-code",
     "missing-error-boundary",
     "no-ci",
@@ -113,7 +115,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-11-1"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-11-2"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

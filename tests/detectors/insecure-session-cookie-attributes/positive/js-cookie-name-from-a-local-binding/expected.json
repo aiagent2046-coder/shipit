@@ -1,0 +1,10 @@
+{
+  "description": "The first hunt round: eight of eight rewrites moved the cookie name into a local const and the rule went silent on all eight. Binding a name once is ordinary code, not an obfuscation.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

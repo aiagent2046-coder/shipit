@@ -1,0 +1,10 @@
+{
+  "description": "Express's res.cookie defaults httpOnly to false, so the three-argument form without an options object leaves the session cookie readable by script.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

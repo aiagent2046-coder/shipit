@@ -1,0 +1,5 @@
+app.post("/login", (req, res) => {
+  req.session.cookie.httpOnly = false;
+  req.session.user = req.body.user;
+  res.json({ ok: true });
+});

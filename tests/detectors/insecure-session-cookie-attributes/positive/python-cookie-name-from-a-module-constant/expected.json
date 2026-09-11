@@ -1,0 +1,10 @@
+{
+  "description": "The cookie name is a module-level constant holding a literal, resolved one hop. A rule that only read string literals would miss every codebase that names its cookie once.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

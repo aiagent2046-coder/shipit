@@ -1,0 +1,7 @@
+{
+  "description": "The correct Django settings. The mutation flips HTTPONLY to False, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-session-cookie-attributes"
+  ]
+}

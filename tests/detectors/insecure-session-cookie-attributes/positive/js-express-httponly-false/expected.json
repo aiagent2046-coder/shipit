@@ -1,0 +1,10 @@
+{
+  "description": "The options object is written across the call and explicitly switches HttpOnly off. A line-based matcher would need the whole call to see it.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
