@@ -185,6 +185,28 @@ def test_dependency_read_witness_does_not_cross_routers(separation):
     assert scan_auth_read(archive(source)) == []
 
 
+def test_a_module_level_block_does_not_hide_a_read_disagreement():
+    """`if:`/`try:`/`with:`/`for:` open no scope in Python, so the two routes
+    below still share one router object and the disagreement is the same one.
+    Measured on this rule: reading only a scope's direct statements made every
+    conditionally registered route invisible, and the corpus held no block-shaped
+    case to catch it. A feature-flagged route is ordinary FastAPI code."""
+    lines = (GUARDED_COLLECTION + OPEN_ITEM).strip().splitlines()
+    header, rest = lines[:3], lines[3:]
+    source = "\n".join(header) + "\nif settings.EXPORTS_ENABLED:\n" + "\n".join("    " + line for line in rest) + "\n"
+    assert len(scan_auth_read(archive(source))) == 1
+
+
+def test_a_block_route_on_another_router_is_not_a_sibling():
+    """Reading block statements must not start pairing routes that never shared a
+    router. Silent case plus the one change that removes the property it pins."""
+    admin_item = OPEN_ITEM.strip().replace("@router.", "@admin.")
+    body = "\n".join("    " + line for line in admin_item.splitlines())
+    source = GUARDED_COLLECTION + "admin = APIRouter()\n" + "if settings.EXPORTS_ENABLED:\n" + body + "\n"
+    assert scan_auth_read(archive(source)) == []
+    assert len(scan_auth_read(archive(source.replace("@admin.", "@router.")))) == 1
+
+
 # The provenance boundary the block-declaration fix deliberately does NOT cross: an
 # import written inside a block establishes no dependency provenance. Measured on
 # twelve pinned public FastAPI projects (569 Python files; the measurement ships as

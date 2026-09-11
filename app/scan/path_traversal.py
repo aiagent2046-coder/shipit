@@ -30,6 +30,7 @@ from app.scan.outbound_url import (
     _skeleton,
     _walk,
 )
+from app.scan.scope_statements import scope_statements
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "path-traversal-file-sink"
@@ -241,12 +242,24 @@ def _join_states(state: _PathState, branches: list[_PathState]) -> None:
 
 
 def _forget_stores(stmt: ast.AST, state: _PathState) -> None:
-    for node in _walk(stmt):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+    pending = [stmt]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _bind_path(ast.Name(id=node.name), None, state)
+            continue
+        if isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             _bind_path(node, None, state)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 _bind_path(ast.Name(id=alias.asname or alias.name.split(".")[0]), None, state)
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+            _bind_path(ast.Name(id=node.name), None, state)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            _bind_path(ast.Name(id=node.rest), None, state)
+        pending.extend(ast.iter_child_nodes(node))
 
 
 def _import_path(stmt: ast.Import | ast.ImportFrom, state: _PathState) -> None:
@@ -353,10 +366,17 @@ def _import_context(body: list[ast.stmt], state: _PathState) -> None:
 def _scan_scope(body: list[ast.stmt], inherited: _PathState, path: str, findings: list[CheckFinding]) -> None:
     context = inherited.copy()
     _import_context(body, context)
-    for stmt in body:
+    # scope_statements, not `body`: a module-level `if:`/`try:`/`with:`/`for:`
+    # opens no scope in Python, so a route declared inside one still hangs on the
+    # router built here and its handler still reads request input. Reading direct
+    # statements only made every conditionally registered route invisible --
+    # measured on the sibling outbound-URL rule, and this scanner shares the
+    # discovery shape.
+    for stmt in scope_statements(body):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             declares_route = _declares_route(stmt, context)
-            nested = any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) for child in stmt.body)
+            nested = any(isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         for child in scope_statements(stmt.body))
             if not declares_route and not nested:
                 continue
             local = context.copy()
