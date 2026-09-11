@@ -22,7 +22,7 @@
 
 import { useState } from "react";
 import { runRlsCheck, ApiError } from "@/lib/api";
-import type { RlsCheckResult } from "@/lib/types";
+import type { RlsAttempt, RlsCheckResult } from "@/lib/types";
 import { Spinner } from "./Spinner";
 
 const CONSENT_PHRASE = "i-own-this-project";
@@ -127,9 +127,10 @@ export function RlsCheck({
         public key your app already hands to every visitor.
       </p>
       <p className="mt-2 text-sm text-muted">
-        It sends a handful of read-only requests, one per table, and reads at
-        most three rows from each. No value from those rows is stored or shown:
-        the result records column names, a count, and lengths.
+        It requests at most three rows per table, for up to 12 tables. The
+        database requests stop after 45 seconds, and oversized responses are
+        not evaluated. No value from those rows is stored or shown: the result
+        records column names, a count, and lengths.
       </p>
       {/* Named explicitly because the first customer to see this block went
           looking for a field to paste their GitHub URL into. There is none —
@@ -232,76 +233,101 @@ function Outcome({ result }: { result: RlsCheckResult }) {
 
   return (
     <div className="mt-4 space-y-4 text-sm">
-      {exposed.length > 0 ? (
-        <div className="rounded-md border border-red-500/40 bg-red-500/5 p-4">
-          <p className="font-medium text-red-500">
-            {exposed.length === 1
-              ? "One table handed rows to the public key."
-              : `${exposed.length} tables handed rows to the public key.`}
-          </p>
+      <div className="rounded-md border border-border p-4">
+        <p className="font-medium">
+          {exposed.length > 0
+            ? `Anonymous requests read rows from ${exposed.length} ${exposed.length === 1 ? "table" : "tables"}.`
+            : "No readable rows were confirmed."}
+        </p>
+        {exposed.length > 0 && (
           <p className="mt-1 text-muted">
-            Anyone who opens your site can make the same request.
+            Anyone with your app&apos;s public key can make the same request.
+            This may be intentional for public data, such as a catalog.
+            Check whether these rows are meant to be public before treating
+            this as a security issue.
           </p>
-          <ul className="mt-2 list-inside list-disc font-mono text-xs">
-            {exposed.map((t) => (
-              <li key={t}>{t}</li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <div className="rounded-md border border-border p-4">
-          <p className="font-medium">No rows came back.</p>
-          {/* NOT "your tables are protected". RLS filters rather than denying,
-              so a protected table and an EMPTY table answer identically — and
-              a new project's tables are empty all the time. The backend counts
-              those answers for exactly this sentence. */}
-          {result.empty_but_unproven > 0 && (
-            <p className="mt-1 text-muted">
-              {result.empty_but_unproven === result.checked.length
-                ? "Every answer was empty"
-                : `${result.empty_but_unproven} of those answers were empty`}
-              , and an empty answer is not proof of protection: a table that is
-              locked and a table that has no rows in it look exactly the same
-              from outside. If you know these tables hold data, that is the
-              difference — and it means they are protected.
-            </p>
-          )}
-        </div>
+        )}
+        {result.empty_but_unproven > 0 && (
+          <p className="mt-1 text-muted">
+            {result.empty_but_unproven} {result.empty_but_unproven === 1 ? "answer was" : "answers were"} empty.
+            An empty answer does not prove protection. It can mean no rows,
+            filtered rows, or a difference between this deployment and the
+            data you expected. This check does not test access between users.
+          </p>
+        )}
+        {result.inconclusive > 0 && (
+          <p className="mt-1 text-muted">
+            {result.inconclusive} {result.inconclusive === 1 ? "request was" : "requests were"} inconclusive.
+            Errors do not establish whether those tables allow access.
+          </p>
+        )}
+      </div>
+
+      {result.attempts.length > 0 && (
+        <ul className="space-y-2" aria-label="Table results">
+          {result.attempts.map((attempt, index) => (
+            <li key={index}>
+              <span className="font-mono text-xs">
+                {typeof attempt.evidence.table === "string" ? attempt.evidence.table : "Table"}
+              </span>{" — "}
+              {attemptSummary(attempt)}
+            </li>
+          ))}
+        </ul>
       )}
 
       <div className="text-muted">
-        {/* "the tables we could name from your repository", never "your
-            tables". MEASURED: on the one project we ran this against, the only
-            table ever found genuinely exposed appeared in neither the
-            migrations nor the client code, so nothing could have named it. */}
         <p>
           We asked about {result.checked.length}{" "}
-          {result.checked.length === 1 ? "table" : "tables"} we could name from
-          your repository — from your migrations, and from the{" "}
-          <code className="font-mono text-xs">supabase.from(&apos;…&apos;)</code>{" "}
-          calls in your code. A table neither of those mentions is not in this
-          list, and we cannot know it exists.
+          {result.checked.length === 1 ? "table" : "tables"} named in your
+          repository&apos;s migrations, generated types, or client calls.
+          Tables absent from these sources are outside this check.
+          Each result describes this request at the time it ran.
         </p>
-        <p className="mt-1 font-mono text-xs">{result.checked.join(", ")}</p>
-
         {result.not_checked.length > 0 && (
           <p className="mt-2">
-            {result.not_checked.length} more were named but not asked about —
-            this check stops at {result.max_tables}:{" "}
+            {result.not_checked.length} more were named but not asked about.
+            {result.stop_reason === "time_budget_exceeded"
+              ? " The time budget was exhausted. "
+              : result.stop_reason === "table_limit"
+                ? ` The table limit was reached (${result.max_tables}). `
+                : " The check ended before these tables were requested. "}
             <span className="font-mono text-xs">
               {result.not_checked.join(", ")}
             </span>
           </p>
         )}
-
-        {result.inconclusive > 0 && (
-          <p className="mt-2">
-            {result.inconclusive}{" "}
-            {result.inconclusive === 1 ? "request" : "requests"} settled
-            nothing — the database did not answer in a way we can read.
-          </p>
-        )}
       </div>
     </div>
   );
+}
+
+function attemptSummary(attempt: RlsAttempt): string {
+  // Render our vocabulary, never a database's free-form error message.
+  switch (attempt.evidence.reason) {
+    case "rows_readable":
+      return "Rows readable anonymously; confirm whether public access is intended.";
+    case "empty_result":
+      return "Empty result; protection is unproven.";
+    case "permission_denied":
+      return "Database denied this request; this does not assess other roles or operations.";
+    case "table_not_exposed":
+      return "Table not found in the published API schema; check its name and deployment.";
+    case "authentication_failed":
+      return "Key or request authentication rejected; table access is undetermined.";
+    case "rate_limited":
+      return "Request rate limited; table access is undetermined.";
+    case "server_error":
+      return "Database service error; table access is undetermined.";
+    case "request_timeout":
+      return "Request timed out; table access is undetermined.";
+    case "response_too_large":
+      return "Response too large to evaluate; table access is undetermined.";
+    case "unsupported_encoding":
+      return "Response compression is unsupported; table access is undetermined.";
+    case "invalid_response":
+      return "Invalid response format; table access is undetermined.";
+    default:
+      return "No interpretable result; table access is undetermined.";
+  }
 }

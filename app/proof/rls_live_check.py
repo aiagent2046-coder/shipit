@@ -38,6 +38,7 @@ marks an empty result `alone_proves_nothing` and why this result reports it as
 from __future__ import annotations
 
 import io
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -57,6 +58,7 @@ from app.proof.types import ExploitAttempt
 # small enough that a consented check is unmistakably a check rather than a
 # scan of their database.
 MAX_TABLES = 12
+MAX_CHECK_SECONDS = 45
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,8 @@ class LiveCheckResult:
     attempts: list[ExploitAttempt] = field(default_factory=list)
     checked: list[str] = field(default_factory=list)
     not_checked: list[str] = field(default_factory=list)
+    # Why the remaining candidates were not requested. Empty for a full pass.
+    stop_reason: str = ""              # table_limit | time_budget_exceeded
 
     @property
     def exposed_tables(self) -> list[str]:
@@ -110,8 +114,8 @@ class LiveCheckResult:
 
     @property
     def inconclusive(self) -> int:
-        """Requests that ran and settled nothing — a bad key, a 5xx, a table
-        PostgREST does not expose. Counted separately from `failure` because
+        """Requests that ran and settled nothing — a bad key or a 5xx.
+        Counted separately from `failure` because
         "we asked and learned nothing" is not "we asked and it was fine"."""
         return sum(1 for a in self.attempts if a.status == "error")
 
@@ -129,6 +133,7 @@ def run_live_rls_check(
     `fetch` is injectable so the whole pass is testable without a network, the
     same pattern rls_probe and cors_probe already use.
     """
+    deadline = time.monotonic() + MAX_CHECK_SECONDS
     if not consent:
         # Before anything else, including reading the repository. There is no
         # state to build up for a check that is not going to happen.
@@ -153,31 +158,40 @@ def run_live_rls_check(
             ),
         )
 
-    return _ask(target, candidates, max_tables, fetch)
+    return _ask(target, candidates, max_tables, fetch, deadline)
 
 
 def _ask(target: SupabaseTarget, candidates: list[TableCandidate],
          max_tables: int,
-         fetch: Callable[..., tuple[int, Any]] | None) -> LiveCheckResult:
-    chosen = candidates[:max_tables]
-    attempts = [
-        run_rls_probe(
+         fetch: Callable[..., tuple[int, Any]] | None,
+         deadline: float) -> LiveCheckResult:
+    chosen = candidates[:max(0, min(max_tables, MAX_TABLES))]
+    attempts: list[ExploitAttempt] = []
+    checked: list[str] = []
+    stop_reason = ""
+    for candidate in chosen:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            stop_reason = "time_budget_exceeded"
+            break
+        attempts.append(run_rls_probe(
             project_url=target.project_url,
             anon_key=target.anon_key,
             table=candidate.name,
             consent=True,
             fetch=fetch,
-        )
-        for candidate in chosen
-    ]
+            timeout_s=remaining,
+        ))
+        checked.append(candidate.name)
+    not_checked = [c.name for c in candidates[len(checked):]]
+    if not_checked and not stop_reason:
+        stop_reason = "table_limit"
     return LiveCheckResult(
         status="checked",
         project_ref=target.ref,
         key_source=target.source,
         attempts=attempts,
-        checked=[c.name for c in chosen],
-        # Named, not just counted. "We checked 12 of your 40 tables" is a
-        # different report from "we checked your tables", and the customer is
-        # the one who knows which of the other 28 matter.
-        not_checked=[c.name for c in candidates[max_tables:]],
+        checked=checked,
+        not_checked=not_checked,
+        stop_reason=stop_reason,
     )

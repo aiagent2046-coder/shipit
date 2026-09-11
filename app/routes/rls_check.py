@@ -74,6 +74,7 @@ def _payload(result: LiveCheckResult) -> dict:
         "key_source": result.key_source,
         "checked": result.checked,
         "not_checked": result.not_checked,
+        "stop_reason": result.stop_reason,
         "exposed_tables": result.exposed_tables,
         "inconclusive": result.inconclusive,
         # Reported beside the other two on purpose: 0 exposed and 0
@@ -95,6 +96,7 @@ def _refusal(reason: str, *, persisted: bool) -> dict:
         "status": "refused",
         "reason": reason,
         "project_ref": "", "key_source": "", "checked": [], "not_checked": [],
+        "stop_reason": "",
         "exposed_tables": [], "inconclusive": 0, "empty_but_unproven": 0,
         "max_tables": MAX_TABLES, "attempts": [],
     }

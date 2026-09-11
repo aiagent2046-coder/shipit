@@ -23,6 +23,7 @@ on:
     paths:
       - "app/proof/rls_oracle.py"
       - "app/proof/rls_probe.py"
+      - "app/proof/rls_fetch_worker.py"
       - "app/proof/compare.py"
       - "app/proof/types.py"
       - "scripts/e2e_proof_rls_probe.py"

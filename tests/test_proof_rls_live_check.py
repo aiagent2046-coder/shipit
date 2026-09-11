@@ -241,3 +241,60 @@ def test_rows_coming_back_are_not_counted_as_unproven() -> None:
 def test_a_refused_check_counts_nothing() -> None:
     result = run_live_rls_check(REPO, consent=False, fetch=empty)
     assert result.empty_but_unproven == 0
+
+
+
+def test_time_budget_preserves_completed_results_and_names_unasked_tables(monkeypatch):
+    from types import SimpleNamespace
+    from app.proof import rls_live_check as live
+
+    now = [100.0]
+    monkeypatch.setattr(live, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    calls = []
+
+    def slow(base, key, table, limit):
+        calls.append(table)
+        now[0] += live.MAX_CHECK_SECONDS
+        return rows()
+
+    result = run_live_rls_check(REPO, consent=True, fetch=slow)
+    assert result.checked == calls
+    assert len(calls) == 1
+    assert result.exposed_tables == calls
+    assert set(result.checked + result.not_checked) == {"users", "products"}
+    assert result.stop_reason == "time_budget_exceeded"
+
+
+def test_deadline_expired_before_first_request_makes_no_request(monkeypatch):
+    from types import SimpleNamespace
+    from app.proof import rls_live_check as live
+
+    times = iter([100.0, 100.0 + live.MAX_CHECK_SECONDS])
+    monkeypatch.setattr(live, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    calls = []
+    result = run_live_rls_check(REPO, consent=True, fetch=lambda *a: calls.append(a))
+    assert calls == []
+    assert result.checked == []
+    assert set(result.not_checked) == {"users", "products"}
+    assert result.stop_reason == "time_budget_exceeded"
+
+
+def test_malformed_table_response_does_not_discard_other_results():
+    def malformed(base, key, table, limit):
+        return (200, [None]) if table == "users" else rows()
+
+    result = run_live_rls_check(REPO, consent=True, fetch=malformed)
+    assert set(result.checked) == {"users", "products"}
+    assert result.exposed_tables == ["products"]
+    assert result.inconclusive == 1
+    assert result.stop_reason == ""
+
+
+def test_internal_override_cannot_exceed_hard_table_limit():
+    entries = {"repo/.env": f"KEY={jwt()}\n",
+               "repo/src/db.ts": "".join(
+                   f"supabase.from('t{i}').select('*');\n" for i in range(20))}
+    result = run_live_rls_check(make_zip(entries), consent=True, fetch=empty, max_tables=100)
+    assert len(result.checked) == MAX_TABLES
+    assert len(result.not_checked) == 20 - MAX_TABLES
+    assert result.stop_reason == "table_limit"
