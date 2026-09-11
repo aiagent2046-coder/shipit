@@ -28,6 +28,7 @@ import json
 import urllib.parse
 
 from app.report.plain_language import plain_fields
+from app.scan.rule_coverage import normalize_rule_coverage
 
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
@@ -173,6 +174,7 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 "engineVersion": engine_version,
                 "basis": (score or {}).get("basis"),
                 "limitations": list(manifest.get("limitations") or []),
+                "ruleCoverage": normalize_rule_coverage(manifest.get("rule_coverage")),
             },
         }],
         "results": results,

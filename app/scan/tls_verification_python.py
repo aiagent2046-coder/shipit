@@ -94,15 +94,19 @@ def _bound(body):
     return counts
 
 
-def python_evidence(text):
+def python_evidence(text, *, incomplete_reason: dict[str, str] | None = None):
     tree = ast.parse(text)
     if not _bounded(tree):
+        if incomplete_reason is not None:
+            incomplete_reason["reason"] = "ast_limit"
         return []
     found = []
 
     def emit(node, what, kind="certificate"):
         if len(found) < 32:
             found.append((node.lineno, what, kind))
+        elif incomplete_reason is not None:
+            incomplete_reason["reason"] = "finding_limit"
 
     def inspect_call(node, bindings):
         callee = _qualified(node.func, bindings)

@@ -6,6 +6,7 @@ import io
 import zipfile
 
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
+from app.scan.rule_coverage import normalize_rule_coverage
 from app.sca.lockfiles import OSV_ECOSYSTEM
 
 
@@ -115,6 +116,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         **sca_manifest_fields(sca),
         "static_limits": static.get("coverage", {}),
         "secrets_coverage": _file_counts(static.get("secrets_coverage")),
+        "rule_coverage": normalize_rule_coverage(static.get("rule_coverage")),
         "source_facts": static.get("source_facts"),
         "model": stats.get("model"),
         "model_calls": stats.get("calls", 0),

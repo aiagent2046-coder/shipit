@@ -16,6 +16,7 @@ from app.scan.claim_evidence import (
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.manifest import SCA_LIMITATIONS
+from app.scan.rule_coverage import normalize_rule_coverage
 
 
 def is_non_production(finding: dict) -> bool:
@@ -101,6 +102,57 @@ MODEL_LIMITATIONS = frozenset({
     "input_truncated", "invalid_responses", "no_providers_configured", "free_tier",
 })
 
+RULE_COVERAGE_LABELS = {
+    "outbound_url": "Outbound request URLs",
+    "tls_verification": "TLS verification",
+    "unsafe_deserialization": "Unsafe deserialization",
+    "path_traversal": "Filesystem paths",
+}
+RULE_EXCLUSION_LABELS = {
+    "unsupported_extension": "unsupported file types",
+    "non_production_path": "test/example paths",
+    "dependency_tree": "dependency directories",
+}
+RULE_SKIP_LABELS = {
+    "file_size_limit": "file size limit",
+    "file_limit": "file count limit",
+    "finding_limit": "finding limit",
+    "read_error": "read errors",
+    "decode_error": "decoding errors",
+    "parse_error": "syntax errors",
+    "ast_limit": "syntax-analysis budget",
+    "analysis_limit": "expression analysis limit",
+}
+
+
+def _rule_reasons(reasons: dict, labels: dict) -> str:
+    return ", ".join(f"{label}: {reasons[key]}" for key, label in labels.items()
+                     if reasons.get(key)) or "None recorded"
+
+
+def _rule_coverage_rows(manifest: dict) -> list[tuple[str, str]]:
+    coverage = normalize_rule_coverage(manifest.get("rule_coverage")) or {}
+    checks = manifest.get("static_checks") or []
+    rows = []
+    for rule, label in RULE_COVERAGE_LABELS.items():
+        item = coverage.get(rule)
+        if item is None:
+            if rule in checks:
+                rows.append((f"File coverage: {label}", "Not recorded for this audit"))
+            continue
+        status = ("Partial check." if item["partial"] else
+                  "No file-processing gaps recorded within this rule's scope."
+                  if item["eligible_files"] else "No eligible files for this rule.")
+        rows.append((f"File coverage: {label}",
+                     f"{item['analyzed_files']} of {item['eligible_files']} eligible files analyzed; "
+                     f"{item['attempted_files']} attempted; {item['skipped_files']} not fully analyzed; "
+                     f"{item['excluded_files']} excluded from {item['files_total']} archive files. {status}"))
+        rows.append((f"Files excluded: {label}",
+                     _rule_reasons(item["exclusion_reasons"], RULE_EXCLUSION_LABELS)))
+        rows.append((f"Files not fully analyzed: {label}",
+                     _rule_reasons(item["skip_reasons"], RULE_SKIP_LABELS)))
+    return rows
+
 
 def _classified_limits(score: dict) -> tuple[list[str], list[str], list[str]]:
     model, dependency, other = [], [], []
@@ -118,6 +170,18 @@ def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
     """Keep dependency gaps and unclassified reasons visible above the findings."""
     _, dependency, other = _classified_limits(score)
     notices = []
+    coverage = normalize_rule_coverage((score.get("scan_manifest") or {}).get("rule_coverage")) or {}
+    incomplete = []
+    for rule, label in RULE_COVERAGE_LABELS.items():
+        item = coverage.get(rule)
+        if item and item["partial"]:
+            incomplete.append(
+                f"{label}: {item['analyzed_files']} of {item['eligible_files']} eligible files analyzed "
+                f"({_rule_reasons(item['skip_reasons'], RULE_SKIP_LABELS)}).")
+    if incomplete:
+        notices.append(("Static checks incomplete", " ".join(incomplete) +
+                        " These counts cover the named rules only. Files not fully analyzed may contain "
+                        "additional findings; an empty result does not establish safety."))
     if dependency:
         details = []
         if "dependency_check_not_run" in dependency:
@@ -569,6 +633,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
     rows.extend(_limitation_rows(score))
     for check, status in manifest.get("static_limits", {}).items():
         rows.append((f"Static scope: {check}", str(status)))
+    rows.extend(_rule_coverage_rows(manifest))
     facts = manifest.get("source_facts")
     if isinstance(facts, dict):
         for key, label in (("guards", "Guard evidence"), ("cost_context", "Cost evidence"),

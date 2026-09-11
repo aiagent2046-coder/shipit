@@ -13,7 +13,7 @@ import zipfile
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
-from app.scan.secrets import is_dependency_path, is_non_production_path
+from app.scan.rule_coverage import RuleCoverage
 from app.scan.tls_verification_js import js_evidence
 from app.scan.tls_verification_python import python_evidence
 
@@ -24,39 +24,46 @@ _MAX_FILES = 400
 _MAX_FINDINGS = 32
 
 
-def scan_tls_verification(fileobj: BinaryIO) -> list[CheckFinding]:
+def scan_tls_verification(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
     findings = []
     seen = set()
     with zipfile.ZipFile(fileobj) as archive:
-        infos = [
-            info
-            for info in archive.infolist()
-            if not info.is_dir()
-            and info.file_size <= _MAX_FILE_BYTES
-            and (info.filename.endswith(".py") or info.filename.endswith(_JS_FILE_SUFFIXES))
-            and not is_non_production_path(info.filename)
-            and not is_dependency_path(info.filename)
-        ]
-        for info in infos[:_MAX_FILES]:
-            if len(findings) >= _MAX_FINDINGS:
-                break
+        accounting = RuleCoverage(archive, extensions=(".py", *_JS_FILE_SUFFIXES),
+                                  max_file_bytes=_MAX_FILE_BYTES, coverage=coverage)
+        for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
+            incomplete: dict[str, str] = {}
             try:
                 text = archive.read(info).decode("utf-8")
+            except UnicodeError:
+                accounting.skip("decode_error")
+                continue
+            try:
                 evidence = (
-                    python_evidence(text)
+                    python_evidence(text, incomplete_reason=incomplete)
                     if info.filename.endswith(".py")
-                    else js_evidence(text, tsx=info.filename.endswith((".tsx", ".jsx")))
+                    else js_evidence(text, tsx=info.filename.endswith((".tsx", ".jsx")),
+                                     incomplete_reason=incomplete)
                 )
-            except (UnicodeError, SyntaxError, ValueError, RecursionError):
+            except (SyntaxError, ValueError):
+                accounting.skip("parse_error")
+                continue
+            except RecursionError:
+                accounting.skip("ast_limit")
                 continue
             for line, what, kind in evidence:
                 key = (info.filename, line, what, kind)
                 if key in seen:
                     continue
+                if len(findings) >= _MAX_FINDINGS:
+                    incomplete["reason"] = "finding_limit"
+                    break
                 seen.add(key)
                 findings.append(_finding(info.filename, line, what, kind))
-                if len(findings) >= _MAX_FINDINGS:
-                    break
+            if incomplete:
+                accounting.skip(incomplete["reason"])
+            else:
+                accounting.analyzed()
+        accounting.finish()
     return findings
 
 

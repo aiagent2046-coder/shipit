@@ -20,8 +20,8 @@ from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
+from app.scan.rule_coverage import RuleCoverage, mark_analysis_limit, track_analysis_limits
 from app.scan.scope_statements import BLOCK_STATEMENTS, block_arms
-from app.scan.secrets import is_dependency_path, is_non_production_path
 
 RULE_ID = "python-outbound-request-unvalidated-url"
 _METHODS = frozenset({"delete", "get", "head", "options", "patch", "post", "put", "request", "stream"})
@@ -55,6 +55,10 @@ _MAX_TEMPLATE_BYTES = 16_000
 _MAX_SLOTS = 256
 _MARKER = "\x00"
 _PERCENT = re.compile(r"%(?:\((?P<key>[^)]+)\))?[#0 +\-]*\d*(?:\.\d+)?[sradifgGouxXeE%]")
+
+
+class _FindingLimitReached(Exception):
+    """The file traversal stopped before its supported checks completed."""
 
 
 @dataclass
@@ -204,8 +208,10 @@ def _request_read(expr: ast.AST, state: _State) -> set[str]:
 
 def _combine(parts: list[tuple[str, list[set[str]]]]):
     if sum(len(text) for text, _ in parts) > _MAX_TEMPLATE_BYTES:
+        mark_analysis_limit()
         return None
     if sum(len(slots) for _, slots in parts) > _MAX_SLOTS:
+        mark_analysis_limit()
         return None
     return "".join(text for text, _ in parts), [slot for _, slots in parts for slot in slots]
 
@@ -413,6 +419,7 @@ def _request_inputs(fn: ast.FunctionDef | ast.AsyncFunctionDef, state: _State) -
         if annotation_type in declarations.model_types:
             fields = declarations.model_types[annotation_type]
             if len(fields) + len(state.model_fields) > _MAX_SLOTS:
+                mark_analysis_limit()
                 continue
             state.models[arg.arg] = arg.arg
             for name in fields:
@@ -531,7 +538,7 @@ def _terminates(body: list[ast.stmt]) -> bool:
 def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[CheckFinding]) -> None:
     for stmt in body:
         if len(findings) >= _MAX_FINDINGS:
-            return
+            raise _FindingLimitReached
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind(ast.Name(id=stmt.name), None, state)
             continue
@@ -634,7 +641,7 @@ def _join_states(state: _State, branches: list[_State]) -> None:
 def _scan_expr(expr: ast.AST, state: _State, path: str, findings: list[CheckFinding]) -> None:
     for call in _walk(expr):
         if len(findings) >= _MAX_FINDINGS:
-            return
+            raise _FindingLimitReached
         if not isinstance(call, ast.Call):
             continue
         outbound = _outbound_argument(call, state)
@@ -715,7 +722,7 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
     """
     for stmt in body:
         if len(findings) >= _MAX_FINDINGS:
-            return
+            raise _FindingLimitReached
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
             _import(stmt, state)
         elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
@@ -776,27 +783,46 @@ def _has_route_declaration(body: list[ast.stmt]) -> bool:
     return False
 
 
-def scan_outbound_url(fileobj: BinaryIO) -> list[CheckFinding]:
+def scan_outbound_url(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
     findings: list[CheckFinding] = []
     with zipfile.ZipFile(fileobj) as archive:
-        count = 0
-        for info in archive.infolist():
-            if (not info.filename.endswith(".py") or info.is_dir() or info.file_size > _MAX_FILE_BYTES
-                    or is_non_production_path(info.filename) or is_dependency_path(info.filename)):
+        accounting = RuleCoverage(archive, extensions=(".py",),
+                                  max_file_bytes=_MAX_FILE_BYTES, coverage=coverage)
+        for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
+            raw = archive.read(info)
+            if b"@" not in raw:
+                accounting.analyzed()
                 continue
-            count += 1
-            if count > _MAX_FILES or len(findings) >= _MAX_FINDINGS:
-                break
             try:
-                raw = archive.read(info)
-                if b"@" not in raw:
-                    continue
-                tree = ast.parse(raw.decode("utf-8"))
-            except (SyntaxError, UnicodeError, ValueError, RecursionError):
+                source = raw.decode("utf-8")
+            except UnicodeError:
+                accounting.skip("decode_error")
                 continue
-            if not _has_route_declaration(tree.body) or not _bounded_tree(tree):
+            try:
+                tree = ast.parse(source)
+            except (SyntaxError, ValueError):
+                accounting.skip("parse_error")
                 continue
-            _scan_declarations(tree.body, _State(), info.filename, findings)
+            except RecursionError:
+                accounting.skip("ast_limit")
+                continue
+            if not _bounded_tree(tree):
+                accounting.skip("ast_limit")
+                continue
+            try:
+                with track_analysis_limits() as limits:
+                    if _has_route_declaration(tree.body):
+                        _scan_declarations(tree.body, _State(), info.filename, findings)
+            except _FindingLimitReached:
+                accounting.skip("finding_limit")
+            except RecursionError:
+                accounting.skip("ast_limit")
+            else:
+                if limits:
+                    accounting.skip("analysis_limit")
+                else:
+                    accounting.analyzed()
+        accounting.finish()
     return findings
 
 

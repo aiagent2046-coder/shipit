@@ -20,6 +20,7 @@ from app.scan.outbound_url import (
     _MAX_FILES,
     _MAX_FILE_BYTES,
     _MAX_FINDINGS,
+    _FindingLimitReached,
     _State,
     _bind,
     _bounded_tree,
@@ -30,8 +31,8 @@ from app.scan.outbound_url import (
     _skeleton,
     _walk,
 )
+from app.scan.rule_coverage import RuleCoverage, track_analysis_limits
 from app.scan.scope_statements import scope_statements
-from app.scan.secrets import is_dependency_path, is_non_production_path
 
 RULE_ID = "path-traversal-file-sink"
 _PATH_CLASSES = frozenset(f"pathlib.{name}" for name in
@@ -175,7 +176,7 @@ def _path_arguments(call: ast.Call, state: _PathState) -> list[ast.AST]:
 def _scan_expression(expr: ast.AST, state: _PathState, path: str, findings: list[CheckFinding]) -> None:
     for call in _walk(expr):
         if len(findings) >= _MAX_FINDINGS:
-            return
+            raise _FindingLimitReached
         if not isinstance(call, ast.Call):
             continue
         reaching = set()
@@ -271,7 +272,7 @@ def _import_path(stmt: ast.Import | ast.ImportFrom, state: _PathState) -> None:
 def _scan_block(body: list[ast.stmt], state: _PathState, path: str, findings: list[CheckFinding]) -> bool:
     for stmt in body:
         if len(findings) >= _MAX_FINDINGS:
-            return True
+            raise _FindingLimitReached
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind_path(ast.Name(id=stmt.name), None, state)
             continue
@@ -395,25 +396,45 @@ def _scan_scope(body: list[ast.stmt], inherited: _PathState, path: str, findings
                 _scan_scope(stmt.body, local, path, findings)
 
 
-def scan_path_traversal(fileobj: BinaryIO) -> list[CheckFinding]:
+def scan_path_traversal(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
     findings: list[CheckFinding] = []
     with zipfile.ZipFile(fileobj) as archive:
-        infos = [info for info in archive.infolist()
-                 if not info.is_dir() and info.filename.endswith(".py")
-                 and info.file_size <= _MAX_FILE_BYTES and not is_non_production_path(info.filename)
-                 and not is_dependency_path(info.filename)]
-        for info in infos[:_MAX_FILES]:
-            if len(findings) >= _MAX_FINDINGS:
-                break
-            try:
-                source = archive.read(info)
-                if b"@" not in source:
-                    continue
-                tree = ast.parse(source.decode("utf-8"))
-            except (SyntaxError, UnicodeError, ValueError, RecursionError):
+        accounting = RuleCoverage(archive, extensions=(".py",),
+                                  max_file_bytes=_MAX_FILE_BYTES, coverage=coverage)
+        for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
+            raw = archive.read(info)
+            if b"@" not in raw:
+                accounting.analyzed()
                 continue
-            if _bounded_tree(tree):
-                _scan_scope(tree.body, _PathState(), info.filename, findings)
+            try:
+                source = raw.decode("utf-8")
+            except UnicodeError:
+                accounting.skip("decode_error")
+                continue
+            try:
+                tree = ast.parse(source)
+            except (SyntaxError, ValueError):
+                accounting.skip("parse_error")
+                continue
+            except RecursionError:
+                accounting.skip("ast_limit")
+                continue
+            if not _bounded_tree(tree):
+                accounting.skip("ast_limit")
+                continue
+            try:
+                with track_analysis_limits() as limits:
+                    _scan_scope(tree.body, _PathState(), info.filename, findings)
+            except _FindingLimitReached:
+                accounting.skip("finding_limit")
+            except RecursionError:
+                accounting.skip("ast_limit")
+            else:
+                if limits:
+                    accounting.skip("analysis_limit")
+                else:
+                    accounting.analyzed()
+        accounting.finish()
     return findings
 
 

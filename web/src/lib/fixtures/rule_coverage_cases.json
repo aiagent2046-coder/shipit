@@ -1,0 +1,199 @@
+[
+  {
+    "name": "file budget and parser gaps",
+    "rule": "unsafe_deserialization",
+    "label": "Unsafe deserialization",
+    "record": {
+      "version": 1,
+      "files_total": 1200,
+      "eligible_files": 840,
+      "attempted_files": 400,
+      "analyzed_files": 398,
+      "excluded_files": 360,
+      "skipped_files": 442,
+      "exclusion_reasons": {
+        "dependency_tree": 350,
+        "non_production_path": 10
+      },
+      "skip_reasons": {
+        "file_limit": 440,
+        "decode_error": 1,
+        "ast_limit": 1
+      },
+      "partial": true
+    },
+    "summary": "398 of 840 eligible files analyzed; 400 attempted; 442 not fully analyzed; 360 excluded from 1200 archive files. Partial check.",
+    "exclusions": "test/example paths: 10, dependency directories: 350",
+    "skips": "file count limit: 440, decoding errors: 1, syntax-analysis budget: 1",
+    "notice": "Unsafe deserialization: 398 of 840 eligible files analyzed (file count limit: 440, decoding errors: 1, syntax-analysis budget: 1)."
+  },
+  {
+    "name": "dependencies do not create a partial result",
+    "rule": "outbound_url",
+    "label": "Outbound request URLs",
+    "record": {
+      "version": 1,
+      "files_total": 402,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 1,
+      "excluded_files": 401,
+      "skipped_files": 0,
+      "exclusion_reasons": {
+        "dependency_tree": 401
+      },
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "1 of 1 eligible files analyzed; 1 attempted; 0 not fully analyzed; 401 excluded from 402 archive files. No file-processing gaps recorded within this rule's scope.",
+    "exclusions": "dependency directories: 401",
+    "skips": "None recorded",
+    "notice": null
+  },
+  {
+    "name": "own oversized source remains eligible",
+    "rule": "path_traversal",
+    "label": "Filesystem paths",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 0,
+      "analyzed_files": 0,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "file_size_limit": 1
+      },
+      "partial": true
+    },
+    "summary": "0 of 1 eligible files analyzed; 0 attempted; 1 not fully analyzed; 0 excluded from 1 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "file size limit: 1",
+    "notice": "Filesystem paths: 0 of 1 eligible files analyzed (file size limit: 1)."
+  },
+  {
+    "name": "finding limit inside the only file",
+    "rule": "tls_verification",
+    "label": "TLS verification",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 0,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "finding_limit": 1
+      },
+      "partial": true
+    },
+    "summary": "0 of 1 eligible files analyzed; 1 attempted; 1 not fully analyzed; 0 excluded from 1 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "finding limit: 1",
+    "notice": "TLS verification: 0 of 1 eligible files analyzed (finding limit: 1)."
+  },
+  {
+    "name": "unsupported archive has no eligible files",
+    "rule": "tls_verification",
+    "label": "TLS verification",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 0,
+      "attempted_files": 0,
+      "analyzed_files": 0,
+      "excluded_files": 1,
+      "skipped_files": 0,
+      "exclusion_reasons": {
+        "unsupported_extension": 1
+      },
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "0 of 0 eligible files analyzed; 0 attempted; 0 not fully analyzed; 1 excluded from 1 archive files. No eligible files for this rule.",
+    "exclusions": "unsupported file types: 1",
+    "skips": "None recorded",
+    "notice": null
+  },
+  {
+    "name": "stored partial flag cannot hide a gap",
+    "rule": "outbound_url",
+    "label": "Outbound request URLs",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 0,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "parse_error": 1
+      },
+      "partial": false
+    },
+    "summary": "0 of 1 eligible files analyzed; 1 attempted; 1 not fully analyzed; 0 excluded from 1 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "syntax errors: 1",
+    "notice": "Outbound request URLs: 0 of 1 eligible files analyzed (syntax errors: 1)."
+  },
+  {
+    "name": "expression tracing exhausts its local budget",
+    "rule": "outbound_url",
+    "label": "Outbound request URLs",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 0,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "analysis_limit": 1
+      },
+      "partial": true
+    },
+    "summary": "0 of 1 eligible files analyzed; 1 attempted; 1 not fully analyzed; 0 excluded from 1 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "expression analysis limit: 1",
+    "notice": "Outbound request URLs: 0 of 1 eligible files analyzed (expression analysis limit: 1)."
+  },
+  {
+    "name": "older audit with no counters",
+    "rule": "tls_verification",
+    "label": "TLS verification",
+    "record": null,
+    "summary": "Not recorded for this audit",
+    "exclusions": null,
+    "skips": null,
+    "notice": null
+  },
+  {
+    "name": "inconsistent stored counters stay unknown",
+    "rule": "unsafe_deserialization",
+    "label": "Unsafe deserialization",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 2,
+      "excluded_files": 0,
+      "skipped_files": 0,
+      "exclusion_reasons": {},
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "Not recorded for this audit",
+    "exclusions": null,
+    "skips": null,
+    "notice": null
+  }
+]
