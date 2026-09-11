@@ -13,7 +13,7 @@ import zipfile
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
-from app.scan.secrets import is_non_production_path
+from app.scan.secrets import is_dependency_path, is_non_production_path
 from app.scan.tls_verification_js import js_evidence
 from app.scan.tls_verification_python import python_evidence
 
@@ -35,6 +35,7 @@ def scan_tls_verification(fileobj: BinaryIO) -> list[CheckFinding]:
             and info.file_size <= _MAX_FILE_BYTES
             and (info.filename.endswith(".py") or info.filename.endswith(_JS_FILE_SUFFIXES))
             and not is_non_production_path(info.filename)
+            and not is_dependency_path(info.filename)
         ]
         for info in infos[:_MAX_FILES]:
             if len(findings) >= _MAX_FINDINGS:

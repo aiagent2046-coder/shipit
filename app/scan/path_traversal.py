@@ -31,7 +31,7 @@ from app.scan.outbound_url import (
     _walk,
 )
 from app.scan.scope_statements import scope_statements
-from app.scan.secrets import is_non_production_path
+from app.scan.secrets import is_dependency_path, is_non_production_path
 
 RULE_ID = "path-traversal-file-sink"
 _PATH_CLASSES = frozenset(f"pathlib.{name}" for name in
@@ -400,7 +400,8 @@ def scan_path_traversal(fileobj: BinaryIO) -> list[CheckFinding]:
     with zipfile.ZipFile(fileobj) as archive:
         infos = [info for info in archive.infolist()
                  if not info.is_dir() and info.filename.endswith(".py")
-                 and info.file_size <= _MAX_FILE_BYTES and not is_non_production_path(info.filename)]
+                 and info.file_size <= _MAX_FILE_BYTES and not is_non_production_path(info.filename)
+                 and not is_dependency_path(info.filename)]
         for info in infos[:_MAX_FILES]:
             if len(findings) >= _MAX_FINDINGS:
                 break

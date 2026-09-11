@@ -185,7 +185,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # session cookies set without HttpOnly (Python calls, Django settings, Express,
 # a Next.js cookie store, express-session config, document.cookie) or with an
 # explicit SameSite=None. Reads Python and TS/JS; dependency trees excluded.
-AUDIT_ENGINE_VERSION = "2026-09-11-2"
+# 2026-09-11-3: exclude dependency trees before TLS, deserialization, outbound-URL
+# and path-traversal file budgets so bundled dependencies do not displace own code.
+AUDIT_ENGINE_VERSION = "2026-09-11-3"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

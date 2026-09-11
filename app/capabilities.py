@@ -198,7 +198,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         ("python-outbound-request-unvalidated-url",),
         "Known HTTP clients in locally declared FastAPI routes; "
         "at most 400 eligible Python files up to 400 KB each. Recognized test/example/documentation "
-        "paths are skipped, except migration paths; vendor and dependency trees are not excluded; "
+        "paths are skipped, except migration paths; vendor and dependency trees are excluded before the file limit; "
         "20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, "
         "32 findings total. Supported Request fields, locally declared Pydantic string fields, "
         "known-string strip(), URL expressions and preceding local "
@@ -212,7 +212,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "At most 400 Python and JS/TS files, each up to "
         "400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Recognized "
         "test/example/documentation paths are skipped, except migration paths; vendor and "
-        "dependency trees are not excluded. Local imports and "
+        "dependency trees are excluded before the file limit. Local imports and "
         "client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, "
         "Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and "
         "process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 "
@@ -227,7 +227,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         ("unsafe-deserialization",),
         "At most 400 Python files up to "
         "400 KB, 20,000 AST nodes and depth 100. Recognized test/example/documentation paths "
-        "are skipped, except migration paths; vendor and dependency trees are not excluded. "
+        "are skipped, except migration paths; vendor and dependency trees are excluded before the file limit. "
         "Import-resolved loads with lexical "
         "shadowing and stable outer bindings. Unsafe YAML classes must have confirmed "
         "library provenance; Base/Safe/Full loaders are silent. Marshal and missing "
@@ -243,7 +243,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         ("path-traversal-file-sink",),
         "Local FastAPI route handlers in parseable Python files up to "
         "400 KB; recognized test/example/documentation paths are skipped, except migration paths. "
-        "Vendor and dependency trees are not excluded. Imported file operations and proven pathlib receivers "
+        "At most 400 files and 32 findings; vendor and dependency trees are excluded before the file limit. "
+        "Imported file operations and proven pathlib receivers "
         "are traced "
         "locally with bounded expansion. Path construction alone is not a sink. "
         "Containment recognizes imported secure_filename results and a resolved Path "
