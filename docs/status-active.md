@@ -522,6 +522,11 @@ previous release running does not pass.
 
 ### Host provisioning — one-time, not part of a deploy
 
+Use the current [configuration requirements](configuration.md) and
+[backend template](../.env.example) when configuring a host. They distinguish
+production-required fields from integration-specific settings, including the
+database pepper, Telegram webhook secret and the separate sandbox-runner token.
+
 These set up **host** state, so they survive every release swap and
 `deploy-production.sh` does not run them. Both are needed once when a host is
 built (or rebuilt from scratch), and both are idempotent:
