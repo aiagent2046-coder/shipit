@@ -112,8 +112,11 @@ The test suite needs no cloud credentials. That is the honest local baseline.
 
 **Audits need a database.** Without `DATABASE_URL`, the API can start, but
 `POST /v1/audits` returns `503 {"reason": "queue_unavailable"}` — audits are
-queued jobs. Copy [`.env.example`](.env.example), set at least `DATABASE_URL`,
-then run migrations as documented in deploy docs.
+queued jobs. Copy [`.env.example`](.env.example), set `DATABASE_URL` and
+`API_KEY_PEPPER`, then run migrations as documented in deploy docs. For a local
+development server, set `ENVIRONMENT=development`; the template selects
+`production`. See [configuration requirements](docs/configuration.md) for the
+production and integration-specific fields.
 
 Optional: LLM keys, GitHub App, sandbox runner, `YOOKASSA_*`, SMTP / Telegram.
 Without LLM keys the scan degrades to static-only (`basis: static_only`) rather

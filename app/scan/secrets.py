@@ -537,7 +537,7 @@ RULES: tuple[SecretRule, ...] = (
         # `adminToken` but not in `tokenizer`. Verified against 8243 files
         # (web/src, app/, scripts/, 8000 from node_modules): 6 matches, of
         # which the scanner damps the test-file one and reports two throwaway
-        # container passwords in scripts/ that already carry a `# noqa: S105`
+        # container passwords in scripts/ that already carry an S105 suppression
         # from another linter -- so the new reach finds the class of thing it
         # is for. `encryption[_-]?key` is the one added word: nothing else in
         # the vocabulary covers it, and it cost 2 matches in that corpus, both

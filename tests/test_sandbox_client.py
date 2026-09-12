@@ -16,7 +16,7 @@ import pytest
 
 import app.sandbox_client as sc
 from app.fixpack.generate import FixpackPlan
-from app.fixpack.semantic_check import TestRunner
+from app.fixpack.semantic_check import TestRunner as SuiteRunner
 
 
 def _install(monkeypatch, handler):
@@ -182,7 +182,7 @@ def test_run_suite_marshals_runner_and_zip(monkeypatch):
         })
 
     _install(monkeypatch, handler)
-    runner = TestRunner(ecosystem="node", image="node:20",
+    runner = SuiteRunner(ecosystem="node", image="node:20",
                         install_script="npm ci", test_script="npm test")
     result = sc.run_suite(b"ZIPBYTES", runner)
 
@@ -246,7 +246,7 @@ def test_run_suite_returns_error_result_on_outage(monkeypatch):
         raise httpx.ConnectError("refused", request=request)
 
     _install(monkeypatch, handler)
-    runner = TestRunner(ecosystem="node", image="node:20",
+    runner = SuiteRunner(ecosystem="node", image="node:20",
                         install_script="npm ci", test_script="npm test")
     result = sc.run_suite(b"z", runner)
     # symmetric non-regression: error set, not an exception
@@ -270,7 +270,7 @@ def test_successful_results_are_not_flagged_unavailable(monkeypatch):
         "passed": 2, "failed": 1, "timed_out": False,
         "error": "dependency install failed (exit 1)",
     }))
-    runner = TestRunner(ecosystem="node", image="node:20",
+    runner = SuiteRunner(ecosystem="node", image="node:20",
                         install_script="npm ci", test_script="npm test")
     # An error the runner *reported* is not unavailability: the runner answered,
     # and the fact is about the client's repo.
@@ -284,7 +284,7 @@ def test_transport_error_after_retries_still_flags_unavailable(monkeypatch):
         raise httpx.ConnectError("refused", request=request)
 
     _install(monkeypatch, handler)
-    runner = TestRunner(ecosystem="node", image="node:20",
+    runner = SuiteRunner(ecosystem="node", image="node:20",
                         install_script="npm ci", test_script="npm test")
     # SandboxRunnerTransportError is a subclass, so the same handler must catch
     # it and set the flag -- otherwise the retryable case would fail open.
@@ -411,7 +411,7 @@ def test_run_suite_outage_result_reports_exhausted_retries(monkeypatch,
         raise httpx.ConnectError("refused", request=request)
 
     _install(monkeypatch, handler)
-    runner = TestRunner(ecosystem="node", image="node:20",
+    runner = SuiteRunner(ecosystem="node", image="node:20",
                         install_script="npm ci", test_script="npm test")
     result = sc.run_suite(b"z", runner)
     # unchanged degradation contract, now only after the retries are spent
