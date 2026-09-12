@@ -8,7 +8,7 @@ These records describe each rule's supported source analysis. They do not
 measure the coverage of all static rules or establish runtime safety.
 
 - `files_total`: non-directory entries in the submitted archive.
-- `excluded_files`: dependency trees, recognized non-production paths and
+- `excluded_files`: dependency trees, generated build directories, recognized non-production paths and
   unsupported extensions. `exclusion_reasons` records those counts separately.
 - `eligible_files`: supported application source before resource limits.
   Oversized application files remain in this denominator.
@@ -27,14 +27,31 @@ The counts satisfy `files_total = eligible_files + excluded_files` and
 `eligible_files = analyzed_files + skipped_files`. A finding can come from a
 partially analyzed file; its presence does not make that file complete.
 
-The 400-file and 32-finding limits remain in place. Dependencies are excluded
-before those budgets. Reaching a limit is shown above the findings in both
+The 400-file and 32-finding limits remain in place. Dependencies and build output
+are excluded before those budgets. Reaching a limit is shown above the findings in both
 HTML and web reports, including when these rules emit no findings. The scan
 record contains the per-rule counts and reasons; CLI JSON carries the same
 record. SARIF records it in invocation properties as `ruleCoverage`. Unknown
 source fields and exception text are excluded from this schema.
 
+Build directories `.next/`, `dist/` and `build/` are recognized as complete path
+segments at any depth, including inside a wrapped repository or a workspace.
+Their files are recorded as `generated_build`; dependencies take precedence
+when a path belongs to both categories. Build files never enter `eligible_files`,
+even when oversized or malformed. An archive containing only build output has
+zero eligible files, which establishes no coverage of application source.
+Names such as `builder/` or `distances/` remain eligible. The session-cookie
+check uses the same build exclusion before its file limit; its coverage is
+still outside this four-rule measurement.
+
+Secret scanning keeps its existing directory policy, including reading `vendor/`
+and `site-packages/`. A committed secret there still matters. Sharing path
+categories does not make every scanner exclude the same files.
+
 Older audits without these measurements show coverage as not recorded. Their
 counts are not reconstructed from archive size or another scanner's coverage.
 A scan engine version change prevents old cached results from being served as
 a newly measured scan.
+
+The scan engine version identifies analysis and cache behavior. Release tags
+identify deployed application builds; these are independent version series.

@@ -8,11 +8,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import zipfile
 
-from app.scan.secrets import is_dependency_path, is_non_production_path
+from app.scan.file_scope import is_dependency_path, is_generated_path
+from app.scan.secrets import is_non_production_path
 
 
 RULE_COVERAGE_KEYS = ("outbound_url", "tls_verification", "unsafe_deserialization", "path_traversal")
-EXCLUSION_REASONS = ("unsupported_extension", "non_production_path", "dependency_tree")
+EXCLUSION_REASONS = ("unsupported_extension", "non_production_path", "dependency_tree", "generated_build")
 SKIP_REASONS = (
     "file_size_limit", "file_limit", "finding_limit", "read_error", "decode_error", "parse_error", "ast_limit",
     "analysis_limit",
@@ -97,6 +98,8 @@ class RuleCoverage:
             self.files_total += 1
             if is_dependency_path(info.filename):
                 self.exclusions["dependency_tree"] += 1
+            elif is_generated_path(info.filename):
+                self.exclusions["generated_build"] += 1
             elif is_non_production_path(info.filename):
                 self.exclusions["non_production_path"] += 1
             elif not info.filename.endswith(extensions):

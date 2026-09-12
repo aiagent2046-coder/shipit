@@ -112,6 +112,7 @@ RULE_EXCLUSION_LABELS = {
     "unsupported_extension": "unsupported file types",
     "non_production_path": "test/example paths",
     "dependency_tree": "dependency directories",
+    "generated_build": "generated build directories",
 }
 RULE_SKIP_LABELS = {
     "file_size_limit": "file size limit",

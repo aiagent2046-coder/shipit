@@ -37,7 +37,8 @@ from typing import BinaryIO
 from app.scan.checks import CheckFinding
 from app.scan.cookie_flags_js import js_evidence
 from app.scan.cookie_flags_python import python_evidence
-from app.scan.secrets import is_dependency_path, is_non_production_path
+from app.scan.file_scope import is_dependency_path, is_generated_path
+from app.scan.secrets import is_non_production_path
 # The same file-type vocabulary the TLS rule reads, imported rather than copied:
 # two lists of "what counts as TypeScript" would drift, and the audience is the
 # same repositories.
@@ -61,6 +62,7 @@ def scan_cookie_flags(fileobj: BinaryIO) -> list[CheckFinding]:
             and (info.filename.endswith(".py") or info.filename.endswith(_JS_SUFFIXES))
             and not is_non_production_path(info.filename)
             and not is_dependency_path(info.filename)
+            and not is_generated_path(info.filename)
         ]
         for info in infos[:_MAX_FILES]:
             if len(findings) >= _MAX_FINDINGS:

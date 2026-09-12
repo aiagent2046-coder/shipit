@@ -24,10 +24,16 @@ from dataclasses import dataclass
 from typing import BinaryIO, Iterator
 
 from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
+from app.scan.file_scope import GENERATED_DIRECTORIES, is_dependency_path as is_dependency_path
 
 MAX_SCANNED_FILE_BYTES = 1 * 1024 * 1024  # skip huge files: minified bundles etc.
 
-_SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", "venv/", ".venv/")
+# Preserve the text scanner's existing exclusions. In particular, vendor and
+# site-packages remain readable for leaked secrets even though source rules
+# exclude them. Sharing path categories must not merge scanner policies.
+_SKIP_DIRS = tuple(f"{directory}/" for directory in (
+    "node_modules", ".git", *GENERATED_DIRECTORIES, "venv", ".venv",
+))
 _SKIP_SUFFIXES = (
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
     ".woff", ".woff2", ".ttf", ".eot", ".zip", ".gz", ".map",
@@ -318,22 +324,6 @@ def is_non_production_path(name: str) -> bool:
     if _is_migration_context(name):
         return False
     return _is_test_fixture_path(name) or _is_doc_context(name)
-
-
-# Vendored and dependency trees: code the repository did not write, and the
-# scanners that read source for a defect must not report on it. Measured, four
-# shipped scanners (tls_verification, unsafe_deserialization, path_traversal,
-# outbound_url) reported a defect planted under `node_modules/` and `vendor/`,
-# and two of them promise "non-test/vendor" in the coverage sentence they show a
-# customer. The route rules in auth_read/auth_write already carried this list
-# inline; it lives here now so the fifth copy is not written by hand.
-_DEPENDENCY_SEGMENTS = frozenset({"node_modules", "vendor", "venv", ".venv", "site-packages",
-                                 "bower_components", ".tox", ".nox"})
-
-
-def is_dependency_path(name: str) -> bool:
-    """True for a file inside a dependency or vendored tree."""
-    return any(segment in _DEPENDENCY_SEGMENTS for segment in name.replace("\\", "/").split("/"))
 
 
 def damp_for_non_production_path(
