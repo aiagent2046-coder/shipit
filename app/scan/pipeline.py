@@ -189,7 +189,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # and path-traversal file budgets so bundled dependencies do not displace own code.
 # 2026-09-11-4: persist actual bounded-rule file coverage, including incomplete
 # files, so old cached audits cannot stand in for a newly measured scan.
-AUDIT_ENGINE_VERSION = "2026-09-11-4"
+# 2026-09-12-1: exclude generated build output before bounded source and cookie
+# file budgets, recording generated_build separately from dependency trees.
+AUDIT_ENGINE_VERSION = "2026-09-12-1"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

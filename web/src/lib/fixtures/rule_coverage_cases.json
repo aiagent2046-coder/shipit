@@ -195,5 +195,76 @@
     "exclusions": null,
     "skips": null,
     "notice": null
+  },
+  {
+    "name": "build output does not consume source budget",
+    "rule": "tls_verification",
+    "label": "TLS verification",
+    "record": {
+      "version": 1,
+      "files_total": 501,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 1,
+      "excluded_files": 500,
+      "skipped_files": 0,
+      "exclusion_reasons": {
+        "generated_build": 500
+      },
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "1 of 1 eligible files analyzed; 1 attempted; 0 not fully analyzed; 500 excluded from 501 archive files. No file-processing gaps recorded within this rule's scope.",
+    "exclusions": "generated build directories: 500",
+    "skips": "None recorded",
+    "notice": null
+  },
+  {
+    "name": "build exclusion preserves own source partial coverage",
+    "rule": "tls_verification",
+    "label": "TLS verification",
+    "record": {
+      "version": 1,
+      "files_total": 1340,
+      "eligible_files": 840,
+      "attempted_files": 400,
+      "analyzed_files": 400,
+      "excluded_files": 500,
+      "skipped_files": 440,
+      "exclusion_reasons": {
+        "generated_build": 500
+      },
+      "skip_reasons": {
+        "file_limit": 440
+      },
+      "partial": true
+    },
+    "summary": "400 of 840 eligible files analyzed; 400 attempted; 440 not fully analyzed; 500 excluded from 1340 archive files. Partial check.",
+    "exclusions": "generated build directories: 500",
+    "skips": "file count limit: 440",
+    "notice": "TLS verification: 400 of 840 eligible files analyzed (file count limit: 440)."
+  },
+  {
+    "name": "build-only archive establishes no source coverage",
+    "rule": "tls_verification",
+    "label": "TLS verification",
+    "record": {
+      "version": 1,
+      "files_total": 500,
+      "eligible_files": 0,
+      "attempted_files": 0,
+      "analyzed_files": 0,
+      "excluded_files": 500,
+      "skipped_files": 0,
+      "exclusion_reasons": {
+        "generated_build": 500
+      },
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "0 of 0 eligible files analyzed; 0 attempted; 0 not fully analyzed; 500 excluded from 500 archive files. No eligible files for this rule.",
+    "exclusions": "generated build directories: 500",
+    "skips": "None recorded",
+    "notice": null
   }
 ]

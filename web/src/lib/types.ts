@@ -66,7 +66,7 @@ export interface StaticRuleCoverage {
   analyzed_files: number;
   excluded_files: number;
   skipped_files: number;
-  exclusion_reasons: Partial<Record<"unsupported_extension" | "non_production_path" | "dependency_tree", number>>;
+  exclusion_reasons: Partial<Record<"unsupported_extension" | "non_production_path" | "dependency_tree" | "generated_build", number>>;
   skip_reasons: Partial<Record<"file_size_limit" | "file_limit" | "finding_limit" | "read_error"
     | "decode_error" | "parse_error" | "ast_limit" | "analysis_limit", number>>;
   partial: boolean;
