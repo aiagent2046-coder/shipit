@@ -113,6 +113,11 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         "commit_sha": None,
         "inventory": inventory,
         "static_checks": static.get("checks_run", []),
+        # A check that raised is named here WITH its reason. The report must be
+        # able to say "this was not looked at", which is not the same as clean,
+        # and a shortened static_checks alone would read as "it ran and found
+        # nothing" (see the per-check isolation in app/scan/static.py).
+        "static_checks_not_run": static.get("checks_not_run", []),
         **sca_manifest_fields(sca),
         "static_limits": static.get("coverage", {}),
         "secrets_coverage": _file_counts(static.get("secrets_coverage")),

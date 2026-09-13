@@ -83,5 +83,21 @@ counts are not reconstructed from archive size or another scanner's coverage.
 A scan engine version change prevents old cached results from being served as
 a newly measured scan.
 
+## A check that fails is reported, not fatal
+
+One failing check no longer takes the scan with it, and it does not disappear
+either. `checks_run` shrinks by exactly that check, and `checks_not_run` names it
+with the exception TYPE only — never the message, which can quote the input and
+which travels into the report. The scan manifest carries the same list as
+`static_checks_not_run`, because a shortened `static_checks` with no companion
+would read as "it ran and found nothing". The coverage sentence for a check that
+did not run says so in words, and the error-boundary check reports its mount as
+undetermined rather than claiming no mount was seen.
+
+MEASURED 2026-09-13: before this, a single raising scanner killed the entire
+scan — every other finding went with it — on the server and in a browser build
+that lacked the TypeScript grammar (see
+`shipit-measurements/2026-09-13-browser-engine/RESULT_PARITY.md`).
+
 The scan engine version identifies analysis and cache behavior. Release tags
 identify deployed application builds; these are independent version series.

@@ -197,7 +197,12 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # the service-role rule reported a route compiled into .next/server/ as source.
 # 2026-09-13-2: preserve case-insensitive categories and conventional handler URL
 # segments such as app/api/build; an excluded prefix still marks a compiled copy.
-AUDIT_ENGINE_VERSION = "2026-09-13-2"
+# 2026-09-13-3: one failing check no longer takes the whole scan with it. The
+# check is reported as not run -- checks_run shrinks, checks_not_run names it with
+# the exception type -- instead of the stage raising and the customer getting no
+# report at all. MEASURED 2026-09-13: a single raising scanner killed every other
+# finding, server-side and in a browser build that lacked the TypeScript grammar.
+AUDIT_ENGINE_VERSION = "2026-09-13-3"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt
