@@ -1,0 +1,10 @@
+{
+  "description": "A one-time password drawn from random.randint is guessable.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

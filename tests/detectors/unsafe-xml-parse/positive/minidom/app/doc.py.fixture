@@ -1,0 +1,2 @@
+import xml.dom.minidom
+xml.dom.minidom.parseString(data)

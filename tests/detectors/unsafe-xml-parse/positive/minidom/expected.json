@@ -1,0 +1,10 @@
+{
+  "description": "xml.dom.minidom is not secure against maliciously constructed XML.",
+  "expect": [
+    {
+      "rule_id": "unsafe-xml-parse",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "xml.sax resolves external entities and is vulnerable to XXE.",
+  "expect": [
+    {
+      "rule_id": "unsafe-xml-parse",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

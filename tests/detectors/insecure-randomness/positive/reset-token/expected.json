@@ -1,0 +1,10 @@
+{
+  "description": "A password-reset token drawn from random.choice: the classic predictable reset link.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "A reset token drawn straight from Math.random.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

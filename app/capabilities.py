@@ -289,6 +289,33 @@ CAPABILITIES: tuple[Capability, ...] = (
         "not verified; textContent/innerText and setAttribute are not sinks.",
     ),
     Capability(
+        "insecure_randomness",
+        "A secret-looking value generated from a non-cryptographic random source",
+        ("insecure-randomness",),
+        "JavaScript/TypeScript and Python source read as text, at most 400 files up to 400 KB each, with "
+        "string literals and comments masked out; vendor, dependency trees and generated build "
+        "directories (.next, dist, build) are excluded before the file limit. A draw from Math.random or "
+        "Python's random module whose result lands in a secret-named variable (token, secret, password, "
+        "otp, reset, nonce, salt, credential, api key, confirmation, verification) is reported. The "
+        "security word must sit on the left of an assignment to the draw. crypto.getRandomValues, "
+        "secrets.* and random.SystemRandom are the secure sources and are not sinks; a bare randint(...) "
+        "from `from random import randint` is not read. Whether the value is actually used as a secret is "
+        "not verified.",
+    ),
+    Capability(
+        "unsafe_xml_parse",
+        "XML parsed without protection against external entities",
+        ("unsafe-xml-parse",),
+        "Python source, import-resolved like the deserialization rule, at most 400 files up to 400 KB each; "
+        "vendor, dependency trees and generated build directories (.next, dist, build) are excluded before "
+        "the file limit. A parse through lxml.etree or the stdlib xml.dom.minidom / xml.sax / "
+        "xml.dom.pulldom modules, which resolve external entities by default, is reported unless the lxml "
+        "call passes an inline parser=XMLParser(resolve_entities=False). xml.etree.ElementTree and "
+        "defusedxml are the safe alternatives and are not sinks. Cross-file resolution, conditional "
+        "imports and a parser object stored in a variable are not resolved. Whether the bytes are "
+        "attacker-controlled is not verified.",
+    ),
+    Capability(
         "session_cookie",
         "A session cookie set without the attributes that protect it",
         ("insecure-session-cookie-attributes",),

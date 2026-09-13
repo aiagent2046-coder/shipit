@@ -1,0 +1,7 @@
+{
+  "description": "No XML parse at all; the mutation adds an lxml parse, which must fire.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

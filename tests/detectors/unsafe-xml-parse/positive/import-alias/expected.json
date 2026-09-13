@@ -1,0 +1,10 @@
+{
+  "description": "An import alias is the same lxml call; provenance resolves through the import.",
+  "expect": [
+    {
+      "rule_id": "unsafe-xml-parse",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

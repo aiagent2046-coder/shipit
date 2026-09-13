@@ -1,0 +1,7 @@
+{
+  "description": "defusedxml is the hardened package and is not a sink; the mutation swaps in lxml, which must fire.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

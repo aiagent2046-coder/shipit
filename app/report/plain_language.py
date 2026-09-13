@@ -20,6 +20,26 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "unsafe-xml-parse": (
+        "XML is parsed without protection against external entities.",
+        "lxml and the stdlib minidom/sax/pulldom resolve external entities by default, so an "
+        "attacker-controlled XML document can read local files, probe the internal network or force a "
+        "billion-laughs expansion. Where the bytes come from has not been verified; trusted internal "
+        "data and untrusted external data can reach the same call.",
+        "Parse XML with xml.etree.ElementTree (which does not resolve external entities) or the "
+        "defusedxml package. For lxml, pass parser=etree.XMLParser(resolve_entities=False) and disable "
+        "network access. Never parse untrusted XML with minidom, sax or pulldom.",
+    ),
+    "insecure-randomness": (
+        "A secret-looking value is generated from a non-cryptographic random source.",
+        "A token, password, reset link, OTP or nonce is drawn from Math.random or Python's random "
+        "module. That source is predictable, so the value can be guessed or replayed -- the classic "
+        "account-takeover vector. Whether the value is actually used as a secret and whether anything "
+        "else re-randomizes it have not been verified.",
+        "Use a cryptographically secure source: crypto.getRandomValues in JS/TS, or Python's secrets "
+        "module (secrets.token_hex / secrets.token_urlsafe). Never derive a token, password, reset link, "
+        "OTP, nonce or salt from Math.random or the random module.",
+    ),
     "python-open-redirect-unvalidated-url": (
         "A redirect targets a URL whose authority comes from the caller.",
         "A redirect constructor sends the visitor's browser to an address whose host is built from the "

@@ -1,0 +1,10 @@
+{
+  "description": "lxml resolves external entities by default, so an attacker-controlled document can read local files.",
+  "expect": [
+    {
+      "rule_id": "unsafe-xml-parse",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

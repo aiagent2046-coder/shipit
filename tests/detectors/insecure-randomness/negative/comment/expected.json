@@ -1,0 +1,7 @@
+{
+  "description": "A draw spelled inside a comment is history, not code; the mutation uncomments it, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

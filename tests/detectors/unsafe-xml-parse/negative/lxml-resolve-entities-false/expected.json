@@ -1,0 +1,7 @@
+{
+  "description": "An inline parser with resolve_entities=False disables the external entity resolution; the mutation drops the parser, which must fire.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

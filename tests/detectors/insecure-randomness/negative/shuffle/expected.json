@@ -1,0 +1,7 @@
+{
+  "description": "A shuffle is not a secret draw; the mutation assigns the draw to a token name, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

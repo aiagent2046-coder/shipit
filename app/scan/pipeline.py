@@ -211,6 +211,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # innerHTML/outerHTML assignment, document.write and insertAdjacentHTML.
 # 2026-09-13-7: python-open-redirect-unvalidated-url, a redirect whose target
 # authority comes from the caller (Starlette/FastAPI RedirectResponse in routes).
+# 2026-09-13-8: insecure-randomness, a text scanner (no native grammar) that reads
+# a secret-named value drawn from a non-cryptographic source (Math.random / random).
+# 2026-09-13-9: unsafe-xml-parse, an import-resolved XXE rule: lxml and the stdlib
+# minidom/sax/pulldom resolve external entities by default.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
