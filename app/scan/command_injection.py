@@ -36,6 +36,7 @@ from app.scan.outbound_url import (
     _State,
     _bind,
     _bounded_tree,
+    _combine,
     _forget_stores,
     _import,
     _join_states,
@@ -198,6 +199,16 @@ def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[C
         elif isinstance(stmt, ast.AnnAssign):
             _bind(stmt.target, stmt.value, state)
         elif isinstance(stmt, ast.AugAssign):
+            # `cmd += host` is `cmd = cmd + host`: keep the accumulated string
+            # and its caller slots rather than dropping the provenance.
+            if isinstance(stmt.target, ast.Name) and isinstance(stmt.op, ast.Add):
+                old = _skeleton(stmt.target, state)
+                added = _skeleton(stmt.value, state)
+                if old is not None and added is not None:
+                    combined = _combine([old, added])
+                    if combined is not None:
+                        state.values[stmt.target.id] = combined
+                        continue
             _bind(stmt.target, None, state)
         elif isinstance(stmt, ast.Delete):
             for target in stmt.targets:
