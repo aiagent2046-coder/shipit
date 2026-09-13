@@ -142,12 +142,19 @@ def test_one_leading_slash_can_still_redirect_to_a_caller_host(expression):
     assert scan_open_redirect(archive(handler('    return RedirectResponse("/users/" + next)\n'))) == []
 
 
-@pytest.mark.parametrize("target", ["https://ours.com.evil.example", "https://ours.com@evil.example"])
-def test_prefix_allowlist_accepts_a_different_host_and_must_not_suppress(target):
+@pytest.mark.parametrize(("target", "destination_host"), [
+    ("https://ours.com.evil.example", "ours.com.evil.example"),
+    ("https://ours.com@evil.example", "evil.example"),
+])
+def test_prefix_allowlist_accepts_a_different_host_and_must_not_suppress(target, destination_host):
     from urllib.parse import urlsplit
+    from starlette.responses import RedirectResponse
 
-    assert target.startswith("https://ours.com")
-    assert urlsplit(target).hostname != "ours.com"
+    # The unsafe prefix guard is scanner input below; the runtime oracle checks
+    # where Starlette actually sends these concrete lookalike destinations.
+    response = RedirectResponse(target)
+    assert urlsplit(response.headers["location"]).hostname == destination_host
+    assert destination_host != "ours.com"
     source = handler('    if next.startswith("https://ours.com"):\n'
                      '        return RedirectResponse(next)\n    raise ValueError()\n')
     assert len(scan_open_redirect(archive(source))) == 1
