@@ -23,7 +23,7 @@
     </header>
     <main id="main" class="page">
       <section class="intro" aria-labelledby="page-title">
-        <div class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Browser preview · partial coverage</div>
+        <div class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Browser preview · local static analysis</div>
         <h1 id="page-title">Your source code.<br /><span>On your device.</span></h1>
         <p class="lead">Check a project ZIP with the browser preview’s supported static patterns. Review the findings, see exactly what ran, and take the report with you.</p>
         <p class="privacy-note">All analysis runs locally. Your code stays on your device. The scanner and its runtime need an initial internet download.</p>
@@ -47,7 +47,7 @@
 
       <aside class="scope" aria-labelledby="scope-title">
         <h2 id="scope-title">Preview coverage is limited</h2>
-        <p>This preview runs a subset of the Drydock engine. Checks requiring native libraries are unavailable. No runtime tests, dependency advisory scan, or LLM analysis. Supported source patterns can identify issues to investigate; they cannot establish that an application is secure.</p>
+        <p>This preview runs the Drydock static engine locally, including JavaScript, TypeScript and SQL parsers. Any check that cannot load is listed in the report. No runtime tests, dependency advisory scan, or LLM analysis. Supported source patterns can identify issues to investigate; they cannot establish that an application is secure.</p>
       </aside>
 
       <section id="results" class="results" aria-labelledby="results-title" hidden>

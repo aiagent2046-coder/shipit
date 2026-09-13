@@ -1,5 +1,5 @@
 import { loadPyodide } from './runtime/pyodide.mjs';
-import { installEngine, scanBytes } from './runtime.js';
+import { installEngine, loadNativeParsers, scanBytes } from './runtime.js';
 
 let started = false;
 self.onmessage = async ({ data }) => {
@@ -18,6 +18,7 @@ self.onmessage = async ({ data }) => {
         stdout: () => {}, stderr: () => {} }),
     ]);
     await pyodide.loadPackage('pyyaml');
+    const nativeFailures = await loadNativeParsers(pyodide);
     await installEngine(pyodide, files);
     // All assets have loaded. Close network APIs before any customer bytes
     // enter Python. CSP adds an independent same-origin boundary in hosting.
@@ -31,7 +32,7 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ type: 'error', code: result.error });
       return;
     }
-    result.report.runtime = build;
+    result.report.runtime = { ...build, native_load_failures: nativeFailures };
     self.postMessage({ type: 'result', ...result });
   } catch {
     // Parser exceptions may contain source or secrets. Only stable codes cross

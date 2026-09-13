@@ -1,4 +1,21 @@
 // Shared by the worker and the reproducible WASM parity harness.
+export async function loadNativeParsers(pyodide) {
+  const failures = [];
+  for (const name of ['tree-sitter', 'tree-sitter-typescript', 'tree-sitter-javascript', 'pglast']) {
+    try {
+      await pyodide.loadPackage(name);
+      // loadPackage can report download errors through its callback rather
+      // than reject. Confirm installation before recording a successful load.
+      if (!pyodide.loadedPackages[name]) throw new Error('Package not installed');
+    } catch {
+      // A missing/corrupt native asset must not erase the pure-Python results.
+      // Imports in the shared engine decide which dependent checks cannot run.
+      failures.push({ package: name, reason: 'native_package_load_failed' });
+    }
+  }
+  return failures;
+}
+
 export async function installEngine(pyodide, files) {
   for (const [path, source] of Object.entries(files)) {
     if (!/^app\/[a-zA-Z0-9_/]+\.py$/.test(path)) throw new Error('Invalid engine bundle');

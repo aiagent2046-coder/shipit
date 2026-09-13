@@ -11,6 +11,10 @@ const out = resolve(process.argv[2] || join(root, 'browser/dist'));
 const runtime = join(root, 'browser/node_modules/pyodide');
 const version = JSON.parse(await readFile(join(runtime, 'package.json'))).version;
 const lock = JSON.parse(await readFile(join(runtime, 'pyodide-lock.json')));
+const native = JSON.parse(await readFile(join(root, 'browser/native/manifest.json')));
+if (native.pyodide !== version || native.python !== lock.info.python || native.abi !== lock.info.abi_version) {
+  throw new Error('Native parser ABI does not match the pinned Pyodide runtime');
+}
 await mkdir(join(out, 'runtime'), { recursive: true });
 for (const name of ['pyodide.mjs', 'pyodide.asm.mjs', 'pyodide.asm.wasm',
                     'python_stdlib.zip', 'pyodide-lock.json']) {
@@ -29,6 +33,19 @@ if (!cached || createHash('sha256').update(cached).digest('hex') !== yaml.sha256
 if (createHash('sha256').update(await readFile(wheel)).digest('hex') !== yaml.sha256) {
   throw new Error('PyYAML wheel integrity mismatch');
 }
+for (const pkg of native.packages) {
+  const data = await readFile(join(root, 'browser/native', pkg.file_name));
+  if (createHash('sha256').update(data).digest('hex') !== pkg.sha256) {
+    throw new Error(`Native wheel integrity mismatch: ${pkg.name}`);
+  }
+  await writeFile(join(out, 'runtime', pkg.file_name), data);
+  lock.packages[pkg.name] = {
+    name: pkg.name, version: pkg.version, file_name: pkg.file_name, sha256: pkg.sha256,
+    imports: [pkg.name.replaceAll('-', '_')], depends: [], install_dir: 'site',
+    package_type: 'package', unvendored_tests: false,
+  };
+}
+await writeFile(join(out, 'runtime/pyodide-lock.json'), JSON.stringify(lock));
 
 const files = {};
 // Never ship provider clients, the API, billing, or the orchestration pipeline.
@@ -44,13 +61,15 @@ const bundle = JSON.stringify(files);
 await writeFile(join(out, 'engine-files.json'), bundle);
 await cp(join(root, 'LICENSE'), join(out, 'LICENSE.txt'));
 await cp(join(root, 'browser/THIRD_PARTY_NOTICES.md'), join(out, 'THIRD_PARTY_NOTICES.txt'));
+await cp(join(root, 'browser/native/manifest.json'), join(out, 'native-manifest.json'));
+await cp(join(root, 'browser/native/licenses'), join(out, 'licenses'), { recursive: true });
 for (const name of ['index.html', 'app.js', 'styles.css', 'worker.js', 'runtime.js']) {
   await cp(join(root, 'browser/src', name), join(out, name));
 }
 const manifest = {
-  profile: 'python-browser-preview', pyodide: version,
+  profile: 'python-browser-native', pyodide: version,
   python: lock.info.python, engine_sha256: createHash('sha256').update(bundle).digest('hex'),
-  native_parsers: { tree_sitter: 'unavailable', pglast: 'unavailable' },
+  native_parsers: Object.fromEntries(native.packages.map(p => [p.name, p.version])),
 };
 await writeFile(join(out, 'build.json'), JSON.stringify(manifest, null, 2) + '\n');
 let bytes = 0;

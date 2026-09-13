@@ -1,4 +1,4 @@
-# Drydock browser scanner — partial preview
+# Drydock browser scanner — local static preview
 
 Select a local ZIP, run deterministic source checks in a Web Worker, and export
 JSON or SARIF. No account, audit API, model provider, or customer-code execution.
@@ -8,25 +8,25 @@ does not claim installable-PWA or guaranteed offline-reload support.
 ## Measured scope
 
 Pinned runtime: Pyodide 314.0.6 / Python 3.14.2 / PyYAML 6.0.3.
-The same reviewed Python detectors run here, with genuinely unavailable native
-packages; no empty-result parser stubs or regular-expression replacements.
+The same reviewed Python detectors run here with real native parser extensions
+cross-compiled to WASM. No empty-result stubs or substitute JS adapters.
 
-| Scope | First preview |
+| Scope | Native parser preview |
 | --- | --- |
-| Completed top-level checks | 13 of 17 |
-| Unavailable checks | `sql_injection_js`, `tls_verification`, `session_cookie`, `http_success` |
-| Findings matching the full native stage | 209 of 251 corpus cases |
-| Cases with missing findings | 42 of 251; gaps remain explicit |
-| Match to the same partial profile in CPython | Required for all 251 reports, including SARIF and coverage |
-| Runtime assets before HTTP compression | 13,637,815 bytes |
-| Python engine bundle | Approximately 1.35 MB before HTTP compression |
+| Completed top-level checks | 17 of 17 when all assets load |
+| Full CPython report and SARIF parity | 251 of 251 corpus cases |
+| Golden finding expectations | 251 of 251 corpus cases |
+| Parser probes | TS, TSX, JS and PostgreSQL AST, Unicode offsets and parse errors |
+| Runtime assets before HTTP compression | 14,674,647 bytes |
+| Python engine bundle | 1,353,167 bytes before HTTP compression |
 
 This is reviewed example coverage, **not recall on arbitrary repositories**.
-Negative fixtures do not turn unavailable checks into tested capabilities.
-Some unavailable aggregate checks include Python rules too: this preview does
-not claim Python TLS/cookie support just because Python itself runs.
-Recommendation hints are withheld when their prerequisite parser cannot load.
-The report explains this; SARIF cannot silently restore dictionary advice.
+The parser packages add 1,042,834 bytes of compressed wheels. All four previously
+unavailable checks are restored: `sql_injection_js`, `tls_verification`,
+`session_cookie` and `http_success`. Recommendation guard logic also runs.
+If a native asset fails to load, available checks still run and the report lists
+the gaps; incomplete SARIF reports use `executionSuccessful: false`. The CI
+suite blocks native wheel downloads to exercise that failure mode in Chromium.
 
 The preview does not run repository tests, query dependency advisories, check a
 live database, or prove runtime exploitability. It exposes no readiness score.
@@ -50,7 +50,8 @@ the existing Next.js site: its prebuild generates `web/public/scanner` and the
 preview is available at `/scanner/index.html`. Do not publish `test-dist`:
 it contains synthetic corpus sources and test harnesses, not product assets.
 
-All runtime assets are copied into the build. PyYAML is downloaded **at build
+All runtime assets are copied into the build. The four vendored native wheels
+are verified against `native/manifest.json`, including runtime ABI. PyYAML is downloaded **at build
 time** from the runtime's pinned catalog and SHA-256 verified. The browser makes
 only same-origin asset GETs; no source values enter request bodies or URLs.
 After initialization the production worker disables fetch/XHR/WebSocket before
@@ -76,18 +77,22 @@ cases, valid and invalid ZIPs, cancellation, exports, mobile overflow, and a
 network trace. Artifacts include per-case parity, screenshots and exported SARIF
 validated with the canonical schema and `FormatChecker`.
 
-## Next portability gate
+## Native wheel provenance and rebuilding
 
-The pinned Python packages `tree-sitter==0.26.0`, its JS/TS grammars and
-`pglast==7.7` have no published Pyodide wheels as checked on 2026-09-13. Prefer
-cross-building their source distributions against one pinned Pyodide ABI.
-Pglast's nested `libpg_query` make must use the Emscripten compiler and archive
-tools, not a host-native static library.
+See [native/README.md](native/README.md) for the exact compiler/runtime, source
+archive hashes, TypeScript header supplement and rebuild command. The static
+web build uses the reviewed wheels; it does not install a C compiler or run
+customer build scripts. `native-manifest.json` and `licenses/` ship alongside
+the application. Parser versions match the server pins:
+`tree-sitter==0.26.0`, `tree-sitter-typescript==0.23.2`,
+`tree-sitter-javascript==0.25.0`, `pglast==7.7`.
 
-Alternatively, published npm TS/TSX/JS grammars work with `web-tree-sitter`, and
-`@libpg-query/parser` has WASM parse/scan APIs. An adapter needs real node/AST
-compatibility and offset tests: web Tree-sitter indices are UTF-16, while our
-Python scanners slice UTF-8 bytes. Non-ASCII, astral characters, comments,
-multistatement SQL and error locations must match before enabling these checks.
-The next gate is restoring all four checks with full findings/coverage parity;
-adding new rule classes comes after that measurement.
+`parser_probes.py` runs unchanged in CPython and WASM. Comparisons cover UTF-8
+byte spans, TS/TSX/JS child fields, SQL AST node types and values, SQL scanner
+character offsets and malformed SQL. The corpus gate compares entire reports,
+including advice, coverage and SARIF, against the native profile. Chromium also
+runs those probes under the production worker CSP with no network during scans.
+
+The next coverage expansion should add rule classes and their positive/negative
+fixtures to the shared engine, keeping this full parity gate. Restoring existing
+checks does not itself add new defect classes or repository-test execution.

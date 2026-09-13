@@ -9,9 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-# A second fresh process supplies native-Python expectations for the exact
-# partial browser profile. This catches losses within supported checks, while
-# the fully installed profile quantifies the explicitly missing capabilities.
+# A fresh process supplies the partial profile for the asset-failure test.
+# Normal WASM corpus comparisons use the fully installed native profile.
 if "--portable" in sys.argv:
     class NoNative(importlib.abc.MetaPathFinder):
         def find_spec(self, fullname, path=None, target=None):
@@ -24,6 +23,7 @@ if "--portable" in sys.argv:
 
 from app.scan.browser import scan_archive  # noqa: E402
 from tests.detectors.conftest import build_archive, discover_cases, load_expected  # noqa: E402
+from parser_probes import probe_parsers  # noqa: E402
 
 
 def main():
@@ -44,6 +44,8 @@ def main():
     out = Path(sys.argv[1])
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(cases))
+    (out.parent / 'parser-probes.json').write_text(json.dumps(probe_parsers()))
+    (out.parent / 'parser-probes.py').write_text((Path(__file__).parent / 'parser_probes.py').read_text())
     print(f"Wrote {len(cases)} native corpus expectations to {out}")
 
 

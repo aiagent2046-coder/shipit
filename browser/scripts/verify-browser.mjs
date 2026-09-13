@@ -30,8 +30,11 @@ try {
   await writeFile(resolve(output, 'chromium-parity.json'), JSON.stringify(measured, null, 2));
   assert.equal(measured.summary?.unexpected_failures, 0, 'Chromium corpus parity failed');
   assert.equal(measured.summary.cases, 251);
-  assert.equal(measured.summary.expectation_passed, 209, 'Update measured scope explicitly when changing support');
-  assert.equal(measured.summary.full_parity, false);
+  assert.equal(measured.summary.expectation_passed, 251, 'Update measured scope explicitly when changing support');
+  assert.equal(measured.summary.full_parity, true);
+
+  assert.equal(measured.summary.parser_probes, 'passed');
+  assert.equal(measured.summary.supported_checks, 17);
 
   const cases = JSON.parse(await readFile(resolve(root, 'test-dist/cases.json')));
   const item = cases.find(c => c.rule === 'stripe-live-key' && c.polarity === 'positive');
@@ -41,8 +44,8 @@ try {
   await page.getByLabel('Project ZIP', { exact: true }).setInputFiles(input);
   await page.getByRole('button', { name: 'Scan locally' }).click();
   await page.locator('#results').waitFor({ state: 'visible', timeout: 120_000 });
-  assert.equal(await page.locator('#checks-not-run li').count(), 4);
-  assert.equal(await page.locator('#checks-run li').count(), 13);
+  assert.equal(await page.locator('#checks-not-run li').count(), 0);
+  assert.equal(await page.locator('#checks-run li').count(), 17);
   assert.match(await page.locator('#findings').innerText(), /Stripe/);
   await page.screenshot({ path: resolve(output, 'scanner-desktop.png'), fullPage: true });
 
@@ -53,11 +56,11 @@ try {
     await download.saveAs(resolve(output, name));
   }
   const report = JSON.parse(await readFile(resolve(output, 'report.json')));
-  assert.equal(report.checks_not_run.length, 4);
+  assert.equal(report.checks_not_run.length, 0);
   assert.ok(report.findings.some(f => f.rule_id === 'stripe-live-key'));
   assert.equal('score' in report, false);
   const sarif = JSON.parse(await readFile(resolve(output, 'report.sarif')));
-  assert.equal(sarif.runs[0].invocations[0].executionSuccessful, false);
+  assert.equal(sarif.runs[0].invocations[0].executionSuccessful, true);
   assert.equal(sarif.runs[0].results.length, report.findings.length);
 
   // Cancel an actual new worker, then scan an invalid archive. Old results must
@@ -78,6 +81,37 @@ try {
   assert.ok(requests.every(r => r.method === 'GET' && r.url.startsWith(base + '/') && !r.url.includes('?')),
     'Unexpected network request; source must never enter a request');
   await writeFile(resolve(output, 'network.json'), JSON.stringify(requests, null, 2));
+  // A missing native asset must preserve useful findings and explicitly mark
+  // incomplete coverage. A fresh context avoids a previously cached wheel.
+  const degraded = await browser.newContext();
+  await degraded.route('**/*', route => {
+    const r = route.request();
+    if (!r.url().startsWith(base + '/') || r.method() !== 'GET') return route.abort();
+    if (/\/(tree_sitter[^/]*|pglast[^/]*)\.whl$/.test(r.url())) return route.abort();
+    return route.continue();
+  });
+  const fallback = await degraded.newPage();
+  await fallback.goto(base + '/index.html');
+  await fallback.getByLabel('Project ZIP', { exact: true }).setInputFiles(input);
+  await fallback.getByRole('button', { name: 'Scan locally' }).click();
+  await fallback.locator('#results').waitFor({ state: 'visible', timeout: 120_000 });
+  assert.equal(await fallback.locator('#checks-not-run li').count(), 4);
+  assert.equal(await fallback.locator('#checks-run li').count(), 13);
+  assert.match(await fallback.locator('#findings').innerText(), /Stripe/);
+  assert.equal(await fallback.locator('#partial-coverage').isVisible(), true);
+  const fallbackDownload = fallback.waitForEvent('download');
+  await fallback.getByRole('button', { name: 'Export SARIF' }).click();
+  await (await fallbackDownload).saveAs(resolve(output, 'degraded.sarif'));
+  const incomplete = JSON.parse(await readFile(resolve(output, 'degraded.sarif')));
+  assert.equal(incomplete.runs[0].invocations[0].executionSuccessful, false);
+  const fallbackJson = fallback.waitForEvent('download');
+  await fallback.getByRole('button', { name: 'Export JSON' }).click();
+  await (await fallbackJson).saveAs(resolve(output, 'degraded.json'));
+  const partialReport = JSON.parse(await readFile(resolve(output, 'degraded.json')));
+  assert.equal(partialReport.runtime.native_load_failures.length, 4);
+  delete partialReport.runtime;
+  assert.deepEqual({ report: partialReport, sarif: incomplete }, item.portable);
+  await degraded.close();
   console.log(JSON.stringify({ ...measured.summary, ui: 'passed', exports: 'passed', network: 'same-origin GET assets only' }));
 } finally {
   await browser.close();
