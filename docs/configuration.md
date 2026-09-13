@@ -30,13 +30,30 @@ or product feature is not currently used.
 
 | Integration | Configuration and condition |
 | --- | --- |
-| AITunnel | Set `AITUNNEL_API_KEY` and `AITUNNEL_BASE_URL` together. With a base URL, production validation also requires `AITUNNEL_LLM_MODEL` or `LLM_MODEL`. Use that provider's model names; configure the preview model separately. Model names are exact and the punctuation differs per provider: MEASURED 2026-09-13, AITunnel lists `claude-haiku-4.5` and `claude-sonnet-4.6` (DOTS) while the code defaults spell them with dashes (`claude-haiku-4-5`), so a deployment that leaves the preview model at its default answers 400 on every preview — set `FREE_TIER_LLM_MODEL_AITUNNEL` from the provider's own list. Without any configured LLM provider, audits are static-only. |
+| AITunnel | Set `AITUNNEL_API_KEY` and `AITUNNEL_BASE_URL` together. With a base URL, production validation also requires `AITUNNEL_LLM_MODEL` or `LLM_MODEL`. Use that provider's model identifiers; configure the preview model separately with `FREE_TIER_LLM_MODEL_AITUNNEL` or `FREE_TIER_LLM_MODEL`. Without any configured LLM provider, audits are static-only. |
 | Telegram alerts | `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_CHAT_ID` enable operator notifications. Outbound alerts alone do not need a webhook secret. |
 | Incoming Telegram updates | `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` are required; otherwise the webhook returns 503. The secret must match `secret_token` passed to Telegram `setWebhook`. The operator chat id is separately checked before a payment-confirmation callback can act. |
 | Manual bank transfer | Populate all six `BANK_TRANSFER_` bank-detail fields from the template. The runtime treats an incomplete set as unconfigured. Production validation requires the Telegram bot token, operator chat id and webhook secret whenever `BANK_TRANSFER_CARD` or `BANK_TRANSFER_ACCOUNT` is populated. |
 | YooKassa card checkout | Set `YOOKASSA_SHOP_ID` and `YOOKASSA_SECRET_KEY` together, or leave both empty. A half-configured pair fails production validation; without the pair card checkout returns 503. A `test_` key is reported as a warning and does not collect real payments. |
 | Sandbox runner | Set the same `SANDBOX_RUNNER_TOKEN` in the backend env and `/opt/shipit-runner/.env.runner`. Required for sandbox-backed verification and preview operations. A runner without its token returns 503; a configured runner rejects a missing or mismatched client token with 401. This is an operation requirement, not a check performed by the production env validator. |
 | SMTP | Set `SMTP_HOST` and `SMTP_FROM` together. Set both `SMTP_USERNAME` and `SMTP_PASSWORD`, or neither for a relay that needs no credentials. Production validation rejects incomplete pairs. Without the host/from pair, no email is sent. |
+
+Model identifiers are exact and punctuation can differ by provider. AITunnel's
+API examples use [`claude-haiku-4.5`](https://aitunnel.ru/models/claude-haiku-4-5)
+and [`claude-sonnet-4.6`](https://aitunnel.ru/models/claude-sonnet-4-6). Copy the
+request identifier from the provider's catalog, not the spelling in a page URL.
+
+For an AITunnel preview, a nonblank `FREE_TIER_LLM_MODEL_AITUNNEL` takes
+precedence over `FREE_TIER_LLM_MODEL`. When the per-provider override is blank
+and the shared variable is absent, the code uses `claude-haiku-4-5`.
+The shipped `.env.example` already sets `FREE_TIER_LLM_MODEL=claude-haiku-4.5`;
+leaving only the per-provider override blank does not select the code default.
+The paid stage reads a nonempty `AITUNNEL_LLM_MODEL` first, falling back to
+`LLM_MODEL`; neither variable selects the preview model. An unsupported
+identifier can cause the provider's LLM request to fail; if no configured
+fallback succeeds, the pipeline records that failure and retains static
+findings. This does not imply that Drydock's own preview endpoint returns
+HTTP 400.
 
 The runner has a [separate minimal template](../deploy/sandbox-runner/env.runner.example)
 and [installation instructions](../deploy/sandbox-runner/README.md). Share only
