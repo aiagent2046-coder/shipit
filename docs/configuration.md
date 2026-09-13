@@ -30,13 +30,30 @@ or product feature is not currently used.
 
 | Integration | Configuration and condition |
 | --- | --- |
-| AITunnel | Set `AITUNNEL_API_KEY` and `AITUNNEL_BASE_URL` together. With a base URL, production validation also requires `AITUNNEL_LLM_MODEL` or `LLM_MODEL`. Use that provider's model names; configure the preview model separately. Without any configured LLM provider, audits are static-only. |
+| AITunnel | Set `AITUNNEL_API_KEY` and `AITUNNEL_BASE_URL` together. With a base URL, production validation also requires `AITUNNEL_LLM_MODEL` or `LLM_MODEL`. Use that provider's model identifiers; configure the preview model separately with `FREE_TIER_LLM_MODEL_AITUNNEL` or `FREE_TIER_LLM_MODEL`. Without any configured LLM provider, audits are static-only. |
 | Telegram alerts | `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_CHAT_ID` enable operator notifications. Outbound alerts alone do not need a webhook secret. |
 | Incoming Telegram updates | `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` are required; otherwise the webhook returns 503. The secret must match `secret_token` passed to Telegram `setWebhook`. The operator chat id is separately checked before a payment-confirmation callback can act. |
 | Manual bank transfer | Populate all six `BANK_TRANSFER_` bank-detail fields from the template. The runtime treats an incomplete set as unconfigured. Production validation requires the Telegram bot token, operator chat id and webhook secret whenever `BANK_TRANSFER_CARD` or `BANK_TRANSFER_ACCOUNT` is populated. |
 | YooKassa card checkout | Set `YOOKASSA_SHOP_ID` and `YOOKASSA_SECRET_KEY` together, or leave both empty. A half-configured pair fails production validation; without the pair card checkout returns 503. A `test_` key is reported as a warning and does not collect real payments. |
 | Sandbox runner | Set the same `SANDBOX_RUNNER_TOKEN` in the backend env and `/opt/shipit-runner/.env.runner`. Required for sandbox-backed verification and preview operations. A runner without its token returns 503; a configured runner rejects a missing or mismatched client token with 401. This is an operation requirement, not a check performed by the production env validator. |
 | SMTP | Set `SMTP_HOST` and `SMTP_FROM` together. Set both `SMTP_USERNAME` and `SMTP_PASSWORD`, or neither for a relay that needs no credentials. Production validation rejects incomplete pairs. Without the host/from pair, no email is sent. |
+
+Model identifiers are exact and punctuation can differ by provider. AITunnel's
+API examples use [`claude-haiku-4.5`](https://aitunnel.ru/models/claude-haiku-4-5)
+and [`claude-sonnet-4.6`](https://aitunnel.ru/models/claude-sonnet-4-6). Copy the
+request identifier from the provider's catalog, not the spelling in a page URL.
+
+For an AITunnel preview, a nonblank `FREE_TIER_LLM_MODEL_AITUNNEL` takes
+precedence over `FREE_TIER_LLM_MODEL`. When the per-provider override is blank
+and the shared variable is absent, the code uses `claude-haiku-4-5`.
+The shipped `.env.example` already sets `FREE_TIER_LLM_MODEL=claude-haiku-4.5`;
+leaving only the per-provider override blank does not select the code default.
+The paid stage reads a nonempty `AITUNNEL_LLM_MODEL` first, falling back to
+`LLM_MODEL`; neither variable selects the preview model. An unsupported
+identifier can cause the provider's LLM request to fail; if no configured
+fallback succeeds, the pipeline records that failure and retains static
+findings. This does not imply that Drydock's own preview endpoint returns
+HTTP 400.
 
 The runner has a [separate minimal template](../deploy/sandbox-runner/env.runner.example)
 and [installation instructions](../deploy/sandbox-runner/README.md). Share only
@@ -73,7 +90,57 @@ variables.
 
 ```bash
 python3 deploy/scripts/validate-production-env.py --env-file /opt/shipit/.env
+/srv/shipit/current/.venv/bin/python scripts/verify_llm_provider.py --env /opt/shipit/.env
 ```
+
+Run these from the release directory (`/srv/shipit/current` on the standard
+host); for a local checkout use its `.venv/bin/python` instead. The validator
+checks configuration shape. The provider check uses only the selected file,
+with the same quote parsing; shell exports cannot fill missing values or
+replace its models/keys. `--process-env` explicitly selects exported settings
+instead, and cannot be combined with `--env`.
+
+The provider check prints the fallback chain and both paid/preview model names,
+then checks each provider's authenticated model catalog. It uses the provider's
+own protocol, including [Anthropic pagination](https://platform.claude.com/docs/en/api/models/list).
+For AITunnel, the authenticated `/v1/models` endpoint is distinct from its
+[public model/pricing catalog](https://aitunnel.ru/docs/models). An identifier
+missing from a catalog is reported as unconfirmed; this alone does not prove
+that a completion request would return HTTP 400. Anthropic aliases absent from
+its listing are additionally checked with the official
+[get-model endpoint](https://platform.claude.com/docs/en/api/models/retrieve);
+other providers' unlisted aliases remain unconfirmed. Catalog success does not
+test generation, balance or audit quality.
+
+Generation is a separate, **potentially billed** opt-in:
+
+```bash
+/srv/shipit/current/.venv/bin/python scripts/verify_llm_provider.py --env /opt/shipit/.env --probe
+```
+
+Each catalog-confirmed provider/model gets one attempt through `LLMClient`'s
+actual payload and nonempty-answer parser, without automatic retries or fallback.
+The request sets `max_tokens=8`, but this is **not a guarantee of eight billed
+tokens or a spending cap**. The report shows returned token counts and served
+model, without response text, keys or raw exception messages. A short successful
+probe does not verify the full audit prompt, context window or billing estimate.
+
+Exit codes: `0` means all requested checks passed; `1` means invalid/unconfigured
+settings, an unlisted model or an invalid completion; `2` means verification was
+incomplete due to network, auth, HTTP or catalog errors. If both kinds occur,
+`2` takes precedence and the report retains both failures. Run the catalog check
+after changing provider credentials/URLs, `LLM_MODEL`, per-provider paid models
+or `FREE_TIER_LLM_MODEL*` settings.
+
+Unknown models such as `grok-4.20-multi-agent` currently use `DEFAULT_PRICE`
+($3 input / $15 output per million tokens) for internal USD estimates. Those
+rates are the maximum among known table entries, **not a verified upper bound**
+on an unknown model's bill. The estimate can be too high or too low; the audit
+cap is checked after each response and can stop subsequent calls. The default
+200,000-token input budget is also a local heuristic, not a verified context
+window for Grok. Neither catalog checks nor a small probe establishes these
+limits. Verify provider billing and representative audit behaviour before
+relying on them for a model switch.
 
 With `--env-file`, the validator reads only that file: shell exports and a
 systemd `Environment=ENVIRONMENT=production` setting cannot supply a missing
