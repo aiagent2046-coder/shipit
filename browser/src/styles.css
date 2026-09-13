@@ -69,7 +69,7 @@ input[type=file]::file-selector-button{border:1px solid #3d3d43;border-radius:5p
 .findings{display:grid;gap:12px}
 .finding{padding:21px 23px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
 .finding-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px;margin-bottom:8px}
-.finding-heading h3{font-size:15px;margin:0}
+.finding-heading h4{font-size:15px;margin:0}
 .severity{font-size:10px;line-height:1.5;border-radius:4px;padding:3px 7px;background:#28282d;color:#d4d4d8;font-weight:650;letter-spacing:.06em;text-transform:uppercase}
 .severity-critical,.severity-high{background:#45202b;color:var(--danger)}
 .severity-medium,.severity-warning{background:#3d301a;color:var(--warning)}
@@ -103,3 +103,8 @@ input[type=file]::file-selector-button{border:1px solid #3d3d43;border-radius:5p
 }
 @media(prefers-reduced-motion:reduce){*,*::before{animation:none!important;transition:none!important}
 }
+
+.finding-group>.finding{margin-top:12px}
+.contextual-findings{margin-top:12px;border-top:1px solid var(--border);padding-top:18px}
+.contextual-findings>summary{cursor:pointer;font-size:15px;font-weight:550}
+.finding-metadata{color:var(--muted);font-size:12px!important}

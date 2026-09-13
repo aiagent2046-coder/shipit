@@ -183,6 +183,57 @@ function renderDefinitions(container, entries) {
   container.append(list);
 }
 
+// Context changes presentation only; findings and exports retain every signal.
+const findingContexts = {
+  test_file: 'Test file', test_fixture: 'Test fixture or placeholder',
+  doc_example: 'Documentation or example', comment: 'Comment',
+  ci_service: 'CI service', configuration_template: 'Configuration template',
+  placeholder_uri: 'Placeholder URI', docstring: 'Documentation string',
+  deployment_inventory: 'Deployment inventory',
+};
+
+function findingContext(finding) {
+  return text(finding.context) || text(finding.claim_evidence?.source_context?.kind);
+}
+
+function isContextualFinding(finding) {
+  // A credible or severe signal deserves review even when found in a test.
+  if (['high', 'critical'].includes(text(finding.severity).toLowerCase())) return false;
+  if (typeof finding.confidence === 'number' && finding.confidence >= 0.8
+      && findingContext(finding) !== 'deployment_inventory') return false;
+  return Object.hasOwn(findingContexts, findingContext(finding));
+}
+
+function findingMetadata(finding) {
+  const context = findingContext(finding);
+  const contextLabel = findingContexts[context] || (context ? context.replaceAll('_', ' ') : 'Context not identified');
+  const confidence = finding.confidence;
+  const confidenceLabel = typeof confidence === 'number' && Number.isFinite(confidence)
+    && confidence >= 0 && confidence <= 1 ? confidence.toFixed(2) : 'Not reported';
+  return `${contextLabel} · Detector confidence: ${confidenceLabel} · Verification: ${text(finding.verification_status, 'Not reported').replaceAll('_', ' ')}`;
+}
+
+function renderFinding(finding) {
+  const article = node('article', undefined, 'finding');
+  const heading = node('div', undefined, 'finding-heading');
+  const severity = text(finding.severity, 'unspecified').toLowerCase();
+  const knownSeverity = ['critical', 'high', 'medium', 'warning', 'low', 'info'].includes(severity) ? severity : 'unknown';
+  heading.append(node('span', severity, `severity severity-${knownSeverity}`), node('h4', text(finding.title, 'Static finding')));
+  const location = text(finding.file, 'Project');
+  const line = Number.isInteger(finding.line) && finding.line > 0 ? `:${finding.line}` : '';
+  const rule = finding.rule_id ? ` · ${text(finding.rule_id)}` : '';
+  article.append(heading, node('p', `${location}${line}${rule}`, 'finding-location'));
+  article.append(node('p', findingMetadata(finding), 'finding-metadata'));
+  if (finding.explanation) article.append(node('p', text(finding.explanation)));
+  if (finding.fix_hint) {
+    const hint = node('p', undefined, 'fix-hint');
+    hint.append(node('strong', 'Suggested next step: '), node('span', text(finding.fix_hint)));
+    article.append(hint);
+  }
+  if (finding.masked) article.append(node('p', 'Sensitive values are masked in this finding.', 'masked-note'));
+  return article;
+}
+
 function renderReport(report) {
   byId('engine-version').textContent = report.engine_version ? `Engine ${text(report.engine_version)}` : 'Local static scan';
   const gaps = Array.isArray(report.checks_not_run) ? report.checks_not_run : [];
@@ -195,31 +246,34 @@ function renderReport(report) {
   }
   byId('partial-coverage').hidden = gaps.length === 0;
 
-  const findings = report.findings;
+  const findings = report.findings.filter(finding => finding && typeof finding === 'object');
+  const contextual = findings.filter(isContextualFinding);
+  const review = findings.filter(finding => !isContextualFinding(finding));
   byId('findings-summary').textContent = findings.length === 0
     ? 'No findings from the checks that ran.'
-    : `${findings.length} ${findings.length === 1 ? 'finding' : 'findings'} to review`;
+    : `${findings.length} total findings · ${review.length} for initial review · ${contextual.length} contextual or informational`;
   const findingList = byId('findings');
   findingList.replaceChildren();
-  for (const finding of findings) {
-    if (!finding || typeof finding !== 'object') continue;
-    const article = node('article', undefined, 'finding');
-    const heading = node('div', undefined, 'finding-heading');
-    const severity = text(finding.severity, 'unspecified').toLowerCase();
-    const knownSeverity = ['critical', 'high', 'medium', 'warning', 'low', 'info'].includes(severity) ? severity : 'unknown';
-    heading.append(node('span', severity, `severity severity-${knownSeverity}`), node('h3', text(finding.title, 'Static finding')));
-    const location = text(finding.file, 'Project');
-    const line = Number.isInteger(finding.line) && finding.line > 0 ? `:${finding.line}` : '';
-    const rule = finding.rule_id ? ` · ${text(finding.rule_id)}` : '';
-    article.append(heading, node('p', `${location}${line}${rule}`, 'finding-location'));
-    if (finding.explanation) article.append(node('p', text(finding.explanation)));
-    if (finding.fix_hint) {
-      const hint = node('p', undefined, 'fix-hint');
-      hint.append(node('strong', 'Suggested next step: '), node('span', text(finding.fix_hint)));
-      article.append(hint);
-    }
-    if (finding.masked) article.append(node('p', 'Sensitive values are masked in this finding.', 'masked-note'));
-    findingList.append(article);
+  const reviewSection = node('section', undefined, 'finding-group');
+  reviewSection.setAttribute('aria-labelledby', 'initial-review-title');
+  const reviewTitle = node('h3', `Initial review (${review.length})`);
+  reviewTitle.id = 'initial-review-title';
+  reviewSection.append(reviewTitle);
+  if (review.length) {
+    reviewSection.append(node('p', 'Review these signals first. Priority does not establish that a vulnerability is present.', 'hint'));
+    reviewSection.append(...review.map(renderFinding));
+  } else {
+    reviewSection.append(node('p', contextual.length
+      ? 'All reported signals are grouped below. This does not establish that the project is safe.'
+      : 'Review the coverage and limitations below; no findings does not establish safety.', 'hint'));
+  }
+  findingList.append(reviewSection);
+  if (contextual.length) {
+    const details = node('details', undefined, 'finding-group contextual-findings');
+    details.append(node('summary', `Tests, examples and informational signals (${contextual.length})`));
+    details.append(node('p', 'Grouped by reported context, not dismissed as false positives. Real credentials can also appear in tests. Every finding remains in JSON and SARIF exports.', 'hint'));
+    details.append(...contextual.map(renderFinding));
+    findingList.append(details);
   }
 
   const checks = Array.isArray(report.checks_run) ? report.checks_run : [];

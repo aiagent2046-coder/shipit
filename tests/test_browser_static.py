@@ -115,6 +115,29 @@ def test_browser_native_path_matches_shared_static_stage():
     assert result["sarif"]["runs"][0]["invocations"][0]["executionSuccessful"] is True
 
 
+def test_secret_advice_reaches_json_and_sarif_without_claiming_live_credentials():
+    data = io.BytesIO()
+    literal = "browser-probe-" + "a1b2c3d4"
+    with zipfile.ZipFile(data, "w") as zf:
+        for name in ("src/config.py", "tests/test_config.py"):
+            zf.writestr(name, f'api_key = "{literal}"\n')
+    result = scan_archive(data.getvalue())
+    findings = [f for f in result["report"]["findings"] if f["rule_id"] == "generic-assignment"]
+    assert len(findings) == 2
+    for finding in findings:
+        assert "does not establish" in finding["explanation"]
+        assert "synthetic test data" in finding["fix_hint"]
+        assert finding["verification_status"] == "unverified"
+        assert finding["claim_evidence"]["conditions_status"] == "not_checked"
+        sarif_result = next(r for r in result["sarif"]["runs"][0]["results"]
+                            if r["ruleId"] == "generic-assignment"
+                            and r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == finding["file"])
+        assert finding["explanation"] in sarif_result["message"]["text"]
+    test_finding = next(f for f in findings if f["file"].startswith("tests/"))
+    assert "test, example or comment context" in test_finding["explanation"]
+    assert literal not in json.dumps(result)
+
+
 @pytest.mark.parametrize("data,reason", [(b"not a zip", "not_a_zip"), (b"", "not_a_zip")])
 def test_browser_rejects_invalid_zip(data, reason):
     with pytest.raises(ArchiveValidationError) as error:
