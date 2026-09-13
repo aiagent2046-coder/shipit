@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import ast
 import zipfile
+
+from app.scan.rule_coverage import remaining_findings
 from collections import Counter
 from typing import BinaryIO
 
@@ -257,7 +259,7 @@ def scan_insecure_randomness(fileobj: BinaryIO, *, coverage: dict | None = None)
                 accounting.skip("syntax_limit")
                 continue
             for line_no, name in evidence:
-                if len(findings) >= _MAX_FINDINGS:
+                if len(findings) >= remaining_findings(_MAX_FINDINGS):
                     accounting.skip("finding_limit")
                     accounting.finish()
                     return findings

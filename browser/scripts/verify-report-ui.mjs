@@ -24,7 +24,9 @@ const report = {
     finding('<img src=x onerror=alert(1)>', { context: 'comment' }),
     finding('Unknown context', { context: 'future_context' }),
   ],
-  checks_run: ['secrets'], checks_not_run: [], limitations: ['static_source_only'],
+  checks_run: ['secrets', 'xss'], checks_not_run: [], limitations: ['static_source_only'],
+  rule_coverage: { xss: { analyzed_files: 400, eligible_files: 429, skipped_files: 29,
+    partial: true, skip_reasons: { file_limit: 29 } } },
 };
 const sarif = { version: '2.1.0', runs: [{ results: report.findings.map(f => ({ message: { text: f.title } })) }] };
 const browser = await chromium.launch();
@@ -50,6 +52,8 @@ try {
   await page.getByLabel('Project ZIP', { exact: true }).setInputFiles({ name: 'project.zip', mimeType: 'application/zip', buffer: Buffer.from('worker fixture') });
   await page.getByRole('button', { name: 'Scan locally', exact: true }).click();
   await page.locator('#results').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#partial-coverage').isVisible(), true);
+  assert.match(await page.locator('#checks-not-run').innerText(), /400 of 429/);
   const initial = page.getByRole('region', { name: 'Initial review (4)' });
   assert.equal(await initial.locator('article').count(), 4);
   for (const title of ['Production candidate', 'Severe test signal', 'Credible test signal', 'Unknown context']) {

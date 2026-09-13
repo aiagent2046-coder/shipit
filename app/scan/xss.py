@@ -8,6 +8,8 @@ unresolved. Native parser absence fails the check rather than claiming coverage.
 from __future__ import annotations
 
 import zipfile
+
+from app.scan.rule_coverage import remaining_findings
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
@@ -192,7 +194,7 @@ def scan_xss(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFi
                 sink, value = _sink(node)
                 if sink is None or value is None or _static_value(value, node, declarations):
                     continue
-                if len(findings) >= _MAX_FINDINGS:
+                if len(findings) >= remaining_findings(_MAX_FINDINGS):
                     accounting.skip("finding_limit")
                     accounting.finish()
                     return findings

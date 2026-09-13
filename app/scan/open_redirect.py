@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import ast
 import zipfile
+
+from app.scan.rule_coverage import remaining_findings
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
@@ -129,7 +131,7 @@ def _allowed_inputs(test: ast.AST, state: _State, accepted: bool) -> set[str]:
 
 def _scan_expr(expr: ast.AST, state: _State, path: str, findings: list[CheckFinding]) -> None:
     for call in _walk(expr):
-        if len(findings) >= _MAX_FINDINGS:
+        if len(findings) >= remaining_findings(_MAX_FINDINGS):
             raise _FindingLimitReached
         if not isinstance(call, ast.Call):
             continue
@@ -144,7 +146,7 @@ def _scan_expr(expr: ast.AST, state: _State, path: str, findings: list[CheckFind
 
 def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[CheckFinding]) -> None:
     for stmt in body:
-        if len(findings) >= _MAX_FINDINGS:
+        if len(findings) >= remaining_findings(_MAX_FINDINGS):
             raise _FindingLimitReached
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind(ast.Name(id=stmt.name), None, state)

@@ -1,5 +1,7 @@
 """Build test inputs and native expectations; never included in public assets."""
 import base64
+import io
+import zipfile
 import json
 import importlib.abc
 import subprocess
@@ -21,7 +23,7 @@ if "--portable" in sys.argv:
 
     sys.meta_path.insert(0, NoNative())
 
-from app.scan.browser import scan_archive  # noqa: E402
+from app.scan.browser import ScanSession, scan_archive  # noqa: E402
 from tests.detectors.conftest import build_archive, discover_cases, load_expected  # noqa: E402
 from parser_probes import probe_parsers  # noqa: E402
 
@@ -46,6 +48,16 @@ def main():
     out.write_text(json.dumps(cases))
     (out.parent / 'parser-probes.json').write_text(json.dumps(probe_parsers()))
     (out.parent / 'parser-probes.py').write_text((Path(__file__).parent / 'parser_probes.py').read_text())
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
+        for index in range(400):
+            z.writestr(f'src/module{index}.js', 'export const value = true;')
+        z.writestr('src/tail.js', 'element.innerHTML = untrusted;')
+        z.writestr('src/broken.js', 'const broken = [;')
+    session = ScanSession(archive.getvalue())
+    continuation = {"archive": base64.b64encode(archive.getvalue()).decode(),
+                    "initial": session.result(), "final": session.continue_scan()}
+    (out.parent / 'continuation.json').write_text(json.dumps(continuation))
     print(f"Wrote {len(cases)} native corpus expectations to {out}")
 
 

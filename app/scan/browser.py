@@ -7,6 +7,8 @@ Native parsers are optional; unavailable checks remain explicit failures.
 from __future__ import annotations
 
 import io
+from copy import deepcopy
+from dataclasses import replace
 
 from app.report.sarif import build_sarif
 from app.scan.manifest import scan_manifest
@@ -24,6 +26,10 @@ def scan_archive(data: bytes) -> dict:
     if not isinstance(data, bytes):
         raise TypeError("scan_archive expects bytes")
     static = run_static_scan(io.BytesIO(data), allow_missing_native=True)
+    return _result(data, static)
+
+
+def _result(data: bytes, static: dict) -> dict:
     manifest = scan_manifest(
         data, AUDIT_ENGINE_VERSION, static,
         {"skipped_reason": "llm_not_run_browser"}, None,
@@ -63,3 +69,89 @@ def scan_archive(data: bytes) -> dict:
         },
         "sarif": sarif,
     }
+
+
+class ScanSession:
+    """In-memory browser session; no source or continuation token leaves the worker.
+
+    Each continuation reads at most another 400 eligible files per bounded rule.
+    Findings, parse failures and the per-rule finding cap persist across batches.
+    Checks without file accounting are never claimed to be resumable.
+    """
+
+    def __init__(self, data: bytes):
+        if not isinstance(data, bytes):
+            raise TypeError("ScanSession expects bytes")
+        self.data = data
+        self.static = run_static_scan(io.BytesIO(data), allow_missing_native=True)
+
+    def result(self) -> dict:
+        failed = {item["check"] for item in self.static["checks_not_run"]}
+        result = _result(self.data, self.static)
+        result["can_continue"] = any(
+            record.get("skip_reasons", {}).get("file_limit", 0) and name not in failed
+            for name, record in self.static["rule_coverage"].items()
+        )
+        return result
+
+    def continue_scan(self) -> dict:
+        from app.scan import static as stage
+        from app.scan.rule_coverage import resume_rule
+        from app.scan.scoring import ScoredFinding, compute_scores
+        from app.scan.claim_evidence import static_claim_evidence
+        from app.scan.check_failure_scoring import failed_check_categories
+
+        scanners = {
+            "outbound_url": (stage.scan_outbound_url, "python-outbound-request-unvalidated-url"),
+            "tls_verification": (stage.scan_tls_verification, "tls-verification-disabled"),
+            "unsafe_deserialization": (stage.scan_unsafe_deserialization, "unsafe-deserialization"),
+            "path_traversal": (stage.scan_path_traversal, "path-traversal-file-sink"),
+            "xss": (stage.scan_xss, "xss-unsafe-html-injection"),
+            "open_redirect": (stage.scan_open_redirect, "python-open-redirect-unvalidated-url"),
+            "insecure_randomness": (stage.scan_insecure_randomness, "insecure-randomness"),
+            "command_injection": (stage.scan_command_injection, "command-injection-shell-built-command"),
+        }
+        updated = {**self.static, **deepcopy({key: self.static[key] for key in (
+            "findings", "rule_coverage", "checks_not_run", "checks_run", "coverage",
+        )})}
+        failed = {item["check"] for item in updated["checks_not_run"]}
+        for name, (scanner, rule_id) in scanners.items():
+            previous = self.static["rule_coverage"].get(name, {})
+            if name in failed or not previous.get("skip_reasons", {}).get("file_limit"):
+                continue
+            coverage = {}
+            count = sum(f["rule_id"] == rule_id for f in updated["findings"])
+            try:
+                with resume_rule(previous, count):
+                    candidates = scanner(io.BytesIO(self.data), coverage=coverage)
+                added = []
+                for candidate in candidates:
+                    finding = ScoredFinding(
+                        rule_id=candidate.rule_id, title=candidate.title, severity=candidate.severity,
+                        confidence=candidate.confidence, category=candidate.category,
+                        file=candidate.file, line=candidate.line, explanation=candidate.explanation,
+                        fix_hint=candidate.fix_hint, source="static", verification_method="source_pattern",
+                        claim_evidence=static_claim_evidence(),
+                    )
+                    if "recommendation_enrichment_unavailable" in updated["limitations"]:
+                        finding = replace(finding, fix_hint="")
+                    else:
+                        finding = stage.prepare_recommendation(finding, updated["source_facts"])
+                    added.append(vars(finding))
+                updated["findings"].extend(added)
+                updated["rule_coverage"][name] = coverage
+                prefix = "Continued in local batches; the file limit below applies to each batch. "
+                if not updated["coverage"][name].startswith(prefix):
+                    updated["coverage"][name] = prefix + updated["coverage"][name]
+            except Exception as exc:  # Same fail-closed boundary as the initial static stage.
+                updated["checks_not_run"].append({"check": name, "reason": f"check_error: {type(exc).__name__}"})
+                updated["checks_run"] = [check for check in updated["checks_run"] if check != name]
+                # Preserve previous findings/counts: the failed batch establishes no new coverage.
+        frontend = updated["score"].get("frontend_scan")
+        updated["score"] = compute_scores(
+            [ScoredFinding(**finding) for finding in updated["findings"]], llm_ran=False,
+            failed_static=failed_check_categories(updated["checks_not_run"]),
+        )
+        updated["score"]["frontend_scan"] = frontend
+        self.static = updated
+        return self.result()

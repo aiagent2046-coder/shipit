@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import ast
 import zipfile
+
+from app.scan.rule_coverage import remaining_findings
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
@@ -175,7 +177,7 @@ def _path_arguments(call: ast.Call, state: _PathState) -> list[ast.AST]:
 
 def _scan_expression(expr: ast.AST, state: _PathState, path: str, findings: list[CheckFinding]) -> None:
     for call in _walk(expr):
-        if len(findings) >= _MAX_FINDINGS:
+        if len(findings) >= remaining_findings(_MAX_FINDINGS):
             raise _FindingLimitReached
         if not isinstance(call, ast.Call):
             continue
@@ -271,7 +273,7 @@ def _import_path(stmt: ast.Import | ast.ImportFrom, state: _PathState) -> None:
 
 def _scan_block(body: list[ast.stmt], state: _PathState, path: str, findings: list[CheckFinding]) -> bool:
     for stmt in body:
-        if len(findings) >= _MAX_FINDINGS:
+        if len(findings) >= remaining_findings(_MAX_FINDINGS):
             raise _FindingLimitReached
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind_path(ast.Name(id=stmt.name), None, state)

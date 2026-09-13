@@ -1,10 +1,11 @@
 // Runs the exact shipped Python bundle in WASM. Browser-specific verification
 // uses the same assertions in tests/harness-worker.js through real Chromium.
+import assert from 'node:assert/strict';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPyodide } from 'pyodide';
-import { installEngine, loadNativeParsers, scanBytes } from '../src/runtime.js';
+import { installEngine, loadNativeParsers, scanBytes, startSession, continueSession } from '../src/runtime.js';
 import { assertParserParity, evaluateCase, summarize } from '../tests/parity.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,7 +25,12 @@ const rows = cases.map(item => {
   const bytes = Uint8Array.from(Buffer.from(item.archive, 'base64'));
   return evaluateCase(item, scanBytes(pyodide, bytes.buffer));
 });
+const continuation = JSON.parse(await readFile(resolve(root, 'test-dist/continuation.json')));
+const archive = Uint8Array.from(Buffer.from(continuation.archive, 'base64'));
+assert.deepEqual(startSession(pyodide, archive.buffer), continuation.initial);
+assert.deepEqual(continueSession(pyodide), continuation.final);
 const summary = summarize(rows);
+summary.continuation = 'passed';
 summary.elapsed_ms = Math.round(performance.now() - start);
 summary.runtime = 'Pyodide in Node (browser run recorded separately)';
 summary.parser_probes = 'passed';

@@ -424,3 +424,52 @@ def test_deep_expression_does_not_abort_later_files(extension):
     scanner = scan_sql_injection if extension == "py" else scan_sql_injection_js
     findings = scanner(archive)
     assert [(finding.file, finding.line) for finding in findings] == [(f"src/query.{extension}", 1)]
+
+
+@pytest.mark.parametrize('source', [
+    '''
+    def query(cur, name):
+        conditions = []
+        if name:
+            conditions.append("name = ?")
+        cur.execute("SELECT * FROM users WHERE " + " AND ".join(conditions), (name,))
+    ''',
+    '''
+    def query(cur, ids):
+        cur.execute("SELECT * FROM users WHERE id IN (" + ",".join("?" for _ in ids) + ")", ids)
+    ''',
+    '''
+    def query(cur, body):
+        fields, values = [], []
+        for column in ("name", "email"):
+            if column in body:
+                fields.append(f"{column} = ?")
+                values.append(body[column])
+        cur.execute(f"UPDATE users SET {', '.join(fields)}", values)
+    ''',
+])
+def test_fixed_fragments_and_placeholder_counts_do_not_become_sql_injection(source):
+    assert scan(source, 'py') == []
+
+
+@pytest.mark.parametrize('mutation', [
+    'parts.append(user_input)',
+    'alias = parts\nalias.append(user_input)',
+    'mutate(parts)',
+    'mutate([parts])',
+    'alias = [parts]\nalias[0].append(user_input)',
+    'parts[0] = user_input',
+    'parts.extend([user_input])',
+])
+def test_mutated_fragment_lists_remain_reportable(mutation):
+    source = ('parts = ["name = ?"]\n' + mutation
+              + '\ncur.execute("SELECT * FROM users WHERE " + " AND ".join(parts), (value,))')
+    assert scan(source, 'py')
+
+
+def test_parameters_do_not_silence_tainted_query_text():
+    assert scan('cur.execute(f"SELECT * FROM {table} WHERE id = ?", (value,))', 'py')
+
+
+def test_placeholder_comprehension_must_not_insert_input():
+    assert scan('cur.execute("SELECT " + ",".join(value for value in ids), ids)', 'py')
