@@ -43,6 +43,7 @@ jobs:
         run: |
           cd browser
           npx playwright install --with-deps chromium
+          node scripts/verify-report-ui.mjs
           python scripts/serve.py > /tmp/drydock-browser-http.log 2>&1 &
           SERVER_PID=$!
           trap 'kill "$SERVER_PID"' EXIT
