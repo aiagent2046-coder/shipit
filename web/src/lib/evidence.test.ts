@@ -387,7 +387,7 @@ it.each([
   { source_handler: "send.run" }, { source_handler: "s".repeat(129) }, { result: "verified" },
 ])("does not manufacture a handler-label warning from invalid metadata %#", (override) => {
   const finding = groupedNetworkFinding();
-  Object.assign(finding.claim_evidence!.grouped_claim_scope!.title_source_disagreements[0], override);
+  Object.assign(finding.claim_evidence!.grouped_claim_scope!.title_source_disagreements![0], override);
   const rows = claimEvidenceRows(finding);
   expect(rows.some(([label]) => label === "Grouped hypothesis scope")).toBe(true);
   expect(rows.some(([label]) => label === "Handler label needs review")).toBe(false);

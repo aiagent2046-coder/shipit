@@ -1,7 +1,7 @@
 import { AuditCoverage } from "@/components/AuditCoverage";
 import type { Finding, Score, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
-import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, partialContradicted, sourceSeverityCounts, syntaxContradicted, unsupportedTransport } from "@/lib/evidence";
+import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, narrativeProjection, partialContradicted, sourceSeverityCounts, syntaxContradicted, unsupportedTransport } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -52,6 +52,7 @@ export function SeveritySummary({ findings }: { findings: Finding[] }) {
 
 function FindingCard({ finding, historical = false, included = false }: { finding: Finding; historical?: boolean; included?: boolean }) {
   const { what, risk, fix } = plainFields(finding);
+  const projection = narrativeProjection(finding);
   const loc = finding.file
     ? `${finding.file}${finding.line ? `:${finding.line}` : ""}`
     : "";
@@ -59,7 +60,7 @@ function FindingCard({ finding, historical = false, included = false }: { findin
   const contradicted = syntaxContradicted(finding);
   const unsupported = unsupportedTransport(finding) && !contradicted && !historical;
   const partial = partialContradicted(finding) && !historical;
-  const tech = [partial || unsupported ? "" : finding.title, loc, finding.masked].filter(Boolean).join(" · ");
+  const tech = [(partial || unsupported) && !projection ? "" : finding.title, loc, finding.masked].filter(Boolean).join(" · ");
   const evidence = <dl className="my-3 space-y-2 whitespace-pre-line text-sm">
     {claimEvidenceRows(finding, historical).map(([label, value], index) => (
       <div key={`${label}-${index}`}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
@@ -69,7 +70,7 @@ function FindingCard({ finding, historical = false, included = false }: { findin
     <li className="rounded-lg border border-border bg-surface p-4">
       <div className="mb-2 flex items-start justify-between gap-3">
         <p className="font-medium">{unsupported ? "Credential transport — exposure not established"
-          : partial ? "Source checks contradict part of this finding" : what}</p>
+          : partial && !projection ? "Source checks contradict part of this finding" : what}</p>
         {historical ? <span className="text-sm text-muted">{included ? "Free audit observation — included in this audit" : "Previous preview — not reassessed"}
           {isNonProductionFinding(finding) && " · Test/example context"}</span>
           : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
@@ -82,13 +83,18 @@ function FindingCard({ finding, historical = false, included = false }: { findin
       {partial && <p className="mb-2 text-sm text-muted">
         Other claims remain unverified. Review the counterevidence below; the original model severity is retained in the score pending review.
       </p>}
-      {risk && !partial && !unsupported && <p className="mb-2 text-sm text-muted">
+      {risk && (!partial || projection) && !unsupported && <p className="mb-2 text-sm text-muted">
         {model && <strong>Possible consequence — unverified: </strong>}{risk}
       </p>}
       {model ? evidence : <details className="my-3 text-sm"><summary>Evidence and conditions</summary>{evidence}</details>}
-      {partial && <details className="my-3 text-sm text-muted">
+      {partial && !projection && <details className="my-3 text-sm text-muted">
         <summary>Original model claim and suggestion — contains a contradicted premise</summary>
         <p>{what}</p>{risk && <p>{risk}</p>}{fix && <p>{fix}</p>}
+      </details>}
+      {projection && <details className="my-3 text-sm text-muted">
+        <summary>Superseded model wording — source premise corrected</summary>
+        {(["title", "explanation", "fix_hint", "observation"] as const).map(key =>
+          projection.original[key] ? <p key={key}>{projection.original[key]}</p> : null)}
       </details>}
       {unsupported && <details className="my-3 text-sm text-muted">
         <summary>Original model claim and suggestion — exposure not established</summary>
@@ -96,10 +102,11 @@ function FindingCard({ finding, historical = false, included = false }: { findin
         {finding.fix_hint && <p>{finding.fix_hint}</p>}
       </details>}
       {fix && (contradicted || historical) && <details className="my-3 text-sm text-muted">
-        <summary>{historical ? (included ? "Free audit suggestion — unverified" : "Original preview suggestion — not reassessed")
+        <summary>{historical ? (projection ? "Recorded verification guidance — not reassessed"
+          : included ? "Free audit suggestion — unverified" : "Original preview suggestion — not reassessed")
           : "Original model suggestion — premise contradicted"}</summary>{fix}
       </details>}
-      {fix && !contradicted && !partial && !unsupported && !historical && (
+      {fix && !contradicted && (!partial || projection) && !unsupported && !historical && (
         <p className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-accent">
           <span>
             <span aria-hidden="true">→ </span>
