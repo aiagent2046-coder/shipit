@@ -12,9 +12,10 @@ Measured 2026-08-28: `usage` comes back with `cost_rub` (that call's charge,
 rounded to kopecks) and `balance`. That is the provider's own number for what
 it billed — better evidence than anything derivable here, and the way the
 GLM row below was priced. It is not a drop-in replacement for the table: it
-arrives per response, in roubles, after the fact, while the spend cap needs a
-per-token rate in USD before the call. Worth wiring into reconciliation; not
-worth pretending the table is redundant.
+arrives per response, in roubles, after the fact. The audit cap currently
+checks an estimated USD total after a response and can stop subsequent calls;
+it does not impose a hard limit on the charge for the current call. Actual
+charge reconciliation and a pre-call budget estimate are separate concerns.
 
 The Claude numbers are Anthropic's published list prices. AITunnel (the only
 provider configured today) resells access and bills a different amount per
@@ -118,6 +119,32 @@ _GLM_5_3_FLASH: dict[str, Decimal] = {
     "input": Decimal("0.08"),
     "output": Decimal("0.25"),
 }
+# grok-4.20-multi-agent has no model-specific price. The operator reported
+# these AITunnel samples on 2026-09-13 (input/output tokens -> billed RUB):
+#
+#     in=2663   out=1236 ->  0.74 RUB     in=12089  out=5036 ->  4.09 RUB
+#     in=125087 out=2310 -> 22.01 RUB     in=75482  out=4655 -> 11.54 RUB
+#
+# Three further calls reportedly sent the same message (about 3.5K tokens):
+#
+#     prompt=14695  cached=14592 out=2552 -> 1.87 RUB
+#     prompt=45858  cached=30208 out=3526 -> 6.82 RUB
+#     prompt=74914  cached=62528 out=4740 -> 7.89 RUB
+#
+# Reported prompt usage and charges varied despite identical submitted text.
+# These samples do not establish reliable constant input/output rates. Cache
+# counts are reported, but cache discount rates, internal orchestration and the
+# exact billing formula were not verified. No inferred per-MTok rate is added.
+#
+# DEFAULT_PRICE remains an estimate, not an upper bound on this model's bill.
+# It can overestimate OR underestimate cost. The audit cap is checked after a
+# response, so it can stop later calls but cannot bound the current call's cost.
+# Recording per-response cost_rub, when supplied, would support reconciliation
+# with explicit currency handling; a shared balance delta cannot attribute one
+# call if concurrent requests are billed. Neither replaces a pre-call bound.
+#
+# Request acceptance with temperature is recorded in app/llm/client.py; it
+# establishes neither sampling semantics nor a verified context window.
 PRICE_TABLE: dict[str, dict[str, Decimal]] = {
     "claude-sonnet-4.6": _SONNET_4_6,   # AITunnel / OpenAI-compat response name
     "claude-sonnet-4-6": _SONNET_4_6,   # direct Anthropic response name
@@ -128,10 +155,9 @@ PRICE_TABLE: dict[str, dict[str, Decimal]] = {
 }
 
 # Fallback for a model not in the table (an unexpected served model, or a new
-# one added to the env before this file was updated). Deliberately the most
-# expensive KNOWN rates, so an unknown model over-estimates rather than
-# under-counts spend — a cost guard that reads low is worse than one that reads
-# high. Recomputed from PRICE_TABLE so it can never drift below a real entry.
+# one added to the env before this file was updated). Use the most expensive
+# KNOWN rates in each category. This cannot fall below a listed rate, but it
+# is not a verified upper bound for an unknown model or a reseller's invoice.
 DEFAULT_PRICE: dict[str, Decimal] = {
     "input": max((p["input"] for p in PRICE_TABLE.values()), default=Decimal("3.00")),
     "output": max((p["output"] for p in PRICE_TABLE.values()), default=Decimal("15.00")),
@@ -140,7 +166,7 @@ DEFAULT_PRICE: dict[str, Decimal] = {
 
 def price_for(model: str) -> dict[str, Decimal]:
     """The (input, output) per-MTok price for a model, or DEFAULT_PRICE when the
-    model is unknown (fail-safe high — see DEFAULT_PRICE)."""
+    model is unknown (an estimate, not a billing upper bound — see DEFAULT_PRICE)."""
     return PRICE_TABLE.get(model, DEFAULT_PRICE)
 
 

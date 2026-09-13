@@ -90,7 +90,57 @@ variables.
 
 ```bash
 python3 deploy/scripts/validate-production-env.py --env-file /opt/shipit/.env
+/srv/shipit/current/.venv/bin/python scripts/verify_llm_provider.py --env /opt/shipit/.env
 ```
+
+Run these from the release directory (`/srv/shipit/current` on the standard
+host); for a local checkout use its `.venv/bin/python` instead. The validator
+checks configuration shape. The provider check uses only the selected file,
+with the same quote parsing; shell exports cannot fill missing values or
+replace its models/keys. `--process-env` explicitly selects exported settings
+instead, and cannot be combined with `--env`.
+
+The provider check prints the fallback chain and both paid/preview model names,
+then checks each provider's authenticated model catalog. It uses the provider's
+own protocol, including [Anthropic pagination](https://platform.claude.com/docs/en/api/models/list).
+For AITunnel, the authenticated `/v1/models` endpoint is distinct from its
+[public model/pricing catalog](https://aitunnel.ru/docs/models). An identifier
+missing from a catalog is reported as unconfirmed; this alone does not prove
+that a completion request would return HTTP 400. Anthropic aliases absent from
+its listing are additionally checked with the official
+[get-model endpoint](https://platform.claude.com/docs/en/api/models/retrieve);
+other providers' unlisted aliases remain unconfirmed. Catalog success does not
+test generation, balance or audit quality.
+
+Generation is a separate, **potentially billed** opt-in:
+
+```bash
+/srv/shipit/current/.venv/bin/python scripts/verify_llm_provider.py --env /opt/shipit/.env --probe
+```
+
+Each catalog-confirmed provider/model gets one attempt through `LLMClient`'s
+actual payload and nonempty-answer parser, without automatic retries or fallback.
+The request sets `max_tokens=8`, but this is **not a guarantee of eight billed
+tokens or a spending cap**. The report shows returned token counts and served
+model, without response text, keys or raw exception messages. A short successful
+probe does not verify the full audit prompt, context window or billing estimate.
+
+Exit codes: `0` means all requested checks passed; `1` means invalid/unconfigured
+settings, an unlisted model or an invalid completion; `2` means verification was
+incomplete due to network, auth, HTTP or catalog errors. If both kinds occur,
+`2` takes precedence and the report retains both failures. Run the catalog check
+after changing provider credentials/URLs, `LLM_MODEL`, per-provider paid models
+or `FREE_TIER_LLM_MODEL*` settings.
+
+Unknown models such as `grok-4.20-multi-agent` currently use `DEFAULT_PRICE`
+($3 input / $15 output per million tokens) for internal USD estimates. Those
+rates are the maximum among known table entries, **not a verified upper bound**
+on an unknown model's bill. The estimate can be too high or too low; the audit
+cap is checked after each response and can stop subsequent calls. The default
+200,000-token input budget is also a local heuristic, not a verified context
+window for Grok. Neither catalog checks nor a small probe establishes these
+limits. Verify provider billing and representative audit behaviour before
+relying on them for a model switch.
 
 With `--env-file`, the validator reads only that file: shell exports and a
 systemd `Environment=ENVIRONMENT=production` setting cannot supply a missing
