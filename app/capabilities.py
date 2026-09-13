@@ -270,7 +270,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "build) are excluded before the file limit. Shell-invoking calls whose command is assembled "
         "from a value the request supplies are reported: os.system/os.popen (always a shell), the "
         "subprocess family when shell=True is a literal, and a [\"<shell>\", \"-c\", command] argument "
-        "list (a shell command without shell=True). shell passed as a variable, an argument list "
+        "list (a shell command without shell=True). Positional and args= forms are recognized. "
+        "Lists follow POSIX semantics: only args[0] under shell=True, or the command after -c, "
+        "is shell code; subsequent positional parameters are data. Windows shell/list conventions, "
+        "shell passed as a variable, an argument list "
         "assigned to a variable before the call, os.exec*/os.spawn* and TS/JS are not covered. Whether "
         "the route is reachable, whether a check elsewhere constrains the value, and whether the call "
         "executes are not verified.",

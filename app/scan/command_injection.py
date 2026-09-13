@@ -5,26 +5,17 @@ and its deprecated ``popen2``/``popen3``/``popen4`` siblings always do; the
 ``subprocess`` family does only when ``shell=True`` is passed as a literal. A
 caller-controlled value that reaches the command string is reported.
 
-What stays silent, and why, is as much of the claim as what fires:
+The subprocess argument model is POSIX: with ``shell=True`` a sequence's
+first element is the command string and the rest are shell positional arguments,
+not concatenated command text. For an explicit ``["sh", "-c", command, ...]``
+invocation, only ``command`` is shell source; later arguments are data. Re-evaluation
+of those arguments by eval or a nested shell is outside this bounded trace.
+Windows shell/list conventions are not analysed.
 
-  * a ``subprocess`` call WITHOUT ``shell=True`` is silent -- its argument list
-    is not interpreted by a shell, so the same string there is a program name
-    (or one argv entry), not a command line. ``shell=False`` is the library
-    default, so a bare ``subprocess.run("ls " + name)`` is a fixed program name,
-    not an injection, and the rule treats it as such;
-  * ``shell=<variable>`` is NOT read -- only the literal ``shell=True`` is. An
-    unknown value counts as safe, exactly like an unknown helper stops the
-    trace; this rule never asserts a gap on a value it cannot see;
-  * a ``["sh", "-c", value]`` argument list is read when its first element is a
-    shell program and the second is the literal ``-c``: that runs the value
-    through a shell without ``shell=True``, and the rule reports the command
-    part. ``os.exec*``/``os.spawn*`` and the removed Python 2 ``commands``
-    module are outside this rule's claim;
-  * an argument list assigned to a variable and then passed on
-    (``args = ["rm", name]; subprocess.run(args, shell=True)``) is one hop of
-    indirection the trace does not follow: the skeleton is built from strings,
-    not from a list stored in a name. The list literal in the call itself is
-    read; the list behind a variable is not.
+A call without ``shell=True`` or a recognized explicit shell invocation is not
+reported by this shell-injection rule. An unknown shell option, helper or list
+stored in a variable stops the trace; silence is not proof of safety. ``os.exec*``
+and ``os.spawn*`` are outside the supported sinks.
 
 Only locally declared FastAPI routes are read; helpers are not analysed across
 calls. No uploaded code is imported or executed.
@@ -79,71 +70,57 @@ def _shell_true(call: ast.Call) -> bool:
     return False
 
 
-def _shell_c_arguments(call: ast.Call) -> list[ast.AST]:
-    """The command part of a ``["<shell>", "-c", command]`` argument list.
+def _subprocess_args(call: ast.Call) -> ast.AST | None:
+    """Normalize the supported positional and keyword forms of subprocess args."""
+    named = [kw.value for kw in call.keywords if kw.arg == "args"]
+    if call.args:
+        # Duplicate args raises at runtime; do not invent a command for it.
+        return call.args[0] if not named else None
+    return named[0] if len(named) == 1 else None
 
-    This is a shell command without ``shell=True``: the first element names a
-    shell program and the second is the literal ``-c``, so whatever follows is
-    interpreted by that shell. Anything but that exact shape is not a shell
-    command and returns nothing.
-    """
-    if not call.args or not isinstance(call.args[0], (ast.List, ast.Tuple)):
+
+def _shell_c_arguments(argument: ast.AST) -> list[ast.AST]:
+    """Return only command text, not the shell's $0/$1/... argument values."""
+    if not isinstance(argument, (ast.List, ast.Tuple)):
         return []
-    elements = call.args[0].elts
+    elements = argument.elts
     if len(elements) < 3:
         return []
     program, flag = elements[0], elements[1]
     if not (isinstance(program, ast.Constant) and isinstance(program.value, str)
             and program.value in _SHELL_PROGRAMS):
         return []
-    if not (isinstance(flag, ast.Constant) and isinstance(flag.value, str)
-            and flag.value == "-c"):
+    if not (isinstance(flag, ast.Constant) and flag.value == "-c"):
         return []
-    return list(elements[2:])
+    return [elements[2]]
 
 
 def _command_arguments(call: ast.Call, state: _State) -> list[ast.AST]:
-    """The command expression(s) a shell will interpret, or none.
-
-    For ``os.system``/``os.popen`` the first positional argument IS the command
-    string. For ``subprocess.*`` the ``args`` argument (positional or by keyword)
-    is the command, but only when ``shell=True`` is a literal -- otherwise the
-    argument list is not shell-interpreted, unless it is a ``["<shell>", "-c",
-    command]`` list, which is.
-    """
+    """Select the expression interpreted as shell source under POSIX semantics."""
     qualified = _qualified(call.func, state.bindings)
-    result: list[ast.AST] = []
     if qualified in _SHELL_CALLS:
-        if call.args:
-            result.append(call.args[0])
-        return result
-    if qualified in _SUBPROCESS_CALLS:
-        if _shell_true(call):
-            for keyword in call.keywords:
-                if keyword.arg == "args":
-                    result.append(keyword.value)
-                    return result
-            if call.args:
-                result.append(call.args[0])
-            return result
-        result.extend(_shell_c_arguments(call))
-    return result
+        return [call.args[0]] if call.args else []
+    if qualified not in _SUBPROCESS_CALLS:
+        return []
+    argument = _subprocess_args(call)
+    if argument is None:
+        return []
+    if _shell_true(call):
+        # POSIX Popen executes ['/bin/sh', '-c', args[0], args[1], ...].
+        # The tail is not joined into args[0], even when it contains metacharacters.
+        if isinstance(argument, (ast.List, ast.Tuple)):
+            return argument.elts[:1]
+        return [argument]
+    # A non-literal shell option can change which expression is command text.
+    # Only the omitted/default or explicit False form has known POSIX argv semantics.
+    if any(kw.arg == "shell" and not (isinstance(kw.value, ast.Constant)
+                                     and kw.value.value is False) for kw in call.keywords):
+        return []
+    return _shell_c_arguments(argument)
 
 
 def _caller_inputs(expr: ast.AST, state: _State) -> set[str]:
-    """The request origins a command expression carries, if any.
-
-    A string command is reduced to its skeleton and its caller slots collected.
-    An argument LIST under ``shell=True`` is read element by element: any
-    element that carries a caller value makes the whole command caller-built.
-    """
-    if isinstance(expr, (ast.List, ast.Tuple)):
-        result: set[str] = set()
-        for element in expr.elts:
-            built = _skeleton(element, state)
-            if built is not None:
-                result.update(set().union(*built[1]))
-        return result
+    """The request origins in the selected command string, when traceable."""
     built = _skeleton(expr, state)
     if built is None:
         return set()
@@ -341,7 +318,8 @@ def _finding(path: str, call: ast.Call, reaching: set[str]) -> CheckFinding:
             "the application never wrote, up to and including arbitrary code as the process user. "
             "Whether the route is reachable, whether anything outside this function constrains the "
             "value, and whether the call executes are NOT verified, and the value is traced only "
-            "inside this function."
+            "inside this function. Subprocess argument lists use POSIX semantics; Windows shell "
+            "conventions and re-evaluation of positional arguments are not analysed."
         ),
         fix_hint=(
             "Do not run a shell on request input. Pass arguments as a list to subprocess without "

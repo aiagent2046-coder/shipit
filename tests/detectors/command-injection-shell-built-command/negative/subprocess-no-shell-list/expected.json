@@ -1,5 +1,5 @@
 {
-  "description": "A subprocess argument list without shell=True is a plain argv, not a command line: the elements are never interpreted by a shell, so a caller element is an argument, not an injection. The mutation adds shell=True, which turns the same list into a shell string and must fire.",
+  "description": "With shell=False, argv values are not shell command text. The mutation changes this to a shell=True list with caller input in its first command element.",
   "expect": [],
   "forbid": [
     "command-injection-shell-built-command"

@@ -6,5 +6,5 @@ router = APIRouter()
 
 @router.get("/run")
 async def run(name: str):
-    args = ["rm", "-rf", name]
+    args = ["rm -rf " + name]
     subprocess.run(args, shell=True)

@@ -5,13 +5,13 @@ The load-bearing tests:
   * every corpus negative is MUTATED in the one place that removes the property it
     pins, and the rule must fire on the result;
   * every negative on disk has a mutation;
-  * the product's own code is scanned with its premise asserted -- shipit runs
-    docker through subprocess in the sandbox and proof runners, so the silence
-    below is silence over code that invokes subprocess, not silence over an empty
-    archive.
+  * the product baseline is scanned and a known eligible route is then added
+    to prove that discovery still reaches supported code in the same archive;
+  * POSIX shell semantics are checked independently using harmless printf calls.
 """
 import io
-import re
+import os
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 POSITIVE = '''from fastapi import APIRouter, Depends
 import os
+import subprocess
 
 router = APIRouter()
 
@@ -121,7 +122,13 @@ CORPUS_NEGATIVES = REPO_ROOT / "tests" / "detectors" / RULE_ID / "negative"
 MUTATIONS: dict[str, tuple[str, str, str]] = {
     "subprocess-no-shell-list": ("app/list_files.py",
                                  'subprocess.run(["ls", "-la", name])',
-                                 'subprocess.run(["ls", "-la", name], shell=True)'),
+                                 'subprocess.run(["ls -la " + name], shell=True)'),
+    "shell-c-positional-data": ("app/command.py",
+                                "[\"bash\", \"-c\", 'printf \"%s\" \"$1\"', \"_\", name]",
+                                '["bash", "-c", "printf " + name]'),
+    "shell-true-positional-data": ("app/command.py",
+                                   "['printf \"%s\" \"$1\"', \"_\", name]",
+                                   '["printf " + name]'),
     "subprocess-no-shell-string": ("app/program.py",
                                    'subprocess.run("run-" + name)',
                                    'subprocess.run("run-" + name, shell=True)'),
@@ -141,8 +148,8 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
                               '["bash", "-c", "ls -la"]',
                               '["bash", "-c", "ls -la " + name]'),
     "list-variable-shell-true": ("app/variable_list.py",
-                                 "    args = [\"rm\", \"-rf\", name]\n    subprocess.run(args, shell=True)",
-                                 "    subprocess.run([\"rm\", \"-rf\", name], shell=True)"),
+                                 "    args = [\"rm -rf \" + name]\n    subprocess.run(args, shell=True)",
+                                 "    subprocess.run([\"rm -rf \" + name], shell=True)"),
 }
 
 
@@ -166,14 +173,57 @@ def test_each_corpus_negative_goes_silent_for_its_stated_reason(case):
 def test_the_product_own_code_reports_nothing():
     """A false-positive guard whose premise is asserted.
 
-    shipit runs docker through subprocess in the sandbox runner, the preview
-    stage and the proof probes, so a rule that fired on our own routes would be
-    unusable. If this ever fails, read the reported line before touching the rule.
+    Preserve the current self-scan baseline, then add a known eligible handler
+    to prove discovery reaches supported code within this same archive. A future
+    finding in the baseline must be investigated, not automatically suppressed.
     """
     sources = {p.relative_to(REPO_ROOT).as_posix(): p.read_text()
                for p in sorted((REPO_ROOT / "app").rglob("*.py")) if "__pycache__" not in p.parts}
-    text = "\n".join(sources.values())
-    subprocess_calls = len(re.findall(r"\bsubprocess\.(?:run|Popen|call|check_call|check_output)\(", text)) \
-        + len(re.findall(r"\bos\.(?:system|popen)", text))
-    assert subprocess_calls > 10, f"expected the product to invoke subprocess; found {subprocess_calls}"
     assert scan_command_injection(archive(sources)) == []
+    # A real candidate inside the same archive must still be visited, avoiding
+    # a vacuous green result when discovery/filtering stops seeing handlers.
+    sources["app/aaa_command_regression.py"] = POSITIVE
+    findings = scan_command_injection(archive(sources))
+    assert [(f.rule_id, f.file) for f in findings] == [(RULE_ID, "app/aaa_command_regression.py")]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="The scanner's argument-list model is POSIX")
+@pytest.mark.parametrize("explicit_shell", [False, True])
+@pytest.mark.parametrize("keyword_args", [False, True])
+@pytest.mark.parametrize("in_command", [False, True])
+def test_posix_command_positions_match_harmless_shell_execution(explicit_shell, keyword_args, in_command):
+    """Independent oracle: only synthetic printf commands run, never archive code.
+
+    The same metacharacters are printed literally as positional data, but are
+    interpreted when deliberately inserted into command source. This prevents
+    golden expectations from defining their own incorrect subprocess semantics.
+    """
+    value = "; printf SIDE_EFFECT"
+    if in_command:
+        expression = '["printf DATA" + host]'
+        argv = ["printf DATA" + value]
+    else:
+        expression = '[\'printf "%s" "$1"\', "_", host]'
+        argv = ['printf "%s" "$1"', "_", value]
+    if explicit_shell:
+        expression = '["sh", "-c", ' + expression[1:]
+        argv = ["sh", "-c", *argv]
+    options = {"shell": not explicit_shell}
+    result = subprocess.run(args=argv, capture_output=True, text=True, check=True, timeout=5, **options)
+    assert result.stdout == ("DATASIDE_EFFECT" if in_command else value)
+    call = f'subprocess.run({"args=" if keyword_args else ""}{expression}, shell={not explicit_shell})'
+    source = POSITIVE.replace('os.system("ping -c 1 " + host)', call)
+    findings = scan_command_injection(archive(source))
+    assert len(findings) == int(in_command)
+
+
+@pytest.mark.parametrize("arguments", [
+    '["echo " + host]',
+    '("echo " + host,)',
+    '["bash", "-c", "echo " + host]',
+    '("bash", "-c", "echo " + host)',
+])
+def test_unknown_shell_option_does_not_establish_command_position(arguments):
+    source = POSITIVE.replace('os.system("ping -c 1 " + host)',
+                              f'subprocess.run(args={arguments}, shell=unknown_shell)')
+    assert scan_command_injection(archive(source)) == []

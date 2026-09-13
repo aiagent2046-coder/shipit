@@ -1,5 +1,5 @@
 {
-  "description": "An argument LIST under shell=True: every element is joined into the shell string, so a caller element is still an injection.",
+  "description": "On POSIX only the first list element is interpreted as shell command text. The request value is assembled into that first element.",
   "expect": [
     {
       "rule_id": "command-injection-shell-built-command",

@@ -1,0 +1,10 @@
+{
+  "description": "The keyword args= form has the same command position as the positional shell -c form.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
