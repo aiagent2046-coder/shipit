@@ -119,25 +119,38 @@ _GLM_5_3_FLASH: dict[str, Decimal] = {
     "output": Decimal("0.25"),
 }
 # grok-4.20-multi-agent is deliberately NOT priced here, and that is a measured
-# decision rather than an omission. MEASURED 2026-09-13 against AITunnel with the
-# method above -- four calls of different shapes, then a fit:
+# decision rather than an omission. MEASURED 2026-09-13 against AITunnel, first
+# with four calls of different shapes and a fit:
 #
 #     in=2663   out=1236 ->  0.74 RUB     in=12089  out=5036 ->  4.09 RUB
 #     in=125087 out=2310 -> 22.01 RUB     in=75482  out=4655 -> 11.54 RUB
 #
-# No (input, output) rate pair explains those four points: the best fits leave
-# residuals of 25-29% of the call, so what this provider charges for this model is
-# not linear in the token counts we record (cached input is billed differently,
-# and a "multi-agent" request may be charged per step). Writing a per-MTok row
-# from them would put a fabricated number inside the spend cap -- the one place
-# where a guard reading low is worse than one reading high.
+# No (input, output) rate pair explains those four points -- the best fits leave
+# residuals of 25-29% of the call. The reason was then measured directly, by
+# sending the SAME message three times in a row:
 #
-# So it keeps DEFAULT_PRICE until a fit holds, and the cost of that choice is
-# named: the cap may stop a job early, and an early stop is visible in the report
-# rather than silent. The real fix is to record the provider's own `cost_rub` and
-# `balance`, which every AITunnel response carries (see this module's docstring),
-# instead of estimating from tokens -- that needs a currency, so it is a schema
-# decision rather than a table row.
+#     prompt=14695  cached=14592 out=2552 -> 1.87 RUB
+#     prompt=45858  cached=30208 out=3526 -> 6.82 RUB
+#     prompt=74914  cached=62528 out=4740 -> 7.89 RUB
+#
+# Identical input, five times the prompt tokens and four times the charge. The text
+# in that message was about 3.5K tokens, so most of what is billed is not what we
+# send: this endpoint runs a multi-agent orchestration, its token counts include
+# that machinery, and the machinery varies per call. Two consequences, and the
+# second is the one that matters operationally:
+#
+#   * a per-MTok row cannot be derived, because the tokens we can measure are not
+#     the tokens that are billed;
+#   * the spend ESTIMATE this module feeds is not a bound for this model: cost per
+#     call is not predictable from the prompt we build, so the estimate can be
+#     several times off in either direction.
+#
+# It therefore keeps DEFAULT_PRICE -- the most expensive known rates, so the error
+# this project tolerates is the one that stops a job rather than the one that
+# overspends -- and its recorded cost should be read as a rough guard, never as a
+# bill. The real fix is to store the provider's own `cost_rub` and `balance`, which
+# every AITunnel response carries (see this module's docstring): that is a currency
+# and schema decision, not a table row.
 #
 # Its sampling decision IS measured: AITunnel answered 200 to a request carrying
 # `temperature`, so it belongs on the MODELS_WITH_SAMPLING_PARAMS side in
