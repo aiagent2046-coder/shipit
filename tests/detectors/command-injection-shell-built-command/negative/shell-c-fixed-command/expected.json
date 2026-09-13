@@ -1,0 +1,7 @@
+{
+  "description": "The [\"bash\", \"-c\", command] list runs a literal command the code chose; the caller's value is not in it. The mutation puts the caller's name into the command part, which must fire.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}

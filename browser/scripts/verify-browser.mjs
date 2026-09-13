@@ -26,17 +26,20 @@ try {
   await page.goto(base + '/harness.html');
   await page.waitForFunction(() => ['PASSED', 'FAILED'].includes(document.querySelector('#status').textContent), null,
     { timeout: 120_000 });
+  const cases = JSON.parse(await readFile(resolve(root, 'test-dist/cases.json')));
+  assert.ok(cases.length > 0, 'Need a nonempty corpus');
+  const expectedChecks = cases[0].native.report.checks_run;
   const measured = JSON.parse(await page.locator('#result').textContent());
   await writeFile(resolve(output, 'chromium-parity.json'), JSON.stringify(measured, null, 2));
   assert.equal(measured.summary?.unexpected_failures, 0, 'Chromium corpus parity failed');
-  assert.equal(measured.summary.cases, 251);
-  assert.equal(measured.summary.expectation_passed, 251, 'Update measured scope explicitly when changing support');
+  assert.equal(measured.summary.cases, cases.length);
+  assert.equal(measured.summary.expectation_passed, cases.length, 'Every corpus expectation must pass');
   assert.equal(measured.summary.full_parity, true);
 
   assert.equal(measured.summary.parser_probes, 'passed');
-  assert.equal(measured.summary.supported_checks, 17);
+  assert.equal(measured.summary.supported_checks, expectedChecks.length);
 
-  const cases = JSON.parse(await readFile(resolve(root, 'test-dist/cases.json')));
+  assert.deepEqual(measured.rows.map(r => r.id).sort(), cases.map(c => c.id).sort());
   const item = cases.find(c => c.rule === 'stripe-live-key' && c.polarity === 'positive');
   assert.ok(item, 'Need a real synthetic credential fixture');
   const input = { name: 'synthetic-project.zip', mimeType: 'application/zip', buffer: Buffer.from(item.archive, 'base64') };
@@ -45,7 +48,7 @@ try {
   await page.getByRole('button', { name: 'Scan locally' }).click();
   await page.locator('#results').waitFor({ state: 'visible', timeout: 120_000 });
   assert.equal(await page.locator('#checks-not-run li').count(), 0);
-  assert.equal(await page.locator('#checks-run li').count(), 17);
+  assert.equal(await page.locator('#checks-run li').count(), expectedChecks.length);
   assert.match(await page.locator('#findings').innerText(), /Stripe/);
   await page.screenshot({ path: resolve(output, 'scanner-desktop.png'), fullPage: true });
 
@@ -57,6 +60,7 @@ try {
   }
   const report = JSON.parse(await readFile(resolve(output, 'report.json')));
   assert.equal(report.checks_not_run.length, 0);
+  assert.deepEqual([...report.checks_run].sort(), [...expectedChecks].sort());
   assert.ok(report.findings.some(f => f.rule_id === 'stripe-live-key'));
   assert.equal('score' in report, false);
   const sarif = JSON.parse(await readFile(resolve(output, 'report.sarif')));
@@ -95,8 +99,8 @@ try {
   await fallback.getByLabel('Project ZIP', { exact: true }).setInputFiles(input);
   await fallback.getByRole('button', { name: 'Scan locally' }).click();
   await fallback.locator('#results').waitFor({ state: 'visible', timeout: 120_000 });
-  assert.equal(await fallback.locator('#checks-not-run li').count(), 4);
-  assert.equal(await fallback.locator('#checks-run li').count(), 13);
+  assert.equal(await fallback.locator('#checks-not-run li').count(), item.portable.report.checks_not_run.length);
+  assert.equal(await fallback.locator('#checks-run li').count(), item.portable.report.checks_run.length);
   assert.match(await fallback.locator('#findings').innerText(), /Stripe/);
   assert.equal(await fallback.locator('#partial-coverage').isVisible(), true);
   const fallbackDownload = fallback.waitForEvent('download');

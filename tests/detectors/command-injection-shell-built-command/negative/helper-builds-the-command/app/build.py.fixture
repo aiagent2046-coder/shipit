@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+import os
+
+router = APIRouter()
+
+
+@router.get("/report")
+async def report(name: str):
+    os.system(build_command(name))

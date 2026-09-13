@@ -1,0 +1,12 @@
+from fastapi import APIRouter
+import subprocess
+
+router = APIRouter()
+
+
+@router.get("/export")
+async def export(name: str):
+    try:
+        subprocess.check_output("tar -cf out.tar " + name, shell=True)
+    except Exception:
+        pass

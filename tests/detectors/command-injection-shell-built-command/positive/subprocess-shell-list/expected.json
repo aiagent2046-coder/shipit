@@ -1,0 +1,10 @@
+{
+  "description": "On POSIX only the first list element is interpreted as shell command text. The request value is assembled into that first element.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

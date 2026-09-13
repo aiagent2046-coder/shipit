@@ -1,0 +1,7 @@
+{
+  "description": "The caller value is positional data, not shell source. Quoted expansion does not evaluate metacharacters in the value.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}

@@ -14,6 +14,7 @@ from app.scan.auth_write import scan_auth_write
 from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
+from app.scan.command_injection import scan_command_injection
 from app.scan.check_loading import is_native_import_error, optional_native_function
 from app.scan.error_boundary import MOUNT_UNKNOWN, scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
@@ -187,6 +188,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
             ))
 
     fileobj.seek(0)
+    with attempt("command_injection"):
+        for c in list(scan_command_injection(fileobj, coverage=rule_coverage["command_injection"])):
+            findings.append(ScoredFinding(
+                rule_id=c.rule_id, title=c.title, severity=c.severity,
+                confidence=c.confidence, category=c.category, file=c.file,
+                line=c.line, explanation=c.explanation, fix_hint=c.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
+
+    fileobj.seek(0)
     with attempt("session_cookie"):
         for c in list(scan_cookie_flags(fileobj)):
             findings.append(ScoredFinding(
@@ -346,6 +357,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                      "outbound_url": SCOPE["outbound_url"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],
                      "path_traversal": SCOPE["path_traversal"],
+                     "command_injection": SCOPE["command_injection"],
                      "session_cookie": SCOPE["session_cookie"],
                      "http_success": HTTP_SUCCESS_SCOPE_PREFIX
                      + "Parser limits: "

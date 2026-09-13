@@ -1,0 +1,10 @@
+{
+  "description": "Building the command with += is the same concatenation as +; the provenance must survive the augmented assignment.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

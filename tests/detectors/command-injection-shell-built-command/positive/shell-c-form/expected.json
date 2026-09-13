@@ -1,0 +1,10 @@
+{
+  "description": "A [\"bash\", \"-c\", command] argument list runs the command through a shell without shell=True; the caller's value in the command part is the injection.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

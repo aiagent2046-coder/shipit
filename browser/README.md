@@ -5,7 +5,7 @@ JSON or SARIF. No account, audit API, model provider, or customer-code execution
 The initial application/runtime download needs a connection. This first build
 does not claim installable-PWA or guaranteed offline-reload support.
 
-## Measured scope
+## Coverage verification
 
 Pinned runtime: Pyodide 314.0.6 / Python 3.14.2 / PyYAML 6.0.3.
 The same reviewed Python detectors run here with real native parser extensions
@@ -13,14 +13,17 @@ cross-compiled to WASM. No empty-result stubs or substitute JS adapters.
 
 | Scope | Native parser preview |
 | --- | --- |
-| Completed top-level checks | 17 of 17 when all assets load |
-| Full CPython report and SARIF parity | 251 of 251 corpus cases |
-| Golden finding expectations | 251 of 251 corpus cases |
+| Completed top-level checks | Every check in the shared capability registry when all assets load |
+| Full CPython report and SARIF parity | Every case in the current detector corpus |
+| Golden finding expectations | Every positive and negative corpus expectation |
 | Parser probes | TS, TSX, JS and PostgreSQL AST, Unicode offsets and parse errors |
 | Runtime assets before HTTP compression | 14,674,647 bytes |
-| Python engine bundle | 1,354,468 bytes before HTTP compression |
+| Python engine bundle | Size and SHA-256 recorded by each build |
 
-This is reviewed example coverage, **not recall on arbitrary repositories**.
+The CI artifacts record actual case counts, completed checks and per-case differences
+for each commit. The browser gate compares check identities, not a fixed historical
+count; missing or duplicate checks still fail. This is reviewed example coverage,
+**not recall on arbitrary repositories**.
 The parser packages add 1,042,834 bytes of compressed wheels. All four previously
 unavailable checks are restored: `sql_injection_js`, `tls_verification`,
 `session_cookie` and `http_success`. Recommendation guard logic also runs.

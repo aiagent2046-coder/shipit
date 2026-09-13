@@ -204,6 +204,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # the exception type -- instead of the stage raising and the customer getting no
 # report at all. MEASURED 2026-09-13: a single raising scanner killed every other
 # finding, server-side and in a browser build that lacked the TypeScript grammar.
+# 2026-09-13-6: command-injection-shell-built-command, a new static scanner that
+# reads a shell command assembled from request input -- os.system/os.popen and the
+# subprocess family with a literal shell=True, or an explicit POSIX shell -c.
+# Only the command string is treated as shell code; positional data is separate.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+import subprocess
+
+router = APIRouter()
+
+
+@router.get("/command")
+async def command(name: str):
+    subprocess.run(["bash", "-c", 'printf "%s" "$1"', "_", name])

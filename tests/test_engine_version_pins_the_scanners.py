@@ -52,6 +52,7 @@ WIRED_SCANNERS = (
     "scan_auth_read",
     "scan_auth_write",
     "scan_ci_deploy_source",
+    "scan_command_injection",
     "scan_cookie_flags",
     "scan_error_boundary",
     "scan_http_success",
@@ -76,6 +77,7 @@ WIRED_SCANNERS = (
 EMITTED_RULE_IDS = (
     "anthropic-api-key",
     "aws-access-key-id",
+    "command-injection-shell-built-command",
     "connection-string-dev-password",
     "connection-string-local-host",
     "connection-string-password",
@@ -115,7 +117,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-13-5"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-13-6"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

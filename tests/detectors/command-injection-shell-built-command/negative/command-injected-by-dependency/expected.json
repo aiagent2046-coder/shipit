@@ -1,0 +1,7 @@
+{
+  "description": "The command is configuration injected by a dependency, not a value the caller sent. The mutation turns the parameter into one the request fills, which must fire.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}
