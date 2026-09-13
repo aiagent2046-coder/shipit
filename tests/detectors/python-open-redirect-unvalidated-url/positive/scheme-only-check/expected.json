@@ -1,0 +1,10 @@
+{
+  "description": "A scheme check leaves the destination host entirely caller-controlled.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

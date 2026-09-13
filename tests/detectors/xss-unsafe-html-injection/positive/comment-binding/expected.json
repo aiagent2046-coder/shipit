@@ -1,0 +1,10 @@
+{
+  "description": "A commented declaration cannot suppress a real use.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

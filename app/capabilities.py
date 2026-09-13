@@ -245,6 +245,22 @@ CAPABILITIES: tuple[Capability, ...] = (
         "32 findings are reported",
     ),
     Capability(
+        "open_redirect",
+        "A redirect whose target authority comes from the caller",
+        ("python-open-redirect-unvalidated-url",),
+        "Local FastAPI routes in parseable Python files up to 400 KB; recognized test/example/documentation "
+        "paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency "
+        "trees and generated build directories (.next, dist, build) are excluded before the file limit. The "
+        "Starlette/FastAPI RedirectResponse constructor whose target authority (between :// and the first "
+        "/, ? or #) is built from a value the request supplies is reported. A caller value that fills only "
+        "the path stays silent, except an input immediately after a leading slash that can form //host. "
+        "Only an exact literal destination allowlist on the accepting branch suppresses the signal. "
+        "Prefix/scheme checks, assertions and unknown validators do not establish that allowlist. "
+        "Flask/Django redirect(), HTTPResponse/HTTPException Location headers, meta-refresh and JS/TS "
+        "are not covered, and a helper that assembles the URL is not followed. Whether the route is "
+        "reachable is not verified; parsed-host and cross-function validators are unresolved.",
+    ),
+    Capability(
         "path_traversal",
         "A file path built from a value the caller sent",
         ("path-traversal-file-sink",),
@@ -259,6 +275,53 @@ CAPABILITIES: tuple[Capability, ...] = (
         "checked against a fixed absolute base on the branch reaching the operation. "
         "Unknown helpers, general control-flow joins, other validation patterns, "
         "runtime symlinks and TS/JS file handling are NOT covered",
+    ),
+    Capability(
+        "xss",
+        "HTML injected into the DOM from a value that is not a fixed string",
+        ("xss-unsafe-html-injection",),
+        "JavaScript/TypeScript/JSX/TSX parsed with the bundled native grammar; at most 400 files "
+        "up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example "
+        "paths, vendor, dependency trees and generated build directories are excluded before the "
+        "file limit. DOM innerHTML/outerHTML assignments, document.write/writeln, insertAdjacentHTML "
+        "and React dangerouslySetInnerHTML are reported for nonliteral values. A complete literal "
+        "or an earlier visible, globally unambiguous const literal stays silent; concatenation, "
+        "shadowed names and comments do not establish a static value. Sanitization, input trust, "
+        "DOM receiver provenance, cross-file resolution and other framework template bindings are "
+        "unresolved. Missing native grammars withhold the check; malformed or oversized source "
+        "is reported in coverage rather than treated as analyzed.",
+    ),
+    Capability(
+        "insecure_randomness",
+        "A secret-looking value generated from a non-cryptographic random source",
+        ("insecure-randomness",),
+        "Python AST and JavaScript/TypeScript/JSX/TSX syntax; at most 400 files up to 400 KB each, "
+        "20,000 syntax nodes and depth 100, with at most 32 findings. Test/example paths, vendor, "
+        "dependency trees and generated build directories are excluded before the file limit. "
+        "Secret-named assignments containing a call to a proven stable Python random import "
+        "(including supported aliases) or an unshadowed Math.random are reported, including template "
+        "interpolation. Comments, docstrings and literal text are not draws. Rebound or ambiguous "
+        "sources, helpers, cross-file provenance and actual security use of the result are unresolved. "
+        "secrets and SystemRandom are not insecure sources. Missing native grammars withhold this "
+        "combined check; malformed or oversized source is reported in coverage.",
+    ),
+    Capability(
+        "command_injection",
+        "A shell command assembled from the caller's input",
+        ("command-injection-shell-built-command",),
+        "Local FastAPI route handlers in parseable Python files up to 400 KB; recognized "
+        "test/example/documentation paths are skipped, except migration paths. At most 400 files "
+        "and 32 findings; vendor, dependency trees and generated build directories (.next, dist, "
+        "build) are excluded before the file limit. Shell-invoking calls whose command is assembled "
+        "from a value the request supplies are reported: os.system/os.popen (always a shell), the "
+        "subprocess family when shell=True is a literal, and a [\"<shell>\", \"-c\", command] argument "
+        "list (a shell command without shell=True). Positional and args= forms are recognized. "
+        "Lists follow POSIX semantics: only args[0] under shell=True, or the command after -c, "
+        "is shell code; subsequent positional parameters are data. Windows shell/list conventions, "
+        "shell passed as a variable, an argument list "
+        "assigned to a variable before the call, os.exec*/os.spawn* and TS/JS are not covered. Whether "
+        "the route is reachable, whether a check elsewhere constrains the value, and whether the call "
+        "executes are not verified.",
     ),
     Capability(
         "session_cookie",

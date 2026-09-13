@@ -1,0 +1,2 @@
+const item = document.getElementById("feed");
+item.insertAdjacentHTML("beforeend", entry.html);

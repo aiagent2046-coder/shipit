@@ -1,0 +1,2 @@
+import random as rnd
+reset_token = rnd.getrandbits(128)

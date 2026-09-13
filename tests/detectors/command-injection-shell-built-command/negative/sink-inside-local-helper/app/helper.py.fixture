@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+import os
+
+router = APIRouter()
+
+
+@router.get("/run")
+async def run(name: str):
+    def execute(cmd):
+        os.system(cmd)
+    execute("ls -la")

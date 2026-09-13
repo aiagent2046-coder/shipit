@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+from starlette.responses import RedirectResponse
+
+router = APIRouter()
+
+
+@router.get("/go")
+async def go(next: str):
+    if next in ("https://ours.com/cb", "https://ours.com/home"):
+        return RedirectResponse(next)
+    raise ValueError()

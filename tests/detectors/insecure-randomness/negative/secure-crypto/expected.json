@@ -1,0 +1,7 @@
+{
+  "description": "crypto.getRandomValues is the secure source; the mutation swaps it for Math.random, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

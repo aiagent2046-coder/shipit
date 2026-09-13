@@ -1,0 +1,10 @@
+{
+  "description": "insertAdjacentHTML with a non-literal value.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

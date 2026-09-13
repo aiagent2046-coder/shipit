@@ -1,0 +1,7 @@
+{
+  "description": "A raw Starlette Response with a Location header is an open redirect spelled differently, but this rule reads only the RedirectResponse constructor; the mutation swaps in RedirectResponse, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-open-redirect-unvalidated-url"
+  ]
+}

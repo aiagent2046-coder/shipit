@@ -38,7 +38,14 @@ def test_real_scan_records_the_unread_tail_for_each_bounded_rule():
     scan = run_scan(data, LLMClient(providers=[]))
     counts = scan["score"]["scan_manifest"]["rule_coverage"]
     assert set(counts) == set(RULE_COVERAGE_KEYS)
-    assert all(record == partial_record() for record in counts.values())
+    # The .py bounded rules read the 840 Python files and hit the 400-file
+    # limit; the JS/TS rule has nothing to read in a Python-only archive, so it
+    # is complete over zero eligible files rather than partial.
+    for key, record in counts.items():
+        if key == "xss":
+            assert record["eligible_files"] == 0 and record["partial"] is False
+        else:
+            assert record == partial_record()
     # A report round-trip must retain the measured scope even with no findings
     # from these four rules. The visible notice is exercised by report tests.
     restored = json.loads(json.dumps(scan))

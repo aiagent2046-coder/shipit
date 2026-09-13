@@ -1,0 +1,4 @@
+import random
+"""
+reset_token = random.randint(1, 9)
+"""

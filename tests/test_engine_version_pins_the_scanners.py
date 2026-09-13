@@ -52,9 +52,12 @@ WIRED_SCANNERS = (
     "scan_auth_read",
     "scan_auth_write",
     "scan_ci_deploy_source",
+    "scan_command_injection",
     "scan_cookie_flags",
     "scan_error_boundary",
     "scan_http_success",
+    "scan_insecure_randomness",
+    "scan_open_redirect",
     "scan_outbound_url",
     "scan_path_traversal",
     "scan_rls",
@@ -65,6 +68,7 @@ WIRED_SCANNERS = (
     "scan_sql_injection_js",
     "scan_tls_verification",
     "scan_unsafe_deserialization",
+    "scan_xss",
 )
 
 # Every rule id a static finding can reach the reader under. Taken from the
@@ -76,6 +80,7 @@ WIRED_SCANNERS = (
 EMITTED_RULE_IDS = (
     "anthropic-api-key",
     "aws-access-key-id",
+    "command-injection-shell-built-command",
     "connection-string-dev-password",
     "connection-string-local-host",
     "connection-string-password",
@@ -84,6 +89,7 @@ EMITTED_RULE_IDS = (
     "generic-assignment",
     "github-pat",
     "gitignore-missing-secrets",
+    "insecure-randomness",
     "insecure-session-cookie-attributes",
     "jwt-in-code",
     "missing-error-boundary",
@@ -92,6 +98,7 @@ EMITTED_RULE_IDS = (
     "no-tests",
     "path-traversal-file-sink",
     "private-key-block",
+    "python-open-redirect-unvalidated-url",
     "python-outbound-request-unvalidated-url",
     "python-route-read-auth-consistency",
     "python-route-write-auth-consistency",
@@ -104,6 +111,7 @@ EMITTED_RULE_IDS = (
     "telegram-bot-token",
     "tls-verification-disabled",
     "unsafe-deserialization",
+    "xss-unsafe-html-injection",
 )
 
 # The damping vocabulary. A context decides which section of the report a

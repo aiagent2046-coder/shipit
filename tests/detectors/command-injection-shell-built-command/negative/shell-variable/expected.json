@@ -1,0 +1,7 @@
+{
+  "description": "shell is passed as a variable, not the literal True; an unknown value counts as safe, so the call is not read as a shell sink. The mutation hard-codes shell=True, which must fire.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}

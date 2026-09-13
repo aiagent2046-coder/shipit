@@ -1,0 +1,7 @@
+{
+  "description": "The sink sits inside a local helper; its parameter is not the handler's parameter and the helper is callable from anywhere in the file, so the rule does not connect them. The mutation inlines the sink into the handler with the caller's value, which must fire.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}

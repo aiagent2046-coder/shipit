@@ -1,0 +1,10 @@
+{
+  "description": "A token in JS drawn from Math.random: predictable and replayable.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

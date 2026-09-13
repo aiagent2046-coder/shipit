@@ -1,0 +1,7 @@
+{
+  "description": "textContent is text, not markup, and is not a sink; the mutation changes it to innerHTML, which must fire.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "description": "The secrets module is the secure source; the mutation swaps it for the random module, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

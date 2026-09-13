@@ -1,0 +1,10 @@
+{
+  "description": "A caller value beginning with slash changes the leading single slash into a protocol-relative authority.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

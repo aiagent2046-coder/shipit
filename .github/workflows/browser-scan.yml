@@ -38,7 +38,9 @@ jobs:
           npm --prefix browser run build
           node browser/scripts/prepare-harness.mjs
       - name: WASM profile parity
-        run: npm --prefix browser run test:wasm
+        run: |
+          node --test browser/tests/parity.test.mjs
+          npm --prefix browser run test:wasm
       - name: Chromium UI, offline corpus and exports
         run: |
           cd browser

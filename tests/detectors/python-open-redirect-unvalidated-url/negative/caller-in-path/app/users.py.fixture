@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+from starlette.responses import RedirectResponse
+
+router = APIRouter()
+
+
+@router.get("/u")
+async def u(user_id: str):
+    return RedirectResponse(f"/users/{user_id}")

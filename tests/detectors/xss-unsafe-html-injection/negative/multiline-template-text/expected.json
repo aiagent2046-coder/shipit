@@ -1,0 +1,7 @@
+{
+  "description": "A sink spelling inside multiline literal text is not an operation.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

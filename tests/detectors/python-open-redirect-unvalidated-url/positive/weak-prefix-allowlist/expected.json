@@ -1,0 +1,10 @@
+{
+  "description": "A URL prefix also accepts ours.com.evil.example and ours.com@evil.example; it is not a destination allowlist.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

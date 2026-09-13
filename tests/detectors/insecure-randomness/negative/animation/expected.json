@@ -1,0 +1,7 @@
+{
+  "description": "A random draw feeding an animation is not a secret; the mutation renames the target to a token, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

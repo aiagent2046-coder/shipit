@@ -44,12 +44,16 @@ SCANNER_CHECKS = {
     "scan_auth_read": "auth_read_consistency",
     "scan_auth_write": "auth_write_consistency",
     "scan_http_success": "http_success",
+    "scan_insecure_randomness": "insecure_randomness",
     "scan_sql_injection": "sql_injection",
     "scan_sql_injection_js": "sql_injection_js",
     "scan_outbound_url": "outbound_url",
+    "scan_open_redirect": "open_redirect",
     "scan_tls_verification": "tls_verification",
     "scan_unsafe_deserialization": "unsafe_deserialization",
     "scan_path_traversal": "path_traversal",
+    "scan_xss": "xss",
+    "scan_command_injection": "command_injection",
     "scan_cookie_flags": "session_cookie",
 }
 

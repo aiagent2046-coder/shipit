@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+import subprocess
+
+router = APIRouter()
+
+
+@router.get("/purge")
+async def purge(target: str):
+    subprocess.run(["bash", "-c", f"rm -rf '{target}'"])

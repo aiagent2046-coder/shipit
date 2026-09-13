@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+import os
+
+router = APIRouter()
+
+
+@router.get("/ping")
+async def ping(host: str):
+    cmd = "ping -c 1 "
+    cmd += host
+    os.system(cmd)

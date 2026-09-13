@@ -29,7 +29,11 @@ The browser can still import report code without native AST dependencies.
 
 ## Offline measurement
 
-Comparison base: `5dfd35882ac60d27b2db7aeab7731ac0bf50d882`.
+Initial comparison base: `5dfd35882ac60d27b2db7aeab7731ac0bf50d882`.
+Repeated after integrating main `4cde0762bdc3f4a6d2390bfb2510f7e9c913082c`:
+the measurements below and all LLM records are unchanged; the nine static
+findings match updated main exactly. Merge conflicts were limited to the engine
+version and its pin; the newer detector roster is preserved.
 Changed engine: `2026-09-13-11`.
 
 Inputs were the existing saved trial and its pinned source ZIP, not newly
@@ -93,7 +97,7 @@ Validation covers actual AST-generated evidence, stale helper/config bindings,
 uncapped consumers, HTTP checks inside the retry callback, distinct SELECT/count
 operations, malformed metadata, repeat/projection idempotence and public exports.
 
-Local checks: 7,865 Python tests passed, 148 skipped and one expected failure;
+Final local checks after main integration: 8,101 Python tests passed, 148 skipped and one expected failure;
 316 web tests passed; TypeScript, Ruff and whitespace checks passed. The full
 Python suite used `FIXPACK_RUN_AS_USER=node:node` for mocked container-command
 tests because this workspace cannot chown to numeric UID 1000. Ambient proxy

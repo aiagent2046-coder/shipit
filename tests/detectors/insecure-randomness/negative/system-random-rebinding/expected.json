@@ -1,0 +1,7 @@
+{
+  "description": "SystemRandom rebinding must not borrow the module generator properties.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "description": "A multiline docstring contains text, not a call.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

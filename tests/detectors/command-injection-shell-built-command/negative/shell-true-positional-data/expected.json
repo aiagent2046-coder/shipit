@@ -1,0 +1,7 @@
+{
+  "description": "POSIX shell=True interprets only the first list element as command text; later values are shell positional arguments, not joined source.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}

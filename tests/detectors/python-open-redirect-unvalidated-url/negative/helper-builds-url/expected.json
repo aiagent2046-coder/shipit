@@ -1,0 +1,7 @@
+{
+  "description": "The target is assembled by a call the rule does not follow into, so the trace stops; the mutation inlines the concatenation, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-open-redirect-unvalidated-url"
+  ]
+}

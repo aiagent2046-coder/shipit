@@ -1,0 +1,10 @@
+{
+  "description": "An executed class body draws a secret-named value from the proven module.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

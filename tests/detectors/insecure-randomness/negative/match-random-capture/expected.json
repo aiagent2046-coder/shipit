@@ -1,0 +1,7 @@
+{
+  "description": "Pattern capture shadows the imported random module in the function.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

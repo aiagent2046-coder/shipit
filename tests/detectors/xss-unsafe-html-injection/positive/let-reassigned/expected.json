@@ -1,0 +1,10 @@
+{
+  "description": "A let binding is not trusted as static because it can be reassigned; the dynamic reassignment must still fire.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "The caller fills the authority of the redirect target, so the visitor can be sent to an attacker's host.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

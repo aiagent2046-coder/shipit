@@ -1,0 +1,7 @@
+{
+  "description": "The argument list is assigned to a variable before the call; the skeleton is built from strings, not a list behind a name, so this one hop of indirection is not followed and the trace stops. The mutation inlines the list into the call, which must fire.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}
