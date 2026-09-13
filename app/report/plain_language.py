@@ -20,6 +20,17 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "unsafe-xml-parse": (
+        "XML is parsed through a path that can resolve external entities.",
+        "lxml.etree resolves external entities when resolve_entities=True is passed, and does so "
+        "by default before lxml 5.0 (from 5.0 the default is 'internal', which does not). An "
+        "attacker-controlled XML document can then read local files, probe the internal network or "
+        "force a billion-laughs expansion. Where the bytes come from has not been verified; trusted "
+        "internal data and untrusted external data can reach the same call.",
+        "Parse XML with xml.etree.ElementTree (which does not resolve external entities) or the "
+        "defusedxml package. For lxml, pass resolve_entities=False (or "
+        "parser=etree.XMLParser(resolve_entities=False)) and disable network access.",
+    ),
     "command-injection-shell-built-command": (
         "A shell command is built from a value the caller sent.",
         "This route hands a string to a shell -- os.system, os.popen, subprocess with shell=True, "

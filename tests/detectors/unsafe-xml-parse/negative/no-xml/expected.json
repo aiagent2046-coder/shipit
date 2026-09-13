@@ -1,0 +1,7 @@
+{
+  "description": "not an XML parse at all.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

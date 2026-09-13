@@ -1,0 +1,7 @@
+{
+  "description": "defusedxml is the hardened package and is not a sink.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

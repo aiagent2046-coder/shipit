@@ -68,6 +68,7 @@ WIRED_SCANNERS = (
     "scan_sql_injection_js",
     "scan_tls_verification",
     "scan_unsafe_deserialization",
+    "scan_unsafe_xml_parse",
     "scan_xss",
 )
 
@@ -111,6 +112,7 @@ EMITTED_RULE_IDS = (
     "telegram-bot-token",
     "tls-verification-disabled",
     "unsafe-deserialization",
+    "unsafe-xml-parse",
     "xss-unsafe-html-injection",
 )
 
@@ -123,7 +125,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-13-12"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-13-13"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

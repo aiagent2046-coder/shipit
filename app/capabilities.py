@@ -306,6 +306,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         "combined check; malformed or oversized source is reported in coverage.",
     ),
     Capability(
+        "unsafe_xml_parse",
+        "XML parsed through a path that can resolve external entities",
+        ("unsafe-xml-parse",),
+        "Import-resolved Python XML parses in parseable Python files up to 400 KB; recognized "
+        "test/example/documentation paths are skipped, except migration paths. At most 400 files and "
+        "32 findings; vendor, dependency trees and generated build directories are excluded before "
+        "the file limit. lxml.etree parse/fromstring/iterparse calls that pass resolve_entities=True "
+        "are reported at high confidence; a call with no resolve_entities argument is reported at "
+        "medium confidence because it is unsafe on lxml < 5.0 but safe from 5.0. resolve_entities=False "
+        "and the stdlib xml.etree/sax/minidom/pulldom modules (which do not resolve external entities "
+        "on Python 3.7.1+) are not sinks. Input trust, the installed lxml version, cross-file "
+        "resolution and a parser object stored in a variable then passed later are unresolved.",
+    ),
+    Capability(
         "command_injection",
         "A shell command assembled from the caller's input",
         ("command-injection-shell-built-command",),

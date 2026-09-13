@@ -209,6 +209,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # XSS and JS random calls use bundled syntax parsers; Python random imports use
 # bounded AST provenance. Redirect suppression requires an exact destination
 # allowlist. XML is deferred rather than assuming unsafe parser defaults.
+# 2026-09-13-13: unsafe-xml-parse, an import-resolved XXE rule. lxml.etree is the
+# only sink: the stdlib xml modules do not resolve external entities on Python
+# 3.7.1+. resolve_entities=True is high confidence; a missing argument is medium
+# (unsafe before lxml 5.0, safe from 5.0); resolve_entities=False is not a sink.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

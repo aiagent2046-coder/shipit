@@ -1,0 +1,7 @@
+{
+  "description": "a direct resolve_entities=False keyword on iterparse disables external entities and is not a sink.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

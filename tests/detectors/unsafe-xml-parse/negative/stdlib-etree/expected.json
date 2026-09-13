@@ -1,0 +1,7 @@
+{
+  "description": "xml.etree.ElementTree does not resolve external entities and is not a sink.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

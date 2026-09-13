@@ -1,0 +1,7 @@
+{
+  "description": "xml.sax does not resolve external entities on Python 3.7.1+ and is not a sink.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}
