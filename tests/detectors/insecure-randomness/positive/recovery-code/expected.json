@@ -1,0 +1,10 @@
+{
+  "description": "A recovery code drawn from Math.random is a predictable account-recovery secret.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

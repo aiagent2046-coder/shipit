@@ -1,0 +1,1 @@
+row.innerHTML = `<b>${rowData.title}</b>`;

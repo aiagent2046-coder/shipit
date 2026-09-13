@@ -1,0 +1,10 @@
+{
+  "description": "A value built by a call is not a static binding, so the sink on the name still fires.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

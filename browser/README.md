@@ -24,8 +24,8 @@ The CI artifacts record actual case counts, completed checks and per-case differ
 for each commit. The browser gate compares check identities, not a fixed historical
 count; missing or duplicate checks still fail. This is reviewed example coverage,
 **not recall on arbitrary repositories**.
-The parser packages add 1,042,834 bytes of compressed wheels. All four previously
-unavailable checks are restored: `sql_injection_js`, `tls_verification`,
+The parser packages add 1,042,834 bytes of compressed wheels. Native parsers support XSS and random-source analysis as well as
+the four original native-dependent checks: `sql_injection_js`, `tls_verification`,
 `session_cookie` and `http_success`. Recommendation guard logic also runs.
 If a native asset fails to load, available checks still run and the report lists
 the gaps; incomplete SARIF reports use `executionSuccessful: false`. The CI

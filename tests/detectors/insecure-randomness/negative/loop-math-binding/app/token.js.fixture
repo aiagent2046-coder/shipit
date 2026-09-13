@@ -1,0 +1,1 @@
+for (const Math of sources) { const token = Math.random(); }

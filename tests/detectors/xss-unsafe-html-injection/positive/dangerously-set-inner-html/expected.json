@@ -1,0 +1,10 @@
+{
+  "description": "React's explicit escape hatch: a caller value handed straight to dangerouslySetInnerHTML.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

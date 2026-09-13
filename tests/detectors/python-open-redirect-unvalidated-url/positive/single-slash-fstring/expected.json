@@ -1,0 +1,10 @@
+{
+  "description": "Interpolation after one slash can introduce a protocol-relative authority.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

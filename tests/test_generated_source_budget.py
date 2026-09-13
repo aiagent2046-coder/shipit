@@ -115,8 +115,16 @@ def test_generated_counts_survive_static_manifest_and_sarif_with_secret_findings
                for finding in static["findings"])
     manifest = scan_manifest(data, "test", static, {}, None)
     assert manifest["rule_coverage"] == static["rule_coverage"]
-    for record in manifest["rule_coverage"].values():
-        assert_accounting(record, total=502, eligible=1, attempted=1, analyzed=1,
-                          exclusions={"dependency_tree": 1, "generated_build": 500})
+    for key, record in manifest["rule_coverage"].items():
+        if key == "xss":
+            # The JS/TS rule reads no .py file in this archive; the only .py
+            # files are the generated build tree and a vendor dependency, and
+            # the own .py source is an unsupported extension for it.
+            assert_accounting(record, total=502, eligible=0, attempted=0, analyzed=0,
+                              exclusions={"dependency_tree": 1, "generated_build": 500,
+                                          "unsupported_extension": 1})
+        else:
+            assert_accounting(record, total=502, eligible=1, attempted=1, analyzed=1,
+                              exclusions={"dependency_tree": 1, "generated_build": 500})
     sarif = build_sarif([], engine_version="test", score={"scan_manifest": manifest})
     assert sarif["runs"][0]["invocations"][0]["properties"]["ruleCoverage"] == manifest["rule_coverage"]

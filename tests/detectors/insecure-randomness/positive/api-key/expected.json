@@ -1,0 +1,10 @@
+{
+  "description": "An API key drawn from random.getrandbits is not cryptographically secure.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

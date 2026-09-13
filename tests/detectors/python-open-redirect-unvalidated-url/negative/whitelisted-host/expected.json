@@ -1,0 +1,7 @@
+{
+  "description": "An exact allowlist of complete destination URLs permits only fixed destinations; the mutation removes the check, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-open-redirect-unvalidated-url"
+  ]
+}

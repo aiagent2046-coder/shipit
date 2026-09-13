@@ -1,0 +1,2 @@
+const html = "fixed";
+for (const html of inputs) { node.innerHTML = html; }

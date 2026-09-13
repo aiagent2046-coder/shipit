@@ -1,0 +1,7 @@
+{
+  "description": "Picking from a list named tokens is not generating a token; the mutation renames the target to a secret name, which must fire.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

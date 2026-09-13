@@ -1,0 +1,5 @@
+import random
+def issue(obj):
+    match obj:
+        case {"random": random}:
+            secret = random.random()

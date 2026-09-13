@@ -1,0 +1,10 @@
+{
+  "description": "An interpolation-free template prefix does not make concatenation static.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

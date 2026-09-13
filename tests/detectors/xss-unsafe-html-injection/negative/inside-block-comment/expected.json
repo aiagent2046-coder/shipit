@@ -1,0 +1,7 @@
+{
+  "description": "A sink inside a /* */ block comment is disabled code; the mutation removes the comment delimiters, which must fire.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

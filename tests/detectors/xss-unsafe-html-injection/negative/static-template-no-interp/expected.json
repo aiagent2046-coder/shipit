@@ -1,0 +1,7 @@
+{
+  "description": "A template literal with no interpolation is static; the mutation adds an interpolation, which must fire.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

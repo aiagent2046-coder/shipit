@@ -1,0 +1,7 @@
+{
+  "description": "A fixed absolute host the code chose; the mutation puts the caller's value into the host, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-open-redirect-unvalidated-url"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Template substitutions execute random draws; template text does not.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

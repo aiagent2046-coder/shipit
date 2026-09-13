@@ -1,0 +1,7 @@
+{
+  "description": "A name bound one hop earlier to a fixed string is static; the mutation replaces the literal with a call, which must fire.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

@@ -1,0 +1,2 @@
+import random
+api_key = random.getrandbits(128)

@@ -1,0 +1,2 @@
+const html = "<b>fixed</b>";
+el.innerHTML = html;

@@ -1,0 +1,7 @@
+{
+  "description": "A parameter named Math has unknown provenance, not proven built-in Math.random.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

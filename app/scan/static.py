@@ -12,13 +12,15 @@ from app.report.plain_language import plain_fields
 from app.scan.auth_read import scan_auth_read
 from app.scan.auth_write import scan_auth_write
 from app.scan.claim_evidence import static_claim_evidence
+from app.scan.command_injection import scan_command_injection
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
-from app.scan.command_injection import scan_command_injection
 from app.scan.check_loading import is_native_import_error, optional_native_function
 from app.scan.error_boundary import MOUNT_UNKNOWN, scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
+from app.scan.insecure_randomness import scan_insecure_randomness
 from app.scan.outbound_url import scan_outbound_url
+from app.scan.open_redirect import scan_open_redirect
 from app.scan.rls import scan_rls
 from app.scan.rule_coverage import RULE_COVERAGE_KEYS
 from app.scan.schema_drift import scan_schema_drift
@@ -28,6 +30,7 @@ from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.unsafe_deserialization import scan_unsafe_deserialization
 from app.scan.path_traversal import scan_path_traversal
+from app.scan.xss import scan_xss
 from app.scan.check_failure_scoring import failed_check_categories
 
 
@@ -157,6 +160,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
             ))
 
     fileobj.seek(0)
+    with attempt("open_redirect"):
+        for r in list(scan_open_redirect(fileobj, coverage=rule_coverage["open_redirect"])):
+            findings.append(ScoredFinding(
+                rule_id=r.rule_id, title=r.title, severity=r.severity,
+                confidence=r.confidence, category=r.category, file=r.file,
+                line=r.line, explanation=r.explanation, fix_hint=r.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
+
+    fileobj.seek(0)
     with attempt("tls_verification"):
         for t in list(scan_tls_verification(fileobj, coverage=rule_coverage["tls_verification"])):
             findings.append(ScoredFinding(
@@ -184,6 +197,26 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                 rule_id=t.rule_id, title=t.title, severity=t.severity,
                 confidence=t.confidence, category=t.category, file=t.file,
                 line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
+
+    fileobj.seek(0)
+    with attempt("xss"):
+        for x in list(scan_xss(fileobj, coverage=rule_coverage["xss"])):
+            findings.append(ScoredFinding(
+                rule_id=x.rule_id, title=x.title, severity=x.severity,
+                confidence=x.confidence, category=x.category, file=x.file,
+                line=x.line, explanation=x.explanation, fix_hint=x.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
+
+    fileobj.seek(0)
+    with attempt("insecure_randomness"):
+        for r in list(scan_insecure_randomness(fileobj, coverage=rule_coverage["insecure_randomness"])):
+            findings.append(ScoredFinding(
+                rule_id=r.rule_id, title=r.title, severity=r.severity,
+                confidence=r.confidence, category=r.category, file=r.file,
+                line=r.line, explanation=r.explanation, fix_hint=r.fix_hint,
                 claim_evidence=static_claim_evidence(),
             ))
 
@@ -355,8 +388,11 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                      "auth_read_consistency": SCOPE["auth_read_consistency"],
                      "auth_write_consistency": SCOPE["auth_write_consistency"],
                      "outbound_url": SCOPE["outbound_url"],
+                     "open_redirect": SCOPE["open_redirect"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],
                      "path_traversal": SCOPE["path_traversal"],
+                     "xss": SCOPE["xss"],
+                     "insecure_randomness": SCOPE["insecure_randomness"],
                      "command_injection": SCOPE["command_injection"],
                      "session_cookie": SCOPE["session_cookie"],
                      "http_success": HTTP_SUCCESS_SCOPE_PREFIX

@@ -1,0 +1,5 @@
+let html = "";
+if (rowData.title) {
+    html = `<b>${rowData.title}</b>`;
+}
+document.getElementById("cell").innerHTML = html;

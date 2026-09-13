@@ -1,0 +1,7 @@
+{
+  "description": "The caller fills only the path; the host is fixed, so the visitor stays on the same origin. The mutation moves the caller value into the authority, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-open-redirect-unvalidated-url"
+  ]
+}

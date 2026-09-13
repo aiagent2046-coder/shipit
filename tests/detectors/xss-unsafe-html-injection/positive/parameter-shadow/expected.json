@@ -1,0 +1,10 @@
+{
+  "description": "A function parameter cannot borrow an outer literal binding.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

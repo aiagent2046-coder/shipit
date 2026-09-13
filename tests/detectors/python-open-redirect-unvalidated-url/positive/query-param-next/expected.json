@@ -1,0 +1,10 @@
+{
+  "description": "The canonical open redirect: a query parameter handed straight to the redirect constructor.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

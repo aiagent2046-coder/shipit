@@ -1,0 +1,2 @@
+const html = "safe";
+function render(html) { el.innerHTML = html; }

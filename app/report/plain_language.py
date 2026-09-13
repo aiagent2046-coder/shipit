@@ -33,6 +33,39 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "values as positional parameters with quoted expansions. shlex.quote applies to POSIX shells, "
         "not Windows cmd.exe; validate command and option choices separately.",
     ),
+    "insecure-randomness": (
+        "A secret-looking value is generated from a non-cryptographic random source.",
+        "A token, password, reset link, OTP or nonce is drawn from Math.random or Python's random "
+        "module. That source is predictable, so the value can be guessed or replayed -- the classic "
+        "account-takeover vector. Whether the value is actually used as a secret and whether anything "
+        "else re-randomizes it have not been verified.",
+        "Use a cryptographically secure source: crypto.getRandomValues in JS/TS, or Python's secrets "
+        "module (secrets.token_hex / secrets.token_urlsafe). Never derive a token, password, reset link, "
+        "OTP, nonce or salt from Math.random or the random module.",
+    ),
+    "python-open-redirect-unvalidated-url": (
+        "A redirect targets a URL whose authority comes from the caller.",
+        "A redirect constructor sends the visitor's browser to an address whose host is built from the "
+        "request itself. A caller who controls the target can redirect a signed-in user to an attacker's "
+        "domain -- the open redirect that carries OAuth codes, session tokens in the Referer and phishing "
+        "flows. Whether the route is reachable and whether anything outside this function constrains the "
+        "target have not been verified.",
+        "Validate the target before redirecting: allow only relative paths, or compare the resolved host "
+        "against an allowlist of your own origins and reject everything else (including protocol-relative "
+        "//host and backslashes that some parsers read as //host). Never redirect straight to a value the "
+        "request supplied.",
+    ),
+    "xss-unsafe-html-injection": (
+        "HTML is injected into the DOM from a value that is not a fixed string.",
+        "A non-literal value reaches an HTML-injection sink -- dangerouslySetInnerHTML, innerHTML/outerHTML, "
+        "document.write or insertAdjacentHTML. If that value can carry attacker-controlled text, it injects "
+        "markup and script into the page: script execution under the visitor's origin, token theft and DOM "
+        "corruption. Whether the value was sanitized, whether it is reachable, and whether the sink runs "
+        "have not been verified.",
+        "Use textContent (or React children) for anything that is text, not markup. If HTML must be inserted, "
+        "sanitize the value first (DOMPurify with an allowlist, or an equivalent) and avoid building HTML "
+        "from strings. In React, avoid dangerouslySetInnerHTML unless the content is already trusted.",
+    ),
     "path-traversal-file-sink": (
         "A file path is built from a value the caller sent.",
         "This route hands a filesystem path to a file operation, and that path is assembled from the "

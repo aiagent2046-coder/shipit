@@ -1,0 +1,10 @@
+{
+  "description": "Import provenance follows the real non-cryptographic module under its alias.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
