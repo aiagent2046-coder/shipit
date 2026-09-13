@@ -1,16 +1,22 @@
 import { loadPyodide } from './runtime/pyodide.mjs';
-import { installEngine, scanBytes } from './runtime.js';
-import { evaluateCase, summarize } from './parity.js';
+import { installEngine, loadNativeParsers, scanBytes } from './runtime.js';
+import { assertParserParity, evaluateCase, summarize } from './parity.js';
 
 self.onmessage = async () => {
   try {
-    const [files, cases] = await Promise.all(['engine-files.json', 'cases.json'].map(path => fetch(path).then(r => r.json())));
+    const [files, cases, expectedProbes] = await Promise.all(
+      ['engine-files.json', 'cases.json', 'parser-probes.json'].map(path => fetch(path).then(r => r.json())));
+    const probeSource = await fetch('parser-probes.py').then(r => r.text());
     const started = performance.now();
     const pyodide = await loadPyodide({ indexURL: new URL('./runtime/', import.meta.url).href,
       stdout: () => {}, stderr: () => {} });
     await pyodide.loadPackage('pyyaml');
+    const nativeFailures = await loadNativeParsers(pyodide);
+    if (nativeFailures.length) throw new Error(JSON.stringify(nativeFailures));
     await installEngine(pyodide, files);
     const loaded = performance.now();
+    const actualProbes = JSON.parse(pyodide.runPython(probeSource + '\nimport json\njson.dumps(probe_parsers())'));
+    assertParserParity(expectedProbes, actualProbes);
     // Observe that the corpus still executes after network access is disabled.
     self.fetch = () => { throw new Error('offline'); };
     const rows = [];
@@ -23,6 +29,7 @@ self.onmessage = async () => {
     summary.load_ms = Math.round(loaded - started);
     summary.scan_ms = Math.round(performance.now() - loaded);
     summary.runtime = navigator.userAgent;
+    summary.parser_probes = 'passed';
     self.postMessage({ summary, rows });
   } catch (e) {
     // This harness contains only synthetic reviewed fixtures, never customer input.

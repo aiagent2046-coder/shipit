@@ -16,3 +16,20 @@ https://github.com/yaml/pyyaml/tree/6.0.3 .
 
 The build manifest records runtime versions and engine SHA-256. Package lock
 integrity and the runtime catalog's PyYAML SHA-256 pin the downloaded artifacts.
+
+Native parser wheels (source URLs and hashes in native-manifest.json):
+
+- tree-sitter 0.26.0, MIT: https://github.com/tree-sitter/py-tree-sitter/tree/v0.26.0
+- tree-sitter-typescript 0.23.2, MIT: https://github.com/tree-sitter/tree-sitter-typescript/tree/v0.23.2
+- tree-sitter-javascript 0.25.0, MIT: https://github.com/tree-sitter/tree-sitter-javascript/tree/v0.25.0
+- pglast 7.7, GPL-3.0-or-later, copyright Lele Gaifax:
+  https://github.com/lelit/pglast/tree/v7.7 . Includes libpg_query (BSD-3-Clause)
+  and PostgreSQL 17.4 parser sources (PostgreSQL license).
+
+Complete parser license texts are distributed in licenses/. Tree-sitter wheel
+metadata also retains its licenses. The pglast source distribution omits a full
+GPL text; licenses/pglast-GPL-3.txt supplies it with this distribution. Source
+archives for every wheel and the seven unmodified TypeScript headers are linked
+by exact version and SHA-256 in native-manifest.json. Build instructions are in
+browser/native/README.md and browser/scripts/rebuild-native.py in this repository.
+No parser source algorithms were modified for these builds.

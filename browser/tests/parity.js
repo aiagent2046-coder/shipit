@@ -1,6 +1,5 @@
 // Findings compared as a multiset, including multiplicity and locations.
-// Advice is intentionally omitted in the preview when prerequisites cannot
-// be checked; it is compared separately as an explicit limitation.
+// Native WASM wheels must preserve the entire report, including advice guards.
 const identity = f => JSON.stringify([f.rule_id, f.file, f.line ?? null, f.severity,
   f.confidence, f.title, f.explanation ?? '', f.masked ?? null]);
 const findingsKey = findings => findings.map(identity).sort().join('\n');
@@ -10,7 +9,9 @@ function normalize(value) {
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, normalize(value[k])]));
   return value;
 }
-const NATIVE_CHECKS = new Set(['sql_injection_js', 'tls_verification', 'session_cookie', 'http_success']);
+export function assertParserParity(expected, actual) {
+  if (canonical(expected) !== canonical(actual)) throw new Error('Native parser Unicode/AST parity mismatch');
+}
 
 export function evaluateCase(item, result) {
   if (!result.report || !result.sarif) return { id: item.id, error: 'scan_did_not_complete' };
@@ -18,15 +19,14 @@ export function evaluateCase(item, result) {
   const findings = report.findings;
   const failures = report.checks_not_run;
   const errors = [];
-  if (canonical(result) !== canonical(item.portable)) errors.push('portable_profile_mismatch');
+  if (canonical(result) !== canonical(item.native)) errors.push('native_profile_mismatch');
   const checks = [...report.checks_run, ...failures.map(f => f.check)];
   if (checks.length !== 17 || new Set(checks).size !== 17) errors.push('check_partition');
-  if (failures.length !== NATIVE_CHECKS.size || failures.some(f => !NATIVE_CHECKS.has(f.check))) {
+  if (failures.length) {
     errors.push('unexpected_check_failure');
   }
-  if (sarif.runs[0].invocations[0].executionSuccessful !== false) errors.push('sarif_false_success');
-  if (!report.limitations.includes('recommendation_enrichment_unavailable')) errors.push('advice_limit_missing');
-  if (findings.some(f => f.fix_hint)) errors.push('unguarded_advice');
+  if (sarif.runs[0].invocations[0].executionSuccessful !== true) errors.push('sarif_execution_failure');
+  if (report.limitations.includes('recommendation_enrichment_unavailable')) errors.push('advice_guards_missing');
   // A browser must never invent additional findings due to a failed parser.
   const remaining = item.native.report.findings.map(identity);
   for (const f of findings) {
@@ -52,6 +52,6 @@ export function summarize(rows) {
     expectation_passed: rows.filter(r => r.expectation_passed).length,
     finding_parity: rows.filter(r => r.finding_parity).length,
     unexpected_failures: rows.filter(r => r.error || r.errors?.length).length,
-    supported_checks: 13, unavailable_checks: [...NATIVE_CHECKS],
-    full_parity: rows.every(r => !r.error && !r.errors.length && r.finding_parity) && NATIVE_CHECKS.size === 0 };
+    supported_checks: 17, unavailable_checks: [],
+    full_parity: rows.every(r => !r.error && !r.errors.length && r.finding_parity && r.expectation_passed) };
 }
