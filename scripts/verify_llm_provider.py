@@ -1,194 +1,236 @@
 #!/usr/bin/env python3
-"""What LLM provider and model this environment will ACTUALLY use, checked.
+"""Check the configured LLM chain and paid/preview model identifiers.
 
-Run this before a deploy and after changing any AITUNNEL_*/LLM_MODEL/FREE_TIER_*
-setting. It answers the three questions an operator gets wrong:
+By default read <repo>/.env ONLY, using the deployment validator's parser.
+Use --env for another file, or --process-env for exported settings. No files
+are modified. Catalog checks do not generate completions. Optional --probe
+can incur charges: max_tokens=8 is a request, not a billing guarantee.
 
-  1. which providers the environment builds, in what order (the fallback chain);
-  2. which model each stage will request -- the paid rubric stage and the free
-     preview resolve through different variables;
-  3. whether those model names exist at that provider.
-
-The third question is the one that costs a production incident. Model names are
-exact and the punctuation differs per provider: AITunnel lists `claude-haiku-4.5`
-and `claude-sonnet-4.6` (dots) while this repository's code defaults spell them
-with dashes. A deployment that leaves the preview model at its default answers
-400 on every preview, and nothing else in the project says so at startup.
-
-Read-only: it never stores, prints or logs a key, and `--probe` sends only an
-eight-token request per model.
-
-Usage:
-    python3 scripts/verify_llm_provider.py                  # env from ./.env
-    python3 scripts/verify_llm_provider.py --env /opt/shipit/.env --probe
-
-Exit codes: 0 everything the environment names exists at its provider;
-            1 a named model is missing, or no provider is configured at all;
-            2 the provider could not be reached (network, auth, HTTP error).
+Exit codes: 0 all catalog checks (and requested probes) passed;
+            1 invalid configuration, unlisted model, or invalid completion;
+            2 verification incomplete (network/auth/HTTP/invalid catalog).
+When both failure types occur, 2 takes precedence: not everything was checked.
 """
 from __future__ import annotations
 
 import argparse
-import json
+from contextlib import contextmanager
+from dataclasses import replace
 import os
 import pathlib
 import sys
 import time
-import urllib.error
-import urllib.request
+from urllib.parse import quote, urlsplit
+
+import httpx
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.llm.client import LLMClient, Provider, providers_from_env  # noqa: E402
+from scripts.env_file import read_values  # noqa: E402
+
 PROBE_MAX_TOKENS = 8
-PROBE_TIMEOUT = 60
+CATALOG_TIMEOUT = 60
+MAX_CATALOG_PAGES = 100
+CONFIG_NAMES = (
+    "AITUNNEL_API_KEY", "AITUNNEL_BASE_URL", "AITUNNEL_LLM_MODEL",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_LLM_MODEL", "LLM_MODEL",
+    "FREE_TIER_LLM_MODEL", "FREE_TIER_LLM_MODEL_AITUNNEL", "FREE_TIER_LLM_MODEL_ANTHROPIC",
+)
 
 
-def load_env(path: pathlib.Path) -> list[str]:
-    """Set names from an env file without overriding what the process already has.
-
-    Returns the names it added, so a caller can print what came from where
-    without ever touching a value.
-    """
-    added: list[str] = []
-    if not path.exists():
-        return added
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        name, value = name.strip(), value.strip()
-        if name and name not in os.environ:
-            os.environ[name] = value
-            added.append(name)
-    return added
+@contextmanager
+def configured_environment(values: dict[str, str]):
+    """Scope provider resolution to this configuration; restore the caller's env."""
+    previous = {name: os.environ.get(name) for name in CONFIG_NAMES}
+    try:
+        for name in CONFIG_NAMES:
+            if name in values:
+                os.environ[name] = values[name]
+            else:
+                os.environ.pop(name, None)
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
-def providers() -> list:
-    from app.llm.client import providers_from_env
-    return providers_from_env()
-
-
-def stage_models(chain: list) -> list[tuple[str, str, str]]:
-    """(stage, provider kind, model) for every model this deployment will request."""
-    from app.scan.pipeline import FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND
-    rows = [(f"paid ({provider.kind})", provider.kind, provider.model) for provider in chain]
-    kinds = [provider.kind for provider in chain] or ["openai_compat"]
-    for kind in kinds:
-        rows.append((f"free preview ({kind})", kind,
-                     FREE_TIER_MODEL_BY_KIND.get(kind, FREE_TIER_MODEL)))
+def stage_models(chain: list[Provider], values: dict[str, str]) -> list[tuple[str, str, str]]:
+    """Resolve as a fresh service would, without importing/reloading pipeline globals."""
+    # Match pipeline.FREE_TIER_MODEL and free_tier_models_by_kind(): a blank
+    # per-provider override falls back, but a present blank shared value does not.
+    shared = values.get("FREE_TIER_LLM_MODEL", "claude-haiku-4-5")
+    overrides = {"openai_compat": "FREE_TIER_LLM_MODEL_AITUNNEL",
+                 "anthropic": "FREE_TIER_LLM_MODEL_ANTHROPIC"}
+    rows = [(f"paid ({p.kind})", p.kind, p.model) for p in chain]
+    rows.extend((f"free preview ({p.kind})", p.kind,
+                 values.get(overrides[p.kind], "").strip() or shared) for p in chain)
     return rows
 
 
-def fetch_model_ids(base_url: str, api_key: str) -> set[str]:
-    request = urllib.request.Request(base_url.rstrip("/") + "/models",
-                                     headers={"Authorization": "Bearer " + api_key})
-    with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT) as response:
-        body = json.loads(response.read())
-    return {entry.get("id") for entry in body.get("data", []) if entry.get("id")}
+def fetch_model_ids(provider: Provider, transport: httpx.BaseTransport | None = None) -> set[str]:
+    """Fetch the complete catalog using each provider's own authentication/API."""
+    anthropic = provider.kind == "anthropic"
+    url = provider.base_url + ("/v1/models" if anthropic else "/models")
+    headers = ({"x-api-key": provider.api_key, "anthropic-version": "2023-06-01"}
+               if anthropic else {"Authorization": "Bearer " + provider.api_key})
+    params: dict[str, str | int] = {"limit": 1000} if anthropic else {}
+    ids: set[str] = set()
+    cursors: set[str] = set()
+    # Never follow a redirect carrying credentials to another endpoint.
+    with httpx.Client(timeout=CATALOG_TIMEOUT, transport=transport, follow_redirects=False) as client:
+        for _ in range(MAX_CATALOG_PAGES):
+            response = client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            body = response.json()
+            if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+                raise ValueError("invalid catalog shape")
+            for entry in body["data"]:
+                if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"]:
+                    raise ValueError("invalid model identifier")
+                ids.add(entry["id"])
+            more = body.get("has_more", False)
+            if not isinstance(more, bool):
+                raise ValueError("invalid pagination flag")
+            if not more:
+                return ids
+            cursor = body.get("last_id")
+            if not anthropic or not isinstance(cursor, str) or not cursor or cursor in cursors:
+                raise ValueError("incomplete catalog pagination")
+            cursors.add(cursor)
+            params["after_id"] = cursor
+    raise ValueError("catalog page limit exceeded")
 
 
-def probe_model(base_url: str, api_key: str, model: str) -> str:
-    payload = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
-               "messages": [{"role": "user", "content": "ок"}]}
-    request = urllib.request.Request(
-        base_url.rstrip("/") + "/chat/completions", data=json.dumps(payload).encode(),
-        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"})
+def probe_model(provider: Provider, model: str, transport: httpx.BaseTransport | None = None) -> str:
+    """One attempt with the product's payload, transport and nonempty-answer parser."""
+    selected = replace(provider, model=model)
+    client = LLMClient(providers=[selected], transport=transport)
     started = time.monotonic()
-    with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT) as response:
-        body = json.loads(response.read())
-    elapsed = time.monotonic() - started
-    usage = body.get("usage", {}) or {}
-    served = body.get("model")
-    return (f"{elapsed:.1f}s, completion={usage.get('completion_tokens')}, "
-            f"cost_rub={usage.get('cost_rub')}, balance={usage.get('balance')}, "
-            f"served_as={served}")
+    # _call is the product's single wire attempt. complete() would retry paid
+    # requests and allow fallback to conceal which configured provider failed.
+    _answer, usage = client._call(selected, "Reply briefly.", "Reply OK.", PROBE_MAX_TOKENS)
+    return (f"{time.monotonic() - started:.1f}s, requested_max_tokens={PROBE_MAX_TOKENS}, "
+            f"input={usage.input_tokens}, completion={usage.output_tokens}, served_as={usage.model}")
 
 
-def check(env_path: pathlib.Path, probe: bool = False) -> tuple[int, list[str]]:
-    """Returns (exit code, report lines). No key material in the lines."""
+def error_summary(exc: Exception) -> str:
+    """Exception messages, URLs and response bodies may echo a key; omit them."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__
+
+
+def redact(lines: list[str], secrets: list[str]) -> list[str]:
+    tokens = {token for secret in secrets if secret for token in (secret, quote(secret, safe=""))}
+    clean = []
+    for line in lines:
+        for token in sorted(tokens, key=len, reverse=True):
+            line = line.replace(token, "[REDACTED]")
+        clean.append("".join(c if c.isprintable() else " " for c in line))
+    return clean
+
+
+def _check(values: dict[str, str], probe: bool,
+           transport: httpx.BaseTransport | None) -> tuple[int, list[str]]:
     lines: list[str] = []
-    added = load_env(env_path)
-    lines.append(f"env file: {env_path} ({'найден' if env_path.exists() else 'НЕТ'}; "
-                 f"из него взято {len(added)} переменных)")
-
-    chain = providers()
+    if bool(values.get("AITUNNEL_API_KEY")) != bool(values.get("AITUNNEL_BASE_URL")):
+        return 1, ["ПРОВАЛ: AITUNNEL_API_KEY и AITUNNEL_BASE_URL должны быть заданы вместе"]
+    with configured_environment(values):
+        chain = providers_from_env()
     if not chain:
-        lines.append("ПРОВАЛ: ни одного LLM-провайдера не настроено — аудиты будут "
-                     "static-only. Нужны AITUNNEL_API_KEY + AITUNNEL_BASE_URL "
-                     "(или ANTHROPIC_API_KEY).")
-        return 1, lines
-
+        return 1, ["ПРОВАЛ: ни одного LLM-провайдера не настроено — аудиты будут static-only"]
+    # Reject URL credentials/query/fragment instead of printing or sending them.
+    for provider in chain:
+        url = urlsplit(provider.base_url)
+        if (url.scheme not in {"http", "https"} or not url.hostname or url.username is not None
+                or url.password is not None or url.query or url.fragment):
+            return 1, [f"ПРОВАЛ: некорректный base URL для {provider.kind}"]
+    rows = stage_models(chain, values)
+    if any(not model.strip() for _stage, _kind, model in rows):
+        return 1, ["ПРОВАЛ: имя модели не должно быть пустым"]
     lines.append(f"провайдеров в цепочке: {len(chain)} "
-                 f"({'фолбэка нет — все запросы идут через первый' if len(chain) == 1 else 'есть фолбэк'})")
+                 f"({'фолбэка нет' if len(chain) == 1 else 'есть фолбэк'})")
     for provider in chain:
-        lines.append(f"  {provider.kind:<14} {provider.base_url:<32} model={provider.model} "
-                     f"key={len(provider.api_key)} симв.")
-
-    rows = stage_models(chain)
+        lines.append(f"  {provider.kind}: {provider.base_url}")
     lines.append("стадии:")
-    for stage, _kind, model in rows:
-        lines.append(f"  {stage:<22} -> {model}")
-
-    failures: list[str] = []
-    unreachable = False
-
-    # one listing per provider, then one verdict per distinct model
-    by_kind: dict[str, list[str]] = {}
-    for _stage, kind, model in rows:
-        by_kind.setdefault(kind, [])
-        if model not in by_kind[kind]:
-            by_kind[kind].append(model)
-
+    lines.extend(f"  {stage} -> {model}" for stage, _kind, model in rows)
+    if probe:
+        lines.append("ПЛАТНЫЙ PROBE: одна попытка на каждую пару провайдер/модель; "
+                     "max_tokens=8 не гарантирует восемь оплачиваемых токенов")
+    failed = incomplete = False
     for provider in chain:
-        models = by_kind.get(provider.kind, [])
+        models = list(dict.fromkeys(model for _stage, kind, model in rows if kind == provider.kind))
         try:
-            available = fetch_model_ids(provider.base_url, provider.api_key)
-        except Exception as exc:                                  # noqa: BLE001
-            unreachable = True
-            lines.append(f"  {provider.kind}: список моделей недоступен — "
-                         f"{type(exc).__name__}: {str(exc)[:120]}")
+            available = fetch_model_ids(provider, transport)
+        except Exception as exc:  # noqa: BLE001
+            incomplete = True
+            lines.append(f"НЕ ПРОВЕРЕНО: {provider.kind}: каталог недоступен — {error_summary(exc)}")
             continue
         lines.append(f"  {provider.kind}: провайдер отдаёт {len(available)} моделей")
         for model in models:
-            if model in available:
-                lines.append(f"    ЕСТЬ   {model}")
-            else:
-                failures.append(f"{provider.kind}: модели {model!r} нет в списке "
-                                f"провайдера — каждый запрос к ней будет 400")
-                lines.append(f"    НЕТ    {model}  <- в списке провайдера отсутствует")
-        if probe:
-            for model in models:
-                if model not in available:
-                    lines.append(f"    probe {model}: пропущен (модели нет в списке)")
-                    continue
+            if model not in available:
+                failed = True
+                lines.append(f"ПРОВАЛ: {provider.kind}: НЕТ {model} в каталоге; "
+                             "имя не подтверждено (это не предсказание HTTP-статуса генерации)")
+                continue
+            lines.append(f"    ЕСТЬ {model}")
+            if probe:
                 try:
-                    lines.append(f"    probe {model}: {probe_model(provider.base_url, provider.api_key, model)}")
-                except Exception as exc:                          # noqa: BLE001
-                    failures.append(f"{provider.kind}: probe {model!r} не прошёл — "
-                                    f"{type(exc).__name__}: {str(exc)[:120]}")
-                    lines.append(f"    probe {model}: ОШИБКА {type(exc).__name__}")
-
-    for failure in failures:
-        lines.append("ПРОВАЛ: " + failure)
-    if failures:
-        return 1, lines
-    if unreachable:
-        lines.append("НЕ ПРОВЕРЕНО: провайдер недоступен, имена моделей не подтверждены")
+                    lines.append(f"    probe {model}: {probe_model(provider, model, transport)}")
+                except (httpx.HTTPError, OSError) as exc:
+                    incomplete = True
+                    lines.append(f"НЕ ПРОВЕРЕНО: probe {model}: {error_summary(exc)}")
+                except Exception as exc:  # noqa: BLE001
+                    failed = True
+                    lines.append(f"ПРОВАЛ: probe {model}: некорректный ответ — {error_summary(exc)}")
+    if incomplete:
         return 2, lines
-    lines.append("ОК: каждое имя модели, которое запросит это окружение, есть у провайдера")
+    if failed:
+        return 1, lines
+    lines.append("ОК: имена подтверждены каталогами" +
+                 ("; пробные ответы прошли проверку LLMClient" if probe else
+                  "; генерация и баланс не проверялись"))
     return 0, lines
+
+
+def check(env_path: pathlib.Path | None, probe: bool = False, *,
+          transport: httpx.BaseTransport | None = None) -> tuple[int, list[str]]:
+    """Check one configuration source, without retaining its values in os.environ."""
+    ambient_keys = [os.environ.get(name, "") for name in CONFIG_NAMES if name.endswith("API_KEY")]
+    if env_path is None:
+        values = {name: os.environ[name] for name in CONFIG_NAMES if name in os.environ}
+        source = "источник: окружение процесса"
+    else:
+        # read_values uses the deployment validator's quote handling and never
+        # exposes a failed parse. An empty/unreadable file is not ambient config.
+        values = read_values(env_path)
+        if not values:
+            return 1, ["ПРОВАЛ: env-файл отсутствует, пуст или не читается; окружение оболочки не используется"]
+        source = "источник: только указанный env-файл (переменные оболочки не подмешиваются)"
+    secrets = ambient_keys + [value for name, value in values.items() if name.endswith("API_KEY")]
+    try:
+        code, lines = _check(values, probe, transport)
+    except Exception as exc:  # noqa: BLE001
+        code, lines = 1, [f"ПРОВАЛ: не удалось проверить конфигурацию — {error_summary(exc)}"]
+    return code, redact([source, *lines], secrets)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
-    parser.add_argument("--env", default=str(ROOT / ".env"), help="env file (default: <repo>/.env)")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--env", type=pathlib.Path, help="read ONLY this env file (default: <repo>/.env)")
+    source.add_argument("--process-env", action="store_true", help="read ONLY exported process settings")
     parser.add_argument("--probe", action="store_true",
-                        help="send one eight-token request per distinct model")
+                        help="paid: one product-client attempt per provider/model; max_tokens is not a billing cap")
     args = parser.parse_args(argv)
-    code, lines = check(pathlib.Path(args.env), probe=args.probe)
+    path = None if args.process_env else (args.env if args.env is not None else ROOT / ".env")
+    code, lines = check(path, probe=args.probe)
     for line in lines:
         print(line)
     return code

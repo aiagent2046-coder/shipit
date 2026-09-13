@@ -70,11 +70,10 @@ MODELS_WITHOUT_SAMPLING_PARAMS = frozenset({
 MODELS_WITH_SAMPLING_PARAMS = frozenset({
     "claude-sonnet-4.6", "claude-sonnet-4-6",
     "claude-haiku-4.5", "claude-haiku-4-5",
-    # MEASURED 2026-09-13: AITunnel served grok-4.20-multi-agent a request with
-    # `temperature` and answered 200, so it takes the parameters rather than
-    # rejecting them. It is also a reasoning model (3,710 completion tokens on an
-    # eight-token probe), which is a different axis from sampling and one this
-    # wire format has no key for.
+    # Operator report, 2026-09-13: AITunnel accepted a request carrying
+    # `temperature` (HTTP 200). This records acceptance, not sampling semantics.
+    # Reported completion_tokens=3710 with max_tokens=8 does not establish a
+    # reasoning-token breakdown or a hard billing limit for a small probe.
     "grok-4.20-multi-agent",
     # Not a Claude model, and the reason it belongs on this side is measured
     # rather than assumed: AITunnel served it a `temperature: 0` request and
