@@ -1,0 +1,10 @@
+{
+  "description": "A comparison on the other branch does not constrain a rejected caller URL.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

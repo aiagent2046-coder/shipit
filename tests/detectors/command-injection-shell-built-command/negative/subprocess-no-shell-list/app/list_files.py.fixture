@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+import subprocess
+
+router = APIRouter()
+
+
+@router.get("/ls")
+async def list_files(name: str):
+    subprocess.run(["ls", "-la", name])

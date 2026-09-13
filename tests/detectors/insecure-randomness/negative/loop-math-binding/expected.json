@@ -1,0 +1,7 @@
+{
+  "description": "A for-of binding named Math cannot borrow builtin random provenance.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

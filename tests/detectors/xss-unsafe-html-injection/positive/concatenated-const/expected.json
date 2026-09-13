@@ -1,0 +1,10 @@
+{
+  "description": "A string prefix does not make a concatenated const a static literal.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

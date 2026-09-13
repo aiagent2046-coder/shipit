@@ -1,0 +1,2 @@
+// const html = "safe";
+el.innerHTML = html;

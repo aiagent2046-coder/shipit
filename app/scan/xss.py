@@ -1,44 +1,12 @@
-"""Unsafe HTML injection into the DOM, read as text with quote/comment tracking.
+"""Bounded syntax checks for JS/TS DOM HTML injection; no source is executed.
 
-JS/TS/JSX/TSX is read as source text, not executed and not tree-parsed, so this
-rule is portable to the offline browser engine (no native grammar). Four sinks
-inject HTML into the DOM, and a caller whose value is not a fixed string literal
-can inject markup and script:
-
-  * ``dangerouslySetInnerHTML={{ __html: value }}`` -- React's explicit escape
-    hatch, the only way to inject raw HTML in React;
-  * ``element.innerHTML = value`` / ``element.outerHTML = value`` (including the
-    ``+=`` compound append);
-  * ``document.write(value)`` / ``document.writeln(value)``;
-  * ``element.insertAdjacentHTML(position, value)``.
-
-A value is read as STATIC and stays silent only when it is a single- or
-double-quoted string with no concatenation, or a template literal with no
-``${`` interpolation. A ``const`` bound one hop earlier to such a literal
-(``const html = "<b>fixed</b>"; el.innerHTML = html``) is also static -- a
-``let``/``var`` is not, because it can be reassigned to a dynamic value. What
-the rule cannot see, and names rather than guesses:
-
-  * it does not know whether a dynamic value was sanitized (DOMPurify, a custom
-    escape) -- a sanitized variable is still reported, because the provenance of
-    the sanitization is not traced;
-  * ``textContent``/``innerText`` are NOT sinks (text, not markup) and are
-    silent; ``setAttribute("innerHTML", ...)`` is not a sink either;
-  * framework template bindings -- Angular ``[innerHTML]``, Vue ``v-html``,
-    Svelte ``innerHTML={...}``, jQuery ``.html(...)`` -- are a different spelling
-    and outside this rule's claim, which reads the DOM property and the React
-    escape hatch;
-  * a sink split across lines, or a template literal whose interpolation
-    contains another sink, is not reconstructed across the boundary.
-
-Only the code parts of each line are matched: string literals and ``//`` and
-``/* */`` comments are skipped, so ``const doc = "dangerouslySetInnerHTML"`` is
-documentation, not a decision. No uploaded code is executed.
+A literal string/template or an earlier, visible, unambiguous const literal is
+silent. Comments and strings are syntax nodes, not declarations or sinks.
+Sanitizers, input trust, custom DOM-like receivers and cross-file bindings are
+unresolved. Native parser absence fails the check rather than claiming coverage.
 """
-
 from __future__ import annotations
 
-import re
 import zipfile
 from typing import BinaryIO
 
@@ -50,182 +18,185 @@ _JS_FILE_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts
 _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 400
 _MAX_FINDINGS = 32
-
-# Each entry is (name, sink marker, how the value follows the marker). The value
-# is read from the ORIGINAL line after the marker's end, so a string literal on
-# the right-hand side is not lost to the code-segment split.
-_SINKS = (
-    ("dangerously-set-inner-html",
-     re.compile(r"dangerouslySetInnerHTML\s*=\s*\{\s*\{\s*__html\s*:"), "colon"),
-    ("inner-outer-html-assignment",
-     re.compile(r"\.(?:innerHTML|outerHTML)\s*\+?="), "assign"),
-    ("document-write",
-     re.compile(r"document\.write(?:ln)?\s*\("), "first_arg"),
-    ("insert-adjacent-html",
-     re.compile(r"\.insertAdjacentHTML\s*\("), "second_arg"),
-)
+_MAX_NODES = 20_000
+_MAX_DEPTH = 100
 
 
-def _code_segments(text: str) -> list[tuple[int, list[tuple[int, int]]]]:
-    """Per line, the (start, end) spans that are code, not string or comment.
+def _parser(tsx: bool):
+    # Lazy imports let the engine withhold this check when native grammars fail.
+    try:
+        from tree_sitter import Language, Parser
+        import tree_sitter_typescript
+    except ImportError:
+        raise ImportError("Native JavaScript grammar unavailable") from None
+    language = (tree_sitter_typescript.language_tsx() if tsx
+                else tree_sitter_typescript.language_typescript())
+    return Parser(Language(language))
 
-    String literals (``'`` ``"`` `` ` `` with backslash escapes), ``//`` line
-    comments and ``/* ... */`` block comments (which may span lines) are removed
-    so a sink spelled inside any of them is not matched. Only the SINK MARKER is
-    matched against these spans; the value is read from the original line.
+
+def _nodes(root):
+    pending, nodes = [(root, 0)], []
+    while pending:
+        node, depth = pending.pop()
+        if len(nodes) >= _MAX_NODES or depth > _MAX_DEPTH:
+            raise ValueError("syntax_limit")
+        nodes.append(node)
+        pending.extend((child, depth + 1) for child in reversed(node.named_children))
+    return nodes
+
+
+def _text(node):
+    return node.text.decode("utf-8") if node is not None else ""
+
+
+def _literal(node):
+    return node is not None and (
+        node.type == "string" or
+        (node.type == "template_string" and
+         not any(child.type == "template_substitution" for child in node.named_children))
+    )
+
+
+def _declarations(nodes):
+    """Only globally unique names are eligible for one-hop suppression.
+
+    This is intentionally narrower than general symbol resolution: parameters,
+    destructuring, imports and mutations invalidate the name. The remaining
+    declaration must also precede the use and have a containing lexical scope.
     """
-    result: list[tuple[int, list[tuple[int, int]]]] = []
-    in_block_comment = False
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        segments: list[tuple[int, int]] = []
-        seg_start = 0
-        i = 0
-        n = len(line)
-        while i < n:
-            if in_block_comment:
-                end = line.find("*/", i)
-                if end == -1:
-                    i = n
-                    seg_start = n
-                    break
-                i = end + 2
-                in_block_comment = False
-                seg_start = i
-                continue
-            char = line[i]
-            if char in ("'", '"', "`"):
-                if seg_start < i:
-                    segments.append((seg_start, i))
-                quote = char
-                i += 1
-                while i < n:
-                    if line[i] == "\\":
-                        i += 2
-                        continue
-                    if line[i] == quote:
-                        i += 1
-                        break
-                    i += 1
-                seg_start = i
-                continue
-            if char == "/" and i + 1 < n:
-                if line[i + 1] == "/":
-                    if seg_start < i:
-                        segments.append((seg_start, i))
-                    seg_start = n
-                    i = n
-                    break
-                if line[i + 1] == "*":
-                    if seg_start < i:
-                        segments.append((seg_start, i))
-                    end = line.find("*/", i + 2)
-                    if end == -1:
-                        in_block_comment = True
-                        seg_start = n
-                        i = n
-                        break
-                    i = end + 2
-                    seg_start = i
-                    continue
-            i += 1
-        if seg_start < n:
-            segments.append((seg_start, n))
-        result.append((line_no, segments))
-    return result
+    declared, invalid = {}, set()
+    for node in nodes:
+        if node.type == "variable_declarator":
+            name = node.child_by_field_name("name")
+            if name is not None and name.type == "identifier":
+                key = _text(name)
+                if key in declared:
+                    invalid.add(key)
+                declared[key] = node
+            elif name is not None:
+                invalid.update(_text(n) for n in _nodes(name)
+                               if n.type in {"identifier", "shorthand_property_identifier_pattern"})
+        elif node.type in {"formal_parameters", "import_clause", "catch_clause"}:
+            # Catch body names invalidate conservatively as well.
+            invalid.update(_text(n) for n in _nodes(node) if n.type == "identifier")
+        elif node.type == "for_in_statement":
+            # for-in/of binds its left side directly, without a variable_declarator.
+            target = node.child_by_field_name("left")
+            if target is not None:
+                invalid.update(_text(n) for n in _nodes(target)
+                               if n.type in {"identifier", "shorthand_property_identifier_pattern"})
+        elif node.type == "arrow_function":
+            parameter = node.child_by_field_name("parameter")
+            if parameter is not None:
+                invalid.add(_text(parameter))
+        elif node.type in {"function_declaration", "class_declaration"}:
+            invalid.add(_text(node.child_by_field_name("name")))
+        elif node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression"}:
+            target = node.child_by_field_name("left") or node.child_by_field_name("argument")
+            if target is not None:
+                invalid.update(_text(n) for n in _nodes(target) if n.type == "identifier")
+    return {name: node for name, node in declared.items() if name not in invalid}
 
 
-def _is_static_literal(value: str) -> bool:
-    """A value stays silent only as a plain '...' or "..." string, or a
-    template literal with no interpolation.
-
-    A single/double-quoted string is static unless a ``+`` concatenates it; a
-    template literal (`` ` ``) is static only without ``${`` -- an interpolation
-    makes it dynamic by construction.
-    """
-    value = value.strip()
-    if not value:
+def _static_value(value, use, declarations):
+    if isinstance(value, list):
+        return all(_static_value(argument, use, declarations) for argument in value)
+    if _literal(value):
+        return True
+    if value is None or value.type != "identifier":
         return False
-    if value[0] in ("'", '"'):
-        return "+" not in value
-    if value[0] == "`":
-        return "${" not in value
+    declaration = declarations.get(_text(value))
+    if declaration is None or declaration.end_byte > use.start_byte:
+        return False
+    if declaration.parent.type != "lexical_declaration" or not _text(declaration.parent).startswith("const "):
+        return False
+    if not _literal(declaration.child_by_field_name("value")):
+        return False
+    scope = declaration.parent.parent
+    # Loop-local declarations must not leak out of their loop body.
+    parent = use.parent
+    while parent is not None:
+        if parent == scope:
+            return True
+        parent = parent.parent
     return False
 
 
-# A `const name = "<literal>"` (or a template without an interpolation) that a
-# sink may reference one hop later. Only `const` is bound, and only the
-# whole-literal form: `let`/`var` may be reassigned to a dynamic value, and a
-# concatenation or a call is never static -- the binding is a convenience for
-# the honest static case (a theme script, a fixed template), never a claim that
-# a name is safe.
-_STATIC_ASSIGN = re.compile(
-    r"const\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*"
-    r"(?P<value>[\"'][^\"']*[\"']|`[^`$]*`)"
-)
-
-
-def _static_bindings(text: str) -> dict[str, str]:
-    return {match.group("name"): match.group("value") for match in _STATIC_ASSIGN.finditer(text)}
-
-
-def _value_after(line: str, pos: int, kind: str) -> str:
-    """The value expression following a sink marker, from the original line."""
-    tail = line[pos:].lstrip()
-    if kind == "assign":
-        return tail.split(";", 1)[0].strip()
-    if kind == "colon":
-        end = min((idx for ch in "}," if (idx := tail.find(ch)) != -1), default=len(tail))
-        return tail[:end].strip()
-    if kind == "first_arg":
-        end = min((idx for ch in ",)" if (idx := tail.find(ch)) != -1), default=len(tail))
-        return tail[:end].strip()
-    if kind == "second_arg":
-        comma = tail.find(",")
-        if comma == -1:
-            return ""
-        rest = tail[comma + 1:].lstrip()
-        end = rest.find(")") if ")" in rest else len(rest)
-        return rest[:end].strip()
-    return ""
+def _sink(node):
+    if node.type in {"assignment_expression", "augmented_assignment_expression"}:
+        if node.type == "augmented_assignment_expression" and _text(node.child_by_field_name("operator")) != "+=":
+            return None, None
+        left = node.child_by_field_name("left")
+        if left is not None and left.type == "member_expression":
+            prop = _text(left.child_by_field_name("property"))
+            if prop in {"innerHTML", "outerHTML"}:
+                return "inner-outer-html-assignment", node.child_by_field_name("right")
+    if node.type == "call_expression":
+        function = node.child_by_field_name("function")
+        arguments = node.child_by_field_name("arguments")
+        args = [n for n in arguments.named_children if n.type != "comment"] if arguments else []
+        if function is not None and function.type == "member_expression":
+            prop = _text(function.child_by_field_name("property"))
+            receiver = _text(function.child_by_field_name("object"))
+            if receiver == "document" and prop in {"write", "writeln"} and args:
+                return "document-write", args
+            if prop == "insertAdjacentHTML" and len(args) >= 2:
+                return "insert-adjacent-html", args[1]
+    if node.type == "jsx_attribute" and node.named_children:
+        if _text(node.named_children[0]) == "dangerouslySetInnerHTML":
+            for child in node.named_children[1:]:
+                if child.type != "jsx_expression":
+                    continue
+                for obj in child.named_children:
+                    if obj.type != "object":
+                        continue
+                    value = None
+                    for pair in obj.named_children:
+                        if pair.type == "pair" and _text(pair.child_by_field_name("key")) in {
+                            "__html", "\"__html\"", "'__html'"
+                        }:
+                            value = pair.child_by_field_name("value")
+                        elif pair.type == "shorthand_property_identifier" and _text(pair) == "__html":
+                            value = pair
+                        elif pair.type == "spread_element" and value is not None:
+                            # A later spread may replace the known __html value.
+                            value = pair
+                    if value is not None:
+                        return "dangerously-set-inner-html", value
+    return None, None
 
 
 def scan_xss(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
+    parsers = {False: _parser(False), True: _parser(True)}
     findings: list[CheckFinding] = []
     with zipfile.ZipFile(fileobj) as archive:
         accounting = RuleCoverage(archive, extensions=_JS_FILE_SUFFIXES,
                                   max_file_bytes=_MAX_FILE_BYTES, coverage=coverage)
         for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
             raw = archive.read(info)
-            if not any(marker in raw for marker in
-                       (b"innerHTML", b"outerHTML", b"document.write", b"dangerouslySetInnerHTML",
-                        b"insertAdjacentHTML")):
-                accounting.analyzed()
-                continue
             try:
-                text = raw.decode("utf-8")
+                raw.decode("utf-8")
+                root = parsers[info.filename.endswith((".jsx", ".tsx"))].parse(raw).root_node
+                if root.has_error:
+                    accounting.skip("parse_error")
+                    continue
+                nodes = _nodes(root)
+                declarations = _declarations(nodes)
             except UnicodeError:
                 accounting.skip("decode_error")
                 continue
-            lines = text.splitlines()
-            bindings = _static_bindings(text)
-            for line_no, segments in _code_segments(text):
-                line = lines[line_no - 1]
-                for start, end in segments:
-                    segment = line[start:end]
-                    for name, pattern, kind in _SINKS:
-                        for match in pattern.finditer(segment):
-                            if len(findings) >= _MAX_FINDINGS:
-                                accounting.skip("finding_limit")
-                                accounting.finish()
-                                return findings
-                            value = _value_after(line, start + match.end(), kind)
-                            if not value:
-                                continue
-                            if _is_static_literal(value):
-                                continue
-                            if value in bindings and _is_static_literal(bindings[value]):
-                                continue
-                            findings.append(_finding(info.filename, line_no, name))
+            except ValueError:
+                accounting.skip("syntax_limit")
+                continue
+            for node in nodes:
+                sink, value = _sink(node)
+                if sink is None or value is None or _static_value(value, node, declarations):
+                    continue
+                if len(findings) >= _MAX_FINDINGS:
+                    accounting.skip("finding_limit")
+                    accounting.finish()
+                    return findings
+                findings.append(_finding(info.filename, node.start_point[0] + 1, sink))
             accounting.analyzed()
         accounting.finish()
     return findings

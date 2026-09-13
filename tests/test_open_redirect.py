@@ -61,6 +61,7 @@ def test_a_redirect_targeting_a_caller_authority_is_a_high_severity_signal():
     POSITIVE.replace("url=next", '"/dashboard"'),
     # the caller fills only the path, not the host
     POSITIVE.replace("url=next", 'f"/users/{next}"'),
+    POSITIVE.replace("url=next", 'f"/users/{next}?callback=https://ours.com"'),
     # a fixed absolute host the code chose
     POSITIVE.replace("url=next", '"https://ours.com/cb"'),
     # built by a call the trace does not follow
@@ -68,7 +69,7 @@ def test_a_redirect_targeting_a_caller_authority_is_a_high_severity_signal():
     # a recognised local check on the address
     "from fastapi import APIRouter\nfrom starlette.responses import RedirectResponse\n\n"
     "router = APIRouter()\n\n\n@router.get('/go')\nasync def go(next: str):\n"
-    "    if next.startswith('https://ours.com'):\n        return RedirectResponse(next)\n"
+    "    if next in ('https://ours.com/cb', 'https://ours.com/home'):\n        return RedirectResponse(next)\n"
     "    raise ValueError()\n",
     "not valid python (",
 ])
@@ -82,13 +83,14 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "literal-path": ("app/dash.py", 'RedirectResponse("/dashboard")', "RedirectResponse(next)"),
     "caller-in-path": ("app/users.py", 'f"/users/{user_id}"', 'f"https://{user_id}/x"'),
     "whitelisted-host": ("app/safe.py",
-                         "    if next.startswith(\"https://ours.com\"):\n        return RedirectResponse(next)\n"
+                         "    if next in (\"https://ours.com/cb\", \"https://ours.com/home\"):\n"
+                         "        return RedirectResponse(next)\n"
                          "    raise ValueError()",
                          "    return RedirectResponse(next)"),
     "helper-builds-url": ("app/indirect.py", "build_url(next)", '"https://" + next'),
     "fixed-authority": ("app/fixed.py", '"https://ours.com/cb"', '"https://" + next'),
     "httpresponse-location": ("app/loc.py",
-                              'HTTPResponse(302, headers={"Location": target})',
+                              'Response(status_code=302, headers={"Location": target})',
                               "RedirectResponse(url=target)"),
 }
 
@@ -119,3 +121,58 @@ def test_the_product_own_code_reports_nothing():
     sources = {p.relative_to(REPO_ROOT).as_posix(): p.read_text()
                for p in sorted((REPO_ROOT / "app").rglob("*.py")) if "__pycache__" not in p.parts}
     assert scan_open_redirect(archive(sources)) == []
+
+
+def handler(body: str) -> str:
+    return POSITIVE[:POSITIVE.index("    return")] + body
+
+
+@pytest.mark.parametrize("expression", ['"/" + next', 'f"/{next}"'])
+def test_one_leading_slash_can_still_redirect_to_a_caller_host(expression):
+    from urllib.parse import urlsplit
+    from starlette.responses import RedirectResponse
+
+    # A real framework response demonstrates why this is a positive, without
+    # making a network request or executing code supplied by an upload.
+    response = RedirectResponse("/" + "/evil.example")
+    assert urlsplit(response.headers["location"]).netloc == "evil.example"
+    findings = scan_open_redirect(archive(handler(f"    return RedirectResponse({expression})\n")))
+    assert len(findings) == 1
+    assert findings[0].rule_id == RULE_ID
+    assert scan_open_redirect(archive(handler('    return RedirectResponse("/users/" + next)\n'))) == []
+
+
+@pytest.mark.parametrize("target", ["https://ours.com.evil.example", "https://ours.com@evil.example"])
+def test_prefix_allowlist_accepts_a_different_host_and_must_not_suppress(target):
+    from urllib.parse import urlsplit
+
+    assert target.startswith("https://ours.com")
+    assert urlsplit(target).hostname != "ours.com"
+    source = handler('    if next.startswith("https://ours.com"):\n'
+                     '        return RedirectResponse(next)\n    raise ValueError()\n')
+    assert len(scan_open_redirect(archive(source))) == 1
+
+
+@pytest.mark.parametrize("body", [
+    '    if next != "https://ours.com/cb":\n        raise ValueError()\n    return RedirectResponse(next)\n',
+    '    if next not in ("https://ours.com/cb", "/home"):\n'
+    '        raise ValueError()\n    return RedirectResponse(next)\n',
+    '    if next == "https://ours.com/cb" or next == "/home":\n'
+    '        return RedirectResponse(next)\n    raise ValueError()\n',
+])
+def test_exact_destinations_are_accepted_only_on_the_constrained_path(body):
+    assert scan_open_redirect(archive(handler(body))) == []
+
+
+@pytest.mark.parametrize("body", [
+    '    if next == "https://ours.com/cb":\n'
+    '        return RedirectResponse("/home")\n    return RedirectResponse(next)\n',
+    '    if next == "https://ours.com/cb" or enabled:\n        return RedirectResponse(next)\n',
+    '    if next.startswith("/"):\n        return RedirectResponse(next)\n',
+    '    if next.startswith("https://"):\n        return RedirectResponse(next)\n',
+    '    if next in "https://ours.com/cb":\n        return RedirectResponse(next)\n',
+    '    validate_url(next)\n    return RedirectResponse(next)\n',
+    '    assert next == "https://ours.com/cb"\n    return RedirectResponse(next)\n',
+])
+def test_weak_unresolved_or_optimizable_checks_leave_a_signal(body):
+    assert len(scan_open_redirect(archive(handler(body)))) == 1

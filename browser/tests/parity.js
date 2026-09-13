@@ -21,7 +21,10 @@ export function evaluateCase(item, result) {
   const errors = [];
   if (canonical(result) !== canonical(item.native)) errors.push('native_profile_mismatch');
   const checks = [...report.checks_run, ...failures.map(f => f.check)];
-  if (checks.length !== 17 || new Set(checks).size !== 17) errors.push('check_partition');
+  const expectedChecks = [...item.native.report.checks_run,
+    ...item.native.report.checks_not_run.map(f => f.check)];
+  if (new Set(checks).size !== checks.length ||
+      canonical([...checks].sort()) !== canonical([...expectedChecks].sort())) errors.push('check_partition');
   if (failures.length) {
     errors.push('unexpected_check_failure');
   }
@@ -44,7 +47,7 @@ export function evaluateCase(item, result) {
     expectation_passed: expectationPassed,
     finding_parity: findingsKey(findings) === findingsKey(item.native.report.findings),
     browser_findings: findings.length, native_findings: item.native.report.findings.length,
-    checks_not_run: failures.map(f => f.check), errors };
+    checks_run: report.checks_run, checks_not_run: failures.map(f => f.check), errors };
 }
 
 export function summarize(rows) {
@@ -52,6 +55,7 @@ export function summarize(rows) {
     expectation_passed: rows.filter(r => r.expectation_passed).length,
     finding_parity: rows.filter(r => r.finding_parity).length,
     unexpected_failures: rows.filter(r => r.error || r.errors?.length).length,
-    supported_checks: 17, unavailable_checks: [],
-    full_parity: rows.every(r => !r.error && !r.errors.length && r.finding_parity && r.expectation_passed) };
+    supported_checks: rows.length ? rows[0].checks_run?.length ?? 0 : 0,
+    unavailable_checks: [...new Set(rows.flatMap(r => r.checks_not_run ?? []))],
+    full_parity: rows.length > 0 && rows.every(r => !r.error && !r.errors.length && r.finding_parity && r.expectation_passed) };
 }

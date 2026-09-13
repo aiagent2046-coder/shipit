@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+import os
+
+router = APIRouter()
+
+
+@router.get("/reload")
+async def reload(name: str):
+    os.system("systemctl restart app")

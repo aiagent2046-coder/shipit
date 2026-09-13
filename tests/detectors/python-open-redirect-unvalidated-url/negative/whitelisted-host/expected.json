@@ -1,5 +1,5 @@
 {
-  "description": "A recognised local check on the address suppresses the signal; the mutation removes the check, which must fire.",
+  "description": "An exact allowlist of complete destination URLs permits only fixed destinations; the mutation removes the check, which must fire.",
   "expect": [],
   "forbid": [
     "python-open-redirect-unvalidated-url"

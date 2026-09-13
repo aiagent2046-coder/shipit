@@ -79,6 +79,9 @@ def test_a_string_or_comment_spelling_the_sink_is_not_code():
 # case name -> (file, the one change that removes the property the case pins)
 CORPUS_NEGATIVES = REPO_ROOT / "tests" / "detectors" / RULE_ID / "negative"
 MUTATIONS: dict[str, tuple[str, str, str]] = {
+    "multiline-template-text": ("app/view.js",
+                                "const doc = `\nel.innerHTML = user.html;\n`;",
+                                "el.innerHTML = user.html;"),
     "static-literal": ("app/fixed.js", 'el.innerHTML = "<b>fixed</b>";', "el.innerHTML = user.html;"),
     "text-content": ("app/safe.js", "el.textContent = user.html;", "el.innerHTML = user.html;"),
     "set-attribute": ("app/attr.js", 'el.setAttribute("innerHTML", user.html);', "el.innerHTML = user.html;"),
@@ -126,3 +129,58 @@ def test_the_product_own_frontend_reports_nothing():
         + len(re.findall(r"document\.write(?:ln)?\s*\(|insertAdjacentHTML", text))
     assert sinks > 0, f"expected the product's frontend to use HTML-injection sinks; found {sinks}"
     assert scan_xss(archive(sources)) == []
+
+
+@pytest.mark.parametrize("source", [
+    'const html = "<b>" + user.html; el.innerHTML = html;',
+    '// const html = "safe";\nel.innerHTML = html;',
+    '/* const html = "safe"; */\nel.innerHTML = html;',
+    'const html = "safe"; function render(html) { el.innerHTML = html; }',
+    'const html = "safe"; const render = html => { el.innerHTML = html; };',
+    'const html = "safe"; { const html = user.html; el.innerHTML = html; }',
+    'el.innerHTML = html; const html = "safe";',
+    '{ const html = "safe"; } el.innerHTML = html;',
+    'el.innerHTML = `safe` + user.html;',
+    'const html = `safe` + user.html; el.innerHTML = html;',
+    'document.write("<b>" + user.html);',
+    'el.insertAdjacentHTML("beforeend", "<b>" + user.html);',
+])
+def test_dynamic_expressions_cannot_borrow_a_literal_prefix_or_unrelated_binding(source):
+    findings = scan_xss(archive(source))
+    assert len(findings) == 1
+
+
+@pytest.mark.parametrize("source", [
+    'el.innerHTML = "a+b;),}";',
+    'document.write("a+b;),}");',
+    'el.insertAdjacentHTML("beforeend", "a+b;),}");',
+    'const html = `<p>\nfixed\n</p>`; el.innerHTML = html;',
+    'const doc = `\nel.innerHTML = user.html;\n`;',
+    'const doc = /el.innerHTML = user.html/;',
+])
+def test_literal_punctuation_and_multiline_text_are_not_executable_html_sources(source):
+    assert scan_xss(archive(source)) == []
+
+
+@pytest.mark.parametrize("source", [
+    'const View = () => <div dangerouslySetInnerHTML={{__html: "safe", ...user}} />;',
+    'const View = () => <div dangerouslySetInnerHTML={{__html: "safe", __html: user.html}} />;',
+    'const View = () => <div dangerouslySetInnerHTML={{__html}} />;',
+])
+def test_react_html_value_cannot_borrow_an_overridden_literal(source):
+    assert len(scan_xss(archive(source, "repo/app/view.tsx"))) == 1
+
+
+def test_document_write_checks_all_html_arguments_and_numeric_update_is_not_a_sink():
+    assert len(scan_xss(archive('document.write("safe", user.html);'))) == 1
+    assert scan_xss(archive('el.innerHTML -= count;')) == []
+
+
+@pytest.mark.parametrize("loop", [
+    'for (const html of inputs)',
+    'for (const html in inputs)',
+    'for (const {html} of inputs)',
+])
+def test_loop_bindings_cannot_borrow_an_outer_literal(loop):
+    source = f'const html = "fixed"; {loop} {{ node.innerHTML = html; }}'
+    assert len(scan_xss(archive(source))) == 1

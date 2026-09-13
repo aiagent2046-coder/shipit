@@ -51,9 +51,9 @@ SCANNER_CHECKS = {
     "scan_open_redirect": "open_redirect",
     "scan_tls_verification": "tls_verification",
     "scan_unsafe_deserialization": "unsafe_deserialization",
-    "scan_unsafe_xml_parse": "unsafe_xml_parse",
     "scan_path_traversal": "path_traversal",
     "scan_xss": "xss",
+    "scan_command_injection": "command_injection",
     "scan_cookie_flags": "session_cookie",
 }
 

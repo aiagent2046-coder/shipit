@@ -1,157 +1,267 @@
-"""A secret or token generated from a non-cryptographic random source.
+"""Secret-named assignments containing a non-cryptographic random call.
 
-``Math.random()`` and Python's ``random`` module are not cryptographically
-secure: their state is predictable, so a token, password reset link, OTP or
-nonce drawn from them can be guessed or replayed. This rule reads JS/TS and
-Python as text (no native grammar) and reports a random draw whose result lands
-in a name that announces it is a secret -- a token, secret, password, OTP,
-reset, nonce, salt, credential, API key, confirmation or verification value.
-
-It stays silent when the draw feeds anything else: an animation, a shuffle, a
-random test value, a game. ``crypto.getRandomValues``, ``secrets.*`` and
-``random.SystemRandom`` are the secure alternatives and are NOT sinks. Only the
-dotted spelling is read -- a bare ``randint(...)`` bound by ``from random import
-randint`` and an aliased ``import random as rnd`` are outside this rule's claim.
-A helper that returns a draw (``def gen(): return random.randint(...)`` called as
-``otp = gen()``) is cross-function taint this rule does not follow, and that is
-the dominant residual rather than a hidden gap. The security word must sit on
-the LEFT of an assignment to the draw, so ``random.choice(tokens)`` (picking
-from a list named ``tokens``) is not reported. String literals and comments are
-masked out before matching, so a mention in a docstring or comment is not a
-decision. No uploaded code is executed.
+Python AST requires an unambiguous local/inherited random import. Rebinding,
+parameters and member replacement invalidate that provenance. JS/TS syntax
+recognizes calls to an unshadowed Math.random, including template substitutions.
+Comments and literal text never count as draws. Helpers, dynamic aliases and
+cross-file provenance are unresolved. No uploaded source is executed.
 """
-
 from __future__ import annotations
 
-import re
+import ast
 import zipfile
+from collections import Counter
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
 from app.scan.rule_coverage import RuleCoverage
+from app.scan.xss import _nodes, _parser, _text
 
 RULE_ID = "insecure-randomness"
 _FILE_SUFFIXES = (".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 400
 _MAX_FINDINGS = 32
-
-# A name that announces the drawn value is a secret. Substring, not word-boundary
-# split, so resetToken / reset_token / password_reset all match. "passcode" and
-# "recovery" are the synonyms the hunt produced that the first vocabulary missed.
+_MAX_NODES = 20_000
+_MAX_DEPTH = 100
 _SECRET_WORDS = (
     "token", "secret", "password", "passwd", "passcode", "otp", "reset", "recovery", "nonce",
     "salt", "credential", "apikey", "api_key", "confirmation", "verification",
 )
-
-# security-name LEFT of an assignment to a non-cryptographic draw, on one line.
-# Lazy so a name that IS the word (otp, salt, nonce) still matches, and
-# case-insensitive so resetToken / API_KEY are recognised.
-_ASSIGN = re.compile(
-    r"(?P<name>\b\w*?(?:" + "|".join(_SECRET_WORDS) + r")\w*\b)"
-    r"\s*(?::\s*[^=\n;]+)?=\s*"
-    r"[^;\n]*?"
-    r"\b(?:Math\.random|random\.(?:random|randint|randrange|choice|getrandbits|uniform|sample))\b",
-    re.IGNORECASE,
-)
+_METHODS = {"random", "randint", "randrange", "choice", "getrandbits", "uniform", "sample"}
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 
 
-def _masked_lines(text: str) -> list[str]:
-    """The text with string literals and comments replaced by spaces.
+def _secret(name):
+    return any(word in name.lower() for word in _SECRET_WORDS)
 
-    Positions are preserved (so a finding's line is still right), and a string
-    or comment is never a place the assignment can match. Block comments may
-    span lines.
-    """
-    lines = text.splitlines()
-    out: list[str] = []
-    in_block = False
-    for line in lines:
-        chars = list(line)
-        i, n = 0, len(line)
-        while i < n:
-            if in_block:
-                end = line.find("*/", i)
-                if end == -1:
-                    for j in range(i, n):
-                        chars[j] = " "
-                    i = n
-                    break
-                for j in range(i, end + 2):
-                    chars[j] = " "
-                i = end + 2
-                in_block = False
+
+def _ast_nodes(tree):
+    pending, nodes = [(tree, 0)], []
+    while pending:
+        node, depth = pending.pop()
+        if len(nodes) >= _MAX_NODES or depth > _MAX_DEPTH:
+            raise ValueError("syntax_limit")
+        nodes.append(node)
+        pending.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
+    return nodes
+
+
+def _target_names(target):
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Attribute):
+        return [target.attr]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [name for child in target.elts for name in _target_names(child)]
+    return []
+
+
+def _qualified(node, bindings):
+    if isinstance(node, ast.Name):
+        return bindings.get(node.id, "")
+    if isinstance(node, ast.Attribute):
+        base = _qualified(node.value, bindings)
+        return f"{base}.{node.attr}" if base else ""
+    return ""
+
+
+def _python_draw(value, bindings):
+    if value is None or isinstance(value, _SCOPES):
+        return False
+    if isinstance(value, _COMPREHENSIONS):
+        local = bindings.copy()
+        for gen in value.generators:
+            if _python_draw(gen.iter, local):
+                return True
+            for name in _target_names(gen.target):
+                local.pop(name, None)
+            if any(_python_draw(condition, local) for condition in gen.ifs):
+                return True
+        values = [value.key, value.value] if isinstance(value, ast.DictComp) else [value.elt]
+        return any(_python_draw(child, local) for child in values)
+    if isinstance(value, ast.Call) and _qualified(value.func, bindings) in {
+        f"random.{method}" for method in _METHODS
+    }:
+        return True
+    return any(_python_draw(child, bindings) for child in ast.iter_child_nodes(value))
+
+
+def _python_evidence(text):
+    tree = ast.parse(text)
+    _ast_nodes(tree)
+    found = []
+
+    def scope(body, inherited, parameters=(), method_globals=None):
+        counts, imports, imports_at, nodes, nested = Counter(parameters), {}, {}, [], []
+        pending = list(body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, _SCOPES):
+                if not isinstance(node, ast.Lambda):
+                    counts[node.name] += 1
+                    nested.append(node)
                 continue
-            char = line[i]
-            if char in ("'", '"', "`"):
-                quote = char
-                chars[i] = " "
-                i += 1
-                while i < n:
-                    if line[i] == "\\":
-                        chars[i] = " "
-                        if i + 1 < n:
-                            chars[i + 1] = " "
-                            i += 2
-                        else:
-                            i += 1
-                        continue
-                    chars[i] = " "
-                    if line[i] == quote:
-                        i += 1
-                        break
-                    i += 1
+            nodes.append(node)
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    name = alias.asname or alias.name.split(".")[0]
+                    counts[name] += 1
+                    if alias.name == "random":
+                        imports[name], imports_at[name] = "random", (node.lineno, node.col_offset)
+            elif isinstance(node, ast.ImportFrom):
+                if any(alias.name == "*" for alias in node.names):
+                    # Unknown star exports can shadow an imported source.
+                    return
+                for alias in node.names:
+                    name = alias.asname or alias.name
+                    counts[name] += 1
+                    if node.module == "random" and not node.level:
+                        imports[name], imports_at[name] = f"random.{alias.name}", (node.lineno, node.col_offset)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                counts[node.id] += 1
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                counts.update(node.names)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                counts[node.name] += 1
+            elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+                counts[node.name] += 1
+            elif isinstance(node, ast.MatchMapping) and node.rest:
+                counts[node.rest] += 1
+            pending.extend(ast.iter_child_nodes(node))
+        bindings = {name: origin for name, origin in inherited.items() if counts[name] == 0}
+        bindings.update({name: origin for name, origin in imports.items() if counts[name] == 1})
+        # Conditional imports are unresolved rather than treated as guaranteed.
+        for node in nodes:
+            if isinstance(node, (ast.If, ast.Try, ast.TryStar, ast.For, ast.While, ast.Match)):
+                for child in ast.walk(node):
+                    if isinstance(child, (ast.Import, ast.ImportFrom)):
+                        for alias in child.names:
+                            bindings.pop(alias.asname or alias.name.split(".")[0], None)
+            if isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                base = node
+                while isinstance(base, ast.Attribute):
+                    base = base.value
+                if isinstance(base, ast.Name) and base.id in bindings:
+                    origin = bindings[base.id]
+                    bindings = {name: value for name, value in bindings.items()
+                                if value != origin and not value.startswith(origin + ".")}
+        for node in nodes:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
                 continue
-            if char == "/" and i + 1 < n:
-                if line[i + 1] == "/":
-                    for j in range(i, n):
-                        chars[j] = " "
-                    break
-                if line[i + 1] == "*":
-                    chars[i] = " "
-                    chars[i + 1] = " "
-                    end = line.find("*/", i + 2)
-                    if end == -1:
-                        for j in range(i, n):
-                            chars[j] = " "
-                        in_block = True
-                        i = n
-                        break
-                    for j in range(i, end + 2):
-                        chars[j] = " "
-                    i = end + 2
-                    continue
-            if char == "#":
-                for j in range(i, n):
-                    chars[j] = " "
-                break
-            i += 1
-        out.append("".join(chars))
-    return out
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            local = {name: value for name, value in bindings.items()
+                     if name not in imports_at or imports_at[name] < (node.lineno, node.col_offset)}
+            if _python_draw(node.value, local):
+                for target in targets:
+                    for name in _target_names(target):
+                        if _secret(name):
+                            found.append((node.lineno, name))
+        for node in nested:
+            if isinstance(node, ast.ClassDef):
+                # Class bodies execute assignments, but class namespace bindings
+                # are not lexical globals for methods or a nested class body.
+                class_globals = method_globals if method_globals is not None else bindings
+                scope(node.body, class_globals, method_globals=class_globals)
+            else:
+                args = node.args
+                parameters = [arg.arg for arg in (
+                    *args.posonlyargs, *args.args, *args.kwonlyargs,
+                    *([args.vararg] if args.vararg else []),
+                    *([args.kwarg] if args.kwarg else []))]
+                scope(node.body, method_globals if method_globals is not None else bindings, parameters)
+
+    scope(tree.body, {})
+    return sorted(set(found))
+
+
+def _js_evidence(root, nodes):
+    # Without full symbol resolution, any local Math binding/mutation makes its
+    # provenance unknown. This deliberately under-reports instead of assigning
+    # cryptographic properties to a custom object with the same spelling.
+    for node in nodes:
+        if node.type in {"formal_parameters", "import_clause", "catch_clause"}:
+            if any(_text(child) == "Math" for child in _nodes(node)):
+                return []
+        if node.type in {"variable_declarator", "function_declaration", "class_declaration"}:
+            name = node.child_by_field_name("name")
+            if name is not None and any(_text(child) == "Math" for child in _nodes(name)):
+                return []
+        if node.type == "arrow_function" and _text(node.child_by_field_name("parameter")) == "Math":
+            return []
+        if node.type == "for_in_statement":
+            target = node.child_by_field_name("left")
+            if target is not None and any(_text(child) == "Math" for child in _nodes(target)):
+                return []
+        if node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression"}:
+            target = node.child_by_field_name("left") or node.child_by_field_name("argument")
+            if target is not None and any(_text(child) == "Math" for child in _nodes(target)):
+                return []
+
+    def draw(value):
+        if value is None or value.type in {"arrow_function", "function_expression", "function_declaration"}:
+            return False
+        if value.type == "call_expression":
+            callee = value.child_by_field_name("function")
+            if callee is not None and callee.type == "member_expression":
+                if (_text(callee.child_by_field_name("object")) == "Math" and
+                        _text(callee.child_by_field_name("property")) == "random"):
+                    return True
+        return any(draw(child) for child in value.named_children)
+
+    found = []
+    for node in nodes:
+        if node.type == "variable_declarator":
+            target, value = node.child_by_field_name("name"), node.child_by_field_name("value")
+        elif node.type == "assignment_expression":
+            target, value = node.child_by_field_name("left"), node.child_by_field_name("right")
+        else:
+            continue
+        if target is not None and target.type == "member_expression":
+            target = target.child_by_field_name("property")
+        if target is not None and target.type in {"identifier", "property_identifier"}:
+            name = _text(target)
+            if _secret(name) and draw(value):
+                found.append((node.start_point[0] + 1, name))
+    return found
 
 
 def scan_insecure_randomness(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
+    # Fail the complete check if JS support is unavailable: never label Python-
+    # only output as a complete mixed-language check.
+    parsers = {False: _parser(False), True: _parser(True)}
     findings: list[CheckFinding] = []
     with zipfile.ZipFile(fileobj) as archive:
         accounting = RuleCoverage(archive, extensions=_FILE_SUFFIXES,
                                   max_file_bytes=_MAX_FILE_BYTES, coverage=coverage)
         for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
             raw = archive.read(info)
-            if b"Math.random" not in raw and b"random." not in raw:
-                accounting.analyzed()
-                continue
             try:
                 text = raw.decode("utf-8")
+                if info.filename.endswith(".py"):
+                    evidence = _python_evidence(text)
+                else:
+                    root = parsers[info.filename.endswith((".jsx", ".tsx"))].parse(raw).root_node
+                    if root.has_error:
+                        accounting.skip("parse_error")
+                        continue
+                    evidence = _js_evidence(root, _nodes(root))
             except UnicodeError:
                 accounting.skip("decode_error")
                 continue
-            for line_no, line in enumerate(_masked_lines(text), start=1):
-                for match in _ASSIGN.finditer(line):
-                    if len(findings) >= _MAX_FINDINGS:
-                        accounting.skip("finding_limit")
-                        accounting.finish()
-                        return findings
-                    findings.append(_finding(info.filename, line_no, match.group("name")))
+            except (SyntaxError, RecursionError):
+                accounting.skip("parse_error")
+                continue
+            except ValueError:
+                accounting.skip("syntax_limit")
+                continue
+            for line_no, name in evidence:
+                if len(findings) >= _MAX_FINDINGS:
+                    accounting.skip("finding_limit")
+                    accounting.finish()
+                    return findings
+                findings.append(_finding(info.filename, line_no, name))
             accounting.analyzed()
         accounting.finish()
     return findings

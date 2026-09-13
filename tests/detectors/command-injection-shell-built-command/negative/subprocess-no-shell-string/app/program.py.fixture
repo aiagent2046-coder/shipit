@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+import subprocess
+
+router = APIRouter()
+
+
+@router.get("/exec")
+async def exec_it(name: str):
+    subprocess.run("run-" + name)

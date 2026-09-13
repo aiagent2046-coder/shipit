@@ -1,0 +1,10 @@
+{
+  "description": "subprocess with a literal shell=True and an f-string built from the caller's value.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

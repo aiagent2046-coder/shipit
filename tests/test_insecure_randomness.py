@@ -69,6 +69,12 @@ def test_shapes_this_rule_does_not_report(source):
 
 CORPUS_NEGATIVES = REPO_ROOT / "tests" / "detectors" / RULE_ID / "negative"
 MUTATIONS: dict[str, tuple[str, str, str]] = {
+    "loop-math-binding": ("app/token.js", "const Math of sources", "const source of sources"),
+    "match-random-capture": ("app/token.py", 'case {"random": random}', 'case {"random": source}'),
+    "multiline-docstring": ("app/token.py", '\"\"\"\nreset_token = random.randint(1, 9)\n\"\"\"',
+                            "reset_token = random.randint(1, 9)"),
+    "system-random-rebinding": ("app/token.py", "random = random.SystemRandom()\n", ""),
+    "shadowed-math": ("app/token.js", "issue(Math)", "issue()"),
     "animation": ("app/anim.js", "const x = Math.random() * width;", "const token = Math.random();"),
     "shuffle": ("app/shuffle.py", "random.shuffle(items)", "reset_token = random.choice(items)"),
     "pick-from-list": ("app/pick.py", "winner = random.choice(tokens)", "reset_token = random.choice(tokens)"),
@@ -112,3 +118,72 @@ def test_the_product_own_code_reports_nothing():
         r"Math\.random|random\.(?:random|randint|randrange|choice|getrandbits|uniform|sample)", text))
     assert draws > 0, f"expected the product to draw from the non-cryptographic sources; found {draws}"
     assert scan_insecure_randomness(archive(sources)) == []
+
+
+@pytest.mark.parametrize("source", [
+    'import random\n"""\nreset_token = random.randint(1, 9)\n"""',
+    'import random\nrandom = random.SystemRandom()\nreset_token = random.randint(1, 9)',
+    'import random\ndef make(random):\n    reset_token = random.randint(1, 9)',
+    'import random\nrandom.randint = secure_randint\nreset_token = random.randint(1, 9)',
+    'import other_library as random\nreset_token = random.randint(1, 9)',
+    'import random\nreset_token = lambda: random.randint(1, 9)',
+])
+def test_python_text_or_unknown_random_provenance_does_not_claim_a_predictable_draw(source):
+    assert scan_insecure_randomness(archive(source)) == []
+
+
+@pytest.mark.parametrize("source", [
+    'import random\nreset_token = f"prefix-{random.getrandbits(128)}"',
+    'import random as rnd\nreset_token = rnd.getrandbits(128)',
+    'from random import getrandbits\nreset_token = getrandbits(128)',
+])
+def test_python_draws_use_import_provenance_and_evaluate_fstring_expressions(source):
+    findings = scan_insecure_randomness(archive(source))
+    assert len(findings) == 1
+    assert findings[0].line == 2
+
+
+@pytest.mark.parametrize("source", [
+    'const resetToken = `${Math.random()}`;',
+    'const resetToken = `prefix-${Math.random().toString(36)}`;',
+    'const resetToken =\n  Math.random();',
+])
+def test_js_draws_are_calls_in_expressions_including_template_substitution(source):
+    assert len(scan_insecure_randomness(archive(source, "repo/app/x.js"))) == 1
+
+
+@pytest.mark.parametrize("source", [
+    'const doc = `\nconst resetToken = Math.random();\n`;',
+    'function make(Math) { const resetToken = Math.random(); }',
+    'const Math = secureGenerator; const resetToken = Math.random();',
+    'const resetToken = Math.random;',
+    'const resetToken = () => Math.random();',
+    'const resetToken = math.random();',
+])
+def test_js_literal_text_custom_math_and_function_references_are_not_draws(source):
+    assert scan_insecure_randomness(archive(source, "repo/app/x.js")) == []
+
+
+@pytest.mark.parametrize("pattern", [
+    '{"random": random}',
+    '[*random]',
+    '{**random}',
+])
+def test_match_capture_shadows_imported_random(pattern):
+    source = (f'import random\ndef issue(obj):\n    match obj:\n'
+              f'        case {pattern}:\n            secret = random.random()\n')
+    assert scan_insecure_randomness(archive(source)) == []
+
+
+def test_executed_class_body_draw_is_detected_without_leaking_class_bindings_to_methods():
+    source = ('import random\nclass Config:\n    secret = random.random()\n'
+              '    def issue(self):\n        token = random.random()\n')
+    assert [finding.line for finding in scan_insecure_randomness(archive(source))] == [3, 5]
+    isolated = ('class Config:\n    import random\n    secret = random.random()\n'
+                '    def issue(self):\n        token = random.random()\n')
+    assert [finding.line for finding in scan_insecure_randomness(archive(isolated))] == [3]
+
+
+def test_math_loop_binding_has_unknown_provenance():
+    source = 'for (const Math of providers) { const token = Math.random(); }'
+    assert scan_insecure_randomness(archive(source, 'repo/app/x.js')) == []

@@ -1,7 +1,0 @@
-{
-  "description": "xml.etree.ElementTree does not resolve external entities and is not a sink; the mutation swaps in lxml, which must fire.",
-  "expect": [],
-  "forbid": [
-    "unsafe-xml-parse"
-  ]
-}

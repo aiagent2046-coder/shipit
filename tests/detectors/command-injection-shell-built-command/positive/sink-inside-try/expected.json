@@ -1,0 +1,10 @@
+{
+  "description": "The sink sits inside a try: block; the statement walker must descend into it.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

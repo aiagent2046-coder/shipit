@@ -8,12 +8,13 @@ an attacker-chosen host: the open redirect behind most phishing and OAuth
 token-theft flows.
 
 A caller value that only fills the PATH is not an open redirect -- the host is
-fixed, so the visitor stays on the same origin -- and stays silent, exactly the
-boundary ``_host_inputs`` draws for the outbound-URL rule. A recognised local
-check on the address (an allowed-host comparison, a scheme check) suppresses the
-signal without certifying that the check is correct.
+fixed, so the visitor stays on the same origin -- and stays silent. A lone
+leading slash is different: caller input beginning with another slash can make
+a protocol-relative authority. Only an exact literal destination allowlist on
+the accepting branch suppresses the signal. Prefix and scheme checks, unknown
+validation helpers and parsed-host validators do not establish that property.
 
-Flask/Django ``redirect()``, ``HTTPResponse(headers={"Location": ...})`` and the
+Flask/Django ``redirect()``, ``Response(headers={"Location": ...})`` and the
 ``<meta http-equiv=refresh>`` pattern, and JS/TS (``res.redirect``,
 ``window.location``) are outside this rule's claim; it reads only the
 Starlette/FastAPI constructor in FastAPI routes. No uploaded code is imported or
@@ -31,6 +32,7 @@ from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
 from app.scan.outbound_url import (
+    _MARKER,
     _MAX_FILE_BYTES,
     _MAX_FILES,
     _MAX_FINDINGS,
@@ -39,8 +41,6 @@ from app.scan.outbound_url import (
     _attr_name,
     _bind,
     _bounded_tree,
-    _checked_names,
-    _check_call,
     _forget_stores,
     _host_inputs,
     _import,
@@ -49,7 +49,6 @@ from app.scan.outbound_url import (
     _request_inputs,
     _skeleton,
     _terminates,
-    _test_inspects,
     _walk,
 )
 from app.scan.rule_coverage import RuleCoverage, track_analysis_limits
@@ -75,6 +74,59 @@ def _redirect_argument(call: ast.Call, state: _State) -> ast.AST | None:
     return call.args[0] if call.args else None
 
 
+def _redirect_host_inputs(built: tuple[str, list[set[str]]]) -> set[str]:
+    template, slots = built
+    # A leading slash does not fix the origin if the next character is supplied
+    # by the caller: "/" + "/evil.example" is a network-path reference.
+    if template.startswith("/") and not template.startswith("//"):
+        return set(slots[0]) if template.startswith("/" + _MARKER) and slots else set()
+    return _host_inputs(built)
+
+
+def _allowed_destinations(expr: ast.AST) -> bool:
+    if isinstance(expr, ast.Constant):
+        return isinstance(expr.value, str)
+    return (isinstance(expr, (ast.Tuple, ast.List, ast.Set)) and bool(expr.elts)
+            and all(isinstance(item, ast.Constant) and isinstance(item.value, str)
+                    for item in expr.elts))
+
+
+def _allowed_inputs(test: ast.AST, state: _State, accepted: bool) -> set[str]:
+    """Exact whole-destination comparisons on the branch that accepts them.
+
+    An arbitrary inspection of a URL does not constrain its authority. In
+    particular, startswith("https://ours.com") also accepts attacker hosts and
+    userinfo. Do not inherit the outbound rule's weaker inspection heuristic.
+    """
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return _allowed_inputs(test.operand, state, not accepted)
+    if isinstance(test, ast.BoolOp):
+        arms = [_allowed_inputs(value, state, accepted) for value in test.values]
+        every_arm = (isinstance(test.op, ast.Or) and accepted
+                     or isinstance(test.op, ast.And) and not accepted)
+        return set.intersection(*arms) if every_arm else set.union(*arms)
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return set()
+    op = test.ops[0]
+    positive = isinstance(op, (ast.Eq, ast.In))
+    negative = isinstance(op, (ast.NotEq, ast.NotIn))
+    if not (positive and accepted or negative and not accepted):
+        return set()
+    left, right = test.left, test.comparators[0]
+    if isinstance(op, (ast.In, ast.NotIn)):
+        # Membership in a string checks a substring, not an allowed destination.
+        if not isinstance(right, (ast.Tuple, ast.List, ast.Set)):
+            return set()
+    elif isinstance(left, ast.Constant) and isinstance(left.value, str):
+        left, right = right, left
+    if not _allowed_destinations(right):
+        return set()
+    value = _skeleton(left, state)
+    # Check the entire caller value; inspecting just its scheme/path is not an
+    # allowlist for the destination eventually passed to RedirectResponse.
+    return set(value[1][0]) if value and value[0] == _MARKER and len(value[1]) == 1 else set()
+
+
 def _scan_expr(expr: ast.AST, state: _State, path: str, findings: list[CheckFinding]) -> None:
     for call in _walk(expr):
         if len(findings) >= _MAX_FINDINGS:
@@ -85,7 +137,7 @@ def _scan_expr(expr: ast.AST, state: _State, path: str, findings: list[CheckFind
         if url is None:
             continue
         built = _skeleton(url, state)
-        reaching = _host_inputs(built) if built is not None else set()
+        reaching = _redirect_host_inputs(built) if built is not None else set()
         if reaching and not reaching <= state.checked:
             findings.append(_finding(path, call, reaching))
 
@@ -102,21 +154,15 @@ def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[C
             continue
         if isinstance(stmt, ast.If):
             _scan_expr(stmt.test, state, path, findings)
-            inspected = (_checked_names(stmt.test, state)
-                         if _test_inspects(stmt.test, set(state.values) | state.requests | state.models.keys())
-                         else set())
             branch_states = []
-            for branch in (stmt.body, stmt.orelse):
+            for accepted, branch in ((True, stmt.body), (False, stmt.orelse)):
                 branch_state = state.copy()
-                branch_state.checked |= inspected
+                branch_state.checked |= _allowed_inputs(stmt.test, state, accepted)
                 _scan_block(branch, branch_state, path, findings)
                 if not _terminates(branch):
                     branch_states.append(branch_state)
             if not branch_states:
                 return
-            if len(branch_states) > 1:
-                for branch_state in branch_states:
-                    branch_state.checked -= inspected - state.checked
             _join_states(state, branch_states)
             continue
         if isinstance(stmt, (ast.With, ast.AsyncWith)):
@@ -159,11 +205,6 @@ def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[C
         elif isinstance(stmt, ast.Delete):
             for target in stmt.targets:
                 _bind(target, None, state)
-        elif isinstance(stmt, ast.Expr):
-            state.checked |= _check_call(stmt.value, state)
-        elif isinstance(stmt, ast.Assert) and _test_inspects(
-                stmt.test, set(state.values) | state.requests | state.models.keys()):
-            state.checked |= _checked_names(stmt.test, state)
         elif isinstance(stmt, (ast.Return, ast.Raise)):
             return
 
@@ -271,7 +312,7 @@ def _finding(path: str, call: ast.Call, reaching: set[str]) -> CheckFinding:
             f"visitor's browser to an address whose host is built from request input ({names}). A caller "
             "who controls the target can redirect a signed-in user to an attacker's domain -- the open "
             "redirect that carries OAuth codes, session tokens in the Referer, and phishing flows. No "
-            "recognised local check on the address was found on this path. Whether the route is "
+            "exact literal destination allowlist was established on this path. Whether the route is "
             "reachable and whether anything outside this function constrains the target have NOT been "
             "verified, and the value is traced only inside this function."
         ),

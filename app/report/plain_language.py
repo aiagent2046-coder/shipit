@@ -20,15 +20,18 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
-    "unsafe-xml-parse": (
-        "XML is parsed without protection against external entities.",
-        "lxml and the stdlib minidom/sax/pulldom resolve external entities by default, so an "
-        "attacker-controlled XML document can read local files, probe the internal network or force a "
-        "billion-laughs expansion. Where the bytes come from has not been verified; trusted internal "
-        "data and untrusted external data can reach the same call.",
-        "Parse XML with xml.etree.ElementTree (which does not resolve external entities) or the "
-        "defusedxml package. For lxml, pass parser=etree.XMLParser(resolve_entities=False) and disable "
-        "network access. Never parse untrusted XML with minidom, sax or pulldom.",
+    "command-injection-shell-built-command": (
+        "A shell command is built from a value the caller sent.",
+        "This route hands a string to a shell -- os.system, os.popen, subprocess with shell=True, "
+        "or an explicit POSIX shell -c -- "
+        "and that string is assembled from the request itself. A value carrying shell characters (;, "
+        "&&, $(...), backticks) can run a second command the application never wrote, up to arbitrary "
+        "code as the process user. Whether the route is reachable, whether anything outside this "
+        "function constrains the value, and whether the call actually runs have not been verified.",
+        "Pass request values as separate arguments to the intended executable, without shell=True "
+        "or an explicit shell -c. In a necessary POSIX shell script, keep the script fixed and pass "
+        "values as positional parameters with quoted expansions. shlex.quote applies to POSIX shells, "
+        "not Windows cmd.exe; validate command and option choices separately.",
     ),
     "insecure-randomness": (
         "A secret-looking value is generated from a non-cryptographic random source.",

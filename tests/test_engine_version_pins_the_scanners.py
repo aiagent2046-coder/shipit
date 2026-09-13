@@ -52,6 +52,7 @@ WIRED_SCANNERS = (
     "scan_auth_read",
     "scan_auth_write",
     "scan_ci_deploy_source",
+    "scan_command_injection",
     "scan_cookie_flags",
     "scan_error_boundary",
     "scan_http_success",
@@ -67,7 +68,6 @@ WIRED_SCANNERS = (
     "scan_sql_injection_js",
     "scan_tls_verification",
     "scan_unsafe_deserialization",
-    "scan_unsafe_xml_parse",
     "scan_xss",
 )
 
@@ -80,6 +80,7 @@ WIRED_SCANNERS = (
 EMITTED_RULE_IDS = (
     "anthropic-api-key",
     "aws-access-key-id",
+    "command-injection-shell-built-command",
     "connection-string-dev-password",
     "connection-string-local-host",
     "connection-string-password",
@@ -110,7 +111,6 @@ EMITTED_RULE_IDS = (
     "telegram-bot-token",
     "tls-verification-disabled",
     "unsafe-deserialization",
-    "unsafe-xml-parse",
     "xss-unsafe-html-injection",
 )
 

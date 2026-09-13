@@ -65,6 +65,7 @@ def test_browser_boots_without_native_dependencies_and_reports_real_findings():
     failures = report["checks_not_run"]
     assert {entry["check"] for entry in failures} == {
         "sql_injection_js", "tls_verification", "session_cookie", "http_success",
+        "xss", "insecure_randomness",
     }
     assert all(entry["reason"] == "check_error: ImportError" for entry in failures)
     assert all(report["coverage"][entry["check"]].startswith("Did not run") for entry in failures)

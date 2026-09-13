@@ -1,0 +1,10 @@
+from fastapi import APIRouter, Request
+import os
+
+router = APIRouter()
+
+
+@router.get("/lookup")
+async def lookup(request: Request):
+    host = request.query_params.get("host")
+    os.popen("nslookup " + host)

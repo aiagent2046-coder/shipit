@@ -253,10 +253,12 @@ CAPABILITIES: tuple[Capability, ...] = (
         "trees and generated build directories (.next, dist, build) are excluded before the file limit. The "
         "Starlette/FastAPI RedirectResponse constructor whose target authority (between :// and the first "
         "/, ? or #) is built from a value the request supplies is reported. A caller value that fills only "
-        "the path stays silent, and a recognised local check on the address suppresses the signal. "
+        "the path stays silent, except an input immediately after a leading slash that can form //host. "
+        "Only an exact literal destination allowlist on the accepting branch suppresses the signal. "
+        "Prefix/scheme checks, assertions and unknown validators do not establish that allowlist. "
         "Flask/Django redirect(), HTTPResponse/HTTPException Location headers, meta-refresh and JS/TS "
         "are not covered, and a helper that assembles the URL is not followed. Whether the route is "
-        "reachable and whether the check is correct are not verified.",
+        "reachable is not verified; parsed-host and cross-function validators are unresolved.",
     ),
     Capability(
         "path_traversal",
@@ -278,42 +280,48 @@ CAPABILITIES: tuple[Capability, ...] = (
         "xss",
         "HTML injected into the DOM from a value that is not a fixed string",
         ("xss-unsafe-html-injection",),
-        "JavaScript/TypeScript/JSX/TSX source read as text, at most 400 files up to 400 KB each, with "
-        "string literals and // and /* */ comments skipped; vendor, dependency trees and generated build "
-        "directories (.next, dist, build) are excluded before the file limit. Four sinks that inject HTML "
-        "into the DOM are read -- dangerouslySetInnerHTML, innerHTML/outerHTML assignment (including +=), "
-        "document.write and insertAdjacentHTML -- and reported when the value is not a fixed single- or "
-        "double-quoted string with no concatenation. A template literal with an interpolation is dynamic. "
-        "Framework template bindings (Angular [innerHTML], Vue v-html, Svelte innerHTML={...}, jQuery "
-        ".html(...)) are not read. Whether the value was sanitized, is reachable, or the sink runs are "
-        "not verified; textContent/innerText and setAttribute are not sinks.",
+        "JavaScript/TypeScript/JSX/TSX parsed with the bundled native grammar; at most 400 files "
+        "up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example "
+        "paths, vendor, dependency trees and generated build directories are excluded before the "
+        "file limit. DOM innerHTML/outerHTML assignments, document.write/writeln, insertAdjacentHTML "
+        "and React dangerouslySetInnerHTML are reported for nonliteral values. A complete literal "
+        "or an earlier visible, globally unambiguous const literal stays silent; concatenation, "
+        "shadowed names and comments do not establish a static value. Sanitization, input trust, "
+        "DOM receiver provenance, cross-file resolution and other framework template bindings are "
+        "unresolved. Missing native grammars withhold the check; malformed or oversized source "
+        "is reported in coverage rather than treated as analyzed.",
     ),
     Capability(
         "insecure_randomness",
         "A secret-looking value generated from a non-cryptographic random source",
         ("insecure-randomness",),
-        "JavaScript/TypeScript and Python source read as text, at most 400 files up to 400 KB each, with "
-        "string literals and comments masked out; vendor, dependency trees and generated build "
-        "directories (.next, dist, build) are excluded before the file limit. A draw from Math.random or "
-        "Python's random module whose result lands in a secret-named variable (token, secret, password, "
-        "otp, reset, nonce, salt, credential, api key, confirmation, verification) is reported. The "
-        "security word must sit on the left of an assignment to the draw. crypto.getRandomValues, "
-        "secrets.* and random.SystemRandom are the secure sources and are not sinks; a bare randint(...) "
-        "from `from random import randint` is not read. Whether the value is actually used as a secret is "
-        "not verified.",
+        "Python AST and JavaScript/TypeScript/JSX/TSX syntax; at most 400 files up to 400 KB each, "
+        "20,000 syntax nodes and depth 100, with at most 32 findings. Test/example paths, vendor, "
+        "dependency trees and generated build directories are excluded before the file limit. "
+        "Secret-named assignments containing a call to a proven stable Python random import "
+        "(including supported aliases) or an unshadowed Math.random are reported, including template "
+        "interpolation. Comments, docstrings and literal text are not draws. Rebound or ambiguous "
+        "sources, helpers, cross-file provenance and actual security use of the result are unresolved. "
+        "secrets and SystemRandom are not insecure sources. Missing native grammars withhold this "
+        "combined check; malformed or oversized source is reported in coverage.",
     ),
     Capability(
-        "unsafe_xml_parse",
-        "XML parsed without protection against external entities",
-        ("unsafe-xml-parse",),
-        "Python source, import-resolved like the deserialization rule, at most 400 files up to 400 KB each; "
-        "vendor, dependency trees and generated build directories (.next, dist, build) are excluded before "
-        "the file limit. A parse through lxml.etree or the stdlib xml.dom.minidom / xml.sax / "
-        "xml.dom.pulldom modules, which resolve external entities by default, is reported unless the lxml "
-        "call passes an inline parser=XMLParser(resolve_entities=False). xml.etree.ElementTree and "
-        "defusedxml are the safe alternatives and are not sinks. Cross-file resolution, conditional "
-        "imports and a parser object stored in a variable are not resolved. Whether the bytes are "
-        "attacker-controlled is not verified.",
+        "command_injection",
+        "A shell command assembled from the caller's input",
+        ("command-injection-shell-built-command",),
+        "Local FastAPI route handlers in parseable Python files up to 400 KB; recognized "
+        "test/example/documentation paths are skipped, except migration paths. At most 400 files "
+        "and 32 findings; vendor, dependency trees and generated build directories (.next, dist, "
+        "build) are excluded before the file limit. Shell-invoking calls whose command is assembled "
+        "from a value the request supplies are reported: os.system/os.popen (always a shell), the "
+        "subprocess family when shell=True is a literal, and a [\"<shell>\", \"-c\", command] argument "
+        "list (a shell command without shell=True). Positional and args= forms are recognized. "
+        "Lists follow POSIX semantics: only args[0] under shell=True, or the command after -c, "
+        "is shell code; subsequent positional parameters are data. Windows shell/list conventions, "
+        "shell passed as a variable, an argument list "
+        "assigned to a variable before the call, os.exec*/os.spawn* and TS/JS are not covered. Whether "
+        "the route is reachable, whether a check elsewhere constrains the value, and whether the call "
+        "executes are not verified.",
     ),
     Capability(
         "session_cookie",

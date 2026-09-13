@@ -204,17 +204,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # the exception type -- instead of the stage raising and the customer getting no
 # report at all. MEASURED 2026-09-13: a single raising scanner killed every other
 # finding, server-side and in a browser build that lacked the TypeScript grammar.
-# 2026-09-13-6: command-injection-shell-built-command (a sibling branch owns this
-# number; this branch's detectors start at -7).
-# 2026-09-13-7: xss-unsafe-html-injection, a text scanner (no native grammar) that
-# reads HTML injected into the DOM from a non-literal value: dangerouslySetInnerHTML,
-# innerHTML/outerHTML assignment, document.write and insertAdjacentHTML.
-# 2026-09-13-8: python-open-redirect-unvalidated-url, a redirect whose target
-# authority comes from the caller (Starlette/FastAPI RedirectResponse in routes).
-# 2026-09-13-9: insecure-randomness, a text scanner (no native grammar) that reads
-# a secret-named value drawn from a non-cryptographic source (Math.random / random).
-# 2026-09-13-10: unsafe-xml-parse, an import-resolved XXE rule: lxml and the stdlib
-# minidom/sax/pulldom resolve external entities by default.
+# 2026-09-13-6: POSIX shell command text separated from positional parameters.
+# 2026-09-13-10: reviewed XSS, redirect and token-source checks without LLM.
+# XSS and JS random calls use bundled syntax parsers; Python random imports use
+# bounded AST provenance. Redirect suppression requires an exact destination
+# allowlist. XML is deferred rather than assuming unsafe parser defaults.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

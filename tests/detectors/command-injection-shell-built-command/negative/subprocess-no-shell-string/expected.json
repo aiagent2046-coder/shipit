@@ -1,0 +1,7 @@
+{
+  "description": "A bare subprocess string without shell=True is a program name, not a command line: shell=False is the library default, so the value is not shell-interpreted. The mutation adds shell=True, which must fire.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "description": "With shell=False, argv values are not shell command text. The mutation changes this to a shell=True list with caller input in its first command element.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}
