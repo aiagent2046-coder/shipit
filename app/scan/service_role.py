@@ -87,7 +87,7 @@ import zipfile
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding, archive_root
-from app.scan.file_scope import is_dependency_path, is_generated_path
+from app.scan.file_scope import is_excluded_handler_tree
 from app.scan.rls import read_committed_sql
 from app.scan.sql_schema import parse_schema
 
@@ -221,9 +221,7 @@ def _is_skipped_tree(name: str) -> bool:
     list is shared with the consumers of the source-scan budgets, and none of
     them has been measured against coverage directories.
     """
-    segments = name.replace("\\", "/").split("/")[:-1]
-    return (is_dependency_path(name) or is_generated_path(name)
-            or any(segment in _EXTRA_SKIPPED_SEGMENTS for segment in segments))
+    return is_excluded_handler_tree(name, extra_directories=_EXTRA_SKIPPED_SEGMENTS)
 
 # Enough to cover a large app without turning one scan into a directory walk
 # of somebody's committed dependencies.
@@ -255,7 +253,7 @@ def _key_holding_modules(fileobj: BinaryIO) -> dict[str, tuple[str, int]]:
             lowered = rel.lower()
             if not lowered.endswith(_SOURCE_EXTS):
                 continue
-            if _is_skipped_tree(rel) or _is_skipped_tree(info.filename):
+            if _is_skipped_tree(info.filename):
                 continue
             if is_request_handler(rel) or is_request_handler(info.filename):
                 continue
@@ -343,7 +341,9 @@ def scan_service_role(fileobj: BinaryIO) -> list[CheckFinding]:
             # produced a finding for the compiled copy of a route the customer
             # wrote once, and the collapsed row could name the build artifact as
             # where the key lives. MEASURED 2026-09-13, see _is_skipped_tree.
-            if _is_skipped_tree(rel) or _is_skipped_tree(info.filename):
+            # Keep the routing root for classification: archive_root can strip
+            # app/ from a ZIP containing only app/api/build/route.ts.
+            if _is_skipped_tree(info.filename):
                 continue
             # BOTH FORMS, because the wrapping folder cannot always be told
             # from a real one. An archive whose only top-level entry is `app/`

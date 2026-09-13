@@ -14,7 +14,7 @@ from pglast.parser import ParseError
 from tree_sitter import Language, Parser
 import tree_sitter_typescript
 
-from app.scan.file_scope import is_dependency_path, is_generated_path
+from app.scan.file_scope import is_excluded_handler_tree
 from app.scan.secrets import is_non_production_path
 from app.scan.checks import archive_root
 
@@ -34,7 +34,9 @@ SCOPE = (
     "JWT claims, search_path and migration application must be checked. Missing declarations do not "
     "prove missing protection. Procedural/dynamic SQL, tests, dependency trees and generated build "
     "output are not policy evidence: those paths are excluded before the file budget, so they can "
-    "neither supply a query chain nor displace an own-source file."
+    "neither supply a query chain nor displace an own-source file. Category matching ignores case. "
+    "Conventional handlers retain URL segments named build, dist, vendor or coverage after their "
+    "routing root; custom routing roots and build-directory configuration are not resolved."
 )
 _WRITE_COMMANDS = {"insert": ("INSERT",), "update": ("UPDATE",), "delete": ("DELETE",),
                    "upsert": ("INSERT", "UPDATE")}
@@ -208,7 +210,7 @@ def collect_rls_recommendations(fileobj):
             if info.is_dir() or not (sql_file or path.endswith((".ts", ".tsx", ".js", ".jsx"))):
                 continue
             if (stat.S_ISLNK(info.external_attr >> 16) or is_non_production_path(path)
-                    or is_dependency_path(path) or is_generated_path(path)
+                    or is_excluded_handler_tree(path)
                     or any(p.lower() in _EXCLUDED for p in parts)):
                 excluded += 1
                 continue

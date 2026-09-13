@@ -289,6 +289,83 @@ def test_the_same_chain_in_own_source_is_still_an_operation():
     assert [record["table"] for record in facts["records"]] == ["agent_context"]
 
 
+@pytest.mark.parametrize("path", [
+    "app/api/build/route.ts",
+    "src/app/api/vendor/route.ts",
+    "src/routes/build/+server.ts",
+    "pages/api/build/index.ts",
+])
+def test_route_named_like_build_or_dependency_keeps_operation_and_policy_evidence(path):
+    migration = "supabase/migrations/0001_policies.sql"
+    facts = collect_rls_recommendations(archive({path: CHAIN, migration: policy("SELECT")}))
+
+    assert facts["checked_files"] == 2
+    assert facts["excluded_files"] == 0
+    assert len(facts["records"]) == 1
+    record = facts["records"][0]
+    assert record["file"] == path
+    assert record["table"] == "agent_context"
+    assert record["operation"] == "INSERT"
+    assert record["sequence_status"] == "declared_filename_sequence"
+    assert record["commands_in_declared_sequence"] == ["SELECT"]
+    assert record["missing_command_declarations"] == ["INSERT"]
+    assert [event["file"] for event in record["policy_history"]] == [migration]
+
+
+@pytest.mark.parametrize("directory", ["Vendor", "VENV", "Node_Modules", ".VENV"])
+def test_mixed_case_dependency_cannot_displace_own_source_or_migration(directory):
+    facts = collect(policy("SELECT"), **chunks(directory, 400))
+
+    assert facts["excluded_files"] == 400
+    assert facts["checked_files"] == 2
+    assert "scan_budget_reached" not in facts["limitations"]
+    assert len(facts["records"]) == 1
+    record = facts["records"][0]
+    assert record["file"] == "app/api/context/route.ts"
+    assert record["operation"] == "INSERT"
+    assert record["sequence_status"] == "declared_filename_sequence"
+    assert record["commands_in_declared_sequence"] == ["SELECT"]
+    assert record["missing_command_declarations"] == ["INSERT"]
+    assert [event["file"] for event in record["policy_history"]] == [
+        "supabase/migrations/0001_policies.sql",
+    ]
+
+
+def test_mixed_case_dependency_migration_is_not_own_policy_evidence():
+    dependency_migration = "Vendor/migrations/0001_access.sql"
+    facts = collect(policy("SELECT"), **{dependency_migration: policy("ALL", name="other")})
+
+    assert facts["excluded_files"] == 1
+    assert facts["checked_files"] == 2
+    record = facts["records"][0]
+    assert record["sequence_status"] == "declared_filename_sequence"
+    assert record["commands_in_declared_sequence"] == ["SELECT"]
+    assert record["missing_command_declarations"] == ["INSERT"]
+    assert [event["file"] for event in record["policy_history"]] == [
+        "supabase/migrations/0001_policies.sql",
+    ]
+
+
+@pytest.mark.parametrize("path", [
+    ".next/server/app/api/build/route.ts",
+    "dist/app/api/vendor/route.ts",
+    "build/src/routes/build/+server.ts",
+    "vendor/pkg/src/app/api/vendor/route.ts",
+    "Vendor/pkg/pages/api/build/index.ts",
+    "node_modules/pkg/src/routes/build/+server.ts",
+])
+def test_generated_or_dependency_prefixed_route_supplies_no_operation(path):
+    facts = collect_rls_recommendations(archive({
+        path: CHAIN,
+        "supabase/migrations/0001_policies.sql": policy("SELECT"),
+    }))
+
+    assert facts["records"] == []
+    assert facts["excluded_files"] == 1
+    assert facts["checked_files"] == 1
+    assert "scan_budget_reached" not in facts["limitations"]
+
+
 @pytest.mark.parametrize("directory", [".next/static/chunks", "dist/static/chunks"])
 def test_a_minified_bundle_supplies_no_operation(directory):
     """A bundler aliases the client away, and the chain shape survives it:

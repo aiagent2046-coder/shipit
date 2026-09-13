@@ -195,7 +195,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # it -- the RLS recommendation collector read generated build output before own
 # source in filename order (starving the operations a recommendation names), and
 # the service-role rule reported a route compiled into .next/server/ as source.
-AUDIT_ENGINE_VERSION = "2026-09-13-1"
+# 2026-09-13-2: preserve case-insensitive categories and conventional handler URL
+# segments such as app/api/build; an excluded prefix still marks a compiled copy.
+AUDIT_ENGINE_VERSION = "2026-09-13-2"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

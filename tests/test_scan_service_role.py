@@ -415,3 +415,54 @@ def test_a_compiled_copy_does_not_double_the_collapsed_row() -> None:
     assert len(rows) == 1
     assert rows[0]["file"] == "app/api/context/route.ts"
     assert "found in" not in rows[0]["title"]
+
+
+@pytest.mark.parametrize("path", [
+    "app/api/build/route.ts",
+    "src/app/api/vendor/route.ts",
+    "app/dist/route.js",
+    "app/api/coverage/route.ts",
+    "src/routes/build/+server.ts",
+    "pages/api/vendor/index.ts",
+    "server/api/build/index.ts",
+])
+@pytest.mark.parametrize("wrapper", ["", "repo/"])
+def test_handler_url_segments_are_not_output_directories(path, wrapper):
+    entries = {wrapper + path: ROUTE, wrapper + "package.json": "{}"}
+    assert files(entries) == [path]
+    # Change the credential, keeping the exact route and archive shape.
+    assert files({**entries, wrapper + path: SCOPED_ROUTE}) == []
+
+
+def test_bare_app_archive_keeps_a_build_named_route():
+    # archive_root mistakes app/ for an export wrapper. Path classification
+    # still needs app/ to distinguish the URL /api/build from build output.
+    found = scan({"app/api/build/route.ts": ROUTE})
+    assert len(found) == 1
+    assert found[0].rule_id == RULE_ID
+
+
+@pytest.mark.parametrize("path", [
+    ".NEXT/server/app/api/build/route.js",
+    "web/Build/server/app/api/vendor/route.js",
+    "Vendor/pkg/app/api/build/route.ts",
+    "Node_Modules/pkg/pages/api/build/index.ts",
+    "Coverage/src/routes/build/+server.ts",
+    "app/api/build/node_modules/pkg/app/api/context/route.ts",
+    "app/api/vendor/.next/server/app/api/context/route.js",
+])
+def test_a_route_named_build_does_not_override_an_excluded_tree(path):
+    assert files({path: ROUTE, "package.json": "{}"}) == []
+
+
+@pytest.mark.parametrize("directory", ["Vendor", "Node_Modules", "Build", ".NEXT", "Coverage"])
+def test_mixed_case_excluded_helper_cannot_implicate_an_own_route(directory):
+    entries = {
+        "app/api/context/route.ts": "import { admin } from '@/lib/admin';",
+        "lib/admin.ts": "export const admin = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;",
+        f"{directory}/pkg/admin.ts": "export const admin = process.env.SUPABASE_SERVICE_ROLE_KEY;",
+    }
+    assert files(entries) == []
+    # Move the key read into the module the handler actually imports.
+    entries["lib/admin.ts"] = "export const admin = process.env.SUPABASE_SERVICE_ROLE_KEY;"
+    assert files(entries) == ["app/api/context/route.ts"]
