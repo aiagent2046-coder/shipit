@@ -54,9 +54,27 @@ def main():
             z.writestr(f'src/module{index}.js', 'export const value = true;')
         z.writestr('src/tail.js', 'element.innerHTML = untrusted;')
         z.writestr('src/broken.js', 'const broken = [;')
+        xml_call = 'etree.fromstring(xml, parser=etree.XMLParser(resolve_entities=True))\n'
+        z.writestr('src/first.py', 'from lxml import etree\n' + xml_call * 31)
+        for index in range(399):
+            z.writestr(f'src/module{index}.py', 'pass\n')
+        z.writestr('src/tail.py', 'from lxml import etree\n' + xml_call * 2)
     session = ScanSession(archive.getvalue())
     continuation = {"archive": base64.b64encode(archive.getvalue()).decode(),
-                    "initial": session.result(), "final": session.continue_scan()}
+                    "initial": session.result()}
+    # Mixed-language rules need three batches for this 803-file archive.
+    continuation['continuations'] = [session.continue_scan() for _ in range(2)]
+    continuation['final'] = continuation['continuations'][-1]
+    # Parity alone could preserve the same continuation bug in both runtimes.
+    # Require tail discovery, a shared cap and an honest remaining coverage gap.
+    assert continuation['initial']['can_continue']
+    final = continuation['final']
+    xml_findings = [f for f in final['report']['findings'] if f['rule_id'] == 'unsafe-xml-parse']
+    assert len(xml_findings) == 32
+    assert sum(f['file'] == 'src/tail.py' for f in xml_findings) == 1
+    xml_coverage = final['report']['rule_coverage']['unsafe_xml_parse']
+    assert xml_coverage['partial'] and xml_coverage['skip_reasons'] == {'finding_limit': 1}
+    assert not final['can_continue']
     (out.parent / 'continuation.json').write_text(json.dumps(continuation))
     print(f"Wrote {len(cases)} native corpus expectations to {out}")
 

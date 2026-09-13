@@ -28,7 +28,7 @@ from enum import Enum
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
-from app.scan.rule_coverage import RuleCoverage
+from app.scan.rule_coverage import RuleCoverage, remaining_findings
 from app.scan.unsafe_deserialization import _Imports
 
 RULE_ID = "unsafe-xml-parse"
@@ -185,7 +185,7 @@ def scan_unsafe_xml_parse(fileobj: BinaryIO, *, coverage: dict | None = None) ->
             except RecursionError:
                 accounting.skip("ast_limit")
                 continue
-            remaining = _MAX_FINDINGS - len(findings)
+            remaining = remaining_findings(_MAX_FINDINGS) - len(findings)
             findings.extend(_finding(info.filename, item) for item in evidence[:remaining])
             if len(evidence) > remaining:
                 accounting.skip("finding_limit")

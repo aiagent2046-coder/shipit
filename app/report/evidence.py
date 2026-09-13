@@ -109,6 +109,7 @@ RULE_COVERAGE_LABELS = {
     "outbound_url": "Outbound request URLs",
     "tls_verification": "TLS verification",
     "unsafe_deserialization": "Unsafe deserialization",
+    "unsafe_xml_parse": "XML entity resolution",
     "path_traversal": "Filesystem paths",
 }
 RULE_EXCLUSION_LABELS = {

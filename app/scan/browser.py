@@ -105,6 +105,7 @@ class ScanSession:
             "outbound_url": (stage.scan_outbound_url, "python-outbound-request-unvalidated-url"),
             "tls_verification": (stage.scan_tls_verification, "tls-verification-disabled"),
             "unsafe_deserialization": (stage.scan_unsafe_deserialization, "unsafe-deserialization"),
+            "unsafe_xml_parse": (stage.scan_unsafe_xml_parse, "unsafe-xml-parse"),
             "path_traversal": (stage.scan_path_traversal, "path-traversal-file-sink"),
             "xss": (stage.scan_xss, "xss-unsafe-html-injection"),
             "open_redirect": (stage.scan_open_redirect, "python-open-redirect-unvalidated-url"),
