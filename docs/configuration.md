@@ -73,7 +73,18 @@ variables.
 
 ```bash
 python3 deploy/scripts/validate-production-env.py --env-file /opt/shipit/.env
+python3 scripts/verify_llm_provider.py --env /opt/shipit/.env --probe
 ```
+
+The first checks the file's shape and the pairs that must be set together. The
+second asks the provider itself: it prints the fallback chain, prints the model each
+stage will request — the paid rubric stage and the free preview resolve through
+different variables — and fails if any of those names is absent from the provider's
+own model list. That last check exists because the names are exact and the
+punctuation differs per provider (AITunnel lists `claude-haiku-4.5`, the code default
+spells it `claude-haiku-4-5`), and a wrong spelling is a 400 on every request that
+nothing else in the project reports at startup. Run it after changing any
+`AITUNNEL_*`, `LLM_MODEL` or `FREE_TIER_*` setting.
 
 With `--env-file`, the validator reads only that file: shell exports and a
 systemd `Environment=ENVIRONMENT=production` setting cannot supply a missing

@@ -118,6 +118,30 @@ _GLM_5_3_FLASH: dict[str, Decimal] = {
     "input": Decimal("0.08"),
     "output": Decimal("0.25"),
 }
+# grok-4.20-multi-agent is deliberately NOT priced here, and that is a measured
+# decision rather than an omission. MEASURED 2026-09-13 against AITunnel with the
+# method above -- four calls of different shapes, then a fit:
+#
+#     in=2663   out=1236 ->  0.74 RUB     in=12089  out=5036 ->  4.09 RUB
+#     in=125087 out=2310 -> 22.01 RUB     in=75482  out=4655 -> 11.54 RUB
+#
+# No (input, output) rate pair explains those four points: the best fits leave
+# residuals of 25-29% of the call, so what this provider charges for this model is
+# not linear in the token counts we record (cached input is billed differently,
+# and a "multi-agent" request may be charged per step). Writing a per-MTok row
+# from them would put a fabricated number inside the spend cap -- the one place
+# where a guard reading low is worse than one reading high.
+#
+# So it keeps DEFAULT_PRICE until a fit holds, and the cost of that choice is
+# named: the cap may stop a job early, and an early stop is visible in the report
+# rather than silent. The real fix is to record the provider's own `cost_rub` and
+# `balance`, which every AITunnel response carries (see this module's docstring),
+# instead of estimating from tokens -- that needs a currency, so it is a schema
+# decision rather than a table row.
+#
+# Its sampling decision IS measured: AITunnel answered 200 to a request carrying
+# `temperature`, so it belongs on the MODELS_WITH_SAMPLING_PARAMS side in
+# app/llm/client.py, and it is listed there.
 PRICE_TABLE: dict[str, dict[str, Decimal]] = {
     "claude-sonnet-4.6": _SONNET_4_6,   # AITunnel / OpenAI-compat response name
     "claude-sonnet-4-6": _SONNET_4_6,   # direct Anthropic response name
