@@ -1,0 +1,10 @@
+{
+  "description": "A template literal with an interpolation is dynamic even though it starts with a backtick.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

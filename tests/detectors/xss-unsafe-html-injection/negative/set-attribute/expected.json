@@ -1,0 +1,7 @@
+{
+  "description": "setAttribute(\"innerHTML\", ...) sets an attribute named innerHTML, not the DOM property; the mutation rewrites it to the property assignment, which must fire.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

@@ -65,6 +65,7 @@ WIRED_SCANNERS = (
     "scan_sql_injection_js",
     "scan_tls_verification",
     "scan_unsafe_deserialization",
+    "scan_xss",
 )
 
 # Every rule id a static finding can reach the reader under. Taken from the
@@ -104,6 +105,7 @@ EMITTED_RULE_IDS = (
     "telegram-bot-token",
     "tls-verification-disabled",
     "unsafe-deserialization",
+    "xss-unsafe-html-injection",
 )
 
 # The damping vocabulary. A context decides which section of the report a
@@ -115,7 +117,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-13-4"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-13-6"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

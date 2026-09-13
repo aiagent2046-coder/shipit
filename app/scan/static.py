@@ -26,6 +26,7 @@ from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.unsafe_deserialization import scan_unsafe_deserialization
 from app.scan.path_traversal import scan_path_traversal
+from app.scan.xss import scan_xss
 from app.scan.check_failure_scoring import failed_check_categories
 
 
@@ -177,6 +178,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                 rule_id=t.rule_id, title=t.title, severity=t.severity,
                 confidence=t.confidence, category=t.category, file=t.file,
                 line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
+
+    fileobj.seek(0)
+    with attempt("xss"):
+        for x in list(scan_xss(fileobj, coverage=rule_coverage["xss"])):
+            findings.append(ScoredFinding(
+                rule_id=x.rule_id, title=x.title, severity=x.severity,
+                confidence=x.confidence, category=x.category, file=x.file,
+                line=x.line, explanation=x.explanation, fix_hint=x.fix_hint,
                 claim_evidence=static_claim_evidence(),
             ))
 
@@ -340,6 +351,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                      "outbound_url": SCOPE["outbound_url"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],
                      "path_traversal": SCOPE["path_traversal"],
+                     "xss": SCOPE["xss"],
                      "session_cookie": SCOPE["session_cookie"],
                      "http_success": HTTP_SUCCESS_SCOPE_PREFIX
                      + "Parser limits: "

@@ -1,0 +1,7 @@
+{
+  "description": "A sink spelled inside a string literal is documentation, not a decision; the mutation unquotes it, which must fire.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

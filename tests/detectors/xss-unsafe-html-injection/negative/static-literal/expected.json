@@ -1,0 +1,7 @@
+{
+  "description": "A fixed single-quoted/double-quoted string is not an injection; the mutation makes the value a variable, which must fire.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

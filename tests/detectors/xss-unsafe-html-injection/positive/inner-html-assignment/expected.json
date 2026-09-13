@@ -1,0 +1,10 @@
+{
+  "description": "The canonical DOM sink: innerHTML assigned a non-literal value.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

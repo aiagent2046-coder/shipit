@@ -1,0 +1,2 @@
+const html = buildHtml(user);
+el.innerHTML = html;

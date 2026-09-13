@@ -20,6 +20,17 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "xss-unsafe-html-injection": (
+        "HTML is injected into the DOM from a value that is not a fixed string.",
+        "A non-literal value reaches an HTML-injection sink -- dangerouslySetInnerHTML, innerHTML/outerHTML, "
+        "document.write or insertAdjacentHTML. If that value can carry attacker-controlled text, it injects "
+        "markup and script into the page: script execution under the visitor's origin, token theft and DOM "
+        "corruption. Whether the value was sanitized, whether it is reachable, and whether the sink runs "
+        "have not been verified.",
+        "Use textContent (or React children) for anything that is text, not markup. If HTML must be inserted, "
+        "sanitize the value first (DOMPurify with an allowlist, or an equivalent) and avoid building HTML "
+        "from strings. In React, avoid dangerouslySetInnerHTML unless the content is already trusted.",
+    ),
     "path-traversal-file-sink": (
         "A file path is built from a value the caller sent.",
         "This route hands a filesystem path to a file operation, and that path is assembled from the "

@@ -1,0 +1,7 @@
+{
+  "description": "A sink in a // comment is history, not code; the mutation deletes the comment marker, which must fire.",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

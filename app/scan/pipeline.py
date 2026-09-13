@@ -204,6 +204,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # the exception type -- instead of the stage raising and the customer getting no
 # report at all. MEASURED 2026-09-13: a single raising scanner killed every other
 # finding, server-side and in a browser build that lacked the TypeScript grammar.
+# 2026-09-13-5: command-injection-shell-built-command (a sibling branch owns this
+# number; xss takes -6 so the two can merge without renumbering).
+# 2026-09-13-6: xss-unsafe-html-injection, a text scanner (no native grammar) that
+# reads HTML injected into the DOM from a non-literal value: dangerouslySetInnerHTML,
+# innerHTML/outerHTML assignment, document.write and insertAdjacentHTML.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

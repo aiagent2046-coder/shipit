@@ -261,6 +261,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         "runtime symlinks and TS/JS file handling are NOT covered",
     ),
     Capability(
+        "xss",
+        "HTML injected into the DOM from a value that is not a fixed string",
+        ("xss-unsafe-html-injection",),
+        "JavaScript/TypeScript/JSX/TSX source read as text, at most 400 files up to 400 KB each, with "
+        "string literals and // and /* */ comments skipped; vendor, dependency trees and generated build "
+        "directories (.next, dist, build) are excluded before the file limit. Four sinks that inject HTML "
+        "into the DOM are read -- dangerouslySetInnerHTML, innerHTML/outerHTML assignment (including +=), "
+        "document.write and insertAdjacentHTML -- and reported when the value is not a fixed single- or "
+        "double-quoted string with no concatenation. A template literal with an interpolation is dynamic. "
+        "Framework template bindings (Angular [innerHTML], Vue v-html, Svelte innerHTML={...}, jQuery "
+        ".html(...)) are not read. Whether the value was sanitized, is reachable, or the sink runs are "
+        "not verified; textContent/innerText and setAttribute are not sinks.",
+    ),
+    Capability(
         "session_cookie",
         "A session cookie set without the attributes that protect it",
         ("insecure-session-cookie-attributes",),

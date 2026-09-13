@@ -1,0 +1,10 @@
+{
+  "description": "The += compound append is the same sink: a non-literal value concatenated into existing HTML.",
+  "expect": [
+    {
+      "rule_id": "xss-unsafe-html-injection",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

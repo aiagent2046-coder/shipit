@@ -1,0 +1,4 @@
+function renderMessage(msg) {
+  const el = document.getElementById("log");
+  el.innerHTML = msg.html;
+}
