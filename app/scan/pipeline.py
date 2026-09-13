@@ -204,7 +204,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # the exception type -- instead of the stage raising and the customer getting no
 # report at all. MEASURED 2026-09-13: a single raising scanner killed every other
 # finding, server-side and in a browser build that lacked the TypeScript grammar.
-# 2026-09-13-5: command-injection-shell-built-command, a new static scanner that
+# 2026-09-13-6: command-injection-shell-built-command, a new static scanner that
 # reads a shell command assembled from request input -- os.system/os.popen and the
 # subprocess family with a literal shell=True. A subprocess call without shell=True
 # is silent by design (its argument list is not shell-interpreted).
