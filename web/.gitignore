@@ -2,6 +2,7 @@
 /.next
 /out
 /build
+/public/scanner/
 next-env.d.ts
 *.tsbuildinfo
 .env

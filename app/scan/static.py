@@ -13,24 +13,29 @@ from app.scan.auth_write import scan_auth_write
 from app.scan.claim_evidence import static_claim_evidence
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
-from app.scan.cookie_flags import scan_cookie_flags
+from app.scan.check_loading import is_native_import_error, optional_native_function
 from app.scan.error_boundary import MOUNT_UNKNOWN, scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.outbound_url import scan_outbound_url
 from app.scan.rls import scan_rls
-from app.scan.recommendations import prepare_recommendation
 from app.scan.rule_coverage import RULE_COVERAGE_KEYS
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
-from app.scan.sql_injection_js import scan_sql_injection_js
-from app.scan.tls_verification import scan_tls_verification
 from app.scan.unsafe_deserialization import scan_unsafe_deserialization
 from app.scan.path_traversal import scan_path_traversal
-from app.scan.source_facts import collect_source_facts
 from app.scan.check_failure_scoring import failed_check_categories
+
+
+# Real functions remain bound when their dependencies are installed. This
+# preserves server monkeypatching and source inspection (the golden corpus).
+scan_cookie_flags = optional_native_function("app.scan.cookie_flags", "scan_cookie_flags")
+scan_sql_injection_js = optional_native_function("app.scan.sql_injection_js", "scan_sql_injection_js")
+scan_tls_verification = optional_native_function("app.scan.tls_verification", "scan_tls_verification")
+collect_source_facts = optional_native_function("app.scan.source_facts", "collect_source_facts")
+prepare_recommendation = optional_native_function("app.scan.recommendations", "prepare_recommendation")
 
 
 class _CheckDidNotRun:
@@ -49,7 +54,7 @@ class _CheckDidNotRun:
         self.mount = MOUNT_UNKNOWN
 
 
-def run_static_scan(fileobj: BinaryIO) -> dict:
+def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) -> dict:
     """Returns {"score": {...}, "findings": [ScoredFinding-as-dict]}.
 
     The score here describes THIS stage only. app/scan/pipeline.py reads just
@@ -65,6 +70,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     findings: list[ScoredFinding] = []
     rule_coverage = {name: {} for name in RULE_COVERAGE_KEYS}
     checks_not_run: list[dict] = []
+    limitations: list[str] = []
 
     @contextmanager
     def attempt(check: str):
@@ -256,8 +262,16 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     with attempt("http_success"):
         source_facts = collect_source_facts(fileobj)
         findings.extend(scan_http_success(source_facts))
-    findings = [prepare_recommendation(replace(f, source="static", verification_method="source_pattern"), source_facts)
-                for f in findings]
+    findings = [replace(f, source="static", verification_method="source_pattern") for f in findings]
+    try:
+        findings = [prepare_recommendation(f, source_facts) for f in findings]
+    except ImportError as exc:
+        if not allow_missing_native or not is_native_import_error(exc):
+            raise
+        # Advice without its prerequisite checks can be dangerous. Preserve
+        # the evidence, withhold all unenriched advice, and tell consumers why.
+        findings = [replace(f, fix_hint="") for f in findings]
+        limitations.append("recommendation_enrichment_unavailable")
     for failure in checks_not_run:
         if failure['check'] == 'secrets':
             file_coverage.clear()
@@ -275,6 +289,7 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         + EXCLUSIONS_NOTE
     )
     return {
+        "limitations": limitations,
         "rule_coverage": rule_coverage,
         "secrets_coverage": file_coverage,
         "source_facts": source_facts,

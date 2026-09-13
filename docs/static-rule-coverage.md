@@ -113,10 +113,13 @@ be compared to a complete audit. HTML/web present the incomplete coverage instea
 of numerical readiness scores. A scan with no completed category has diagnostic
 total `0.0` and explicitly lists every category as unexamined.
 
-This isolates exceptions during a running check, not failures importing the
-application or its native dependencies. Browser compatibility of those imports
-still requires a separate portability gate. ZIP validation and the later
-recommendation-enrichment pass retain their existing failure behavior.
+Native-dependent checks now load through a bounded optional-import boundary.
+Only identified native-package ImportErrors become unavailable checks;
+application import bugs still raise. The browser-only entry explicitly permits
+partial operation without native parsers and withholds recommendation hints
+whose prerequisite checks could not load. The server retains its existing
+recommendation-enrichment failure behavior. ZIP validation remains shared.
+See `browser/README.md` for the measured partial profile and remaining parity gate.
 
 MEASURED 2026-09-13: before this, a single raising scanner killed the entire
 scan — every other finding went with it — on the server and in a browser build

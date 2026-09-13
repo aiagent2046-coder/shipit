@@ -1,0 +1,57 @@
+// Findings compared as a multiset, including multiplicity and locations.
+// Advice is intentionally omitted in the preview when prerequisites cannot
+// be checked; it is compared separately as an explicit limitation.
+const identity = f => JSON.stringify([f.rule_id, f.file, f.line ?? null, f.severity,
+  f.confidence, f.title, f.explanation ?? '', f.masked ?? null]);
+const findingsKey = findings => findings.map(identity).sort().join('\n');
+const canonical = value => JSON.stringify(normalize(value));
+function normalize(value) {
+  if (Array.isArray(value)) return value.map(normalize);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, normalize(value[k])]));
+  return value;
+}
+const NATIVE_CHECKS = new Set(['sql_injection_js', 'tls_verification', 'session_cookie', 'http_success']);
+
+export function evaluateCase(item, result) {
+  if (!result.report || !result.sarif) return { id: item.id, error: 'scan_did_not_complete' };
+  const { report, sarif } = result;
+  const findings = report.findings;
+  const failures = report.checks_not_run;
+  const errors = [];
+  if (canonical(result) !== canonical(item.portable)) errors.push('portable_profile_mismatch');
+  const checks = [...report.checks_run, ...failures.map(f => f.check)];
+  if (checks.length !== 17 || new Set(checks).size !== 17) errors.push('check_partition');
+  if (failures.length !== NATIVE_CHECKS.size || failures.some(f => !NATIVE_CHECKS.has(f.check))) {
+    errors.push('unexpected_check_failure');
+  }
+  if (sarif.runs[0].invocations[0].executionSuccessful !== false) errors.push('sarif_false_success');
+  if (!report.limitations.includes('recommendation_enrichment_unavailable')) errors.push('advice_limit_missing');
+  if (findings.some(f => f.fix_hint)) errors.push('unguarded_advice');
+  // A browser must never invent additional findings due to a failed parser.
+  const remaining = item.native.report.findings.map(identity);
+  for (const f of findings) {
+    const at = remaining.indexOf(identity(f));
+    if (at < 0) errors.push('extra_or_changed_finding');
+    else remaining.splice(at, 1);
+  }
+  const matches = (f, want) => Object.entries(want).every(([key, value]) =>
+    key === 'count' || (key === 'file_endswith' ? f.file?.endsWith(value) : f[key] === value));
+  const expectationPassed = (item.expected.expect || []).every(want => {
+    const n = findings.filter(f => matches(f, want)).length;
+    return n > 0 && (want.count === undefined || n === want.count);
+  }) && (item.expected.forbid || []).every(rule => !findings.some(f => f.rule_id === rule));
+  return { id: item.id, rule: item.rule, polarity: item.polarity,
+    expectation_passed: expectationPassed,
+    finding_parity: findingsKey(findings) === findingsKey(item.native.report.findings),
+    browser_findings: findings.length, native_findings: item.native.report.findings.length,
+    checks_not_run: failures.map(f => f.check), errors };
+}
+
+export function summarize(rows) {
+  return { cases: rows.length,
+    expectation_passed: rows.filter(r => r.expectation_passed).length,
+    finding_parity: rows.filter(r => r.finding_parity).length,
+    unexpected_failures: rows.filter(r => r.error || r.errors?.length).length,
+    supported_checks: 13, unavailable_checks: [...NATIVE_CHECKS],
+    full_parity: rows.every(r => !r.error && !r.errors.length && r.finding_parity) && NATIVE_CHECKS.size === 0 };
+}

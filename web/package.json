@@ -4,6 +4,7 @@
   "license": "AGPL-3.0-or-later",
   "private": true,
   "scripts": {
+    "prebuild": "npm --prefix ../browser ci --ignore-scripts && npm --prefix ../browser run build -- ../web/public/scanner",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
