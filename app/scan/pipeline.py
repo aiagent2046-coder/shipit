@@ -23,6 +23,7 @@ from app.scan.manifest import scan_manifest
 from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
+from app.scan.version import AUDIT_ENGINE_VERSION
 from app.scan.check_failure_scoring import failed_check_categories
 from app.sca.osv import OsvClient
 from app.sca.stage import run_sca_stage
@@ -203,7 +204,7 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # the exception type -- instead of the stage raising and the customer getting no
 # report at all. MEASURED 2026-09-13: a single raising scanner killed every other
 # finding, server-side and in a browser build that lacked the TypeScript grammar.
-AUDIT_ENGINE_VERSION = "2026-09-13-3"
+# Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

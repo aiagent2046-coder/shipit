@@ -28,6 +28,12 @@ export function Header() {
           Drydock
         </Link>
         <nav className="flex items-center gap-1 sm:gap-3">
+          <a
+            href="/scanner/index.html"
+            className="rounded-md px-2 py-1.5 text-sm text-muted transition-colors hover:text-text sm:px-3"
+          >
+            Local scanner
+          </a>
           <Link
             href="/pricing"
             className="rounded-md px-2 py-1.5 text-sm text-muted transition-colors hover:text-text sm:px-3"
