@@ -1,5 +1,5 @@
 {
-  "description": "an explicit resolve_entities='internal' does not resolve external entities.",
+  "description": "Explicit internal-only entity resolution does not enable external entities.",
   "expect": [],
   "forbid": [
     "unsafe-xml-parse"

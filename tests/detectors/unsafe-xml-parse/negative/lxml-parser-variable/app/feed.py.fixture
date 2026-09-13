@@ -1,0 +1,3 @@
+from lxml import etree
+parser = etree.XMLParser(resolve_entities=True)
+etree.parse(source, parser=parser)

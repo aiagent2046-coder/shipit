@@ -1,5 +1,5 @@
 {
-  "description": "The imported alias preserves both the XML parser constructor and fromstring provenance.",
+  "description": "A dotted import and positional XMLParser both preserve the explicit entity setting.",
   "expect": [
     {
       "rule_id": "unsafe-xml-parse",

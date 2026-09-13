@@ -1,0 +1,7 @@
+{
+  "description": "HTML iterparse does not establish the XML external entity configuration.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

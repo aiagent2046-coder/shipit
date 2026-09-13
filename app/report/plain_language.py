@@ -21,14 +21,14 @@ TIERS = {
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
     "unsafe-xml-parse": (
-        "XML is parsed with external entity resolution explicitly enabled.",
-        "lxml.etree resolves external entities when resolve_entities=True is passed. An "
-        "attacker-controlled XML document can then read local files, probe the internal network or "
-        "force a billion-laughs expansion. Where the bytes come from has not been verified; trusted "
-        "internal data and untrusted external data can reach the same call.",
-        "Parse XML with xml.etree.ElementTree (which does not resolve external entities) or the "
-        "defusedxml package. For lxml, drop resolve_entities=True (the default is 'internal' on "
-        "lxml 5.0+/6.1.0+, which does not resolve external entities) or pass resolve_entities=False.",
+        "An XML parse explicitly enables entity resolution.",
+        "If the XML is untrusted, resolve_entities=True can allow external entity access. "
+        "Input trust, custom resolvers, runtime parser behavior and network controls have not "
+        "been verified.",
+        "For lxml.etree.parse/fromstring, pass "
+        "parser=etree.XMLParser(resolve_entities=False, no_network=True). For lxml.etree.iterparse, "
+        "pass resolve_entities=False, no_network=True directly. Verify whether the application "
+        "needs entity expansion before changing parsing behavior.",
     ),
     "command-injection-shell-built-command": (
         "A shell command is built from a value the caller sent.",

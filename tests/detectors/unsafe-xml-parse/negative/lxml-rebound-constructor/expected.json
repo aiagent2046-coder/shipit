@@ -1,0 +1,7 @@
+{
+  "description": "A rebound constructor no longer establishes lxml XMLParser configuration.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

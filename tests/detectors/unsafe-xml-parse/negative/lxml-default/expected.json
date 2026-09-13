@@ -1,5 +1,5 @@
 {
-  "description": "a missing resolve_entities argument does not prove external entities are resolved (default is 'internal' on lxml 5.0+).",
+  "description": "A version-dependent default does not establish that external entity resolution is enabled.",
   "expect": [],
   "forbid": [
     "unsafe-xml-parse"

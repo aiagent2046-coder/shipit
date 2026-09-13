@@ -3,7 +3,9 @@
   "expect": [
     {
       "rule_id": "unsafe-xml-parse",
-      "count": 1
+      "count": 1,
+      "severity": "high",
+      "confidence": 0.9
     }
   ],
   "forbid": []

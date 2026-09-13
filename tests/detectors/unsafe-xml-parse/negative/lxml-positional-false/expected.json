@@ -1,0 +1,7 @@
+{
+  "description": "A positional XMLParser disables entity resolution just as a keyword parser does.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

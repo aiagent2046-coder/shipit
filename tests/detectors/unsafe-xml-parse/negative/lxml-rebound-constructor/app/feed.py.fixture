@@ -1,0 +1,3 @@
+from lxml.etree import parse, XMLParser
+XMLParser = custom_parser
+parse(source, parser=XMLParser(resolve_entities=True))

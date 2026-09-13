@@ -1,26 +1,22 @@
-"""Import-resolved Python XML parses proven to resolve external entities.
+"""Import-resolved lxml calls that explicitly enable external entity resolution.
 
-The stdlib xml modules -- xml.etree.ElementTree, xml.sax, xml.dom.minidom and
-xml.dom.pulldom -- do NOT resolve external entities on supported Python
-(3.7.1+), so they are not sinks. lxml.etree resolves external entities only
-when resolve_entities is set to True; the default changed to 'internal'
-(external entities NOT resolved) in lxml 5.0 for XMLParser and in lxml 6.1.0
-for iterparse/ETCompatXMLParser. A static scan cannot know the installed lxml
-version, so the rule reports only what is proven unsafe on every version:
+Only literal ``resolve_entities=True`` is reported: on an inline XMLParser
+consumed by parse/fromstring (positional or keyword parser), or directly on
+iterparse in XML mode. Constructing a parser alone does not consume XML.
 
-  * resolve_entities=True -- for parse/fromstring via
-    parser=etree.XMLParser(resolve_entities=True), for iterparse as a direct
-    keyword.
+Defaults and unknown configurations are not findings. XMLParser changed its
+default to 'internal' in lxml 5.0; iterparse and ETCompatXMLParser did so only
+in 6.1.0 (https://lxml.de/6.1/changes-6.1.0.html). Dependency versions are not
+inferred. False and 'internal' disable external entity expansion in this
+configuration, but do not prove overall XML safety.
 
-A missing resolve_entities argument, resolve_entities=False or 'internal', a
-non-lxml parser object, and a mutated module (etree.parse reassigned) are NOT
-reported: none of them proves external entities are resolved. Names are
-resolved through the file's imports with the same lexical-scope machinery as
-the deserialization rule, so an import alias (from lxml import etree as ET) is
-the same call and a shadowed or reassigned name loses its provenance.
-Cross-file resolution, conditional imports, monkey-patching and a parser
-object stored in a variable then passed later are not resolved. No uploaded
-code is imported or executed.
+Lexical imports, aliases, shadowing and module writes use the deserialization
+rule's resolver. Observed module writes invalidate provenance. Conditional
+imports, cross-file/dynamic mutations, parser variables, custom parsers and
+resolvers, set_default_parser, feed/close, and XInclude are not resolved.
+The stdlib XML APIs and other libraries are outside this rule's scope.
+Input trust, execution and runtime controls are not verified. No uploaded
+code is imported or executed; no finding does not establish safety.
 """
 
 from __future__ import annotations
@@ -28,6 +24,7 @@ from __future__ import annotations
 import ast
 import zipfile
 from dataclasses import dataclass
+from enum import Enum
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
@@ -36,8 +33,6 @@ from app.scan.unsafe_deserialization import _Imports
 
 RULE_ID = "unsafe-xml-parse"
 
-# lxml.etree is the only XXE-prone parser left: the stdlib xml.* modules do not
-# resolve external entities on supported Python (>= 3.7.1).
 _XXE_SINKS = {
     "lxml.etree": {"parse", "fromstring", "iterparse"},
 }
@@ -48,36 +43,90 @@ _MAX_FINDINGS = 32
 _MAX_AST_NODES = 20_000
 _MAX_AST_DEPTH = 100
 
-_CONFIDENCE = 0.9
+_CONF_EXPLICIT = 0.9
+
+# Recognised API shapes, not a claim that every accepted option/value is valid
+# in every lxml release. Expanded/duplicate or unsupported arguments stay unknown.
+_XML_PARSER_OPTIONS = frozenset({
+    "encoding", "attribute_defaults", "dtd_validation", "load_dtd", "no_network",
+    "decompress", "ns_clean", "recover", "schema", "huge_tree", "remove_blank_text",
+    "resolve_entities", "remove_comments", "remove_pis", "strip_cdata", "collect_ids",
+    "target", "compact",
+})
+_ITERPARSE_OPTIONS = frozenset({
+    "source", "events", "tag", "attribute_defaults", "dtd_validation", "load_dtd",
+    "no_network", "remove_blank_text", "compact", "resolve_entities", "remove_comments",
+    "remove_pis", "strip_cdata", "encoding", "html", "recover", "huge_tree", "schema", "chunk_size",
+})
+
+
+class _EntityResolution(Enum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    DEFAULT = "default"
+    UNRESOLVED = "unresolved"
 
 
 @dataclass(frozen=True)
 class _Evidence:
     line: int
-    what: str
+    target: str
 
 
-def _is_true(value: ast.AST) -> bool:
-    return isinstance(value, ast.Constant) and value.value is True
-
-
-def _parser_resolve_entities_true(call: ast.Call, imports: _Imports, scope) -> bool:
-    """parse/fromstring take resolve_entities only via parser=XMLParser(...)."""
+def _keywords(call: ast.Call, allowed: frozenset[str]) -> dict[str, ast.AST] | None:
+    keywords: dict[str, ast.AST] = {}
+    if any(isinstance(arg, ast.Starred) for arg in call.args):
+        return None
     for keyword in call.keywords:
-        if keyword.arg != "parser":
-            continue
-        parser = keyword.value
-        if not isinstance(parser, ast.Call):
-            continue  # a parser object stored in a variable -> not proven
-        if imports.qualified(parser.func, scope) != "lxml.etree.XMLParser":
-            continue  # a non-lxml parser -> not proven
-        return any(_is_true(pkw.value) for pkw in parser.keywords if pkw.arg == "resolve_entities")
-    return False
+        if keyword.arg not in allowed or keyword.arg in keywords:
+            return None
+        keywords[keyword.arg] = keyword.value
+    return keywords
 
 
-def _direct_resolve_entities_true(call: ast.Call) -> bool:
-    """iterparse takes resolve_entities as a direct keyword."""
-    return any(_is_true(kw.value) for kw in call.keywords if kw.arg == "resolve_entities")
+def _entity_option(keywords: dict[str, ast.AST]) -> _EntityResolution:
+    if "resolve_entities" not in keywords:
+        return _EntityResolution.DEFAULT
+    value = keywords["resolve_entities"]
+    if isinstance(value, ast.Constant):
+        if value.value is True:
+            return _EntityResolution.ENABLED
+        if value.value is False or value.value == "internal":
+            return _EntityResolution.DISABLED
+    return _EntityResolution.UNRESOLVED
+
+
+def _lxml_resolve_entities(call: ast.Call, member: str, imports: _Imports, scope) -> _EntityResolution:
+    if member == "iterparse":
+        keywords = _keywords(call, _ITERPARSE_OPTIONS)
+        # Keep the first positional source or keyword source only; other
+        # positional options are outside this deliberately bounded trace.
+        if keywords is None or len(call.args) > 1 or bool(call.args) == ("source" in keywords):
+            return _EntityResolution.UNRESOLVED
+        html = keywords.get("html")
+        if html is not None and not (isinstance(html, ast.Constant) and html.value is False):
+            return _EntityResolution.UNRESOLVED
+        return _entity_option(keywords)
+
+    source_name = "source" if member == "parse" else "text"
+    # base_url is keyword-only, despite its display in some generated docs.
+    parameters = (source_name, "parser")
+    keywords = _keywords(call, frozenset((*parameters, "base_url")))
+    if keywords is None or len(call.args) > len(parameters):
+        return _EntityResolution.UNRESOLVED
+    if any(name in keywords for name in parameters[:len(call.args)]):
+        return _EntityResolution.UNRESOLVED
+    if not call.args and source_name not in keywords:
+        return _EntityResolution.UNRESOLVED
+    parser = call.args[1] if len(call.args) > 1 else keywords.get("parser")
+    if parser is None or (isinstance(parser, ast.Constant) and parser.value is None):
+        return _EntityResolution.DEFAULT
+    if not isinstance(parser, ast.Call) or imports.qualified(parser.func, scope) != "lxml.etree.XMLParser":
+        return _EntityResolution.UNRESOLVED
+    options = _keywords(parser, _XML_PARSER_OPTIONS)
+    if parser.args or options is None:
+        return _EntityResolution.UNRESOLVED
+    return _entity_option(options)
 
 
 def _evidence(tree: ast.Module) -> list[_Evidence]:
@@ -90,14 +139,8 @@ def _evidence(tree: ast.Module) -> list[_Evidence]:
             continue
         if member not in _XXE_SINKS.get(module, ()):
             continue
-        if member in ("parse", "fromstring"):
-            proven = _parser_resolve_entities_true(node, imports, scope)
-        elif member == "iterparse":
-            proven = _direct_resolve_entities_true(node)
-        else:
-            continue
-        if proven:
-            found.append(_Evidence(node.lineno, f"calls {target}(resolve_entities=True)"))
+        if _lxml_resolve_entities(node, member, imports, scope) is _EntityResolution.ENABLED:
+            found.append(_Evidence(node.lineno, target))
     return found
 
 
@@ -153,25 +196,26 @@ def scan_unsafe_xml_parse(fileobj: BinaryIO, *, coverage: dict | None = None) ->
 
 
 def _finding(path: str, item: _Evidence) -> CheckFinding:
+    if item.target.endswith(".iterparse"):
+        configuration = "passes resolve_entities=True directly in XML mode"
+        fix = "Pass resolve_entities=False and no_network=True directly to etree.iterparse()."
+    else:
+        configuration = "receives an inline etree.XMLParser(resolve_entities=True)"
+        fix = "Pass parser=etree.XMLParser(resolve_entities=False, no_network=True) to this parse call."
     return CheckFinding(
         rule_id=RULE_ID,
-        title="XML is parsed with external entity resolution explicitly enabled",
+        title="XML parsing explicitly enables external entity resolution",
         severity="high",
-        confidence=_CONFIDENCE,
+        confidence=_CONF_EXPLICIT,
         category="Security",
         file=path,
         line=item.line,
         explanation=(
-            f"Line {item.line} {item.what}. resolve_entities=True makes lxml resolve external "
-            "entities on every version, so an attacker-controlled XML document can read local "
-            "files, probe the internal network or force a billion-laughs expansion. Where the "
-            "bytes come from has NOT been verified; trusted internal data and untrusted external "
-            "data can reach the same call."
+            f"Line {item.line} calls {item.target} and {configuration}. This explicitly enables "
+            "external entity expansion. If attacker-controlled XML reaches this call and runtime "
+            "controls allow access, external entities may expose local file contents or access "
+            "other resources. Input trust, execution, installed libraries, custom resolvers and "
+            "network access have not been verified."
         ),
-        fix_hint=(
-            "Parse XML with xml.etree.ElementTree (which does not resolve external entities) or "
-            "the defusedxml package. For lxml, drop resolve_entities=True (the default is "
-            "'internal' on lxml 5.0+/6.1.0+, which does not resolve external entities), or pass "
-            "resolve_entities=False explicitly."
-        ),
+        fix_hint=fix + " Check input trust and whether external entities are required before changing XML handling.",
     )

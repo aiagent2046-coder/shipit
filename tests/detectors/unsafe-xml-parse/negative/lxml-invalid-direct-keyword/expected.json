@@ -1,0 +1,7 @@
+{
+  "description": "parse does not accept resolve_entities directly; the setting belongs to XMLParser.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

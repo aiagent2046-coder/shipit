@@ -307,18 +307,17 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     Capability(
         "unsafe_xml_parse",
-        "XML parsed through a path that can resolve external entities",
+        "An XML parse explicitly enables entity resolution",
         ("unsafe-xml-parse",),
         "Import-resolved Python XML parses in parseable Python files up to 400 KB; recognized "
         "test/example/documentation paths are skipped, except migration paths. At most 400 files and "
         "32 findings; vendor, dependency trees and generated build directories are excluded before "
-        "the file limit. Only lxml.etree parse/fromstring/iterparse calls proven to pass "
-        "resolve_entities=True are reported (parse/fromstring via parser=XMLParser(resolve_entities=True), "
-        "iterparse via a direct keyword). A missing resolve_entities argument, resolve_entities=False "
-        "or 'internal', a non-lxml parser object and a reassigned etree.parse are not reported: none "
-        "proves external entities are resolved. The stdlib xml.etree/sax/minidom/pulldom modules and "
-        "defusedxml are not sinks. Input trust, the installed lxml version, cross-file resolution and "
-        "a parser object stored in a variable then passed later are unresolved.",
+        "the file limit. Reports lxml.etree parse/fromstring calls with an inline XMLParser that "
+        "explicitly sets resolve_entities=True, passed by keyword or position, and iterparse "
+        "calls with direct resolve_entities=True in XML mode. Defaults, version inference, parser "
+        "variables, set_default_parser, custom resolvers, XInclude, feed parsing and cross-file "
+        "resolution are outside this check. Input trust and runtime access are not verified. "
+        "No finding does not establish safe parsing.",
     ),
     Capability(
         "command_injection",

@@ -1,0 +1,7 @@
+{
+  "description": "A function parameter shadows the lxml module for both parsing and construction.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}
