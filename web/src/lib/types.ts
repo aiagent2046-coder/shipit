@@ -221,6 +221,23 @@ export interface SourceAssessment {
   source_sha256: string;
   method: "source_ast";
   source_binding: Record<string, unknown>;
+  operation_identity?: Record<string, unknown>;
+  span?: [number, number];
+}
+
+export interface NarrativeProjection {
+  version: 1;
+  method: "source_bound_projection";
+  kind: "fact_input_count_unbounded" | "retry_callback_scope";
+  applied_checks: string[];
+  source_hashes: Record<string, string>;
+  whole_finding: false;
+  original: {
+    title: string; explanation: string; fix_hint: string; observation: string | null;
+    producer: { model: string; response: number; rubric: string };
+  };
+  previous_fix_hint: string;
+  active: { title: string; explanation: string; fix_hint: string; observation: string };
 }
 
 export interface Finding {
@@ -235,16 +252,17 @@ export interface Finding {
     source_context?: { kind: string; uri_scheme: string; uri_kind: string } | null;
     grouped_originals?: Record<string, unknown>[];
     grouped_claim_scope?: {
-      mechanism: "react_network_rejection_cleanup";
+      mechanism: "react_network_rejection_cleanup" | "query_read_volume";
       scope: string;
       consequences: string;
-      title_source_disagreements: { original_index: number; result: "different_handler_label";
+      title_source_disagreements?: { original_index: number; result: "different_handler_label";
         source_handler: string }[];
     } | null;
     producer?: { model: string; response: number; rubric: string };
     source_issue_identity?: Record<string, unknown> | null;
     context_checks?: Record<string, unknown>[];
     source_assessments?: SourceAssessment[];
+    narrative_projection?: NarrativeProjection;
     premise_checks?: { kind: string; target: string; line_start?: number; line_end?: number;
       source_line_start?: number; source_line_end?: number;
       result: "contradicted" | "not_checked"; claim: string; detail: string }[];

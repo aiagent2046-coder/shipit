@@ -5,6 +5,7 @@ import pytest
 
 from app.report.html import _finding_row
 from app.scan.claim_evidence import partial_contradicted, unsupported_transport
+from app.scan.claim_narrative import narrative_projection
 from app.scan.pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_external_call_assessment import CALLER, COUNT, HELPER, WRAPPER, finding
@@ -28,5 +29,13 @@ def test_external_source_assessment_keeps_original_and_mixed_penalty(source, mar
     assert partial_contradicted(model["claim_evidence"]) is partial
     assert not unsupported_transport(model["claim_evidence"])
     assert result["score"]["categories"]["Auth"] < 10
-    assert ("Source checks contradict part of this finding" in _finding_row(model)) is partial
-    assert model["title"] == title
+    if kind == "retry_callback_scope":
+        projection = narrative_projection(model)
+        assert projection and projection["original"]["title"] == title
+        assert model["title"] != title
+        assert "Superseded model wording" in _finding_row(model)
+        assert model["title"] in _finding_row(model)
+    else:
+        assert "Source checks contradict part of this finding" not in _finding_row(model)
+        assert model["title"] == title
+        assert narrative_projection(model) is None

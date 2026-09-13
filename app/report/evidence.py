@@ -14,6 +14,8 @@ from app.scan.claim_evidence import (
     narrative_review_checks, partial_contradicted, source_assessments, syntax_contradicted, unsupported_transport,
 )
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
+from app.scan.claim_narrative import narrative_projection
+from app.scan.query_read_identity import valid_query_read_identity
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.manifest import SCA_LIMITATIONS
 from app.scan.rule_coverage import normalize_rule_coverage
@@ -296,9 +298,15 @@ def evidence_label(finding: dict, historical: bool = False) -> str:
     return "Legacy finding — verification not recorded"
 
 
-def _grouped_claim_rows(record: dict) -> list[tuple[str, str]]:
+def _grouped_claim_rows(record: dict, file: str = "", source: str = "") -> list[tuple[str, str]]:
     grouping = record.get("grouped_claim_scope")
     originals = record.get("grouped_originals")
+    if (source == "llm" and isinstance(grouping, dict) and grouping.get("mechanism") == "query_read_volume"
+            and isinstance(originals, list) and len(originals) > 1
+            and valid_query_read_identity(record.get("source_issue_identity"), file)):
+        return [("Grouped hypothesis scope", "Grouped by the same source SELECT operation and pagination-bound "
+                 "hypothesis only. Original conditions, retention assumptions and claimed costs remain "
+                 "separate and unverified; repetition is not independent confirmation.")]
     if (not isinstance(grouping, dict) or grouping.get("mechanism") != "react_network_rejection_cleanup"
             or not isinstance(originals, list) or len(originals) < 2):
         return []
@@ -327,6 +335,7 @@ def _grouped_claim_rows(record: dict) -> list[tuple[str, str]]:
 def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[str, str]]:
     """A recorded source check is separate from the model's reading of it."""
     record = finding.get("claim_evidence")
+    projection = narrative_projection(finding)
     record = record if isinstance(record, dict) and record.get("version") == 1 else {}
     check = record.get("source_check") or {}
     if check.get("kind") == "quote_match":
@@ -452,12 +461,19 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
         for i, hint in enumerate(superseded if isinstance(superseded, list) else [], 1):
             if isinstance(hint, str):
                 rows.append((f"Superseded intermediate recommendation {i} — do not apply without review", hint))
-    rows.extend(_grouped_claim_rows(record))
+    rows.extend(_grouped_claim_rows(record, finding.get("file", ""), finding.get("source", "")))
     for i, original in enumerate(record.get("grouped_originals", []), 1):
         rows.append((f"Grouped original {i} — not independent confirmation",
                      json.dumps(original, ensure_ascii=False)))
+    if projection:
+        rows.append(("Recorded wording correction", "The active wording follows the recorded source check. "
+                     "Only the stated premise is corrected; other claims, conditions and consequences "
+                     "remain unverified. Severity and score eligibility are unchanged."))
+        rows.append(("Original model provenance — not independent confirmation",
+                     json.dumps(projection["original"]["producer"], ensure_ascii=False)))
     if record.get("observation"):
-        rows.append(("Model interpretation — unverified", record["observation"]))
+        label = "Source interpretation — outcome unverified" if projection else "Model interpretation — unverified"
+        rows.append((label, record["observation"]))
     conditions = record.get("required_conditions")
     rows.append(("Required conditions — not checked", "\n".join(conditions) if conditions else
                  "Not recorded; do not assume the conditions for harm are satisfied."))

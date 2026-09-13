@@ -11,6 +11,7 @@ from html import escape
 from app.scan.claim_evidence import (
     narrative_review_checks, partial_contradicted, syntax_contradicted, unsupported_transport,
 )
+from app.scan.claim_narrative import narrative_projection
 
 from app.report.evidence import (
     is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
@@ -44,6 +45,7 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
     if f.get("line"):
         loc += f":{int(f['line'])}"
     what, risk, fix = plain_fields(f)
+    projection = narrative_projection(f)
     emoji, _ = tier(sev)
     tier_label = f"Potential {sev} impact"
     contradicted = syntax_contradicted(f.get("claim_evidence"))
@@ -80,11 +82,12 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
                     + escape(fix) + '</details>') if fix else ""
     if historical:
         fix_html = ('<details><summary>'
-                    + ('Free audit suggestion — unverified' if included
+                    + ('Recorded verification guidance — not reassessed' if projection else
+                       'Free audit suggestion — unverified' if included
                        else 'Original preview suggestion — not reassessed')
                     + '</summary>'
                     + escape(fix) + '</details>') if fix else ""
-    if partial:
+    if partial and not projection:
         original = ('<details><summary>Original model claim and suggestion — contains a contradicted premise</summary>'
                     + '<p>' + escape(what) + '</p>'
                     + ('<p>' + escape(risk) + '</p>' if risk else '')
@@ -102,7 +105,7 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         risk_html = ('<div class="risk">This transport-only hypothesis is excluded from the score. '
                      'Runtime routing, logging and credential exposure remain unverified.</div>')
         fix_html = original
-    elif review and not partial and not contradicted:
+    elif review and not partial and not contradicted and not projection:
         fix_html = ('<details><summary>Original model claim and suggestion — outcome not established</summary>'
                     + '<p>' + escape(what) + '</p>'
                     + ('<p>' + escape(risk) + '</p>' if risk else '')
@@ -111,6 +114,12 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         risk_html = ('<div class="risk">Review the source conditions below before acting. '
                      'The original model severity remains in the score pending review; '
                      'the claimed outcome and project safety have not been verified.</div>')
+    if projection:
+        original = projection["original"]
+        fix_html += ('<details><summary>Superseded model wording — source premise corrected</summary>'
+                     + ''.join('<p>' + escape(str(original[key])) + '</p>'
+                               for key in ('title', 'explanation', 'fix_hint', 'observation') if original.get(key))
+                     + '</details>')
     evidence = '<dl style="white-space:pre-line">' + "".join(
         f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in claim_evidence_rows(f, historical)
     ) + '</dl>'
@@ -118,7 +127,7 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         evidence = '<details><summary>Evidence and conditions</summary>' + evidence + '</details>'
     tech_bits = " · ".join(x for x in (
         _category_label(f),
-        ("" if partial or unsupported or review else escape(str(f.get("title", "")))), loc,
+        ("" if (partial or unsupported or review) and not projection else escape(str(f.get("title", "")))), loc,
         escape(str(f.get("masked", "")))) if x)
     return (
         '<tr>'
