@@ -38,6 +38,9 @@ def scan_archive(data: bytes) -> dict:
         ) else []),
     ]))
     manifest["limitations"] = limitations
+    coverage = dict(static["coverage"])
+    for failure in static["checks_not_run"]:
+        coverage[failure["check"]] = f"Did not run ({failure['reason']}). No coverage established."
     sarif = build_sarif(
         static["findings"], engine_version=AUDIT_ENGINE_VERSION,
         score={**static["score"], "basis": "static_only", "scan_manifest": manifest},
@@ -53,7 +56,7 @@ def scan_archive(data: bytes) -> dict:
             "findings": static["findings"],
             "checks_run": static["checks_run"],
             "checks_not_run": static["checks_not_run"],
-            "coverage": static["coverage"],
+            "coverage": coverage,
             "rule_coverage": static["rule_coverage"],
             "limitations": limitations,
             "runtime_verified": False,

@@ -67,6 +67,7 @@ def test_browser_boots_without_native_dependencies_and_reports_real_findings():
         "sql_injection_js", "tls_verification", "session_cookie", "http_success",
     }
     assert all(entry["reason"] == "check_error: ImportError" for entry in failures)
+    assert all(report["coverage"][entry["check"]].startswith("Did not run") for entry in failures)
     assert set(report["checks_run"]).isdisjoint(entry["check"] for entry in failures)
     assert set(report["checks_run"]) | {entry["check"] for entry in failures} == set(CHECKS_RUN)
     assert len(report["checks_run"]) + len(failures) == len(CHECKS_RUN) == 17

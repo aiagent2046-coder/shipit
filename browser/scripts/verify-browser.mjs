@@ -24,7 +24,8 @@ try {
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(e.message));
   await page.goto(base + '/harness.html');
-  await page.waitForFunction(() => ['PASSED', 'FAILED'].includes(document.querySelector('#status').textContent), { timeout: 120_000 });
+  await page.waitForFunction(() => ['PASSED', 'FAILED'].includes(document.querySelector('#status').textContent), null,
+    { timeout: 120_000 });
   const measured = JSON.parse(await page.locator('#result').textContent());
   await writeFile(resolve(output, 'chromium-parity.json'), JSON.stringify(measured, null, 2));
   assert.equal(measured.summary?.unexpected_failures, 0, 'Chromium corpus parity failed');
