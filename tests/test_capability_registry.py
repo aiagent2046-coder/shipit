@@ -47,6 +47,7 @@ SCANNER_CHECKS = {
     "scan_sql_injection": "sql_injection",
     "scan_sql_injection_js": "sql_injection_js",
     "scan_outbound_url": "outbound_url",
+    "scan_open_redirect": "open_redirect",
     "scan_tls_verification": "tls_verification",
     "scan_unsafe_deserialization": "unsafe_deserialization",
     "scan_path_traversal": "path_traversal",

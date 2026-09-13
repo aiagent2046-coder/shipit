@@ -209,6 +209,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-13-6: xss-unsafe-html-injection, a text scanner (no native grammar) that
 # reads HTML injected into the DOM from a non-literal value: dangerouslySetInnerHTML,
 # innerHTML/outerHTML assignment, document.write and insertAdjacentHTML.
+# 2026-09-13-7: python-open-redirect-unvalidated-url, a redirect whose target
+# authority comes from the caller (Starlette/FastAPI RedirectResponse in routes).
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

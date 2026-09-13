@@ -20,6 +20,18 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "python-open-redirect-unvalidated-url": (
+        "A redirect targets a URL whose authority comes from the caller.",
+        "A redirect constructor sends the visitor's browser to an address whose host is built from the "
+        "request itself. A caller who controls the target can redirect a signed-in user to an attacker's "
+        "domain -- the open redirect that carries OAuth codes, session tokens in the Referer and phishing "
+        "flows. Whether the route is reachable and whether anything outside this function constrains the "
+        "target have not been verified.",
+        "Validate the target before redirecting: allow only relative paths, or compare the resolved host "
+        "against an allowlist of your own origins and reject everything else (including protocol-relative "
+        "//host and backslashes that some parsers read as //host). Never redirect straight to a value the "
+        "request supplied.",
+    ),
     "xss-unsafe-html-injection": (
         "HTML is injected into the DOM from a value that is not a fixed string.",
         "A non-literal value reaches an HTML-injection sink -- dangerouslySetInnerHTML, innerHTML/outerHTML, "

@@ -1,0 +1,10 @@
+{
+  "description": "A protocol-relative //host target: the host is still caller-chosen, just without a scheme.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

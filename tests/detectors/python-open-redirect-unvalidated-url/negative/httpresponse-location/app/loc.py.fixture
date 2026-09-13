@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+from starlette.responses import HTTPResponse, RedirectResponse
+
+router = APIRouter()
+
+
+@router.get("/go")
+async def go(target: str):
+    return HTTPResponse(302, headers={"Location": target})

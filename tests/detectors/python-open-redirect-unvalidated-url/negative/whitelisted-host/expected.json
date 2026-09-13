@@ -1,0 +1,7 @@
+{
+  "description": "A recognised local check on the address suppresses the signal; the mutation removes the check, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-open-redirect-unvalidated-url"
+  ]
+}

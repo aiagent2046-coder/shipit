@@ -1,0 +1,7 @@
+{
+  "description": "A fixed relative path redirects within the same origin, not an open redirect; the mutation hands the caller's value to the constructor, which must fire.",
+  "expect": [],
+  "forbid": [
+    "python-open-redirect-unvalidated-url"
+  ]
+}

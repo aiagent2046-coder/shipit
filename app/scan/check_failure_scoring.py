@@ -9,7 +9,7 @@ CHECK_CATEGORIES = {
     'sql_injection': {'Security'}, 'sql_injection_js': {'Security'},
     'outbound_url': {'Security'}, 'tls_verification': {'Security'},
     'unsafe_deserialization': {'Security'}, 'path_traversal': {'Security'},
-    'xss': {'Security'}, 'session_cookie': {'Security'},
+    'xss': {'Security'}, 'open_redirect': {'Security'}, 'session_cookie': {'Security'},
     'project_files': {'Security', 'Testing', 'Deploy'},
     'ci_deploy_source': {'Deploy'}, 'service_role': {'Auth'},
     'auth_read_consistency': {'Auth'}, 'auth_write_consistency': {'Auth'},

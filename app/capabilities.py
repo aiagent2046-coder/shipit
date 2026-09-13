@@ -245,6 +245,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         "32 findings are reported",
     ),
     Capability(
+        "open_redirect",
+        "A redirect whose target authority comes from the caller",
+        ("python-open-redirect-unvalidated-url",),
+        "Local FastAPI routes in parseable Python files up to 400 KB; recognized test/example/documentation "
+        "paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency "
+        "trees and generated build directories (.next, dist, build) are excluded before the file limit. The "
+        "Starlette/FastAPI RedirectResponse constructor whose target authority (between :// and the first "
+        "/, ? or #) is built from a value the request supplies is reported. A caller value that fills only "
+        "the path stays silent, and a recognised local check on the address suppresses the signal. "
+        "Flask/Django redirect(), HTTPResponse/HTTPException Location headers, meta-refresh and JS/TS "
+        "are not covered, and a helper that assembles the URL is not followed. Whether the route is "
+        "reachable and whether the check is correct are not verified.",
+    ),
+    Capability(
         "path_traversal",
         "A file path built from a value the caller sent",
         ("path-traversal-file-sink",),

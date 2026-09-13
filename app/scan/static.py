@@ -17,6 +17,7 @@ from app.scan.check_loading import is_native_import_error, optional_native_funct
 from app.scan.error_boundary import MOUNT_UNKNOWN, scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.outbound_url import scan_outbound_url
+from app.scan.open_redirect import scan_open_redirect
 from app.scan.rls import scan_rls
 from app.scan.rule_coverage import RULE_COVERAGE_KEYS
 from app.scan.schema_drift import scan_schema_drift
@@ -147,6 +148,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                 rule_id=u.rule_id, title=u.title, severity=u.severity,
                 confidence=u.confidence, category=u.category, file=u.file,
                 line=u.line, explanation=u.explanation, fix_hint=u.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
+
+    fileobj.seek(0)
+    with attempt("open_redirect"):
+        for r in list(scan_open_redirect(fileobj, coverage=rule_coverage["open_redirect"])):
+            findings.append(ScoredFinding(
+                rule_id=r.rule_id, title=r.title, severity=r.severity,
+                confidence=r.confidence, category=r.category, file=r.file,
+                line=r.line, explanation=r.explanation, fix_hint=r.fix_hint,
                 claim_evidence=static_claim_evidence(),
             ))
 
@@ -349,6 +360,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                      "auth_read_consistency": SCOPE["auth_read_consistency"],
                      "auth_write_consistency": SCOPE["auth_write_consistency"],
                      "outbound_url": SCOPE["outbound_url"],
+                     "open_redirect": SCOPE["open_redirect"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],
                      "path_traversal": SCOPE["path_traversal"],
                      "xss": SCOPE["xss"],

@@ -1,0 +1,10 @@
+{
+  "description": "The authority is assembled by concatenation from a caller value.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
