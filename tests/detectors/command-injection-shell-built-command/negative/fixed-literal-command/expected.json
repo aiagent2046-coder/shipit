@@ -1,0 +1,7 @@
+{
+  "description": "The command is a literal the code chose; the caller's value is not in it. The mutation concatenates the caller's name into the command, which must fire.",
+  "expect": [],
+  "forbid": [
+    "command-injection-shell-built-command"
+  ]
+}

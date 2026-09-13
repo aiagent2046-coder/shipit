@@ -1,0 +1,10 @@
+{
+  "description": "An argument LIST under shell=True: every element is joined into the shell string, so a caller element is still an injection.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

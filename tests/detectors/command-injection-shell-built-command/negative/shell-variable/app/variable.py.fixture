@@ -1,0 +1,10 @@
+from fastapi import APIRouter
+import subprocess
+
+router = APIRouter()
+
+
+@router.get("/run")
+async def run(name: str):
+    shell = False
+    subprocess.run("echo " + name, shell=shell)

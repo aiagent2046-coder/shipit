@@ -20,6 +20,18 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "command-injection-shell-built-command": (
+        "A shell command is built from a value the caller sent.",
+        "This route hands a string to a shell -- os.system, os.popen, or subprocess with shell=True -- "
+        "and that string is assembled from the request itself. A value carrying shell characters (;, "
+        "&&, $(...), backticks) can run a second command the application never wrote, up to arbitrary "
+        "code as the process user. Whether the route is reachable, whether anything outside this "
+        "function constrains the value, and whether the call actually runs have not been verified.",
+        "Do not run a shell on request input. Pass arguments as a list to subprocess without shell=True "
+        "so no shell interprets the value, and avoid os.system/os.popen for anything but a fixed literal. "
+        "If a command must be built, quote each value with shlex.quote, or whitelist the allowed commands "
+        "and reject the rest.",
+    ),
     "path-traversal-file-sink": (
         "A file path is built from a value the caller sent.",
         "This route hands a filesystem path to a file operation, and that path is assembled from the "

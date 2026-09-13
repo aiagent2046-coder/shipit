@@ -1,0 +1,10 @@
+{
+  "description": "The value is read off the Request object rather than a named parameter; the origin still resolves to the request.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,9 @@
+from fastapi import APIRouter
+import subprocess
+
+router = APIRouter()
+
+
+@router.get("/cleanup")
+async def cleanup(target: str):
+    subprocess.run(["rm", "-rf", target], shell=True)

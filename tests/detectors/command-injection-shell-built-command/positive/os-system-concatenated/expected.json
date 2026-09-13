@@ -1,0 +1,10 @@
+{
+  "description": "The classic shell injection: a request value concatenated straight into os.system, which always interprets the string through a shell.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
