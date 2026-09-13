@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.scan.checks import CheckFinding
+from app.scan.cve_evidence import empty_cve_summary, normalize_cve_summary
+from app.sca.cve import CveClient
 from app.sca.lockfiles import Dependency, collect_dependency_inventory, unusable_lockfiles
 from app.sca.osv import OsvClient, OsvUnavailable
 
@@ -101,6 +103,26 @@ def sca_enabled(env: dict | None = None) -> bool:
         "0", "false", "no", "off"}
 
 
+def cve_enabled(env: dict | None = None) -> bool:
+    source = os.environ if env is None else env
+    return str(source.get("CVE_ENABLED", "1")).strip().lower() not in {
+        "0", "false", "no", "off"}
+
+
+def loses_cve_evidence(score: dict, current: object) -> bool:
+    """An incomplete refresh must not erase previously fetched CVE records.
+
+    A complete OSV result without CVE IDs can legitimately retire old matches.
+    An explicitly disabled enrichment is also an operator policy decision.
+    """
+    previous = normalize_cve_summary((score.get("scan_manifest") or {}).get("sca_cve"))
+    latest = normalize_cve_summary(current)
+    if not previous or not latest or latest["status"] not in {"partial", "unavailable"}:
+        return False
+    return bool({r["id"] for r in previous["records"]}
+                - {r["id"] for r in latest["records"]})
+
+
 def sca_client_for(*, paid: bool, opt_out: bool = False,
                    requested: bool | None = None) -> "OsvClient | None":
     """Who gets their dependency list sent to a third party.
@@ -121,7 +143,7 @@ def sca_client_for(*, paid: bool, opt_out: bool = False,
         return None
     if requested is None and not sca_enabled():
         return None
-    return OsvClient()
+    return OsvClient(cve_client=CveClient() if cve_enabled() else None)
 
 
 def _rank(severity: str) -> int:
@@ -227,8 +249,10 @@ class Advisory:
     # version -- and only the detail is missing, so the finding stays and says
     # which part is unverified instead of disappearing.
     details_missing: bool = False
+    cve_ids: list[str] = field(default_factory=list)
 
     def absorb(self, other: "Advisory") -> None:
+        self.cve_ids = list(dict.fromkeys(self.cve_ids + other.cve_ids))
         if _rank(other.severity) > _rank(self.severity):
             self.severity = other.severity
         self.declared = self.declared or other.declared
@@ -261,6 +285,7 @@ def _advisories(dependency: Dependency, records: list[dict],
             published=str(record.get("published") or "")[:10],
             url=_advisory_url(record),
             fixed=_fixed_versions(record, dependency),
+            cve_ids=[record.get("id", ""), *record.get("aliases", [])],
         )
         if advisory.identifier in merged:
             merged[advisory.identifier].absorb(advisory)
@@ -275,6 +300,7 @@ def _advisories(dependency: Dependency, records: list[dict],
             published="",
             url=f"https://osv.dev/vulnerability/{advisory_id}",
             details_missing=True,
+            cve_ids=[advisory_id],
         ))
     return sorted(merged.values(), key=lambda a: (-_rank(a.severity), a.identifier))
 
@@ -293,7 +319,8 @@ def _scope_sentence(dependency: Dependency) -> str:
     return "This dependency arrives through another one"
 
 
-def build_finding(dependency: Dependency, advisories: list[Advisory]) -> CheckFinding:
+def build_finding(dependency: Dependency, advisories: list[Advisory],
+                  cve: dict | None = None) -> CheckFinding:
     worst = advisories[0]
     others = advisories[1:]
     # Fixed events belong to individual affected ranges, not to a global
@@ -346,6 +373,28 @@ def build_finding(dependency: Dependency, advisories: list[Advisory]) -> CheckFi
            "target was not verified. Update the lockfile, reinstall, and rerun "
            f"the dependency scan and your tests. Reference: {worst.url}")
 
+    # CVE supplies record provenance; OSV remains the exact-version matcher.
+    # A rejected record is a source disagreement, never a reason to silently
+    # delete the package match or change its rating.
+    if cve:
+        identifiers = {i for advisory in advisories for i in advisory.cve_ids}
+        matched = [r for r in cve["records"] if r["id"] in identifiers]
+        for record in matched[:MAX_LISTED_ADVISORIES]:
+            risk += (f" CVE Program {record['id']}: {record['state']} "
+                     f"(checked {cve['checked_at']}).")
+            if record["description"]:
+                risk += f" CNA description: {record['description'][:600]}"
+            if record["cwes"]:
+                risk += " CNA weakness IDs: " + ", ".join(record["cwes"]) + "."
+            fix += f" Official CVE record: {record['url']}"
+        if any(r["state"] == "REJECTED" for r in matched):
+            risk += (" The CVE Program has rejected a record still referenced by OSV. "
+                     "The OSV package match is retained; reconcile the sources before acting.")
+        if len(matched) > MAX_LISTED_ADVISORIES:
+            risk += f" {len(matched) - MAX_LISTED_ADVISORIES} additional CVE records are retained in the scan record."
+        if cve["status"] in {"partial", "unavailable"}:
+            risk += " Official CVE lookup was incomplete; unavailable records do not invalidate OSV matches."
+
     if len(advisories) == 1:
         title = f"{worst.identifier} in {dependency.name} {dependency.version}"
     else:
@@ -397,6 +446,7 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         "truncated": 0,
         "asked_at": None,
         "skipped_reason": None,
+        "cve": empty_cve_summary("not_run" if client is None or client.cve_client else "disabled"),
     }
     try:
         inventory = collect_dependency_inventory(data)
@@ -432,6 +482,7 @@ def run_sca_stage(data: bytes, client: OsvClient | None) -> tuple[list[CheckFind
         return [], stats
 
     hits, records, unreadable, skip_reason = query_dependencies(dependencies, client)
+    stats["cve"] = client.cve_summary
     if skip_reason is not None:
         stats["skipped_reason"] = skip_reason
         stats["requests"] = client.requests_made
@@ -471,6 +522,7 @@ def query_dependencies(
     deployment does not keep. Never raises, for the same reason the stage never
     does -- an unreachable database is a reason, not a failed audit.
     """
+    client.cve_summary = empty_cve_summary("not_run" if client.cve_client else "disabled")
     try:
         hits = client.query(dependencies)
         wanted: dict[str, None] = {}
@@ -480,6 +532,13 @@ def query_dependencies(
         records = client.details(list(wanted))
     except OsvUnavailable as exc:
         return {}, {}, set(), f"osv_unavailable: {exc}"
+    if client.cve_client is not None:
+        # Query only IDs supplied by the package database; the CVE client
+        # validates them before constructing a fixed-host URL.
+        identifiers = list(wanted)
+        for record in sorted(records.values(), key=lambda r: -_rank(_severity(r)[0])):
+            identifiers.extend(record.get("aliases", []))
+        client.cve_summary = client.cve_client.lookup(identifiers)
     return hits, records, set(wanted) - set(records), None
 
 
@@ -510,7 +569,7 @@ def findings_for(
             stats["below_severity_floor"] += 1
             continue
         stats["reported_advisories"] += len(advisories)
-        findings.append(build_finding(dependency, advisories))
+        findings.append(build_finding(dependency, advisories, normalize_cve_summary(stats.get("cve"))))
 
     findings.sort(key=lambda f: (-_rank(f.severity), f.file, f.line, f.title))
     stats["truncated"] = max(0, len(findings) - MAX_FINDINGS)

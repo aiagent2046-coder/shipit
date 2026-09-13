@@ -18,6 +18,7 @@ from app.scan.claim_narrative import narrative_projection
 from app.scan.query_read_identity import valid_query_read_identity
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.manifest import SCA_LIMITATIONS
+from app.report.cve import cve_rows, cve_notices
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
 
@@ -177,7 +178,7 @@ def _classified_limits(score: dict) -> tuple[list[str], list[str], list[str]]:
 def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
     """Keep dependency gaps and unclassified reasons visible above the findings."""
     _, dependency, other = _classified_limits(score)
-    notices = []
+    notices = cve_notices((score.get("scan_manifest") or {}).get("sca_cve"))
     failures = normalize_check_failures((score.get("scan_manifest") or {}).get("static_checks_not_run"))
     if failures:
         notices.append(("Static checks failed",
@@ -612,6 +613,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Files in archive", str(manifest.get("archive_files", "Not recorded"))),
         ("Static checks run", ", ".join(manifest.get("static_checks", [])) or "Not recorded"),
         _dependency_row(manifest),
+        *cve_rows(manifest.get("sca_cve")),
         ("Last responding model", manifest.get("model") or "No model response recorded"),
         ("Model responses", str(manifest.get("model_calls", 0))),
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),

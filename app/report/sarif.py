@@ -30,6 +30,7 @@ import urllib.parse
 from app.report.plain_language import plain_fields
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
+from app.scan.cve_evidence import normalize_cve_summary
 from app.scan.claim_narrative import narrative_projection
 from app.scan.query_read_identity import valid_query_read_identity
 
@@ -206,6 +207,7 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 "basis": (score or {}).get("basis"),
                 "limitations": list(manifest.get("limitations") or []),
                 "ruleCoverage": normalize_rule_coverage(manifest.get("rule_coverage")),
+                "cveEvidence": normalize_cve_summary(manifest.get("sca_cve")),
                 "staticChecksNotRun": failures,
             },
         }],

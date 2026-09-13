@@ -1,5 +1,6 @@
 import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment, StaticCoverageRule, StaticRuleCoverage } from "./types";
 import { narrativeProjection as checkedNarrativeProjection } from "./claimNarrative";
+import { cveRows, cveNotices } from "./cveEvidence";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -457,7 +458,7 @@ function normalizedCheckFailures(value: unknown): { check: string; reason: strin
 
 export function nonModelStatusNotices(score: Score): [string, string][] {
   const [, dependency, other] = classifiedLimits(score);
-  const notices: [string, string][] = [];
+  const notices: [string, string][] = cveNotices(score.scan_manifest?.sca_cve);
   const failures = normalizedCheckFailures(score.scan_manifest?.static_checks_not_run);
   if (failures.length) notices.push(["Static checks failed",
     failures.map(item => `${item.check}: ${item.reason}`).join("; ") +
@@ -647,6 +648,7 @@ export function manifestRows(score: Score): [string, string][] {
     ["Scan engine", m.engine_version || "Not recorded"],
     ["Files in archive", String(m.archive_files)],
     ["Static checks run", m.static_checks.join(", ") || "Not recorded"],
+    ...cveRows(m.sca_cve),
     ["Last responding model", m.model || "No model response recorded"],
     ["Model responses", String(m.model_calls)],
     ["Review areas applied", m.rubrics_completed.join(", ") || "None"],

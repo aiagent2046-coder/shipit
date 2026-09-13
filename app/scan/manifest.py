@@ -8,6 +8,7 @@ import zipfile
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
+from app.scan.cve_evidence import normalize_cve_summary
 from app.sca.lockfiles import OSV_ECOSYSTEM
 
 
@@ -40,6 +41,7 @@ def sca_manifest_fields(sca: dict) -> dict:
         "coverage_incomplete", "below_severity_floor",
     )}
     fields.update({"sca_checks": sca.get("checks_run", []),
+                   "sca_cve": normalize_cve_summary(sca.get("cve")),
                    "sca_findings_truncated": sca.get("truncated", 0),
                    "sca_skipped_reason": sca.get("skipped_reason") or None})
     return fields
