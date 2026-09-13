@@ -5,7 +5,8 @@ import zipfile
 
 import pytest
 
-from app.scan.rls_recommendations import collect_rls_recommendations, rls_recommendation_context
+from app.scan.rls_recommendations import (MAX_FILES, collect_rls_recommendations,
+                                          rls_recommendation_context)
 
 
 def archive(files):
@@ -223,6 +224,160 @@ def test_budget_is_reported_and_not_silent(monkeypatch):
     facts = collect(policy("SELECT"))
     assert "scan_budget_reached" in facts["limitations"]
     assert facts["records"][0]["missing_command_declarations"] is None
+
+
+CHUNK = "self.webpackChunk=self.webpackChunk||[];\n"
+CHAIN = "await db.from('agent_context').insert({});"
+MINIFIED = 'e.from("profiles").insert({id:1});'
+
+
+def chunks(directory, count):
+    return {f"{directory}/static/chunks/chunk_{number:04d}.js": CHUNK for number in range(count)}
+
+
+@pytest.mark.parametrize("directory", [".next", "dist", "build"])
+def test_generated_build_output_cannot_displace_own_source_or_the_migrations(directory):
+    """MEASURED 2026-09-13. The walk is `sorted(infolist(), key=filename)` and
+    stops at MAX_FILES, and '.' (0x2E) sorts before letters, so `web/.next/**`
+    was read before `web/app/**` while `dist`/`build` were read before
+    `supabase/migrations/**`. With 400 build files the collector returned NO
+    records, and the client-change advice degraded to "Affected operation
+    targets were not resolved by this bounded source check" for a file whose
+    chain it had been perfectly able to read a moment earlier.
+    """
+    facts = collect(policy("SELECT"), **chunks(directory, 400))
+    assert facts["excluded_files"] == 400
+    assert facts["checked_files"] == 2  # own source + the migration, nothing else
+    assert "scan_budget_reached" not in facts["limitations"]
+    record = facts["records"][0]
+    assert record["table"] == "agent_context"
+    # The migration was read, so completeness is not lost either.
+    assert record["sequence_status"] == "declared_filename_sequence"
+    assert record["commands_in_declared_sequence"] == ["SELECT"]
+
+
+def test_a_non_generated_directory_ahead_in_filename_order_still_spends_the_budget():
+    """The mutation of the case above: NEITHER the count nor the filenames
+    change, only the category of the directory. This is the boundary the fix
+    does not cross — the budget is still spent in filename order by whatever is
+    not a dependency tree, a build directory or a test/doc path, and the limit
+    is still reported rather than hidden.
+    """
+    facts = collect(policy("SELECT"), **chunks("aa_assets", 400))
+    assert "scan_budget_reached" in facts["limitations"]
+    assert facts["records"] == []
+    assert facts["excluded_files"] == 0
+    assert facts["checked_files"] == MAX_FILES
+
+
+@pytest.mark.parametrize("path", ["vendor/lib/app/route.ts", "node_modules/pkg/app/route.ts",
+                                  "site-packages/pkg/app/route.ts",
+                                  "bower_components/pkg/app/route.ts",
+                                  ".tox/pkg/app/route.ts", ".nox/pkg/app/route.ts"])
+def test_dependency_trees_supply_no_operation(path):
+    """`vendor` and `node_modules` were in this collector's own list; the rest of
+    the dependency segments were not, and the shared predicate now covers all of
+    them so a package's own query chains stay out of the recommendation."""
+    facts = collect_rls_recommendations(archive({path: CHAIN}))
+    assert facts["records"] == []
+    assert facts["excluded_files"] == 1
+
+
+def test_the_same_chain_in_own_source_is_still_an_operation():
+    """The mutation of every case above: same body, a path the project owns."""
+    facts = collect_rls_recommendations(archive({"app/api/route.ts": CHAIN}))
+    assert [record["table"] for record in facts["records"]] == ["agent_context"]
+
+
+@pytest.mark.parametrize("path", [
+    "app/api/build/route.ts",
+    "src/app/api/vendor/route.ts",
+    "src/routes/build/+server.ts",
+    "pages/api/build/index.ts",
+])
+def test_route_named_like_build_or_dependency_keeps_operation_and_policy_evidence(path):
+    migration = "supabase/migrations/0001_policies.sql"
+    facts = collect_rls_recommendations(archive({path: CHAIN, migration: policy("SELECT")}))
+
+    assert facts["checked_files"] == 2
+    assert facts["excluded_files"] == 0
+    assert len(facts["records"]) == 1
+    record = facts["records"][0]
+    assert record["file"] == path
+    assert record["table"] == "agent_context"
+    assert record["operation"] == "INSERT"
+    assert record["sequence_status"] == "declared_filename_sequence"
+    assert record["commands_in_declared_sequence"] == ["SELECT"]
+    assert record["missing_command_declarations"] == ["INSERT"]
+    assert [event["file"] for event in record["policy_history"]] == [migration]
+
+
+@pytest.mark.parametrize("directory", ["Vendor", "VENV", "Node_Modules", ".VENV"])
+def test_mixed_case_dependency_cannot_displace_own_source_or_migration(directory):
+    facts = collect(policy("SELECT"), **chunks(directory, 400))
+
+    assert facts["excluded_files"] == 400
+    assert facts["checked_files"] == 2
+    assert "scan_budget_reached" not in facts["limitations"]
+    assert len(facts["records"]) == 1
+    record = facts["records"][0]
+    assert record["file"] == "app/api/context/route.ts"
+    assert record["operation"] == "INSERT"
+    assert record["sequence_status"] == "declared_filename_sequence"
+    assert record["commands_in_declared_sequence"] == ["SELECT"]
+    assert record["missing_command_declarations"] == ["INSERT"]
+    assert [event["file"] for event in record["policy_history"]] == [
+        "supabase/migrations/0001_policies.sql",
+    ]
+
+
+def test_mixed_case_dependency_migration_is_not_own_policy_evidence():
+    dependency_migration = "Vendor/migrations/0001_access.sql"
+    facts = collect(policy("SELECT"), **{dependency_migration: policy("ALL", name="other")})
+
+    assert facts["excluded_files"] == 1
+    assert facts["checked_files"] == 2
+    record = facts["records"][0]
+    assert record["sequence_status"] == "declared_filename_sequence"
+    assert record["commands_in_declared_sequence"] == ["SELECT"]
+    assert record["missing_command_declarations"] == ["INSERT"]
+    assert [event["file"] for event in record["policy_history"]] == [
+        "supabase/migrations/0001_policies.sql",
+    ]
+
+
+@pytest.mark.parametrize("path", [
+    ".next/server/app/api/build/route.ts",
+    "dist/app/api/vendor/route.ts",
+    "build/src/routes/build/+server.ts",
+    "vendor/pkg/src/app/api/vendor/route.ts",
+    "Vendor/pkg/pages/api/build/index.ts",
+    "node_modules/pkg/src/routes/build/+server.ts",
+])
+def test_generated_or_dependency_prefixed_route_supplies_no_operation(path):
+    facts = collect_rls_recommendations(archive({
+        path: CHAIN,
+        "supabase/migrations/0001_policies.sql": policy("SELECT"),
+    }))
+
+    assert facts["records"] == []
+    assert facts["excluded_files"] == 1
+    assert facts["checked_files"] == 1
+    assert "scan_budget_reached" not in facts["limitations"]
+
+
+@pytest.mark.parametrize("directory", [".next/static/chunks", "dist/static/chunks"])
+def test_a_minified_bundle_supplies_no_operation(directory):
+    """A bundler aliases the client away, and the chain shape survives it:
+    `e.from("profiles").insert(...)` is what `_operations` looks for, with the
+    schema silently defaulting to public. MEASURED 2026-09-13: before the fix
+    this produced a record for `.next/static/chunks/app-page-1a2b3c.js` naming
+    public.profiles.INSERT. A record is matched to a finding by `file`, so it
+    could only ever be attached to a generated path.
+    """
+    facts = collect_rls_recommendations(archive({f"{directory}/app-page-1a2b3c.js": MINIFIED}))
+    assert facts["records"] == []
+    assert facts["excluded_files"] == 1
 
 
 def test_select_operation_records_read_command_without_write_permission_claim():

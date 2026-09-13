@@ -131,7 +131,11 @@ CAPABILITIES: tuple[Capability, ...] = (
         "A request handler holding the Supabase service-role key",
         ("supabase-service-role-route",),
         "Files matching Next.js, SvelteKit or Nuxt handler path conventions that read a "
-        "service-role environment variable or import a module with that read. One-hop imports "
+        "service-role environment variable or import a module with that read. Dependency trees, "
+        "generated build output and coverage reports are excluded before matching, so a compiled "
+        "copy of a route is not a second finding. Category matching ignores case. Conventional "
+        "handlers retain URL segments named build, dist, vendor or coverage after their routing "
+        "root; custom routing roots and build-directory configuration are not resolved. One-hop imports "
         "are matched by module basename; equal basenames are not distinguished. General Python "
         "decorator routes, Express routing and Supabase Edge Functions are outside this check. "
         "Client construction, runtime key resolution, authentication and query access are not "

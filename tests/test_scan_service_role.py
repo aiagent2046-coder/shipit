@@ -18,6 +18,8 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
+
 from app.scan.collapse import collapse_repeats
 from app.scan.service_role import (
     RULE_ID,
@@ -360,3 +362,107 @@ def test_a_key_holder_inside_a_vendored_tree_is_not_indexed() -> None:
         "repo/src/app/api/x/route.ts":
             "import { a } from '@/lib/supabase-admin';\nexport async function GET() {}",
     }) == []
+
+
+# ── The same trees, in the loop that EMITS findings ─────────────────────────
+# MEASURED 2026-09-13. The list of skipped trees above was consulted only in the
+# helper index; the finding loop filtered on `is_request_handler` alone, and
+# Next.js emits `.next/server/app/<path>/route.js`, which wears a route
+# basename. So the rule reported the compiled copy of a route the customer wrote
+# once — and `collapse_repeats` named the build artifact as the file to open and
+# counted the handler twice. Vendored paths fired too, once they happened to
+# contain an `app/` segment.
+
+@pytest.mark.parametrize("path", [
+    ".next/server/app/api/context/route.js",
+    "web/.next/server/app/api/context/route.js",
+    "dist/server/app/api/context/route.js",
+    "build/app/api/context/route.js",
+    "coverage/app/api/context/route.ts",
+    "vendor/lib/app/api/context/route.ts",
+    "node_modules/pkg/app/api/context/route.ts",
+    "site-packages/pkg/app/api/context/route.ts",
+])
+def test_a_compiled_or_vendored_copy_of_a_route_is_not_a_route(path: str) -> None:
+    assert files({path: ROUTE}) == []
+
+
+@pytest.mark.parametrize("path", ["app/api/context/route.ts",
+                                  "web/app/api/context/route.ts"])
+def test_the_same_body_in_own_source_is_still_a_route(path: str) -> None:
+    """The mutation of every case above: the body and the framework convention
+    are unchanged, only the tree the file sits in. Without this half, `return []`
+    at the top of the scanner would pass the whole set.
+
+    `package.json` rides along so the archive has no single root to strip — a
+    zip holding one top-level folder makes that folder look like an export
+    wrapper, which is a different behaviour with its own test.
+    """
+    assert files({path: ROUTE, "package.json": "{}"}) == [path]
+
+
+def test_a_compiled_copy_does_not_double_the_collapsed_row() -> None:
+    """The customer-visible effect, and the reason the tree filter matters more
+    here than a tidy path list: one handler, written once, became "found in 2
+    places", and because "." sorts before "a" the representative the reader was
+    shown was `.next/server/app/api/context/route.js` — a file they cannot open
+    and must not edit."""
+    found = scan({"app/api/context/route.ts": ROUTE,
+                  ".next/server/app/api/context/route.js": ROUTE})
+    assert [f.file for f in found] == ["app/api/context/route.ts"]
+
+    rows = collapse_repeats([vars(f) for f in found])
+    assert len(rows) == 1
+    assert rows[0]["file"] == "app/api/context/route.ts"
+    assert "found in" not in rows[0]["title"]
+
+
+@pytest.mark.parametrize("path", [
+    "app/api/build/route.ts",
+    "src/app/api/vendor/route.ts",
+    "app/dist/route.js",
+    "app/api/coverage/route.ts",
+    "src/routes/build/+server.ts",
+    "pages/api/vendor/index.ts",
+    "server/api/build/index.ts",
+])
+@pytest.mark.parametrize("wrapper", ["", "repo/"])
+def test_handler_url_segments_are_not_output_directories(path, wrapper):
+    entries = {wrapper + path: ROUTE, wrapper + "package.json": "{}"}
+    assert files(entries) == [path]
+    # Change the credential, keeping the exact route and archive shape.
+    assert files({**entries, wrapper + path: SCOPED_ROUTE}) == []
+
+
+def test_bare_app_archive_keeps_a_build_named_route():
+    # archive_root mistakes app/ for an export wrapper. Path classification
+    # still needs app/ to distinguish the URL /api/build from build output.
+    found = scan({"app/api/build/route.ts": ROUTE})
+    assert len(found) == 1
+    assert found[0].rule_id == RULE_ID
+
+
+@pytest.mark.parametrize("path", [
+    ".NEXT/server/app/api/build/route.js",
+    "web/Build/server/app/api/vendor/route.js",
+    "Vendor/pkg/app/api/build/route.ts",
+    "Node_Modules/pkg/pages/api/build/index.ts",
+    "Coverage/src/routes/build/+server.ts",
+    "app/api/build/node_modules/pkg/app/api/context/route.ts",
+    "app/api/vendor/.next/server/app/api/context/route.js",
+])
+def test_a_route_named_build_does_not_override_an_excluded_tree(path):
+    assert files({path: ROUTE, "package.json": "{}"}) == []
+
+
+@pytest.mark.parametrize("directory", ["Vendor", "Node_Modules", "Build", ".NEXT", "Coverage"])
+def test_mixed_case_excluded_helper_cannot_implicate_an_own_route(directory):
+    entries = {
+        "app/api/context/route.ts": "import { admin } from '@/lib/admin';",
+        "lib/admin.ts": "export const admin = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;",
+        f"{directory}/pkg/admin.ts": "export const admin = process.env.SUPABASE_SERVICE_ROLE_KEY;",
+    }
+    assert files(entries) == []
+    # Move the key read into the module the handler actually imports.
+    entries["lib/admin.ts"] = "export const admin = process.env.SUPABASE_SERVICE_ROLE_KEY;"
+    assert files(entries) == ["app/api/context/route.ts"]

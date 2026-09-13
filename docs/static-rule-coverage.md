@@ -48,6 +48,36 @@ Secret scanning keeps its existing directory policy, including reading `vendor/`
 and `site-packages/`. A committed secret there still matters. Sharing path
 categories does not make every scanner exclude the same files.
 
+The RLS recommendation collector and the service-role route check take the same
+dependency and build categories before their own limits. MEASURED 2026-09-13:
+both read generated output as if the project owned it. The collector walks the
+archive in filename order and stops at its 300-file budget, and `.` sorts before
+letters, so `web/.next/**` was read before `web/app/**`; with 400 build files it
+returned no operations at all and the client-change advice named no target, while
+`dist/`/`build/` — which sort after `app/` but before `supabase/` — starved the
+migration files instead. The route check matched `.next/server/app/<path>/route.js`,
+a compiled copy of a route the project wrote once, and the collapsed row then named
+that build artifact as the file holding the key and counted the handler twice.
+Vendored paths fired as well once they contained an `app/` segment. Neither check
+writes per-rule coverage records; those paths are excluded rather than counted.
+
+These two collectors preserve their previous case-insensitive category matching:
+`Vendor/`, `Node_Modules/` and `VENV/` are excluded as well. SQL under those trees
+cannot become evidence for the application's policy declarations. The helper
+index in the service-role check uses the same policy as its finding loop.
+
+Handler paths need an additional distinction: `app/api/build/route.ts` is the
+source of a URL named `/api/build`, while `.next/server/app/api/build/route.js`
+is a compiled copy. For conventional Next.js App Router, Pages Router, Nuxt and
+SvelteKit (`src/routes`) handlers, the names `build`, `dist`, `vendor` and
+`coverage` after the routing root remain eligible. An excluded category before
+the routing root still excludes the file; markers such as `.next` and
+`node_modules` exclude at any depth. Classification uses the original ZIP path
+so stripping a bare `app/` tree as an export wrapper does not lose that context.
+This is a path heuristic: custom routing roots and build-directory configuration
+are not resolved. The four bounded source checks, cookie check and secret scanner
+retain their existing path policies.
+
 Older audits without these measurements show coverage as not recorded. Their
 counts are not reconstructed from archive size or another scanner's coverage.
 A scan engine version change prevents old cached results from being served as

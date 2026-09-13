@@ -1,0 +1,7 @@
+{
+  "description": "Next.js emits `.next/server/app/<path>/route.js` for every API route, and that compiled copy wears the same basename and the same `app/` segment a real route does. It is not a route the project owns, so the service-role read inside it must not be reported — otherwise one handler the owner wrote once is named twice, and the collapsed row can name the build artifact as the file to open. The same body one directory up is the positive case `direct-env-read`, so this case is a single move away from firing.",
+  "expect": [],
+  "forbid": [
+    "supabase-service-role-route"
+  ]
+}
