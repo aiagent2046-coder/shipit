@@ -299,3 +299,38 @@ def test_cli_defaults_to_catalog_only_and_file_only(env_file, monkeypatch, capsy
     assert calls[-1] == (None, True)
     with pytest.raises(SystemExit):
         verify.main(["--process-env", "--env", str(env_file)])
+
+
+@pytest.mark.parametrize("result,expected", [("resolved", 0), ("missing", 1), ("unreachable", 2), ("invalid", 2)])
+def test_anthropic_aliases_are_resolved_without_guessing(env_file, result, expected):
+    alias = "claude-haiku-4-5"
+    canonical = "claude-haiku-4-5-20251001"
+    env_file.write_text(f"ANTHROPIC_API_KEY={SECRET}\nANTHROPIC_LLM_MODEL={alias}\n")
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        assert request.headers["x-api-key"] == SECRET
+        assert request.headers["anthropic-version"] == "2023-06-01"
+        if request.url.path == "/v1/models":
+            return catalog(canonical, has_more=False)
+        if request.method == "POST":
+            payload = json.loads(request.content)
+            assert payload["model"] == alias  # probe the configured name, not its replacement
+            return httpx.Response(200, json={"model": canonical,
+                "content": [{"type": "text", "text": "OK"}],
+                "usage": {"input_tokens": 10, "output_tokens": 1}})
+        assert request.url.path == "/v1/models/" + alias
+        if result == "missing":
+            return httpx.Response(404, text=SECRET)
+        if result == "unreachable":
+            return httpx.Response(401, text=SECRET)
+        if result == "invalid":
+            return httpx.Response(200, json={"error": SECRET})
+        return httpx.Response(200, json={"id": canonical})
+
+    code, report = run(env_file, handle, probe=True)
+    assert code == expected
+    assert [r.method for r in requests] == (["GET", "GET", "POST"] if expected == 0 else ["GET", "GET"])
+    if expected == 0:
+        assert f"ALIAS {alias} -> {canonical}" in report

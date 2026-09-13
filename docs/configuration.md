@@ -89,8 +89,11 @@ own protocol, including [Anthropic pagination](https://platform.claude.com/docs/
 For AITunnel, the authenticated `/v1/models` endpoint is distinct from its
 [public model/pricing catalog](https://aitunnel.ru/docs/models). An identifier
 missing from a catalog is reported as unconfirmed; this alone does not prove
-that a completion request would return HTTP 400. Model aliases may need separate
-confirmation. Catalog success does not test generation, balance or audit quality.
+that a completion request would return HTTP 400. Anthropic aliases absent from
+its listing are additionally checked with the official
+[get-model endpoint](https://platform.claude.com/docs/en/api/models/retrieve);
+other providers' unlisted aliases remain unconfirmed. Catalog success does not
+test generation, balance or audit quality.
 
 Generation is a separate, **potentially billed** opt-in:
 

@@ -107,6 +107,21 @@ def fetch_model_ids(provider: Provider, transport: httpx.BaseTransport | None = 
     raise ValueError("catalog page limit exceeded")
 
 
+def resolve_anthropic_alias(provider: Provider, model: str,
+                            transport: httpx.BaseTransport | None = None) -> str | None:
+    """Anthropic's get-model API resolves valid aliases absent from the list."""
+    with httpx.Client(timeout=CATALOG_TIMEOUT, transport=transport, follow_redirects=False) as client:
+        response = client.get(provider.base_url + "/v1/models/" + quote(model, safe=""),
+                              headers={"x-api-key": provider.api_key, "anthropic-version": "2023-06-01"})
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict) or not isinstance(body.get("id"), str) or not body["id"]:
+            raise ValueError("invalid model metadata")
+        return body["id"]
+
+
 def probe_model(provider: Provider, model: str, transport: httpx.BaseTransport | None = None) -> str:
     """One attempt with the product's payload, transport and nonempty-answer parser."""
     selected = replace(provider, model=model)
@@ -174,7 +189,18 @@ def _check(values: dict[str, str], probe: bool,
             continue
         lines.append(f"  {provider.kind}: провайдер отдаёт {len(available)} моделей")
         for model in models:
-            if model not in available:
+            confirmed = model in available
+            if not confirmed and provider.kind == "anthropic":
+                try:
+                    resolved = resolve_anthropic_alias(provider, model, transport)
+                except Exception as exc:  # noqa: BLE001
+                    incomplete = True
+                    lines.append(f"НЕ ПРОВЕРЕНО: alias {model}: {error_summary(exc)}")
+                    continue
+                if resolved:
+                    confirmed = True
+                    lines.append(f"    ALIAS {model} -> {resolved}")
+            if not confirmed:
                 failed = True
                 lines.append(f"ПРОВАЛ: {provider.kind}: НЕТ {model} в каталоге; "
                              "имя не подтверждено (это не предсказание HTTP-статуса генерации)")
