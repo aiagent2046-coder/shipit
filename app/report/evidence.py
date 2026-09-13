@@ -17,6 +17,7 @@ from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.manifest import SCA_LIMITATIONS
 from app.scan.rule_coverage import normalize_rule_coverage
+from app.scan.check_failures import normalize_check_failures
 
 
 def is_non_production(finding: dict) -> bool:
@@ -158,6 +159,9 @@ def _rule_coverage_rows(manifest: dict) -> list[tuple[str, str]]:
 def _classified_limits(score: dict) -> tuple[list[str], list[str], list[str]]:
     model, dependency, other = [], [], []
     for reason in (score.get("scan_manifest") or {}).get("limitations") or []:
+        if reason == "static_checks_failed" and normalize_check_failures(
+                (score.get("scan_manifest") or {}).get("static_checks_not_run")):
+            continue  # Rendered with its named check and type-only reason.
         if reason in MODEL_LIMITATIONS or reason.startswith("rubric_failed:"):
             model.append(reason)
         elif reason in SCA_LIMITATIONS:
@@ -171,6 +175,12 @@ def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
     """Keep dependency gaps and unclassified reasons visible above the findings."""
     _, dependency, other = _classified_limits(score)
     notices = []
+    failures = normalize_check_failures((score.get("scan_manifest") or {}).get("static_checks_not_run"))
+    if failures:
+        notices.append(("Static checks failed",
+                        "; ".join(f"{item['check']}: {item['reason']}" for item in failures) +
+                        ". These checks did not complete. Their missing findings are not a clean result; "
+                        "the overall score and affected category scores cannot be used for comparison."))
     coverage = normalize_rule_coverage((score.get("scan_manifest") or {}).get("rule_coverage")) or {}
     incomplete = []
     for rule, label in RULE_COVERAGE_LABELS.items():
@@ -478,6 +488,8 @@ def coverage_rows(score: dict, findings: list[dict]) -> list[tuple[str, str]]:
                 key in score.get("scan_manifest", {}).get("static_checks", [])
                 for key in ("auth_read_consistency", "auth_write_consistency")):
             label = "Local Python route check ran — broader auth not checked"
+        if name in score.get("incomplete_static_categories", []):
+            label = "Incomplete — static check failed"
         elsewhere = (score.get("reported_elsewhere") or {}).get(name)
         if elsewhere:
             label += " — findings reported under " + ", ".join(elsewhere)
@@ -588,6 +600,8 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),
     ]
     accounting = manifest.get("model_findings")
+    rows.extend((f"Static check failed: {item['check']}", item["reason"])
+                for item in normalize_check_failures(manifest.get("static_checks_not_run")))
     if accounting is None:
         rows.append(("Model finding processing", "Not recorded for this audit"))
     elif not accounting:

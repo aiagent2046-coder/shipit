@@ -263,6 +263,7 @@ export function coverageRows(score: Score, findings: Finding[]): [string, string
       label = "Local Python route check ran — broader auth not checked";
     }
     const elsewhere = score.reported_elsewhere?.[name];
+    if (score.incomplete_static_categories?.includes(name)) label = "Incomplete — static check failed";
     if (elsewhere?.length) label += ` — findings reported under ${elsewhere.join(", ")}`;
     if (count) label += ` · ${count} unverified finding${count === 1 ? "" : "s"}`;
     if (examples) label += ` · ${examples} test/example observations`;
@@ -390,6 +391,7 @@ function ruleCoverageRows(score: Score): [string, string][] {
 function classifiedLimits(score: Score): [string[], string[], string[]] {
   const model: string[] = [], dependency: string[] = [], other: string[] = [];
   for (const reason of score.scan_manifest?.limitations ?? []) {
+    if (reason === "static_checks_failed" && normalizedCheckFailures(score.scan_manifest?.static_checks_not_run).length) continue;
     if (modelLimitations.has(reason) || reason.startsWith("rubric_failed:")) model.push(reason);
     else if (dependencyLimitations.has(reason)) dependency.push(reason);
     else other.push(reason);
@@ -397,9 +399,38 @@ function classifiedLimits(score: Score): [string[], string[], string[]] {
   return [model, dependency, other];
 }
 
+// Mirror the producer's known check IDs and type-only reason contract. Never
+// reflect arbitrary exception text from a stored report into the UI.
+const staticCheckIds = new Set([
+  "secrets", "rls", "schema_drift", "project_files", "ci_deploy_source", "service_role",
+  "error_boundary", "auth_read_consistency", "auth_write_consistency", "http_success",
+  "sql_injection", "sql_injection_js", "outbound_url", "tls_verification",
+  "unsafe_deserialization", "path_traversal", "session_cookie",
+]);
+
+function normalizedCheckFailures(value: unknown): { check: string; reason: string }[] {
+  if (value == null) return [];
+  const records = Array.isArray(value) ? value : [value];
+  const result: { check: string; reason: string }[] = [];
+  for (const entry of records.slice(0, 128)) {
+    const item = entry && typeof entry === "object" ? entry : {};
+    const check = typeof item.check === "string" && staticCheckIds.has(item.check) ? item.check : "unknown_check";
+    const reason = typeof item.reason === "string" && /^check_error: [A-Za-z_][A-Za-z0-9_]{0,79}$/.test(item.reason)
+      ? item.reason : "reason_not_recorded";
+    if (!result.some(row => row.check === check && row.reason === reason)) result.push({ check, reason });
+  }
+  if (records.length > 128) result.push({ check: "unknown_check", reason: "additional_failures_omitted" });
+  return result;
+}
+
 export function nonModelStatusNotices(score: Score): [string, string][] {
   const [, dependency, other] = classifiedLimits(score);
   const notices: [string, string][] = [];
+  const failures = normalizedCheckFailures(score.scan_manifest?.static_checks_not_run);
+  if (failures.length) notices.push(["Static checks failed",
+    failures.map(item => `${item.check}: ${item.reason}`).join("; ") +
+    ". These checks did not complete. Their missing findings are not a clean result; " +
+    "the overall score and affected category scores cannot be used for comparison."]);
   const coverage = normalizedRuleCoverage(score.scan_manifest?.rule_coverage);
   const incomplete: string[] = [];
   for (const [rule, label] of Object.entries(ruleCoverageLabels)) {
@@ -605,6 +636,8 @@ export function manifestRows(score: Score): [string, string][] {
     rows.push(["Rejection reasons", JSON.stringify(row.rejection_reasons)]);
   }
   rows.push(...rejectionDiagnosticRows(score));
+  rows.push(...normalizedCheckFailures(m.static_checks_not_run).map(
+    (item): [string, string] => [`Static check failed: ${item.check}`, item.reason]));
   const exclusionLabels: Record<string, string> = {
     no_rubric_match: "No keyword match in configured review areas",
     rubric_not_reached: "Matching review areas were not reached",
