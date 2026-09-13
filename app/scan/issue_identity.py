@@ -21,6 +21,9 @@ from app.scan.model_metadata_identity import (
     MECHANISM as MODEL_METADATA, VERSION as MODEL_METADATA_VERSION, model_metadata_claim,
     model_metadata_title,
 )
+from app.scan.query_read_identity import (
+    MECHANISM as QUERY_READ, query_read_candidates, query_read_claim, query_read_related_title,
+)
 
 MAX_FILE_BYTES = 256_000
 MAX_TOTAL_BYTES = 2_000_000
@@ -199,7 +202,11 @@ class SourceIssueResolver:
         metadata_claim = model_metadata_claim(finding)
         if metadata_claim is None and model_metadata_title(finding.get("title", "")):
             return None  # A rejected mixed metadata claim cannot select another cause.
-        kind = MODEL_METADATA if metadata_claim else _mechanism(finding.get("title", ""))
+        query_claim = query_read_claim(finding)
+        if query_claim is None and query_read_related_title(finding.get("title", "")):
+            return None  # A compound read-volume claim cannot fall back to another mechanism.
+        kind = (MODEL_METADATA if metadata_claim else QUERY_READ if query_claim
+                else _mechanism(finding.get("title", "")))
         if kind == MODEL_METADATA and metadata_claim is None:
             return None  # One metadata operation can underlie different claims.
         path = finding.get("file")
@@ -232,7 +239,8 @@ class SourceIssueResolver:
             if work > self.remaining_nodes:
                 return None
             self.remaining_nodes -= work
-            candidates = self._candidates(kind, scope, own)
+            candidates = (query_read_candidates(own, query_claim) if kind == QUERY_READ
+                          else self._candidates(kind, scope, own))
             if kind == "query_row_bound":
                 # A title can select an actual table, just as coordinates can
                 # select a statement. It cannot invent the source identity.
@@ -244,17 +252,23 @@ class SourceIssueResolver:
                     for call in g._walk(node))]
                 if named:
                     candidates = named
-            operation = _select(candidates, start, end)
+            if kind == QUERY_READ:
+                # A nearby count/write citation must not be redirected to the
+                # only eligible SELECT elsewhere in the same function.
+                candidates = [n for n in candidates if _lines(n)[0] <= end and start <= _lines(n)[1]]
+                operation = candidates[0] if len(candidates) == 1 else None
+            else:
+                operation = _select(candidates, start, end)
             if operation is None:
                 return None
             operation_scope = _enclosing(operation.parent, g._FUNCTIONS) or scope
             return {"version": MODEL_METADATA_VERSION if kind == MODEL_METADATA else 1,
-                    **(metadata_claim if kind == MODEL_METADATA else {}),
+                    **(metadata_claim if kind == MODEL_METADATA else query_claim if kind == QUERY_READ else {}),
                     "method": "source_ast", "file": path,
                     "source_sha256": digest, "mechanism": kind,
                     "function_span": _span(operation_scope), "operation_span": _span(operation),
                     "operation_line_start": _lines(operation)[0], "operation_line_end": _lines(operation)[1]}
-        except (UnicodeError, ValueError, TypeError, RecursionError, RuntimeError,
+        except (UnicodeError, ValueError, TypeError, RecursionError, RuntimeError, ImportError,
                 OSError, zipfile.BadZipFile):
             return None
 

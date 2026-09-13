@@ -8,6 +8,7 @@ findings are discarded, never shown.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -21,6 +22,7 @@ from typing import BinaryIO
 from app.llm import pricing
 from app.llm.client import LLMClient, LLMError
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
+from app.scan.claim_narrative import project_claim_narrative
 from app.scan.syntax_claims import SyntaxVerifier
 from app.scan.premise_context import finding_context
 from app.scan.recommendations import prepare_recommendation
@@ -838,7 +840,7 @@ class LLMScanStats:
     input_truncated: bool = False
 
 
-def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
+def _iter_code_files(zf: zipfile.ZipFile, *, source_hashes: dict[str, str] | None = None) -> list[tuple[str, str]]:
     out = []
     for info in zf.infolist():
         n = info.filename
@@ -851,6 +853,10 @@ def _iter_code_files(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
         data = zf.read(info)
         if b"\x00" in data[:4096]:
             continue
+        if source_hashes is not None:
+            # Use archive bytes, as the AST bindings do; decoding with ignored
+            # errors must never make a changed source look like the old one.
+            source_hashes[n] = hashlib.sha256(data).hexdigest()
         out.append((n, data.decode("utf-8", errors="ignore")))
     return out
 
@@ -1334,8 +1340,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     # mid-scan produce prompts of two different sizes in one audit.
     budget = content_budget(client)
     request_limit = request_limit_for(client)
+    current_source_hashes: dict[str, str] = {}
     with zipfile.ZipFile(fileobj) as zf:
-        files = _iter_code_files(zf)
+        files = _iter_code_files(zf, source_hashes=current_source_hashes)
     files_by_name = dict(files)
     syntax_verifier = SyntaxVerifier(fileobj, source_facts)
     issue_resolver = SourceIssueResolver(fileobj, source_facts)
@@ -1559,6 +1566,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
         "request_window": len(unmatched & selected_names),
     }
     grouped = dedup_cross_rubric(findings)
+    # Grouping retains original model prose. Project only after recommendation
+    # preparation and grouping, so neither can reactivate a contradicted claim.
+    grouped = [project_claim_narrative(f, current_source_hashes=current_source_hashes) for f in grouped]
     for row in stats.model_findings:
         row["saved"] = sum((f.claim_evidence or {}).get("producer", {}).get("model") == row["model"]
                            for f in grouped)

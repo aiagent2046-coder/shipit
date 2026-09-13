@@ -1,0 +1,884 @@
+{
+  "facts": {
+    "rule_id": "llm-money",
+    "title": "Fact count is capped before rendering; database read needs separate review",
+    "severity": "medium",
+    "confidence": 0.8,
+    "category": "Money & Data",
+    "file": "src/caller.ts",
+    "line": 3,
+    "masked": "",
+    "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+    "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+    "context": null,
+    "origin_category": null,
+    "source": "llm",
+    "verification_status": "unverified",
+    "verification_method": "model_review",
+    "claim_evidence": {
+      "version": 1,
+      "source_check": {
+        "kind": "quote_match",
+        "line_start": 1,
+        "line_end": 5
+      },
+      "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check.",
+      "required_conditions": [
+        "The operation is invoked."
+      ],
+      "conditions_status": "not_checked",
+      "consequence_status": "not_checked",
+      "producer": {
+        "model": "fixture-model",
+        "rubric": "money",
+        "response": 1
+      },
+      "source_assessments": [
+        {
+          "kind": "fact_input_count_unbounded",
+          "claim": "The cited query result reaches the recorded fact-block consumer without a collection-count cap.",
+          "result": "contradicted",
+          "whole_finding": false,
+          "method": "source_ast",
+          "detail": "The cited query-result binding enters the capped helper and its unchanged returned collection is the sole array argument of the recorded direct fact-block renderer. This contradicts an uncapped fact count on that source path. The preceding database read is not capped by this downstream slice; no total prompt-size or billing conclusion follows. Only this recorded source premise is assessed; the whole finding is not dismissed. Runtime bindings, other operations and paths, data volume, token/byte totals, billing, authorization policy and harmful outcomes remain unverified.",
+          "file": "src/caller.ts",
+          "line_start": 2,
+          "line_end": 7,
+          "source_sha256": "c7c19ff4d825539d0324f6e0897811eb6f4e552bf6506b7f65b2e1b0678e957f",
+          "source_binding": {
+            "file": "src/caller.ts",
+            "source_sha256": "c7c19ff4d825539d0324f6e0897811eb6f4e552bf6506b7f65b2e1b0678e957f",
+            "line_start": 2,
+            "line_end": 7,
+            "span": [
+              65,
+              272
+            ],
+            "call": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                185,
+                211
+              ]
+            },
+            "caller_result": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                174,
+                211
+              ]
+            },
+            "input_argument": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                199,
+                210
+              ]
+            },
+            "import": {
+              "line_start": 1,
+              "line_end": 1,
+              "span": [
+                0,
+                57
+              ],
+              "name": "sanitizeFacts"
+            },
+            "resolution": {
+              "kind": "relative_source_candidate"
+            },
+            "callee": {
+              "file": "src/helper.ts",
+              "source_sha256": "315542ec6212c022f3007f882899f99261d290ce8076d58cf13a1ead2dbf6c89",
+              "line_start": 2,
+              "line_end": 5,
+              "span": [
+                36,
+                258
+              ]
+            },
+            "return": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                173,
+                256
+              ]
+            },
+            "slice": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                180,
+                255
+              ]
+            },
+            "cap_declaration": {
+              "line_start": 3,
+              "line_end": 3,
+              "span": [
+                133,
+                170
+              ]
+            },
+            "default_declaration": {
+              "line_start": 1,
+              "line_end": 1,
+              "span": [
+                13,
+                27
+              ]
+            },
+            "parameter": "maxFacts",
+            "upper": 40,
+            "argument_mode": "omitted_options_default",
+            "override": null,
+            "runtime_array_identity": "not_checked",
+            "query_result": {
+              "line_start": 3,
+              "line_end": 3,
+              "span": [
+                101,
+                165
+              ]
+            },
+            "consumer_call": {
+              "line_start": 5,
+              "line_end": 5,
+              "span": [
+                229,
+                253
+              ]
+            },
+            "consumer_import": {
+              "line_start": 1,
+              "line_end": 1,
+              "span": [
+                0,
+                57
+              ]
+            },
+            "consumer_resolution": {
+              "kind": "relative_source_candidate"
+            },
+            "consumer": {
+              "file": "src/helper.ts",
+              "source_sha256": "315542ec6212c022f3007f882899f99261d290ce8076d58cf13a1ead2dbf6c89",
+              "line_start": 6,
+              "line_end": 9,
+              "span": [
+                266,
+                425
+              ],
+              "return": {
+                "line_start": 8,
+                "line_end": 8,
+                "span": [
+                  341,
+                  423
+                ]
+              },
+              "mapped_input": {
+                "line_start": 8,
+                "line_end": 8,
+                "span": [
+                  377,
+                  401
+                ]
+              }
+            },
+            "database_read_bound": "not_checked",
+            "total_prompt_bound": "not_checked"
+          }
+        }
+      ],
+      "source_issue_identity": null,
+      "future_metadata": {
+        "must_survive": [
+          1,
+          2
+        ]
+      },
+      "narrative_projection": {
+        "version": 1,
+        "method": "source_bound_projection",
+        "kind": "fact_input_count_unbounded",
+        "applied_checks": [
+          "fact_input_count_unbounded"
+        ],
+        "active": {
+          "title": "Fact count is capped before rendering; database read needs separate review",
+          "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+          "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+          "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check."
+        },
+        "source_hashes": {
+          "src/caller.ts": "c7c19ff4d825539d0324f6e0897811eb6f4e552bf6506b7f65b2e1b0678e957f",
+          "src/helper.ts": "315542ec6212c022f3007f882899f99261d290ce8076d58cf13a1ead2dbf6c89"
+        },
+        "whole_finding": false,
+        "original": {
+          "title": "Unbounded facts are injected into every Claude prompt",
+          "explanation": "The query has no LIMIT and every saved fact increases the prompt and cost.",
+          "fix_hint": "Remove the retry and all collection caps.",
+          "observation": "The query has no LIMIT and every saved fact increases the prompt and cost.",
+          "producer": {
+            "model": "fixture-model",
+            "rubric": "money",
+            "response": 1
+          }
+        },
+        "previous_fix_hint": "Remove the retry and all collection caps."
+      }
+    }
+  },
+  "retry": {
+    "rule_id": "llm-money",
+    "title": "Request rejection can retry; later response checks are outside the callback",
+    "severity": "medium",
+    "confidence": 0.8,
+    "category": "Money & Data",
+    "file": "src/route.ts",
+    "line": 18,
+    "masked": "",
+    "explanation": "The retry callback returns the recorded request. Checks of that response's HTTP status and JSON parsing occur after the awaited retry call, outside its callback. The wrapper configures at most 2 total attempts (1 additional attempt). Failures in those later response checks do not re-enter this retry invocation. Request rejection can still retry; runtime outcomes and repeated charges are not established by this source check.",
+    "fix_hint": "Review the request rejection and timeout policy separately from HTTP status handling. Before repeating an operation after an uncertain response, check its remote outcome and applicable idempotency support. Verify actual attempts and charges separately; do not attribute retries to response checks outside this callback.",
+    "context": null,
+    "origin_category": null,
+    "source": "llm",
+    "verification_status": "unverified",
+    "verification_method": "model_review",
+    "claim_evidence": {
+      "version": 1,
+      "source_check": {
+        "kind": "quote_match",
+        "line_start": 16,
+        "line_end": 20
+      },
+      "observation": "The retry callback returns the recorded request. Checks of that response's HTTP status and JSON parsing occur after the awaited retry call, outside its callback.",
+      "required_conditions": [
+        "The operation is invoked."
+      ],
+      "conditions_status": "not_checked",
+      "consequence_status": "not_checked",
+      "producer": {
+        "model": "fixture-model",
+        "rubric": "money",
+        "response": 1
+      },
+      "source_assessments": [
+        {
+          "kind": "retry_callback_scope",
+          "result": "contradicted",
+          "whole_finding": false,
+          "method": "source_ast",
+          "scope": "bounded_source_premise",
+          "detail": "The selected callback returns the recorded fetch/helper call. The same response's HTTP status check and JSON parse occur after the awaited retry invocation, outside its callback; errors from those caller statements do not re-enter this invocation. The loop bound counts total attempts, not additional retries. Helper/runtime failures and charges are separate. Only the recorded source premise is assessed; the whole finding, other call sites, runtime bindings, provider behavior, cancellation, billing and overall concurrency safety are not verified.",
+          "file": "src/route.ts",
+          "source_sha256": "b17292d26ade14146d7b60bf8ed4e888cbaca062137c385c0a8c1f45b44281fd",
+          "line_start": 18,
+          "line_end": 18,
+          "span": [
+            511,
+            563
+          ],
+          "source_binding": {
+            "file": "src/route.ts",
+            "source_sha256": "b17292d26ade14146d7b60bf8ed4e888cbaca062137c385c0a8c1f45b44281fd",
+            "line_start": 18,
+            "line_end": 18,
+            "span": [
+              511,
+              563
+            ],
+            "retry_call": {
+              "line_start": 18,
+              "line_end": 18,
+              "span": [
+                511,
+                563
+              ]
+            },
+            "callback": {
+              "line_start": 18,
+              "line_end": 18,
+              "span": [
+                521,
+                562
+              ]
+            },
+            "wrapper": {
+              "file": "src/route.ts",
+              "source_sha256": "b17292d26ade14146d7b60bf8ed4e888cbaca062137c385c0a8c1f45b44281fd",
+              "line_start": 1,
+              "line_end": 10,
+              "span": [
+                0,
+                315
+              ]
+            },
+            "maximum_attempts": 2,
+            "maximum_additional_attempts": 1,
+            "attempt_bound_mode": "literal_loop_bound",
+            "response_status_checks": [
+              {
+                "line_start": 19,
+                "line_end": 19,
+                "span": [
+                  571,
+                  577
+                ]
+              }
+            ],
+            "response_json_calls": [
+              {
+                "line_start": 20,
+                "line_end": 20,
+                "span": [
+                  618,
+                  628
+                ]
+              }
+            ]
+          },
+          "operation_identity": {
+            "version": 1,
+            "mechanism": "retry_poll_execution",
+            "file": "src/route.ts",
+            "source_sha256": "b17292d26ade14146d7b60bf8ed4e888cbaca062137c385c0a8c1f45b44281fd",
+            "operation_span": [
+              511,
+              563
+            ]
+          }
+        }
+      ],
+      "source_issue_identity": null,
+      "future_metadata": {
+        "must_survive": [
+          1,
+          2
+        ]
+      },
+      "narrative_projection": {
+        "version": 1,
+        "method": "source_bound_projection",
+        "kind": "retry_callback_scope",
+        "applied_checks": [
+          "retry_callback_scope"
+        ],
+        "active": {
+          "title": "Request rejection can retry; later response checks are outside the callback",
+          "explanation": "The retry callback returns the recorded request. Checks of that response's HTTP status and JSON parsing occur after the awaited retry call, outside its callback. The wrapper configures at most 2 total attempts (1 additional attempt). Failures in those later response checks do not re-enter this retry invocation. Request rejection can still retry; runtime outcomes and repeated charges are not established by this source check.",
+          "fix_hint": "Review the request rejection and timeout policy separately from HTTP status handling. Before repeating an operation after an uncertain response, check its remote outcome and applicable idempotency support. Verify actual attempts and charges separately; do not attribute retries to response checks outside this callback.",
+          "observation": "The retry callback returns the recorded request. Checks of that response's HTTP status and JSON parsing occur after the awaited retry call, outside its callback."
+        },
+        "source_hashes": {
+          "src/route.ts": "b17292d26ade14146d7b60bf8ed4e888cbaca062137c385c0a8c1f45b44281fd"
+        },
+        "whole_finding": false,
+        "original": {
+          "title": "Retry on any HTTP error or JSON parsing failure",
+          "explanation": "HTTP errors and JSON failures retry the whole request and cause two charges.",
+          "fix_hint": "Remove the retry and all collection caps.",
+          "observation": "HTTP errors and JSON failures retry the whole request and cause two charges.",
+          "producer": {
+            "model": "fixture-model",
+            "rubric": "money",
+            "response": 1
+          }
+        },
+        "previous_fix_hint": "Remove the retry and all collection caps."
+      }
+    }
+  },
+  "configured_facts": {
+    "rule_id": "llm-money",
+    "title": "Fact count is capped before rendering; database read needs separate review",
+    "severity": "medium",
+    "confidence": 0.8,
+    "category": "Money & Data",
+    "file": "src/caller.ts",
+    "line": 3,
+    "masked": "",
+    "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+    "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+    "context": null,
+    "origin_category": null,
+    "source": "llm",
+    "verification_status": "unverified",
+    "verification_method": "model_review",
+    "claim_evidence": {
+      "version": 1,
+      "source_check": {
+        "kind": "quote_match",
+        "line_start": 1,
+        "line_end": 5
+      },
+      "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check.",
+      "required_conditions": [
+        "The operation is invoked."
+      ],
+      "conditions_status": "not_checked",
+      "consequence_status": "not_checked",
+      "producer": {
+        "model": "fixture-model",
+        "rubric": "money",
+        "response": 1
+      },
+      "source_assessments": [
+        {
+          "kind": "fact_input_count_unbounded",
+          "claim": "The cited query result reaches the recorded fact-block consumer without a collection-count cap.",
+          "result": "contradicted",
+          "whole_finding": false,
+          "method": "source_ast",
+          "detail": "The cited query-result binding enters the capped helper and its unchanged returned collection is the sole array argument of the recorded direct fact-block renderer. This contradicts an uncapped fact count on that source path. The preceding database read is not capped by this downstream slice; no total prompt-size or billing conclusion follows. Only this recorded source premise is assessed; the whole finding is not dismissed. Runtime bindings, other operations and paths, data volume, token/byte totals, billing, authorization policy and harmful outcomes remain unverified.",
+          "file": "src/caller.ts",
+          "line_start": 2,
+          "line_end": 7,
+          "source_sha256": "e49d5dfa89402031a7bca94816a775566eef76886e8be78390654100abfb2ec7",
+          "source_binding": {
+            "file": "src/caller.ts",
+            "source_sha256": "e49d5dfa89402031a7bca94816a775566eef76886e8be78390654100abfb2ec7",
+            "line_start": 2,
+            "line_end": 7,
+            "span": [
+              65,
+              272
+            ],
+            "call": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                185,
+                211
+              ]
+            },
+            "caller_result": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                174,
+                211
+              ]
+            },
+            "input_argument": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                199,
+                210
+              ]
+            },
+            "import": {
+              "line_start": 1,
+              "line_end": 1,
+              "span": [
+                0,
+                57
+              ],
+              "name": "sanitizeFacts"
+            },
+            "resolution": {
+              "kind": "literal_config_source_candidate",
+              "configuration": {
+                "file": "tsconfig.json",
+                "source_sha256": "bddc68eabe71cd40b72902aa9463af334ad251ebd0cfa8773318b2e3e27212d2",
+                "line_start": 1,
+                "line_end": 1,
+                "span": [
+                  0,
+                  68
+                ]
+              }
+            },
+            "callee": {
+              "file": "src/helper.ts",
+              "source_sha256": "315542ec6212c022f3007f882899f99261d290ce8076d58cf13a1ead2dbf6c89",
+              "line_start": 2,
+              "line_end": 5,
+              "span": [
+                36,
+                258
+              ]
+            },
+            "return": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                173,
+                256
+              ]
+            },
+            "slice": {
+              "line_start": 4,
+              "line_end": 4,
+              "span": [
+                180,
+                255
+              ]
+            },
+            "cap_declaration": {
+              "line_start": 3,
+              "line_end": 3,
+              "span": [
+                133,
+                170
+              ]
+            },
+            "default_declaration": {
+              "line_start": 1,
+              "line_end": 1,
+              "span": [
+                13,
+                27
+              ]
+            },
+            "parameter": "maxFacts",
+            "upper": 40,
+            "argument_mode": "omitted_options_default",
+            "override": null,
+            "runtime_array_identity": "not_checked",
+            "query_result": {
+              "line_start": 3,
+              "line_end": 3,
+              "span": [
+                101,
+                165
+              ]
+            },
+            "consumer_call": {
+              "line_start": 5,
+              "line_end": 5,
+              "span": [
+                229,
+                253
+              ]
+            },
+            "consumer_import": {
+              "line_start": 1,
+              "line_end": 1,
+              "span": [
+                0,
+                57
+              ]
+            },
+            "consumer_resolution": {
+              "kind": "literal_config_source_candidate",
+              "configuration": {
+                "file": "tsconfig.json",
+                "source_sha256": "bddc68eabe71cd40b72902aa9463af334ad251ebd0cfa8773318b2e3e27212d2",
+                "line_start": 1,
+                "line_end": 1,
+                "span": [
+                  0,
+                  68
+                ]
+              }
+            },
+            "consumer": {
+              "file": "src/helper.ts",
+              "source_sha256": "315542ec6212c022f3007f882899f99261d290ce8076d58cf13a1ead2dbf6c89",
+              "line_start": 6,
+              "line_end": 9,
+              "span": [
+                266,
+                425
+              ],
+              "return": {
+                "line_start": 8,
+                "line_end": 8,
+                "span": [
+                  341,
+                  423
+                ]
+              },
+              "mapped_input": {
+                "line_start": 8,
+                "line_end": 8,
+                "span": [
+                  377,
+                  401
+                ]
+              }
+            },
+            "database_read_bound": "not_checked",
+            "total_prompt_bound": "not_checked"
+          }
+        }
+      ],
+      "source_issue_identity": null,
+      "future_metadata": {
+        "must_survive": [
+          1,
+          2
+        ]
+      },
+      "narrative_projection": {
+        "version": 1,
+        "method": "source_bound_projection",
+        "kind": "fact_input_count_unbounded",
+        "applied_checks": [
+          "fact_input_count_unbounded"
+        ],
+        "active": {
+          "title": "Fact count is capped before rendering; database read needs separate review",
+          "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+          "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+          "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check."
+        },
+        "source_hashes": {
+          "src/caller.ts": "e49d5dfa89402031a7bca94816a775566eef76886e8be78390654100abfb2ec7",
+          "src/helper.ts": "315542ec6212c022f3007f882899f99261d290ce8076d58cf13a1ead2dbf6c89",
+          "tsconfig.json": "bddc68eabe71cd40b72902aa9463af334ad251ebd0cfa8773318b2e3e27212d2"
+        },
+        "whole_finding": false,
+        "original": {
+          "title": "Unbounded facts are injected into every Claude prompt",
+          "explanation": "The query has no LIMIT and every saved fact increases the prompt and cost.",
+          "fix_hint": "Remove the retry and all collection caps.",
+          "observation": "The query has no LIMIT and every saved fact increases the prompt and cost.",
+          "producer": {
+            "model": "fixture-model",
+            "rubric": "money",
+            "response": 1
+          }
+        },
+        "previous_fix_hint": "Remove the retry and all collection caps."
+      }
+    }
+  },
+  "query_group": {
+    "rule_id": "llm-money",
+    "title": "Query pagination bound requires review",
+    "severity": "low",
+    "confidence": 0.75,
+    "category": "Money & Data",
+    "file": "route.ts",
+    "line": 3,
+    "masked": "",
+    "explanation": "Multiple model responses flag a pagination bound for the same source SELECT operation. Their conditions, retention assumptions and cost estimates remain separate claims in the originals; repetition is not independent confirmation.",
+    "fix_hint": "Verify the effective row bound and initial-load pagination for this SELECT. Review each original condition before choosing a limit.",
+    "context": null,
+    "origin_category": null,
+    "source": "llm",
+    "verification_status": "unverified",
+    "verification_method": "model_review",
+    "claim_evidence": {
+      "version": 1,
+      "source_issue_identity": {
+        "version": 1,
+        "claim_scope": "select_pagination_bound",
+        "table_sha256": "f5cccfb737512bedd4f2e39e7d72425ae8d3ebf8aa8ab6f966bef1fc916f5011",
+        "method": "source_ast",
+        "file": "route.ts",
+        "source_sha256": "6e87fb0f531926951c41590f8aac4d3586932f8420e9210ded4cbcb44a3fb82e",
+        "mechanism": "query_read_volume",
+        "function_span": [
+          0,
+          256
+        ],
+        "operation_span": [
+          69,
+          175
+        ],
+        "operation_line_start": 3,
+        "operation_line_end": 5
+      },
+      "source_check": {
+        "kind": "quote_match",
+        "line_start": 3,
+        "line_end": 7
+      },
+      "producer": {
+        "model": "synthetic-model",
+        "rubric": "money",
+        "response": 3
+      },
+      "observation": "The query selects all messages for a match_id with no limit.",
+      "required_conditions": [
+        "A match accumulates many messages",
+        "A user opens the chat"
+      ],
+      "conditions_status": "not_checked",
+      "consequence_status": "not_checked",
+      "syntax_check": {
+        "kind": "unsupported",
+        "result": "not_checked",
+        "claim": "Query pagination",
+        "detail": "Not assessed by this check."
+      },
+      "premise_checks": [
+        {
+          "kind": "query_limit_unbounded",
+          "target": "messages",
+          "line_start": 3,
+          "line_end": 7,
+          "result": "not_checked",
+          "claim": "The query has no pagination bound.",
+          "detail": "The runtime row bound is not checked."
+        }
+      ],
+      "source_assessments": [],
+      "grouped_originals": [
+        {
+          "line": 3,
+          "context": null,
+          "claim_evidence": {
+            "version": 1,
+            "source_issue_identity": {
+              "version": 1,
+              "claim_scope": "select_pagination_bound",
+              "table_sha256": "f5cccfb737512bedd4f2e39e7d72425ae8d3ebf8aa8ab6f966bef1fc916f5011",
+              "method": "source_ast",
+              "file": "route.ts",
+              "source_sha256": "6e87fb0f531926951c41590f8aac4d3586932f8420e9210ded4cbcb44a3fb82e",
+              "mechanism": "query_read_volume",
+              "function_span": [
+                0,
+                256
+              ],
+              "operation_span": [
+                69,
+                175
+              ],
+              "operation_line_start": 3,
+              "operation_line_end": 5
+            },
+            "source_check": {
+              "kind": "quote_match",
+              "line_start": 3,
+              "line_end": 7
+            },
+            "producer": {
+              "model": "synthetic-model",
+              "rubric": "money",
+              "response": 3
+            },
+            "observation": "The query selects all messages for a match_id with no limit.",
+            "required_conditions": [
+              "A match accumulates many messages",
+              "A user opens the chat"
+            ],
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "syntax_check": {
+              "kind": "unsupported",
+              "result": "not_checked",
+              "claim": "Query pagination",
+              "detail": "Not assessed by this check."
+            },
+            "premise_checks": [
+              {
+                "kind": "query_limit_unbounded",
+                "target": "messages",
+                "line_start": 3,
+                "line_end": 7,
+                "result": "not_checked",
+                "claim": "The query has no pagination bound.",
+                "detail": "The runtime row bound is not checked."
+              }
+            ],
+            "source_assessments": []
+          },
+          "verification_status": "unverified",
+          "title": "GET /api/messages fetches all messages for a match with no LIMIT",
+          "category": "Money & Data",
+          "rule_id": "llm-money",
+          "confidence": 0.75,
+          "explanation": "A large conversation produces a large initial response payload.",
+          "origin_category": null,
+          "masked": "",
+          "source": "llm",
+          "fix_hint": "Add a limit and explicit pagination for older messages.",
+          "verification_method": "model_review",
+          "file": "route.ts",
+          "severity": "low"
+        },
+        {
+          "line": 3,
+          "context": null,
+          "claim_evidence": {
+            "version": 1,
+            "source_issue_identity": {
+              "version": 1,
+              "claim_scope": "select_pagination_bound",
+              "table_sha256": "f5cccfb737512bedd4f2e39e7d72425ae8d3ebf8aa8ab6f966bef1fc916f5011",
+              "method": "source_ast",
+              "file": "route.ts",
+              "source_sha256": "6e87fb0f531926951c41590f8aac4d3586932f8420e9210ded4cbcb44a3fb82e",
+              "mechanism": "query_read_volume",
+              "function_span": [
+                0,
+                256
+              ],
+              "operation_span": [
+                69,
+                175
+              ],
+              "operation_line_start": 3,
+              "operation_line_end": 5
+            },
+            "source_check": {
+              "kind": "quote_match",
+              "line_start": 3,
+              "line_end": 7
+            },
+            "producer": {
+              "model": "synthetic-model",
+              "rubric": "money",
+              "response": 7
+            },
+            "observation": "The query selects all messages for a match_id with no limit.",
+            "required_conditions": [
+              "A match accumulates many messages",
+              "A user opens the chat"
+            ],
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "syntax_check": {
+              "kind": "unsupported",
+              "result": "not_checked",
+              "claim": "Query pagination",
+              "detail": "Not assessed by this check."
+            },
+            "premise_checks": [
+              {
+                "kind": "query_limit_unbounded",
+                "target": "messages",
+                "line_start": 3,
+                "line_end": 7,
+                "result": "not_checked",
+                "claim": "The query has no pagination bound.",
+                "detail": "The runtime row bound is not checked."
+              }
+            ],
+            "source_assessments": []
+          },
+          "verification_status": "unverified",
+          "title": "Messages GET endpoint fetches all messages for a match with no pagination limit",
+          "category": "Money & Data",
+          "rule_id": "llm-money",
+          "confidence": 0.75,
+          "explanation": "A large conversation produces a large initial response payload.",
+          "origin_category": null,
+          "masked": "",
+          "source": "llm",
+          "fix_hint": "Add a limit and explicit pagination for older messages.",
+          "verification_method": "model_review",
+          "file": "route.ts",
+          "severity": "low"
+        }
+      ],
+      "grouped_claim_scope": {
+        "mechanism": "query_read_volume",
+        "scope": "Same source SELECT operation and pagination-bound hypothesis only.",
+        "consequences": "Original conditions, retention assumptions and claimed costs remain separate and unverified."
+      }
+    }
+  }
+}

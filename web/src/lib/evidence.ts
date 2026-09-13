@@ -1,4 +1,5 @@
 import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment, StaticCoverageRule, StaticRuleCoverage } from "./types";
+import { narrativeProjection as checkedNarrativeProjection } from "./claimNarrative";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -61,6 +62,10 @@ export function unsupportedTransport(finding: Finding): boolean {
     && assessment.result === "unsupported" && assessment.whole_finding);
 }
 
+export function narrativeProjection(finding: Finding) {
+  return checkedNarrativeProjection(finding, sourceAssessments(finding));
+}
+
 function partialPremiseContradicted(finding: Finding): boolean {
   return finding.claim_evidence?.version === 1 && !syntaxContradicted(finding)
     && (finding.claim_evidence.premise_checks ?? []).some(check => check.result === "contradicted");
@@ -90,6 +95,25 @@ function groupedClaimScopeRows(finding: Finding): [string, string][] {
   const evidence = finding.claim_evidence;
   const grouping: unknown = evidence?.grouped_claim_scope;
   const originals = evidence?.grouped_originals;
+  const identity = evidence?.source_issue_identity;
+  if (finding.source === "llm" && evidence?.version === 1 && record(grouping) && grouping.mechanism === "query_read_volume"
+    && Array.isArray(originals) && originals.length > 1 && record(identity)
+    && Object.keys(identity).length === 11 && identity.version === 1 && identity.method === "source_ast"
+    && identity.mechanism === "query_read_volume" && identity.claim_scope === "select_pagination_bound"
+    && identity.file === finding.file && typeof finding.file === "string" && finding.file.length > 0 && finding.file.length <= 512
+    && !finding.file.includes("\\") && finding.file.split("/").every(p => !["", ".", ".."].includes(p))
+    && [identity.table_sha256, identity.source_sha256].every(v => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))
+    && [identity.function_span, identity.operation_span].every(v => Array.isArray(v) && v.length === 2
+      && count(v[0]) && count(v[1]) && v[0] < v[1] && v[1] <= 256000)
+    && (identity.function_span as number[])[0] <= (identity.operation_span as number[])[0]
+    && (identity.operation_span as number[])[1] <= (identity.function_span as number[])[1]
+    && count(identity.operation_line_start) && count(identity.operation_line_end)
+    && identity.operation_line_start > 0 && identity.operation_line_start <= identity.operation_line_end
+    && identity.operation_line_end <= 256000) {
+    return [["Grouped hypothesis scope", "Grouped by the same source SELECT operation and pagination-bound "
+      + "hypothesis only. Original conditions, retention assumptions and claimed costs remain "
+      + "separate and unverified; repetition is not independent confirmation."]];
+  }
   if (evidence?.version !== 1 || !record(grouping)
     || grouping.mechanism !== "react_network_rejection_cleanup"
     || !Array.isArray(originals) || originals.length <= 1) return [];
@@ -114,6 +138,7 @@ function groupedClaimScopeRows(finding: Finding): [string, string][] {
 
 export function claimEvidenceRows(finding: Finding, historical = false): [string, string][] {
   const record = finding.claim_evidence?.version === 1 ? finding.claim_evidence : undefined;
+  const projection = narrativeProjection(finding);
   const check = record?.source_check;
   const checked = check?.kind === "quote_match"
     ? `Quoted text matched in source lines ${check.line_start}–${check.line_end}. This does not verify the interpretation.`
@@ -235,7 +260,13 @@ export function claimEvidenceRows(finding: Finding, historical = false): [string
   for (const [i, original] of (record?.grouped_originals ?? []).entries()) {
     rows.push([`Grouped original ${i + 1} — not independent confirmation`, JSON.stringify(original)]);
   }
-  if (record?.observation) rows.push(["Model interpretation — unverified", record.observation]);
+  if (projection) {
+    rows.push(["Recorded wording correction", "The active wording follows the recorded source check. "
+      + "Only the stated premise is corrected; other claims, conditions and consequences "
+      + "remain unverified. Severity and score eligibility are unchanged."]);
+    rows.push(["Original model provenance — not independent confirmation", JSON.stringify(projection.original.producer)]);
+  }
+  if (record?.observation) rows.push([projection ? "Source interpretation — outcome unverified" : "Model interpretation — unverified", record.observation]);
   rows.push(["Required conditions — not checked", record?.required_conditions?.length
     ? record.required_conditions.join("\n") : "Not recorded; do not assume the conditions for harm are satisfied."]);
   rows.push(["Consequence check", "No independent verification recorded."]);

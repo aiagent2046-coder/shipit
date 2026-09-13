@@ -30,6 +30,8 @@ import urllib.parse
 from app.report.plain_language import plain_fields
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
+from app.scan.claim_narrative import narrative_projection
+from app.scan.query_read_identity import valid_query_read_identity
 
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
@@ -165,6 +167,33 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 {"name": rule_id, "kind": "rule"}]}],
             "partialFingerprints": {FINGERPRINT_KEY: fingerprint({**finding, "file": path})},
         })
+        projection = narrative_projection(finding)
+        if projection:
+            # Active prose stays in message/rule help. The retained model text
+            # is provenance, never a second active finding or a verified fix.
+            record = finding["claim_evidence"]
+            results[-1]["properties"] = {
+                "narrativeProjection": projection,
+                "sourceAssessments": record["source_assessments"],
+                "requiredConditions": record.get("required_conditions"),
+                "conditionsStatus": record.get("conditions_status"),
+                "consequenceStatus": record.get("consequence_status"),
+                "verificationStatus": finding.get("verification_status"),
+                "verificationMethod": finding.get("verification_method"),
+            }
+        record = finding.get("claim_evidence")
+        record = record if isinstance(record, dict) else {}
+        grouping, originals = record.get("grouped_claim_scope"), record.get("grouped_originals")
+        if (finding.get("source") == "llm" and record.get("version") == 1 and isinstance(grouping, dict)
+                and grouping.get("mechanism") == "query_read_volume"
+                and isinstance(originals, list) and len(originals) > 1
+                and valid_query_read_identity(record.get("source_issue_identity"), finding.get("file", ""))):
+            results[-1].setdefault("properties", {}).update({
+                "groupedClaimScope": grouping,
+                "groupedOriginals": originals,
+                "sourceIssueIdentity": record["source_issue_identity"],
+                "verificationStatus": finding.get("verification_status"),
+            })
 
     run: dict = {
         "tool": {"driver": {"name": TOOL_NAME, "version": engine_version,

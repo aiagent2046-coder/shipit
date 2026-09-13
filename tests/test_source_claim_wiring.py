@@ -5,6 +5,7 @@ import pytest
 
 from app.report.html import _finding_row
 from app.scan.claim_evidence import partial_contradicted, unsupported_transport
+from app.scan.claim_narrative import narrative_projection
 from app.scan.pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_source_claim_assessment import CALLER, HELPER, TIMEZONE, finding
@@ -29,6 +30,14 @@ def test_partial_assessment_crosses_model_admission_scoring_and_rendering(source
     assert partial_contradicted(model["claim_evidence"])
     assert not unsupported_transport(model["claim_evidence"])
     assert result["score"]["categories"]["Auth"] < 10
-    assert "Source checks contradict part of this finding" in _finding_row(model)
+    if expected == {"fact_input_count_unbounded"}:
+        projection = narrative_projection(model)
+        assert projection and projection["original"]["title"] == title
+        assert model["title"] != title
+        assert "Superseded model wording" in _finding_row(model)
+        assert model["title"] in _finding_row(model)
+    else:
+        assert "Source checks contradict part of this finding" in _finding_row(model)
+        assert model["title"] == title
+        assert narrative_projection(model) is None
     assert "Source checks contradict part of this finding" not in _finding_row(model, historical=True)
-    assert model["title"] == title

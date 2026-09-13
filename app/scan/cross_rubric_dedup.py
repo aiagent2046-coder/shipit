@@ -23,6 +23,10 @@ from app.scan.model_metadata_identity import (
 from app.scan.external_operation_identity import (
     MECHANISMS as EXTERNAL_OPERATIONS, compatible_external_claims, valid_external_identity,
 )
+from app.scan.query_read_identity import (
+    MECHANISM as QUERY_READ, CLAIM_SCOPE as QUERY_READ_SCOPE,
+    compatible_query_read_claims, valid_query_read_identity,
+)
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -136,6 +140,12 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
                 and identity_a["mechanism"] in EXTERNAL_OPERATIONS)
     if external and (not valid_external_identity(identity_a, anchor.file)
                      or not compatible_external_claims(anchor, f, identity_a)):
+        return False
+    query_read = any(isinstance(identity, dict) and (
+        identity.get("mechanism") == QUERY_READ or identity.get("claim_scope") == QUERY_READ_SCOPE
+        or "table_sha256" in identity) for identity in (identity_a, identity_b))
+    if query_read and (not valid_query_read_identity(identity_a, anchor.file)
+                       or not compatible_query_read_claims(anchor, f, identity_a)):
         return False
     network = isinstance(identity_a, dict) and identity_a.get("mechanism") == MECHANISM
     if network:
@@ -304,6 +314,19 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
             rep = replace(rep, claim_evidence={"version": 1, **(rep.claim_evidence or {}),
                                               "grouped_originals": [_original(item) for item in origins]})
             identity = (rep.claim_evidence or {}).get("source_issue_identity")
+            if valid_query_read_identity(identity, rep.file):
+                rep = replace(rep, title="Query pagination bound requires review", explanation=(
+                    "Multiple model responses flag a pagination bound for the same source SELECT operation. "
+                    "Their conditions, retention assumptions and cost estimates remain separate claims in "
+                    "the originals; repetition is not independent confirmation."), fix_hint=(
+                    "Verify the effective row bound and initial-load pagination for this SELECT. "
+                    "Review each original condition before choosing a limit."), claim_evidence={
+                        **rep.claim_evidence, "grouped_claim_scope": {
+                            "mechanism": QUERY_READ,
+                            "scope": "Same source SELECT operation and pagination-bound hypothesis only.",
+                            "consequences": "Original conditions, retention assumptions and claimed costs "
+                                            "remain separate and unverified.",
+                        }})
             if valid_network_identity(identity, rep.file):
                 rep = replace(rep, claim_evidence={**rep.claim_evidence, "grouped_claim_scope": {
                     "mechanism": MECHANISM,
