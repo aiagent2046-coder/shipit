@@ -8,6 +8,7 @@ from typing import BinaryIO
 
 from app.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
 from app.ingest.validators import validate_zip
+from app.report.plain_language import plain_fields
 from app.scan.auth_read import scan_auth_read
 from app.scan.auth_write import scan_auth_write
 from app.scan.claim_evidence import static_claim_evidence
@@ -95,10 +96,15 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
     file_coverage: dict = {}
     with attempt("secrets"):
         for s in list(scan_secrets(fileobj, coverage=file_coverage)):
+            # Use the same deterministic, context-aware wording in JSON,
+            # browser cards and SARIF. Populate it before advice guards run;
+            # an unavailable prerequisite check must still withhold the hint.
+            _, explanation, fix_hint = plain_fields(vars(s))
             findings.append(ScoredFinding(
                 rule_id=s.rule_id, title=s.title, severity=s.severity,
                 confidence=s.confidence, category="Security",
                 file=s.file, line=s.line, masked=s.masked, context=s.context,
+                explanation=explanation, fix_hint=fix_hint,
                 claim_evidence={**static_claim_evidence(), "source_context": s.source_context},
             ))
 

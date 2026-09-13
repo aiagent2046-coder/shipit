@@ -1163,6 +1163,10 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
         for name, text in _iter_text_files(zf, coverage):
             regions = None
             comparison_ranges = None
+            # Corpus files keep an inert suffix in the repository. Reading
+            # that wrapper must not turn the same SQL predicate into a secret
+            # assignment when the repository itself is scanned.
+            is_sql = name.lower().removesuffix(".fixture").endswith(".sql")
             shell_substitutions = None
             next_line_offset = 0
             for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
@@ -1180,7 +1184,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                             remaining -= size
                             regions = python_regions(text)
                     for candidate in rule.pattern.finditer(line):
-                        if rule.id == "sql-secret-assignment" and name.lower().endswith(".sql"):
+                        if is_sql and rule.id in {"sql-secret-assignment", "generic-assignment"}:
                             if comparison_ranges is None:
                                 comparison_ranges = _sql_comparison_ranges(text)
                             offset = line_offset + candidate.start()

@@ -601,10 +601,11 @@ def test_aws_example_in_python_docstring_is_reported_without_automatic_fix_conte
     "WHERE u . password", "WHERE /* predicate */ u.password",
     "HAVING  password", "JOIN other u ON (u.password",
 ])
-def test_sql_comparison_formatting_does_not_create_assignments(predicate):
-    source = f"SELECT id FROM users {predicate} = 'redacted'" + ")" * predicate.count("(") + ";\n"
-    findings = scan_secrets(make_zip({"schema.sql": source.encode()}))
-    assert not any(f.rule_id == "sql-secret-assignment" for f in findings)
+@pytest.mark.parametrize("path", ["schema.sql", "schema.sql.fixture"])
+def test_sql_comparison_formatting_does_not_create_assignments(predicate, path):
+    source = f"SELECT id FROM users {predicate} = 'abcdefgh12345'" + ")" * predicate.count("(") + ";\n"
+    findings = scan_secrets(make_zip({path: source.encode()}))
+    assert not any(f.rule_id in {"sql-secret-assignment", "generic-assignment"} for f in findings)
 
 
 @pytest.mark.parametrize("source", [
@@ -619,6 +620,24 @@ def test_sql_comparison_formatting_does_not_create_assignments(predicate):
     "SELECT id FROM users WHERE (password = 'redacted'); "
     "UPDATE users SET password = 'redacted';",
 ])
-def test_sql_predicate_context_does_not_hide_real_assignments(source):
-    findings = scan_secrets(make_zip({"schema.sql": source.encode()}))
+@pytest.mark.parametrize("path", ["schema.sql", "schema.sql.fixture"])
+def test_sql_predicate_context_does_not_hide_real_assignments(source, path):
+    findings = scan_secrets(make_zip({path: source.encode()}))
     assert any(f.rule_id == "sql-secret-assignment" for f in findings)
+
+
+@pytest.mark.parametrize("path", ["schema.sql", "schema.sql.fixture"])
+def test_sql_predicate_keeps_provider_credentials_visible(path):
+    source = f"SELECT id FROM users WHERE api_key = '{FAKE_AWS}';"
+    findings = scan_secrets(make_zip({path: source.encode()}))
+    assert {f.rule_id for f in findings} == {"aws-access-key-id"}
+
+
+@pytest.mark.parametrize("path", ["schema.sql", "schema.sql.fixture"])
+def test_sql_predicate_does_not_hide_generic_assignment_later_on_line(path):
+    source = (
+        "SELECT id FROM users WHERE access_token = 'abcdefgh12345'; "
+        "UPDATE users SET access_token = 'abcdefgh12345';"
+    )
+    findings = scan_secrets(make_zip({path: source.encode()}))
+    assert [f.rule_id for f in findings] == ["generic-assignment"]
