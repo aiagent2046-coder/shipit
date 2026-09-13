@@ -191,7 +191,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # files, so old cached audits cannot stand in for a newly measured scan.
 # 2026-09-12-1: exclude generated build output before bounded source and cookie
 # file budgets, recording generated_build separately from dependency trees.
-AUDIT_ENGINE_VERSION = "2026-09-12-1"
+# 2026-09-13-1: apply the same path policy in the two collectors that never had
+# it -- the RLS recommendation collector read generated build output before own
+# source in filename order (starving the operations a recommendation names), and
+# the service-role rule reported a route compiled into .next/server/ as source.
+AUDIT_ENGINE_VERSION = "2026-09-13-1"
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

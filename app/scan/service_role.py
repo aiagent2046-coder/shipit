@@ -87,6 +87,7 @@ import zipfile
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding, archive_root
+from app.scan.file_scope import is_dependency_path, is_generated_path
 from app.scan.rls import read_committed_sql
 from app.scan.sql_schema import parse_schema
 
@@ -199,10 +200,30 @@ def service_role_env_reads(text: str) -> list[tuple[str, int]]:
 _IMPORT_SPECIFIER = re.compile(
     r"""(?:\bfrom|\brequire\s*\(|\bimport\s*\()\s*["'`]([^"'`\n]+)["'`]""")
 
-# Vendored or generated trees. A repository that commits node_modules would
-# otherwise have every dependency read looking for a helper.
-_SKIP_DIRS = ("node_modules/", "/node_modules/", ".next/", "dist/", "build/",
-              "vendor/", "coverage/", ".venv/")
+# Vendored and generated trees are read by nobody in this rule. The list itself
+# used to sit here and was consulted in ONE of the two loops below, which made
+# the finding loop read `route.js` files emitted into `.next/server/app/` and
+# report a compiled copy of the customer's own route as the place the key lives.
+# MEASURED 2026-09-13: with the source route AND its `.next/server` copy in the
+# archive, `collapse_repeats` named the build artifact as the row's file and
+# counted the same handler twice ("found in 2 places"); a path under
+# `vendor/lib/app/api/` or `node_modules/pkg/app/api/` fired as well, so the
+# earlier silence there was the path convention, not a guard. The categories now
+# come from app/scan/file_scope.py, the shared predicate.
+_EXTRA_SKIPPED_SEGMENTS = ("coverage",)  # generated too, not (yet) in file_scope
+
+
+def _is_skipped_tree(name: str) -> bool:
+    """True for dependency trees, generated build output, and coverage reports.
+
+    `coverage` is the one name this rule used to skip that app/scan/file_scope.py
+    does not carry. It stays here, named, rather than being added there: that
+    list is shared with the consumers of the source-scan budgets, and none of
+    them has been measured against coverage directories.
+    """
+    segments = name.replace("\\", "/").split("/")[:-1]
+    return (is_dependency_path(name) or is_generated_path(name)
+            or any(segment in _EXTRA_SKIPPED_SEGMENTS for segment in segments))
 
 # Enough to cover a large app without turning one scan into a directory walk
 # of somebody's committed dependencies.
@@ -234,7 +255,7 @@ def _key_holding_modules(fileobj: BinaryIO) -> dict[str, tuple[str, int]]:
             lowered = rel.lower()
             if not lowered.endswith(_SOURCE_EXTS):
                 continue
-            if any(skip in f"/{lowered}" for skip in _SKIP_DIRS):
+            if _is_skipped_tree(rel) or _is_skipped_tree(info.filename):
                 continue
             if is_request_handler(rel) or is_request_handler(info.filename):
                 continue
@@ -316,6 +337,14 @@ def scan_service_role(fileobj: BinaryIO) -> list[CheckFinding]:
             if info.is_dir():
                 continue
             rel = info.filename[len(root):] if root else info.filename
+            # Generated and vendored trees hold route-shaped FILENAMES, not the
+            # project's routes: Next.js emits `.next/server/app/<path>/route.js`
+            # and a package may ship `app/api/...`. Without this, the loop below
+            # produced a finding for the compiled copy of a route the customer
+            # wrote once, and the collapsed row could name the build artifact as
+            # where the key lives. MEASURED 2026-09-13, see _is_skipped_tree.
+            if _is_skipped_tree(rel) or _is_skipped_tree(info.filename):
+                continue
             # BOTH FORMS, because the wrapping folder cannot always be told
             # from a real one. An archive whose only top-level entry is `app/`
             # — a zip of a bare Next.js tree — makes `app/` look like the

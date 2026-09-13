@@ -18,6 +18,8 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
+
 from app.scan.collapse import collapse_repeats
 from app.scan.service_role import (
     RULE_ID,
@@ -360,3 +362,56 @@ def test_a_key_holder_inside_a_vendored_tree_is_not_indexed() -> None:
         "repo/src/app/api/x/route.ts":
             "import { a } from '@/lib/supabase-admin';\nexport async function GET() {}",
     }) == []
+
+
+# ── The same trees, in the loop that EMITS findings ─────────────────────────
+# MEASURED 2026-09-13. The list of skipped trees above was consulted only in the
+# helper index; the finding loop filtered on `is_request_handler` alone, and
+# Next.js emits `.next/server/app/<path>/route.js`, which wears a route
+# basename. So the rule reported the compiled copy of a route the customer wrote
+# once — and `collapse_repeats` named the build artifact as the file to open and
+# counted the handler twice. Vendored paths fired too, once they happened to
+# contain an `app/` segment.
+
+@pytest.mark.parametrize("path", [
+    ".next/server/app/api/context/route.js",
+    "web/.next/server/app/api/context/route.js",
+    "dist/server/app/api/context/route.js",
+    "build/app/api/context/route.js",
+    "coverage/app/api/context/route.ts",
+    "vendor/lib/app/api/context/route.ts",
+    "node_modules/pkg/app/api/context/route.ts",
+    "site-packages/pkg/app/api/context/route.ts",
+])
+def test_a_compiled_or_vendored_copy_of_a_route_is_not_a_route(path: str) -> None:
+    assert files({path: ROUTE}) == []
+
+
+@pytest.mark.parametrize("path", ["app/api/context/route.ts",
+                                  "web/app/api/context/route.ts"])
+def test_the_same_body_in_own_source_is_still_a_route(path: str) -> None:
+    """The mutation of every case above: the body and the framework convention
+    are unchanged, only the tree the file sits in. Without this half, `return []`
+    at the top of the scanner would pass the whole set.
+
+    `package.json` rides along so the archive has no single root to strip — a
+    zip holding one top-level folder makes that folder look like an export
+    wrapper, which is a different behaviour with its own test.
+    """
+    assert files({path: ROUTE, "package.json": "{}"}) == [path]
+
+
+def test_a_compiled_copy_does_not_double_the_collapsed_row() -> None:
+    """The customer-visible effect, and the reason the tree filter matters more
+    here than a tidy path list: one handler, written once, became "found in 2
+    places", and because "." sorts before "a" the representative the reader was
+    shown was `.next/server/app/api/context/route.js` — a file they cannot open
+    and must not edit."""
+    found = scan({"app/api/context/route.ts": ROUTE,
+                  ".next/server/app/api/context/route.js": ROUTE})
+    assert [f.file for f in found] == ["app/api/context/route.ts"]
+
+    rows = collapse_repeats([vars(f) for f in found])
+    assert len(rows) == 1
+    assert rows[0]["file"] == "app/api/context/route.ts"
+    assert "found in" not in rows[0]["title"]

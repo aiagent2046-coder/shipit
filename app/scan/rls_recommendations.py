@@ -14,6 +14,7 @@ from pglast.parser import ParseError
 from tree_sitter import Language, Parser
 import tree_sitter_typescript
 
+from app.scan.file_scope import is_dependency_path, is_generated_path
 from app.scan.secrets import is_non_production_path
 from app.scan.checks import archive_root
 
@@ -31,14 +32,19 @@ SCOPE = (
     "is compared conditionally with public; client configuration and runtime binding are not verified. "
     "Policy commands do not prove access: roles, grants, predicates, restrictive policies, RLS state, "
     "JWT claims, search_path and migration application must be checked. Missing declarations do not "
-    "prove missing protection. Procedural/dynamic SQL, tests and vendor files are not policy evidence."
+    "prove missing protection. Procedural/dynamic SQL, tests, dependency trees and generated build "
+    "output are not policy evidence: those paths are excluded before the file budget, so they can "
+    "neither supply a query chain nor displace an own-source file."
 )
 _WRITE_COMMANDS = {"insert": ("INSERT",), "update": ("UPDATE",), "delete": ("DELETE",),
                    "upsert": ("INSERT", "UPDATE")}
 _QUERY_COMMANDS = {**_WRITE_COMMANDS, "select": ("SELECT",)}
 _ALL_COMMANDS = {"SELECT", "INSERT", "UPDATE", "DELETE"}
-_EXCLUDED = {"vendor", "node_modules", "venv", ".venv", "archive", "archived", "test", "tests",
-             "__tests__", "fixtures", "__fixtures__", "examples", "example", "docs", "spec", "specs"}
+# Contexts that are not policy evidence FOR THIS COLLECTOR. Dependency and
+# generated trees are deliberately absent: they come from app/scan/file_scope.py,
+# the shared predicate, so this list cannot drift from the other consumers.
+_EXCLUDED = {"archive", "archived", "test", "tests", "__tests__", "fixtures", "__fixtures__",
+             "examples", "example", "docs", "spec", "specs"}
 
 
 def _identifier(value):
@@ -202,6 +208,7 @@ def collect_rls_recommendations(fileobj):
             if info.is_dir() or not (sql_file or path.endswith((".ts", ".tsx", ".js", ".jsx"))):
                 continue
             if (stat.S_ISLNK(info.external_attr >> 16) or is_non_production_path(path)
+                    or is_dependency_path(path) or is_generated_path(path)
                     or any(p.lower() in _EXCLUDED for p in parts)):
                 excluded += 1
                 continue
