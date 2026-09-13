@@ -1,2 +1,2 @@
 from lxml import etree as ET
-ET.fromstring(data)
+ET.fromstring(data, parser=ET.XMLParser(resolve_entities=True))

@@ -1,0 +1,10 @@
+{
+  "description": "a direct resolve_entities=True keyword on iterparse must fire.",
+  "expect": [
+    {
+      "rule_id": "unsafe-xml-parse",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

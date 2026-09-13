@@ -312,12 +312,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Import-resolved Python XML parses in parseable Python files up to 400 KB; recognized "
         "test/example/documentation paths are skipped, except migration paths. At most 400 files and "
         "32 findings; vendor, dependency trees and generated build directories are excluded before "
-        "the file limit. lxml.etree parse/fromstring/iterparse calls that pass resolve_entities=True "
-        "are reported at high confidence; a call with no resolve_entities argument is reported at "
-        "medium confidence because it is unsafe on lxml < 5.0 but safe from 5.0. resolve_entities=False "
-        "and the stdlib xml.etree/sax/minidom/pulldom modules (which do not resolve external entities "
-        "on Python 3.7.1+) are not sinks. Input trust, the installed lxml version, cross-file "
-        "resolution and a parser object stored in a variable then passed later are unresolved.",
+        "the file limit. Only lxml.etree parse/fromstring/iterparse calls proven to pass "
+        "resolve_entities=True are reported (parse/fromstring via parser=XMLParser(resolve_entities=True), "
+        "iterparse via a direct keyword). A missing resolve_entities argument, resolve_entities=False "
+        "or 'internal', a non-lxml parser object and a reassigned etree.parse are not reported: none "
+        "proves external entities are resolved. The stdlib xml.etree/sax/minidom/pulldom modules and "
+        "defusedxml are not sinks. Input trust, the installed lxml version, cross-file resolution and "
+        "a parser object stored in a variable then passed later are unresolved.",
     ),
     Capability(
         "command_injection",

@@ -1,5 +1,5 @@
 {
-  "description": "an inline parser with resolve_entities=False disables external entities and is not a sink.",
+  "description": "an inline parser with resolve_entities=False disables external entities.",
   "expect": [],
   "forbid": [
     "unsafe-xml-parse"

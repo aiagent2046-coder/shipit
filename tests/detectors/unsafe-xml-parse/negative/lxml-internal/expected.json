@@ -1,0 +1,7 @@
+{
+  "description": "an explicit resolve_entities='internal' does not resolve external entities.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}
