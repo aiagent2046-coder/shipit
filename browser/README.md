@@ -18,7 +18,7 @@ cross-compiled to WASM. No empty-result stubs or substitute JS adapters.
 | Golden finding expectations | 251 of 251 corpus cases |
 | Parser probes | TS, TSX, JS and PostgreSQL AST, Unicode offsets and parse errors |
 | Runtime assets before HTTP compression | 14,674,647 bytes |
-| Python engine bundle | 1,353,167 bytes before HTTP compression |
+| Python engine bundle | 1,354,468 bytes before HTTP compression |
 
 This is reviewed example coverage, **not recall on arbitrary repositories**.
 The parser packages add 1,042,834 bytes of compressed wheels. All four previously
@@ -34,6 +34,22 @@ ZIP validation and per-rule budgets are shared with the server (50 MiB compresse
 500 MiB declared total expansion, 100 MiB per entry, 50,000 entries). A two-minute
 UI deadline terminates the worker; users can cancel earlier. These limits do not
 guarantee a fixed memory footprint. Runtime and input objects die with the worker.
+
+## Reading findings
+
+The initial review section prioritizes signals without a recognized test or
+example context. Tests, examples, comments, configuration templates and deployment
+inventory appear in a collapsible group; high/critical severity or detector
+confidence of at least 0.8 keeps a signal in initial review (except deployment
+inventory). These are presentation groups, not vulnerability verdicts. All
+findings remain in JSON and SARIF, including possible real secrets in tests.
+
+Credential explanations and conditional next steps come from the shared static
+rule dictionary, without a model request. Advice is withheld when prerequisite
+checks cannot run. Stored `.sql.fixture` inputs use the SQL comparison exclusions;
+inert `.env.fixture` files and entirely wrapped test dependency trees do not
+produce instructions to remove working configuration or installed dependencies.
+Their contents remain subject to the existing secret scanner and its exclusions.
 
 ## Build and serve
 

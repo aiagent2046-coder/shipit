@@ -76,8 +76,9 @@ def _strip_root(names: list[str]) -> list[str]:
 # customer's repository, venv/ was 2,987 of 3,098 tracked files and the audit
 # said nothing, because every component that could have noticed was told to
 # look away. This check reads no contents; it counts names.
-_DEPENDENCY_DIRS = ("venv/", ".venv/", "node_modules/", "vendor/",
-                    "__pycache__/", "site-packages/")
+_DEPENDENCY_DIRS = frozenset({
+    "venv", ".venv", "node_modules", "vendor", "__pycache__", "site-packages",
+})
 
 # One stray committed file is a mistake; a populated tree is the problem this
 # describes. Below this it is not worth a finding of its own.
@@ -118,20 +119,28 @@ def _committed_dependency_dirs(files: list[str]) -> list[tuple[str, int]]:
     its own finding would bury the one fact the owner needs under its own
     consequences.
     """
-    counts: dict[str, int] = {}
+    members: dict[str, list[str]] = {}
     for name in files:
-        for marker in _DEPENDENCY_DIRS:
-            index = name.find(marker)
-            if index == -1:
+        parts = name.split("/")
+        # Walk from the archive root, matching complete directory segments.
+        # Substrings such as myvenv or custom_vendor are not dependency dirs.
+        for index, part in enumerate(parts[:-1]):
+            if part not in _DEPENDENCY_DIRS:
                 continue
-            directory = name[:index + len(marker) - 1]
-            counts[directory] = counts.get(directory, 0) + 1
+            directory = "/".join(parts[:index + 1])
+            members.setdefault(directory, []).append(name)
             break
-    nested = {d for d in counts for other in counts
-              if d != other and d.startswith(other + "/")}
     return sorted(
-        (d, n) for d, n in counts.items()
-        if d not in nested and n >= _DEPENDENCY_DIR_MIN_FILES
+        (directory, len(paths)) for directory, paths in members.items()
+        if len(paths) >= _DEPENDENCY_DIR_MIN_FILES
+        # A stored detector corpus is not an installed dependency tree. Both
+        # the test path and every member's inert suffix must establish that;
+        # a real venv under tests, or a mixed tree, remains reportable.
+        and not (
+            any(part in {"tests", "test", "fixtures", "__fixtures__"}
+                for part in directory.split("/")[:-1])
+            and all(path.endswith(".fixture") for path in paths)
+        )
     )
 
 
@@ -160,7 +169,10 @@ def find_committed_env_files(files: list[str]) -> list[str]:
         n for n in files
         if n == ".env" or n.endswith("/.env")
         or (n.rsplit("/", 1)[-1].startswith(".env.")
-            and not is_env_template_name(n))
+            and not is_env_template_name(n)
+            # Stored test inputs are not environment files loaded by default.
+            # This affects inventory/Fix Pack only; secrets still scan them.
+            and not n.endswith(".fixture"))
     ]
 
 
@@ -428,21 +440,18 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
             severity="medium", confidence=0.95, category="Deploy",
             file=directory,
             explanation=(
-                f"{directory} holds code you did not write — libraries "
-                "installed by a package manager — and it is stored in your "
-                "repository as if you had. Every clone downloads it, every "
-                "change to it lands in your history, and the versions there "
-                "drift away from the ones your lockfile names, so what runs "
-                "in production stops matching what the project says it "
-                "needs. On one real repository this was 2,987 files against "
-                "111 of the owner's own."
+                f"The archive contains {count} files under {directory}, a "
+                "directory name commonly used for installed dependencies or "
+                "generated caches. File names alone do not establish how "
+                "these files were created, whether they are intentionally "
+                "vendored, or which versions run in production."
             ),
             fix_hint=(
-                f"Add {directory} to .gitignore and remove it from version "
-                f"control with `git rm -r --cached {directory}`. Your local "
-                "copy stays; only the tracking stops. Anyone cloning "
-                "reinstalls from your lockfile, which is the point of having "
-                "one."
+                "Check whether this directory contains reproducible installed "
+                "dependencies or generated caches. If it does, add it to "
+                f".gitignore and stop tracking it with `git rm -r --cached {directory}`, "
+                "then document how to recreate it. Keep intentional vendored "
+                "source or test data when the project requires it."
             ),
         ))
 
