@@ -3,9 +3,8 @@ JSON report.
 
 Two claims have to hold at once, and they are different claims:
 
-1. a SARIF consumer will ACCEPT the document -- checked against the OASIS
-   schema that GitHub and VS Code validate with, checked in under
-   tests/fixtures/ (see the SOURCE note beside it);
+1. the document matches the checked-in OASIS schema, including its declared
+   formats (see tests/fixtures/ and the SOURCE note beside the schema);
 2. the document describes exactly the findings this audit produced -- no
    invention, no silent omission, no reordering that loses a row.
 
@@ -55,7 +54,7 @@ def schema() -> dict:
 
 
 def validate(document: dict, schema: dict) -> None:
-    jsonschema.validate(instance=document, schema=schema)
+    jsonschema.validate(instance=document, schema=schema, format_checker=jsonschema.FormatChecker())
 
 
 # -- the schema gate -------------------------------------------------------
@@ -81,6 +80,78 @@ def test_the_schema_gate_can_actually_fail(schema):
     document["version"] = "2.0"
     with pytest.raises(jsonschema.ValidationError):
         validate(document, schema)
+
+
+def test_every_format_in_the_schema_has_an_installed_checker(schema):
+    """FormatChecker silently accepts formats whose optional dependency is missing."""
+    def declared_formats(node):
+        if isinstance(node, dict):
+            if isinstance(node.get("format"), str):
+                yield node["format"]
+            for value in node.values():
+                yield from declared_formats(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from declared_formats(value)
+
+    missing = set(declared_formats(schema)) - jsonschema.FormatChecker().checkers.keys()
+    assert not missing, (
+        f"Missing SARIF format checkers: {sorted(missing)}. "
+        "Install the dev dependencies, including jsonschema[format-nongpl]."
+    )
+
+
+@pytest.mark.parametrize("field", ["startTimeUtc", "endTimeUtc"])
+@pytest.mark.parametrize("timestamp", [
+    "2026-02-28T10:00:00Z",
+    "2024-02-29T10:00:00Z",
+    "2026-09-13T10:00:00.123456Z",
+])
+def test_optional_invocation_timestamp_accepts_valid_utc_dates(schema, field, timestamp):
+    document = build_sarif([], engine_version=AUDIT_ENGINE_VERSION)
+    document["runs"][0]["invocations"][0][field] = timestamp
+    validate(document, schema)
+
+
+@pytest.mark.parametrize("field", ["startTimeUtc", "endTimeUtc"])
+@pytest.mark.parametrize("timestamp", [
+    "2026-02-30T10:00:00Z",
+    "2025-13-01T10:00:00Z",
+    "2026-04-31T10:00:00Z",
+    "2025-02-29T10:00:00Z",
+    "2026-02-28T10:00:00",
+])
+def test_invocation_timestamp_rejects_invalid_dates_and_missing_timezone(schema, field, timestamp):
+    document = build_sarif([], engine_version=AUDIT_ENGINE_VERSION)
+    document["runs"][0]["invocations"][0][field] = timestamp
+    with pytest.raises(jsonschema.ValidationError) as error:
+        validate(document, schema)
+    assert error.value.validator == "format"
+    assert list(error.value.absolute_path) == ["runs", 0, "invocations", 0, field]
+
+
+@pytest.mark.parametrize("path,value,format_name", [
+    (["runs", 0, "tool", "driver", "informationUri"], "relative/path", "uri"),
+    (["runs", 0, "results", 0, "locations", 0, "physicalLocation", "artifactLocation", "uri"],
+     "src/unescaped space.ts", "uri-reference"),
+])
+def test_schema_gate_rejects_invalid_uri_formats(schema, path, value, format_name):
+    document = build_sarif([SECRET], engine_version=AUDIT_ENGINE_VERSION)
+    target = document
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    with pytest.raises(jsonschema.ValidationError) as error:
+        validate(document, schema)
+    assert error.value.validator == "format"
+    assert error.value.validator_value == format_name
+    assert list(error.value.absolute_path) == path
+
+
+def test_invocation_does_not_require_timestamps(schema):
+    document = build_sarif([], engine_version=AUDIT_ENGINE_VERSION)
+    document["runs"][0]["invocations"] = [{"executionSuccessful": True}]
+    validate(document, schema)
 
 
 def test_an_audit_with_nothing_to_report_is_still_a_valid_document(schema):

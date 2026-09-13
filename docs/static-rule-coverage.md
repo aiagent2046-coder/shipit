@@ -90,9 +90,33 @@ either. `checks_run` shrinks by exactly that check, and `checks_not_run` names i
 with the exception TYPE only — never the message, which can quote the input and
 which travels into the report. The scan manifest carries the same list as
 `static_checks_not_run`, because a shortened `static_checks` with no companion
-would read as "it ran and found nothing". The coverage sentence for a check that
-did not run says so in words, and the error-boundary check reports its mount as
+would read as "it ran and found nothing". The error-boundary coverage sentence
+says the check did not run, and the check reports its mount as
 undetermined rather than claiming no mount was seen.
+
+Each check executes inside its own exception boundary without passing findings
+through a shared callback return. If collection or finding conversion fails,
+that check's partially appended findings and stale file coverage are discarded;
+other checks keep their results. Only the exception class is recorded.
+
+HTML and web reports display the failed checks and reasons above the findings.
+SARIF sets `executionSuccessful: false`, includes `toolExecutionNotifications`,
+and retains the findings of completed checks. The manifest also records the
+`static_checks_failed` limitation. Malformed failure metadata stays visible as an
+unknown failure instead of becoming a successful scan.
+
+Affected categories are excluded from completed coverage even if a model
+responded. Scores carry `static_incomplete` and `incomplete_static_categories`,
+including after a dependency refresh. Existing numeric fields remain diagnostic
+values for API compatibility; the total and affected category numbers must not
+be compared to a complete audit. HTML/web present the incomplete coverage instead
+of numerical readiness scores. A scan with no completed category has diagnostic
+total `0.0` and explicitly lists every category as unexamined.
+
+This isolates exceptions during a running check, not failures importing the
+application or its native dependencies. Browser compatibility of those imports
+still requires a separate portability gate. ZIP validation and the later
+recommendation-enrichment pass retain their existing failure behavior.
 
 MEASURED 2026-09-13: before this, a single raising scanner killed the entire
 scan — every other finding went with it — on the server and in a browser build

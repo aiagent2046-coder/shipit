@@ -34,6 +34,7 @@ from app.sca.stage import (RULE_ID, SCA_FRESHNESS_TTL_DAYS, findings_for,
                            freshness, query_dependencies)
 from app.sca.osv import OsvClient
 from app.scan.pipeline import RUBRICS, BASIS_STATIC_ONLY, score_findings
+from app.scan.check_failure_scoring import failed_check_categories
 from app.scan.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
 
 INVENTORY_VERSION = 1
@@ -144,6 +145,7 @@ def score_inputs_from_stored(score: dict) -> dict:
         "llm_categories": frozenset(RUBRICS[r]["category"] for r in ran if r in RUBRICS),
         "incomplete_static": frozenset(
             {"Frontend"} if limits.get("error_boundary") == "budget_exhausted" else set()),
+        "failed_static": failed_check_categories(manifest.get('static_checks_not_run')),
     }
 
 

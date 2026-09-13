@@ -7,6 +7,7 @@ import zipfile
 
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
+from app.scan.check_failures import normalize_check_failures
 from app.sca.lockfiles import OSV_ECOSYSTEM
 
 
@@ -104,6 +105,9 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
     # boundary (the check is not part of this entitlement), the other is a
     # failure that could be retried.
     reasons.extend(sca_limitations(sca))
+    failed_checks = normalize_check_failures(static.get('checks_not_run'))
+    if failed_checks:
+        reasons.append('static_checks_failed')
     return {
         "archive_sha256": hashlib.sha256(data).hexdigest(),
         "engine_version": engine,
@@ -117,7 +121,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         # able to say "this was not looked at", which is not the same as clean,
         # and a shortened static_checks alone would read as "it ran and found
         # nothing" (see the per-check isolation in app/scan/static.py).
-        "static_checks_not_run": static.get("checks_not_run", []),
+        "static_checks_not_run": failed_checks,
         **sca_manifest_fields(sca),
         "static_limits": static.get("coverage", {}),
         "secrets_coverage": _file_counts(static.get("secrets_coverage")),

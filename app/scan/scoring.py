@@ -414,7 +414,8 @@ def _apply_gate(total: float, reasons: list[dict]) -> float:
 def compute_scores(findings: list[ScoredFinding],
                    llm_ran: bool = True,
                    llm_categories: frozenset[str] | None = None,
-                   incomplete_static: frozenset[str] = frozenset()) -> dict:
+                   incomplete_static: frozenset[str] = frozenset(),
+                   failed_static: frozenset[str] = frozenset()) -> dict:
     """Per-category subscores and their weighted mean.
 
     `llm_ran=False` marks a static-only audit, where LLM_ONLY_CATEGORIES had
@@ -473,6 +474,9 @@ def compute_scores(findings: list[ScoredFinding],
         and any(f.origin_category == c for f in findings)
     }
     def _examined(cat: str) -> bool:
+        # A model response does not replace a failed deterministic check.
+        if cat in failed_static:
+            return False
         llm_examined = llm_ran and (llm_categories is None
                                     or cat in llm_categories)
         if cat in LLM_ONLY_CATEGORIES:
@@ -491,7 +495,7 @@ def compute_scores(findings: list[ScoredFinding],
     counted = [c for c in CATEGORIES
                if _examined(c) and c not in reported_elsewhere]
     divisor = sum(_RAW_CATEGORY_WEIGHT[c] for c in counted)
-    total = sum(by_cat[c] * _RAW_CATEGORY_WEIGHT[c] for c in counted) / divisor
+    total = sum(by_cat[c] * _RAW_CATEGORY_WEIGHT[c] for c in counted) / divisor if divisor else 0.0
     # The gate reads only categories that were actually examined, for the same
     # reason: an unexamined Auth sitting at 10.0 must not be able to clear a
     # gate, and an unexamined one cannot fail it either.
@@ -582,6 +586,8 @@ def compute_scores(findings: list[ScoredFinding],
     unexamined_with_findings = [c for c in unexamined
                                 if any(f.category == c for f in findings)]
     return {"total": total, "categories": by_cat, "gated_by": reasons,
+            **({'static_incomplete': True, 'incomplete_static_categories': sorted(failed_static)}
+               if failed_static else {}),
             "readiness_score_validated": False,
             "unexamined": unexamined,
             "unexamined_with_findings": unexamined_with_findings,
