@@ -50,6 +50,22 @@ explicit archive wrapper from reported paths; recognized GitHub commit-export
 wrappers are handled automatically. Generated HTML and SARIF files receive
 owner-only permissions, including when replacing an existing artifact.
 
+The SARIF schema gate runs in `tests/test_sarif_export.py`. It checks structure
+and the schema's `date-time`, `uri`, and `uri-reference` formats with
+`jsonschema.FormatChecker`. Install the dev lock with
+`pip install --require-hashes -r requirements-dev.txt`; the
+`jsonschema[format-nongpl]` dev dependency supplies the optional format checkers.
+A separate check fails when any format declared by the schema lacks a checker,
+because `FormatChecker` otherwise silently accepts unsupported formats.
+
+Control cases reject impossible calendar dates, missing time zones, and invalid
+URIs, while accepting valid leap days and invocations without timestamps.
+`startTimeUtc` and `endTimeUtc` are optional and the current exporter emits
+neither. This is a test gate; the CLI does not validate exports against the
+schema at runtime. Schema validation does not establish timestamp ordering or
+guarantee acceptance by every consumer. Separate tests compare exported findings
+with the audit results.
+
 ## Integration verification
 
 The scanner version pin records `2026-09-10-5`. The integration checks cover
