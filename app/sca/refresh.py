@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from app.scan.checks import CheckFinding
 from app.sca.lockfiles import Dependency, collect_dependency_inventory
 from app.sca.stage import (RULE_ID, SCA_FRESHNESS_TTL_DAYS, findings_for,
-                           freshness, query_dependencies)
+                           freshness, query_dependencies, loses_cve_evidence)
 from app.sca.osv import OsvClient
 from app.scan.pipeline import RUBRICS, BASIS_STATIC_ONLY, score_findings
 from app.scan.check_failure_scoring import failed_check_categories
@@ -258,7 +258,12 @@ async def refresh_stale_dependency_audits(
                 summary.reasons.get("details_unavailable", 0) + 1)
             continue
 
+        if loses_cve_evidence(score, client.cve_summary):
+            summary.unavailable += 1
+            summary.reasons["cve_unavailable"] = summary.reasons.get("cve_unavailable", 0) + 1
+            continue
         stats = _empty_stats()
+        stats["cve"] = client.cve_summary
         stats["lockfiles"] = list(payload.get("lockfiles") or [])
         stats["dependencies"] = len(dependencies)
         stats["dependencies_found"] = found

@@ -26,11 +26,14 @@ suite that fails on a plane.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, TYPE_CHECKING
 
 import httpx
 
 from app.sca.lockfiles import Dependency
+
+if TYPE_CHECKING:
+    from app.sca.cve import CveClient
 
 OSV_BASE = "https://api.osv.dev"
 
@@ -72,6 +75,8 @@ class OsvClient:
     max_details: int = MAX_DETAILS
     max_query_pages: int = MAX_QUERY_PAGES
     base_url: str = OSV_BASE
+    cve_client: CveClient | None = None
+    cve_summary: dict | None = field(default=None, init=False)
     requests_made: int = field(default=0, init=False)
 
     # -- transport ---------------------------------------------------------

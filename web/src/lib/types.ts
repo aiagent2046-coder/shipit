@@ -84,6 +84,8 @@ export interface RejectionDiagnostic {
 }
 
 export interface ScanManifest {
+  // Validated at the presentation boundary for older/malformed stored reports.
+  sca_cve?: unknown;
   source_facts?: {
     guards?: ReviewContextIndex;
     cost_context?: ReviewContextIndex;
