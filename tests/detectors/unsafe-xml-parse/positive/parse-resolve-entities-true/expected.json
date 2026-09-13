@@ -1,0 +1,12 @@
+{
+  "description": "parser=XMLParser(resolve_entities=True) on parse must fire at high confidence.",
+  "expect": [
+    {
+      "rule_id": "unsafe-xml-parse",
+      "count": 1,
+      "severity": "high",
+      "confidence": 0.9
+    }
+  ],
+  "forbid": []
+}

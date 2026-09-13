@@ -1,0 +1,7 @@
+{
+  "description": "Explicit internal-only entity resolution does not enable external entities.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

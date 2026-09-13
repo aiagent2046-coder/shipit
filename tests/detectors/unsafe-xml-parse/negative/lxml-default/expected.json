@@ -1,0 +1,7 @@
+{
+  "description": "A version-dependent default does not establish that external entity resolution is enabled.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

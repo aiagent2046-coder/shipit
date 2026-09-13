@@ -1,0 +1,2 @@
+from lxml import etree
+etree.iterparse(source, html=True, resolve_entities=True)

@@ -1,0 +1,12 @@
+{
+  "description": "The imported alias preserves both the XML parser constructor and fromstring provenance.",
+  "expect": [
+    {
+      "rule_id": "unsafe-xml-parse",
+      "severity": "high",
+      "confidence": 0.9,
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

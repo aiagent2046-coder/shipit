@@ -1,13 +1,17 @@
 """Partial static work stays visible even when no findings were produced."""
 from copy import deepcopy
 from html import escape
+import io
 import json
 from pathlib import Path
+import zipfile
 
 import pytest
 
 from app.report.evidence import manifest_rows, non_model_status_notices
 from app.report.html import render_report
+from app.scan.manifest import scan_manifest
+from app.scan.xxe import scan_unsafe_xml_parse
 
 
 CASES = json.loads((Path(__file__).parents[1] / "web/src/lib/fixtures/rule_coverage_cases.json").read_text())
@@ -44,6 +48,37 @@ def test_file_accounting_and_legacy_states_match_browser(case):
         assert 'aria-label="Static checks incomplete"' not in html
     assert escape(case["summary"]) in html
     assert score == before
+
+
+@pytest.mark.parametrize("signals", [1, 33])
+def test_xml_scanner_coverage_reaches_html_with_its_real_finding_limit(signals):
+    data = io.BytesIO()
+    source = "from lxml import etree\n" + (
+        "etree.parse(source, etree.XMLParser(resolve_entities=True))\n" * signals
+    )
+    with zipfile.ZipFile(data, "w") as archive:
+        archive.writestr("app/feed.py", source)
+    coverage = {}
+    findings = scan_unsafe_xml_parse(io.BytesIO(data.getvalue()), coverage=coverage)
+    assert len(findings) == min(signals, 32)
+    manifest = scan_manifest(data.getvalue(), "test", {
+        "checks_run": ["unsafe_xml_parse"], "rule_coverage": {"unsafe_xml_parse": coverage},
+    }, None, None)
+    score = {"basis": "static_only", "categories": {}, "scan_manifest": manifest}
+    rows = dict(manifest_rows(score))
+    notices = non_model_status_notices(score)
+    html = render_report({"score": score, "findings": [vars(finding) for finding in findings]})
+    assert escape(rows["File coverage: XML entity resolution"]) in html
+    if signals > 32:
+        assert rows["Files not fully analyzed: XML entity resolution"] == "finding limit: 1"
+        assert len(notices) == 1
+        assert notices[0][0] == "Static checks incomplete"
+        assert "XML entity resolution: 0 of 1 eligible files analyzed" in notices[0][1]
+        assert escape(notices[0][1]) in html
+    else:
+        assert rows["Files not fully analyzed: XML entity resolution"] == "None recorded"
+        assert notices == []
+        assert 'aria-label="Static checks incomplete"' not in html
 
 
 def test_unknown_rule_metadata_never_reaches_report():

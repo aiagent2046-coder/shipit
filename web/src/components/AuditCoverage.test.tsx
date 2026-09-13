@@ -43,8 +43,8 @@ const manifest: ScanManifest = {
 };
 
 describe("audit evidence", () => {
-  it("shows incomplete static work outside scan details even with zero findings", () => {
-    const item = ruleCoverageCases[0];
+  it.each(ruleCoverageCases.filter(item => item.notice))(
+    "shows incomplete static work outside scan details even with zero findings: $name", item => {
     const score = { total: 0, categories: {}, basis: "static+llm", scan_manifest: {
       ...manifest, model_calls: 1, static_checks: [item.rule], rule_coverage: { [item.rule]: item.record },
     } } as Score;

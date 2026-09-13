@@ -1,0 +1,12 @@
+{
+  "description": "A dotted import and positional XMLParser both preserve the explicit entity setting.",
+  "expect": [
+    {
+      "rule_id": "unsafe-xml-parse",
+      "severity": "high",
+      "confidence": 0.9,
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

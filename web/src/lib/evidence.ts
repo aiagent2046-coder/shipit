@@ -338,6 +338,7 @@ const ruleCoverageLabels: Record<StaticCoverageRule, string> = {
   outbound_url: "Outbound request URLs",
   tls_verification: "TLS verification",
   unsafe_deserialization: "Unsafe deserialization",
+  unsafe_xml_parse: "XML entity resolution",
   path_traversal: "Filesystem paths",
 };
 const ruleExclusionLabels = {
@@ -436,7 +437,7 @@ const staticCheckIds = new Set([
   "secrets", "rls", "schema_drift", "project_files", "ci_deploy_source", "service_role",
   "error_boundary", "auth_read_consistency", "auth_write_consistency", "http_success",
   "sql_injection", "sql_injection_js", "outbound_url", "tls_verification",
-  "unsafe_deserialization", "path_traversal", "session_cookie",
+  "unsafe_deserialization", "unsafe_xml_parse", "path_traversal", "session_cookie",
 ]);
 
 function normalizedCheckFailures(value: unknown): { check: string; reason: string }[] {

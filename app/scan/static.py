@@ -30,6 +30,7 @@ from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.unsafe_deserialization import scan_unsafe_deserialization
 from app.scan.path_traversal import scan_path_traversal
+from app.scan.xxe import scan_unsafe_xml_parse
 from app.scan.xss import scan_xss
 from app.scan.check_failure_scoring import failed_check_categories
 
@@ -187,6 +188,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                 rule_id=d.rule_id, title=d.title, severity=d.severity,
                 confidence=d.confidence, category=d.category, file=d.file,
                 line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
+
+    fileobj.seek(0)
+    with attempt("unsafe_xml_parse"):
+        for x in list(scan_unsafe_xml_parse(fileobj, coverage=rule_coverage["unsafe_xml_parse"])):
+            findings.append(ScoredFinding(
+                rule_id=x.rule_id, title=x.title, severity=x.severity,
+                confidence=x.confidence, category=x.category, file=x.file,
+                line=x.line, explanation=x.explanation, fix_hint=x.fix_hint,
                 claim_evidence=static_claim_evidence(),
             ))
 
@@ -390,6 +401,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                      "outbound_url": SCOPE["outbound_url"],
                      "open_redirect": SCOPE["open_redirect"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],
+                     "unsafe_xml_parse": SCOPE["unsafe_xml_parse"],
                      "path_traversal": SCOPE["path_traversal"],
                      "xss": SCOPE["xss"],
                      "insecure_randomness": SCOPE["insecure_randomness"],

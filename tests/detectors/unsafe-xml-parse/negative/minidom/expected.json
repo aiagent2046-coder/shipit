@@ -1,0 +1,7 @@
+{
+  "description": "xml.dom.minidom does not resolve external entities on supported Python and is not a sink.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

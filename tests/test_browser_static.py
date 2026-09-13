@@ -71,7 +71,7 @@ def test_browser_boots_without_native_dependencies_and_reports_real_findings():
     assert all(report["coverage"][entry["check"]].startswith("Did not run") for entry in failures)
     assert set(report["checks_run"]).isdisjoint(entry["check"] for entry in failures)
     assert set(report["checks_run"]) | {entry["check"] for entry in failures} == set(CHECKS_RUN)
-    assert len(report["checks_run"]) + len(failures) == len(CHECKS_RUN) == 21
+    assert len(report["checks_run"]) + len(failures) == len(CHECKS_RUN) == 22
     assert "score" not in report
     assert report["runtime_verified"] is False
     assert result["invalid_zip_reason"] == "not_a_zip"
@@ -114,6 +114,38 @@ def test_browser_native_path_matches_shared_static_stage():
     assert "recommendation_enrichment_unavailable" not in result["report"]["limitations"]
     assert "native_parsers_unavailable" not in result["report"]["limitations"]
     assert result["sarif"]["runs"][0]["invocations"][0]["executionSuccessful"] is True
+
+
+def test_browser_xml_exports_only_explicit_entity_resolution_as_unverified():
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as zf:
+        zf.writestr("app/feed.py", "\n".join([
+            "from lxml import etree",
+            "etree.parse(source, parser=etree.XMLParser(resolve_entities=True))",
+            "etree.parse(source)",
+            "etree.parse(source, parser=etree.XMLParser(resolve_entities=False))",
+        ]))
+    result = scan_archive(data.getvalue())
+    report = result["report"]
+    assert "unsafe_xml_parse" in report["checks_run"]
+    findings = [f for f in report["findings"] if f["rule_id"] == "unsafe-xml-parse"]
+    assert len(findings) == 1
+    finding = findings[0]
+    assert (finding["file"], finding["line"]) == ("app/feed.py", 2)
+    assert (finding["severity"], finding["confidence"]) == ("high", 0.9)
+    assert finding["verification_status"] == "unverified"
+    assert finding["claim_evidence"]["conditions_status"] == "not_checked"
+
+    exported = [row for row in result["sarif"]["runs"][0]["results"]
+                if row["ruleId"] == "unsafe-xml-parse"]
+    assert len(exported) == 1
+    row = exported[0]
+    location = row["locations"][0]["physicalLocation"]
+    assert location["artifactLocation"]["uri"] == "app/feed.py"
+    assert location["region"]["startLine"] == 2
+    assert row["level"] == "error"
+    assert finding["explanation"] in row["message"]["text"]
+    assert "have not been verified" in row["message"]["text"]
 
 
 def test_secret_advice_reaches_json_and_sarif_without_claiming_live_credentials():

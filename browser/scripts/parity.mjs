@@ -28,7 +28,9 @@ const rows = cases.map(item => {
 const continuation = JSON.parse(await readFile(resolve(root, 'test-dist/continuation.json')));
 const archive = Uint8Array.from(Buffer.from(continuation.archive, 'base64'));
 assert.deepEqual(startSession(pyodide, archive.buffer), continuation.initial);
-assert.deepEqual(continueSession(pyodide), continuation.final);
+for (const expected of continuation.continuations) {
+  assert.deepEqual(continueSession(pyodide), expected);
+}
 const summary = summarize(rows);
 summary.continuation = 'passed';
 summary.elapsed_ms = Math.round(performance.now() - start);

@@ -1,0 +1,7 @@
+{
+  "description": "Configuring a parser alone does not parse or consume XML.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

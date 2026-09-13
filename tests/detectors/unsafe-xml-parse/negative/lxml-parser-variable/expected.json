@@ -1,0 +1,7 @@
+{
+  "description": "A parser variable is outside the bounded inline configuration analysis.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}

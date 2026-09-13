@@ -57,7 +57,7 @@ export interface ModelAcceptance {
 }
 
 export type StaticCoverageRule = "outbound_url" | "tls_verification"
-  | "unsafe_deserialization" | "path_traversal";
+  | "unsafe_deserialization" | "unsafe_xml_parse" | "path_traversal";
 export interface StaticRuleCoverage {
   version: 1;
   files_total: number;

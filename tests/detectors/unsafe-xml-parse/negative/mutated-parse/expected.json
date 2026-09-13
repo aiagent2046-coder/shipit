@@ -1,0 +1,7 @@
+{
+  "description": "a reassigned etree.parse loses provenance and must not be reported.",
+  "expect": [],
+  "forbid": [
+    "unsafe-xml-parse"
+  ]
+}
