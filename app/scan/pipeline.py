@@ -23,6 +23,7 @@ from app.scan.manifest import scan_manifest
 from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
+from app.scan.check_failure_scoring import failed_check_categories
 from app.sca.osv import OsvClient
 from app.sca.stage import run_sca_stage
 
@@ -486,7 +487,8 @@ def content_digest(data: bytes) -> str:
 
 def score_findings(findings: list[dict], *, llm_ran: bool,
                    llm_categories: frozenset[str],
-                   incomplete_static: frozenset[str]) -> dict:
+                   incomplete_static: frozenset[str],
+                   failed_static: frozenset[str] = frozenset()) -> dict:
     """The single place a finding list becomes a score.
 
     Extracted so the dependency refresh can rescore an audit it did not run
@@ -507,6 +509,7 @@ def score_findings(findings: list[dict], *, llm_ran: bool,
         # A static producer that ran out of read budget did not finish, so the
         # absence of its finding is not evidence of a clean category.
         incomplete_static=incomplete_static,
+        failed_static=failed_static,
     )
 
 
@@ -641,6 +644,7 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
                     {"Frontend"}
                     if static.get("coverage", {}).get("error_boundary")
                     == "budget_exhausted" else set()),
+                failed_static=failed_check_categories(static.get('checks_not_run')),
             ),
             # Carried through from the static stage, which decided it. Without
             # this line a PAID row would be blind to the same question a

@@ -29,6 +29,7 @@ import urllib.parse
 
 from app.report.plain_language import plain_fields
 from app.scan.rule_coverage import normalize_rule_coverage
+from app.scan.check_failures import normalize_check_failures
 
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
@@ -134,6 +135,7 @@ def build_sarif(findings: list[dict], *, engine_version: str,
     a wrapper (an archive may legitimately contain only `src/`).
     """
     manifest = ((score or {}).get("scan_manifest") or {})
+    failures = normalize_check_failures(manifest.get("static_checks_not_run"))
     by_rule: dict[str, list[dict]] = {}
     for finding in findings:
         rule_id = str(finding.get("rule_id") or "")
@@ -169,16 +171,25 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                             "informationUri": "https://drydock.co",
                             "rules": rules}},
         "invocations": [{
-            "executionSuccessful": True,
+            "executionSuccessful": not failures,
             "properties": {
                 "engineVersion": engine_version,
                 "basis": (score or {}).get("basis"),
                 "limitations": list(manifest.get("limitations") or []),
                 "ruleCoverage": normalize_rule_coverage(manifest.get("rule_coverage")),
+                "staticChecksNotRun": failures,
             },
         }],
         "results": results,
     }
+    if failures:
+        run["invocations"][0]["toolExecutionNotifications"] = [
+            {"level": "error", "descriptor": {"id": "static-check-failed"},
+             "message": {"text": f"Static check {item['check']} did not complete ({item['reason']}). "
+                         "Missing findings do not establish a clean result."},
+             "properties": item}
+            for item in failures
+        ]
     if project_name:
         run["properties"] = {"project": project_name}
     return {"version": SARIF_VERSION, "$schema": SARIF_SCHEMA, "runs": [run]}

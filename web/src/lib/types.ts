@@ -119,6 +119,7 @@ export interface ScanManifest {
   engine_version: string;
   archive_files: number;
   static_checks: string[];
+  static_checks_not_run?: { check: string; reason: string }[];
   static_limits: Record<string, string>;
   // Absent on older stored audits; absence must not become zero or complete.
   rule_coverage?: Partial<Record<StaticCoverageRule, StaticRuleCoverage>> | null;
@@ -160,6 +161,8 @@ export interface Score {
   scan_manifest?: ScanManifest;
   // Numeric fields remain for older API consumers; they are not a readiness verdict.
   readiness_score_validated?: false;
+  static_incomplete?: boolean;
+  incomplete_static_categories?: string[];
   total: number;
   categories: Record<string, number>;
   // Every value app/scan/pipeline.py can emit: BASIS_FULL, BASIS_PREVIEW,

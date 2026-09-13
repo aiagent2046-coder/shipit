@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from contextlib import contextmanager
 from typing import BinaryIO
 
 from app.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
@@ -29,6 +30,7 @@ from app.scan.tls_verification import scan_tls_verification
 from app.scan.unsafe_deserialization import scan_unsafe_deserialization
 from app.scan.path_traversal import scan_path_traversal
 from app.scan.source_facts import collect_source_facts
+from app.scan.check_failure_scoring import failed_check_categories
 
 
 class _CheckDidNotRun:
@@ -64,7 +66,8 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     rule_coverage = {name: {} for name in RULE_COVERAGE_KEYS}
     checks_not_run: list[dict] = []
 
-    def attempt(check: str, thunk, make_fallback=None):
+    @contextmanager
+    def attempt(check: str):
         """Run one check. A failure is recorded, never raised and never hidden.
 
         The reason carries the exception TYPE only, never its message: scanner
@@ -72,152 +75,159 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         check is recorded once, so a check whose evidence collection failed and
         whose consumer then failed is one entry, not two.
         """
+        before = len(findings)
         try:
-            return thunk()
+            yield
         except Exception as exc:                          # noqa: BLE001
+            del findings[before:]
             reason = f"check_error: {type(exc).__name__}"
             if not any(entry["check"] == check for entry in checks_not_run):
                 checks_not_run.append({"check": check, "reason": reason})
-            return make_fallback(reason) if make_fallback else []
 
     fileobj.seek(0)
     file_coverage: dict = {}
-    for s in attempt("secrets", lambda: list(scan_secrets(fileobj, coverage=file_coverage))):
-        findings.append(ScoredFinding(
-            rule_id=s.rule_id, title=s.title, severity=s.severity,
-            confidence=s.confidence, category="Security",
-            file=s.file, line=s.line, masked=s.masked, context=s.context,
-            claim_evidence={**static_claim_evidence(), "source_context": s.source_context},
-        ))
+    with attempt("secrets"):
+        for s in list(scan_secrets(fileobj, coverage=file_coverage)):
+            findings.append(ScoredFinding(
+                rule_id=s.rule_id, title=s.title, severity=s.severity,
+                confidence=s.confidence, category="Security",
+                file=s.file, line=s.line, masked=s.masked, context=s.context,
+                claim_evidence={**static_claim_evidence(), "source_context": s.source_context},
+            ))
 
     fileobj.seek(0)
-    for r in attempt("rls", lambda: list(scan_rls(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=r.rule_id, title=r.title, severity=r.severity,
-            confidence=r.confidence, category=r.category, file=r.file,
-            explanation=r.explanation, fix_hint=r.fix_hint,
-        ))
+    with attempt("rls"):
+        for r in list(scan_rls(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=r.rule_id, title=r.title, severity=r.severity,
+                confidence=r.confidence, category=r.category, file=r.file,
+                explanation=r.explanation, fix_hint=r.fix_hint,
+            ))
 
     fileobj.seek(0)
-    for d in attempt("schema_drift", lambda: list(scan_schema_drift(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=d.rule_id, title=d.title, severity=d.severity,
-            confidence=d.confidence, category=d.category, file=d.file,
-            explanation=d.explanation, fix_hint=d.fix_hint,
-        ))
+    with attempt("schema_drift"):
+        for d in list(scan_schema_drift(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=d.rule_id, title=d.title, severity=d.severity,
+                confidence=d.confidence, category=d.category, file=d.file,
+                explanation=d.explanation, fix_hint=d.fix_hint,
+            ))
 
     fileobj.seek(0)
-    for q in attempt("sql_injection", lambda: list(scan_sql_injection(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=q.rule_id, title=q.title, severity=q.severity,
-            confidence=q.confidence, category=q.category, file=q.file,
-            line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
-            claim_evidence=static_claim_evidence(),
-        ))
+    with attempt("sql_injection"):
+        for q in list(scan_sql_injection(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=q.rule_id, title=q.title, severity=q.severity,
+                confidence=q.confidence, category=q.category, file=q.file,
+                line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
 
     fileobj.seek(0)
-    for q in attempt("sql_injection_js", lambda: list(scan_sql_injection_js(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=q.rule_id, title=q.title, severity=q.severity,
-            confidence=q.confidence, category=q.category, file=q.file,
-            line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
-            claim_evidence=static_claim_evidence(),
-        ))
+    with attempt("sql_injection_js"):
+        for q in list(scan_sql_injection_js(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=q.rule_id, title=q.title, severity=q.severity,
+                confidence=q.confidence, category=q.category, file=q.file,
+                line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
 
     fileobj.seek(0)
-    for u in attempt("outbound_url", lambda: list(scan_outbound_url(fileobj, coverage=rule_coverage["outbound_url"]))):
-        findings.append(ScoredFinding(
-            rule_id=u.rule_id, title=u.title, severity=u.severity,
-            confidence=u.confidence, category=u.category, file=u.file,
-            line=u.line, explanation=u.explanation, fix_hint=u.fix_hint,
-            claim_evidence=static_claim_evidence(),
-        ))
+    with attempt("outbound_url"):
+        for u in list(scan_outbound_url(fileobj, coverage=rule_coverage["outbound_url"])):
+            findings.append(ScoredFinding(
+                rule_id=u.rule_id, title=u.title, severity=u.severity,
+                confidence=u.confidence, category=u.category, file=u.file,
+                line=u.line, explanation=u.explanation, fix_hint=u.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
 
     fileobj.seek(0)
-    for t in attempt(
-            "tls_verification",
-            lambda: list(scan_tls_verification(fileobj, coverage=rule_coverage["tls_verification"])),
-    ):
-        findings.append(ScoredFinding(
-            rule_id=t.rule_id, title=t.title, severity=t.severity,
-            confidence=t.confidence, category=t.category, file=t.file,
-            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
-            claim_evidence=static_claim_evidence(),
-        ))
+    with attempt("tls_verification"):
+        for t in list(scan_tls_verification(fileobj, coverage=rule_coverage["tls_verification"])):
+            findings.append(ScoredFinding(
+                rule_id=t.rule_id, title=t.title, severity=t.severity,
+                confidence=t.confidence, category=t.category, file=t.file,
+                line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
 
     fileobj.seek(0)
-    for d in attempt(
-            "unsafe_deserialization",
-            lambda: list(scan_unsafe_deserialization(
-                fileobj, coverage=rule_coverage["unsafe_deserialization"])),
-    ):
-        findings.append(ScoredFinding(
-            rule_id=d.rule_id, title=d.title, severity=d.severity,
-            confidence=d.confidence, category=d.category, file=d.file,
-            line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
-            claim_evidence=static_claim_evidence(),
-        ))
+    with attempt("unsafe_deserialization"):
+        for d in list(scan_unsafe_deserialization(
+                fileobj, coverage=rule_coverage["unsafe_deserialization"])):
+            findings.append(ScoredFinding(
+                rule_id=d.rule_id, title=d.title, severity=d.severity,
+                confidence=d.confidence, category=d.category, file=d.file,
+                line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
 
     fileobj.seek(0)
-    for t in attempt(
-            "path_traversal",
-            lambda: list(scan_path_traversal(fileobj, coverage=rule_coverage["path_traversal"])),
-    ):
-        findings.append(ScoredFinding(
-            rule_id=t.rule_id, title=t.title, severity=t.severity,
-            confidence=t.confidence, category=t.category, file=t.file,
-            line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
-            claim_evidence=static_claim_evidence(),
-        ))
+    with attempt("path_traversal"):
+        for t in list(scan_path_traversal(fileobj, coverage=rule_coverage["path_traversal"])):
+            findings.append(ScoredFinding(
+                rule_id=t.rule_id, title=t.title, severity=t.severity,
+                confidence=t.confidence, category=t.category, file=t.file,
+                line=t.line, explanation=t.explanation, fix_hint=t.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
 
     fileobj.seek(0)
-    for c in attempt("session_cookie", lambda: list(scan_cookie_flags(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=c.rule_id, title=c.title, severity=c.severity,
-            confidence=c.confidence, category=c.category, file=c.file,
-            line=c.line, explanation=c.explanation, fix_hint=c.fix_hint,
-            claim_evidence=static_claim_evidence(),
-        ))
+    with attempt("session_cookie"):
+        for c in list(scan_cookie_flags(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=c.rule_id, title=c.title, severity=c.severity,
+                confidence=c.confidence, category=c.category, file=c.file,
+                line=c.line, explanation=c.explanation, fix_hint=c.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
 
     fileobj.seek(0)
-    for c in attempt("project_files", lambda: list(run_checks(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=c.rule_id, title=c.title, severity=c.severity,
-            confidence=c.confidence, category=c.category, file=c.file,
-            line=c.line, explanation=c.explanation, fix_hint=c.fix_hint, context=c.context,
-        ))
+    with attempt("project_files"):
+        for c in list(run_checks(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=c.rule_id, title=c.title, severity=c.severity,
+                confidence=c.confidence, category=c.category, file=c.file,
+                line=c.line, explanation=c.explanation, fix_hint=c.fix_hint, context=c.context,
+            ))
 
     fileobj.seek(0)
-    for d in attempt("ci_deploy_source", lambda: list(scan_ci_deploy_source(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=d.rule_id, title=d.title, severity=d.severity,
-            confidence=d.confidence, category=d.category, file=d.file,
-            line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
-        ))
+    with attempt("ci_deploy_source"):
+        for d in list(scan_ci_deploy_source(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=d.rule_id, title=d.title, severity=d.severity,
+                confidence=d.confidence, category=d.category, file=d.file,
+                line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
+            ))
 
     fileobj.seek(0)
-    for h in attempt("service_role", lambda: list(scan_service_role(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=h.rule_id, title=h.title, severity=h.severity,
-            confidence=h.confidence, category=h.category, file=h.file,
-            line=h.line, explanation=h.explanation, fix_hint=h.fix_hint,
-        ))
+    with attempt("service_role"):
+        for h in list(scan_service_role(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=h.rule_id, title=h.title, severity=h.severity,
+                confidence=h.confidence, category=h.category, file=h.file,
+                line=h.line, explanation=h.explanation, fix_hint=h.fix_hint,
+            ))
 
     fileobj.seek(0)
-    for a in attempt("auth_read_consistency", lambda: list(scan_auth_read(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=a.rule_id, title=a.title, severity=a.severity,
-            confidence=a.confidence, category=a.category, file=a.file,
-            line=a.line, explanation=a.explanation, fix_hint=a.fix_hint,
-        ))
+    with attempt("auth_read_consistency"):
+        for a in list(scan_auth_read(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=a.rule_id, title=a.title, severity=a.severity,
+                confidence=a.confidence, category=a.category, file=a.file,
+                line=a.line, explanation=a.explanation, fix_hint=a.fix_hint,
+            ))
 
     fileobj.seek(0)
-    for w in attempt("auth_write_consistency", lambda: list(scan_auth_write(fileobj))):
-        findings.append(ScoredFinding(
-            rule_id=w.rule_id, title=w.title, severity=w.severity,
-            confidence=w.confidence, category=w.category, file=w.file,
-            line=w.line, explanation=w.explanation, fix_hint=w.fix_hint,
-        ))
+    with attempt("auth_write_consistency"):
+        for w in list(scan_auth_write(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=w.rule_id, title=w.title, severity=w.severity,
+                confidence=w.confidence, category=w.category, file=w.file,
+                line=w.line, explanation=w.explanation, fix_hint=w.fix_hint,
+            ))
 
     # The first static producer for Frontend. Wired on a number measured in
     # this repository (DRYDOCK_LENS_PLAN.md): 11 of 12 mounted apps in the
@@ -226,23 +236,33 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
     # is reproducible with `scripts/measure_error_boundary.py --strata`. This
     # is what took Frontend out of LLM_ONLY_CATEGORIES in scoring.py.
     fileobj.seek(0)
-    boundary = attempt("error_boundary", lambda: scan_error_boundary(fileobj),
-                       lambda reason: _CheckDidNotRun(reason))
-    for b in boundary.findings:
-        findings.append(ScoredFinding(
-            rule_id=b.rule_id, title=b.title, severity=b.severity,
-            confidence=b.confidence, category=b.category, file=b.file,
-            line=b.line, explanation=b.explanation, fix_hint=b.fix_hint,
-        ))
+    boundary = _CheckDidNotRun("check_error")
+    with attempt("error_boundary"):
+        boundary = scan_error_boundary(fileobj)
+        for b in boundary.findings:
+            findings.append(ScoredFinding(
+                rule_id=b.rule_id, title=b.title, severity=b.severity,
+                confidence=b.confidence, category=b.category, file=b.file,
+                line=b.line, explanation=b.explanation, fix_hint=b.fix_hint,
+            ))
+    for failure in checks_not_run:
+        if failure['check'] == 'error_boundary':
+            boundary = _CheckDidNotRun(failure['reason'])
 
     fileobj.seek(0)
     # The facts collector feeds the http_success check below; when it fails,
     # that check cannot run and says so, rather than the scan dying here.
-    source_facts = attempt("http_success", lambda: collect_source_facts(fileobj),
-                           lambda reason: {})
-    findings.extend(attempt("http_success", lambda: list(scan_http_success(source_facts))))
+    source_facts = {}
+    with attempt("http_success"):
+        source_facts = collect_source_facts(fileobj)
+        findings.extend(scan_http_success(source_facts))
     findings = [prepare_recommendation(replace(f, source="static", verification_method="source_pattern"), source_facts)
                 for f in findings]
+    for failure in checks_not_run:
+        if failure['check'] == 'secrets':
+            file_coverage.clear()
+        if failure['check'] in rule_coverage:
+            rule_coverage[failure['check']] = {}
     exclusion_labels = {"file_size_limit": "over the 1 MiB file limit", "symlink": "symbolic links",
                         "excluded_directory": "dependency/build directories",
                         "excluded_extension": "excluded file types", "binary_content": "binary content"}
@@ -265,7 +285,8 @@ def run_static_scan(fileobj: BinaryIO) -> dict:
         # which is the exact defect LLM_ONLY_CATEGORIES exists to prevent,
         # reached by leaving an argument out rather than by passing it wrong.
         "score": {
-            **compute_scores(findings, llm_ran=False),
+            **compute_scores(findings, llm_ran=False,
+                             failed_static=failed_check_categories(checks_not_run)),
             # PERSISTED FOR THE SAME REASON `basis` IS (see pipeline.py): it
             # travels inside score_json so it reaches the DB, and every
             # consumer of the score, rather than being decided during a scan
