@@ -1,0 +1,6 @@
+def query(cur, name, ids):
+    conditions = []
+    if name:
+        conditions.append("name = ?")
+    cur.execute("SELECT * FROM users WHERE " + " AND ".join(conditions), (name,))
+    cur.execute("SELECT * FROM users WHERE id IN (" + ",".join("?" for _ in ids) + ")", ids)

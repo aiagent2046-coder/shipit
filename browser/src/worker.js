@@ -1,8 +1,24 @@
 import { loadPyodide } from './runtime/pyodide.mjs';
-import { installEngine, loadNativeParsers, scanBytes } from './runtime.js';
+import { installEngine, loadNativeParsers, startSession, continueSession } from './runtime.js';
 
 let started = false;
+let runtime = null;
+let runtimeMetadata = null;
+let canContinue = false;
 self.onmessage = async ({ data }) => {
+  if (data?.type === 'continue' && runtime && canContinue) {
+    canContinue = false;
+    try {
+      self.postMessage({ type: 'progress', stage: 'scanning' });
+      const result = continueSession(runtime);
+      result.report.runtime = runtimeMetadata;
+      canContinue = result.can_continue;
+      self.postMessage({ type: 'result', ...result });
+    } catch {
+      self.postMessage({ type: 'error', code: 'scan_failed' });
+    }
+    return;
+  }
   if (started || data?.type !== 'scan') return;
   started = true;
   if (!(data.archive instanceof ArrayBuffer) || data.archive.byteLength > 50 * 1024 * 1024) {
@@ -27,12 +43,15 @@ self.onmessage = async ({ data }) => {
     self.XMLHttpRequest = class { constructor() { offline(); } };
     self.WebSocket = class { constructor() { offline(); } };
     self.postMessage({ type: 'progress', stage: 'scanning' });
-    const result = scanBytes(pyodide, data.archive);
+    const result = startSession(pyodide, data.archive);
     if (result.error) {
       self.postMessage({ type: 'error', code: result.error });
       return;
     }
-    result.report.runtime = { ...build, native_load_failures: nativeFailures };
+    runtime = pyodide;
+    runtimeMetadata = { ...build, native_load_failures: nativeFailures };
+    canContinue = result.can_continue;
+    result.report.runtime = runtimeMetadata;
     self.postMessage({ type: 'result', ...result });
   } catch {
     // Parser exceptions may contain source or secrets. Only stable codes cross

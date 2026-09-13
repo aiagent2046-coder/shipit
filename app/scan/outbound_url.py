@@ -16,6 +16,8 @@ import ast
 import re
 import string
 import zipfile
+
+from app.scan.rule_coverage import remaining_findings
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
@@ -537,7 +539,7 @@ def _terminates(body: list[ast.stmt]) -> bool:
 
 def _scan_block(body: list[ast.stmt], state: _State, path: str, findings: list[CheckFinding]) -> None:
     for stmt in body:
-        if len(findings) >= _MAX_FINDINGS:
+        if len(findings) >= remaining_findings(_MAX_FINDINGS):
             raise _FindingLimitReached
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind(ast.Name(id=stmt.name), None, state)
@@ -640,7 +642,7 @@ def _join_states(state: _State, branches: list[_State]) -> None:
 
 def _scan_expr(expr: ast.AST, state: _State, path: str, findings: list[CheckFinding]) -> None:
     for call in _walk(expr):
-        if len(findings) >= _MAX_FINDINGS:
+        if len(findings) >= remaining_findings(_MAX_FINDINGS):
             raise _FindingLimitReached
         if not isinstance(call, ast.Call):
             continue
@@ -721,7 +723,7 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
     known to the statements that follow it.
     """
     for stmt in body:
-        if len(findings) >= _MAX_FINDINGS:
+        if len(findings) >= remaining_findings(_MAX_FINDINGS):
             raise _FindingLimitReached
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
             _import(stmt, state)

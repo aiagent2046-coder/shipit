@@ -51,6 +51,7 @@ function setBusy(value) {
   input.disabled = value;
   scanButton.disabled = value || !selectedArchive();
   cancelButton.hidden = !value;
+  byId('continue-button').disabled = value;
   status.classList.toggle('busy', value);
   byId('scan-form').setAttribute('aria-busy', String(value));
 }
@@ -62,9 +63,15 @@ function releaseWorker() {
   timeout = null;
 }
 
-function finish() {
-  releaseWorker();
-  generation += 1;
+function finish(keepWorker = false) {
+  if (keepWorker) {
+    clearTimeout(timeout);
+    timeout = null;
+  } else {
+    releaseWorker();
+    generation += 1;
+    byId('continue-button').hidden = true;
+  }
   setBusy(false);
 }
 
@@ -83,6 +90,7 @@ function clearResults() {
 }
 
 input.addEventListener('change', () => {
+  finish();
   clearResults();
   error.hidden = true;
   const file = input.files?.[0];
@@ -105,10 +113,24 @@ cancelButton.addEventListener('click', () => {
   scanButton.focus();
 });
 
+byId('continue-button').addEventListener('click', () => {
+  if (busy || !worker) return;
+  error.hidden = true;
+  setBusy(true);
+  setStatus('Scanning the next portion of remaining files locally…');
+  const current = generation;
+  timeout = setTimeout(() => {
+    if (current === generation) fail('This portion exceeded the two-minute limit. The previous report remains available.');
+  }, SCAN_TIMEOUT_MS);
+  worker.postMessage({ type: 'continue' });
+});
+
 byId('scan-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const file = selectedArchive();
   if (busy || !file) return;
+  releaseWorker();
+  byId('continue-button').hidden = true;
   clearResults();
   error.hidden = true;
   setBusy(true);
@@ -138,8 +160,11 @@ byId('scan-form').addEventListener('submit', async (event) => {
           renderReport(data.report);
           exportedReport = data.report;
           exportedSarif = data.sarif;
-          finish();
-          setStatus('Local scan complete. Review the findings and coverage below.');
+          finish(data.can_continue === true);
+          byId('continue-button').hidden = data.can_continue !== true;
+          setStatus(data.can_continue
+            ? 'This portion is complete. You can continue scanning remaining files.'
+            : 'Local scan complete. Review the findings and coverage below.');
           results.hidden = false;
           byId('results-title').focus();
         } catch {
@@ -236,7 +261,17 @@ function renderFinding(finding) {
 
 function renderReport(report) {
   byId('engine-version').textContent = report.engine_version ? `Engine ${text(report.engine_version)}` : 'Local static scan';
-  const gaps = Array.isArray(report.checks_not_run) ? report.checks_not_run : [];
+  const gaps = Array.isArray(report.checks_not_run) ? [...report.checks_not_run] : [];
+  for (const [check, detail] of Object.entries(report.rule_coverage || {})) {
+    if (!detail || !(detail.partial || detail.skipped_files > 0)) continue;
+    const reasons = Object.entries(detail.skip_reasons || {}).filter(([, count]) => count > 0)
+      .map(([reason, count]) => `${reason.replaceAll('_', ' ')}: ${count}`).join(', ');
+    gaps.push({ check, reason: `${text(detail.analyzed_files, '?')} of ${text(detail.eligible_files, '?')} eligible files analyzed; ${reasons || 'coverage incomplete'}.` });
+  }
+  const httpCoverage = report.coverage?.http_success;
+  if (typeof httpCoverage === 'string' && /Parser limits: (?!none(?:$|[.;]))\S/.test(httpCoverage)) {
+    gaps.push({ check: 'http_success', reason: httpCoverage });
+  }
   const gapList = byId('checks-not-run');
   gapList.replaceChildren();
   for (const gap of gaps) {

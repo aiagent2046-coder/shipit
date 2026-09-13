@@ -20,7 +20,7 @@ import stat
 import zipfile
 import yaml
 from bisect import bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import BinaryIO, Iterator
 
 from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
@@ -697,6 +697,27 @@ def _shell_substitution_offsets(name: str, text: str) -> set[int]:
     genuine credentials there, so use YAML node spans to delimit run code.
     """
     lower = name.lower()
+    if lower.endswith((".md", ".mdx")):
+        # Only explicitly shell-labelled fenced blocks have shell expansion
+        # semantics. Prose, other languages and quoted heredocs remain data.
+        ignored = set()
+        fence = None
+        start = offset = 0
+        shell_block = False
+        for line in text.splitlines(keepends=True):
+            marker = re.fullmatch(r" {0,3}(`{3,}|~{3,})([^\r\n]*)\r?\n?", line)
+            if marker:
+                run, label = marker.groups()
+                if fence is None:
+                    fence = run
+                    start = offset + len(line)
+                    shell_block = label.strip() in _SHELL_NAMES | {"shell"}
+                elif run[0] == fence[0] and len(run) >= len(fence) and not label.strip():
+                    if shell_block:
+                        ignored.update(_shell_variable_offsets(text[start:offset], start))
+                    fence = None
+            offset += len(line)
+        return ignored
     if (lower.endswith((".sh", ".bash", ".zsh", ".ksh"))
             or lower.rsplit("/", 1)[-1] in {".bashrc", ".bash_profile", ".profile", ".zshrc"}
             or _SHELL_SHEBANG.match(text)):
@@ -1146,6 +1167,45 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     )
 
 
+def _translation_catalog(name: str, text: str) -> set[str]:
+    path = name.lower().removesuffix(".fixture")
+    if (not path.endswith(".json") or _is_migration_context(name)
+            or not {"i18n", "locales", "translations"}.intersection(path.split("/"))
+            or len(text.encode("utf-8")) > MAX_SCANNED_FILE_BYTES):
+        return set()
+    try:
+        root = json.loads(text)
+    except (ValueError, RecursionError):
+        return set()
+    if not isinstance(root, dict):
+        return set()
+    values = set()
+    pending = [root]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, str):
+            values.add(item)
+    return values
+
+
+def _label_text(value: str) -> bool:
+    # Label-like prose only. Digits, credential punctuation and provider key
+    # formats retain their normal treatment, even in a valid catalog.
+    import unicodedata
+    return bool(value) and all(unicodedata.category(char)[0] in {"L", "M"}
+                               or char in " -" for char in value)
+
+
+def _js_variable_declaration(name: str, line: str, match: re.Match) -> bool:
+    if not name.lower().removesuffix(".fixture").endswith((".js", ".jsx", ".ts", ".tsx")):
+        return False
+    # A JS declaration is not SQL. Actual credential assignments still pass
+    # through the generic/provider rules. SQL embedded in a string is retained.
+    return bool(re.fullmatch(r"\s*(?:export\s+)?(?:const|let|var)\s+", line[:match.start()]))
+
+
 def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> Iterator[tuple[SecretFinding, str]]:
     """Like scan_secrets, but also yields the RAW matched text alongside
     each finding.
@@ -1162,6 +1222,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
     with zipfile.ZipFile(fileobj) as zf:
         for name, text in _iter_text_files(zf, coverage):
             regions = None
+            catalog = _translation_catalog(name, text)
             comparison_ranges = None
             # Corpus files keep an inert suffix in the repository. Reading
             # that wrapper must not turn the same SQL predicate into a secret
@@ -1184,6 +1245,13 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                             remaining -= size
                             regions = python_regions(text)
                     for candidate in rule.pattern.finditer(line):
+                        if rule.id == "sql-secret-assignment" and _js_variable_declaration(name, line, candidate):
+                            continue
+                        if (rule.id == "generic-assignment"
+                                and re.fullmatch(r"phc_[A-Za-z0-9]{43,44}", candidate.group("value"))):
+                            # PostHog ingestion project tokens are publishable;
+                            # phx_/phs_ private API keys do not qualify.
+                            continue
                         if is_sql and rule.id in {"sql-secret-assignment", "generic-assignment"}:
                             if comparison_ranges is None:
                                 comparison_ranges = _sql_comparison_ranges(text)
@@ -1217,10 +1285,15 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                     source_role = next((role for lo, col, hi, end_col, role in regions
                                         if role != "formatted_value"
                                         and (lo, col) <= start and end <= (hi, end_col)), None)
-                    yield (
-                        _classify_match(name, lineno, rule, m.group(0), line, source_role),
-                        m.group(0),
-                    )
+                    finding = _classify_match(name, lineno, rule, m.group(0), line, source_role)
+                    if (catalog and rule.id == "generic-assignment" and m.group("value") in catalog
+                            and _label_text(m.group("value"))):
+                        # Retain the candidate: a translation catalog can still
+                        # contain a real password. Path alone never silences it.
+                        finding = replace(finding, severity="low", confidence=0.1, context="doc_example",
+                                          title="Credential-shaped name in a translation label (informational)",
+                                          source_context={"kind": "translation_label"})
+                    yield finding, m.group(0)
 
 
 def scan_secrets(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[SecretFinding]:

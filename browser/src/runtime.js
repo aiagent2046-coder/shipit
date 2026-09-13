@@ -45,3 +45,29 @@ _browser_scan()
     pyodide.globals.delete('_archive_bytes');
   }
 }
+
+export function startSession(pyodide, archive) {
+  pyodide.globals.set('_archive_bytes', new Uint8Array(archive));
+  try {
+    return JSON.parse(pyodide.runPython(`
+import json
+from app.scan.browser import ScanSession
+from app.ingest.validators import ArchiveValidationError
+def _start_session():
+    global _scan_session
+    _scan_session = None
+    try:
+        _scan_session = ScanSession(bytes(_archive_bytes.to_py()))
+        return json.dumps(_scan_session.result())
+    except ArchiveValidationError as exc:
+        return json.dumps({"error": "invalid_archive", "reason": exc.reason})
+_start_session()
+`));
+  } finally {
+    pyodide.globals.delete('_archive_bytes');
+  }
+}
+
+export function continueSession(pyodide) {
+  return JSON.parse(pyodide.runPython('json.dumps(_scan_session.continue_scan())'));
+}

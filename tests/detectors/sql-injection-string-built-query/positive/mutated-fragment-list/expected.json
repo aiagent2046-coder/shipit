@@ -1,0 +1,11 @@
+{
+  "description": "VoiceStudio-derived source context regression with synthetic values.",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "file_endswith": "app/query.py",
+      "severity": "high"
+    }
+  ],
+  "forbid": []
+}

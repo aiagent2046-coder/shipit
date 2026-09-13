@@ -56,9 +56,10 @@
           <div class="export-actions"><button id="export-json" class="button secondary" type="button">Export JSON</button><button id="export-sarif" class="button secondary" type="button">Export SARIF</button></div>
         </div>
         <div id="partial-coverage" class="coverage-warning" hidden>
-          <h3>Partial coverage — checks did not run</h3>
+          <h3>Partial coverage — some source remains unchecked</h3>
           <p>Review these gaps before interpreting the findings.</p>
           <ul id="checks-not-run"></ul>
+          <button id="continue-button" class="button secondary" type="button" hidden>Continue scanning remaining files</button>
         </div>
         <p id="findings-summary" class="findings-summary"></p>
         <p class="hint result-caveat">No findings does not mean the project is secure. This report covers only the static checks and files listed below.</p>

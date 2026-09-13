@@ -10,6 +10,8 @@ unverified. Dynamic helpers and configuration outside these files are unresolved
 from __future__ import annotations
 
 import zipfile
+
+from app.scan.rule_coverage import remaining_findings
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
@@ -54,7 +56,7 @@ def scan_tls_verification(fileobj: BinaryIO, *, coverage: dict | None = None) ->
                 key = (info.filename, line, what, kind)
                 if key in seen:
                     continue
-                if len(findings) >= _MAX_FINDINGS:
+                if len(findings) >= remaining_findings(_MAX_FINDINGS):
                     incomplete["reason"] = "finding_limit"
                     break
                 seen.add(key)

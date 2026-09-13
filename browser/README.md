@@ -115,3 +115,22 @@ runs those probes under the production worker CSP with no network during scans.
 The next coverage expansion should add rule classes and their positive/negative
 fixtures to the shared engine, keeping this full parity gate. Restoring existing
 checks does not itself add new defect classes or repository-test execution.
+
+## Continuing large scans
+
+A partial-coverage notice is shown whenever a rule skips eligible files, even
+when every top-level check ran. It includes per-rule analyzed/eligible counts,
+file and finding limits, parse failures, and the HTTP-success parser limits.
+
+When a counted rule stops at its 400-file budget, **Continue scanning remaining
+files** processes another bounded batch on the same in-memory archive. It resumes
+at that rule's cursor; completed rules are not rerun. Findings and coverage are
+cumulative in both JSON and SARIF. The 32-finding cap remains per rule across all
+batches. Parse failures, oversized files and analysis limits remain explicit;
+continuation does not label those files analyzed. Each batch can be cancelled and
+has its own two-minute deadline. Selecting another ZIP, starting over or closing
+the page releases the retained worker and archive. A failed/cancelled continuation
+leaves the previous report available for export; start a new scan to retry.
+
+Only checks with structured file accounting support continuation. In particular,
+the HTTP-success analysis budget is displayed but cannot yet be resumed.

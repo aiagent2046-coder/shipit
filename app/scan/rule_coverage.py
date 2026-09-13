@@ -21,6 +21,22 @@ SKIP_REASONS = (
 )
 _COUNTS = ("files_total", "eligible_files", "attempted_files", "analyzed_files", "excluded_files", "skipped_files")
 _ANALYSIS_LIMITS: ContextVar[set[str] | None] = ContextVar("rule_analysis_limits", default=None)
+_RESUME: ContextVar[tuple[dict, int] | None] = ContextVar("rule_resume", default=None)
+
+
+@contextmanager
+def resume_rule(previous: dict, finding_count: int) -> Iterator[None]:
+    """Resume one rule on the same immutable archive, with its original caps."""
+    token = _RESUME.set((previous, finding_count))
+    try:
+        yield
+    finally:
+        _RESUME.reset(token)
+
+
+def remaining_findings(limit: int) -> int:
+    resume = _RESUME.get()
+    return max(0, limit - resume[1]) if resume else limit
 
 
 @contextmanager
@@ -111,13 +127,28 @@ class RuleCoverage:
                     self.skips["file_size_limit"] += 1
                 else:
                     self.infos.append(info)
+        self.previous_attempts = 0
+        self.previous_findings = 0
+        resume = _RESUME.get()
+        if resume is not None:
+            previous, self.previous_findings = resume
+            if (not normalize_rule_coverage({RULE_COVERAGE_KEYS[0]: previous})
+                    or previous["files_total"] != self.files_total
+                    or previous["eligible_files"] != self.eligible_files
+                    or previous["exclusion_reasons"] != dict(self.exclusions)
+                    or not previous["skip_reasons"].get("file_limit")):
+                raise ValueError("Invalid rule continuation")
+            self.previous_attempts = self.attempted_files = previous["attempted_files"]
+            self.analyzed_files = previous["analyzed_files"]
+            self.skips = Counter({k: v for k, v in previous["skip_reasons"].items() if k != "file_limit"})
+            self.infos = self.infos[self.previous_attempts:]
 
     def files(self, findings: list, *, max_files: int, max_findings: int) -> Iterator[zipfile.ZipInfo]:
         for index, info in enumerate(self.infos):
-            if len(findings) >= max_findings:
+            if len(findings) + self.previous_findings >= max_findings:
                 self.skip("finding_limit", len(self.infos) - index)
                 return
-            if self.attempted_files >= max_files:
+            if self.attempted_files - self.previous_attempts >= max_files:
                 self.skip("file_limit", len(self.infos) - index)
                 return
             self.attempted_files += 1

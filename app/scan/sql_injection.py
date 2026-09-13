@@ -135,6 +135,11 @@ def _is_literal_iterable(node: ast.AST, known: frozenset[str] = frozenset()) -> 
         # external value. Only single-generator, filter-free forms qualify.
         if len(node.generators) != 1 or node.generators[0].ifs:
             return False
+        if (not node.generators[0].is_async and isinstance(node.elt, ast.Constant)
+                and node.elt.value == "?"
+                and not any(isinstance(child, ast.NamedExpr) for child in ast.walk(node))):
+            # Input changes the number of placeholders, never SQL characters.
+            return True
         if not _is_literal(node.generators[0].iter, known):
             return False
         bound = {n.id for n in ast.walk(node.generators[0].target) if isinstance(n, ast.Name)}
@@ -182,6 +187,7 @@ def _assembly_kind(node: ast.AST, known: frozenset[str] = frozenset()) -> str | 
 class _Binding:
     literal: bool = False
     assembly: tuple[int, str] | None = None
+    container: bool = False
 
 
 _UNKNOWN = _Binding()
@@ -197,7 +203,8 @@ def _merge_states(*states: dict[str, _Binding] | None) -> dict[str, _Binding] | 
     for name in set().union(*paths):
         values = [state.get(name, _UNKNOWN) for state in paths]
         assembly = next((value.assembly for value in values if value.assembly), None)
-        merged[name] = _Binding(all(value.literal for value in values), assembly)
+        merged[name] = _Binding(all(value.literal for value in values), assembly,
+                                all(value.container for value in values))
     return merged
 
 
@@ -221,6 +228,20 @@ def _scope_bindings(scope: ast.AST) -> tuple[set[str], set[str]]:
     # freeze that name's earlier literal value into another function's scope.
     mutable = {name for node in ast.walk(scope)
                if isinstance(node, (ast.Global, ast.Nonlocal)) for name in node.names}
+    containers = {target.id for node in ast.walk(scope) if isinstance(node, (ast.Assign, ast.AnnAssign))
+                  and isinstance(node.value, (ast.List, ast.Dict, ast.Set))
+                  for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+                  if isinstance(target, ast.Name)}
+    mutations = set()
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute) and node.func.attr not in {"items", "keys", "values", "join"}:
+                mutations.update(child.id for child in ast.walk(node.func.value) if isinstance(child, ast.Name))
+            mutations.update(child.id for argument in [*node.args, *(kw.value for kw in node.keywords)]
+                           for child in ast.walk(argument) if isinstance(child, ast.Name))
+        elif isinstance(node, (ast.Subscript, ast.Attribute)) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            mutations.update(child.id for child in ast.walk(node.value) if isinstance(child, ast.Name))
+    mutable.update(mutations & containers)
     return set(writes), {name for name, count in writes.items() if count == 1} - mutable
 
 
@@ -247,7 +268,7 @@ class _QueryFlow:
             return _UNKNOWN
         known = self.known(state)
         if _is_literal(node, known):
-            return _LITERAL
+            return _Binding(literal=True, container=isinstance(node, (ast.List, ast.Set, ast.Dict)))
         kind = _assembly_kind(node, known)
         return _Binding(assembly=(node.lineno, kind)) if kind else _UNKNOWN
 
@@ -345,6 +366,17 @@ class _QueryFlow:
         arguments = [self.expression(argument, state, stable) for argument in node.args]
         for keyword in node.keywords:
             self.expression(keyword.value, state, stable)
+        # Mutable lists passed to arbitrary code can be changed through aliases.
+        # They cannot establish safe fragments at a later sink.
+        literal_join = (isinstance(node.func, ast.Attribute) and node.func.attr == "join"
+                        and isinstance(node.func.value, ast.Constant)
+                        and isinstance(node.func.value.value, str) and len(node.args) == 1
+                        and not node.keywords)
+        for argument in [*node.args, *(kw.value for kw in node.keywords)]:
+            if not literal_join:
+                for child in ast.walk(argument):
+                    if isinstance(child, ast.Name) and state.get(child.id, _UNKNOWN).container:
+                        state[child.id] = _UNKNOWN
         if not isinstance(node.func, ast.Attribute):
             return self.value(node, state)
         if node.func.attr in _SINKS and node.args:
@@ -359,7 +391,12 @@ class _QueryFlow:
                 self.findings.add((node.lineno, node.func.attr, kind))
         # A literal container stops being a constant after an opaque mutation.
         if node.func.attr in {"append", "extend", "insert", "update", "add", "setdefault"}:
-            self.assign(node.func.value, _UNKNOWN, state)
+            receiver = self.value(node.func.value, state)
+            safe_append = (node.func.attr == "append" and receiver.literal and receiver.container
+                           and len(arguments) == 1 and not node.keywords
+                           and arguments[0].literal and not arguments[0].container)
+            if not safe_append:
+                self.assign(node.func.value, _UNKNOWN, state)
         return self.value(node, state)
 
     def block(self, statements, state, stable, captures=None):
@@ -384,8 +421,23 @@ class _QueryFlow:
                 if node.value is None:  # An annotation alone does not rebind.
                     continue
                 value = self.expression(node.value, state, stable)
+                escaped = {child.id for child in ast.walk(node.value) if isinstance(child, ast.Name)
+                           and state.get(child.id, _UNKNOWN).container}
+                if escaped and isinstance(node.value, (ast.Name, ast.List, ast.Tuple, ast.Dict, ast.Set, ast.IfExp)):
+                    # Refuse alias tracking rather than freezing a mutable
+                    # fragment list when another name can append request data.
+                    for name in escaped:
+                        state[name] = _UNKNOWN
+                    value = _UNKNOWN
                 for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
-                    self.assign(target, value, state)
+                    if (isinstance(target, (ast.Tuple, ast.List))
+                            and isinstance(node.value, (ast.Tuple, ast.List))
+                            and len(target.elts) == len(node.value.elts)
+                            and all(isinstance(item, ast.List) and not item.elts for item in node.value.elts)):
+                        for child in target.elts:
+                            self.assign(child, _Binding(literal=True, container=True), state)
+                    else:
+                        self.assign(target, value, state)
             elif isinstance(node, ast.AugAssign):
                 self.expression(node.value, state, stable)
                 before, right = self.value(node.target, state), self.value(node.value, state)

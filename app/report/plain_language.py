@@ -357,6 +357,14 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
     own_fix = str(finding.get("fix_hint", "")).strip()
     if rid in PLAIN and rid in CREDENTIAL_RULES:
         what, risk, fix = PLAIN[rid]
+        evidence = finding.get("claim_evidence") or {}
+        source_context = finding.get("source_context") or evidence.get("source_context") or {}
+        if rid == "generic-assignment" and source_context.get("kind") == "translation_label":
+            return ("Credential-shaped name in a translation label",
+                    "The value is label-like text in a parsed translation catalog. This is usually UI copy. "
+                    "The candidate is retained because a catalog can also contain a real credential.",
+                    "Check that this is display text. A label needs no credential rotation; "
+                    "rotate only if you establish that the value is an exposed real credential.")
         context = finding.get("context")
         example = (context in NON_PRODUCTION_CONTEXTS if context
                    else is_non_production_path(str(finding.get("file", ""))))

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import ast
 import zipfile
+
+from app.scan.rule_coverage import remaining_findings
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -383,7 +385,7 @@ def scan_unsafe_deserialization(fileobj: BinaryIO, *, coverage: dict | None = No
             except RecursionError:
                 accounting.skip("ast_limit")
                 continue
-            remaining = _MAX_FINDINGS - len(findings)
+            remaining = remaining_findings(_MAX_FINDINGS) - len(findings)
             findings.extend(_finding(info.filename, item) for item in evidence[:remaining])
             if len(evidence) > remaining:
                 accounting.skip("finding_limit")

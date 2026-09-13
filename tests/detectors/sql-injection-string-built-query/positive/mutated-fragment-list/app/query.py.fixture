@@ -1,0 +1,5 @@
+def query(cur, text, value):
+    conditions = ["name = ?"]
+    alias = conditions
+    alias.append(text)
+    cur.execute("SELECT * FROM users WHERE " + " AND ".join(conditions), (value,))

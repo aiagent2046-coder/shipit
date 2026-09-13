@@ -1,0 +1,7 @@
+{
+  "description": "VoiceStudio-derived source context regression with synthetic values.",
+  "expect": [],
+  "forbid": [
+    "sql-secret-assignment"
+  ]
+}
