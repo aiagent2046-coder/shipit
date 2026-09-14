@@ -5,9 +5,10 @@ build verifies their hashes and ABI against `manifest.json`, then copies them
 into the same-origin Pyodide package catalog. No CDN is used at scan time.
 
 Toolchain: Python 3.14.2, Pyodide/xbuildenv 314.0.6, pyodide-build 0.39.0,
-Emscripten 5.0.3, ABI `2026_0`. The wheels were built using setuptools 84.0.0
-and `SOURCE_DATE_EPOCH=1789257600`. The manifest records source archive and
-wheel SHA-256 values separately.
+Emscripten 5.0.3, ABI `2026_0`. The tree-sitter wheels were built using setuptools
+84.0.0; pglast 8.4 uses its source-pinned setuptools 83.0.0 and Cython 3.2.8.
+All use `SOURCE_DATE_EPOCH=1789257600`. The manifest records source archive
+and wheel SHA-256 values separately.
 
 The TypeScript 0.23.2 PyPI sdist omits `common/scanner.h` and the six
 `tree_sitter/*.h` headers. These are copied without modification from the

@@ -229,7 +229,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # literal arguments as a literal query: .format(<literals>) carries no
 # external value, exactly like literal concatenation always has. A starred
 # argument, a ** spread or any non-literal argument still reports.
-# 2026-09-14-7: archive-extraction-fully-trusted, a new static scanner. A literal
+# 2026-09-14-8: pglast 8.4 and its matching Wasm wheel parse PostgreSQL 18.
+# Updated SQL syntax and statement locations can change scan evidence, so
+# cached audits must not retain results from the previous parser version.
+# 2026-09-14-9: archive-extraction-fully-trusted, a new static scanner. A literal
 # filter="fully_trusted" on tarfile extract/extractall of an import-proven
 # tarfile.open object is the explicit opt-out from extraction checks and is
 # reported at high confidence; a missing filter (version-dependent default),

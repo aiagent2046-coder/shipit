@@ -13,6 +13,9 @@ CONTINUATION_CASES = [
     pytest.param('unsafe_xml_parse', 'unsafe-xml-parse', 'py', 'pass',
                  'from lxml import etree\netree.fromstring(xml, parser=etree.XMLParser(resolve_entities=True))',
                  'from lxml import etree\nbroken = [', id='xxe'),
+    pytest.param('archive_extraction', 'archive-extraction-fully-trusted', 'py', 'pass',
+                 'import tarfile\ntarfile.open(source).extractall(dest, filter="fully_trusted")',
+                 'import tarfile\nbroken = [', id='archive'),
 ]
 
 

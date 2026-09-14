@@ -345,6 +345,7 @@ const ruleCoverageLabels: Record<StaticCoverageRule, string> = {
   open_redirect: "Open redirects",
   insecure_randomness: "Insecure randomness",
   command_injection: "Shell commands",
+  archive_extraction: "Archive extraction",
 };
 const ruleExclusionLabels = {
   unsupported_extension: "unsupported file types",
@@ -444,7 +445,7 @@ const staticCheckIds = new Set([
   "secrets", "rls", "schema_drift", "project_files", "ci_deploy_source", "service_role",
   "error_boundary", "auth_read_consistency", "auth_write_consistency", "http_success",
   "sql_injection", "sql_injection_js", "outbound_url", "tls_verification",
-  "unsafe_deserialization", "unsafe_xml_parse", "path_traversal", "session_cookie",
+  "unsafe_deserialization", "unsafe_xml_parse", "path_traversal", "session_cookie", "archive_extraction",
 ]);
 
 function normalizedCheckFailures(value: unknown): { check: string; reason: string }[] {

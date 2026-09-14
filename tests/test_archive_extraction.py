@@ -99,6 +99,11 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "call-outside-with-block": ("app/unpack.py",
                                 "    pass\ntar.extractall(dest, filter=\"fully_trusted\")",
                                 "    tar.extractall(dest, filter=\"fully_trusted\")"),
+    "call-before-binding": ("app/unpack.py",
+                            't.extractall(dest, filter="fully_trusted")\nt = tarfile.open(source)',
+                            't = tarfile.open(source)\nt.extractall(dest, filter="fully_trusted")'),
+    "binding-in-other-scope": ("app/unpack.py", '\nt.extractall(', '\n    t.extractall('),
+    "patched-open": ("app/unpack.py", 'tarfile.open = custom_open\n', ''),
 }
 
 
@@ -124,3 +129,57 @@ def test_the_product_own_code_reports_nothing():
     python = {p.relative_to(REPO_ROOT).as_posix(): p.read_text()
               for p in sorted((REPO_ROOT / "app").rglob("*.py")) if "__pycache__" not in p.parts}
     assert scan_archive_extraction(archive(python)) == []
+
+
+_BIND = 'import tarfile\nt = tarfile.open(p)\n'
+_SINK = 't.extractall(d, filter="fully_trusted")\n'
+
+
+@pytest.mark.parametrize("source,old,new", [
+    (_BIND + 'def t():\n    pass\n' + _SINK, 'def t():\n    pass\n', ''),
+    (_BIND + 'class t:\n    pass\n' + _SINK, 'class t:\n    pass\n', ''),
+    (_BIND + 'type t = object\n' + _SINK, 'type t = object\n', ''),
+    (_BIND + 'del t\n' + _SINK, 'del t\n', ''),
+    (_BIND + 't.extractall = custom\n' + _SINK, 't.extractall = custom\n', ''),
+    ('import tarfile\ntarfile.open = custom\ntarfile.open(p).extractall(d, filter="fully_trusted")\n',
+     'tarfile.open = custom\n', ''),
+    (_BIND + 'from plugin import *\n' + _SINK, 'from plugin import *\n', ''),
+    ('import tarfile\ndef f():\n    t = tarfile.open(p)\n' + _SINK,
+     '\n' + _SINK, '\n    ' + _SINK),
+    ('import tarfile\nclass C:\n    t = tarfile.open(p)\n' + _SINK,
+     '\n' + _SINK, '\n    ' + _SINK),
+    ('import tarfile\n' + _SINK + 't = tarfile.open(p)\n',
+     _SINK + 't = tarfile.open(p)\n', 't = tarfile.open(p)\n' + _SINK),
+    ('import tarfile\nif enabled:\n    t = tarfile.open(p)\n' + _SINK,
+     '\n' + _SINK, '\n    ' + _SINK),
+    ('import tarfile\nwith tarfile.open(p) as t, t.extractall(d, filter="fully_trusted"):\n    pass\n',
+     ', t.extractall(d, filter="fully_trusted"):\n    pass', ':\n    ' + _SINK.rstrip()),
+    ('import tarfile\nwith tarfile.open(p) as (t, other):\n    ' + _SINK,
+     '(t, other)', 't'),
+    ('import tarfile\nwith tarfile.open(p) as t:\n    def later():\n        ' + _SINK,
+     '    def later():\n        ', '    '),
+    (_BIND + 'type Alias[t] = ' + _SINK, 'type Alias[t] = ', ''),
+    ('import tarfile\ntype Alias[tarfile] = tarfile.open(p).extractall(d, filter="fully_trusted")\n',
+     'type Alias[tarfile] = ', ''),
+    ('import tarfile\ndef f[tarfile]():\n    tarfile.open(p).extractall(d, filter="fully_trusted")\n',
+     '[tarfile]', ''),
+    ('import tarfile\nclass C[tarfile]:\n    tarfile.open(p).extractall(d, filter="fully_trusted")\n',
+     '[tarfile]', ''),
+    ('import tarfile\ndef f[tarfile](value=tarfile.open(p).extractall(d, filter="fully_trusted")):\n    pass\n',
+     '[tarfile]', ''),
+])
+def test_unproven_receiver_regressions_fire_only_after_restoring_the_binding(source, old, new):
+    assert scan_archive_extraction(archive(source)) == []
+    assert old in source
+    restored = source.replace(old, new, 1)
+    assert len(scan_archive_extraction(archive(restored))) == 1
+
+
+@pytest.mark.parametrize("source", [
+    'import tarfile\ndef f():\n    t = tarfile.open(p)\n    ' + _SINK,
+    'import tarfile\nif enabled:\n    t = tarfile.open(p)\n    ' + _SINK,
+    _BIND + 'if enabled:\n    ' + _SINK,
+    'import tarfile\nfor p in paths:\n    with tarfile.open(p) as t:\n        ' + _SINK,
+])
+def test_enclosing_control_flow_keeps_proven_receivers(source):
+    assert len(scan_archive_extraction(archive(source))) == 1

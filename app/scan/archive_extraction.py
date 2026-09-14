@@ -13,8 +13,11 @@ destination with no warning, on every Python that has the parameter.
 WHAT IT REPORTS, AND WHAT IT DOES NOT CLAIM. One thing only: extract or
 extractall with a literal filter="fully_trusted" keyword on an object
 proven to come from tarfile.open -- a direct chain, or a name bound
-exactly once to a tarfile.open call (an assignment, or a with header
-whose body contains the call). A ** keyword spread, a variable or
+exactly once to a tarfile.open call in the same lexical scope, before
+the extraction (an assignment, or a with header whose body contains
+the call). Conditional bindings must enclose the extraction in the same
+branch. Deferred closures/type aliases, generic declarations, mutated
+modules/receivers, a ** keyword spread, a variable or
 non-literal filter, a missing filter, a rebound or shadowed receiver
 name, a receiver from anywhere else and zipfile extraction are NOT
 reported: none of them proves the opt-out. Where the archive bytes come
@@ -34,7 +37,7 @@ from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
 from app.scan.rule_coverage import remaining_findings, RuleCoverage
-from app.scan.unsafe_deserialization import _Imports
+from app.scan.unsafe_deserialization import _Imports, _Scope
 
 RULE_ID = "archive-extraction-fully-trusted"
 
@@ -56,9 +59,16 @@ class _Evidence:
     line: int
 
 
-def _open_call(node: ast.AST | None, imports: _Imports, scope) -> bool:
+@dataclass(frozen=True)
+class _Binding:
+    node: ast.AST
+    scope: _Scope
+
+
+def _open_call(node: ast.AST | None, imports: _Imports, scope: _Scope | None) -> bool:
     """node is a call the file's imports resolve to tarfile.open/TarFile.open."""
-    return (isinstance(node, ast.Call) and scope is not None
+    return ("tarfile" not in imports.mutated_modules
+            and isinstance(node, ast.Call) and scope is not None
             and imports.qualified(node.func, scope) in _OPEN_CALLS)
 
 
@@ -101,7 +111,7 @@ def _argument_names(args: ast.arguments) -> list[str]:
     return names
 
 
-def _bindings(tree: ast.Module, imports: _Imports) -> tuple[dict[str, ast.AST], set[str]]:
+def _bindings(tree: ast.Module, imports: _Imports) -> tuple[dict[str, _Binding], set[str]]:
     """Names bound exactly once to a tarfile.open call, one hop, lexical.
 
     A name qualifies when exactly one assignment target or with-header
@@ -112,14 +122,14 @@ def _bindings(tree: ast.Module, imports: _Imports) -> tuple[dict[str, ast.AST], 
     extract calls can be required to sit inside the block.
     """
     scopes = {id(call): scope for call, scope in imports.calls}
-    candidates: dict[str, ast.AST] = {}
+    candidates: dict[str, _Binding] = {}
     invalid: set[str] = set()
 
-    def note(key: str, node: ast.AST, qualifies: bool) -> None:
-        if key in candidates or key in invalid or not qualifies:
+    def note(key: str, node: ast.AST, scope: _Scope | None = None) -> None:
+        if key in candidates or key in invalid or scope is None:
             invalid.add(key)
         else:
-            candidates[key] = node
+            candidates[key] = _Binding(node, scope)
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
@@ -129,57 +139,103 @@ def _bindings(tree: ast.Module, imports: _Imports) -> tuple[dict[str, ast.AST], 
                          and _open_call(node.value, imports, scopes.get(id(node.value))))
             for target in targets:
                 for name in _target_names(target):
-                    note(name, node, qualifies)
+                    note(name, node, scopes.get(id(node.value)) if qualifies else None)
         elif isinstance(node, ast.NamedExpr):
             for name in _target_names(node.target):
-                note(name, node, False)
+                note(name, node)
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
                 names = _target_names(item.optional_vars)
-                qualifies = _open_call(item.context_expr, imports,
-                                        scopes.get(id(item.context_expr)))
+                qualifies = (isinstance(node, ast.With) and isinstance(item.optional_vars, ast.Name)
+                             and _open_call(item.context_expr, imports, scopes.get(id(item.context_expr))))
                 for name in names:
-                    note(name, node, qualifies)
+                    note(name, node, scopes.get(id(item.context_expr)) if qualifies else None)
         elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
             for name in _target_names(node.target):
-                note(name, node, False)
+                note(name, node)
         elif isinstance(node, ast.ExceptHandler) and node.name:
-            note(node.name, node, False)
+            note(node.name, node)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             for name in _argument_names(node.args):
-                note(name, node, False)
+                note(name, node)
+            if not isinstance(node, ast.Lambda):
+                note(node.name, node)
+        elif isinstance(node, ast.ClassDef):
+            note(node.name, node)
+        elif isinstance(node, ast.TypeAlias):
+            for name in _target_names(node.name):
+                note(name, node)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Del):
+            note(node.id, node)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
-                note(alias.asname or alias.name.split(".")[0], node, False)
+                note(alias.asname or alias.name.split(".")[0], node)
         elif isinstance(node, (ast.Global, ast.Nonlocal)):
             invalid.update(node.names)
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            note(node.name, node, False)
+            note(node.name, node)
         elif isinstance(node, ast.MatchMapping) and node.rest:
-            note(node.rest, node, False)
+            note(node.rest, node)
+    for target, _scope in imports.mutations:
+        while isinstance(target, (ast.Attribute, ast.Subscript)):
+            target = target.value
+        if isinstance(target, ast.Name):
+            invalid.add(target.id)
     return candidates, invalid
 
 
-def _inside(node: ast.AST, ancestor: ast.AST) -> bool:
-    """True when node lies within ancestor's subtree."""
-    parents: dict[int, ast.AST] = {}
-    for parent in ast.walk(ancestor):
-        for child in ast.iter_child_nodes(parent):
-            parents[id(child)] = parent
-    current: ast.AST | None = node
-    while current is not None:
-        if current is ancestor:
-            return True
-        current = parents.get(id(current))
-    return False
+def _regions(tree: ast.Module) -> dict[int, frozenset[tuple[int, str]]]:
+    """Cache enclosing statement-list regions once, within the bounded AST."""
+    result: dict[int, frozenset[tuple[int, str]]] = {}
+    pending = [(tree, frozenset())]
+    while pending:
+        node, regions = pending.pop()
+        result[id(node)] = regions
+        if (isinstance(node, ast.TypeAlias)
+                or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.type_params):
+            # Lazy aliases and generic declarations have type-parameter scopes
+            # that the shared import resolver does not model. Defaults and
+            # bodies cannot reuse the surrounding module's import provenance.
+            continue
+        for field, value in ast.iter_fields(node):
+            children = value if isinstance(value, list) else [value]
+            for child in children:
+                if isinstance(child, ast.AST):
+                    nested = regions
+                    if field in {"body", "orelse", "finalbody", "handlers", "cases"}:
+                        nested = regions | {(id(node), field)}
+                    pending.append((child, nested))
+    return result
+
+
+def _binding_reaches(binding: _Binding, call: ast.Call, scope: _Scope,
+                     regions: dict[int, frozenset[tuple[int, str]]]) -> bool:
+    """Same-scope, preceding binding in the same enclosing control branches."""
+    if binding.scope is not scope:
+        return False
+    node = binding.node
+    if isinstance(node, ast.With):
+        if (id(node), "body") not in regions[id(call)]:
+            return False
+    elif (node.end_lineno, node.end_col_offset) >= (call.lineno, call.col_offset):
+        return False
+    current: _Scope | None = scope
+    while current:
+        if current.wildcard:
+            return False
+        current = current.parent
+    return regions[id(node)] <= regions[id(call)]
 
 
 def _evidence(tree: ast.Module) -> list[_Evidence]:
     imports = _Imports(tree)
     candidates, invalid = _bindings(tree, imports)
     proven = {name: node for name, node in candidates.items() if name not in invalid}
+    regions = _regions(tree)
     found: list[_Evidence] = []
     for node, scope in imports.calls:
+        if id(node) not in regions:
+            continue
         if not isinstance(node.func, ast.Attribute) or node.func.attr not in _EXTRACT_MEMBERS:
             continue
         receiver = node.func.value
@@ -187,7 +243,7 @@ def _evidence(tree: ast.Module) -> list[_Evidence]:
             proven_receiver = True
         elif isinstance(receiver, ast.Name) and receiver.id in proven:
             binding = proven[receiver.id]
-            if isinstance(binding, (ast.With, ast.AsyncWith)) and not _inside(node, binding):
+            if not _binding_reaches(binding, node, scope, regions):
                 continue
             proven_receiver = True
         else:
