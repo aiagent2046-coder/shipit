@@ -122,6 +122,9 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "deferred-method-direct": ("app/reset.js",
                                "make() {\n    return Math.random();\n  }",
                                "make: Math.random()"),
+    "destructure-index-mismatch": ("app/reset.js", "const [token, count]", "const [count, token]"),
+    "destructure-nested-literal": ("app/reset.js", 'token: "literal"', "token: Math.random()"),
+    "destructure-computed-key": ("app/reset.js", "const { [k]: token }", "const { x: token }"),
 }
 
 
@@ -284,6 +287,35 @@ def test_a_ts_import_alias_shadows_the_helper_inside_its_namespace():
               "namespace Inner {\n  import generateToken = source.secure;\n"
               "  export function issue() {\n    const resetToken = generateToken();\n  }\n}\n")
     assert scan_insecure_randomness(archive(source, "repo/app/x.ts")) == []
+
+
+@pytest.mark.parametrize("source", [
+    "const [token] = [Math.random()];\n",
+    "const { token } = { token: Math.random() };\n",
+    "const { token: resetToken } = { token: Math.random().toString(36).slice(2) };\n",
+    "const [token, , other] = [Math.random(), 1];\n",
+    "const { 'token': randomToken } = { token: Math.random() };\n",
+])
+def test_destructuring_bindings_receive_the_draw(source):
+    assert len(scan_insecure_randomness(archive(source, "repo/app/x.js"))) == 1
+
+
+@pytest.mark.parametrize("source", [
+    # array slots pair exactly: the secret-named slot receives a literal
+    'const [token, count] = ["literal", Math.random()];\n',
+    # holes keep their slot: token receives slot 0, not the draw in slot 2
+    "const [token, , other] = [1, 2, Math.random()];\n",
+    # rest patterns have no provable correspondence
+    "const [...token] = [Math.random()];\n",
+    # computed keys stay unresolved
+    "const { [k]: token } = { x: Math.random() };\n",
+    # a non-literal container has no element correspondence
+    "const [token] = getPair();\n",
+    # object keys must match by text
+    "const { token } = { count: Math.random() };\n",
+])
+def test_destructuring_without_provable_correspondence_stays_silent(source):
+    assert scan_insecure_randomness(archive(source, "repo/app/x.js")) == []
 
 
 @pytest.mark.parametrize("source", [

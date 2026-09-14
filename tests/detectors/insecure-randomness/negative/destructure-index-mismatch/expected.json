@@ -1,0 +1,7 @@
+{
+  "description": "Array slots pair exactly: the secret-named slot receives a literal, not the draw.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

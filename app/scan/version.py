@@ -1,4 +1,4 @@
 """Analysis identity shared by server and offline browser entry points."""
 
-# Archive extraction with the fully-trusted filter is reported.
-AUDIT_ENGINE_VERSION = "2026-09-14-9"
+# Destructuring bindings pair by exact slot or key correspondence.
+AUDIT_ENGINE_VERSION = "2026-09-14-10"

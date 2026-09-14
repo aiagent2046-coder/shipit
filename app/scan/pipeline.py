@@ -238,6 +238,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # reported at high confidence; a missing filter (version-dependent default),
 # data and tar filters, variable or spread filters, zipfile extraction and
 # unproven receivers stay silent.
+# 2026-09-14-10: insecure-randomness reads destructuring targets: array slots
+# pair by comma position (holes keep theirs), object keys by literal key text
+# (last pair wins). Rest patterns, computed keys and non-literal containers
+# stay unresolved.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

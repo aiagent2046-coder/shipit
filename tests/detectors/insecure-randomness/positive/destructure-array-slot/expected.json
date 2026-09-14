@@ -1,0 +1,10 @@
+{
+  "description": "Array destructuring binds a secret-named value from a slot that draws.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

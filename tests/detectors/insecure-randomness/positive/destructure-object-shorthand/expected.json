@@ -1,0 +1,10 @@
+{
+  "description": "Object destructuring shorthand binds a secret-named value from a drawing property.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
