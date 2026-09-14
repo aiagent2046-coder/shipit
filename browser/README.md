@@ -33,6 +33,10 @@ suite blocks native wheel downloads to exercise that failure mode in Chromium.
 
 The preview compares resolved npm/PyPI dependencies against a pinned local CVE
 catalog. It sends no package queries or archive content to advisory services.
+Supported inputs include `package-lock.json`, pinned `requirements.txt`,
+`poetry.lock`, `pnpm-lock.yaml` v9, and `uv.lock` v1 (revisions 0–3).
+All locked platform/optional/development variants are inspected; this is not
+an assertion that every variant is installed in production.
 Source commit, snapshot age, unsupported manifests, unlisted packages and
 unresolved comparisons are shown separately from source-check coverage.
 See [CVE knowledge compilation](../docs/browser-cve-learning.md) for updates and
