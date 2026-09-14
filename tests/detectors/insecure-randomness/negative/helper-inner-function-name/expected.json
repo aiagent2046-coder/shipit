@@ -1,0 +1,7 @@
+{
+  "description": "The inner name of a function expression shadows the helper inside its own body.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

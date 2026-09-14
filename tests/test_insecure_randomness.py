@@ -94,6 +94,22 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "helper-out-of-scope": ("app/reset.js",
                             "if (featureEnabled) {\n  const generateToken = () => Math.random();\n}",
                             "const generateToken = () => Math.random();"),
+    "helper-destructured-reassignment": ("app/reset.js",
+                                         "({generateToken} = {generateToken: () => crypto.randomUUID()});\n",
+                                         ""),
+    "helper-destructured-parameter": ("app/reset.js", "issue({generateToken})", "issue()"),
+    "helper-generator-shadow": ("app/reset.js",
+                                "  function* generateToken() {\n    yield crypto.randomUUID();\n  }\n", ""),
+    "helper-ts-import-alias": ("app/reset.ts", "  import generateToken = source.secure;\n", ""),
+    "helper-returned-generator": ("app/reset.js",
+                                  "return function* () {\n    yield Math.random();\n  };",
+                                  "return Math.random();"),
+    "helper-returned-object-method": ("app/reset.js",
+                                      "return {\n    make() {\n      return Math.random();\n    },\n  };",
+                                      "return Math.random();"),
+    "helper-inner-function-name": ("app/reset.js",
+                                   "function generateToken() {\n  const resetToken",
+                                   "function tokenFactory() {\n  const resetToken"),
 }
 
 
@@ -175,6 +191,8 @@ def test_js_draws_are_calls_in_expressions_including_template_substitution(sourc
     "export function generateToken() {\n  return Math.random();\n}\nconst resetToken = generateToken();\n",
     "function issue() {\n  const makeToken = () => Math.random();\n  const inner = () => {\n"
     "    const resetToken = makeToken();\n    return resetToken;\n  };\n  return inner;\n}\n",
+    # an eagerly evaluated array draws at call time
+    "function generateToken() { return [Math.random()]; }\nconst resetToken = generateToken();\n",
 ])
 def test_a_single_helper_hop_to_math_random_is_a_draw(source):
     findings = scan_insecure_randomness(archive(source, "repo/app/x.js"))
@@ -209,9 +227,37 @@ def test_a_single_helper_hop_to_math_random_is_a_draw(source):
     # a duplicate declaration makes the binding ambiguous
     "function generateToken() {\n  return Math.random();\n}\n"
     "function issue() {\n  const generateToken = () => Math.random();\n  const resetToken = generateToken();\n}\n",
+    # object destructuring reassigns the helper name to a secure source
+    "let generateToken = () => Math.random();\n"
+    "({generateToken} = {generateToken: () => crypto.randomUUID()});\n"
+    "const resetToken = generateToken();\n",
+    # a destructured parameter shadows the helper
+    "function generateToken() {\n  return Math.random();\n}\n"
+    "function issue({generateToken}) {\n  const resetToken = generateToken();\n}\n",
+    # the inner name of a function expression shadows the helper inside it
+    "function generateToken() {\n  return Math.random();\n}\n"
+    "const holder = function generateToken() {\n"
+    "  const resetToken = generateToken();\n  return resetToken;\n};\n",
+    # a generator declaration shadows the helper and never runs on call
+    "function generateToken() {\n  return Math.random();\n}\n"
+    "function issue() {\n  function* generateToken() {\n    yield crypto.randomUUID();\n  }\n"
+    "  const resetToken = generateToken();\n}\n",
+    # a returned generator has not drawn yet
+    "function generateToken() {\n  return function* () {\n    yield Math.random();\n  };\n}\n"
+    "const resetToken = generateToken();\n",
+    # a returned object method has not drawn yet
+    "function generateToken() {\n  return {\n    make() {\n      return Math.random();\n    },\n  };\n}\n"
+    "const resetToken = generateToken();\n",
 ])
 def test_helper_hops_with_unknown_provenance_stay_silent(source):
     assert scan_insecure_randomness(archive(source, "repo/app/x.js")) == []
+
+
+def test_a_ts_import_alias_shadows_the_helper_inside_its_namespace():
+    source = ("function generateToken() {\n  return Math.random();\n}\n"
+              "namespace Inner {\n  import generateToken = source.secure;\n"
+              "  export function issue() {\n    const resetToken = generateToken();\n  }\n}\n")
+    assert scan_insecure_randomness(archive(source, "repo/app/x.ts")) == []
 
 
 @pytest.mark.parametrize("source", [

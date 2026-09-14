@@ -213,11 +213,13 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # import-resolved lxml parse/fromstring with an inline XMLParser, or iterparse
 # in XML mode. Defaults and unknown configurations are not findings; input
 # trust, dependency versions and runtime controls remain unverified.
-# 2026-09-14-3: insecure-randomness resolves one JS/TS helper hop -- a name
+# 2026-09-14-4: insecure-randomness resolves one JS/TS helper hop -- a name
 # declared once as a function whose single return draws Math.random is a draw
-# at call sites inside its declaring scope. Parameters, reassignment,
-# conditional or multiple returns, nested chains and cross-file provenance
-# stay unresolved.
+# at call sites inside its declaring scope. Parameters, destructuring,
+# reassignment, generator, enum, namespace, import-alias and duplicate
+# declarations, conditional or multiple returns, deferred bodies (returned
+# closures, generators, object/class methods), nested chains and cross-file
+# provenance stay unresolved.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

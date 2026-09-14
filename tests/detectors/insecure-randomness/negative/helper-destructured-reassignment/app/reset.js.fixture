@@ -1,0 +1,3 @@
+let generateToken = () => Math.random();
+({generateToken} = {generateToken: () => crypto.randomUUID()});
+const resetToken = generateToken();

@@ -1,0 +1,7 @@
+{
+  "description": "A TS import alias binds the name inside its namespace to a secure source.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}
