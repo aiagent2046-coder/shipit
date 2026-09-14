@@ -1,5 +1,5 @@
 import { loadPyodide } from './runtime/pyodide.mjs';
-import { installEngine, loadNativeParsers, scanBytes } from './runtime.js';
+import { installEngine, installCatalog, loadNativeParsers, scanBytes } from './runtime.js';
 import { assertParserParity, evaluateCase, summarize } from './parity.js';
 
 self.onmessage = async () => {
@@ -14,6 +14,9 @@ self.onmessage = async () => {
     const nativeFailures = await loadNativeParsers(pyodide);
     if (nativeFailures.length) throw new Error(JSON.stringify(nativeFailures));
     await installEngine(pyodide, files);
+    const build = await fetch('build.json').then(r => r.json());
+    const catalog = await fetch('cve-catalog.json').then(r => r.arrayBuffer());
+    await installCatalog(pyodide, catalog, build.cve_catalog_sha256);
     const loaded = performance.now();
     const actualProbes = JSON.parse(pyodide.runPython(probeSource + '\nimport json\njson.dumps(probe_parsers())'));
     assertParserParity(expectedProbes, actualProbes);

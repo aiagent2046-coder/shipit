@@ -39,7 +39,7 @@ EXCLUSIONS_NOTE = (
 # than written twice.
 HTTP_SUCCESS_SCOPE_PREFIX = (
     "Bounded React handlers with direct success effects after an unchecked fetch; "
-    "runtime fetch bindings and HTTP failures are not verified. "
+    "runtime fetch bindings and HTTP failures are not verified. Vue/Svelte templates and handlers are not covered. "
 )
 
 
@@ -104,7 +104,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     Capability(
         "project_files",
-        "Repository hygiene the file listing alone shows",
+        "Repository configuration and file inventory",
         (
             "dependency-dir-committed",
             "env-file-committed",
@@ -113,10 +113,11 @@ CAPABILITIES: tuple[Capability, ...] = (
             "no-dockerfile",
             "no-tests",
         ),
-        "The archive's file listing, with no code analysis: a committed .env or private-key-shaped "
-        "filename, a committed dependency directory, .gitignore coverage missing for secret-bearing "
-        "files, and the absence of tests, a Dockerfile or a CI workflow. Each signal yields at most "
-        "one finding and describes the repository contents, not the deployment.",
+        "Archive-local configuration inventory: environment files are assessed individually for "
+        "credential-shaped values or recognized public settings; nested .gitignore rules are evaluated "
+        "for concrete candidate paths. Global Git exclusions and tracking history are unavailable. "
+        "Installed dependency directories, tests, Dockerfiles and recognized CI configuration paths "
+        "are inventoried. CI configuration validity, hosted integrations and live runs are not verified.",
     ),
     Capability(
         "ci_deploy_source",
@@ -225,6 +226,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "are read; hostname and certificate-chain checks have distinct explanations. "
         "Comments, strings, types, malformed/oversized files, unknown wrappers, cross-file "
         "and dynamic configuration, shell/CI YAML and runtime connections are unresolved. "
+        "Vue/Svelte component script blocks are not covered by this TLS check. "
         "A clean result does not establish that every connection is verified",
     ),
     Capability(
@@ -280,11 +282,15 @@ CAPABILITIES: tuple[Capability, ...] = (
         "xss",
         "HTML injected into the DOM from a value that is not a fixed string",
         ("xss-unsafe-html-injection",),
-        "JavaScript/TypeScript/JSX/TSX parsed with the bundled native grammar; at most 400 files "
+        "JavaScript/TypeScript/JSX/TSX parsed with the bundled native grammar, plus bounded Vue "
+        "single-file components with HTML templates and JS/TS scripts; at most 400 files "
         "up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example "
         "paths, vendor, dependency trees and generated build directories are excluded before the "
         "file limit. DOM innerHTML/outerHTML assignments, document.write/writeln, insertAdjacentHTML "
-        "and React dangerouslySetInnerHTML are reported for nonliteral values. A complete literal "
+        "and React dangerouslySetInnerHTML are reported for nonliteral values. Vue v-html expressions "
+        "are also reported unless they are fixed literals; helpers and sanitizers are unresolved. "
+        "Unsupported Vue template/script languages and malformed components are recorded as coverage gaps. "
+        "A complete literal "
         "or an earlier visible, globally unambiguous const literal stays silent; concatenation, "
         "shadowed names and comments do not establish a static value. Sanitization, input trust, "
         "DOM receiver provenance, cross-file resolution and other framework template bindings are "
@@ -300,10 +306,17 @@ CAPABILITIES: tuple[Capability, ...] = (
         "dependency trees and generated build directories are excluded before the file limit. "
         "Secret-named assignments containing a call to a proven stable Python random import "
         "(including supported aliases) or an unshadowed Math.random are reported, including template "
-        "interpolation. Comments, docstrings and literal text are not draws. Rebound or ambiguous "
-        "sources, helpers, cross-file provenance and actual security use of the result are unresolved. "
+        "interpolation and one JS/TS helper hop: a name declared once as a function whose single "
+        "return draws Math.random, called inside its declaring scope after the declaration. "
+        "Parameters, destructuring, reassignment, generator, enum, namespace and import-alias "
+        "declarations, conditional or multiple returns, deferred bodies (returned or assigned "
+        "closures, generators, object/class methods and classes have not drawn), nested helper "
+        "chains, Python helpers, rebound or ambiguous sources, cross-file provenance and actual "
+        "security use of the result are unresolved. Comments, docstrings and literal text are "
+        "not draws. "
         "secrets and SystemRandom are not insecure sources. Missing native grammars withhold this "
-        "combined check; malformed or oversized source is reported in coverage.",
+        "combined check; malformed or oversized source is reported in coverage. "
+        "Vue/Svelte component script blocks are not covered by this randomness check.",
     ),
     Capability(
         "unsafe_xml_parse",

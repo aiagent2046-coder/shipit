@@ -2,9 +2,16 @@
 
 Python AST requires an unambiguous local/inherited random import. Rebinding,
 parameters and member replacement invalidate that provenance. JS/TS syntax
-recognizes calls to an unshadowed Math.random, including template substitutions.
-Comments and literal text never count as draws. Helpers, dynamic aliases and
-cross-file provenance are unresolved. No uploaded source is executed.
+recognizes calls to an unshadowed Math.random, including template substitutions,
+and resolves exactly one helper hop: a name declared once as a function whose
+single return draws Math.random is itself a draw at call sites inside its
+declaring scope (function declarations may be hoisted; declarators must
+precede the call). Parameters, destructuring, reassignment, generator, enum,
+namespace and import-alias declarations, conditional or multiple returns,
+deferred bodies (a returned or assigned closure, generator, object/class
+method or class has not drawn yet), nested helper chains, Python helpers,
+dynamic aliases and cross-file provenance invalidate that hop. Comments and
+literal text never count as draws. No uploaded source is executed.
 """
 from __future__ import annotations
 
@@ -33,6 +40,17 @@ _SECRET_WORDS = (
 _METHODS = {"random", "randint", "randrange", "choice", "getrandbits", "uniform", "sample"}
 _SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+# Names bound by object destructuring in JS/TS grammar trees.
+_BINDING_NAMES = {"identifier", "shorthand_property_identifier_pattern"}
+# Bodies that do not run when the surrounding expression is evaluated: entering
+# one would count a draw that has not happened yet. A class is included whole:
+# instance fields initialize at construction (static and computed keys may run
+# earlier, but the conservative silence is deliberate under-reporting).
+_DEFERRED_BODIES = {
+    "arrow_function", "function_expression", "function_declaration",
+    "generator_function", "generator_function_declaration", "method_definition",
+    "class", "class_declaration", "abstract_class", "abstract_class_declaration",
+}
 
 
 def _secret(name):
@@ -178,6 +196,119 @@ def _python_evidence(text):
     return sorted(set(found))
 
 
+def _plain_draw(value):
+    """A Math.random call anywhere in the expression, without helper hops."""
+    if value is None or value.type in _DEFERRED_BODIES:
+        return False
+    if value.type == "call_expression":
+        callee = value.child_by_field_name("function")
+        if callee is not None and callee.type == "member_expression":
+            if (_text(callee.child_by_field_name("object")) == "Math" and
+                    _text(callee.child_by_field_name("property")) == "random"):
+                return True
+    return any(_plain_draw(child) for child in value.named_children)
+
+
+def _return_draws(body):
+    """A body whose single statement is a return of a Math.random draw."""
+    if body is None:
+        return False
+    if body.type != "statement_block":
+        return _plain_draw(body)  # arrow function with an expression body
+    statements = [child for child in body.named_children if child.type != "comment"]
+    if len(statements) != 1 or statements[0].type != "return_statement":
+        return False
+    values = [child for child in statements[0].named_children if child.type != "comment"]
+    return len(values) == 1 and _plain_draw(values[0])
+
+
+def _scope_of(node):
+    """The scope a declaration lives in; an export statement is transparent."""
+    scope = node.parent
+    if scope is not None and scope.type == "export_statement":
+        scope = scope.parent
+    return scope
+
+
+def _helpers(nodes):
+    """Names proven to be functions whose only return is a Math.random draw.
+
+    One hop, lexical: a name qualifies when it is declared exactly once -- a
+    function declaration, or a declarator bound to an arrow/function expression
+    -- is never a parameter, catch, loop, destructuring, import, class, enum,
+    namespace, generator or reassignment binding, and its body has a single
+    return drawing Math.random. Returns name -> (declaring scope, order
+    anchor); the anchor is None for hoisted function declarations and the
+    declarator otherwise. Helpers calling other helpers stay unresolved:
+    exactly one hop is supported.
+    """
+    declared, invalid = {}, set()
+    for node in nodes:
+        if node.type in {"function_declaration", "variable_declarator"}:
+            name = node.child_by_field_name("name")
+            if name is not None and name.type == "identifier":
+                key = _text(name)
+                if key in declared:
+                    invalid.add(key)
+                declared[key] = node
+            elif name is not None:
+                invalid.update(_text(n) for n in _nodes(name)
+                               if n.type in _BINDING_NAMES)
+        elif node.type in {"generator_function_declaration", "import_alias"}:
+            # A generator never runs its body on call, and a TS import alias
+            # binds the name locally: both shadow a same-named helper.
+            name = node.child_by_field_name("name")
+            if name is None and node.type == "import_alias" and node.named_children:
+                name = node.named_children[0]
+            if name is not None and name.type == "identifier":
+                invalid.add(_text(name))
+        elif node.type in {"class_declaration", "abstract_class_declaration", "enum_declaration",
+                           "internal_module", "generator_function", "function_expression"}:
+            # Class/enum/namespace names and the inner names of function and
+            # generator expressions are bindings that can shadow the helper.
+            name = node.child_by_field_name("name")
+            if name is not None:
+                invalid.add(_text(name))
+        elif node.type in {"formal_parameters", "import_clause", "catch_clause"}:
+            invalid.update(_text(n) for n in _nodes(node) if n.type in _BINDING_NAMES)
+        elif node.type == "for_in_statement":
+            target = node.child_by_field_name("left")
+            if target is not None:
+                invalid.update(_text(n) for n in _nodes(target) if n.type in _BINDING_NAMES)
+        elif node.type == "arrow_function":
+            parameter = node.child_by_field_name("parameter")
+            if parameter is not None:
+                invalid.add(_text(parameter))
+        elif node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression"}:
+            target = node.child_by_field_name("left") or node.child_by_field_name("argument")
+            if target is not None:
+                invalid.update(_text(n) for n in _nodes(target) if n.type in _BINDING_NAMES)
+    helpers = {}
+    for name, declaration in declared.items():
+        if name in invalid:
+            continue
+        if declaration.type == "function_declaration":
+            if _return_draws(declaration.child_by_field_name("body")):
+                helpers[name] = (_scope_of(declaration), None)
+        else:
+            value = declaration.child_by_field_name("value")
+            if (value is not None and value.type in {"arrow_function", "function_expression"}
+                    and _return_draws(value.child_by_field_name("body"))):
+                helpers[name] = (_scope_of(declaration.parent), declaration)
+    return helpers
+
+
+def _helper_reaches(helper, call):
+    """The call sits inside the helper's declaring scope, after its declarator."""
+    scope, order = helper
+    parent = call.parent
+    while parent is not None:
+        if parent == scope:
+            return order is None or order.end_byte <= call.start_byte
+        parent = parent.parent
+    return False
+
+
 def _js_evidence(root, nodes):
     # Without full symbol resolution, any local Math binding/mutation makes its
     # provenance unknown. This deliberately under-reports instead of assigning
@@ -201,14 +332,20 @@ def _js_evidence(root, nodes):
             if target is not None and any(_text(child) == "Math" for child in _nodes(target)):
                 return []
 
+    helpers = _helpers(nodes)
+
     def draw(value):
-        if value is None or value.type in {"arrow_function", "function_expression", "function_declaration"}:
+        if value is None or value.type in _DEFERRED_BODIES:
             return False
         if value.type == "call_expression":
             callee = value.child_by_field_name("function")
             if callee is not None and callee.type == "member_expression":
                 if (_text(callee.child_by_field_name("object")) == "Math" and
                         _text(callee.child_by_field_name("property")) == "random"):
+                    return True
+            if callee is not None and callee.type == "identifier":
+                helper = helpers.get(_text(callee))
+                if helper is not None and _helper_reaches(helper, value):
                     return True
         return any(draw(child) for child in value.named_children)
 

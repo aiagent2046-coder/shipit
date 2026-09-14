@@ -112,6 +112,10 @@ RULE_COVERAGE_LABELS = {
     "unsafe_deserialization": "Unsafe deserialization",
     "unsafe_xml_parse": "XML entity resolution",
     "path_traversal": "Filesystem paths",
+    "xss": "HTML injection",
+    "open_redirect": "Open redirects",
+    "insecure_randomness": "Insecure randomness",
+    "command_injection": "Shell commands",
 }
 RULE_EXCLUSION_LABELS = {
     "unsupported_extension": "unsupported file types",
@@ -128,6 +132,8 @@ RULE_SKIP_LABELS = {
     "parse_error": "syntax errors",
     "ast_limit": "syntax-analysis budget",
     "analysis_limit": "expression analysis limit",
+    "unsupported_vue_template": "unsupported Vue template language or external template",
+    "unsupported_vue_script": "unsupported Vue script language or external script",
 }
 
 

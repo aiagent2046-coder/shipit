@@ -3,7 +3,7 @@
   "expect": [
     {
       "rule_id": "gitignore-missing-secrets",
-      "severity": "high"
+      "severity": "medium"
     }
   ],
   "forbid": []

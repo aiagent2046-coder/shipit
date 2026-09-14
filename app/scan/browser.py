@@ -16,7 +16,7 @@ from app.scan.static import run_static_scan
 from app.scan.version import AUDIT_ENGINE_VERSION
 
 
-def scan_archive(data: bytes) -> dict:
+def scan_archive(data: bytes, catalog: dict | None = None) -> dict:
     """Return JSON-serializable findings and SARIF; validation errors propagate.
 
     The shared static stage enforces the upload contract, including the 50 MiB
@@ -26,29 +26,53 @@ def scan_archive(data: bytes) -> dict:
     if not isinstance(data, bytes):
         raise TypeError("scan_archive expects bytes")
     static = run_static_scan(io.BytesIO(data), allow_missing_native=True)
-    return _result(data, static)
+    return _result(data, static, _dependencies(data, catalog))
 
 
-def _result(data: bytes, static: dict) -> dict:
+def _dependencies(data: bytes, catalog: dict | None) -> dict | None:
+    if catalog is None:
+        return None
+    from app.scan.cve_match import match_archive
+    try:
+        return match_archive(data, catalog)
+    except (ValueError, TypeError, KeyError, RecursionError):
+        return {"findings": [], "coverage": {"status": "unavailable",
+                "limitations": ["cve_catalog_invalid"]}}
+
+
+def _result(data: bytes, static: dict, dependencies: dict | None = None) -> dict:
     manifest = scan_manifest(
         data, AUDIT_ENGINE_VERSION, static,
         {"skipped_reason": "llm_not_run_browser"}, None,
     )
-    # No advisory lookup occurs, whether or not the archive has a lockfile.
+    # Matching uses a preloaded public snapshot; no package query leaves the worker.
+    dependency_coverage = dependencies["coverage"] if dependencies else None
+    dependency_ran = dependency_coverage and dependency_coverage.get("status") != "unavailable"
+    findings = [*static["findings"], *(dependencies["findings"] if dependencies else [])]
     limitations = list(dict.fromkeys([
         *manifest["limitations"], *static.get("limitations", []),
-        "dependency_check_not_run", "runtime_tests_not_run", "static_source_only",
+        *([] if dependency_ran else ["dependency_check_not_run"]),
+        *(["dependency_snapshot_scope", "dependency_runtime_reachability_not_checked"] if dependency_ran else []),
+        "runtime_tests_not_run", "static_source_only",
         *(["native_parsers_unavailable"] if any(
             failure["reason"] == "check_error: ImportError"
             for failure in static["checks_not_run"]
         ) else []),
     ]))
     manifest["limitations"] = limitations
+    manifest["dependency_cve"] = dependency_coverage
     coverage = dict(static["coverage"])
+    if dependency_coverage:
+        coverage["dependency_cve"] = (
+            "Local CVE snapshot matching of resolved npm/PyPI dependencies. "
+            "Only explicit package identities and supported version ranges are evaluated. "
+            "Snapshot exclusions, unlisted packages and unknown ranges cannot establish safety. "
+            f"Status: {dependency_coverage.get('status', 'unavailable')}."
+        )
     for failure in static["checks_not_run"]:
         coverage[failure["check"]] = f"Did not run ({failure['reason']}). No coverage established."
     sarif = build_sarif(
-        static["findings"], engine_version=AUDIT_ENGINE_VERSION,
+        findings, engine_version=AUDIT_ENGINE_VERSION,
         score={**static["score"], "basis": "static_only", "scan_manifest": manifest},
     )
     if "recommendation_enrichment_unavailable" in limitations:
@@ -59,13 +83,14 @@ def _result(data: bytes, static: dict) -> dict:
     return {
         "report": {
             "engine_version": AUDIT_ENGINE_VERSION,
-            "findings": static["findings"],
+            "findings": findings,
             "checks_run": static["checks_run"],
             "checks_not_run": static["checks_not_run"],
             "coverage": coverage,
             "rule_coverage": static["rule_coverage"],
             "limitations": limitations,
             "runtime_verified": False,
+            **({"dependency_cve": dependency_coverage} if dependency_coverage else {}),
         },
         "sarif": sarif,
     }
@@ -79,15 +104,16 @@ class ScanSession:
     Checks without file accounting are never claimed to be resumable.
     """
 
-    def __init__(self, data: bytes):
+    def __init__(self, data: bytes, catalog: dict | None = None):
         if not isinstance(data, bytes):
             raise TypeError("ScanSession expects bytes")
         self.data = data
         self.static = run_static_scan(io.BytesIO(data), allow_missing_native=True)
+        self.dependencies = _dependencies(data, catalog)
 
     def result(self) -> dict:
         failed = {item["check"] for item in self.static["checks_not_run"]}
-        result = _result(self.data, self.static)
+        result = _result(self.data, self.static, self.dependencies)
         result["can_continue"] = any(
             record.get("skip_reasons", {}).get("file_limit", 0) and name not in failed
             for name, record in self.static["rule_coverage"].items()

@@ -1159,3 +1159,59 @@ def test_partial_group_with_unsupported_occurrence_is_not_offered_for_sale(paths
     assert "config.py" in plan.files
     assert "config.toml" not in plan.files
     assert any("unsupported format" in item.reason for item in plan.skipped)
+
+
+def test_public_env_configuration_is_not_sold_as_an_automatic_fix():
+    findings = [finding(rule_id="env-file-committed",
+                        file="frontend/.env.development", line=0,
+                        context="public_configuration")]
+    zip_bytes = make_zip({
+        "frontend/.env.development": "VITE_API_URL=http://localhost:8000\n",
+        ".env": "SECRET=fake-value-hunter2\n",
+    })
+
+    assert not generate.has_auto_fixable_findings(findings)
+    plan = build_fixpack_plan(zip_bytes, findings)
+    assert not plan.has_changes
+    assert not plan.leaked_env_files
+    assert len(plan.skipped) == 1
+    assert "Public build configuration" in plan.skipped[0].reason
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_env_fix_deletes_only_the_finding_path_and_ignores_that_variant(wrapped):
+    path = "backend/.env.production"
+    persisted_path = "acme-app-deadbeef/" + path if wrapped else path
+    zip_bytes = make_zip({
+        path: "SECRET=fake-value-hunter2\n",
+        "frontend/.env.development": "VITE_API_URL=http://localhost:8000\n",
+        "other/.env": "OTHER_SECRET=fake-value-other-secret\n",
+    })
+    plan = build_fixpack_plan(zip_bytes, [finding(
+        rule_id="env-file-committed", file=persisted_path, line=0)])
+
+    assert plan.deletions == [path]
+    assert plan.leaked_env_files == [path]
+    assert "/backend/.env.production" in plan.files[".gitignore"].splitlines()
+    assert "OTHER_SECRET" not in plan.files[".env.example"]
+    assert "frontend/.env.development" not in plan.files
+
+
+def test_stale_env_finding_preserves_public_configuration_on_refetch():
+    zip_bytes = make_zip({
+        "frontend/.env.development": "VITE_API_URL=http://localhost:8000\n",
+    })
+    # An earlier audit classified the same path as secret-bearing.
+    plan = build_fixpack_plan(zip_bytes, [finding(
+        rule_id="env-file-committed", file="frontend/.env.development", line=0)])
+    assert not plan.has_changes
+    assert "Public build configuration on re-fetch" in plan.skipped[0].reason
+
+
+@pytest.mark.parametrize("missing_path", ["missing/.env", ".env, other/.env", ""])
+def test_unresolved_env_finding_does_not_expand_to_other_files(missing_path):
+    zip_bytes = make_zip({".env": "SECRET=fake-value-hunter2\n"})
+    plan = build_fixpack_plan(zip_bytes, [finding(
+        rule_id="env-file-committed", file=missing_path, line=0)])
+    assert not plan.has_changes
+    assert len(plan.skipped) == 1

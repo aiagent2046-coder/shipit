@@ -17,7 +17,7 @@ RULE_COVERAGE_KEYS = ("outbound_url", "tls_verification", "unsafe_deserializatio
 EXCLUSION_REASONS = ("unsupported_extension", "non_production_path", "dependency_tree", "generated_build")
 SKIP_REASONS = (
     "file_size_limit", "file_limit", "finding_limit", "read_error", "decode_error", "parse_error", "ast_limit",
-    "analysis_limit",
+    "analysis_limit", "unsupported_vue_template", "unsupported_vue_script",
 )
 _COUNTS = ("files_total", "eligible_files", "attempted_files", "analyzed_files", "excluded_files", "skipped_files")
 _ANALYSIS_LIMITS: ContextVar[set[str] | None] = ContextVar("rule_analysis_limits", default=None)

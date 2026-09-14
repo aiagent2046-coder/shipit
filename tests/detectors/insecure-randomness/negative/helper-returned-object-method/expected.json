@@ -1,0 +1,7 @@
+{
+  "description": "A returned object's method is deferred; the helper has not drawn.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

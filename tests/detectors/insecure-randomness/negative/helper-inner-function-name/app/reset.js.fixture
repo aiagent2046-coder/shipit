@@ -1,0 +1,7 @@
+function generateToken() {
+  return Math.random();
+}
+const holder = function generateToken() {
+  const resetToken = generateToken();
+  return resetToken;
+};

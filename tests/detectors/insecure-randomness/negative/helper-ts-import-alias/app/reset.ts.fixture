@@ -1,0 +1,9 @@
+function generateToken() {
+  return Math.random();
+}
+namespace Inner {
+  import generateToken = source.secure;
+  export function issue() {
+    const resetToken = generateToken();
+  }
+}

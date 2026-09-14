@@ -1,0 +1,7 @@
+function generateToken(x) {
+  if (x) {
+    return Math.random();
+  }
+  return crypto.getRandomValues(new Uint8Array(16));
+}
+const resetToken = generateToken(1);

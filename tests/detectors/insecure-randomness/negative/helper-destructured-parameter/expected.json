@@ -1,0 +1,7 @@
+{
+  "description": "A destructured parameter shadows the helper at the call site.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

@@ -14,9 +14,10 @@ from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
 from app.scan.rule_coverage import RuleCoverage
+from app.scan.vue_template import VueParseError, extract_vue
 
 RULE_ID = "xss-unsafe-html-injection"
-_JS_FILE_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
+_JS_FILE_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue")
 _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 400
 _MAX_FINDINGS = 32
@@ -41,7 +42,7 @@ def _nodes(root):
     while pending:
         node, depth = pending.pop()
         if len(nodes) >= _MAX_NODES or depth > _MAX_DEPTH:
-            raise ValueError("syntax_limit")
+            raise ValueError("ast_limit")
         nodes.append(node)
         pending.extend((child, depth + 1) for child in reversed(node.named_children))
     return nodes
@@ -168,6 +169,57 @@ def _sink(node):
     return None, None
 
 
+def _javascript_candidates(raw, parser):
+    root = parser.parse(raw).root_node
+    if root.has_error:
+        raise VueParseError("parse_error")
+    nodes = _nodes(root)
+    declarations = _declarations(nodes)
+    candidates = []
+    for node in nodes:
+        sink, value = _sink(node)
+        if sink is not None and value is not None and not _static_value(value, node, declarations):
+            candidates.append((node.start_point[0] + 1, sink))
+    return candidates, len(nodes)
+
+
+def _vue_candidates(source, parsers):
+    expressions, scripts, node_count = extract_vue(source, max_nodes=_MAX_NODES, max_depth=_MAX_DEPTH)
+    candidates = []
+    for expression in expressions:
+        # A wrapping expression forbids a directive value from introducing
+        # declarations/statements. HTML entities have already been decoded once.
+        raw = ("(" + expression.value + "\n)").encode("utf-8")
+        root = parsers[False].parse(raw).root_node
+        if root.has_error:
+            raise VueParseError("parse_error")
+        nodes = _nodes(root)
+        node_count += len(nodes)
+        if node_count > _MAX_NODES:
+            raise VueParseError("ast_limit")
+        statements = [n for n in root.named_children if n.type != "comment"]
+        if len(statements) != 1 or statements[0].type != "expression_statement":
+            raise VueParseError("parse_error")
+        value = statements[0].named_children[0]
+        while value.type == "parenthesized_expression":
+            children = [n for n in value.named_children if n.type != "comment"]
+            if len(children) != 1:
+                raise VueParseError("parse_error")
+            value = children[0]
+        if not _literal(value):
+            candidates.append((expression.line, "vue-v-html"))
+    for script in scripts:
+        # Separate programs prevent a literal in one block from incorrectly
+        # suppressing a sink in the other block's different compilation scope.
+        raw = script.value.encode("utf-8")
+        script_candidates, count = _javascript_candidates(raw, parsers[script.tsx])
+        node_count += count
+        if node_count > _MAX_NODES:
+            raise VueParseError("ast_limit")
+        candidates.extend((line + script.line - 1, sink) for line, sink in script_candidates)
+    return sorted(candidates)
+
+
 def scan_xss(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
     parsers = {False: _parser(False), True: _parser(True)}
     findings: list[CheckFinding] = []
@@ -177,28 +229,27 @@ def scan_xss(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFi
         for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
             raw = archive.read(info)
             try:
-                raw.decode("utf-8")
-                root = parsers[info.filename.endswith((".jsx", ".tsx"))].parse(raw).root_node
-                if root.has_error:
-                    accounting.skip("parse_error")
-                    continue
-                nodes = _nodes(root)
-                declarations = _declarations(nodes)
+                source = raw.decode("utf-8")
+                if info.filename.endswith(".vue"):
+                    candidates = _vue_candidates(source, parsers)
+                else:
+                    candidates, _ = _javascript_candidates(
+                        raw, parsers[info.filename.endswith((".jsx", ".tsx"))])
             except UnicodeError:
                 accounting.skip("decode_error")
                 continue
-            except ValueError:
-                accounting.skip("syntax_limit")
+            except VueParseError as exc:
+                accounting.skip(str(exc))
                 continue
-            for node in nodes:
-                sink, value = _sink(node)
-                if sink is None or value is None or _static_value(value, node, declarations):
-                    continue
+            except ValueError:
+                accounting.skip("ast_limit")
+                continue
+            for line, sink in candidates:
                 if len(findings) >= remaining_findings(_MAX_FINDINGS):
                     accounting.skip("finding_limit")
                     accounting.finish()
                     return findings
-                findings.append(_finding(info.filename, node.start_point[0] + 1, sink))
+                findings.append(_finding(info.filename, line, sink))
             accounting.analyzed()
         accounting.finish()
     return findings
@@ -222,6 +273,10 @@ def _finding(path: str, line: int, sink: str) -> CheckFinding:
             "value reaches an HTML-injection sink."
         ),
         fix_hint=(
+            "Use Vue interpolation ({{ value }}) or v-text for plain text. If HTML is required, "
+            "sanitize it with an explicit allowlist before v-html. A helper or sanitizer call "
+            "alone does not establish that its policy is safe."
+            if sink == "vue-v-html" else
             "Use textContent (or React's normal children / setText) for anything that is text, not "
             "markup. If you must insert HTML, sanitize the value first (DOMPurify with an allowlist, "
             "or an equivalent) and prefer a template or component that never builds HTML by string. "
@@ -232,6 +287,7 @@ def _finding(path: str, line: int, sink: str) -> CheckFinding:
 
 def _describe(sink: str) -> str:
     return {
+        "vue-v-html": "Vue v-html",
         "dangerously-set-inner-html": "dangerouslySetInnerHTML",
         "inner-outer-html-assignment": "innerHTML/outerHTML",
         "document-write": "document.write",

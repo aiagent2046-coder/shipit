@@ -33,3 +33,19 @@ archives for every wheel and the seven unmodified TypeScript headers are linked
 by exact version and SHA-256 in native-manifest.json. Build instructions are in
 browser/native/README.md and browser/scripts/rebuild-native.py in this repository.
 No parser source algorithms were modified for these builds.
+
+## Dependency advisory knowledge snapshot
+
+The offline package catalog is derived from the CVE List maintained by the CVE
+Program: https://github.com/CVEProject/cvelistV5. Source commit, timestamp, and
+selection counters are preserved in the catalog and scan reports. Redistribution
+and use of the source records are subject to the CVE Program Terms of Use:
+https://www.cve.org/Legal/TermsOfUse. This catalog is a transformed subset, not the
+complete CVE List; inclusion does not imply endorsement by the CVE Program.
+
+The snapshot also includes a transformed subset of the GitHub Advisory
+Database's `advisories/github-reviewed` records for npm and PyPI:
+https://github.com/github/advisory-database . The database is licensed under
+CC-BY-4.0. Each compiled snapshot records the exact source commit and selection
+counters. Inclusion identifies GitHub curator review at that source revision; it
+does not imply endorsement by GitHub or establish application exploitability.

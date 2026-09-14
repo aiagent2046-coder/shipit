@@ -1,0 +1,6 @@
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.get('/f')
+async def f(name: str):
+    return open(f'/srv/uploads/{name}').read()

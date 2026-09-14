@@ -1,0 +1,4 @@
+<script setup>
+const render = value => { element.innerHTML = value; };
+</script>
+<template><p>Preview</p></template>

@@ -1,0 +1,6 @@
+<script setup lang="ts">
+const props = defineProps<{ content: string }>();
+</script>
+<template>
+  <div v-html="props.content"></div>
+</template>

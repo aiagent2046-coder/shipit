@@ -31,8 +31,19 @@ If a native asset fails to load, available checks still run and the report lists
 the gaps; incomplete SARIF reports use `executionSuccessful: false`. The CI
 suite blocks native wheel downloads to exercise that failure mode in Chromium.
 
-The preview does not run repository tests, query dependency advisories, check a
-live database, or prove runtime exploitability. It exposes no readiness score.
+The preview compares resolved npm/PyPI dependencies against a pinned local
+catalog compiled from the CVE List and GitHub-reviewed GHSA records. It sends no
+package queries or archive content to advisory services.
+Supported inputs include `package-lock.json`, pinned `requirements.txt`,
+`poetry.lock`, `pnpm-lock.yaml` v9, and `uv.lock` v1 (revisions 0–3).
+All locked platform/optional/development variants are inspected; this is not
+an assertion that every variant is installed in production.
+Source commits, snapshot age, unsupported manifests, unlisted packages and
+unresolved comparisons are shown separately from source-check coverage.
+See [dependency advisory knowledge compilation](../docs/browser-cve-learning.md)
+for updates and
+limitations. It does not run repository tests, check a live database, or prove
+runtime exploitability. It exposes no readiness score.
 ZIP validation and per-rule budgets are shared with the server (50 MiB compressed,
 500 MiB declared total expansion, 100 MiB per entry, 50,000 entries). A two-minute
 UI deadline terminates the worker; users can cancel earlier. These limits do not
