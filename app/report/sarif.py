@@ -207,7 +207,10 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                             "informationUri": "https://drydock.co",
                             "rules": rules}},
         "invocations": [{
-            "executionSuccessful": not failures,
+            "executionSuccessful": not failures and not (
+                isinstance(manifest.get("dependency_cve"), dict)
+                and manifest["dependency_cve"].get("status") == "unavailable"
+            ),
             "properties": {
                 "engineVersion": engine_version,
                 "basis": (score or {}).get("basis"),

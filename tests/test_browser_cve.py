@@ -63,6 +63,7 @@ def test_catalog_failure_keeps_static_findings_and_exposes_missing_stage():
     data = project('npm', 'lodash', '4.17.23', extra={'index.js': 'element.innerHTML = userText;'})
     result = scan_archive(data, {})
     assert result['report']['dependency_cve']['status'] == 'unavailable'
+    assert result['sarif']['runs'][0]['invocations'][0]['executionSuccessful'] is False
     assert 'dependency_check_not_run' in result['report']['limitations']
     assert any(f['rule_id'] == 'xss-unsafe-html-injection' for f in result['report']['findings'])
     assert not any(f['rule_id'] == 'dependency-cve-match' for f in result['report']['findings'])
