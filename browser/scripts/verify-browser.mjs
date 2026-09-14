@@ -74,7 +74,7 @@ try {
   await page.getByRole('button', { name: 'Scan locally', exact: true }).click();
   await page.getByRole('button', { name: 'Continue scanning remaining files', exact: true }).waitFor({ timeout: 120_000 });
   assert.equal(await page.locator('#partial-coverage').isVisible(), true);
-  assert.match(await page.locator('#checks-not-run').innerText(), /400 of 402/);
+  assert.match(await page.locator('#checks-not-run').innerText(), /400 of 403/);
   for (const expected of continuation.continuations) {
     const button = page.getByRole('button', { name: 'Continue scanning remaining files', exact: true });
     await button.click();
@@ -82,9 +82,10 @@ try {
       null, { timeout: 120_000 });
     assert.equal(await button.isVisible(), expected.can_continue);
   }
-  assert.match(await page.locator('#checks-not-run').innerText(), /401 of 402/);
+  assert.match(await page.locator('#checks-not-run').innerText(), /402 of 403/);
   assert.match(await page.locator('#checks-not-run').innerText(), /parse error/);
   assert.match(await page.locator('#findings').innerText(), /tail.js/);
+  assert.match(await page.locator('#findings').innerText(), /tail.vue/);
   assert.match(await page.locator('#findings').innerText(), /tail.py/);
   const continuedDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export JSON', exact: true }).click();

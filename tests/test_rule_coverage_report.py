@@ -120,3 +120,9 @@ def test_legacy_counts_are_not_inferred_from_secrets_or_archive_size():
     coverage = [(label, value) for label, value in manifest_rows(score) if label.startswith("File coverage:")]
     assert len(coverage) == 4
     assert {value for _, value in coverage} == {"Not recorded for this audit"}
+
+
+def test_every_counted_rule_is_visible_in_report_coverage():
+    from app.report.evidence import RULE_COVERAGE_LABELS
+    from app.scan.rule_coverage import RULE_COVERAGE_KEYS
+    assert set(RULE_COVERAGE_LABELS) == set(RULE_COVERAGE_KEYS)

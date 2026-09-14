@@ -79,6 +79,10 @@ def test_a_string_or_comment_spelling_the_sink_is_not_code():
 # case name -> (file, the one change that removes the property the case pins)
 CORPUS_NEGATIVES = REPO_ROOT / "tests" / "detectors" / RULE_ID / "negative"
 MUTATIONS: dict[str, tuple[str, str, str]] = {
+    "vue-text-interpolation": ("src/View.vue", "<template><p>{{ message }}</p></template>",
+                               '<template><p v-html="message"></p></template>'),
+    "vue-literal-html": ("src/View.vue", "<template><div v-html=\"'&lt;b&gt;fixed&lt;/b&gt;'\"></div></template>",
+                         '<template><div v-html="message"></div></template>'),
     "multiline-template-text": ("app/view.js",
                                 "const doc = `\nel.innerHTML = user.html;\n`;",
                                 "el.innerHTML = user.html;"),
