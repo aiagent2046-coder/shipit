@@ -204,3 +204,121 @@ def test_other_dependency_metadata_is_an_explicit_gap(manifest):
 def test_malformed_catalog_fields_stay_unknown(changes):
     result = match_archive(npm(), catalog([advisory(**changes)]))
     assert result["coverage"]["status_counts"]["unknown"] == 1
+
+
+def osv_advisory(events=None, *, versions=None, aliases=None, kind="ECOSYSTEM"):
+    return {
+        "id": "GHSA-2345-6789-cfgh",
+        "aliases": aliases or [],
+        "source": "github-reviewed",
+        "osv_ranges": [] if events is None else [{"type": kind, "events": events}],
+        "osv_versions": versions or [],
+    }
+
+
+def two_source_catalog(entries, key="npm:widget"):
+    snapshot = catalog(entries, key)
+    snapshot["schema_version"] = 2
+    snapshot["sources"] = {
+        "cvelist": snapshot["source"],
+        "github-reviewed": {
+            "repository": "https://github.com/github/advisory-database",
+            "commit": "b" * 40,
+            "generated_at": "2026-09-14T13:00:00Z",
+        },
+    }
+    return snapshot
+
+
+@pytest.mark.parametrize(("events", "version", "expected"), [
+    ([{"introduced": "0"}, {"fixed": "2.0.0"}], "1.9.9", "affected"),
+    ([{"introduced": "0"}, {"fixed": "2.0.0"}], "2.0.0", "unaffected"),
+    ([{"introduced": "0"}, {"last_affected": "2.0.0"}], "2.0.0", "affected"),
+    ([{"introduced": "0"}, {"last_affected": "2.0.0"}], "2.0.1", "unaffected"),
+    ([{"fixed": "1.1.0"}, {"introduced": "1.0.0"},
+      {"fixed": "3.1.0"}, {"introduced": "3.0.0"}], "3.0.5", "affected"),
+    ([{"introduced": "0"}, {"limit": "2.0.0"}], "2.0.0", "unaffected"),
+])
+def test_osv_event_boundaries_follow_the_published_timeline(events, version, expected):
+    result = evaluate_advisory(version, "npm", osv_advisory(events))
+    assert result["status"] == expected
+
+
+def test_osv_exact_versions_and_supported_pypi_numeric_ranges():
+    exact = osv_advisory(versions=["1.2.3"])
+    assert evaluate_advisory("1.2.3", "npm", exact)["status"] == "affected"
+    assert evaluate_advisory("1.2.4", "npm", exact)["status"] == "unaffected"
+    pypi = osv_advisory([
+        {"introduced": "0"}, {"fixed": "1.10"},
+    ])
+    assert evaluate_advisory("1.9", "PyPI", pypi)["status"] == "affected"
+    assert evaluate_advisory("1.10", "PyPI", pypi)["status"] == "unaffected"
+
+
+@pytest.mark.parametrize(("entry", "reason"), [
+    (osv_advisory([{"introduced": "a" * 40}], kind="GIT"),
+     "unsupported_osv_range_type"),
+    (osv_advisory([{"fixed": "2.0.0"}]), "osv_range_without_introduced"),
+    (osv_advisory([{"introduced": "0", "fixed": "2.0.0"}]),
+     "invalid_osv_event"),
+    (osv_advisory([{"introduced": "0"}, {"fixed": "2.0.0"},
+                   {"last_affected": "1.9.9"}]), "conflicting_osv_events"),
+    (osv_advisory([{"introduced": "0"}, {"fixed": "not-a-version"}]),
+     "unsupported_osv_version"),
+])
+def test_unsupported_or_ambiguous_osv_ranges_remain_unknown(entry, reason):
+    result = match_archive(npm(), two_source_catalog([entry]))
+    assert result["findings"] == []
+    assert result["coverage"]["status_counts"]["unknown"] == 1
+    assert result["coverage"]["details"][0]["reason"] == reason
+
+
+def test_reviewed_ghsa_match_exports_its_own_source_and_url():
+    entry = osv_advisory([{"introduced": "0"}, {"fixed": "2.0.0"}])
+    result = match_archive(npm(), two_source_catalog([entry]))
+    finding, = result["findings"]
+    evidence = finding["claim_evidence"]
+    assert evidence["advisory_id"] == "GHSA-2345-6789-cfgh"
+    assert evidence["ghsa_id"] == evidence["advisory_id"]
+    assert "cve_id" not in evidence
+    assert evidence["url"] == "https://github.com/advisories/GHSA-2345-6789-cfgh"
+    assert evidence["snapshot_sources"] == [{
+        "name": "github-reviewed",
+        **result["coverage"]["sources"]["github-reviewed"],
+    }]
+
+
+def test_cve_alias_deduplicates_matching_sources_and_disagreement_is_unknown():
+    ghsa = osv_advisory(
+        [{"introduced": "0"}, {"fixed": "2.0.0"}],
+        aliases=["CVE-2025-12345"],
+    )
+    matching = two_source_catalog([advisory(), ghsa])
+    result = match_archive(npm(), matching)
+    finding, = result["findings"]
+    evidence = finding["claim_evidence"]
+    assert evidence["advisory_id"] == "CVE-2025-12345"
+    assert evidence["cve_id"] == "CVE-2025-12345"
+    assert evidence["ghsa_id"] == "GHSA-2345-6789-cfgh"
+    assert evidence["advisory_ids"] == [
+        "CVE-2025-12345", "GHSA-2345-6789-cfgh",
+    ]
+    assert {item["name"] for item in evidence["snapshot_sources"]} == {
+        "cvelist", "github-reviewed",
+    }
+
+    disagreeing = advisory(versions=[{
+        "version": "1.2.3", "status": "unaffected",
+    }])
+    result = match_archive(npm(), two_source_catalog([disagreeing, ghsa]))
+    assert result["findings"] == []
+    assert result["coverage"]["details"][0]["reason"] == "conflicting_advisory_sources"
+
+
+def test_two_source_catalog_requires_both_exact_pinned_origins():
+    missing = two_source_catalog([osv_advisory([{"introduced": "0"}])])
+    del missing["sources"]["github-reviewed"]
+    assert match_archive(npm(), missing)["coverage"]["error"] == "invalid_catalog"
+    wrong = two_source_catalog([osv_advisory([{"introduced": "0"}])])
+    wrong["sources"]["github-reviewed"]["repository"] = "https://example.invalid"
+    assert match_archive(npm(), wrong)["coverage"]["error"] == "invalid_catalog"
