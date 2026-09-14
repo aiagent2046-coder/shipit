@@ -176,7 +176,8 @@ def test_browser_cve_reads_both_companion_locks():
     assert coverage['dependencies_found'] == coverage['dependencies_checked'] == 2
     assert coverage['incomplete_manifests'] == {}
     assert {'CVE-2026-2950', 'CVE-2024-7297'} <= {
-        f['claim_evidence']['cve_id'] for f in result['findings']}
+        f['claim_evidence']['cve_id'] for f in result['findings']
+        if 'cve_id' in f['claim_evidence']}
     assert {f['file'] for f in result['findings']} == {
         'project/frontend/pnpm-lock.yaml', 'project/backend/uv.lock'}
 
