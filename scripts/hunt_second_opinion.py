@@ -70,7 +70,7 @@ CODE:
 # as a verdict. Only a line that starts with the verdict counts, and every
 # such line must agree (parse_verdict).
 _VERDICT_RE = re.compile(
-    r"^\s*VERDICT\s*:\s*(VULNERABLE|NOT[- ]VULNERABLE|NOTVULNERABLE|BROKEN|UNSURE)",
+    r"^\s*VERDICT\s*:\s*(VULNERABLE|NOT[- ]VULNERABLE|NOTVULNERABLE|BROKEN|UNSURE)\s*$",
     re.IGNORECASE | re.MULTILINE)
 
 
@@ -204,14 +204,14 @@ def main() -> int:
         if not dump_dir.is_dir():
             parser.error(f"--dump {dump_dir} is not a directory")
         dirs.append(dump_dir)
-    ok, message = model_client.preflight(args.model)
-    if not ok:
-        print(message, file=sys.stderr)
-        return 2
     bodies = review_bodies(dirs)
     if not bodies:
         print("no review bodies: triage already binned everything, or the dump is empty")
         return 0
+    ok, message = model_client.preflight(args.model)
+    if not ok:
+        print(message, file=sys.stderr)
+        return 2
     _report(second_opinion(dirs, args.model, args.max), args.model)
     return 0
 
