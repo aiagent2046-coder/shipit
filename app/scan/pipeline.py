@@ -238,7 +238,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # reported at high confidence; a missing filter (version-dependent default),
 # data and tar filters, variable or spread filters, zipfile extraction and
 # unproven receivers stay silent.
-# 2026-09-14-11: sql-injection reads through a single import-resolved sqlalchemy
+# 2026-09-14-10: archive receiver provenance is keyed by lexical scope, so
+# same-spelled one-time bindings in independent functions are each proven.
+# Proven setattr/patch mutations of tarfile.open or receiver extraction
+# methods invalidate that provenance instead of producing a false positive.
+# 2026-09-14-12: sql-injection reads through a single import-resolved sqlalchemy
 # text() wrapper: the sink's query text is the wrapper argument. text() over a
 # literal stays the parameterised fix; wrappers with keywords, extra arguments,
 # rebound aliases and unknown spellings are not unwrapped.

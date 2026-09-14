@@ -1,0 +1,7 @@
+{
+  "description": "patch.object replacing tarfile.open makes the constructor result unknown.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}

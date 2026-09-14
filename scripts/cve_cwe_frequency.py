@@ -61,6 +61,11 @@ def npm_pypi(record: dict) -> bool:
     return False
 
 
+def _ranked(counter: Counter[str], limit: int) -> list[tuple[str, int]]:
+    """Count descending, then CWE id ascending for stable ties."""
+    return sorted(counter.items(), key=lambda item: (-item[1], item[0]))[:limit]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, help="path to a cvelistV5 checkout")
@@ -73,21 +78,22 @@ def main() -> int:
     examples: dict[str, list[str]] = {}
     records = no_cwe = eco_records = 0
 
-    for path in source.rglob("cves/*/*/*.json"):
+    for path in sorted(source.rglob("cves/*/*/*.json")):
         try:
-            record = json.loads(path.read_text())
+            record = json.loads(path.read_text(encoding="utf-8"))
         except (ValueError, UnicodeError):
             continue
         records += 1
         cwes = cwe_ids(record)
         if not cwes:
             no_cwe += 1
-        if npm_pypi(record):
+        is_eco = npm_pypi(record)
+        if is_eco:
             eco_records += 1
         cve_id = record.get("cveMetadata", {}).get("cveId", path.stem)
-        for cwe in cwes:
+        for cwe in sorted(cwes):
             overall[cwe] += 1
-            if npm_pypi(record):
+            if is_eco:
                 eco[cwe] += 1
                 examples.setdefault(cwe, [])
                 if len(examples[cwe]) < 3:
@@ -95,10 +101,10 @@ def main() -> int:
 
     print(f"records={records}  with_cwe={records - no_cwe}  no_cwe={no_cwe}  npm_pypi={eco_records}")
     print(f"\n=== TOP {args.top} CWE overall:")
-    for cwe, count in overall.most_common(args.top):
+    for cwe, count in _ranked(overall, args.top):
         print(f"  {cwe:10} {count:6}  ({100 * count // max(1, records)}%)")
     print(f"\n=== TOP {args.top} CWE among npm/PyPI records:")
-    for cwe, count in eco.most_common(args.top):
+    for cwe, count in _ranked(eco, args.top):
         ids = ", ".join(examples.get(cwe, []))
         print(f"  {cwe:10} {count:5}  ({100 * count // max(1, eco_records)}%)  e.g. {ids}")
     return 0
