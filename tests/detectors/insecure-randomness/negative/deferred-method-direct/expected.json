@@ -1,0 +1,7 @@
+{
+  "description": "An object method assigned to the secret name has not run, so its Math.random is deferred.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

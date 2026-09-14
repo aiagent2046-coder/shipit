@@ -110,6 +110,18 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "helper-inner-function-name": ("app/reset.js",
                                    "function generateToken() {\n  const resetToken",
                                    "function tokenFactory() {\n  const resetToken"),
+    "helper-deferred-generator-assignment": ("app/reset.js",
+                                             "function* () { yield generateValue(); }",
+                                             "generateValue()"),
+    "helper-deferred-method-assignment": ("app/reset.js",
+                                          "{ make() { return generateValue(); } }",
+                                          "generateValue()"),
+    "helper-returned-class": ("app/reset.js",
+                              "return class { value = Math.random(); };",
+                              "return Math.random();"),
+    "deferred-method-direct": ("app/reset.js",
+                               "make() {\n    return Math.random();\n  }",
+                               "make: Math.random()"),
 }
 
 
@@ -193,6 +205,9 @@ def test_js_draws_are_calls_in_expressions_including_template_substitution(sourc
     "    const resetToken = makeToken();\n    return resetToken;\n  };\n  return inner;\n}\n",
     # an eagerly evaluated array draws at call time
     "function generateToken() { return [Math.random()]; }\nconst resetToken = generateToken();\n",
+    # an eagerly evaluated object property draws at construction of the literal
+    "function generateValue() { return Math.random(); }\n"
+    "const resetToken = { value: generateValue() };\n",
 ])
 def test_a_single_helper_hop_to_math_random_is_a_draw(source):
     findings = scan_insecure_randomness(archive(source, "repo/app/x.js"))
@@ -248,6 +263,17 @@ def test_a_single_helper_hop_to_math_random_is_a_draw(source):
     # a returned object method has not drawn yet
     "function generateToken() {\n  return {\n    make() {\n      return Math.random();\n    },\n  };\n}\n"
     "const resetToken = generateToken();\n",
+    # a generator assigned to the secret name has not run its body
+    "function generateValue() { return Math.random(); }\n"
+    "const resetToken = function* () { yield generateValue(); };\n",
+    # an object method assigned to the secret name has not run its body
+    "function generateValue() { return Math.random(); }\n"
+    "const resetToken = { make() { return generateValue(); } };\n",
+    # a helper returning a class has not drawn: fields initialize at construction
+    "function generateValue() {\n  return class { value = Math.random(); };\n}\n"
+    "const resetToken = generateValue();\n",
+    # a generator assigned to the secret name with a direct draw inside
+    "const resetToken = function* () { yield Math.random(); };\n",
 ])
 def test_helper_hops_with_unknown_provenance_stay_silent(source):
     assert scan_insecure_randomness(archive(source, "repo/app/x.js")) == []

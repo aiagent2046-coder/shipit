@@ -8,10 +8,10 @@ single return draws Math.random is itself a draw at call sites inside its
 declaring scope (function declarations may be hoisted; declarators must
 precede the call). Parameters, destructuring, reassignment, generator, enum,
 namespace and import-alias declarations, conditional or multiple returns,
-deferred bodies (a returned closure, generator or object/class method has not
-drawn yet), nested helper chains, Python helpers, dynamic aliases and
-cross-file provenance invalidate that hop. Comments and literal text never
-count as draws. No uploaded source is executed.
+deferred bodies (a returned or assigned closure, generator, object/class
+method or class has not drawn yet), nested helper chains, Python helpers,
+dynamic aliases and cross-file provenance invalidate that hop. Comments and
+literal text never count as draws. No uploaded source is executed.
 """
 from __future__ import annotations
 
@@ -43,10 +43,13 @@ _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 # Names bound by object destructuring in JS/TS grammar trees.
 _BINDING_NAMES = {"identifier", "shorthand_property_identifier_pattern"}
 # Bodies that do not run when the surrounding expression is evaluated: entering
-# one would count a draw that has not happened yet.
+# one would count a draw that has not happened yet. A class is included whole:
+# instance fields initialize at construction (static and computed keys may run
+# earlier, but the conservative silence is deliberate under-reporting).
 _DEFERRED_BODIES = {
     "arrow_function", "function_expression", "function_declaration",
     "generator_function", "generator_function_declaration", "method_definition",
+    "class", "class_declaration", "abstract_class", "abstract_class_declaration",
 }
 
 
@@ -332,7 +335,7 @@ def _js_evidence(root, nodes):
     helpers = _helpers(nodes)
 
     def draw(value):
-        if value is None or value.type in {"arrow_function", "function_expression", "function_declaration"}:
+        if value is None or value.type in _DEFERRED_BODIES:
             return False
         if value.type == "call_expression":
             callee = value.child_by_field_name("function")

@@ -217,9 +217,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # declared once as a function whose single return draws Math.random is a draw
 # at call sites inside its declaring scope. Parameters, destructuring,
 # reassignment, generator, enum, namespace, import-alias and duplicate
-# declarations, conditional or multiple returns, deferred bodies (returned
-# closures, generators, object/class methods), nested chains and cross-file
-# provenance stay unresolved.
+# declarations, conditional or multiple returns, deferred bodies (returned or
+# assigned closures, generators, object/class methods and classes -- both
+# walkers stop there), nested chains and cross-file provenance stay
+# unresolved.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
