@@ -1,0 +1,6 @@
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.get('/u')
+async def u(name: str, cur):
+    cur.execute('SELECT * FROM users WHERE name = {}'.format(name))

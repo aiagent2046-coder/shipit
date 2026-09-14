@@ -1,0 +1,10 @@
+{
+  "description": "A route parameter is interpolated into a filesystem path inside an f-string (CWE-22).",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
