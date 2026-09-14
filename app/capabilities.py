@@ -298,6 +298,25 @@ CAPABILITIES: tuple[Capability, ...] = (
         "is reported in coverage rather than treated as analyzed.",
     ),
     Capability(
+        "archive_extraction",
+        "Archive extraction with safety filtering explicitly disabled",
+        ("archive-extraction-fully-trusted",),
+        "Import-resolved Python tarfile extraction in parseable Python files up to 400 KB; at "
+        "most 400 files and 32 findings; vendor, dependency trees and generated build "
+        "directories are excluded before the file limit. Only a literal filter=\"fully_trusted\" "
+        "on extract or extractall of an object proven to come from tarfile.open (a direct "
+        "chain, or a name bound once before extraction in the same lexical scope and "
+        "control branch) is reported: the explicit opt-out is "
+        "unsafe on every Python with the parameter (measured on 3.12.13: fully_trusted writes "
+        "outside the destination where the data and tar filters refuse the same member). A "
+        "missing filter is version-dependent (3.14 defaults to data) and is not a finding; "
+        "data and tar filters refuse escaping members, zipfile sanitizes paths itself, and "
+        "variable filters, ** spreads, rebound or mutated receivers, modified tarfile "
+        "modules, deferred closures/type aliases, generic declarations, zipfile calls and cross-file "
+        "provenance are unresolved. Where the archive bytes come from and actual exposure "
+        "are not verified.",
+    ),
+    Capability(
         "insecure_randomness",
         "A secret-looking value generated from a non-cryptographic random source",
         ("insecure-randomness",),

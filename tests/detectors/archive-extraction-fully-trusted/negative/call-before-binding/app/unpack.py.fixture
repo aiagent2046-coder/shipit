@@ -1,0 +1,3 @@
+import tarfile
+t.extractall(dest, filter="fully_trusted")
+t = tarfile.open(source)

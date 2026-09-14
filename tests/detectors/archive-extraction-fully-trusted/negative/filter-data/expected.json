@@ -1,0 +1,7 @@
+{
+  "description": "The data filter refuses members escaping the destination and is safe on every version.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}

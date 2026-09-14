@@ -8,7 +8,7 @@ CHECK_CATEGORIES = {
     'secrets': {'Security'}, 'rls': {'Security'}, 'schema_drift': {'Security'},
     'sql_injection': {'Security'}, 'sql_injection_js': {'Security'},
     'outbound_url': {'Security'}, 'tls_verification': {'Security'},
-    'unsafe_deserialization': {'Security'}, 'unsafe_xml_parse': {'Security'},
+    'unsafe_deserialization': {'Security'}, 'unsafe_xml_parse': {'Security'}, 'archive_extraction': {'Security'},
     'path_traversal': {'Security'},
     'xss': {'Security'}, 'open_redirect': {'Security'}, 'insecure_randomness': {'Security'},
     'command_injection': {'Security'}, 'session_cookie': {'Security'},

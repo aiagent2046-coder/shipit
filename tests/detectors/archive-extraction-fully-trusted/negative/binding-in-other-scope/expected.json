@@ -1,0 +1,7 @@
+{
+  "description": "A function-local archive binding does not identify a module-level receiver.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}

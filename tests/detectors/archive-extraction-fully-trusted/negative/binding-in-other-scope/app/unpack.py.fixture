@@ -1,0 +1,4 @@
+import tarfile
+def setup():
+    t = tarfile.open(source)
+t.extractall(dest, filter="fully_trusted")

@@ -116,6 +116,7 @@ RULE_COVERAGE_LABELS = {
     "open_redirect": "Open redirects",
     "insecure_randomness": "Insecure randomness",
     "command_injection": "Shell commands",
+    "archive_extraction": "Archive extraction",
 }
 RULE_EXCLUSION_LABELS = {
     "unsupported_extension": "unsupported file types",

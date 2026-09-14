@@ -1,0 +1,7 @@
+{
+  "description": "A later assignment does not prove the receiver at an earlier extraction call.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}

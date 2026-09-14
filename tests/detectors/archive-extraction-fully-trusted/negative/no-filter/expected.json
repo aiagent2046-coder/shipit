@@ -1,0 +1,7 @@
+{
+  "description": "A missing filter is version-dependent (3.14 defaults to data) and does not prove the opt-out.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}

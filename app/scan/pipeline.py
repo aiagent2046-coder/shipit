@@ -232,6 +232,12 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-14-8: pglast 8.4 and its matching Wasm wheel parse PostgreSQL 18.
 # Updated SQL syntax and statement locations can change scan evidence, so
 # cached audits must not retain results from the previous parser version.
+# 2026-09-14-9: archive-extraction-fully-trusted, a new static scanner. A literal
+# filter="fully_trusted" on tarfile extract/extractall of an import-proven
+# tarfile.open object is the explicit opt-out from extraction checks and is
+# reported at high confidence; a missing filter (version-dependent default),
+# data and tar filters, variable or spread filters, zipfile extraction and
+# unproven receivers stay silent.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

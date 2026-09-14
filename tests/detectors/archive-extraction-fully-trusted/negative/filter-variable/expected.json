@@ -1,0 +1,7 @@
+{
+  "description": "A variable filter is unresolved; the rule reports only the literal opt-out.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}
