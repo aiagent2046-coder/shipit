@@ -204,8 +204,11 @@ def merge_reviewed_ghsa(catalog: dict, records: Iterable[dict], *,
                 versions = _versions(affected.get("versions", []))
                 if not ranges and not versions:
                     raise _Invalid("missing OSV applicability")
+                supported_types = (
+                    {"SEMVER", "ECOSYSTEM"} if ecosystem == "npm" else {"ECOSYSTEM"}
+                )
                 stats["ghsa_unsupported_ranges"] += sum(
-                    row["type"] not in {"SEMVER", "ECOSYSTEM"} for row in ranges
+                    row["type"] not in supported_types for row in ranges
                 )
             except ValueError:
                 stats["ghsa_invalid_affected"] += 1

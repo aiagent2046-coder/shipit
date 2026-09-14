@@ -176,7 +176,7 @@ def _osv_range_status(version: str, ecosystem: str, row: object) -> tuple[str, s
     if limits:
         before_a_limit = False
         for limit in limits:
-            if limit == "*":
+            if "*" in limit:
                 before_a_limit = True
                 continue
             relation = compare_versions(version, limit, ecosystem)

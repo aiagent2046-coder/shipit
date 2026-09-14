@@ -238,6 +238,7 @@ def two_source_catalog(entries, key="npm:widget"):
     ([{"fixed": "1.1.0"}, {"introduced": "1.0.0"},
       {"fixed": "3.1.0"}, {"introduced": "3.0.0"}], "3.0.5", "affected"),
     ([{"introduced": "0"}, {"limit": "2.0.0"}], "2.0.0", "unaffected"),
+    ([{"introduced": "0"}, {"limit": "2.*"}], "999.0.0", "affected"),
 ])
 def test_osv_event_boundaries_follow_the_published_timeline(events, version, expected):
     result = evaluate_advisory(version, "npm", osv_advisory(events))

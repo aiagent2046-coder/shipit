@@ -136,6 +136,16 @@ def test_git_ranges_are_retained_but_counted_as_unsupported_for_offline_matching
     assert result["stats"]["ghsa_unsupported_ranges"] == 1
 
 
+def test_pypi_semver_ranges_are_retained_but_counted_as_unsupported():
+    ranges = [{
+        "type": "SEMVER",
+        "events": [{"introduced": "0"}, {"fixed": "2.0.0"}],
+    }]
+    result = merge(advisory(affected("PyPI", "widget", ranges=ranges)))
+    assert result["packages"]["PyPI:widget"][0]["osv_ranges"] == ranges
+    assert result["stats"]["ghsa_unsupported_ranges"] == 1
+
+
 def test_duplicate_ids_and_global_limits_abort_instead_of_publishing_partial_data(monkeypatch):
     with pytest.raises(ValueError, match="duplicate GHSA ID"):
         merge(advisory(), advisory())
