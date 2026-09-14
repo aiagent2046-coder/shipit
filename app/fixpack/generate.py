@@ -41,7 +41,11 @@ from tree_sitter import Language, Parser
 import tree_sitter_javascript
 import tree_sitter_typescript
 
-from app.scan.checks import find_committed_env_files, gitignore_covers_env
+from app.scan.checks import (
+    env_file_is_public_configuration,
+    find_committed_env_files,
+    gitignore_covers_env,
+)
 from app.fixpack.rls_policy import PolicyProposal, migration_filename, propose_read_policy
 from app.scan.rls import RULE_ID as RLS_RULE_ID
 from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
@@ -636,6 +640,9 @@ def _is_fixable_rule(finding: dict) -> bool:
     Most rules are advice -- "no tests", "no Dockerfile" -- and no amount of
     code generation turns them into a pull request.
     """
+    if (finding.get("rule_id") == "env-file-committed"
+            and finding.get("context") == "public_configuration"):
+        return False
     return finding.get("rule_id") in (
         SECRET_RULE_IDS | _CHECK_RULE_IDS | _RLS_RULE_IDS | _FRONTEND_RULE_IDS)
 
@@ -699,6 +706,9 @@ def _why_not_fixable(finding: dict) -> str:
     not a non-event.
     """
     rule_id = str(finding.get("rule_id", ""))
+    if (rule_id == "env-file-committed"
+            and finding.get("context") == "public_configuration"):
+        return "Public build configuration; retained without automatic deletion."
     if rule_id.startswith("llm-"):
         return (
             "Found by the deep review. This Fix Pack rewrites only findings "
@@ -1129,7 +1139,37 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
     known_secret_values: set[str] = set()
 
     if "env-file-committed" in check_rule_ids:
-        committed = find_committed_env_files(files_list)
+        # Findings now identify individual files. Never expand a finding for
+        # one credential-bearing env into deletion of every env in the repo.
+        # Old aggregated or stale paths must also fail closed.
+        candidates = set(find_committed_env_files(files_list))
+        committed = []
+        for f in eligible:
+            if f.get("rule_id") != "env-file-committed":
+                continue
+            path = f.get("file", "")
+            # Config findings use repo-relative paths, while older persisted
+            # findings can include the exact archive wrapper. Do not blindly
+            # strip the first component of a nested repo-relative path.
+            env_path = _repo_relative(path) if path in raw_names else path
+            entry = _find_entry(raw_names, env_path)
+            if env_path not in candidates or entry is None:
+                plan.skipped.append(_skipped(
+                    f, "recorded env file not present on re-fetch"))
+                continue
+            body = contents.get(entry)
+            if body is None:
+                plan.skipped.append(_skipped(
+                    f, "env file could not be read safely on re-fetch"))
+                continue
+            if env_file_is_public_configuration(body):
+                plan.skipped.append(_skipped(
+                    f, "Public build configuration on re-fetch; retained "
+                    "without automatic deletion."))
+                continue
+            if env_path not in committed:
+                committed.append(env_path)
+        committed.sort()
         if committed:
             plan.deletions.extend(committed)
             for env_path in committed:
@@ -1147,7 +1187,11 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                     known_secret_values |= _env_values(contents.get(entry, ""))
             # A committed .env re-appears on the next `git add` without an
             # ignore rule, so untracking without this is a half-fix.
-            for p in (".env",):
+            for env_path in committed:
+                # Anchor nested/variant files to their exact repo path, and
+                # escape glob syntax so a filename cannot broaden the rule.
+                p = ".env" if env_path == ".env" else "/" + re.sub(
+                    r"([\\*?\[\] ])", r"\\\1", env_path)
                 if p not in required_gitignore:
                     required_gitignore.append(p)
             plan.config_fixes.append(ConfigFix(
@@ -1162,11 +1206,6 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                 detail="Untracked "
                        + ", ".join(f"`{c}`" for c in committed)
                        + " and added it to `.gitignore`.",
-            ))
-        else:
-            plan.skipped.append(SkippedFinding(
-                rule_id="env-file-committed", file="", line=0,
-                reason="no committed env file present on re-fetch",
             ))
 
     if "gitignore-missing-secrets" in check_rule_ids:

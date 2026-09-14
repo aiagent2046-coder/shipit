@@ -53,6 +53,7 @@ def main():
         for index in range(400):
             z.writestr(f'src/module{index}.js', 'export const value = true;')
         z.writestr('src/tail.js', 'element.innerHTML = untrusted;')
+        z.writestr('src/tail.vue', '<template><div v-html="message"></div></template>')
         z.writestr('src/broken.js', 'const broken = [;')
         xml_call = 'etree.fromstring(xml, parser=etree.XMLParser(resolve_entities=True))\n'
         z.writestr('src/first.py', 'from lxml import etree\n' + xml_call * 31)
@@ -62,7 +63,7 @@ def main():
     session = ScanSession(archive.getvalue())
     continuation = {"archive": base64.b64encode(archive.getvalue()).decode(),
                     "initial": session.result()}
-    # Mixed-language rules need three batches for this 803-file archive.
+    # Mixed-language rules need three batches for this mixed-source archive.
     continuation['continuations'] = [session.continue_scan() for _ in range(2)]
     continuation['final'] = continuation['continuations'][-1]
     # Parity alone could preserve the same continuation bug in both runtimes.
@@ -74,6 +75,9 @@ def main():
     assert sum(f['file'] == 'src/tail.py' for f in xml_findings) == 1
     xml_coverage = final['report']['rule_coverage']['unsafe_xml_parse']
     assert xml_coverage['partial'] and xml_coverage['skip_reasons'] == {'finding_limit': 1}
+    vue_findings = [f for f in final['report']['findings'] if f['file'] == 'src/tail.vue']
+    assert len(vue_findings) == 1 and vue_findings[0]['rule_id'] == 'xss-unsafe-html-injection'
+    assert not any(f['file'] == 'src/tail.vue' for f in continuation['initial']['report']['findings'])
     assert not final['can_continue']
     (out.parent / 'continuation.json').write_text(json.dumps(continuation))
     print(f"Wrote {len(cases)} native corpus expectations to {out}")

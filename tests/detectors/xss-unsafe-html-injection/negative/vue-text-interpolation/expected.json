@@ -1,0 +1,7 @@
+{
+  "description": "Vue vue text interpolation",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}

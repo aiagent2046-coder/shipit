@@ -128,3 +128,40 @@ that lacked the TypeScript grammar (see
 
 The scan engine version identifies analysis and cache behavior. Release tags
 identify deployed application builds; these are independent version series.
+
+
+## Vue components and configuration evidence
+
+The XSS check includes `.vue` single-file components with an HTML template and
+JavaScript/TypeScript script blocks. Dynamic `v-html` expressions are source
+signals, including HTML returned by Markdown helpers. Fixed string expressions,
+Vue interpolation and `v-text` do not trigger the directive check. Sanitization,
+attacker control and execution are unresolved; no submitted code is executed.
+Unsupported preprocessors, external blocks, malformed components and syntax
+budgets remain visible coverage gaps. Vue files share the existing 400-file
+batch and 32-finding total cap, including browser continuation and SARIF export.
+
+`partial: false` describes the eligible source for a particular rule. It does
+not establish that every language, framework or security boundary was checked.
+TLS and insecure-randomness still exclude Vue/Svelte component script blocks;
+HTTP-success and error-boundary checks target React rather than Vue templates.
+Those limitations are independent of XSS's new Vue support.
+
+Project-file checks evaluate archive-local Git ignore rules for concrete paths,
+including nested rules and negation. Global Git exclusions and repository-host
+settings are unavailable. An unprotected candidate path is a configuration gap,
+not an observed leak. Existing tracked files remain tracked even when ignored.
+Public-looking environment settings receive informational low-severity inventory
+and are not automatically removed by Fix Pack; secret-shaped contents retain
+separate findings tied to the relevant file. No-CI means no recognized CI
+configuration file was found, not that no external automation exists or runs.
+
+Control check for engine `2026-09-14-1`: MathModelAgent commit
+`487f35085271f2f5bac5c0bad0b30c64b7b889f9` contains 966 tracked files. XSS
+analyzes all 196 eligible files (46 JS/TS plus 150 Vue), with no skipped files.
+Five dynamic `v-html` source signals appear in `WriterEditor.vue:103`,
+`Bubble.vue:52`, and `NotebookCell.vue:130,135,140`. They are unverified
+HTML-injection candidates, not demonstrated exploits. The public development
+URLs are Low inventory; the uncovered `.env` and `backend/.env` candidates are
+Medium; absent recognized CI remains Low. The control contains eight findings
+in total. No application code or attack payload was executed.

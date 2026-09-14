@@ -68,11 +68,11 @@ PLAIN: dict[str, tuple[str, str, str]] = {
     "xss-unsafe-html-injection": (
         "HTML is injected into the DOM from a value that is not a fixed string.",
         "A non-literal value reaches an HTML-injection sink -- dangerouslySetInnerHTML, innerHTML/outerHTML, "
-        "document.write or insertAdjacentHTML. If that value can carry attacker-controlled text, it injects "
-        "markup and script into the page: script execution under the visitor's origin, token theft and DOM "
+        "document.write, insertAdjacentHTML or Vue v-html. If that value can carry attacker-controlled text, "
+        "it injects markup and script into the page: script execution under the visitor's origin, token theft and DOM "
         "corruption. Whether the value was sanitized, whether it is reachable, and whether the sink runs "
         "have not been verified.",
-        "Use textContent (or React children) for anything that is text, not markup. If HTML must be inserted, "
+        "Use textContent, React children, or Vue interpolation/v-text for plain text. If HTML must be inserted, "
         "sanitize the value first (DOMPurify with an allowlist, or an equivalent) and avoid building HTML "
         "from strings. In React, avoid dangerouslySetInnerHTML unless the content is already trusted.",
     ),
@@ -266,14 +266,12 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "your Row Level Security is on, since the anon key relies on it.",
     ),
     "gitignore-missing-secrets": (
-        "Your project has no .gitignore rule covering secret files like "
-        ".env, private keys, or credential files.",
-        "Without it, the next time you run `git add` it's easy to commit "
-        "your .env or a key file by accident — handing every password and "
-        "API key to anyone who can see the code. This is the most common "
-        "way secrets end up leaked.",
-        "Add a .gitignore that lists .env, .env.*, *.pem, *.key and other "
-        "credential files so they can never be committed by mistake.",
+        "An environment-file path is not covered by the repository's ignore rules.",
+        "An unignored private configuration file could be added to a future commit. "
+        "This is a source configuration gap, not evidence that credentials were exposed. "
+        "Machine-local and global Git exclusions are not available in the archive.",
+        "Add a rule for the reported private configuration path. Keep intentional public "
+        "configuration and example files available; inspect already tracked files separately.",
     ),
     "no-tests": (
         "The project has no automated tests.",
@@ -330,10 +328,11 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "name genuinely has to vary, pick it from a fixed list in your own code.",
     ),
     "no-ci": (
-        "No automated checks run when the code changes (no CI).",
-        "Broken changes reach your live app with nothing in the way.",
-        "Add a simple GitHub Actions workflow that runs the tests on "
-        "every change.",
+        "No recognized CI configuration file was found in the archive.",
+        "External CI services, repository settings and actual build runs were not checked. "
+        "The absence of a configuration file does not establish that no automation runs.",
+        "Check existing CI integrations. If none run the project's checks, add a workflow "
+        "that builds the application and runs its tests on changes.",
     ),
 }
 
@@ -388,6 +387,13 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
             if files:
                 risk += " Files: " + ", ".join(files) + "."
         return what, risk, fix
+    if rid == "env-file-committed" and finding.get("context") == "public_configuration":
+        return (
+            "Public-looking environment configuration is included in the archive.",
+            own_risk or "The recognized values look like public build or development settings. "
+            "This does not establish whether every value is safe to publish.",
+            own_fix or "Keep intentional public configuration; store private credentials separately.",
+        )
     if rid == "no-dockerfile":
         what, risk, fix = PLAIN[rid]
         if finding.get("context") == "deployment_inventory":

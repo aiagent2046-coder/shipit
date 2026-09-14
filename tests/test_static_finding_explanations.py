@@ -192,7 +192,7 @@ def test_a_committed_env_with_no_credentials_is_not_called_a_leak() -> None:
         "critical caps the score (GATE_ON_CRITICAL)")
 
     text = (env.explanation + " " + env.fix_hint).lower()
-    assert "rotate" not in text and "already leaked" not in text, (
+    assert "rotate only exposed real credentials" in text and "already leaked" not in text, (
         "nothing was leaked, so the text must not tell the reader to treat "
         "values as compromised")
     # It still has to explain why a tracked .env matters at all, or the

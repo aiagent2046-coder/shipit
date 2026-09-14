@@ -53,7 +53,7 @@ def test_gitignore_without_env_coverage_is_flagged():
     buf = make_zip({".gitignore": b"node_modules/\ndist/\n", "app.py": b""})
     findings = run_checks(buf)
     f = next(f for f in findings if f.rule_id == "gitignore-missing-secrets")
-    assert f.severity == "high"
+    assert f.severity == "medium"  # Prevention gap, not evidence of a live leak.
     assert f.category == "Security"
 
 

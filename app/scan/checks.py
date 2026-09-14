@@ -1,16 +1,19 @@
 """Deterministic presence checks over the archive file listing.
 
 Cheap signals that need no code analysis: a committed .env, absence of
-tests, Dockerfile or CI. Each check yields at most one finding.
+tests, Dockerfile or CI. Environment findings retain individual file paths.
 """
 
 from __future__ import annotations
 
 import re
+import shlex
+from urllib.parse import urlsplit
 import zipfile
 from dataclasses import dataclass
 from typing import BinaryIO
 
+from app.scan.gitignore import ArchiveGitIgnore
 from app.scan.secrets import (
     RULES,
     is_env_template_name,
@@ -145,7 +148,7 @@ def _committed_dependency_dirs(files: list[str]) -> list[tuple[str, int]]:
 
 
 def find_committed_env_files(files: list[str]) -> list[str]:
-    """The committed env files a repo should never track: `.env` itself
+    """Inventory environment files for content-aware review: `.env` itself
     and any `.env.<something>` that is not a template. Shared by run_checks
     (to fire env-file-committed) and the Fix Pack generator (to know which
     files to untrack), so both agree on exactly what counts.
@@ -276,138 +279,145 @@ def env_file_holds_credentials(body: str) -> bool:
     return False
 
 
+def env_file_is_public_configuration(body: str) -> bool:
+    """Recognize simple frontend-public build settings, never by prefix alone."""
+    if env_file_holds_credentials(body):
+        return False
+    assignments = 0
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.removeprefix("export ").partition("=")
+        key = key.strip()
+        if (not sep or not re.fullmatch(
+                r"(?:VITE_|NEXT_PUBLIC_|REACT_APP_|NUXT_PUBLIC_|PUBLIC_)[A-Z0-9_]+", key)
+                or _SECRET_KEY_RE.search(key)):
+            return False
+        value = value.strip()
+        if value.startswith(("'", '\"')):
+            if len(value) < 2 or value[-1] != value[0]:
+                return False
+            value = value[1:-1]
+        elif "'" in value or '\"' in value:
+            return False
+        if value.startswith(("http://", "https://", "ws://", "wss://")):
+            try:
+                url = urlsplit(value)
+                if (not url.hostname or url.username is not None or url.password is not None
+                        or url.query or url.fragment or any(c.isspace() for c in value)):
+                    return False
+            except ValueError:
+                return False
+        elif not re.fullmatch(r"(?:\d+|true|false|development|production|test)", value):
+            return False
+        assignments += 1
+    return assignments > 0
+
+
 def gitignore_covers_env(gitignore_body: str) -> bool:
-    """Whether a .gitignore's text already ignores .env. Same predicate
-    run_checks uses to decide gitignore-missing-secrets, exposed so the
-    Fix Pack generator can avoid appending a pattern that's already there."""
-    return any(
-        line.strip() in (".env", ".env*", "*.env", ".env.*")
-        for line in gitignore_body.splitlines()
-    )
+    """Whether root rules ignore an untracked root .env, including overrides."""
+    return ArchiveGitIgnore({".gitignore": gitignore_body}).ignores(".env")
+
+
+_CI_CONFIG_PATHS = frozenset({
+    ".gitlab-ci.yml", ".gitlab-ci.yaml", ".circleci/config.yml", ".circleci/config.yaml",
+    "Jenkinsfile", "azure-pipelines.yml", "azure-pipelines.yaml",
+    "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", ".drone.yaml",
+    ".buildkite/pipeline.yml", ".buildkite/pipeline.yaml",
+})
 
 
 def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     with zipfile.ZipFile(fileobj) as zf:
         raw_names = zf.namelist()
-        names = _strip_root(raw_names)
-        # Read the ROOT .gitignore's bytes while the zip is open.
-        #
-        # `endswith("/.gitignore")` was the test here, written for the folder
-        # GitHub wraps an archive in (repo-main/.gitignore). It also matched
-        # apps/web/.gitignore, and a nested one only covers its own directory:
-        # a monorepo ignoring .env inside one package was read as protecting
-        # the whole repository, and the rule stayed silent about the root.
-        #
-        # _strip_root removes the wrapping folder, so the root file is the one
-        # whose stripped name is exactly ".gitignore". It also DROPS the entry
-        # equal to the root itself, so the two lists are not the same length --
-        # zip(strict=True) over them raises. Recomputing the prefix here is the
-        # honest way to pair them.
-        gitignore_body = ""
         root_prefix = archive_root(raw_names) or ""
-        gitignore_raw = next(
-            (raw for raw in raw_names
-             if raw.startswith(root_prefix) and raw[len(root_prefix):] == ".gitignore"),
-            None,
-        )
-        if gitignore_raw is not None:
-            gitignore_body = zf.read(gitignore_raw).decode("utf-8", errors="ignore")
-
-        # The committed env files' bodies, read while the zip is open, so the
-        # finding below can be graded on what is inside rather than on the
-        # filename. Capped: a .env is a handful of lines, and anything larger
-        # is not the file this check is about.
-        env_bodies = [
-            zf.read(n)[:_MAX_ENV_BYTES].decode("utf-8", errors="ignore")
-            for n in find_committed_env_files(raw_names)
-        ]
+        members = {raw[len(root_prefix):]: raw for raw in raw_names
+                   if raw != root_prefix and not raw.endswith("/")}
+        files = list(members)
+        ignore_bodies = {}
+        env_bodies = {}
+        for path in files:
+            if path.rsplit("/", 1)[-1] == ".gitignore":
+                with zf.open(members[path]) as source:
+                    ignore_bodies[path] = source.read(256 * 1024 + 1).decode("utf-8", errors="replace")
+        for path in find_committed_env_files(files):
+            with zf.open(members[path]) as source:
+                env_bodies[path] = source.read(_MAX_ENV_BYTES + 1).decode("utf-8", errors="replace")
 
     findings: list[CheckFinding] = []
-    files = [n for n in names if not n.endswith("/")]
-
-    committed_env = find_committed_env_files(files)
-    if committed_env:
-        exposed = any(env_file_holds_credentials(b) for b in env_bodies)
+    for path, body in env_bodies.items():
+        exposed = env_file_holds_credentials(body)
+        public = len(body.encode("utf-8")) <= _MAX_ENV_BYTES and env_file_is_public_configuration(body)
+        command = "git rm --cached -- " + shlex.quote(path)
         if exposed:
             finding = CheckFinding(
-                "env-file-committed", "Environment file committed to repository",
-                severity="critical", confidence=0.9, category="Security",
-                file=committed_env[0],
-                explanation=(
-                    "Your .env file is stored in the repository, so everything "
-                    "in it — database passwords, API keys, payment credentials "
-                    "— is visible to anyone who can see this code. If the "
-                    "repository is public, that is the whole internet. "
-                    "Deleting the file later does not help on its own: Git "
-                    "keeps every past version, so the values stay readable in "
-                    "the history."
-                ),
-                fix_hint=(
-                    "Treat every value in that file as already leaked and "
-                    "issue new ones (rotate the keys in each service's "
-                    "dashboard). Then stop tracking the file with `git rm "
-                    "--cached .env`, add it to .gitignore, and set the same "
-                    "values as environment variables in your hosting provider "
-                    "instead."
-                ),
+                "env-file-committed", "Credential-like value in an environment file",
+                severity="critical", confidence=0.9, category="Security", file=path,
+                explanation=(f"{path} is included in the archive and contains a credential-like value. "
+                             "Static matching does not establish whether the value is live. "
+                             "If it is a real credential in published source, anyone with source access "
+                             "can read it; deleting the current file does not erase Git history."),
+                fix_hint=("Verify the value and rotate any exposed real credential. "
+                          f"For a private configuration file, stop tracking it with `{command}`, "
+                          f"add `/{path}` to the root .gitignore, and supply its values securely at runtime."),
+            )
+        elif public:
+            finding = CheckFinding(
+                "env-file-committed", "Public frontend configuration included in the archive",
+                severity="low", confidence=0.6, category="Security", file=path,
+                context="public_configuration",
+                explanation=(f"{path} contains only recognized frontend-public settings with simple "
+                             "URLs or build values. Their names use frontend-public conventions. "
+                             "File presence alone is not evidence of credential exposure."),
+                fix_hint=("Keep intentional public build settings in version control when the project "
+                          "needs them. Put private credentials in separate ignored configuration; "
+                          "do not rotate values or delete this file solely because of its name."),
             )
         else:
-            # Same file, no credential in it. Still worth reporting -- this is
-            # the file secrets get added to, and once it is tracked the next
-            # one lands in history without anyone noticing -- but calling it
-            # critical would be a claim about exposure that the contents
-            # contradict, and under GATE_ON_CRITICAL that claim now caps the
-            # headline. Medium keeps it visible without asserting a leak.
             finding = CheckFinding(
-                "env-file-committed", "Environment file tracked in the repository",
-                severity="medium", confidence=0.6, category="Security",
-                file=committed_env[0],
-                explanation=(
-                    "Your .env file is stored in the repository. Nothing in it "
-                    "looks like a password or key today, so nothing is exposed "
-                    "yet — but .env is the file those values go into, and once "
-                    "it is tracked the next secret added to it is committed "
-                    "along with everything else. Git keeps every past version, "
-                    "so that one would stay readable in the history even after "
-                    "a later delete."
-                ),
-                fix_hint=(
-                    "Stop tracking it with `git rm --cached .env` and add "
-                    ".env to .gitignore, so the day a real key goes in there "
-                    "it does not follow. Values the build genuinely needs can "
-                    "live in a committed .env.example with the secrets left "
-                    "blank."
-                ),
+                "env-file-committed", "Environment configuration included in the archive",
+                severity="medium", confidence=0.6, category="Security", file=path,
+                explanation=(f"{path} is included in the archive. No credential-like value was "
+                             "recognized in the inspected content (at most 64 KiB); this does not "
+                             "establish that all values are public or that Git history is free of secrets."),
+                fix_hint=("Check whether the file is intentional public configuration or private settings. "
+                          f"Only for private settings, stop tracking it with `{command}` and add "
+                          f"`/{path}` to the root .gitignore. Rotate only exposed real credentials."),
             )
         findings.append(finding)
 
-    # A .gitignore that doesn't cover .env is how the committed-env leak
-    # above happens in the first place: without it, the next `git add`
-    # sweeps secret-bearing files back in. Fire when there's no
-    # .gitignore at all, or one that doesn't ignore .env.
-    gitignore = next((n for n in files if n == ".gitignore"), None)
-    covers_env = gitignore_covers_env(gitignore_body)
-    if not covers_env:
+    ignores = ArchiveGitIgnore(ignore_bodies)
+    # Evaluate exact paths in relevant package/configuration directories. Nested
+    # rules can protect their own packages, but cannot protect a root .env.
+    env_candidates = {".env"}
+    for path in files:
+        if path.rsplit("/", 1)[-1] in {
+            ".gitignore", "package.json", "pyproject.toml", "requirements.txt",
+        } or path in env_bodies:
+            directory = path.rpartition("/")[0]
+            env_candidates.add(f"{directory}/.env" if directory else ".env")
+    env_candidates.update(path for path, body in env_bodies.items()
+                          if not env_file_is_public_configuration(body))
+    uncovered = sorted(path for path in env_candidates if not ignores.ignores(path))
+    if not ignores.complete:
+        uncovered = sorted(env_candidates)
+    if uncovered:
+        listed = ", ".join(uncovered[:8]) + (" (and more)" if len(uncovered) > 8 else "")
         findings.append(CheckFinding(
-            "gitignore-missing-secrets",
-            "No .gitignore coverage for secret-bearing files"
-            if gitignore is None
-            else ".gitignore does not cover .env / secret files",
-            severity="high", confidence=0.8, category="Security",
-            file=gitignore or "",
-            explanation=(
-                "Nothing is telling Git to leave your .env file alone, so the "
-                "next time you or your AI assistant commits changes, the file "
-                "with your passwords and API keys gets swept in along with "
-                "everything else. This is how secrets end up published — not "
-                "by a deliberate decision, but by a routine commit."
-            ),
-            fix_hint=(
-                "Add a line containing exactly `.env` to your .gitignore file "
-                "(create the file in the project root if it does not exist). "
-                "This does not remove anything already committed — that needs "
-                "the separate fix above — but it stops it happening again."
-            ),
+            "gitignore-missing-secrets", "Environment ignore coverage needs review",
+            severity="medium" if ignores.complete else "low",
+            confidence=0.8 if ignores.complete else 0.5, category="Security",
+            file=".gitignore" if ".gitignore" in files else "",
+            explanation=(f"Archive-local ignore coverage was not established for candidate paths: {listed}. " +
+                         ("Rules were evaluated for each path, including nested files and negations. "
+                          if ignores.complete else
+                          "Ignore analysis reached a budget or unsupported pattern; protection is unresolved. ") +
+                         "Global Git excludes and runtime configuration were not checked. "
+                         "This does not establish that credentials were committed."),
+            fix_hint=("For paths used for private configuration, add appropriate ignore rules in their "
+                      "directory or the repository root. Keep intentional public build configuration "
+                      "and templates. Ignore rules do not remove files already tracked by Git."),
         ))
 
     has_tests = any(
@@ -478,22 +488,21 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
             fix_hint="Review existing deployment instructions; add a Dockerfile only if containers are needed.",
         ))
 
-    if not any(n.startswith(".github/workflows/") for n in files):
+    has_ci = any(
+        (n.startswith(".github/workflows/") and n.count("/") == 2
+         and n.endswith((".yml", ".yaml")))
+        or n in _CI_CONFIG_PATHS for n in files
+    )
+    if not has_ci:
         findings.append(CheckFinding(
-            "no-ci", "No CI workflow found",
+            "no-ci", "No recognized CI configuration found in the archive",
             severity="low", confidence=0.9, category="Deploy",
-            explanation=(
-                "Nothing runs automatically when you change the code, so a "
-                "change that does not even compile can reach production and "
-                "the first sign is the site being down. A human remembering "
-                "to check every time is not a safety net."
-            ),
-            fix_hint=(
-                "Add a GitHub Actions workflow that at minimum builds the app "
-                "on every push. It turns a broken build into a red mark on the "
-                "change instead of an outage. Pairs with the tests above: "
-                "together they catch most self-inflicted breakage."
-            ),
+            explanation=("No recognized GitHub Actions, GitLab CI, CircleCI, Jenkins, Azure Pipelines, "
+                         "Bitbucket Pipelines, Travis, Drone or Buildkite configuration was found. "
+                         "External automation and CI settings outside the archive were not checked."),
+            fix_hint=("Check whether external CI already builds and tests this project. If it does not, "
+                      "add a workflow appropriate to the project's build and test commands. "
+                      "Configuration presence alone does not verify successful execution."),
         ))
 
     return findings

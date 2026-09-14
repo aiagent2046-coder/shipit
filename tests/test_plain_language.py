@@ -141,3 +141,17 @@ def test_the_occurrence_note_still_reaches_the_report():
 
     assert "4 occurrences are recorded" in risk
     assert "a.ts, b.ts, c.ts" in risk
+
+
+def test_configuration_inventory_prose_does_not_claim_exposure_or_absent_automation():
+    public = plain_fields({"rule_id": "env-file-committed", "context": "public_configuration",
+                           "file": "frontend/.env.development", "severity": "low"})
+    assert "public" in public[0].lower()
+    assert "rotate" not in " ".join(public).lower()
+    ci = plain_fields({"rule_id": "no-ci"})
+    assert "configuration file" in ci[0]
+    assert "not checked" in ci[1]
+    assert "No automated checks run" not in " ".join(ci)
+    ignore = plain_fields({"rule_id": "gitignore-missing-secrets"})
+    assert "path" in ignore[0]
+    assert "not evidence" in ignore[1]

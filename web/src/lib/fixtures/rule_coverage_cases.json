@@ -343,5 +343,51 @@
     "exclusions": null,
     "skips": null,
     "notice": null
+  },
+  {
+    "name": "unsupported_vue_template is visible in HTML and web",
+    "rule": "xss",
+    "label": "HTML injection",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 0,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "unsupported_vue_template": 1
+      },
+      "partial": true
+    },
+    "summary": "0 of 1 eligible files analyzed; 1 attempted; 1 not fully analyzed; 0 excluded from 1 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "unsupported Vue template language or external template: 1",
+    "notice": "HTML injection: 0 of 1 eligible files analyzed (unsupported Vue template language or external template: 1)."
+  },
+  {
+    "name": "unsupported_vue_script is visible in HTML and web",
+    "rule": "xss",
+    "label": "HTML injection",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 0,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "unsupported_vue_script": 1
+      },
+      "partial": true
+    },
+    "summary": "0 of 1 eligible files analyzed; 1 attempted; 1 not fully analyzed; 0 excluded from 1 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "unsupported Vue script language or external script: 1",
+    "notice": "HTML injection: 0 of 1 eligible files analyzed (unsupported Vue script language or external script: 1)."
   }
 ]

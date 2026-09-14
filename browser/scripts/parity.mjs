@@ -39,4 +39,4 @@ summary.parser_probes = 'passed';
 await mkdir(resolve(root, 'measurements'), { recursive: true });
 await writeFile(resolve(root, 'measurements/wasm-parity.json'), JSON.stringify({ summary, rows }, null, 2));
 console.log(JSON.stringify(summary, null, 2));
-if (summary.unexpected_failures > 0) process.exitCode = 1;
+if (!summary.full_parity) process.exitCode = 1;

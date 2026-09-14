@@ -1,0 +1,7 @@
+{
+  "description": "Vue vue literal html",
+  "expect": [],
+  "forbid": [
+    "xss-unsafe-html-injection"
+  ]
+}
