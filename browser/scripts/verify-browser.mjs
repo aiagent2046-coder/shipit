@@ -67,6 +67,29 @@ try {
   assert.equal(sarif.runs[0].invocations[0].executionSuccessful, true);
   assert.equal(sarif.runs[0].results.length, report.findings.length);
 
+  const dependencyCase = cases.find(c => c.rule === 'dependency-cve-match' && c.polarity === 'positive');
+  assert.ok(dependencyCase, 'Need a real CVE regression');
+  await page.getByLabel('Project ZIP', { exact: true }).setInputFiles({
+    name: 'dependency-project.zip', mimeType: 'application/zip', buffer: Buffer.from(dependencyCase.archive, 'base64'),
+  });
+  await page.getByRole('button', { name: 'Scan locally', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#scan-button').disabled &&
+    document.querySelector('#findings').textContent.includes('CVE-2026-2950'), null, { timeout: 120_000 });
+  assert.equal(await page.locator('#dependency-cve').isVisible(), true);
+  assert.match(await page.locator('#dependency-cve-details').innerText(), /Runtime exploitability is not checked/);
+  assert.equal(await page.getByRole('link', { name: 'Read CVE-2026-2950', exact: true }).count(), 1);
+  for (const [label, name, expected] of [
+    ['Export JSON', 'dependency.json', dependencyCase.native.report],
+    ['Export SARIF', 'dependency.sarif', dependencyCase.native.sarif],
+  ]) {
+    const ready = page.waitForEvent('download');
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await (await ready).saveAs(resolve(output, name));
+    const actual = JSON.parse(await readFile(resolve(output, name)));
+    delete actual.runtime;
+    assert.deepEqual(actual, expected);
+  }
+
   const continuation = JSON.parse(await readFile(resolve(root, 'test-dist/continuation.json')));
   await page.getByLabel('Project ZIP', { exact: true }).setInputFiles({
     name: 'large-project.zip', mimeType: 'application/zip', buffer: Buffer.from(continuation.archive, 'base64'),
@@ -143,6 +166,23 @@ try {
   delete partialReport.runtime;
   assert.deepEqual({ report: partialReport, sarif: incomplete }, item.portable);
   await degraded.close();
+  // Corrupted catalog must fail its digest while static findings remain usable.
+  const badCatalog = await browser.newContext();
+  await badCatalog.route('**/*', route => {
+    const r = route.request();
+    if (!r.url().startsWith(base + '/') || r.method() !== 'GET') return route.abort();
+    if (r.url().endsWith('/cve-catalog.json')) return route.fulfill({ contentType: 'application/json', body: '{}' });
+    return route.continue();
+  });
+  const badPage = await badCatalog.newPage();
+  await badPage.goto(base + '/index.html');
+  await badPage.getByLabel('Project ZIP', { exact: true }).setInputFiles(input);
+  await badPage.getByRole('button', { name: 'Scan locally', exact: true }).click();
+  await badPage.locator('#results').waitFor({ state: 'visible', timeout: 120_000 });
+  assert.match(await badPage.locator('#findings').innerText(), /Stripe/);
+  assert.match(await badPage.locator('#dependency-cve-details').innerText(), /unavailable/);
+  assert.match(await badPage.locator('#checks-not-run').innerText(), /dependency_cve/);
+  await badCatalog.close();
   console.log(JSON.stringify({ ...measured.summary, ui: 'passed', exports: 'passed', network: 'same-origin GET assets only' }));
 } finally {
   await browser.close();

@@ -33,3 +33,12 @@ archives for every wheel and the seven unmodified TypeScript headers are linked
 by exact version and SHA-256 in native-manifest.json. Build instructions are in
 browser/native/README.md and browser/scripts/rebuild-native.py in this repository.
 No parser source algorithms were modified for these builds.
+
+## CVE knowledge snapshot
+
+The offline package catalog is derived from the CVE List maintained by the CVE
+Program: https://github.com/CVEProject/cvelistV5. Source commit, timestamp, and
+selection counters are preserved in the catalog and scan reports. Redistribution
+and use of the source records are subject to the CVE Program Terms of Use:
+https://www.cve.org/Legal/TermsOfUse. This catalog is a transformed subset, not the
+complete CVE List; inclusion does not imply endorsement by the CVE Program.

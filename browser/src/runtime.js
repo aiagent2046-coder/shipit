@@ -24,6 +24,21 @@ export async function installEngine(pyodide, files) {
     pyodide.FS.writeFile(target, source);
   }
   await pyodide.runPythonAsync("import sys\nsys.path.insert(0, '/engine')\nfrom app.scan.browser import scan_archive");
+  pyodide.runPython('_dependency_catalog = None');
+}
+
+export async function installCatalog(pyodide, bytes, expectedHash) {
+  if (!(bytes instanceof ArrayBuffer) || bytes.byteLength > 32 * 1024 * 1024 ||
+      !/^[a-f0-9]{64}$/.test(expectedHash || '')) throw new Error('Invalid CVE snapshot');
+  const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+    byte => byte.toString(16).padStart(2, '0')).join('');
+  if (hash !== expectedHash) throw new Error('CVE snapshot integrity mismatch');
+  pyodide.globals.set('_catalog_json', new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  try {
+    pyodide.runPython('import json\n_dependency_catalog = json.loads(_catalog_json)');
+  } finally {
+    pyodide.globals.delete('_catalog_json');
+  }
 }
 
 export function scanBytes(pyodide, archive) {
@@ -36,7 +51,7 @@ import json
 from app.ingest.validators import ArchiveValidationError
 def _browser_scan():
     try:
-        return json.dumps(scan_archive(bytes(_archive_bytes.to_py())))
+        return json.dumps(scan_archive(bytes(_archive_bytes.to_py()), _dependency_catalog))
     except ArchiveValidationError as exc:
         return json.dumps({"error": "invalid_archive", "reason": exc.reason})
 _browser_scan()
@@ -57,7 +72,7 @@ def _start_session():
     global _scan_session
     _scan_session = None
     try:
-        _scan_session = ScanSession(bytes(_archive_bytes.to_py()))
+        _scan_session = ScanSession(bytes(_archive_bytes.to_py()), _dependency_catalog)
         return json.dumps(_scan_session.result())
     except ArchiveValidationError as exc:
         return json.dumps({"error": "invalid_archive", "reason": exc.reason})

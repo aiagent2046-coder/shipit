@@ -59,6 +59,13 @@ paths.push('app/__init__.py', 'app/capabilities.py', 'app/ingest/__init__.py',
 for (const path of paths.sort()) files[path] = await readFile(join(root, path), 'utf8');
 const bundle = JSON.stringify(files);
 await writeFile(join(out, 'engine-files.json'), bundle);
+const catalog = await readFile(join(root, 'app/data/cve-catalog.json'));
+if (catalog.length > 32 * 1024 * 1024) throw new Error('CVE snapshot exceeds browser budget');
+const catalogHash = createHash('sha256').update(catalog).digest('hex');
+if ((await readFile(join(root, 'app/data/cve-catalog.json.sha256'), 'utf8')).trim().split(/\s+/)[0] !== catalogHash) {
+  throw new Error('CVE snapshot digest mismatch');
+}
+await writeFile(join(out, 'cve-catalog.json'), catalog);
 await cp(join(root, 'LICENSE'), join(out, 'LICENSE.txt'));
 await cp(join(root, 'browser/THIRD_PARTY_NOTICES.md'), join(out, 'THIRD_PARTY_NOTICES.txt'));
 await cp(join(root, 'browser/native/manifest.json'), join(out, 'native-manifest.json'));
@@ -69,6 +76,7 @@ for (const name of ['index.html', 'app.js', 'styles.css', 'worker.js', 'runtime.
 const manifest = {
   profile: 'python-browser-native', pyodide: version,
   python: lock.info.python, engine_sha256: createHash('sha256').update(bundle).digest('hex'),
+  cve_catalog_sha256: catalogHash,
   native_parsers: Object.fromEntries(native.packages.map(p => [p.name, p.version])),
 };
 await writeFile(join(out, 'build.json'), JSON.stringify(manifest, null, 2) + '\n');

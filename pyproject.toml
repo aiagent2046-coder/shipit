@@ -48,6 +48,9 @@ select = ["F", "E"]
 # both app/ and smoke/ as top-level packages and refuses to guess.
 include = ["app*"]
 
+[tool.setuptools.package-data]
+app = ["data/*.json", "data/*.sha256"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
