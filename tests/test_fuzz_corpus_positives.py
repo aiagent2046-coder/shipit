@@ -126,16 +126,53 @@ def _conditional_import(body: str) -> str | None:
 def _sql_walrus_later_argument(body: str) -> str | None:
     """A walrus in a LATER argument cannot change the first argument's binding.
 
-    Appending `(zz := "SELECT 1")` as an extra argument after the query text
-    reassigns nothing the sink reads: the query was already evaluated. The
-    finding must survive.
+    Only mutate a one-argument sink whose query ultimately reads a simple
+    local name.  The later argument reassigns that SAME name to a literal:
+    this is the regression shape, rather than an unrelated walrus that could
+    never detect a post-evaluation re-read.  Restricting the transform to a
+    one-argument call also avoids manufacturing calls with three arguments.
     """
+    import ast
+
+    tree = ast.parse(body)
+    for node in ast.walk(tree):
+        if (not isinstance(node, ast.Call)
+                or not isinstance(node.func, ast.Attribute)
+                or node.func.attr not in {"execute", "executemany", "executescript"}
+                or len(node.args) != 1 or node.keywords):
+            continue
+        argument = node.args[0]
+        if isinstance(argument, ast.Name):
+            query_name = argument.id
+        elif (isinstance(argument, ast.Call) and len(argument.args) == 1
+              and isinstance(argument.args[0], ast.Name)):
+            query_name = argument.args[0].id
+        else:
+            continue
+        lines = body.splitlines(keepends=True)
+        line_start = sum(len(line) for line in lines[:node.end_lineno - 1])
+        end = line_start + node.end_col_offset
+        call_text = body[sum(len(line) for line in lines[:node.lineno - 1]) + node.col_offset:end]
+        close = call_text.rfind(")")
+        if close < 0:
+            continue
+        insertion = end - (len(call_text) - close)
+        return body[:insertion] + f', ({query_name} := "SELECT 1")' + body[insertion:]
+    return None
+
+
+def _fresh_identifier(body: str, base: str, used: set[str] | None = None) -> str:
+    """Return a deterministic identifier absent from the original and this pass."""
     import re
-    match = re.search(r"^(.*\.execute\(.*)\)(\s*)$", body, re.MULTILINE)
-    if match is None or ":" in match.group(1):
-        return None
-    return body.replace(match.group(0),
-                        f'{match.group(1)}, (zz := "SELECT 1")){match.group(2)}', 1)
+    occupied = set(re.findall(r"\b[A-Za-z_$][A-Za-z0-9_$]*\b", body))
+    if used is not None:
+        occupied.update(used)
+    candidate = base
+    suffix = 1
+    while candidate in occupied:
+        candidate = f"{base}{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _py_rename_secretless(body: str) -> str | None:
@@ -148,7 +185,8 @@ def _py_rename_secretless(body: str) -> str | None:
     match = re.search(rf"^(\s*)(\w*(?:{words})\w*)\s*=", body, re.MULTILINE | re.IGNORECASE)
     if match is None:
         return None
-    return re.sub(rf"\b{re.escape(match.group(2))}\b", "plain_offset", body)
+    replacement = _fresh_identifier(body, "fz_plain_offset")
+    return re.sub(rf"\b{re.escape(match.group(2))}\b", replacement, body)
 
 
 # --------------------------------------------------------------------------
@@ -247,8 +285,11 @@ def _js_rename_secretless(body: str) -> str | None:
     if not names:
         return None
     result = body
-    for index, name in enumerate(dict.fromkeys(names)):
-        result = re.sub(rf"\b{re.escape(name)}\b", f"plain_offset{index or ''}", result)
+    used: set[str] = set()
+    for name in dict.fromkeys(names):
+        replacement = _fresh_identifier(body, "fz_plain_offset", used)
+        used.add(replacement)
+        result = re.sub(rf"\b{re.escape(name)}\b", replacement, result)
     return result
 
 
@@ -415,7 +456,7 @@ def test_a_js_rename_moves_the_call_site_with_the_declaration():
     assert mutated is not None
     assert "generateToken" not in mutated
     assert "resetToken" not in mutated
-    assert "plain_offset()" in mutated   # the call moved with its binding
+    assert "fz_plain_offset()" in mutated   # the call moved with its binding
     assert _scan("insecure-randomness", {"app/token.js": mutated}) == []
 
 
@@ -429,3 +470,32 @@ def test_a_py_rename_moves_later_uses_with_the_assignment():
     import ast
     ast.parse(mutated)   # a program, not a NameError shell
     assert _scan("insecure-randomness", {"app/token.py": mutated}) == []
+
+
+def test_the_walrus_transform_reassigns_the_query_binding_not_a_dummy_name():
+    body = ('query = "SELECT * FROM users WHERE id = " + user_id\n'
+            "cur.execute(query)\n")
+    mutated = _sql_walrus_later_argument(body)
+    assert mutated is not None
+    assert 'cur.execute(query, (query := "SELECT 1"))' in mutated
+    assert _scan("sql-injection-string-built-query", {"app/db.py": mutated})
+
+
+def test_a_later_walrus_cannot_turn_a_safe_first_argument_dangerous():
+    body = ('query = "SELECT 1"\n'
+            'cur.execute(query, (query := "SELECT " + user_id))\n')
+    assert _scan("sql-injection-string-built-query", {"app/db.py": body}) == []
+
+
+def test_js_secretless_renames_never_collide_with_existing_bindings():
+    body = ("const fz_plain_offset = 1;\n"
+            "const fz_plain_offset1 = 2;\n"
+            "const generateToken = () => Math.random();\n"
+            "const resetToken = generateToken();\n")
+    mutated = _js_rename_secretless(body)
+    assert mutated is not None
+    assert "const fz_plain_offset = 1;" in mutated
+    assert "const fz_plain_offset1 = 2;" in mutated
+    assert "const fz_plain_offset2 = () => Math.random();" in mutated
+    assert "const fz_plain_offset3 = fz_plain_offset2();" in mutated
+    assert _scan("insecure-randomness", {"app/token.js": mutated}) == []
