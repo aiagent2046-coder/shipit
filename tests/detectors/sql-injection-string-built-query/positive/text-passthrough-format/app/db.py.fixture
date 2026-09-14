@@ -1,0 +1,9 @@
+import sqlalchemy as sa
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.get('/user')
+async def fetch_user(username: str, connection):
+    query = "SELECT * FROM users WHERE username = '{}'".format(username)
+    result = connection.execute(sa.text(query))
+    return result.fetchall()

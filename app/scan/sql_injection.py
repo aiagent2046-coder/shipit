@@ -7,7 +7,8 @@ literals, `rls.py` reads migrations, and neither notices a query whose text is
 concatenated together at the call site.
 
 WHAT IT REPORTS, AND WHAT IT DOES NOT CLAIM. One thing only: a call to a
-database execution sink whose FIRST argument -- the query text -- is assembled
+database execution sink whose FIRST argument -- the query text, possibly
+through a single import-resolved sqlalchemy text() wrapper -- is assembled
 from something that is not a literal. That is a fact about the source. It is
 NOT proof of an exploitable injection: whether the interpolated value reaches
 an attacker requires taint analysis across call boundaries, which this does not
@@ -56,6 +57,44 @@ RULE_ID = "sql-injection-string-built-query"
 # helpers ORMs expose. `text()` is NOT here: SQLAlchemy's text() is how you
 # declare a parameterised statement, and flagging it would report the fix.
 _SINKS = frozenset({"execute", "executemany", "executescript", "raw", "execute_sql"})
+
+# The import aliases and from-imported names through which a single
+# sqlalchemy text() wrapper over the query text is recognized. text() over a
+# literal is the declared parameterised form and never a finding by itself;
+# text() around an assembled string is the wrapper the sink receives, so the
+# sink reads the string inside it. text() is not a SINK: executing the text()
+# object alone runs nothing.
+_TEXT_MODULES = frozenset({"sqlalchemy", "sqlalchemy.sql"})
+_TEXT_FROM = frozenset({"sqlalchemy.text", "sqlalchemy.sql.text"})
+
+
+def _text_bindings(tree: ast.AST) -> tuple[dict[str, str], set[str]]:
+    """Import-bound text() spellings, shadow-free only.
+
+    Aliases and from-imported names that anything else in the file writes
+    (a parameter, an assignment, a loop target) lose their binding: the call
+    then resolves to something unknown, not to sqlalchemy.
+    """
+    aliases: dict[str, str] = {}
+    names: dict[str, str] = {}
+    imports = [node for node in ast.walk(tree)
+               if isinstance(node, (ast.Import, ast.ImportFrom))]
+    for node in imports:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                target = alias.name if alias.asname else alias.name.split(".")[0]
+                if target in _TEXT_MODULES:
+                    aliases.setdefault(bound, target)
+        elif node.module in _TEXT_MODULES:
+            for alias in node.names:
+                if f"{node.module}.{alias.name}" in _TEXT_FROM:
+                    names.setdefault(alias.asname or alias.name, f"{node.module}.{alias.name}")
+    written = {node.id for node in ast.walk(tree)
+               if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))}
+    written |= {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
+    return ({name: target for name, target in aliases.items() if name not in written},
+            {name for name in names if name not in written})
 
 # Bound so a generated or vendored file cannot turn one archive into a parse
 # storm. 400 KB is past every hand-written module in this repository.
@@ -264,6 +303,28 @@ class _QueryFlow:
     def __init__(self):
         self.findings: set[tuple[int, str, str]] = set()
         self.remaining = 80_000
+        self.text_aliases: dict[str, str] = {}
+        self.text_names: set[str] = frozenset()
+
+    def _dotted(self, node: ast.AST) -> str | None:
+        """Resolve an import-bound Name/Attribute chain to its module path."""
+        if isinstance(node, ast.Name):
+            if node.id in self.text_aliases:
+                return self.text_aliases[node.id]
+            return "sqlalchemy.text" if node.id in self.text_names else None
+        if isinstance(node, ast.Attribute):
+            base = self._dotted(node.value)
+            return f"{base}.{node.attr}" if base else None
+        return None
+
+    def _is_text_wrapper(self, call: ast.Call) -> bool:
+        """The call is spelled as sqlalchemy's text() through the imports."""
+        func = call.func
+        if isinstance(func, ast.Name):
+            return func.id in self.text_names
+        if isinstance(func, ast.Attribute):
+            return func.attr == "text" and self._dotted(func.value) in _TEXT_MODULES
+        return False
 
     @staticmethod
     def known(state):
@@ -397,6 +458,17 @@ class _QueryFlow:
             # Later arguments can reassign names, but cannot change the query
             # text already evaluated as the first argument.
             value = arguments[0]
+            # A single sqlalchemy text() wrapper is transparent: the sink
+            # receives the text() argument as its query text. text() over a
+            # literal stays literal (the declared parameterised form -- never
+            # a finding); over an assembled string the assembly is what runs.
+            # Wrappers with keywords, extra arguments or unknown spellings are
+            # not unwrapped.
+            if (isinstance(argument, ast.Call) and len(argument.args) == 1
+                    and not argument.keywords and self._is_text_wrapper(argument)):
+                inner = argument.args[0]
+                value = self.value(inner, state)
+                argument = inner
             if value.assembly:
                 line, kind = value.assembly
                 if isinstance(argument, ast.Name):
@@ -518,6 +590,7 @@ class _QueryFlow:
 
 def _find_in_module(tree: ast.AST) -> list[tuple[int, str, str]]:
     flow = _QueryFlow()
+    flow.text_aliases, flow.text_names = _text_bindings(tree)
     _, stable = _scope_bindings(tree)
     try:
         flow.block(tree.body, {}, stable)
