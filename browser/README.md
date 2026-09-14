@@ -115,7 +115,7 @@ web build uses the reviewed wheels; it does not install a C compiler or run
 customer build scripts. `native-manifest.json` and `licenses/` ship alongside
 the application. Parser versions match the server pins:
 `tree-sitter==0.26.0`, `tree-sitter-typescript==0.23.2`,
-`tree-sitter-javascript==0.25.0`, `pglast==7.7`.
+`tree-sitter-javascript==0.25.0`, `pglast==8.4`.
 
 `parser_probes.py` runs unchanged in CPython and WASM. Comparisons cover UTF-8
 byte spans, TS/TSX/JS child fields, SQL AST node types and values, SQL scanner

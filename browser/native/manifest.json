@@ -54,13 +54,13 @@
     },
     {
       "name": "pglast",
-      "version": "7.7",
-      "file_name": "pglast-7.7-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
-      "sha256": "12911fbf17b5b2cb05caa644cb51c07bebd8742ab042131980841f54d40edca6",
-      "bytes": 637995,
+      "version": "8.4",
+      "file_name": "pglast-8.4-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+      "sha256": "9f67a69d6e239bc3e834ab594c031062058c36eec68a0ba4fb9d9debf0b8bc52",
+      "bytes": 995046,
       "source": {
-        "url": "https://files.pythonhosted.org/packages/cd/09/12807f704dfc3afc2bab151ead20edb6cb34a673416042f2ba5f0d6f6606/pglast-7.7.tar.gz",
-        "sha256": "5dfbfc1fa39819643a3b915a13668e43bbd6c0b014aadf5d0b4309e860bacbb0"
+        "url": "https://files.pythonhosted.org/packages/ae/e3/e7dbccbac32ba8d6ea4f55aaf14ebd794bf0b8a05561af72284efe38b1b8/pglast-8.4.tar.gz",
+        "sha256": "ebc804351aab9c1bac395611758883cd17d4198f4704224bb6f9f1dd1f3c513d"
       }
     }
   ]
