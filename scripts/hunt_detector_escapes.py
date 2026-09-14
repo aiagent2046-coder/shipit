@@ -20,11 +20,15 @@ own copy of the rule and drifted from production within the hour.
 WHAT A CANDIDATE IS NOT. It is NOT a proven detector gap. A 7B model asked to
 rewrite vulnerable code will sometimes remove the vulnerability, break the
 syntax, or emit something no engineer would write. In those cases silence is
-the CORRECT answer and the candidate is noise. Nothing here can tell the two
-apart, because the only oracle for "is this still vulnerable" is a human
-reading the code. The output is therefore a REVIEW QUEUE, ranked and
-deduplicated, not a defect list -- and the numbers it prints are counts of
-things to look at, not of bugs found.
+the CORRECT answer and the candidate is noise. Three of those noise classes
+are mechanical: scripts/triage_hunt_escapes.py bins unparseable bodies,
+bodies that still name a module they no longer import, rewrites that removed
+the vulnerable construct, and bodies no target filter could ever match -- and
+prints the REVIEW bucket, which is the part a human must read. Whether what
+survives is still vulnerable remains a judgement only that reading can make.
+The output is therefore a REVIEW QUEUE, ranked and deduplicated, not a defect
+list -- and the numbers it prints are counts of things to look at, not of
+bugs found.
 
 WHY A LOCAL MODEL. Variations are cheap, disposable and individually
 unimportant; what matters is volume and diversity. That is the shape of work
