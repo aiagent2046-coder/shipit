@@ -14,7 +14,10 @@ any model:
   * the review bucket is derived by the same triage classification, so a
     noise body never reaches the judge at all;
   * a judge that says nothing readable lands its body in unsure, where a
-    human reads it next.
+    human reads it next -- and a judge CALL that fails does the same
+    without ending the run;
+  * the preamble is never the verdict: only VERDICT lines that start their
+    own line count, and conflicting ones are unsure (review round 1).
 """
 import importlib.util
 import sys
@@ -37,6 +40,7 @@ def load_module(name: str):
 
 TRIAGE = load_module("triage_hunt_escapes")
 OPINION = load_module("hunt_second_opinion")
+MODEL_CLIENT = load_module("model_client")
 
 
 def test_the_prompt_carries_the_rules_own_definition():
@@ -66,6 +70,12 @@ def test_an_unknown_rule_still_gets_a_prompt():
     ("VERDICT: UNSURE\nambiguous", "unsure"),
     ("No verdict line at all, just an essay about the code.", "unsure"),
     ("", "unsure"),
+    # Review round 1: a preamble that RECITES the vocabulary must not be read
+    # as a verdict, and two VERDICT lines that disagree are unsure.
+    ("I will not use VERDICT: VULNERABLE in my answer.\nVERDICT: UNSURE\n", "unsure"),
+    ("Preamble mentions VERDICT: VULNERABLE mid-line.\nVERDICT: UNSURE\n", "unsure"),
+    ("VERDICT: VULNERABLE\nVERDICT: VULNERABLE\nrepeated is fine", "likely-real"),
+    ("VERDICT: VULNERABLE\nVERDICT: NOT-VULNERABLE\ntorn", "unsure"),
 ])
 def test_parse_verdict_tolerates_formatting_and_refuses_to_guess(response, expected):
     assert OPINION.parse_verdict(response) == expected
@@ -122,3 +132,71 @@ def test_an_unreadable_judge_answer_lands_in_unsure(tmp_path):
     buckets = OPINION.second_opinion([dump], "fake-model", judge_fn=broken_judge)
     assert len(buckets["unsure"]) == 1
     assert buckets["likely-real"] == []
+
+
+def test_a_rule_without_a_triage_spec_reaches_the_judge_too(tmp_path):
+    # Review round 1 (inherited from tier 1): "review (no spec)" is a review
+    # bucket -- tier 1 prints it in the queue, so the judge must see it too.
+    dump = tmp_path / "dump"
+    dump.mkdir()
+    (dump / "future-rule__aa__thing.js").write_text("const anything = whatever();\n")
+    bodies = OPINION.review_bodies([dump])
+    assert [path.name for _, path, _, _ in bodies] == ["future-rule__aa__thing.js"]
+
+
+def test_a_failed_judge_call_bins_its_body_and_the_run_continues(tmp_path):
+    # Review round 1: one failed call ended the whole run with no partial
+    # result. 27 sequential local calls must tolerate a single failure.
+    dump = tmp_path / "dump"
+    dump.mkdir()
+    (dump / "insecure-randomness__aa__real.js").write_text(
+        "const [token] = [Math.random().toString(36)];\n")
+    (dump / "insecure-randomness__bb__also.js").write_text(
+        "const resetToken = Math.random().toString(36).slice(2);\n")
+
+    def flaky_judge(prompt, model):
+        if "resetToken" in prompt:
+            raise RuntimeError("connection reset by peer")
+        return "VERDICT: VULNERABLE\nThe destructure binds the draw."
+
+    buckets = OPINION.second_opinion([dump], "fake-model", judge_fn=flaky_judge)
+    assert len(buckets["likely-real"]) == 1
+    assert len(buckets["unsure"]) == 1
+    assert "judge call failed" in buckets["unsure"][0][2]
+
+
+def test_the_cli_preflights_and_reports_the_model_it_was_told_to_use(
+        monkeypatch, tmp_path, capsys):
+    # Review round 1: the CLI defaults to qwen3:8b while preflight checked
+    # HUNT_MODEL/qwen2.5-coder -- wrong attribution, and no existence check
+    # for the --model value.
+    dump = tmp_path / "dump"
+    dump.mkdir()
+    (dump / "insecure-randomness__aa__real.js").write_text(
+        "const [token] = [Math.random().toString(36)];\n")
+    seen = {}
+
+    def fake_preflight(model=None):
+        seen["preflight_model"] = model
+        return True, "ok"
+
+    def fake_second_opinion(dirs, model, limit=None, judge_fn=OPINION.judge):
+        seen["judge_model"] = model
+        return {"likely-real": [], "unsure": [], "likely-noise": []}
+
+    monkeypatch.setattr(OPINION.model_client, "preflight", fake_preflight)
+    monkeypatch.setattr(OPINION, "second_opinion", fake_second_opinion)
+    monkeypatch.setattr(sys, "argv", ["hunt_second_opinion.py",
+                                      "--dump", str(dump), "--model", "qwen3:8b"])
+    assert OPINION.main() == 0
+    assert seen == {"preflight_model": "qwen3:8b", "judge_model": "qwen3:8b"}
+    out = capsys.readouterr().out
+    assert "(judge: qwen3:8b)" in out
+
+
+def test_model_availability_matches_exact_tags_and_family_prefixes():
+    installed = {"qwen2.5-coder:7b", "qwen3:8b", "llama3.2:latest"}
+    assert MODEL_CLIENT._model_available(installed, "qwen3:8b")
+    assert MODEL_CLIENT._model_available(installed, "qwen3")       # family pull
+    assert MODEL_CLIENT._model_available(installed, "llama3.2:latest")
+    assert not MODEL_CLIENT._model_available(installed, "qwen9:99b")

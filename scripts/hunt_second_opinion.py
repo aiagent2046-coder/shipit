@@ -11,9 +11,9 @@ dump produced costs more attention than ranking them does.
 This stage asks a LOCAL model -- default qwen3:8b, one size up from the hunt's generator
 generator -- a single question per body: does this code still contain the
 defect, as the rule itself defines it (the capability title is the definition,
-so the judge is not inventing its own)? The verdict vocabulary is fixed and the
-parser tolerant of the model's formatting habits. The output is three ranked
-buckets:
+so the judge is not inventing its own)? The verdict vocabulary is fixed, and
+the parser reads only VERDICT lines that start their own line and agree with
+each other. The output is three ranked buckets:
 
   likely-real    the judge says the defect is still there
   unsure         the judge answered nothing parseable
@@ -39,7 +39,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import model_client  # noqa: E402
-from triage_hunt_escapes import REVIEW, _rule_and_file, classify  # noqa: E402
+from triage_hunt_escapes import _rule_and_file, classify, is_review  # noqa: E402
 
 PROMPT_TEMPLATE = """A static security scanner was tested with a code sample that contained a defect.
 The sample was then rewritten many times, and the scanner stayed silent on the
@@ -65,9 +65,13 @@ CODE:
 {body}
 """
 
+# Line-anchored on purpose: a model that first RECITES the vocabulary
+# ("I will not use VERDICT: VULNERABLE...") must not have its preamble read
+# as a verdict. Only a line that starts with the verdict counts, and every
+# such line must agree (parse_verdict).
 _VERDICT_RE = re.compile(
-    r"VERDICT\s*:\s*(VULNERABLE|NOT[- ]VULNERABLE|NOTVULNERABLE|BROKEN|UNSURE)",
-    re.IGNORECASE)
+    r"^\s*VERDICT\s*:\s*(VULNERABLE|NOT[- ]VULNERABLE|NOTVULNERABLE|BROKEN|UNSURE)",
+    re.IGNORECASE | re.MULTILINE)
 
 
 def build_prompt(rule_id: str, body: str) -> str:
@@ -83,23 +87,29 @@ def build_prompt(rule_id: str, body: str) -> str:
 
 
 def parse_verdict(response: str) -> str:
-    """The first VERDICT line wins; anything else is unsure, never guessed.
+    """Every line-anchored VERDICT line must agree; anything else is unsure.
 
-    NOT-VULNERABLE must be checked before the bare VULNERABLE it contains.
+    NOT-VULNERABLE is normalized before the bare VULNERABLE it contains is
+    compared. Conflicting lines -- a preamble reciting one vocabulary word
+    and a real answer carrying another -- are unsure: a body mis-bucketed is
+    worse than a body a human reads twice.
     """
-    match = _VERDICT_RE.search(response)
-    if match is None:
-        return "unsure"
-    normalized = match.group(1).upper().replace(" ", "").replace("-", "")
-    if normalized == "NOTVULNERABLE":
+    verdicts = {match.group(1).upper().replace(" ", "").replace("-", "")
+                for match in _VERDICT_RE.finditer(response)}
+    if verdicts == {"NOTVULNERABLE"}:
         return "likely-noise"
-    if normalized == "VULNERABLE":
+    if verdicts == {"VULNERABLE"}:
         return "likely-real"
     return "unsure"
 
 
 def review_bodies(dump_dirs: list[Path]) -> list[tuple[str, Path, str, str]]:
-    """The triage REVIEW bucket: (rule_id, path, filename, body)."""
+    """The triage REVIEW bucket: (rule_id, path, filename, body).
+
+    Both review spellings count: a rule without a triage spec still reaches
+    the judge -- tier 1 prints it in the queue, and dropping it here would
+    drop it for the human too.
+    """
     out = []
     for dump_dir in dump_dirs:
         for path in sorted(dump_dir.iterdir()):
@@ -108,7 +118,7 @@ def review_bodies(dump_dirs: list[Path]) -> list[tuple[str, Path, str, str]]:
                 continue
             rule_id, filename = rule_and_file
             body = path.read_text()
-            if classify(rule_id, filename, body) == REVIEW:
+            if is_review(classify(rule_id, filename, body)):
                 out.append((rule_id, path, filename, body))
     return out
 
@@ -135,7 +145,13 @@ def second_opinion(dump_dirs: list[Path], model: str, limit: int | None = None,
     if limit is not None:
         bodies = bodies[:limit]
     for rule_id, path, _, body in bodies:
-        response = judge_fn(build_prompt(rule_id, body), model)
+        # One failed call must not end the run: the body lands in unsure,
+        # where a human reads it next, and the rest keep their verdicts.
+        try:
+            response = judge_fn(build_prompt(rule_id, body), model)
+        except Exception as exc:
+            buckets["unsure"].append((rule_id, path, f"(judge call failed: {exc})"))
+            continue
         bucket = parse_verdict(response)
         reason = _first_sentence(response)
         buckets[bucket].append((rule_id, path, reason))
@@ -162,9 +178,9 @@ def _first_sentence(text: str) -> str:
     return " ".join(lines)[:160] if lines else "(no answer)"
 
 
-def _report(buckets: dict[str, list[tuple[str, Path, str]]]) -> None:
+def _report(buckets: dict[str, list[tuple[str, Path, str]]], model: str) -> None:
     total = sum(len(entries) for entries in buckets.values())
-    print(f"review bodies judged: {total}")
+    print(f"review bodies judged: {total} (judge: {model})")
     for bucket in ("likely-real", "unsure", "likely-noise"):
         entries = buckets[bucket]
         print(f"\n=== {bucket}: {len(entries)}")
@@ -188,7 +204,7 @@ def main() -> int:
         if not dump_dir.is_dir():
             parser.error(f"--dump {dump_dir} is not a directory")
         dirs.append(dump_dir)
-    ok, message = model_client.preflight()
+    ok, message = model_client.preflight(args.model)
     if not ok:
         print(message, file=sys.stderr)
         return 2
@@ -196,7 +212,7 @@ def main() -> int:
     if not bodies:
         print("no review bodies: triage already binned everything, or the dump is empty")
         return 0
-    _report(second_opinion(dirs, args.model, args.max))
+    _report(second_opinion(dirs, args.model, args.max), args.model)
     return 0
 
 

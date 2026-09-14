@@ -258,24 +258,40 @@ def generate(prompt: str, *, model: str | None = None,
         f"HUNT_PROVIDER={which!r} is not a provider. Use 'ollama' or 'openai'.")
 
 
-def preflight() -> tuple[bool, str]:
+def _model_available(installed: set[str], model: str) -> bool:
+    """An exact tag, or the family prefix before ':' (a pull of `qwen3`
+    serves `qwen3:8b`). The check exists to catch --model typos, not to
+    police which tags are installed."""
+    return any(name == model or name.split(":")[0] == model for name in installed)
+
+
+def preflight(model: str | None = None) -> tuple[bool, str]:
     """Cheap reachability check before a run that costs money or an hour.
 
     Returns (ok, message). Callers print the message either way -- a run that
     starts against an unreachable provider wastes the whole loop, and one that
     starts against the WRONG provider silently produces results attributed to
-    a model that never ran.
+    a model that never ran. `model` is the model the caller will actually
+    use; without it the environment default is assumed and only that one is
+    checked for.
     """
+    chosen = model or model_name()
     which = provider()
     try:
         if which == "ollama":
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(f"{OLLAMA_URL}/api/tags", timeout=10) as resp:
+                installed = {entry.get("name", "")
+                             for entry in json.loads(resp.read()).get("models", [])}
+            if not _model_available(installed, chosen):
+                return False, (f"ollama at {OLLAMA_URL} has no model {chosen!r} "
+                               f"(installed: {sorted(installed)[:8]})")
             with opener.open(f"{OLLAMA_URL}/api/version", timeout=10) as resp:
                 version = json.loads(resp.read()).get("version", "?")
-            return True, f"ollama {version} at {OLLAMA_URL}, model {model_name()}"
-        text = generate("Reply with the single word: ready",
+            return True, f"ollama {version} at {OLLAMA_URL}, model {chosen}"
+        text = generate("Reply with the single word: ready", model=chosen,
                         temperature=0.0, max_tokens=16, timeout=60)
-        return True, f"{describe()} responded: {text.strip()[:40]!r}"
+        return True, f"{which} {chosen} responded: {text.strip()[:40]!r}"
     except GenerationError as exc:
         return False, str(exc)
     except Exception as exc:                                   # noqa: BLE001
