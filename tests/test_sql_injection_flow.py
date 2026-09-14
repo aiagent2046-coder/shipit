@@ -543,9 +543,109 @@ def test_a_single_sqlalchemy_text_wrapper_is_transparent_to_the_sink(source, lin
     def fetch_user(username, connection):
         return connection.execute(sa.text(f'SELECT {username}', bind)).fetchall()
     ''',
+    # an import inside another function binds the name only there
+    '''
+    def helper():
+        import sqlalchemy as sa
+        return sa
+
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
+    # a conditional import is not a guaranteed binding
+    '''
+    import os
+
+    if os.environ.get('DB'):
+        import sqlalchemy as sa
+
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
+    # an import below the sink never proves the name above it
+    '''
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+
+    import sqlalchemy as sa
+    ''',
+    # a text attribute store drops the binding
+    '''
+    import sqlalchemy as sa
+
+    sa.text = lambda q: q
+
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
+    # a re-import of a different module drops the binding
+    '''
+    import sqlalchemy as sa
+    import os as sa
+
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
+    # a def of the name drops the binding
+    '''
+    import sqlalchemy as sa
+
+    def sa(q):
+        return q
+
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
+    # an except-as binding drops the name on that path
+    '''
+    import sqlalchemy as sa
+
+    try:
+        x = 1
+    except ValueError as sa:
+        pass
+
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
 ])
 def test_unknown_wrappers_and_parameterised_text_stay_silent(source):
     assert scan(source, 'py') == []
+
+
+def test_a_parameter_shadowing_the_alias_elsewhere_keeps_the_real_finding():
+    """A parameter named sa shades only its own scope, not the whole file."""
+    source = '''
+    import sqlalchemy as sa
+
+    def shaded(sa, username, connection):
+        return connection.execute(sa.text(username)).fetchall()
+
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    '''
+    findings = scan(source, 'py')
+    assert [finding.line for finding in findings] == [7]
+
+
+def test_the_wrapper_argument_is_captured_at_its_own_evaluation():
+    """No re-read after later arguments: the walrus cannot flip the verdict."""
+    unsafe_later = '''
+    import sqlalchemy as sa
+
+    def fetch_user(username, connection):
+        q = f"SELECT {username}"
+        return connection.execute(sa.text(q), (q := "SELECT 1"))
+    '''
+    assert [finding.line for finding in scan(unsafe_later, 'py')] == [5]
+    safe_later = '''
+    import sqlalchemy as sa
+
+    def fetch_user(username, connection):
+        q = "SELECT 1"
+        return connection.execute(sa.text(q), (q := f"SELECT {username}"))
+    '''
+    assert scan(safe_later, 'py') == []
 
 
 @pytest.mark.parametrize('mutation', [

@@ -1,0 +1,6 @@
+import os
+if os.environ.get('DB'):
+    import sqlalchemy as sa
+
+async def fetch(username, connection):
+    return connection.execute(sa.text(f'SELECT {username}')).fetchall()

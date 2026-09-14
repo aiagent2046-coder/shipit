@@ -58,43 +58,27 @@ RULE_ID = "sql-injection-string-built-query"
 # declare a parameterised statement, and flagging it would report the fix.
 _SINKS = frozenset({"execute", "executemany", "executescript", "raw", "execute_sql"})
 
-# The import aliases and from-imported names through which a single
-# sqlalchemy text() wrapper over the query text is recognized. text() over a
-# literal is the declared parameterised form and never a finding by itself;
-# text() around an assembled string is the wrapper the sink receives, so the
-# sink reads the string inside it. text() is not a SINK: executing the text()
-# object alone runs nothing.
+# The import spellings through which sqlalchemy's text() is recognized:
+# module/submodule aliases (import sqlalchemy as sa, import sqlalchemy.sql as
+# sas, plain import sqlalchemy) and from-imported text. Bindings live in the
+# flow state, so imports resolve lexically, in source order; any later write
+# of the name (assignment, attribute store, re-import, def, except-as,
+# parameter) drops the binding in exactly the scope and position it happens.
+# text() is not a SINK: it constructs a statement object and runs nothing.
 _TEXT_MODULES = frozenset({"sqlalchemy", "sqlalchemy.sql"})
 _TEXT_FROM = frozenset({"sqlalchemy.text", "sqlalchemy.sql.text"})
 
 
-def _text_bindings(tree: ast.AST) -> tuple[dict[str, str], set[str]]:
-    """Import-bound text() spellings, shadow-free only.
-
-    Aliases and from-imported names that anything else in the file writes
-    (a parameter, an assignment, a loop target) lose their binding: the call
-    then resolves to something unknown, not to sqlalchemy.
-    """
-    aliases: dict[str, str] = {}
-    names: dict[str, str] = {}
-    imports = [node for node in ast.walk(tree)
-               if isinstance(node, (ast.Import, ast.ImportFrom))]
-    for node in imports:
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                bound = alias.asname or alias.name.split(".")[0]
-                target = alias.name if alias.asname else alias.name.split(".")[0]
-                if target in _TEXT_MODULES:
-                    aliases.setdefault(bound, target)
-        elif node.module in _TEXT_MODULES:
-            for alias in node.names:
-                if f"{node.module}.{alias.name}" in _TEXT_FROM:
-                    names.setdefault(alias.asname or alias.name, f"{node.module}.{alias.name}")
-    written = {node.id for node in ast.walk(tree)
-               if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))}
-    written |= {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
-    return ({name: target for name, target in aliases.items() if name not in written},
-            {name for name in names if name not in written})
+def _text_import_targets(node: ast.AST):
+    """(bound name, dotted import target) pairs a sqlalchemy import carries."""
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            if alias.name in _TEXT_MODULES:
+                yield alias.asname or alias.name, alias.name
+    elif isinstance(node, ast.ImportFrom) and node.module in _TEXT_MODULES:
+        for alias in node.names:
+            if f"{node.module}.{alias.name}" in _TEXT_FROM:
+                yield alias.asname or alias.name, f"{node.module}.{alias.name}"
 
 # Bound so a generated or vendored file cannot turn one archive into a parse
 # storm. 400 KB is past every hand-written module in this repository.
@@ -240,6 +224,11 @@ class _Binding:
     literal: bool = False
     assembly: tuple[int, str] | None = None
     container: bool = False
+    # The dotted import target this name is import-bound to in the current
+    # scope ("sqlalchemy", "sqlalchemy.sql", "sqlalchemy.text", ...). It lives
+    # in the binding state so imports resolve lexically, in source order, and
+    # any later write of the name drops it.
+    imported: str | None = None
 
 
 _UNKNOWN = _Binding()
@@ -255,8 +244,13 @@ def _merge_states(*states: dict[str, _Binding] | None) -> dict[str, _Binding] | 
     for name in set().union(*paths):
         values = [state.get(name, _UNKNOWN) for state in paths]
         assembly = next((value.assembly for value in values if value.assembly), None)
+        # An import binding is trusted only when every path agrees on it:
+        # a conditional import must not prove the name anywhere.
+        imported = (values[0].imported
+                    if all(value.imported == values[0].imported for value in values)
+                    else None)
         merged[name] = _Binding(all(value.literal for value in values), assembly,
-                                all(value.container for value in values))
+                                all(value.container for value in values), imported)
     return merged
 
 
@@ -275,6 +269,14 @@ def _scope_bindings(scope: ast.AST) -> tuple[set[str], set[str]]:
             writes[node.id] = writes.get(node.id, 0) + 1
         elif isinstance(node, ast.arg):
             writes[node.arg] = writes.get(node.arg, 0) + 1
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            # An import binds its name here; counting it as a write is what
+            # lets an import-bound name become stable and cross into nested
+            # function scopes -- and what zeroes a function-local import at
+            # scope entry, to be bound again at its source position.
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                writes[bound] = writes.get(bound, 0) + 1
         pending.extend(ast.iter_child_nodes(node))
     # A global/nonlocal writer may run after a function was defined. Do not
     # freeze that name's earlier literal value into another function's scope.
@@ -303,28 +305,21 @@ class _QueryFlow:
     def __init__(self):
         self.findings: set[tuple[int, str, str]] = set()
         self.remaining = 80_000
-        self.text_aliases: dict[str, str] = {}
-        self.text_names: set[str] = frozenset()
 
-    def _dotted(self, node: ast.AST) -> str | None:
-        """Resolve an import-bound Name/Attribute chain to its module path."""
+    def _text_import(self, node: ast.AST, state) -> str | None:
+        """The dotted import target a func spelling resolves to, in this state."""
         if isinstance(node, ast.Name):
-            if node.id in self.text_aliases:
-                return self.text_aliases[node.id]
-            return "sqlalchemy.text" if node.id in self.text_names else None
+            return state.get(node.id, _UNKNOWN).imported
         if isinstance(node, ast.Attribute):
-            base = self._dotted(node.value)
+            base = self._text_import(node.value, state)
             return f"{base}.{node.attr}" if base else None
         return None
 
-    def _is_text_wrapper(self, call: ast.Call) -> bool:
-        """The call is spelled as sqlalchemy's text() through the imports."""
-        func = call.func
-        if isinstance(func, ast.Name):
-            return func.id in self.text_names
-        if isinstance(func, ast.Attribute):
-            return func.attr == "text" and self._dotted(func.value) in _TEXT_MODULES
-        return False
+    def _is_text_wrapper(self, node: ast.AST, state) -> bool:
+        """A single-argument, keyword-free sqlalchemy text() call, resolved here."""
+        if not (isinstance(node, ast.Call) and len(node.args) == 1 and not node.keywords):
+            return False
+        return self._text_import(node.func, state) in _TEXT_FROM
 
     @staticmethod
     def known(state):
@@ -451,24 +446,24 @@ class _QueryFlow:
                 for child in ast.walk(argument):
                     if isinstance(child, ast.Name) and state.get(child.id, _UNKNOWN).container:
                         state[child.id] = _UNKNOWN
+        # A single sqlalchemy text() wrapper is transparent: the call's value
+        # is the value of its own evaluated argument, captured here in
+        # evaluation order. text() over a literal stays literal (the declared
+        # parameterised form); over an assembled string the assembly is what
+        # the sink runs.
+        if self._is_text_wrapper(node, state):
+            return arguments[0]
         if not isinstance(node.func, ast.Attribute):
             return self.value(node, state)
         if node.func.attr in _SINKS and node.args:
             argument = node.args[0]
             # Later arguments can reassign names, but cannot change the query
             # text already evaluated as the first argument.
+            # The first argument may be a text() wrapper: expression()
+            # returned the wrapper's own evaluated argument for it, so this
+            # binding was captured at the moment the argument evaluated -- a
+            # walrus in a later argument cannot change what is read here.
             value = arguments[0]
-            # A single sqlalchemy text() wrapper is transparent: the sink
-            # receives the text() argument as its query text. text() over a
-            # literal stays literal (the declared parameterised form -- never
-            # a finding); over an assembled string the assembly is what runs.
-            # Wrappers with keywords, extra arguments or unknown spellings are
-            # not unwrapped.
-            if (isinstance(argument, ast.Call) and len(argument.args) == 1
-                    and not argument.keywords and self._is_text_wrapper(argument)):
-                inner = argument.args[0]
-                value = self.value(inner, state)
-                argument = inner
             if value.assembly:
                 line, kind = value.assembly
                 if isinstance(argument, ast.Name):
@@ -523,6 +518,12 @@ class _QueryFlow:
                             self.assign(child, _Binding(literal=True, container=True), state)
                     else:
                         self.assign(target, value, state)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                # Imports bind in the scope being walked, at their position:
+                # an import inside a function never proves the name at module
+                # level, and one below the sink never proves it above.
+                for bound, target in _text_import_targets(node):
+                    state[bound] = _Binding(imported=target)
             elif isinstance(node, ast.AugAssign):
                 self.expression(node.value, state, stable)
                 before, right = self.value(node.target, state), self.value(node.value, state)
@@ -590,7 +591,6 @@ class _QueryFlow:
 
 def _find_in_module(tree: ast.AST) -> list[tuple[int, str, str]]:
     flow = _QueryFlow()
-    flow.text_aliases, flow.text_names = _text_bindings(tree)
     _, stable = _scope_bindings(tree)
     try:
         flow.block(tree.body, {}, stable)

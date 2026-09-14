@@ -1,0 +1,7 @@
+{
+  "description": "An import inside another function binds the name only there; the module-level spelling is unproven.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}
