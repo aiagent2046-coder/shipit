@@ -331,6 +331,8 @@ def _pattern_binding_names(node):
         yield from _pattern_binding_names(node.child_by_field_name("left"))
     elif node.type == "pair_pattern":
         yield from _pattern_binding_names(node.child_by_field_name("value"))
+    elif node.type in {"required_parameter", "optional_parameter"}:
+        yield from _pattern_binding_names(node.child_by_field_name("pattern"))
     elif node.type in {"array_pattern", "object_pattern", "rest_pattern"}:
         for child in node.named_children:
             yield from _pattern_binding_names(child)
