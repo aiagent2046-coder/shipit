@@ -1,0 +1,2 @@
+const [Math] = sources;
+const resetToken = Math.random();

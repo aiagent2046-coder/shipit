@@ -4,7 +4,9 @@ Python AST requires an unambiguous local/inherited random import. Rebinding,
 parameters and member replacement invalidate that provenance. JS/TS syntax
 recognizes calls to an unshadowed Math.random, including template substitutions,
 array and object destructuring bindings paired by exact slot or key
-correspondence, and resolves exactly one helper hop: a name declared once as a function whose
+correspondence -- a default expression is the binding's value when the
+slot or key is absent, and comments, spreads, rest patterns and computed
+keys correspond to nothing -- and resolves exactly one helper hop: a name declared once as a function whose
 single return draws Math.random is itself a draw at call sites inside its
 declaring scope (function declarations may be hoisted; declarators must
 precede the call). Parameters, destructuring, reassignment, generator, enum,
@@ -310,6 +312,29 @@ def _helper_reaches(helper, call):
     return False
 
 
+def _pattern_binding_names(node):
+    """Binding names a declarator name or pattern binds.
+
+    Values inside defaults are not bindings: `Math.random()` in a default
+    expression does not bind Math, while `const [Math] = xs` does. Walking
+    the whole pattern here would silence the entire file over a value that
+    merely mentions Math.
+    """
+    if node is None:
+        return
+    if node.type in {"identifier", "shorthand_property_identifier_pattern"}:
+        yield _text(node)
+    elif node.type == "assignment_pattern":
+        yield from _pattern_binding_names(node.child_by_field_name("left"))
+    elif node.type == "object_assignment_pattern":
+        yield from _pattern_binding_names(node.child_by_field_name("left"))
+    elif node.type == "pair_pattern":
+        yield from _pattern_binding_names(node.child_by_field_name("value"))
+    elif node.type in {"array_pattern", "object_pattern", "rest_pattern"}:
+        for child in node.named_children:
+            yield from _pattern_binding_names(child)
+
+
 def _js_evidence(root, nodes):
     # Without full symbol resolution, any local Math binding/mutation makes its
     # provenance unknown. This deliberately under-reports instead of assigning
@@ -320,18 +345,23 @@ def _js_evidence(root, nodes):
                 return []
         if node.type in {"variable_declarator", "function_declaration", "class_declaration"}:
             name = node.child_by_field_name("name")
-            if name is not None and any(_text(child) == "Math" for child in _nodes(name)):
+            if name is not None and any(text == "Math" for text in _pattern_binding_names(name)):
                 return []
         if node.type == "arrow_function" and _text(node.child_by_field_name("parameter")) == "Math":
             return []
         if node.type == "for_in_statement":
             target = node.child_by_field_name("left")
-            if target is not None and any(_text(child) == "Math" for child in _nodes(target)):
+            if target is not None and any(text == "Math"
+                                          for text in _pattern_binding_names(target)):
                 return []
         if node.type in {"assignment_expression", "augmented_assignment_expression", "update_expression"}:
             target = node.child_by_field_name("left") or node.child_by_field_name("argument")
-            if target is not None and any(_text(child) == "Math" for child in _nodes(target)):
-                return []
+            if target is not None:
+                if target.type in {"array_pattern", "object_pattern"}:
+                    if any(text == "Math" for text in _pattern_binding_names(target)):
+                        return []
+                elif any(_text(child) == "Math" for child in _nodes(target)):
+                    return []
 
     helpers = _helpers(nodes)
 
@@ -351,12 +381,17 @@ def _js_evidence(root, nodes):
         return any(draw(child) for child in value.named_children)
 
     def slots(container):
-        """Slot index per element, counting commas: array holes keep their position."""
+        """Slot index per element, counting commas; holes keep their position.
+
+        Comments are not slots -- a trailing comment would otherwise take
+        over the position of the real element -- and neither is a spread,
+        which pairs with no single slot.
+        """
         positions, position = {}, 0
         for child in container.children:
             if child.type == ",":
                 position += 1
-            elif child.is_named:
+            elif child.is_named and child.type not in {"comment", "spread_element", "rest_pattern"}:
                 positions[child.start_byte] = position
         return positions
 
@@ -371,60 +406,76 @@ def _js_evidence(root, nodes):
         return None
 
     def destructure_hits(pattern, value, line, out):
-        """Secret-named bindings whose exact destructuring slot draws.
+        """Secret-named bindings whose destructuring source draws.
 
         Correspondence must be provable: array slots pair by comma position
-        (holes keep theirs), object keys pair by literal key text with the
-        last pair per key winning, and defaults keep the slot rule because a
-        default only applies when the slot is undefined. Rest patterns,
-        computed keys and containers that are not array/object literals have
-        no provable correspondence and stay silent.
+        (holes keep theirs), object keys by literal key text with the last
+        pair per key winning. A binding receives the element when its slot
+        or key is present and the pattern's default otherwise, because a
+        default only applies when the value is undefined. Comments, spreads,
+        rest patterns, computed keys and containers that are not array or
+        object literals have no provable correspondence and stay silent.
         """
         if pattern is None or value is None:
             return
+
+        def hits(bound, source):
+            if (bound is not None and source is not None
+                    and _secret(_text(bound)) and draw(source)):
+                out.append((line, _text(bound)))
+
         if pattern.type == "array_pattern" and value.type == "array":
-            elements = {slots(value).get(child.start_byte): child for child in value.named_children}
+            positions = slots(value)
+            elements = {positions.get(child.start_byte): child
+                        for child in value.named_children
+                        if child.type not in {"comment", "spread_element"}}
+            pattern_slots = slots(pattern)
             for child in pattern.named_children:
-                element = elements.get(slots(pattern).get(child.start_byte))
-                if element is None:
-                    continue
+                element = elements.get(pattern_slots.get(child.start_byte))
                 if child.type == "identifier":
-                    if _secret(_text(child)) and draw(element):
-                        out.append((line, _text(child)))
+                    hits(child, element)
                 elif child.type == "assignment_pattern":
-                    bound = child.child_by_field_name("left")
-                    if (bound is not None and bound.type == "identifier"
-                            and _secret(_text(bound)) and draw(element)):
-                        out.append((line, _text(bound)))
+                    bound, default = (child.child_by_field_name("left"),
+                                      child.child_by_field_name("right"))
+                    source = element if element is not None else default
+                    if bound is not None and bound.type == "identifier":
+                        hits(bound, source)
+                    elif bound is not None and bound.type in {"array_pattern", "object_pattern"}:
+                        destructure_hits(bound, source, line, out)
                 elif child.type in {"array_pattern", "object_pattern"}:
                     destructure_hits(child, element, line, out)
         elif pattern.type == "object_pattern" and value.type == "object":
             elements = {}
             for child in value.named_children:
-                if child.type == "pair":
-                    elements[key_text(child.child_by_field_name("key"))] = \
-                        child.child_by_field_name("value")
+                if child.type != "pair":
+                    continue
+                key = key_text(child.child_by_field_name("key"))
+                if key is not None:  # a computed key corresponds to nothing
+                    elements[key] = child.child_by_field_name("value")
             for child in pattern.named_children:
                 if child.type == "shorthand_property_identifier_pattern":
-                    element = elements.get(_text(child))
-                    if element is not None and _secret(_text(child)) and draw(element):
-                        out.append((line, _text(child)))
+                    hits(child, elements.get(_text(child)))
                 elif child.type == "pair_pattern":
-                    bound = child.child_by_field_name("value")
-                    element = elements.get(key_text(child.child_by_field_name("key")))
-                    if element is None or bound is None:
+                    key = key_text(child.child_by_field_name("key"))
+                    if key is None:
                         continue
-                    if bound.type == "identifier":
-                        if _secret(_text(bound)) and draw(element):
-                            out.append((line, _text(bound)))
-                    elif bound.type in {"array_pattern", "object_pattern"}:
-                        destructure_hits(bound, element, line, out)
+                    bound, default = child.child_by_field_name("value"), None
+                    if bound is not None and bound.type == "assignment_pattern":
+                        default = bound.child_by_field_name("right")
+                        bound = bound.child_by_field_name("left")
+                    element = elements.get(key)
+                    source = element if element is not None else default
+                    if bound is not None and bound.type == "identifier":
+                        hits(bound, source)
+                    elif bound is not None and bound.type in {"array_pattern", "object_pattern"}:
+                        destructure_hits(bound, source, line, out)
                 elif child.type == "object_assignment_pattern":
-                    left = child.child_by_field_name("left")
+                    left, default = (child.child_by_field_name("left"),
+                                     child.child_by_field_name("right"))
                     element = elements.get(_text(left)) if left is not None else None
-                    if (left is not None and left.type == "shorthand_property_identifier_pattern"
-                            and element is not None and _secret(_text(left)) and draw(element)):
-                        out.append((line, _text(left)))
+                    source = element if element is not None else default
+                    if left is not None and left.type == "shorthand_property_identifier_pattern":
+                        hits(left, source)
 
     found = []
     for node in nodes:

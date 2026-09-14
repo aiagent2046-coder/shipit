@@ -1,0 +1,7 @@
+{
+  "description": "Computed keys on both sides correspond to nothing, not to each other.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}
