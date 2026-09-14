@@ -1,0 +1,10 @@
+{
+  "description": "A route parameter reaches execute through str.format; the query string is assembled from input (CWE-89).",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

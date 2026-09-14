@@ -1,0 +1,4 @@
+function generateValue() {
+  return class { value = Math.random(); };
+}
+const resetToken = generateValue();

@@ -1,0 +1,7 @@
+{
+  "description": "A second, secure return leaves the helper unresolved.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

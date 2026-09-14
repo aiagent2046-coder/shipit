@@ -447,9 +447,38 @@ def test_deep_expression_does_not_abort_later_files(extension):
                 values.append(body[column])
         cur.execute(f"UPDATE users SET {', '.join(fields)}", values)
     ''',
+    # A literal template formatted with literal arguments is still a literal.
+    '''
+    def query(cur):
+        cur.execute("SELECT 1 WHERE a = {}".format(1))
+    ''',
+    '''
+    def query(cur, limit):
+        cur.execute("SELECT {} LIMIT {}".format("id", 2))
+    ''',
+    '''
+    def query(cur):
+        cur.execute("SELECT %d" % 1)
+    ''',
 ])
 def test_fixed_fragments_and_placeholder_counts_do_not_become_sql_injection(source):
     assert scan(source, 'py') == []
+
+
+def test_literal_format_arguments_stay_silent_until_a_value_enters():
+    """The reviewer-found false positive: .format(1) on a literal template.
+
+    Formatting a literal with literals assembles no external value, so the
+    query is static and the rule must stay silent. Swapping one literal for
+    a parameter is the mutation that must make it fire again.
+    """
+    source = '''
+    def query(cur, name):
+        cur.execute("SELECT 1 WHERE a = {}".format(1))
+    '''
+    assert scan(source, 'py') == []
+    source = source.replace('.format(1)', '.format(name)')
+    assert [finding.line for finding in scan(source, 'py')] == [2]
 
 
 @pytest.mark.parametrize('mutation', [

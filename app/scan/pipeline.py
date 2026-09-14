@@ -213,6 +213,22 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # import-resolved lxml parse/fromstring with an inline XMLParser, or iterparse
 # in XML mode. Defaults and unknown configurations are not findings; input
 # trust, dependency versions and runtime controls remain unverified.
+# 2026-09-14-4: insecure-randomness resolves one JS/TS helper hop -- a name
+# declared once as a function whose single return draws Math.random is a draw
+# at call sites inside its declaring scope. Parameters, destructuring,
+# reassignment, generator, enum, namespace, import-alias and duplicate
+# declarations, conditional or multiple returns, deferred bodies (returned or
+# assigned closures, generators, object/class methods and classes -- both
+# walkers stop there), nested chains and cross-file provenance stay
+# unresolved.
+# 2026-09-14-5: the offline dependency catalog adds pinned GitHub-reviewed
+# GHSA records for npm/PyPI and evaluates their OSV introduced/fixed,
+# last_affected and limit timelines. CVE aliases deduplicate agreeing sources;
+# disagreements and unsupported ordering stay unknown.
+# 2026-09-14-6: sql-injection treats a literal template formatted with
+# literal arguments as a literal query: .format(<literals>) carries no
+# external value, exactly like literal concatenation always has. A starred
+# argument, a ** spread or any non-literal argument still reports.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

@@ -23,14 +23,18 @@ MAX_EXPANDED_BYTES = 100_000_000
 MAX_EVALUATIONS = 20_000
 MAX_FINDINGS = 500
 MAX_RANGES = 256
+MAX_EVENTS = 512
 MAX_DETAILS = 200
 SOURCE_REPOSITORY = "https://github.com/CVEProject/cvelistV5"
+GHSA_REPOSITORY = "https://github.com/github/advisory-database"
 CVE_PAGE = "https://www.cve.org/CVERecord?id="
+GHSA_PAGE = "https://github.com/advisories/"
 _STATUSES = {"affected", "unaffected", "unknown"}
 _SEMVER = re.compile(
     r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?\Z")
 _CVE_ID = re.compile(r"CVE-[0-9]{4}-[0-9]{4,19}\Z")
+_GHSA_ID = re.compile(r"GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}\Z")
 
 
 def _version(value: object, ecosystem: str) -> tuple | None:
@@ -125,11 +129,124 @@ def _range_status(version: str, ecosystem: str, row: object) -> tuple[str | None
     return status, None
 
 
+def _osv_range_status(version: str, ecosystem: str, row: object) -> tuple[str, str | None]:
+    """Evaluate one OSV timeline without guessing unsupported ordering."""
+    if not isinstance(row, dict):
+        return "unknown", "invalid_osv_range"
+    kind, events = row.get("type"), row.get("events")
+    supported = (ecosystem == "npm" and kind in {"SEMVER", "ECOSYSTEM"}
+                 or ecosystem == "PyPI" and kind == "ECOSYSTEM")
+    if not supported:
+        return "unknown", "unsupported_osv_range_type"
+    if not isinstance(events, list) or not events or len(events) > MAX_EVENTS:
+        return "unknown", "invalid_osv_events"
+    target = _version(version, ecosystem)
+    if target is None:
+        return "unknown", "unsupported_installed_version"
+
+    parsed = []
+    limits = []
+    event_kinds = set()
+    points: dict[tuple, set[str]] = {}
+    for event in events:
+        if not isinstance(event, dict) or len(event) != 1:
+            return "unknown", "invalid_osv_event"
+        event_kind, value = next(iter(event.items()))
+        if event_kind not in {"introduced", "fixed", "last_affected", "limit"}:
+            return "unknown", "invalid_osv_event"
+        if (not isinstance(value, str) or not value or len(value) > 128
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            return "unknown", "invalid_osv_event"
+        event_kinds.add(event_kind)
+        if event_kind == "limit":
+            limits.append(value)
+            continue
+        point = (-1,) if event_kind == "introduced" and value == "0" else _version(value, ecosystem)
+        if point is None:
+            return "unknown", "unsupported_osv_version"
+        points.setdefault(point, set()).add(event_kind)
+        if len(points[point]) > 1:
+            return "unknown", "conflicting_osv_events"
+        parsed.append((point, event_kind))
+    if "introduced" not in event_kinds:
+        return "unknown", "osv_range_without_introduced"
+    if {"fixed", "last_affected"} <= event_kinds:
+        return "unknown", "conflicting_osv_events"
+
+    if limits:
+        before_a_limit = False
+        for limit in limits:
+            if "*" in limit:
+                before_a_limit = True
+                continue
+            relation = compare_versions(version, limit, ecosystem)
+            if relation is None:
+                return "unknown", "unsupported_osv_version"
+            before_a_limit = before_a_limit or relation < 0
+        if not before_a_limit:
+            return "unaffected", None
+
+    vulnerable = False
+    for point, event_kind in sorted(parsed):
+        if point > target:
+            continue
+        if event_kind == "introduced":
+            vulnerable = True
+        elif event_kind == "fixed":
+            vulnerable = False
+        elif point < target:  # last_affected is inclusive at the boundary.
+            vulnerable = False
+    return ("affected" if vulnerable else "unaffected"), None
+
+
+def _evaluate_osv(version: str, ecosystem: str, advisory: dict) -> dict:
+    result = {
+        "status": "unknown", "reason": None, "unresolved_ranges": 0,
+        "matched_ranges": [], "matched_versions": [],
+    }
+    if _version(version, ecosystem) is None:
+        return {**result, "reason": "unsupported_installed_version", "unresolved_ranges": 1}
+    ranges, versions = advisory.get("osv_ranges", []), advisory.get("osv_versions", [])
+    if (not isinstance(ranges, list) or len(ranges) > MAX_RANGES
+            or not isinstance(versions, list) or len(versions) > MAX_RANGES * 16
+            or not ranges and not versions):
+        return {**result, "reason": "invalid_or_oversized_osv_ranges", "unresolved_ranges": 1}
+
+    exact = False
+    for item in versions:
+        if (not isinstance(item, str) or not item or len(item) > 128
+                or any(ord(char) < 32 or ord(char) == 127 for char in item)):
+            result["unresolved_ranges"] += 1
+            result["reason"] = result["reason"] or "invalid_osv_version"
+        elif item == version:
+            exact = True
+            result["matched_versions"].append(item)
+
+    for row in ranges:
+        status, reason = _osv_range_status(version, ecosystem, row)
+        if reason:
+            result["unresolved_ranges"] += 1
+            result["reason"] = result["reason"] or reason
+        elif status == "affected":
+            result["matched_ranges"].append(row)
+
+    if exact or result["matched_ranges"]:
+        result["status"] = "affected"
+        result["reason"] = None
+    elif result["unresolved_ranges"]:
+        result["status"] = "unknown"
+    else:
+        result["status"] = "unaffected"
+    return result
+
+
 def evaluate_advisory(version: str, ecosystem: str, advisory: object) -> dict:
     """Evaluate one CVE affected object, preserving unsupported/overlap gaps."""
     result = {"status": "unknown", "reason": None, "unresolved_ranges": 0, "matched_ranges": []}
     if not isinstance(advisory, dict):
         return {**result, "reason": "invalid_advisory", "unresolved_ranges": 1}
+    if "osv_ranges" in advisory or "osv_versions" in advisory:
+        return _evaluate_osv(version, ecosystem, advisory)
     if advisory.get("unsupported_applicability"):
         return {**result, "reason": "unsupported_applicability", "unresolved_ranges": 1}
     if _version(version, ecosystem) is None:
@@ -160,14 +277,10 @@ def evaluate_advisory(version: str, ecosystem: str, advisory: object) -> dict:
     return result
 
 
-def _source(catalog: object) -> dict | None:
-    if (not isinstance(catalog, dict) or type(catalog.get("schema_version")) is not int
-            or catalog["schema_version"] != 1):
+def _valid_source(value: object, repository: str) -> dict | None:
+    if not isinstance(value, dict) or value.get("repository") != repository:
         return None
-    source = catalog.get("source")
-    if not isinstance(source, dict) or source.get("repository") != SOURCE_REPOSITORY:
-        return None
-    commit, date = source.get("commit"), source.get("generated_at")
+    commit, date = value.get("commit"), value.get("generated_at")
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         return None
     if not isinstance(date, str) or len(date) > 64:
@@ -178,8 +291,59 @@ def _source(catalog: object) -> dict | None:
             return None
     except ValueError:
         return None
-    return {"repository": SOURCE_REPOSITORY, "commit": commit, "generated_at": date}
+    return {"repository": repository, "commit": commit, "generated_at": date}
 
+
+def _sources(catalog: object) -> dict[str, dict] | None:
+    if not isinstance(catalog, dict) or type(catalog.get("schema_version")) is not int:
+        return None
+    schema = catalog["schema_version"]
+    primary = _valid_source(catalog.get("source"), SOURCE_REPOSITORY)
+    if primary is None:
+        return None
+    if schema == 1:
+        return {"cvelist": primary}
+    if schema != 2:
+        return None
+    sources = catalog.get("sources")
+    if not isinstance(sources, dict) or set(sources) != {"cvelist", "github-reviewed"}:
+        return None
+    cvelist = _valid_source(sources.get("cvelist"), SOURCE_REPOSITORY)
+    github = _valid_source(sources.get("github-reviewed"), GHSA_REPOSITORY)
+    if cvelist != primary or github is None:
+        return None
+    return {"cvelist": cvelist, "github-reviewed": github}
+
+
+def _source(catalog: object) -> dict | None:
+    sources = _sources(catalog)
+    return sources.get("cvelist") if sources else None
+
+
+def _entry_identity(entry: object, sources: dict[str, dict]) -> tuple[str, list[str], str] | None:
+    if not isinstance(entry, dict):
+        return None
+    advisory_id = entry.get("id")
+    if not isinstance(advisory_id, str) or not (
+            _CVE_ID.fullmatch(advisory_id) or _GHSA_ID.fullmatch(advisory_id)):
+        return None
+    aliases = entry.get("aliases", [])
+    if (not isinstance(aliases, list) or len(aliases) > 256
+            or any(not isinstance(alias, str) or not (
+                _CVE_ID.fullmatch(alias) or _GHSA_ID.fullmatch(alias)
+            ) for alias in aliases)):
+        return None
+    default_source = "cvelist" if _CVE_ID.fullmatch(advisory_id) else None
+    source_key = entry.get("source", default_source)
+    if source_key not in sources:
+        return None
+    if _GHSA_ID.fullmatch(advisory_id) and source_key != "github-reviewed":
+        return None
+    return advisory_id, sorted(set(aliases)), source_key
+
+
+def _advisory_url(advisory_id: str) -> str:
+    return (CVE_PAGE if _CVE_ID.fullmatch(advisory_id) else GHSA_PAGE) + advisory_id
 
 def _archive_inventory(data: bytes):
     if not isinstance(data, bytes) or len(data) > MAX_ARCHIVE_BYTES:
@@ -196,17 +360,18 @@ def _archive_inventory(data: bytes):
         paths = {i.filename for i in members if not i.is_dir()
                  and not is_non_production_path(i.filename) and not _vendored(i.filename)}
         gaps = {}
-        unsupported = {"yarn.lock", "pnpm-lock.yaml", "Pipfile.lock", "uv.lock",
+        unsupported = {"yarn.lock", "Pipfile.lock",
                        "Cargo.lock", "Gemfile.lock", "composer.lock", "packages.lock.json"}
         for path in paths:
             directory, _, basename = path.rpartition("/")
             prefix = directory + "/" if directory else ""
             if basename in unsupported:
                 gaps[path] = "unsupported"
-            elif basename == "package.json" and prefix + "package-lock.json" not in paths:
+            elif basename == "package.json" and not any(
+                    prefix + name in paths for name in ("package-lock.json", "pnpm-lock.yaml")):
                 gaps[path] = "unresolved"
             elif basename in {"pyproject.toml", "Pipfile", "setup.py", "setup.cfg"} and not any(
-                    prefix + name in paths for name in ("poetry.lock", "requirements.txt")):
+                    prefix + name in paths for name in ("poetry.lock", "requirements.txt", "uv.lock")):
                 gaps[path] = "unresolved"
     inventory = collect_dependency_inventory(data)
     inventory.incomplete_manifests.update(gaps)
@@ -214,16 +379,19 @@ def _archive_inventory(data: bytes):
 
 
 def match_archive(data: bytes, catalog: dict) -> dict:
-    """Match ZIP lockfile pins against an identified, offline CVE snapshot."""
+    """Match ZIP lockfile pins against an identified, offline advisory snapshot."""
+    sources = _sources(catalog)
     coverage = {
         "status": "partial", "status_counts": dict.fromkeys((*sorted(_STATUSES), "not_in_catalog"), 0),
         "dependencies_found": 0, "dependencies_checked": 0, "packages_in_catalog": 0,
         "advisory_evaluations": 0, "unresolved_ranges": 0, "manifests": [],
         "incomplete_manifests": {}, "inventory_truncated": 0, "findings_truncated": 0,
-        "evaluations_truncated": 0, "source": _source(catalog), "details": [],
-        "catalog_stats": {},
+        "evaluations_truncated": 0,
+        "source": sources.get("cvelist") if sources else None,
+        "sources": sources or {}, "details": [], "catalog_stats": {},
         "limitations": [
             "Only exact registry package versions in supported lockfiles are compared with this snapshot.",
+            "Locked platform, optional and development variants are included; runtime selection is not evaluated.",
             "A package/version match does not establish reachable or exploitable application code.",
             "Absence from the snapshot, unsupported ranges, and no matches do not establish a clean or safe project.",
             "PyPI comparisons support numeric releases only; npm comparisons support SemVer.",
@@ -232,7 +400,7 @@ def match_archive(data: bytes, catalog: dict) -> dict:
     findings = []
     result = {"findings": findings, "coverage": coverage}
     packages = catalog.get("packages") if isinstance(catalog, dict) else None
-    if coverage["source"] is None or not isinstance(packages, dict):
+    if sources is None or not isinstance(packages, dict):
         coverage.update(status="unavailable", error="invalid_catalog")
         return result
     stats = catalog.get("stats", {})
@@ -264,58 +432,106 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                 coverage["details"].append({"package": key, "version": dep.version,
                                             "reason": "invalid_catalog_entries"})
             continue
-        grouped: dict[str, list[tuple[dict, dict]]] = {}
+        grouped: dict[str, list[tuple[dict, dict, str]]] = {}
         for entry_index, entry in enumerate(entries):
             if coverage["advisory_evaluations"] >= MAX_EVALUATIONS:
                 coverage["evaluations_truncated"] += len(entries) - entry_index
                 break
             coverage["advisory_evaluations"] += 1
-            cve_id = entry.get("id") if isinstance(entry, dict) else None
-            if not isinstance(cve_id, str) or not _CVE_ID.fullmatch(cve_id):
+            identity = _entry_identity(entry, sources)
+            if identity is None:
                 coverage["status_counts"]["unknown"] += 1
                 coverage["unresolved_ranges"] += 1
                 continue
+            entry_id, aliases, source_key = identity
+            group_id = next((item for item in (entry_id, *aliases) if _CVE_ID.fullmatch(item)), entry_id)
             assessment = evaluate_advisory(dep.version, dep.ecosystem, entry)
             coverage["unresolved_ranges"] += assessment["unresolved_ranges"]
-            grouped.setdefault(cve_id, []).append((entry, assessment))
+            grouped.setdefault(group_id, []).append((entry, assessment, source_key))
         # If the cap cut across repeated affected objects, their interpretation
         # is incomplete; never emit a positive based on that partial group.
         truncated = coverage["advisory_evaluations"] >= MAX_EVALUATIONS and coverage["evaluations_truncated"] > 0
-        for cve_id, group in grouped.items():
-            statuses = {assessment["status"] for _, assessment in group}
+        for group_id, group in grouped.items():
+            statuses = {assessment["status"] for _, assessment, _ in group}
             status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unknown"
             coverage["status_counts"][status] += 1
             if status == "unknown":
                 if len(statuses) > 1:
                     coverage["unresolved_ranges"] += 1
-                reason = ("evaluation_limit" if truncated else "conflicting_affected_objects" if len(statuses) > 1 else
-                          next((a["reason"] for _, a in group if a["reason"]), "unknown_status"))
+                if truncated:
+                    reason = "evaluation_limit"
+                elif len(statuses) > 1:
+                    source_keys = {source_key for _, _, source_key in group}
+                    reason = (
+                        "conflicting_advisory_sources" if len(source_keys) > 1
+                        else "conflicting_affected_objects"
+                    )
+                else:
+                    reason = next(
+                        (assessment["reason"] for _, assessment, _ in group
+                         if assessment["reason"]),
+                        "unknown_status",
+                    )
                 if len(coverage["details"]) < MAX_DETAILS:
                     coverage["details"].append({"package": key, "version": dep.version, "manifest": dep.manifest,
-                                                "cve": cve_id, "reason": reason})
+                                                "advisory": group_id, "reason": reason})
                 continue
             if status != "affected":
                 continue
             if len(findings) >= MAX_FINDINGS:
                 coverage["findings_truncated"] += 1
                 continue
-            entry, assessment = group[0]
-            evidence = {"version": 1, "package": name, "ecosystem": dep.ecosystem,
-                        "installed_version": dep.version, "manifest": dep.manifest,
-                        "cve_id": cve_id, "url": CVE_PAGE + cve_id, "snapshot": coverage["source"],
-                        "matched_ranges": [r for _, a in group for r in a["matched_ranges"]],
-                        "default_status_used": not any(a["matched_ranges"] for _, a in group),
-                        "reachability": "not_assessed"}
-            findings.append({"rule_id": RULE_ID, "title": f"{name} {dep.version} matches {cve_id}",
-                             "severity": "high", "confidence": 0.9, "category": "Security",
-                             "file": dep.manifest, "line": dep.line,
-                             "explanation": (f"The resolved {dep.ecosystem} package version is listed as affected "
-                                             f"by {cve_id} in the bundled CVE snapshot. Application reachability "
-                                             "and exploitability have not been verified."),
-                             "fix_hint": ("Review the CVE affected range and upgrade to a supported fixed version; "
-                                          "verify whether the affected functionality is used."),
-                             "source": "dependency", "verification_status": "unverified",
-                             "verification_method": "package_version_match", "claim_evidence": evidence})
+            entry_ids = sorted({entry["id"] for entry, _, _ in group})
+            all_ids = sorted({item for entry, _, _ in group
+                              for item in (entry["id"], *entry.get("aliases", []))})
+            cve_id = next((item for item in entry_ids if _CVE_ID.fullmatch(item)), None)
+            ghsa_id = next((item for item in entry_ids if _GHSA_ID.fullmatch(item)), None)
+            advisory_id = cve_id or ghsa_id or group_id
+            source_keys = sorted({source_key for _, _, source_key in group})
+            evidence = {
+                "version": 1, "package": name, "ecosystem": dep.ecosystem,
+                "installed_version": dep.version, "manifest": dep.manifest,
+                "advisory_id": advisory_id, "advisory_ids": all_ids,
+                "url": _advisory_url(advisory_id), "snapshot": coverage["source"],
+                "snapshot_sources": [
+                    {"name": source_key, **sources[source_key]} for source_key in source_keys
+                ],
+                "matched_ranges": [
+                    row for _, assessment, _ in group for row in assessment["matched_ranges"]
+                ],
+                "matched_versions": [
+                    item for _, assessment, _ in group
+                    for item in assessment.get("matched_versions", [])
+                ],
+                "default_status_used": not any(
+                    assessment["matched_ranges"] for _, assessment, _ in group
+                ) and not any(
+                    assessment.get("matched_versions", []) for _, assessment, _ in group
+                ),
+                "reachability": "not_assessed",
+            }
+            if cve_id:
+                evidence["cve_id"] = cve_id
+            if ghsa_id:
+                evidence["ghsa_id"] = ghsa_id
+            findings.append({
+                "rule_id": RULE_ID,
+                "title": f"{name} {dep.version} matches {advisory_id}",
+                "severity": "high", "confidence": 0.9, "category": "Security",
+                "file": dep.manifest, "line": dep.line,
+                "explanation": (
+                    f"The resolved {dep.ecosystem} package version is listed as affected "
+                    f"by {advisory_id} in the bundled advisory snapshot. Application "
+                    "reachability and exploitability have not been verified."
+                ),
+                "fix_hint": (
+                    "Review the advisory's affected range and upgrade to a supported "
+                    "fixed version; verify whether the affected functionality is used."
+                ),
+                "source": "dependency", "verification_status": "unverified",
+                "verification_method": "package_version_match",
+                "claim_evidence": evidence,
+            })
     gaps = (coverage["incomplete_manifests"] or coverage["inventory_truncated"] or
             coverage["findings_truncated"] or coverage["evaluations_truncated"] or
             coverage["status_counts"]["unknown"] or coverage["status_counts"]["not_in_catalog"])

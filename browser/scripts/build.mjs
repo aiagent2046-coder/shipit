@@ -55,7 +55,8 @@ const paths = (await readdir(join(root, 'app/scan')))
   .map(name => `app/scan/${name}`);
 paths.push('app/__init__.py', 'app/capabilities.py', 'app/ingest/__init__.py',
   'app/ingest/validators.py', 'app/report/__init__.py', 'app/report/plain_language.py',
-  'app/report/sarif.py', 'app/sca/__init__.py', 'app/sca/lockfiles.py');
+  'app/report/sarif.py', 'app/sca/__init__.py', 'app/sca/lockfiles.py',
+  'app/sca/resolved_locks.py');
 for (const path of paths.sort()) files[path] = await readFile(join(root, path), 'utf8');
 const bundle = JSON.stringify(files);
 await writeFile(join(out, 'engine-files.json'), bundle);

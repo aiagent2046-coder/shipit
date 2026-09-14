@@ -1,0 +1,10 @@
+{
+  "description": "A route parameter reaches execute through %-formatting; the query text is built before it runs (CWE-89).",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

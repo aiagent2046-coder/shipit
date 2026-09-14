@@ -1,0 +1,6 @@
+function generateToken() {
+  return Math.random();
+}
+function issue({generateToken}) {
+  const resetToken = generateToken();
+}

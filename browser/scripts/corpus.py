@@ -24,7 +24,7 @@ if "--portable" in sys.argv:
     sys.meta_path.insert(0, NoNative())
 
 from app.scan.browser import ScanSession, scan_archive as _scan_archive  # noqa: E402
-from tests.test_browser_cve import REAL_CASES, project  # noqa: E402
+from tests.test_browser_cve import LOCK_GAPS, REAL_CASES, lock_gap_project, project  # noqa: E402
 from tests.detectors.conftest import build_archive, discover_cases, load_expected  # noqa: E402
 from parser_probes import probe_parsers  # noqa: E402
 
@@ -37,9 +37,15 @@ def scan_archive(data):
 
 def dependency_cases():
     for ecosystem, name, version, cve, affected in REAL_CASES:
-        yield (f'dependency-cve-match/{cve}/{version}', project(ecosystem, name, version),
-               {'expect': [{'rule_id': 'dependency-cve-match', 'cve_id': cve}]} if affected
-               else {'forbid_cves': [cve]}, affected)
+        for modern_lock in (False, True):
+            profile = 'modern-lock' if modern_lock else 'original-lock'
+            yield (f'dependency-cve-match/{cve}/{version}/{profile}',
+                   project(ecosystem, name, version, modern_lock=modern_lock),
+                   {'expect': [{'rule_id': 'dependency-cve-match', 'cve_id': cve}]} if affected
+                   else {'forbid_cves': [cve]}, affected)
+    for name, manifest, body, _ in LOCK_GAPS:
+        yield (f'dependency-cve-match/{name}', lock_gap_project(manifest, body),
+               {'forbid_cves': ['CVE-2026-2950', 'CVE-2024-7297']}, False)
 
 
 def main():

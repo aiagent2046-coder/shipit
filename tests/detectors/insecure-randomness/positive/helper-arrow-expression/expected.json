@@ -1,0 +1,10 @@
+{
+  "description": "An arrow helper with an expression body, called into a secret-named value.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

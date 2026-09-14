@@ -1,0 +1,7 @@
+function drawUnit() {
+  return Math.random();
+}
+function generateToken() {
+  return drawUnit();
+}
+const resetToken = generateToken();
