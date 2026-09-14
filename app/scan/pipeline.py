@@ -229,6 +229,9 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # literal arguments as a literal query: .format(<literals>) carries no
 # external value, exactly like literal concatenation always has. A starred
 # argument, a ** spread or any non-literal argument still reports.
+# 2026-09-14-8: pglast 8.4 and its matching Wasm wheel parse PostgreSQL 18.
+# Updated SQL syntax and statement locations can change scan evidence, so
+# cached audits must not retain results from the previous parser version.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

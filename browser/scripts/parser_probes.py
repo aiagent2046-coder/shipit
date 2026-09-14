@@ -10,7 +10,7 @@ PARSER_VERSIONS = {
     "tree-sitter": "0.26.0",
     "tree-sitter-typescript": "0.23.2",
     "tree-sitter-javascript": "0.25.0",
-    "pglast": "7.7",
+    "pglast": "8.4",
 }
 
 TREE_SOURCES = {
@@ -115,7 +115,7 @@ def _sql_probe():
 
     tokens = []
     for token in scan(SQL_SOURCE):
-        # pglast 7.7 scan uses inclusive Python character offsets.  Record the
+        # pglast scan uses inclusive Python character offsets.  Record the
         # derived UTF-8 span too, to expose Unicode displacement regressions.
         assert 0 <= token.start <= token.end < len(SQL_SOURCE)
         value = SQL_SOURCE[token.start:token.end + 1]
