@@ -48,8 +48,11 @@ _PY_SUFFIXES = {".py"}
 _JS_SUFFIXES = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".mts", ".cts"}
 _TSX_SUFFIXES = {".tsx", ".jsx"}
 
-_RANDOM_METHODS = (r"Math\.random\s*\(|"
-                   r"\brandom\.(?:random|randint|randrange|choice|getrandbits|uniform|sample)\s*\(")
+# Method names, not module spellings: `import random as rnd` still draws
+# through rnd.getrandbits, `from random import random` draws bare, and
+# Math.random() matches the bare `random(` arm. A body that only calls
+# secrets/urandom matches nothing and bins as vuln-removed.
+_RANDOM_METHODS = (r"\b(?:random|randint|randrange|choice|getrandbits|uniform|sample)\s*\(")
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,11 @@ class Spec:
     """What a body must still contain to be worth a human's reading.
 
     markers: regexes that must ALL be found, else the body is vuln-removed.
+             Deliberately BROAD -- method names, not module spellings: a
+             missed marker drops a real escape (review round 1 found seven),
+             a loose one costs one human read. The corpus invariant in
+             tests/test_triage_hunt_escapes.py fails the moment detector
+             coverage outgrows these markers.
     target:  a regex that must be found somewhere (rules with a target
              filter; deliberately liberal, so only clear absences bin out).
     imports: usage regex -> import regex; a usage without its import is a
@@ -78,10 +86,14 @@ SPECS: dict[str, Spec] = {
     ),
     "sql-injection-string-built-query": Spec(
         markers=(r"\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\b",
-                 # %-formatting is deliberately absent: the driver placeholder
-                 # "%s" is the SAFE form and a regex cannot tell them apart, so
-                 # a %-assembled rewrite lands in REVIEW instead of being binned.
-                 r"\+|\.format\(|\bf['\"]|\{\}"),
+                 # The % OPERATOR stands after the closing quote
+                 # ('... = %s' % name): that is assembly, in REVIEW. The %s
+                 # PLACEHOLDER sits inside the literal, before the closing
+                 # quote -- execute('...%s', (name,)) matches none of these
+                 # arms, so a parameterised rewrite still bins as
+                 # vuln-removed. A % applied to a variable (q % name) has no
+                 # quote to anchor on; that rare shape is a documented miss.
+                 r"\+|\.format\(|\bf['\"]|\{\}|['\"]\s*%"),
     ),
     "archive-extraction-fully-trusted": Spec(
         markers=(r"fully_trusted",),
@@ -89,7 +101,7 @@ SPECS: dict[str, Spec] = {
     ),
     "xss-unsafe-html-injection": Spec(
         markers=(r"innerHTML|outerHTML|dangerouslySetInnerHTML|"
-                 r"insertAdjacentHTML|document\.write|\.html\(",),
+                 r"insertAdjacentHTML|document\.write|\.html\(|v-html",),
     ),
     "command-injection-shell-built-command": Spec(
         markers=(r"shell\s*=\s*True|os\.system\s*\(|os\.popen\s*\(|"
@@ -104,13 +116,24 @@ SPECS: dict[str, Spec] = {
         imports={r"\betree\.": r"^\s*(?:import lxml\b|from lxml import\b)"},
     ),
     "unsafe-deserialization": Spec(
-        markers=(r"pickle\.\w+\s*\(|marshal\.\w+\s*\(|yaml\.load|"
-                 r"dill\.\w+\s*\(|jsonpickle\.",),
+        # Method names again: `from pickle import loads` calls loads() bare,
+        # `import pickle as codec` keeps calling codec.loads(), and the \b
+        # keeps yaml.safe_load silent while yaml.unsafe_load stays a marker.
+        markers=(r"\b(?:loads?|unsafe_load|read_pickle)\s*\(|"
+                 r"marshal\.\w+\s*\(|pickle\.\w+\s*\(|dill\.\w+\s*\(|"
+                 r"jsonpickle\.|yaml\.(?:unsafe_)?load\b",),
         imports={r"\byaml\.": r"^\s*(?:import yaml\b|from yaml import\b)"},
     ),
 }
 
 REVIEW = "review"
+
+
+def is_review(bucket: str) -> bool:
+    """Both review spellings belong in the queue: a specced rule returns
+    REVIEW, an unknown rule returns "review (no spec)". A bucket left out of
+    the queue count is a bucket no human ever reads."""
+    return bucket == REVIEW or bucket.startswith(f"{REVIEW} ")
 
 
 def _parse_error(body: str, suffix: str) -> bool:
@@ -148,7 +171,10 @@ def classify(rule_id: str, filename: str, body: str) -> str:
 
 
 def _rule_and_file(path: Path) -> tuple[str, str] | None:
-    parts = path.name.split("__")
+    # maxsplit=2: the third field is the ORIGINAL filename, and an original
+    # filename may itself contain "__" (auth__reset.py) -- it must survive
+    # intact, suffix included, because the parse check reads the suffix.
+    parts = path.name.split("__", 2)
     if len(parts) < 3:
         return None
     return parts[0], parts[2]
@@ -173,7 +199,9 @@ def triage(dump_dirs: list[Path]) -> int:
         print(f"=== {rule_id}: {bodies} bodies")
         for bucket in sorted(rule_buckets):
             print(f"    {bucket}: {len(rule_buckets[bucket])}")
-        review_paths = rule_buckets.get(REVIEW, [])
+        review_paths = [path for bucket in sorted(rule_buckets)
+                        if is_review(bucket)
+                        for path in rule_buckets[bucket]]
         review_total += len(review_paths)
         for path in review_paths:
             print(f"    REVIEW -> {path}")
