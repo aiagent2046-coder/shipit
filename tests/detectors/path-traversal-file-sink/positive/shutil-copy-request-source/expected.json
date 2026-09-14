@@ -1,0 +1,10 @@
+{
+  "description": "A route parameter is used directly as the source path of a copy, without joining to a base (CWE-22).",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

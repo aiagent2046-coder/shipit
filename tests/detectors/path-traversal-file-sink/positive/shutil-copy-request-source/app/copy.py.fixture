@@ -1,0 +1,7 @@
+import shutil
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.post('/copy')
+async def copy(src: str):
+    shutil.copy(src, '/srv/archive')
