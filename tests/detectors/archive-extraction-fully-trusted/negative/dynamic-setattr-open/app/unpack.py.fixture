@@ -1,0 +1,3 @@
+import tarfile
+setattr(tarfile, "open", custom_open)
+tarfile.open(source).extractall(dest, filter="fully_trusted")

@@ -44,6 +44,8 @@ RULE_ID = "archive-extraction-fully-trusted"
 # tarfile.open is TarFile.open; both spellings construct the archive object.
 _OPEN_CALLS = frozenset({"tarfile.open", "tarfile.TarFile.open"})
 _EXTRACT_MEMBERS = frozenset({"extract", "extractall"})
+_PATCH_OBJECT_CALLS = frozenset({"unittest.mock.patch.object", "mock.patch.object"})
+_PATCH_CALLS = frozenset({"unittest.mock.patch", "mock.patch"})
 
 _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 400
@@ -63,6 +65,9 @@ class _Evidence:
 class _Binding:
     node: ast.AST
     scope: _Scope
+
+
+_BindingKey = tuple[int, str]
 
 
 def _open_call(node: ast.AST | None, imports: _Imports, scope: _Scope | None) -> bool:
@@ -94,93 +99,104 @@ def _fully_trusted_filter(call: ast.Call) -> bool:
     return seen
 
 
-def _target_names(target: ast.AST | None) -> list[str]:
-    if isinstance(target, ast.Name):
-        return [target.id]
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return [name for element in target.elts for name in _target_names(element)]
-    if isinstance(target, ast.Starred):
-        return _target_names(target.value)
-    return []
+def _binding_key(scope: _Scope, name: str) -> _BindingKey:
+    return id(scope), name
 
 
-def _argument_names(args: ast.arguments) -> list[str]:
-    names = [arg.arg for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
-    names += [args.vararg.arg] if args.vararg else []
-    names += [args.kwarg.arg] if args.kwarg else []
-    return names
+def _unbound_bare_name(node: ast.AST, name: str, scope: _Scope, imports: _Imports) -> bool:
+    """A bare builtin name with no file binding that could shadow it."""
+    if not isinstance(node, ast.Name) or node.id != name or name in imports.mutable_names:
+        return False
+    current: _Scope | None = scope
+    while current is not None:
+        if current.wildcard or current.bindings.get(name):
+            return False
+        current = current.parent
+    return True
 
 
-def _bindings(tree: ast.Module, imports: _Imports) -> tuple[dict[str, _Binding], set[str]]:
+def _dynamic_mutations(imports: _Imports) -> tuple[bool, set[_BindingKey]]:
+    """Conservative, proven setattr/patch mutations relevant to this rule.
+
+    Replacing tarfile.open makes every constructor result in the file unknown.
+    Replacing extract/extractall on a locally named receiver invalidates only
+    that lexical binding. Arbitrary calls and shadowed ``setattr`` names do not
+    get special meaning.
+    """
+    tarfile_mutated = False
+    receivers: set[_BindingKey] = set()
+
+    def note(target: ast.AST, member: ast.AST, scope: _Scope) -> None:
+        nonlocal tarfile_mutated
+        if not isinstance(member, ast.Constant) or not isinstance(member.value, str):
+            return
+        qualified = imports.qualified(target, scope)
+        if member.value == "open" and qualified in {"tarfile", "tarfile.TarFile"}:
+            tarfile_mutated = True
+        elif member.value in _EXTRACT_MEMBERS and isinstance(target, ast.Name):
+            receivers.add(_binding_key(scope, target.id))
+
+    for call, scope in imports.calls:
+        if (_unbound_bare_name(call.func, "setattr", scope, imports)
+                and len(call.args) == 3 and not call.keywords
+                and not any(isinstance(arg, ast.Starred) for arg in call.args)):
+            note(call.args[0], call.args[1], scope)
+            continue
+        target = imports.qualified(call.func, scope)
+        if (target in _PATCH_OBJECT_CALLS and len(call.args) >= 2
+                and not any(isinstance(arg, ast.Starred) for arg in call.args[:2])):
+            note(call.args[0], call.args[1], scope)
+        elif (target in _PATCH_CALLS and call.args
+              and isinstance(call.args[0], ast.Constant)
+              and call.args[0].value in {"tarfile.open", "tarfile.TarFile.open"}):
+            tarfile_mutated = True
+    return tarfile_mutated, receivers
+
+
+def _bindings(tree: ast.Module, imports: _Imports) -> tuple[dict[_BindingKey, _Binding], set[_BindingKey]]:
     """Names bound exactly once to a tarfile.open call, one hop, lexical.
 
     A name qualifies when exactly one assignment target or with-header
-    optional variable receives a tarfile.open call and nothing else in the
-    file binds the name: parameters, loop and comprehension targets, except
-    handlers, imports, match captures, walrus forms, other assignments and
-    with headers all invalidate it. `with` headers record their statement so
-    extract calls can be required to sit inside the block.
+    optional variable receives a tarfile.open call and nothing else in that
+    lexical scope binds the name. The shared import resolver already records
+    every binding shape, so same-spelled locals in separate functions remain
+    independent. `with` headers record their statement so extract calls can
+    be required to sit inside the block.
     """
     scopes = {id(call): scope for call, scope in imports.calls}
-    candidates: dict[str, _Binding] = {}
-    invalid: set[str] = set()
+    candidates: dict[_BindingKey, _Binding] = {}
+    invalid: set[_BindingKey] = set()
 
-    def note(key: str, node: ast.AST, scope: _Scope | None = None) -> None:
-        if key in candidates or key in invalid or scope is None:
+    def note(name: str, node: ast.AST, scope: _Scope | None) -> None:
+        if scope is None:
+            return
+        key = _binding_key(scope, name)
+        if key in candidates:
             invalid.add(key)
         else:
             candidates[key] = _Binding(node, scope)
 
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            qualifies = (isinstance(node, (ast.Assign, ast.AnnAssign))
-                         and len(targets) == 1 and isinstance(targets[0], ast.Name)
-                         and _open_call(node.value, imports, scopes.get(id(node.value))))
-            for target in targets:
-                for name in _target_names(target):
-                    note(name, node, scopes.get(id(node.value)) if qualifies else None)
-        elif isinstance(node, ast.NamedExpr):
-            for name in _target_names(node.target):
-                note(name, node)
+            if (len(targets) == 1 and isinstance(targets[0], ast.Name)
+                    and _open_call(node.value, imports, scopes.get(id(node.value)))):
+                note(targets[0].id, node, scopes.get(id(node.value)))
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
-                names = _target_names(item.optional_vars)
-                qualifies = (isinstance(node, ast.With) and isinstance(item.optional_vars, ast.Name)
-                             and _open_call(item.context_expr, imports, scopes.get(id(item.context_expr))))
-                for name in names:
-                    note(name, node, scopes.get(id(item.context_expr)) if qualifies else None)
-        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-            for name in _target_names(node.target):
-                note(name, node)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            note(node.name, node)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            for name in _argument_names(node.args):
-                note(name, node)
-            if not isinstance(node, ast.Lambda):
-                note(node.name, node)
-        elif isinstance(node, ast.ClassDef):
-            note(node.name, node)
-        elif isinstance(node, ast.TypeAlias):
-            for name in _target_names(node.name):
-                note(name, node)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Del):
-            note(node.id, node)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                note(alias.asname or alias.name.split(".")[0], node)
-        elif isinstance(node, (ast.Global, ast.Nonlocal)):
-            invalid.update(node.names)
-        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            note(node.name, node)
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            note(node.rest, node)
-    for target, _scope in imports.mutations:
+                if (isinstance(node, ast.With) and isinstance(item.optional_vars, ast.Name)
+                        and _open_call(item.context_expr, imports, scopes.get(id(item.context_expr)))):
+                    note(item.optional_vars.id, node, scopes.get(id(item.context_expr)))
+
+    for key, binding in candidates.items():
+        name = key[1]
+        if name in imports.mutable_names or len(binding.scope.bindings.get(name, [])) != 1:
+            invalid.add(key)
+    for target, scope in imports.mutations:
         while isinstance(target, (ast.Attribute, ast.Subscript)):
             target = target.value
         if isinstance(target, ast.Name):
-            invalid.add(target.id)
+            invalid.add(_binding_key(scope, target.id))
     return candidates, invalid
 
 
@@ -229,8 +245,12 @@ def _binding_reaches(binding: _Binding, call: ast.Call, scope: _Scope,
 
 def _evidence(tree: ast.Module) -> list[_Evidence]:
     imports = _Imports(tree)
+    tarfile_mutated, dynamic_receiver_mutations = _dynamic_mutations(imports)
+    if tarfile_mutated:
+        return []
     candidates, invalid = _bindings(tree, imports)
-    proven = {name: node for name, node in candidates.items() if name not in invalid}
+    invalid.update(dynamic_receiver_mutations)
+    proven = {key: node for key, node in candidates.items() if key not in invalid}
     regions = _regions(tree)
     found: list[_Evidence] = []
     for node, scope in imports.calls:
@@ -241,8 +261,9 @@ def _evidence(tree: ast.Module) -> list[_Evidence]:
         receiver = node.func.value
         if _open_call(receiver, imports, scope):
             proven_receiver = True
-        elif isinstance(receiver, ast.Name) and receiver.id in proven:
-            binding = proven[receiver.id]
+        elif (isinstance(receiver, ast.Name)
+              and _binding_key(scope, receiver.id) in proven):
+            binding = proven[_binding_key(scope, receiver.id)]
             if not _binding_reaches(binding, node, scope, regions):
                 continue
             proven_receiver = True

@@ -238,7 +238,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # reported at high confidence; a missing filter (version-dependent default),
 # data and tar filters, variable or spread filters, zipfile extraction and
 # unproven receivers stay silent.
-# 2026-09-14-10: insecure-randomness reads destructuring targets: array slots
+# 2026-09-14-10: archive receiver provenance is keyed by lexical scope, so
+# same-spelled one-time bindings in independent functions are each proven.
+# Proven setattr/patch mutations of tarfile.open or receiver extraction
+# methods invalidate that provenance instead of producing a false positive.
+# 2026-09-14-11: insecure-randomness reads destructuring targets: array slots
 # pair by comma position (holes keep theirs), object keys by literal key text
 # (last pair wins). Rest patterns, computed keys and non-literal containers
 # stay unresolved.
