@@ -458,8 +458,20 @@ def match_archive(data: bytes, catalog: dict) -> dict:
             if status == "unknown":
                 if len(statuses) > 1:
                     coverage["unresolved_ranges"] += 1
-                reason = ("evaluation_limit" if truncated else "conflicting_advisory_sources" if len(statuses) > 1 else
-                          next((a["reason"] for _, a, _ in group if a["reason"]), "unknown_status"))
+                if truncated:
+                    reason = "evaluation_limit"
+                elif len(statuses) > 1:
+                    source_keys = {source_key for _, _, source_key in group}
+                    reason = (
+                        "conflicting_advisory_sources" if len(source_keys) > 1
+                        else "conflicting_affected_objects"
+                    )
+                else:
+                    reason = next(
+                        (assessment["reason"] for _, assessment, _ in group
+                         if assessment["reason"]),
+                        "unknown_status",
+                    )
                 if len(coverage["details"]) < MAX_DETAILS:
                     coverage["details"].append({"package": key, "version": dep.version, "manifest": dep.manifest,
                                                 "advisory": group_id, "reason": reason})
