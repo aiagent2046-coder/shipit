@@ -122,6 +122,19 @@ def _is_literal(node: ast.AST, known: frozenset[str] = frozenset()) -> bool:
                 and not node.args
                 and _is_literal(node.func.value, known)):
             return True
+        # `"...{}".format(<literals>)` -- a format call on a literal template
+        # whose every argument is itself a literal is still a literal string;
+        # there is nothing from outside in it. A starred argument spreads an
+        # unknown sequence and a `**` keyword (arg None) spreads an unknown
+        # mapping, so both disqualify, as does any non-literal argument: the
+        # value it carries into the query is exactly what the finding is for.
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == "format"
+                and _is_literal(node.func.value, known)
+                and not any(isinstance(arg, ast.Starred) for arg in node.args)
+                and all(_is_literal(arg, known) for arg in node.args)
+                and all(keyword.arg is not None and _is_literal(keyword.value, known)
+                        for keyword in node.keywords)):
+            return True
     return False
 
 

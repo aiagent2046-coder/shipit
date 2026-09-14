@@ -1,0 +1,3 @@
+def q(cur, name):
+    # A literal template formatted with literal arguments assembles no value.
+    cur.execute("SELECT 1 WHERE a = {}".format(1))
