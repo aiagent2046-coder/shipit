@@ -38,11 +38,13 @@ export function evaluateCase(item, result) {
     else remaining.splice(at, 1);
   }
   const matches = (f, want) => Object.entries(want).every(([key, value]) =>
-    key === 'count' || (key === 'file_endswith' ? f.file?.endsWith(value) : f[key] === value));
+    key === 'count' || (key === 'cve_id' ? f.claim_evidence?.cve_id === value :
+      key === 'file_endswith' ? f.file?.endsWith(value) : f[key] === value));
   const expectationPassed = (item.expected.expect || []).every(want => {
     const n = findings.filter(f => matches(f, want)).length;
     return n > 0 && (want.count === undefined || n === want.count);
-  }) && (item.expected.forbid || []).every(rule => !findings.some(f => f.rule_id === rule));
+  }) && (item.expected.forbid || []).every(rule => !findings.some(f => f.rule_id === rule))
+    && (item.expected.forbid_cves || []).every(cve => !findings.some(f => f.claim_evidence?.cve_id === cve));
   return { id: item.id, rule: item.rule, polarity: item.polarity,
     expectation_passed: expectationPassed,
     finding_parity: findingsKey(findings) === findingsKey(item.native.report.findings),

@@ -184,6 +184,12 @@ def build_sarif(findings: list[dict], *, engine_version: str,
             }
         record = finding.get("claim_evidence")
         record = record if isinstance(record, dict) else {}
+        if finding.get("rule_id") == "dependency-cve-match":
+            results[-1].setdefault("properties", {}).update({
+                "dependencyEvidence": record,
+                "verificationStatus": finding.get("verification_status"),
+                "verificationMethod": finding.get("verification_method"),
+            })
         grouping, originals = record.get("grouped_claim_scope"), record.get("grouped_originals")
         if (finding.get("source") == "llm" and record.get("version") == 1 and isinstance(grouping, dict)
                 and grouping.get("mechanism") == "query_read_volume"
@@ -208,6 +214,8 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 "limitations": list(manifest.get("limitations") or []),
                 "ruleCoverage": normalize_rule_coverage(manifest.get("rule_coverage")),
                 "cveEvidence": normalize_cve_summary(manifest.get("sca_cve")),
+                **({"dependencyCve": manifest["dependency_cve"]}
+                   if isinstance(manifest.get("dependency_cve"), dict) else {}),
                 "staticChecksNotRun": failures,
             },
         }],

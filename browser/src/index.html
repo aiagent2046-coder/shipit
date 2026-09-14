@@ -47,7 +47,7 @@
 
       <aside class="scope" aria-labelledby="scope-title">
         <h2 id="scope-title">Preview coverage is limited</h2>
-        <p>This preview runs the Drydock static engine locally, including JavaScript, TypeScript and SQL parsers. Any check that cannot load is listed in the report. No runtime tests, dependency advisory scan, or LLM analysis. Supported source patterns can identify issues to investigate; they cannot establish that an application is secure.</p>
+        <p>This preview runs source checks and matches resolved npm/PyPI dependencies against a downloaded CVE snapshot locally. Project files and package names stay in your browser. Unsupported identities and version ranges remain coverage gaps. No runtime tests or LLM analysis are performed.</p>
       </aside>
 
       <section id="results" class="results" aria-labelledby="results-title" hidden>
@@ -68,6 +68,7 @@
           <h3 id="coverage-title">What this scan covered</h3>
           <h4>Checks run</h4><ul id="checks-run" class="checks-list"></ul>
           <div id="coverage-descriptions"></div>
+          <section id="dependency-cve" hidden aria-label="CVE dependency coverage"><h4>CVE dependency coverage</h4><div id="dependency-cve-details"></div></section>
           <details id="rule-coverage-details" hidden><summary>Rule coverage details</summary><div id="rule-coverage"></div></details>
           <h4>Limitations</h4><ul id="limitations" class="limitations"></ul>
         </section>

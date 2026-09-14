@@ -31,6 +31,7 @@ from app.db import (
 )
 from app.deploypack.preview import PreviewRegistry
 from app.fixpack.merit import UNDETERMINED, Reason, Verdict, assess
+from app.learning.external_cve import external_cve_status
 from app.notify import messages
 from app.routes._shared import (
     _json_object_body,
@@ -248,6 +249,9 @@ async def internal_stats(
         min_labelled=LEARNING_MIN_LABELLED,
         min_audits=LEARNING_MIN_AUDITS,
     )
+    # CVE knowledge is separate from labelled customer fix outcomes. Importing
+    # advisories does not train a classifier or increase per-rule readiness.
+    learning = {**(learning or {}), "external_cve": external_cve_status()}
 
     return {
         "window_seconds": STATS_RECENT_WINDOW_SECONDS,

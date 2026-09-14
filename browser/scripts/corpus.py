@@ -23,15 +23,30 @@ if "--portable" in sys.argv:
 
     sys.meta_path.insert(0, NoNative())
 
-from app.scan.browser import ScanSession, scan_archive  # noqa: E402
+from app.scan.browser import ScanSession, scan_archive as _scan_archive  # noqa: E402
+from tests.test_browser_cve import REAL_CASES, project  # noqa: E402
 from tests.detectors.conftest import build_archive, discover_cases, load_expected  # noqa: E402
 from parser_probes import probe_parsers  # noqa: E402
+
+CATALOG = json.loads((ROOT / "app/data/cve-catalog.json").read_text())
+
+
+def scan_archive(data):
+    return _scan_archive(data, CATALOG)
+
+
+def dependency_cases():
+    for ecosystem, name, version, cve, affected in REAL_CASES:
+        yield (f'dependency-cve-match/{cve}/{version}', project(ecosystem, name, version),
+               {'expect': [{'rule_id': 'dependency-cve-match', 'cve_id': cve}]} if affected
+               else {'forbid_cves': [cve]}, affected)
 
 
 def main():
     if "--portable" in sys.argv:
         print(json.dumps([scan_archive(build_archive(path).getvalue())
-                          for _, _, path in discover_cases()]))
+                          for _, _, path in discover_cases()] +
+                         [scan_archive(data) for _, data, _, _ in dependency_cases()]))
         return
     portable = json.loads(subprocess.run(
         [sys.executable, __file__, "--portable"], check=True, capture_output=True, text=True,
@@ -43,6 +58,11 @@ def main():
         cases.append({"id": f"{rule}/{polarity}/{directory.name}", "rule": rule,
                       "polarity": polarity, "archive": base64.b64encode(data).decode(),
                       "expected": load_expected(directory), "native": result, "portable": portable[index]})
+    for case_id, data, expected, affected in dependency_cases():
+        cases.append({'id': case_id, 'rule': 'dependency-cve-match',
+                      'polarity': 'positive' if affected else 'negative',
+                      'archive': base64.b64encode(data).decode(), 'expected': expected,
+                      'native': scan_archive(data), 'portable': portable[len(cases)]})
     out = Path(sys.argv[1])
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(cases))
@@ -60,7 +80,7 @@ def main():
         for index in range(399):
             z.writestr(f'src/module{index}.py', 'pass\n')
         z.writestr('src/tail.py', 'from lxml import etree\n' + xml_call * 2)
-    session = ScanSession(archive.getvalue())
+    session = ScanSession(archive.getvalue(), CATALOG)
     continuation = {"archive": base64.b64encode(archive.getvalue()).decode(),
                     "initial": session.result()}
     # Mixed-language rules need three batches for this mixed-source archive.
