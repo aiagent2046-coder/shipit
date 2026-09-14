@@ -1,0 +1,7 @@
+import subprocess
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.get('/p')
+async def ping(host: str):
+    return subprocess.check_output(f'ping -c 1 {host}', shell=True)
