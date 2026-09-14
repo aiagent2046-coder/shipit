@@ -120,7 +120,8 @@ import style.
 Hard rules:
 - The defect must survive in every rewrite. Do not fix, redact or comment it out.
 - Keep any @DRYDOCK_SAMPLE:...@ placeholder EXACTLY as written. Never replace one \
-with an invented key or literal.
+with an invented key or literal. If the original contains no placeholder, do NOT \
+invent one: an unknown placeholder name makes the rewrite unusable.
 - Keep every literal value AT LEAST AS LONG as it is in the original. Detectors \
 have length thresholds; a shortened value is a different test, not a variation.
 - Keep credential-shaped NAMES intact (api_key stays api_key, not api_key_string). \
@@ -164,6 +165,11 @@ class RuleResult:
     # tells you about the model, not the detector, and the number is how you see
     # that from the report.
     uncompilable: int = 0
+    # Variations the model wrote with a @DRYDOCK_SAMPLE:...@ placeholder the
+    # corpus does not define -- a prompt violation, not a scanner crash
+    # (expand_samples refuses unknown names, and a bare AssertionError must
+    # never read like one). Counted apart for the same reason as uncompilable.
+    invented_placeholders: int = 0
     caught: int = 0
     escapes: list[Escape] = field(default_factory=list)
     seconds: float = 0.0
@@ -386,8 +392,20 @@ def hunt(rule_id: str, case_dir: Path, model: str, n: int) -> RuleResult:
         try:
             findings = scan(mutated)
         except Exception as exc:      # noqa: BLE001 - a malformed archive is a skip, not a crash
-            result.identical_to_source += 1
-            print(f"    variation {index}: unscannable ({type(exc).__name__})", file=sys.stderr)
+            if type(exc) is AssertionError and "synthetic sample placeholder" in str(exc):
+                # expand_samples refused an UNKNOWN @DRYDOCK_SAMPLE:...@ name:
+                # the model invented a placeholder on a rewrite (measured: a
+                # whole completion led every rewrite with
+                # `# @DRYDOCK_SAMPLE:file_serving_api` on a fixture that had
+                # none). A prompt violation by the model -- counted apart so
+                # it never reads like a scanner crash.
+                result.invented_placeholders += 1
+                print(f"    variation {index}: invented a placeholder the corpus "
+                      f"does not define", file=sys.stderr)
+            else:
+                result.identical_to_source += 1
+                print(f"    variation {index}: unscannable ({type(exc).__name__})",
+                      file=sys.stderr)
             continue
 
         fired = sorted({f.get("rule_id", "") for f in findings})

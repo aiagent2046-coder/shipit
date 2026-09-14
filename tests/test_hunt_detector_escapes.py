@@ -83,3 +83,26 @@ def test_a_masked_dump_would_fail_this_suite(tmp_path):
     assert text == masked  # the write is faithful --
     with pytest.raises(SyntaxError):
         ast.parse(text)  # -- and a masked body is exactly what cannot be read
+
+
+def test_an_invented_placeholder_is_counted_not_read_as_a_crash(monkeypatch, capsys):
+    """A rewrite that invents an unknown @DRYDOCK_SAMPLE:...@ name is a model
+    prompt violation. Measured in a full hunt round: one completion led every
+    rewrite with `# @DRYDOCK_SAMPLE:file_serving_api` on a fixture that had no
+    placeholder, and the failure surfaced as "unscannable (AssertionError)" --
+    which reads like a scanner crash. It must be counted apart and labeled."""
+    case_dir = (REPO_ROOT / "tests" / "detectors" / "insecure-randomness"
+                / "positive" / "reset-token")
+
+    def inventing_generate(model, prompt, timeout=900):
+        return ("import random\n"
+                "# @DRYDOCK_SAMPLE:not_a_real_sample\n"
+                "reset_token = random.getrandbits(128)\n")
+
+    monkeypatch.setattr(hunt, "ollama_generate", inventing_generate)
+    result = hunt.hunt("insecure-randomness", case_dir, "fake-model", 1)
+    assert result.baseline_ok
+    assert result.invented_placeholders == 1
+    assert result.identical_to_source == 0
+    assert result.escapes == []
+    assert "invented a placeholder" in capsys.readouterr().err
