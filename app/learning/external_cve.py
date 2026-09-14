@@ -26,9 +26,12 @@ def external_cve_status(data_directory: Path = DATA_DIRECTORY) -> dict:
                 or not isinstance(summary.get("source"), dict)
                 or not isinstance(summary.get("stats"), dict)):
             return {**base, "status": "invalid"}
+        sources = summary.get("sources", {"cvelist": summary["source"]})
+        if not isinstance(sources, dict):
+            return {**base, "status": "invalid"}
         return {**base, "status": "compiled", "source": summary["source"],
-                "stats": summary["stats"], "catalog_sha256": digest,
-                "coverage": summary.get("coverage", {})}
+                "sources": sources, "stats": summary["stats"],
+                "catalog_sha256": digest, "coverage": summary.get("coverage", {})}
     except FileNotFoundError:
         return {**base, "status": "unavailable"}
     except (OSError, ValueError, TypeError, AttributeError):

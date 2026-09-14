@@ -250,10 +250,18 @@ function renderFinding(finding) {
   article.append(heading, node('p', `${location}${line}${rule}`, 'finding-location'));
   article.append(node('p', findingMetadata(finding), 'finding-metadata'));
   if (finding.explanation) article.append(node('p', text(finding.explanation)));
-  const cve = finding.claim_evidence?.cve_id;
-  if (finding.rule_id === 'dependency-cve-match' && typeof cve === 'string' && /^CVE-\d{4}-\d{4,19}$/.test(cve)) {
-    const link = node('a', `Read ${cve}`);
-    link.href = `https://www.cve.org/CVERecord?id=${encodeURIComponent(cve)}`;
+  const advisory = finding.claim_evidence?.advisory_id || finding.claim_evidence?.cve_id;
+  let advisoryHref = '';
+  if (finding.rule_id === 'dependency-cve-match' && typeof advisory === 'string') {
+    if (/^CVE-\d{4}-\d{4,19}$/.test(advisory)) {
+      advisoryHref = `https://www.cve.org/CVERecord?id=${encodeURIComponent(advisory)}`;
+    } else if (/^GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}$/.test(advisory)) {
+      advisoryHref = `https://github.com/advisories/${encodeURIComponent(advisory)}`;
+    }
+  }
+  if (advisoryHref) {
+    const link = node('a', `Read ${advisory}`);
+    link.href = advisoryHref;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     article.append(link);
@@ -274,22 +282,34 @@ function renderReport(report) {
   byId('dependency-cve').hidden = !dependency;
   if (dependency) {
     const source = dependency.source || {};
+    const identifiedSources = Object.entries(dependency.sources || {})
+      .filter(([, value]) => value && typeof value === 'object');
+    const sourceCommits = identifiedSources
+      .map(([name, value]) => `${name}: ${text(value.commit, 'Unavailable')}`).join('; ');
+    const sourceDates = identifiedSources
+      .map(([name, value]) => `${name}: ${text(value.generated_at, 'Unavailable')}`).join('; ');
     renderDefinitions(byId('dependency-cve-details'), [
       ['Status', text(dependency.status, 'unavailable')],
-      ['Source commit', text(source.commit, 'Unavailable')],
-      ['Snapshot date', text(source.generated_at, 'Unavailable')],
+      ['Source commits', sourceCommits || text(source.commit, 'Unavailable')],
+      ['Snapshot dates', sourceDates || text(source.generated_at, 'Unavailable')],
       ['Resolved dependencies checked', `${text(dependency.dependencies_checked, 0)} / ${text(dependency.dependencies_found, 0)}`],
       ['Version comparisons unresolved', text(dependency.unresolved_ranges, 0)],
       ['Dependencies absent from this catalog', text(dependency.status_counts?.not_in_catalog, 0)],
       ['Unresolved manifests', Object.entries(dependency.incomplete_manifests || {}).map(([path, reason]) => `${path}: ${reason}`).join('; ') || 'None reported'],
-      ['Scope', 'A match identifies a package version listed by a CVE. Runtime exploitability is not checked. Unlisted packages are not a clean bill of health.'],
+      ['Scope', 'A match identifies a package version listed by a CVE or reviewed GHSA. Runtime exploitability is not checked. Unlisted packages are not a clean bill of health.'],
     ]);
     if (dependency.status === 'partial' || dependency.status === 'unavailable') {
       gaps.push({ check: 'dependency_cve', reason: 'Dependency coverage is incomplete; inspect the snapshot scope and unresolved comparisons.' });
     }
-    const snapshotTime = Date.parse(source.generated_at);
-    if (dependency.status !== 'not_applicable' && Number.isFinite(snapshotTime) && Date.now() - snapshotTime > 7 * 86400000) {
-      gaps.push({ check: 'dependency_cve', reason: 'The CVE snapshot is older than seven days. Reload an updated scanner before relying on its advisory coverage.' });
+    const snapshotTimes = identifiedSources
+      .map(([, value]) => Date.parse(value.generated_at)).filter(Number.isFinite);
+    if (!snapshotTimes.length && Number.isFinite(Date.parse(source.generated_at))) {
+      snapshotTimes.push(Date.parse(source.generated_at));
+    }
+    const oldestSnapshot = snapshotTimes.length ? Math.min(...snapshotTimes) : NaN;
+    if (dependency.status !== 'not_applicable' && Number.isFinite(oldestSnapshot)
+        && Date.now() - oldestSnapshot > 7 * 86400000) {
+      gaps.push({ check: 'dependency_cve', reason: 'An advisory snapshot source is older than seven days. Reload an updated scanner before relying on its advisory coverage.' });
     }
   }
   for (const [check, detail] of Object.entries(report.rule_coverage || {})) {
@@ -348,7 +368,7 @@ function renderReport(report) {
   const ruleCoverage = report.rule_coverage && typeof report.rule_coverage === 'object' ? report.rule_coverage : {};
   renderRuleCoverage(ruleCoverage);
   const limits = Array.isArray(report.limitations) ? report.limitations : [];
-  const baseline = 'No runtime tests or LLM analysis. Dependency results, when present, are limited to the recorded CVE snapshot. Absence of findings does not establish safety.';
+  const baseline = 'No runtime tests or LLM analysis. Dependency results, when present, are limited to the recorded advisory snapshot. Absence of findings does not establish safety.';
   byId('limitations').replaceChildren(node('li', baseline), ...limits.map((limit) => node('li', text(limit))));
 }
 

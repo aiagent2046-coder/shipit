@@ -221,6 +221,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # assigned closures, generators, object/class methods and classes -- both
 # walkers stop there), nested chains and cross-file provenance stay
 # unresolved.
+# 2026-09-14-5: the offline dependency catalog adds pinned GitHub-reviewed
+# GHSA records for npm/PyPI and evaluates their OSV introduced/fixed,
+# last_affected and limit timelines. CVE aliases deduplicate agreeing sources;
+# disagreements and unsupported ordering stay unknown.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
