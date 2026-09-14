@@ -100,10 +100,13 @@ def test_a_proven_archive_positive_is_review():
     assert CLASSIFY("archive-extraction-fully-trusted", "unpack.py", body) == "review"
 
 
-def test_a_sql_rewrite_without_the_vulnerability_is_not_a_candidate():
+def test_a_sql_percent_placeholder_errs_toward_review():
     body = ("def query(cur, name):\n"
             "    cur.execute(\"SELECT id FROM users WHERE name = %s\", (name,))\n")
-    assert CLASSIFY("sql-injection-string-built-query", "db.py", body) == "vuln-removed"
+    # Regex triage cannot prove whether `%` is a placeholder or an operator.
+    # Keeping this body costs one read; dropping `template % user_id` can hide
+    # a real scanner escape.
+    assert CLASSIFY("sql-injection-string-built-query", "db.py", body) == "review"
 
 
 def test_a_sql_wrapper_evasion_stays_in_review():
@@ -220,10 +223,26 @@ def test_a_form_the_rule_recognizes_stays_in_review(rule_id, filename, body):
     assert CLASSIFY(rule_id, filename, body) == "review"
 
 
-def test_a_parameterised_percent_placeholder_is_still_vuln_removed():
-    body = ("def query(cur, name):\n"
-            "    cur.execute(\"SELECT id FROM users WHERE name = %s\", (name,))\n")
-    assert CLASSIFY("sql-injection-string-built-query", "db.py", body) == "vuln-removed"
+@pytest.mark.parametrize("rule_id,filename,body", [
+    ("insecure-randomness", "token.py",
+     "import random as rnd\ndraw = rnd.getrandbits\nreset_token = draw(128)\n"),
+    ("sql-injection-string-built-query", "db.py",
+     "def find(db, user_id):\n"
+     "    template = 'SELECT * FROM users WHERE id = %s'\n"
+     "    query = template % user_id\n"
+     "    return db.queryDB(query)\n"),
+    ("unsafe-deserialization", "restore.py",
+     "import jsonpickle as jp\ndef restore(payload):\n"
+     "    decoder = jp.decode\n    return decoder(payload)\n"),
+    ("unsafe-deserialization", "restore.py",
+     "import yaml\ndef restore(payload):\n"
+     "    loader = yaml.load_all\n"
+     "    return list(loader(payload, Loader=yaml.UnsafeLoader))\n"),
+])
+def test_scanner_silent_dangerous_rewrites_are_never_binned_as_noise(
+        rule_id, filename, body):
+    """Triage is a review filter, not a second, narrower detector."""
+    assert CLASSIFY(rule_id, filename, body) == "review"
 
 
 def test_yaml_safe_load_is_still_vuln_removed():
