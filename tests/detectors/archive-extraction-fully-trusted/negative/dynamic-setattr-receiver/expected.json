@@ -1,0 +1,7 @@
+{
+  "description": "A dynamically replaced extractall method makes the receiver capability unknown.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}
