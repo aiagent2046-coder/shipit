@@ -32,6 +32,11 @@ qwen3:8b (thinking enabled, max_tokens 2048) judged 27 review bodies:
   by-design silences the model cannot distinguish at 8B size
 - 1 unsure (thinking consumed all tokens, answer empty)
 
+A repeat run of the same 27 bodies and model moved three by-design
+silences across the real/noise boundary (18/8/1 -> 17/9/1); every real
+gap stayed in likely-real and the unsure body was the same both times.
+The buckets are a reading order, not a set membership.
+
 The model-size finding: 7-8B local models cannot reliably read a rule's
 scope text and check multiple conditions (secret-named target AND Math.random
 AND no shadowing AND no helper wrapping AND not a deferred body). They see
