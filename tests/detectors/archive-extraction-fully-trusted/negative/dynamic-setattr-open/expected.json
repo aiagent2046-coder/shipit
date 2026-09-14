@@ -1,0 +1,7 @@
+{
+  "description": "A dynamically replaced tarfile.open constructor does not prove a TarFile receiver.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}

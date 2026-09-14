@@ -63,6 +63,48 @@ def test_proven_tars_with_the_literal_opt_out_are_reported(source):
     assert len(scan_archive_extraction(archive(source))) == 1
 
 
+def test_same_receiver_name_in_independent_functions_keeps_both_provenances():
+    source = ('import tarfile\n'
+              'def unpack_one(path, dest):\n'
+              '    tar = tarfile.open(path)\n'
+              '    tar.extractall(dest, filter="fully_trusted")\n'
+              'def unpack_two(path, dest):\n'
+              '    tar = tarfile.open(path)\n'
+              '    tar.extractall(dest, filter="fully_trusted")\n')
+    assert [finding.line for finding in scan_archive_extraction(archive(source))] == [4, 7]
+
+
+def test_a_shadowed_setattr_name_does_not_hide_a_proven_direct_chain():
+    source = ('import tarfile\n'
+              'def setattr(*args):\n'
+              '    pass\n'
+              'setattr(tarfile, "open", custom_open)\n'
+              'tarfile.open(path).extractall(dest, filter="fully_trusted")\n')
+    assert [finding.line for finding in scan_archive_extraction(archive(source))] == [5]
+
+
+@pytest.mark.parametrize("source,mutation", [
+    ('import tarfile\n'
+     'setattr(tarfile, "open", custom_open)\n'
+     'tarfile.open(path).extractall(dest, filter="fully_trusted")\n',
+     'setattr(tarfile, "open", custom_open)\n'),
+    ('import tarfile\n'
+     'tar = tarfile.open(path)\n'
+     'setattr(tar, "extractall", custom_extractall)\n'
+     'tar.extractall(dest, filter="fully_trusted")\n',
+     'setattr(tar, "extractall", custom_extractall)\n'),
+    ('from unittest.mock import patch\n'
+     'import tarfile\n'
+     'with patch.object(tarfile, "open", custom_open):\n'
+     '    tarfile.open(path).extractall(dest, filter="fully_trusted")\n',
+     'with patch.object(tarfile, "open", custom_open):\n    '),
+])
+def test_dynamic_mutations_are_silent_until_the_mutation_is_removed(source, mutation):
+    assert scan_archive_extraction(archive(source)) == []
+    assert mutation in source
+    assert len(scan_archive_extraction(archive(source.replace(mutation, "", 1)))) == 1
+
+
 @pytest.mark.parametrize("source", [
     # the safe filters, measured: they refuse members escaping the destination
     'import tarfile\nwith tarfile.open(p) as t:\n    t.extractall(d, filter="data")\n',
@@ -104,6 +146,10 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
                             't = tarfile.open(source)\nt.extractall(dest, filter="fully_trusted")'),
     "binding-in-other-scope": ("app/unpack.py", '\nt.extractall(', '\n    t.extractall('),
     "patched-open": ("app/unpack.py", 'tarfile.open = custom_open\n', ''),
+    "dynamic-setattr-open": ("app/unpack.py", 'setattr(tarfile, "open", custom_open)\n', ''),
+    "dynamic-setattr-receiver": ("app/unpack.py", 'setattr(tar, "extractall", custom_extractall)\n', ''),
+    "dynamic-patch-object": ("app/unpack.py",
+                             'with patch.object(tarfile, "open", custom_open):\n    ', ''),
 }
 
 
