@@ -242,6 +242,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # same-spelled one-time bindings in independent functions are each proven.
 # Proven setattr/patch mutations of tarfile.open or receiver extraction
 # methods invalidate that provenance instead of producing a false positive.
+# 2026-09-14-11: insecure-randomness reads destructuring targets: array slots
+# pair by comma position (holes keep theirs), object keys by literal key text
+# (last pair wins). Rest patterns, computed keys and non-literal containers
+# stay unresolved.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

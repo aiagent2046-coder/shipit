@@ -1,0 +1,7 @@
+{
+  "description": "A spread on the right has no one-slot-one-value pairing; the first element is 1, not the draw.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

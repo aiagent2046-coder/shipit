@@ -1,0 +1,7 @@
+{
+  "description": "A destructuring binding named Math shadows the builtin; the draw has unknown provenance.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

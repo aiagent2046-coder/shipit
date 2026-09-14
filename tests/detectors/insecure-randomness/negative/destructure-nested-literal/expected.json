@@ -1,0 +1,7 @@
+{
+  "description": "Nested object destructuring pairs by key: this secret-named binding receives a literal.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}
