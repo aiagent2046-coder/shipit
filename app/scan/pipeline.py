@@ -225,6 +225,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # GHSA records for npm/PyPI and evaluates their OSV introduced/fixed,
 # last_affected and limit timelines. CVE aliases deduplicate agreeing sources;
 # disagreements and unsupported ordering stay unknown.
+# 2026-09-14-6: sql-injection treats a literal template formatted with
+# literal arguments as a literal query: .format(<literals>) carries no
+# external value, exactly like literal concatenation always has. A starred
+# argument, a ** spread or any non-literal argument still reports.
 # 2026-09-14-7: archive-extraction-fully-trusted, a new static scanner. A literal
 # filter="fully_trusted" on tarfile extract/extractall of an import-proven
 # tarfile.open object is the explicit opt-out from extraction checks and is

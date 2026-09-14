@@ -1,0 +1,10 @@
+{
+  "description": "subprocess.check_output runs a shell command built from a route parameter (CWE-78).",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
