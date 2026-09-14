@@ -258,25 +258,58 @@ def generate(prompt: str, *, model: str | None = None,
         f"HUNT_PROVIDER={which!r} is not a provider. Use 'ollama' or 'openai'.")
 
 
-def preflight() -> tuple[bool, str]:
+def _effective_ollama_name(model: str) -> str:
+    """Normalize the implicit Ollama tag without confusing registry ports.
+
+    Ollama resolves a name without a tag as `:latest`; it does not select an
+    arbitrary installed tag from the same family. A colon before the final
+    slash belongs to a registry host (`localhost:5000/team/model`), while a
+    colon in the final component is an explicit tag.
+    """
+    model = model.strip()
+    final_component = model.rsplit("/", 1)[-1]
+    if ":" not in final_component and "@" not in final_component:
+        return f"{model}:latest"
+    return model
+
+
+def _model_available(installed: set[str], model: str) -> bool:
+    """True only when Ollama can resolve the requested effective model."""
+    requested = _effective_ollama_name(model)
+    return any(_effective_ollama_name(name) == requested for name in installed)
+
+
+def preflight(model: str | None = None) -> tuple[bool, str]:
     """Cheap reachability check before a run that costs money or an hour.
 
     Returns (ok, message). Callers print the message either way -- a run that
     starts against an unreachable provider wastes the whole loop, and one that
     starts against the WRONG provider silently produces results attributed to
-    a model that never ran.
+    a model that never ran. `model` is the model the caller will actually
+    use; without it the environment default is assumed and only that one is
+    checked for.
     """
+    chosen = model or model_name()
     which = provider()
     try:
         if which == "ollama":
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(f"{OLLAMA_URL}/api/tags", timeout=10) as resp:
+                installed = {entry.get("name", "")
+                             for entry in json.loads(resp.read()).get("models", [])}
+            if not _model_available(installed, chosen):
+                return False, (f"ollama at {OLLAMA_URL} has no model {chosen!r} "
+                               f"(installed: {sorted(installed)[:8]})")
             with opener.open(f"{OLLAMA_URL}/api/version", timeout=10) as resp:
                 version = json.loads(resp.read()).get("version", "?")
-            return True, f"ollama {version} at {OLLAMA_URL}, model {model_name()}"
-        text = generate("Reply with the single word: ready",
+            return True, f"ollama {version} at {OLLAMA_URL}, model {chosen}"
+        text = generate("Reply with the single word: ready", model=chosen,
                         temperature=0.0, max_tokens=16, timeout=60)
-        return True, f"{describe()} responded: {text.strip()[:40]!r}"
+        return True, f"{which} {chosen} responded: {text.strip()[:40]!r}"
     except GenerationError as exc:
         return False, str(exc)
     except Exception as exc:                                   # noqa: BLE001
-        return False, f"{describe()} unreachable: {type(exc).__name__}: {exc}"
+        location = (OLLAMA_URL if which == "ollama"
+                    else os.environ.get("HUNT_API_BASE", "https://api.deepseek.com"))
+        return False, (f"{which} {chosen} at {location} unreachable: "
+                       f"{type(exc).__name__}: {exc}")
