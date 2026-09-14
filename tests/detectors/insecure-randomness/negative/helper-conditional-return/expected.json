@@ -1,0 +1,7 @@
+{
+  "description": "A conditional return does not prove every call draws Math.random.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

@@ -306,8 +306,11 @@ CAPABILITIES: tuple[Capability, ...] = (
         "dependency trees and generated build directories are excluded before the file limit. "
         "Secret-named assignments containing a call to a proven stable Python random import "
         "(including supported aliases) or an unshadowed Math.random are reported, including template "
-        "interpolation. Comments, docstrings and literal text are not draws. Rebound or ambiguous "
-        "sources, helpers, cross-file provenance and actual security use of the result are unresolved. "
+        "interpolation and one JS/TS helper hop: a name declared once as a function whose single "
+        "return draws Math.random, called inside its declaring scope after the declaration. "
+        "Parameters, reassignment, conditional or multiple returns, nested helper chains, Python "
+        "helpers, rebound or ambiguous sources, cross-file provenance and actual security use of "
+        "the result are unresolved. Comments, docstrings and literal text are not draws. "
         "secrets and SystemRandom are not insecure sources. Missing native grammars withhold this "
         "combined check; malformed or oversized source is reported in coverage. "
         "Vue/Svelte component script blocks are not covered by this randomness check.",

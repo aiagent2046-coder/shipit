@@ -1,0 +1,10 @@
+{
+  "description": "A hoisted function declaration used before its textual position.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

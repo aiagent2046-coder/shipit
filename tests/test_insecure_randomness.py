@@ -81,6 +81,19 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "secure-secrets": ("app/secrets.py", "secrets.token_hex(16)", "random.choice(chars)"),
     "secure-crypto": ("app/crypto.js", "crypto.getRandomValues(new Uint8Array(16))", "Math.random()"),
     "comment": ("app/history.py", "# reset_token = random.choice(chars)", "reset_token = random.choice(chars)"),
+    "helper-shadowed-by-parameter": ("app/reset.js", "issue(generateToken)", "issue()"),
+    "helper-reassigned": ("app/reset.js", "generateToken = () => crypto.randomUUID();\n", ""),
+    "helper-conditional-return": ("app/reset.js",
+                                  "if (flag) {\n    return Math.random();\n  }\n  return \"fallback\";",
+                                  "return Math.random();"),
+    "helper-second-return-secure": ("app/reset.js",
+                                    "if (x) {\n    return Math.random();\n  }\n"
+                                    "  return crypto.getRandomValues(new Uint8Array(16));",
+                                    "return Math.random();"),
+    "helper-of-helper": ("app/reset.js", "return drawUnit();", "return Math.random();"),
+    "helper-out-of-scope": ("app/reset.js",
+                            "if (featureEnabled) {\n  const generateToken = () => Math.random();\n}",
+                            "const generateToken = () => Math.random();"),
 }
 
 
@@ -150,6 +163,55 @@ def test_python_draws_use_import_provenance_and_evaluate_fstring_expressions(sou
 ])
 def test_js_draws_are_calls_in_expressions_including_template_substitution(source):
     assert len(scan_insecure_randomness(archive(source, "repo/app/x.js"))) == 1
+
+
+@pytest.mark.parametrize("source", [
+    "function generateToken() {\n  return Math.random();\n}\nconst resetToken = generateToken();\n",
+    "const generateToken = () => Math.random();\nconst resetToken = generateToken();\n",
+    "const generateToken = () => {\n  return Math.random().toString(36).slice(2);\n};\n"
+    "const resetToken = generateToken();\n",
+    "const generateToken = function () {\n  return Math.random();\n};\nconst resetToken = generateToken();\n",
+    "const resetToken = generateToken();\nfunction generateToken() {\n  return Math.random();\n}\n",
+    "export function generateToken() {\n  return Math.random();\n}\nconst resetToken = generateToken();\n",
+    "function issue() {\n  const makeToken = () => Math.random();\n  const inner = () => {\n"
+    "    const resetToken = makeToken();\n    return resetToken;\n  };\n  return inner;\n}\n",
+])
+def test_a_single_helper_hop_to_math_random_is_a_draw(source):
+    findings = scan_insecure_randomness(archive(source, "repo/app/x.js"))
+    assert len(findings) == 1
+
+
+@pytest.mark.parametrize("source", [
+    # a parameter shadows the helper at the call site
+    "function generateToken() {\n  return Math.random();\n}\n"
+    "function issue(generateToken) {\n  const resetToken = generateToken();\n}\n",
+    # reassignment makes the name ambiguous
+    "let generateToken = () => Math.random();\n"
+    "generateToken = () => crypto.randomUUID();\nconst resetToken = generateToken();\n",
+    # a conditional return is not a proven draw
+    "function generateToken(flag) {\n  if (flag) {\n    return Math.random();\n  }\n  return 'fallback';\n}\n"
+    "const resetToken = generateToken(true);\n",
+    # a secure second return leaves the helper unresolved
+    "function generateToken(x) {\n  if (x) {\n    return Math.random();\n  }\n"
+    "  return crypto.getRandomValues(new Uint8Array(16));\n}\nconst resetToken = generateToken(1);\n",
+    # exactly one hop: a helper calling a helper stays unresolved
+    "function drawUnit() {\n  return Math.random();\n}\n"
+    "function generateToken() {\n  return drawUnit();\n}\nconst resetToken = generateToken();\n",
+    # a declaration inside a block does not reach the module scope
+    "if (featureEnabled) {\n  const generateToken = () => Math.random();\n}\nconst resetToken = generateToken();\n",
+    # a helper scoped to another function stays out of reach
+    "function outer() {\n  function generateToken() {\n    return Math.random();\n  }\n}\n"
+    "function other() {\n  const resetToken = generateToken();\n}\n",
+    # a declarator must precede its call
+    "const resetToken = generateToken();\nconst generateToken = () => Math.random();\n",
+    # an imported name has cross-file provenance
+    "import { generateToken } from './tokens';\nconst resetToken = generateToken();\n",
+    # a duplicate declaration makes the binding ambiguous
+    "function generateToken() {\n  return Math.random();\n}\n"
+    "function issue() {\n  const generateToken = () => Math.random();\n  const resetToken = generateToken();\n}\n",
+])
+def test_helper_hops_with_unknown_provenance_stay_silent(source):
+    assert scan_insecure_randomness(archive(source, "repo/app/x.js")) == []
 
 
 @pytest.mark.parametrize("source", [

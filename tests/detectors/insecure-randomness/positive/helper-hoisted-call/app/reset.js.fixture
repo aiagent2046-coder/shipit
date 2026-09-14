@@ -1,0 +1,4 @@
+const resetToken = generateToken();
+function generateToken() {
+  return Math.random();
+}

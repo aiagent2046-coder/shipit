@@ -1,0 +1,7 @@
+{
+  "description": "A declaration scoped to a block does not reach calls outside that block.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

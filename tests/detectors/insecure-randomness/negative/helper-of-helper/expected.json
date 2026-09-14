@@ -1,0 +1,7 @@
+{
+  "description": "Exactly one hop is resolved: a helper calling another helper stays silent.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}
