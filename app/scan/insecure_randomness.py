@@ -5,8 +5,9 @@ parameters and member replacement invalidate that provenance. JS/TS syntax
 recognizes calls to an unshadowed Math.random, including template substitutions,
 array and object destructuring bindings paired by exact slot or key
 correspondence -- a default expression is the binding's value when the
-slot or key is absent, and comments, spreads, rest patterns and computed
-keys correspond to nothing -- and resolves exactly one helper hop: a name declared once as a function whose
+slot or key is absent or provably undefined. Comments are ignored;
+spreads, rest patterns and computed keys make correspondence unresolved.
+The rule also resolves exactly one helper hop: a name declared once as a function whose
 single return draws Math.random is itself a draw at call sites inside its
 declaring scope (function declarations may be hoisted; declarators must
 precede the call). Parameters, destructuring, reassignment, generator, enum,
@@ -340,7 +341,11 @@ def _js_evidence(root, nodes):
     # provenance unknown. This deliberately under-reports instead of assigning
     # cryptographic properties to a custom object with the same spelling.
     for node in nodes:
-        if node.type in {"formal_parameters", "import_clause", "catch_clause"}:
+        if node.type in {"formal_parameters", "catch_clause"}:
+            if any(text == "Math" for child in node.named_children
+                   for text in _pattern_binding_names(child)):
+                return []
+        if node.type == "import_clause":
             if any(_text(child) == "Math" for child in _nodes(node)):
                 return []
         if node.type in {"variable_declarator", "function_declaration", "class_declaration"}:
@@ -405,6 +410,14 @@ def _js_evidence(root, nodes):
             return text[1:-1] if len(text) >= 2 and text[0] == text[-1] else None
         return None
 
+    def definitely_undefined(source):
+        """A source expression whose value is certainly JavaScript undefined."""
+        return (source is not None and source.type == "unary_expression"
+                and bool(source.children) and source.children[0].type == "void")
+
+    def source_or_default(element, default):
+        return default if element is None or definitely_undefined(element) else element
+
     def destructure_hits(pattern, value, line, out):
         """Secret-named bindings whose destructuring source draws.
 
@@ -425,10 +438,16 @@ def _js_evidence(root, nodes):
                 out.append((line, _text(bound)))
 
         if pattern.type == "array_pattern" and value.type == "array":
+            # A spread contributes a runtime-dependent number of slots. Even
+            # syntactic elements after it therefore have no exact index, and a
+            # default may or may not run. Keep the entire correspondence
+            # unresolved instead of inventing positions.
+            if any(child.type == "spread_element" for child in value.named_children):
+                return
             positions = slots(value)
-            elements = {positions.get(child.start_byte): child
+            elements = {positions[child.start_byte]: child
                         for child in value.named_children
-                        if child.type not in {"comment", "spread_element"}}
+                        if child.start_byte in positions}
             pattern_slots = slots(pattern)
             for child in pattern.named_children:
                 element = elements.get(pattern_slots.get(child.start_byte))
@@ -437,7 +456,7 @@ def _js_evidence(root, nodes):
                 elif child.type == "assignment_pattern":
                     bound, default = (child.child_by_field_name("left"),
                                       child.child_by_field_name("right"))
-                    source = element if element is not None else default
+                    source = source_or_default(element, default)
                     if bound is not None and bound.type == "identifier":
                         hits(bound, source)
                     elif bound is not None and bound.type in {"array_pattern", "object_pattern"}:
@@ -447,11 +466,17 @@ def _js_evidence(root, nodes):
         elif pattern.type == "object_pattern" and value.type == "object":
             elements = {}
             for child in value.named_children:
-                if child.type != "pair":
+                if child.type == "comment":
                     continue
+                # Spreads, methods, shorthand properties and computed keys can
+                # replace an earlier literal key. Unless every source member is
+                # an ordinary literal-key pair, "last pair wins" is unproven.
+                if child.type != "pair":
+                    return
                 key = key_text(child.child_by_field_name("key"))
-                if key is not None:  # a computed key corresponds to nothing
-                    elements[key] = child.child_by_field_name("value")
+                if key is None:
+                    return
+                elements[key] = child.child_by_field_name("value")
             for child in pattern.named_children:
                 if child.type == "shorthand_property_identifier_pattern":
                     hits(child, elements.get(_text(child)))
@@ -464,7 +489,7 @@ def _js_evidence(root, nodes):
                         default = bound.child_by_field_name("right")
                         bound = bound.child_by_field_name("left")
                     element = elements.get(key)
-                    source = element if element is not None else default
+                    source = source_or_default(element, default)
                     if bound is not None and bound.type == "identifier":
                         hits(bound, source)
                     elif bound is not None and bound.type in {"array_pattern", "object_pattern"}:
@@ -473,7 +498,7 @@ def _js_evidence(root, nodes):
                     left, default = (child.child_by_field_name("left"),
                                      child.child_by_field_name("right"))
                     element = elements.get(_text(left)) if left is not None else None
-                    source = element if element is not None else default
+                    source = source_or_default(element, default)
                     if left is not None and left.type == "shorthand_property_identifier_pattern":
                         hits(left, source)
 

@@ -307,6 +307,11 @@ def test_a_ts_import_alias_shadows_the_helper_inside_its_namespace():
     "const { x: token = 0 } = { x: Math.random() };\n",
     # a comment is not a slot: the real element is still paired
     "const [token] = [Math.random() /* trailing */];\n",
+    # a present value that is certainly undefined activates the default
+    "const [token = Math.random()] = [void 0];\n",
+    "const { token = Math.random() } = { token: void 0 };\n",
+    # Math.random in a parameter default mentions Math but does not bind it
+    "function helper(value = Math.random()) {}\nconst resetToken = Math.random();\n",
 ])
 def test_destructuring_bindings_receive_the_draw(source):
     assert len(scan_insecure_randomness(archive(source, "repo/app/x.js"))) == 1
@@ -333,6 +338,11 @@ def test_destructuring_bindings_receive_the_draw(source):
     "const [Math] = sources;\nconst resetToken = Math.random();\n",
     # a default only applies when the slot is absent; a present element wins
     'const { x: token = Math.random() } = { x: "literal" };\n',
+    # a spread makes every following array position runtime-dependent
+    "const [other, token] = [...[], Math.random()];\n",
+    # later object spreads and computed properties can replace a literal key
+    'const { token } = { token: Math.random(), ...{ token: "literal" } };\n',
+    'const { token } = { token: Math.random(), ["token"]: "literal" };\n',
 ])
 def test_destructuring_without_provable_correspondence_stays_silent(source):
     assert scan_insecure_randomness(archive(source, "repo/app/x.js")) == []
