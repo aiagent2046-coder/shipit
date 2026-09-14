@@ -133,6 +133,14 @@ source = { registry = "https://pypi.org/simple" }
     assert all(d.development is None for d in inv.dependencies)
 
 
+def test_uv_reference_budget_retains_pins_but_not_complete_coverage(monkeypatch):
+    from app.sca import resolved_locks
+    monkeypatch.setattr(resolved_locks, 'MAX_UV_REFERENCE_CHECKS', 1)
+    inv = collect_dependency_inventory(archive({'uv.lock': uv()}))
+    assert inv.found == 1
+    assert inv.incomplete_manifests == {'uv.lock': 'parser_limit'}
+
+
 @pytest.mark.parametrize('source', ['{ registry = "https://private.example/simple" }',
     '{ git = "https://example.org/langflow?rev=abc" }', '{ url = "https://example.org/langflow.whl" }',
     '{ editable = "../langflow" }', '{ directory = "../langflow" }',

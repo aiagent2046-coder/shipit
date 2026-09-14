@@ -14,6 +14,7 @@ from app.sca.lockfiles import Dependency, _NPM_NAME, _NPM_VERSION, normalize_pyp
 
 MAX_YAML_NODES = 100_000
 MAX_YAML_DEPTH = 64
+MAX_UV_REFERENCE_CHECKS = 100_000
 _PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\Z")
 _PYPI_PIN = re.compile(r"[0-9][A-Za-z0-9.!+_-]*\Z")
 
@@ -181,6 +182,7 @@ def uv_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
     reason = None
     direct = set()
     known = {}
+    remaining_checks = MAX_UV_REFERENCE_CHECKS
     for package in packages:
         name = package.get("name")
         if isinstance(name, str) and _PYPI_NAME.fullmatch(name):
@@ -196,6 +198,8 @@ def uv_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
                 continue
             blocks.extend(groups.values())
         for block in blocks:
+            if remaining_checks < 0:
+                break
             if not isinstance(block, list):
                 reason = "unresolved"
                 continue
@@ -205,7 +209,11 @@ def uv_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
                     reason = "unresolved"
                     continue
                 name = normalize_pypi(name)
-                matches = [p for p in known.get(name, [])
+                candidates = known.get(name, [])
+                remaining_checks -= 1 + len(candidates)
+                if remaining_checks < 0:
+                    break
+                matches = [p for p in candidates
                            if ("version" not in ref or p.get("version") == ref["version"])
                            and ("source" not in ref or p.get("source") == ref["source"])]
                 if not matches:
@@ -230,4 +238,4 @@ def uv_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
     for i, dep in enumerate(out):
         if dep.manifest == manifest and (dep.name, dep.version) in direct:
             out[i] = Dependency(dep.ecosystem, dep.name, dep.version, dep.manifest, direct=True)
-    return reason
+    return "parser_limit" if remaining_checks < 0 else reason
