@@ -49,6 +49,7 @@ from app.scan.error_boundary import BoundaryScan
 # called by. Sorted, so a diff reads as one added or removed line.
 WIRED_SCANNERS = (
     "run_checks",
+    "scan_archive_extraction",
     "scan_auth_read",
     "scan_auth_write",
     "scan_ci_deploy_source",
@@ -80,6 +81,7 @@ WIRED_SCANNERS = (
 # with no source-text parsing between it and the truth.
 EMITTED_RULE_IDS = (
     "anthropic-api-key",
+    "archive-extraction-fully-trusted",
     "aws-access-key-id",
     "command-injection-shell-built-command",
     "connection-string-dev-password",
@@ -125,7 +127,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-09-14-5"
+ENGINE_VERSION_FOR_THAT_SET = "2026-09-14-7"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

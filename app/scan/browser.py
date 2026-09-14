@@ -137,6 +137,7 @@ class ScanSession:
             "open_redirect": (stage.scan_open_redirect, "python-open-redirect-unvalidated-url"),
             "insecure_randomness": (stage.scan_insecure_randomness, "insecure-randomness"),
             "command_injection": (stage.scan_command_injection, "command-injection-shell-built-command"),
+            "archive_extraction": (stage.scan_archive_extraction, "archive-extraction-fully-trusted"),
         }
         updated = {**self.static, **deepcopy({key: self.static[key] for key in (
             "findings", "rule_coverage", "checks_not_run", "checks_run", "coverage",

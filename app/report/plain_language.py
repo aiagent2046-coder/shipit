@@ -30,6 +30,17 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "pass resolve_entities=False, no_network=True directly. Verify whether the application "
         "needs entity expansion before changing parsing behavior.",
     ),
+    "archive-extraction-fully-trusted": (
+        "Archive extraction explicitly disables safety filtering.",
+        "tarfile extract or extractall is called with filter=\"fully_trusted\", the explicit "
+        "opt-out from extraction checks. A member named with an absolute path or ../ components "
+        "then writes outside the destination on every Python with the parameter (measured on "
+        "3.12.13: fully_trusted writes outside where the data and tar filters refuse the same "
+        "member). Where the archive bytes come from has not been verified.",
+        "Drop filter=\"fully_trusted\": pass filter=\"data\" (the 3.14 default) or "
+        "filter=\"tar\", or omit the argument on Python 3.14+. Never extract untrusted "
+        "archives with filtering disabled.",
+    ),
     "command-injection-shell-built-command": (
         "A shell command is built from a value the caller sent.",
         "This route hands a string to a shell -- os.system, os.popen, subprocess with shell=True, "

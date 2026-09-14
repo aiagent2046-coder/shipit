@@ -225,6 +225,12 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # GHSA records for npm/PyPI and evaluates their OSV introduced/fixed,
 # last_affected and limit timelines. CVE aliases deduplicate agreeing sources;
 # disagreements and unsupported ordering stay unknown.
+# 2026-09-14-7: archive-extraction-fully-trusted, a new static scanner. A literal
+# filter="fully_trusted" on tarfile extract/extractall of an import-proven
+# tarfile.open object is the explicit opt-out from extraction checks and is
+# reported at high confidence; a missing filter (version-dependent default),
+# data and tar filters, variable or spread filters, zipfile extraction and
+# unproven receivers stay silent.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

@@ -1,0 +1,7 @@
+{
+  "description": "A rebound receiver name loses its tarfile.open provenance.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}

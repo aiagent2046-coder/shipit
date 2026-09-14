@@ -1,0 +1,10 @@
+{
+  "description": "A single-member extract with the fully_trusted filter.",
+  "expect": [
+    {
+      "rule_id": "archive-extraction-fully-trusted",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

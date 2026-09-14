@@ -1,0 +1,7 @@
+{
+  "description": "A with-bound name used outside its block is not proven to hold an open archive.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}

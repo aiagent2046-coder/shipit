@@ -1,0 +1,3 @@
+import tarfile
+with tarfile.open(upload) as tar:
+    tar.extract(member, filter="fully_trusted")
