@@ -1,0 +1,7 @@
+{
+  "description": "The wrapper's argument was captured when it evaluated; a walrus in a later argument cannot change what the sink reads.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

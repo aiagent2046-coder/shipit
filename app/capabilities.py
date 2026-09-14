@@ -184,9 +184,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "SQL text assembled from values instead of parameters (Python)",
         ("sql-injection-string-built-query",),
         "Python statements whose SQL text is assembled from a value the function received, across "
-        "expression branches, telling a fixed conditional fragment apart from an input-built query. "
-        "A parameterized call is silent. Whether the value is attacker-controlled, and any "
-        "database-side policy, is not verified.",
+        "expression branches, telling a fixed conditional fragment apart from an input-built query; "
+        "a single import-resolved sqlalchemy text() wrapper is transparent to the sink, so the "
+        "query text inside it is what is read. A parameterized call is silent. Whether the value "
+        "is attacker-controlled, and any database-side policy, is not verified.",
     ),
     Capability(
         "sql_injection_js",

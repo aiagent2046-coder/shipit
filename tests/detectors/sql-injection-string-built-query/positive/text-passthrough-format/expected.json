@@ -1,0 +1,10 @@
+{
+  "description": "An assembled query wrapped in a single sqlalchemy text() is transparent: execute still runs the built string.",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

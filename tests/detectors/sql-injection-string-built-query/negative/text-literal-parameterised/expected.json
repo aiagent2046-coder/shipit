@@ -1,0 +1,7 @@
+{
+  "description": "text() over a literal is the declared parameterised form; nothing is assembled.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

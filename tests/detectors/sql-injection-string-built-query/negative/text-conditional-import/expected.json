@@ -1,0 +1,7 @@
+{
+  "description": "A conditional import is not a guaranteed binding; the wrapper spelling is unproven.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

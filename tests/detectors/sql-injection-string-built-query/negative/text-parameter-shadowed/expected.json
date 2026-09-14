@@ -1,0 +1,7 @@
+{
+  "description": "A parameter named text is not sqlalchemy's constructor; the wrapper is unknown.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

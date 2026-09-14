@@ -1,4 +1,4 @@
 """Analysis identity shared by server and offline browser entry points."""
 
-# Destructuring bindings pair by exact slot or key correspondence.
-AUDIT_ENGINE_VERSION = "2026-09-14-11"
+# A single sqlalchemy text() wrapper is transparent to the sink.
+AUDIT_ENGINE_VERSION = "2026-09-14-12"

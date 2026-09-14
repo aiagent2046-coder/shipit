@@ -1,0 +1,5 @@
+import sqlalchemy as sa
+
+async def fetch_user(username: str, connection):
+    result = connection.execute(sa.text('SELECT * FROM u WHERE n = :n'), {'n': username})
+    return result.fetchall()

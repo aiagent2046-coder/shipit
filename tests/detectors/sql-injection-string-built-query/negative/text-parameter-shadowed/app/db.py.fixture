@@ -1,0 +1,3 @@
+async def fetch_user(text, username, connection):
+    query = 'SELECT {}'.format(username)
+    return connection.execute(text(query)).fetchall()

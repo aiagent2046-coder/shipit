@@ -1,0 +1,5 @@
+import sqlalchemy as sa
+
+async def fetch(username, connection):
+    q = "SELECT 1"
+    return connection.execute(sa.text(q), (q := f"SELECT {username}"))
