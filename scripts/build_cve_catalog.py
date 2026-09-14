@@ -58,9 +58,9 @@ def source_identity(source: Path, official_remotes: set[str] = OFFICIAL_REMOTES)
     return commit, generated_at
 
 
-def source_blobs(source: Path, commit: str) -> list[tuple[str, str]]:
+def source_blobs(\n    source: Path, commit: str, tree_path: str = "cves"\n) -> list[tuple[str, str]]:
     blobs = []
-    for entry in _git(source, "ls-tree", "-r", "-z", commit, "--", "cves").split(b"\0"):
+    for entry in _git(source, "ls-tree", "-r", "-z", commit, "--", tree_path).split(b"\0"):
         if not entry:
             continue
         metadata, raw_path = entry.split(b"\t", 1)
