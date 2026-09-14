@@ -1,0 +1,7 @@
+{
+  "description": "Destructuring reassigns the helper name to a secure source: the binding is ambiguous.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

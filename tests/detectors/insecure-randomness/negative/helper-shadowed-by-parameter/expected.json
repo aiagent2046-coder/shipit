@@ -1,0 +1,7 @@
+{
+  "description": "A parameter shadowing the helper at the call site has unknown provenance.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

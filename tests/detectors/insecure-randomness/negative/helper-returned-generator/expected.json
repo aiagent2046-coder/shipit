@@ -1,0 +1,7 @@
+{
+  "description": "A returned generator object has not drawn; its body is deferred.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

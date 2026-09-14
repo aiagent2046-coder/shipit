@@ -1,0 +1,7 @@
+{
+  "description": "A helper returning a class has not drawn: instance fields initialize at construction.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

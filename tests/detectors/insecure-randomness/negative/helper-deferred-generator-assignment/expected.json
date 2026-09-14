@@ -1,0 +1,7 @@
+{
+  "description": "A generator assigned to the secret name has not run; the helper call inside is deferred.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

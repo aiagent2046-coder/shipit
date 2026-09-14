@@ -1,0 +1,10 @@
+{
+  "description": "A function whose single return draws Math.random, called into a secret-named value.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

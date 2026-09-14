@@ -1,0 +1,9 @@
+function generateToken() {
+  return Math.random();
+}
+function issue() {
+  function* generateToken() {
+    yield crypto.randomUUID();
+  }
+  const resetToken = generateToken();
+}

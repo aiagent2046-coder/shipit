@@ -1,0 +1,7 @@
+function generateToken(flag) {
+  if (flag) {
+    return Math.random();
+  }
+  return "fallback";
+}
+const resetToken = generateToken(true);

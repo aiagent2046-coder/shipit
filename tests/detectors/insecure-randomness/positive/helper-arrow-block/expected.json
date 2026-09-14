@@ -1,0 +1,10 @@
+{
+  "description": "An arrow helper with a block body returning a Math.random expression.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

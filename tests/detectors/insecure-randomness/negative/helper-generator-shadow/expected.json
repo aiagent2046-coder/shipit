@@ -1,0 +1,7 @@
+{
+  "description": "A generator declaration shadows the helper and never runs its body on call.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}
