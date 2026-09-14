@@ -196,17 +196,18 @@ def _archive_inventory(data: bytes):
         paths = {i.filename for i in members if not i.is_dir()
                  and not is_non_production_path(i.filename) and not _vendored(i.filename)}
         gaps = {}
-        unsupported = {"yarn.lock", "pnpm-lock.yaml", "Pipfile.lock", "uv.lock",
+        unsupported = {"yarn.lock", "Pipfile.lock",
                        "Cargo.lock", "Gemfile.lock", "composer.lock", "packages.lock.json"}
         for path in paths:
             directory, _, basename = path.rpartition("/")
             prefix = directory + "/" if directory else ""
             if basename in unsupported:
                 gaps[path] = "unsupported"
-            elif basename == "package.json" and prefix + "package-lock.json" not in paths:
+            elif basename == "package.json" and not any(
+                    prefix + name in paths for name in ("package-lock.json", "pnpm-lock.yaml")):
                 gaps[path] = "unresolved"
             elif basename in {"pyproject.toml", "Pipfile", "setup.py", "setup.cfg"} and not any(
-                    prefix + name in paths for name in ("poetry.lock", "requirements.txt")):
+                    prefix + name in paths for name in ("poetry.lock", "requirements.txt", "uv.lock")):
                 gaps[path] = "unresolved"
     inventory = collect_dependency_inventory(data)
     inventory.incomplete_manifests.update(gaps)
@@ -224,6 +225,7 @@ def match_archive(data: bytes, catalog: dict) -> dict:
         "catalog_stats": {},
         "limitations": [
             "Only exact registry package versions in supported lockfiles are compared with this snapshot.",
+            "Locked platform, optional and development variants are included; runtime selection is not evaluated.",
             "A package/version match does not establish reachable or exploitable application code.",
             "Absence from the snapshot, unsupported ranges, and no matches do not establish a clean or safe project.",
             "PyPI comparisons support numeric releases only; npm comparisons support SemVer.",

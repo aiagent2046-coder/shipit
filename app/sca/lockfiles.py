@@ -70,6 +70,8 @@ OSV_ECOSYSTEM = {
     "package-lock.json": "npm",
     "requirements.txt": "PyPI",
     "poetry.lock": "PyPI",
+    "pnpm-lock.yaml": "npm",
+    "uv.lock": "PyPI",
 }
 
 _NPM_NAME = re.compile(r"(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$")
@@ -85,7 +87,7 @@ class Dependency:
     version: str
     manifest: str          # archive-relative path of the lockfile it came from
     line: int = 0          # 1-based, and only where the file is line-oriented
-    direct: bool = False   # named in package.json; unknown for other ecosystems
+    direct: bool = False   # named in a manifest or a supported lockfile root
     # True when the lockfile says the package is installed for development
     # only, False when the lockfile says otherwise, and None when the format
     # does not record it. The three are kept apart because "not a production
@@ -348,6 +350,10 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                         manifest, text, _direct_names(archive, manifest), collected)
                 elif basename == "requirements.txt":
                     reason = _requirement_lines(manifest, text, collected)
+                elif basename in {"pnpm-lock.yaml", "uv.lock"}:
+                    from app.sca.resolved_locks import pnpm_packages, uv_packages
+                    reader = pnpm_packages if basename == "pnpm-lock.yaml" else uv_packages
+                    reason = reader(manifest, text, collected)
                 else:
                     reason = _poetry_packages(manifest, text, collected)
             except (KeyError, ValueError, RuntimeError, OSError, zipfile.BadZipFile):
