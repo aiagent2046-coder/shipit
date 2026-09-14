@@ -50,9 +50,10 @@ _TSX_SUFFIXES = {".tsx", ".jsx"}
 
 # Method names, not module spellings: `import random as rnd` still draws
 # through rnd.getrandbits, `from random import random` draws bare, and
-# Math.random() matches the bare `random(` arm. A body that only calls
-# secrets/urandom matches nothing and bins as vuln-removed.
-_RANDOM_METHODS = (r"\b(?:random|randint|randrange|choice|getrandbits|uniform|sample)\s*\(")
+# Math.random matches the bare `random` arm.  Do not require an immediate
+# call: a hunt rewrite can bind the dangerous callable and invoke the alias
+# later. A body that only calls secrets/urandom still matches nothing.
+_RANDOM_METHODS = r"\b(?:random|randint|randrange|choice|getrandbits|uniform|sample)\b"
 
 
 @dataclass(frozen=True)
@@ -86,14 +87,11 @@ SPECS: dict[str, Spec] = {
     ),
     "sql-injection-string-built-query": Spec(
         markers=(r"\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\b",
-                 # The % OPERATOR stands after the closing quote
-                 # ('... = %s' % name): that is assembly, in REVIEW. The %s
-                 # PLACEHOLDER sits inside the literal, before the closing
-                 # quote -- execute('...%s', (name,)) matches none of these
-                 # arms, so a parameterised rewrite still bins as
-                 # vuln-removed. A % applied to a variable (q % name) has no
-                 # quote to anchor on; that rare shape is a documented miss.
-                 r"\+|\.format\(|\bf['\"]|\{\}|['\"]\s*%"),
+                 # `%` is deliberately broad. Distinguishing a placeholder
+                 # in a literal from a later `template % value` operation is
+                 # semantic work, and dropping the latter would hide exactly
+                 # the detector escapes this queue exists to expose.
+                 r"\+|\.format\b|\bf['\"]|\{\}|%"),
     ),
     "archive-extraction-fully-trusted": Spec(
         markers=(r"fully_trusted",),
@@ -104,24 +102,26 @@ SPECS: dict[str, Spec] = {
                  r"insertAdjacentHTML|document\.write|\.html\(|v-html",),
     ),
     "command-injection-shell-built-command": Spec(
-        markers=(r"shell\s*=\s*True|os\.system\s*\(|os\.popen\s*\(|"
-                 r"subprocess\.\w+\s*\(",),
+        # Method references stay signal too (`runner = subprocess.run`).
+        markers=(r"shell\s*=\s*True|\b(?:system|popen|popen2|popen3|popen4|"
+                 r"run|call|check_call|check_output|Popen)\b",),
     ),
     "path-traversal-file-sink": Spec(
-        markers=(r"\bopen\s*\(|send_file|read_text\s*\(|read_bytes\s*\(|"
-                 r"shutil\.(?:copy|rmtree)|\bPath\s*\(|os\.path\.join",),
+        # As above, an assigned sink is not evidence that the vulnerability
+        # was removed, so marker calls are not required to be immediate.
+        markers=(r"\b(?:open|send_file|read_text|read_bytes|copy|rmtree|Path|join)\b",),
     ),
     "unsafe-xml-parse": Spec(
         markers=(r"resolve_entities",),
         imports={r"\betree\.": r"^\s*(?:import lxml\b|from lxml import\b)"},
     ),
     "unsafe-deserialization": Spec(
-        # Method names again: `from pickle import loads` calls loads() bare,
-        # `import pickle as codec` keeps calling codec.loads(), and the \b
-        # keeps yaml.safe_load silent while yaml.unsafe_load stays a marker.
-        markers=(r"\b(?:loads?|unsafe_load|read_pickle)\s*\(|"
-                 r"marshal\.\w+\s*\(|pickle\.\w+\s*\(|dill\.\w+\s*\(|"
-                 r"jsonpickle\.|yaml\.(?:unsafe_)?load\b",),
+        # Method names again: include references and bulk/alias entry points.
+        # The word boundaries keep yaml.safe_load out: `_` is a word char, so
+        # its trailing `load` is not a standalone marker.
+        markers=(r"\b(?:load|loads|load_all|unsafe_load|unsafe_load_all|"
+                 r"read_pickle|decode|Unpickler)\b|"
+                 r"\b(?:marshal|pickle|dill|jsonpickle)\.",),
         imports={r"\byaml\.": r"^\s*(?:import yaml\b|from yaml import\b)"},
     ),
 }
