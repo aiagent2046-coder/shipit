@@ -258,11 +258,25 @@ def generate(prompt: str, *, model: str | None = None,
         f"HUNT_PROVIDER={which!r} is not a provider. Use 'ollama' or 'openai'.")
 
 
+def _effective_ollama_name(model: str) -> str:
+    """Normalize the implicit Ollama tag without confusing registry ports.
+
+    Ollama resolves a name without a tag as `:latest`; it does not select an
+    arbitrary installed tag from the same family. A colon before the final
+    slash belongs to a registry host (`localhost:5000/team/model`), while a
+    colon in the final component is an explicit tag.
+    """
+    model = model.strip()
+    final_component = model.rsplit("/", 1)[-1]
+    if ":" not in final_component and "@" not in final_component:
+        return f"{model}:latest"
+    return model
+
+
 def _model_available(installed: set[str], model: str) -> bool:
-    """An exact tag, or the family prefix before ':' (a pull of `qwen3`
-    serves `qwen3:8b`). The check exists to catch --model typos, not to
-    police which tags are installed."""
-    return any(name == model or name.split(":")[0] == model for name in installed)
+    """True only when Ollama can resolve the requested effective model."""
+    requested = _effective_ollama_name(model)
+    return any(_effective_ollama_name(name) == requested for name in installed)
 
 
 def preflight(model: str | None = None) -> tuple[bool, str]:
@@ -295,4 +309,7 @@ def preflight(model: str | None = None) -> tuple[bool, str]:
     except GenerationError as exc:
         return False, str(exc)
     except Exception as exc:                                   # noqa: BLE001
-        return False, f"{describe()} unreachable: {type(exc).__name__}: {exc}"
+        location = (OLLAMA_URL if which == "ollama"
+                    else os.environ.get("HUNT_API_BASE", "https://api.deepseek.com"))
+        return False, (f"{which} {chosen} at {location} unreachable: "
+                       f"{type(exc).__name__}: {exc}")
