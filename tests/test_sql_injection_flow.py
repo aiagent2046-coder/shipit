@@ -501,6 +501,19 @@ def test_literal_format_arguments_stay_silent_until_a_value_enters():
     def fetch_user(username, connection):
         return connection.execute(text('SELECT {}'.format(username))).fetchall()
     ''', 4),
+    ('''
+    import sqlalchemy.sql
+
+    def fetch_user(username, connection):
+        return connection.execute(sqlalchemy.sql.text(f'SELECT {username}')).fetchall()
+    ''', 4),
+    ('''
+    import sqlalchemy as sa
+
+    connection.execute(
+        sa.text(f'{(sa := other)} SELECT {username}')
+    )
+    ''', 3),
 ])
 def test_a_single_sqlalchemy_text_wrapper_is_transparent_to_the_sink(source, line):
     findings = scan(source, 'py')
@@ -607,6 +620,39 @@ def test_a_single_sqlalchemy_text_wrapper_is_transparent_to_the_sink(source, lin
 
     def fetch_user(username, connection):
         return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
+    # a different import replaces the current module binding immediately
+    '''
+    import sqlalchemy as sa
+    import os as sa
+
+    connection.execute(sa.text(f'SELECT {username}'))
+    ''',
+    # a conditional re-import makes provenance disagree across paths
+    '''
+    def fetch_user(flag, username, connection):
+        import sqlalchemy as sa
+        if flag:
+            import os as sa
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
+    # dynamic member replacement drops the imported module provenance
+    '''
+    import sqlalchemy as sa
+    setattr(sa, 'text', wrapper)
+
+    def fetch_user(username, connection):
+        return connection.execute(sa.text(f'SELECT {username}')).fetchall()
+    ''',
+    # the callable is custom even though its argument later rebinds the name
+    '''
+    import sqlalchemy
+    sa = other
+
+    def fetch_user(username, connection):
+        return connection.execute(
+            sa.text(f'{(sa := sqlalchemy)} SELECT {username}')
+        ).fetchall()
     ''',
 ])
 def test_unknown_wrappers_and_parameterised_text_stay_silent(source):

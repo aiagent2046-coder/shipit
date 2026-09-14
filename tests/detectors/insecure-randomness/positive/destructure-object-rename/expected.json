@@ -1,0 +1,10 @@
+{
+  "description": "A renamed object destructuring binding still receives the drawing property.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

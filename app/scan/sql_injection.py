@@ -70,15 +70,27 @@ _TEXT_FROM = frozenset({"sqlalchemy.text", "sqlalchemy.sql.text"})
 
 
 def _text_import_targets(node: ast.AST):
-    """(bound name, dotted import target) pairs a sqlalchemy import carries."""
+    """Names an import binds and any proven sqlalchemy target they receive.
+
+    Every explicit import is returned, including unrelated imports whose
+    target is None: rebinding sa to another module must drop an earlier
+    sqlalchemy provenance at that exact source position.
+    """
     if isinstance(node, ast.Import):
         for alias in node.names:
+            bound = alias.asname or alias.name.split(".")[0]
+            target = None
             if alias.name in _TEXT_MODULES:
-                yield alias.asname or alias.name, alias.name
-    elif isinstance(node, ast.ImportFrom) and node.module in _TEXT_MODULES:
+                # A plain dotted import binds its root; an as-alias binds the
+                # requested dotted module directly.
+                target = alias.name if alias.asname else alias.name.split(".")[0]
+            yield bound, target
+    elif isinstance(node, ast.ImportFrom):
         for alias in node.names:
-            if f"{node.module}.{alias.name}" in _TEXT_FROM:
-                yield alias.asname or alias.name, f"{node.module}.{alias.name}"
+            if alias.name == "*":
+                continue
+            dotted = f"{node.module}.{alias.name}" if node.module else alias.name
+            yield alias.asname or alias.name, dotted if dotted in _TEXT_FROM else None
 
 # Bound so a generated or vendored file cannot turn one archive into a parse
 # storm. 400 KB is past every hand-written module in this repository.
@@ -432,6 +444,14 @@ class _QueryFlow:
                 self.expression(child, state, stable)
             return self.value(node, state)
         self.expression(node.func, state, stable)
+        # Python resolves the callable before evaluating its arguments. Capture
+        # provenance now: a walrus inside the argument can rebind the spelling,
+        # but cannot change the function object already selected for this call.
+        text_wrapper = self._is_text_wrapper(node, state)
+        dynamic_import = None
+        if (isinstance(node.func, ast.Name)
+                and node.func.id in {"setattr", "delattr"} and node.args):
+            dynamic_import = self._text_import(node.args[0], state)
         arguments = [self.expression(argument, state, stable) for argument in node.args]
         for keyword in node.keywords:
             self.expression(keyword.value, state, stable)
@@ -451,7 +471,11 @@ class _QueryFlow:
         # evaluation order. text() over a literal stays literal (the declared
         # parameterised form); over an assembled string the assembly is what
         # the sink runs.
-        if self._is_text_wrapper(node, state):
+        if dynamic_import in _TEXT_MODULES:
+            # Builtin-style dynamic member replacement destroys confidence in
+            # every imported member reached through that module spelling.
+            self.assign(node.args[0], _UNKNOWN, state)
+        if text_wrapper:
             return arguments[0]
         if not isinstance(node.func, ast.Attribute):
             return self.value(node, state)
@@ -521,9 +545,16 @@ class _QueryFlow:
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 # Imports bind in the scope being walked, at their position:
                 # an import inside a function never proves the name at module
-                # level, and one below the sink never proves it above.
+                # level, and one below the sink never proves it above. Every
+                # explicit re-import writes its name; only recognized
+                # sqlalchemy targets establish new provenance.
+                if isinstance(node, ast.ImportFrom) and any(
+                        alias.name == "*" for alias in node.names):
+                    for name, value in tuple(state.items()):
+                        if value.imported:
+                            state[name] = _UNKNOWN
                 for bound, target in _text_import_targets(node):
-                    state[bound] = _Binding(imported=target)
+                    state[bound] = _Binding(imported=target) if target else _UNKNOWN
             elif isinstance(node, ast.AugAssign):
                 self.expression(node.value, state, stable)
                 before, right = self.value(node.target, state), self.value(node.value, state)

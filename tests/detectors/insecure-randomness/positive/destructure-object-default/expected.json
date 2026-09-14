@@ -1,0 +1,10 @@
+{
+  "description": "An object destructuring default draws when the key is absent.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

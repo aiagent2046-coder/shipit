@@ -1,0 +1,1 @@
+const { a: { token } } = { a: { token: "literal" } };

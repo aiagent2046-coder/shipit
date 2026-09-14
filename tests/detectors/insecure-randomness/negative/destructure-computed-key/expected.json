@@ -1,0 +1,7 @@
+{
+  "description": "A computed pattern key has no provable correspondence to any object property.",
+  "expect": [],
+  "forbid": [
+    "insecure-randomness"
+  ]
+}

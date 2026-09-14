@@ -1,0 +1,10 @@
+{
+  "description": "A comment inside the array is not a slot; the real element of the position is still paired.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

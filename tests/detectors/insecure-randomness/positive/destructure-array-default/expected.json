@@ -1,0 +1,10 @@
+{
+  "description": "A destructuring default draws when the slot is absent: the default is the value the binding receives.",
+  "expect": [
+    {
+      "rule_id": "insecure-randomness",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
