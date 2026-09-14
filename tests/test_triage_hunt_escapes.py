@@ -11,14 +11,24 @@ accident:
   * each noise class lands in its bucket for the RIGHT reason;
   * the real escapes of that measured round -- the array-destructuring and
     renamed-object bodies -- stay in REVIEW;
-  * a body without a spec is never binned beyond the parse check;
+  * every positive corpus case a specced rule fires on stays in REVIEW --
+    review round 1 binned seven real findings (aliased imports, %-assembly,
+    v-html, bare/dotted loaders) behind markers narrower than the detectors;
+  * a body without a spec is never binned beyond the parse check, and its
+    body reaches the printed review queue too;
   * every check errs toward REVIEW: Math.random needs no import, so a pure
     JS body is never "missing import".
 """
 import ast
 import importlib.util
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+import pytest
+
+from app.scan.static import run_static_scan
+from tests.detectors.conftest import build_archive, discover_cases
+from tests.detector_samples import expand_samples
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -160,3 +170,94 @@ def test_a_parseable_python_body_parses_for_the_check():
     parsed = ast.parse(body)  # the same call the triage makes
     assert parsed is not None
     assert TRIAGE._parse_error(body, ".py") is False
+
+
+def test_no_spec_bodies_reach_the_review_queue(tmp_path, capsys):
+    # Review round 1: `classify` said "review (no spec)" but the queue count
+    # read the exact "review" key -- a future rule's body counted 0 and was
+    # never printed, so no human ever read it.
+    dump = tmp_path / "dump"
+    dump.mkdir()
+    (dump / "future-rule__aa__thing.js").write_text("const anything = whatever();\n")
+    assert TRIAGE.triage([dump]) == 0
+    out = capsys.readouterr().out
+    assert "review (no spec): 1" in out
+    assert "future-rule__aa__thing.js" in out
+    assert "TOTAL review queue: 1 bodies" in out
+
+
+def test_a_filename_containing_double_underscores_keeps_its_suffix():
+    # The dump name's third field is the ORIGINAL filename; original names
+    # may contain "__" themselves and must keep the suffix the parse check
+    # reads.
+    assert TRIAGE._rule_and_file(Path("xss__hash__auth__reset.js")) == \
+        ("xss", "auth__reset.js")
+
+
+@pytest.mark.parametrize("rule_id, filename, body", [
+    # Review round 1: each of these forms the DETECTOR recognizes was binned
+    # vuln-removed by a marker narrower than the rule -- a real escape would
+    # have been dropped the same way.
+    ("insecure-randomness", "token.py",
+     "import random as rnd\nreset_token = rnd.getrandbits(128)\n"),
+    ("insecure-randomness", "token.py",
+     "from random import getrandbits\nreset_token = getrandbits(128)\n"),
+    ("sql-injection-string-built-query", "db.py",
+     "def u(name, cur):\n    cur.execute('SELECT * FROM t WHERE name = %s' % name)\n"),
+    ("xss-unsafe-html-injection", "View.vue",
+     '<template><div v-html="content"></div></template>\n'),
+    ("unsafe-deserialization", "tables.py",
+     "from pickle import loads\nfirst = loads(blob)\n"),
+    ("unsafe-deserialization", "tables.py",
+     "import pandas as pd\nsecond = pd.read_pickle(path)\n"),
+    ("unsafe-deserialization", "models.py",
+     "import torch\ndef load_checkpoint(path):\n"
+     "    return torch.load(path, weights_only=False)\n"),
+    ("unsafe-deserialization", "restore.py",
+     "import pickle as codec\ndef restore(data):\n    return codec.loads(data)\n"),
+])
+def test_a_form_the_rule_recognizes_stays_in_review(rule_id, filename, body):
+    assert CLASSIFY(rule_id, filename, body) == "review"
+
+
+def test_a_parameterised_percent_placeholder_is_still_vuln_removed():
+    body = ("def query(cur, name):\n"
+            "    cur.execute(\"SELECT id FROM users WHERE name = %s\", (name,))\n")
+    assert CLASSIFY("sql-injection-string-built-query", "db.py", body) == "vuln-removed"
+
+
+def test_yaml_safe_load_is_still_vuln_removed():
+    body = "import yaml\ndata = yaml.safe_load(blob)\n"
+    assert CLASSIFY("unsafe-deserialization", "restore.py", body) == "vuln-removed"
+
+
+def test_no_corpus_positive_a_specced_rule_fires_on_is_binned_as_noise():
+    """The reviewer's invariant, as a permanent gate.
+
+    Every positive corpus case of the specced rules is scanned with the real
+    static stage; every file a rule fires on must classify into the REVIEW
+    queue. A body that still carries a findable defect is signal, whatever
+    spelling it uses -- and a marker narrower than the detector drops
+    exactly the bodies the hunt exists to surface."""
+    checked = 0
+    for rule_id, polarity, case_dir in discover_cases():
+        if polarity != "positive" or rule_id not in TRIAGE.SPECS:
+            continue
+        findings = run_static_scan(build_archive(case_dir))["findings"]
+        bodies = {}
+        for path in case_dir.rglob("*.fixture"):
+            rel = path.relative_to(case_dir).as_posix().removesuffix(".fixture")
+            bodies[rel] = expand_samples(path.read_text())
+        for finding in findings:
+            if finding.get("rule_id") != rule_id:
+                continue
+            file_path = finding.get("file", "")
+            body = next((text for rel, text in sorted(bodies.items())
+                         if file_path == rel or file_path.endswith("/" + rel)), None)
+            if body is None:
+                continue
+            checked += 1
+            bucket = CLASSIFY(rule_id, PurePosixPath(file_path).name, body)
+            assert bucket.startswith("review"), (
+                f"{rule_id} {case_dir.name} {file_path}: binned {bucket!r}")
+    assert checked >= 40, "the invariant must exercise a real slice of the corpus"
