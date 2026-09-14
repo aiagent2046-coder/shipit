@@ -225,6 +225,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # GHSA records for npm/PyPI and evaluates their OSV introduced/fixed,
 # last_affected and limit timelines. CVE aliases deduplicate agreeing sources;
 # disagreements and unsupported ordering stay unknown.
+# 2026-09-14-6: sql-injection treats a literal template formatted with
+# literal arguments as a literal query: .format(<literals>) carries no
+# external value, exactly like literal concatenation always has. A starred
+# argument, a ** spread or any non-literal argument still reports.
 # Identity is shared with the offline browser entry in app.scan.version.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with

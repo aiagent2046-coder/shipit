@@ -1,0 +1,1 @@
+{"description": "A literal template with literal format arguments carries no external value into the query.", "expect": [], "forbid": ["sql-injection-string-built-query"]}
