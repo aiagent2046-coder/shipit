@@ -189,6 +189,11 @@ def display(report: dict, as_json: bool) -> None:
     print("Dependency coverage: " + json.dumps({k: dependency.get(k) for k in
                                                ("status", "status_counts", "incomplete_manifests")}))
     print("Folder exclusions: " + json.dumps(report["snapshot"]["excluded"]))
+    gaps = {name: row["skip_reasons"] for name, row in report.get("rule_coverage", {}).items()
+            if any(row.get("skip_reasons", {}).values())}
+    if gaps or report["checks_not_run"] or report["can_continue"]:
+        print("Incomplete checks: " + json.dumps({"unavailable": report["checks_not_run"],
+                                                 "rule_skips": gaps, "can_continue": report["can_continue"]}))
     for finding in report['findings'][:20]:
         # JSON escaping prevents project-controlled paths/titles emitting terminal controls.
         print(json.dumps({k: finding.get(k) for k in ('severity', 'rule_id', 'file', 'line', 'title')}))
