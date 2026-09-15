@@ -96,7 +96,7 @@ def test_an_invented_placeholder_is_counted_not_read_as_a_crash(monkeypatch, cap
 
     def inventing_generate(model, prompt, timeout=900):
         return ("import random\n"
-                "# @DRYDOCK_SAMPLE:not_a_real_sample\n"
+                "# @DRYDOCK_SAMPLE:not_a_real_sample@\n"
                 "reset_token = random.getrandbits(128)\n")
 
     monkeypatch.setattr(hunt, "ollama_generate", inventing_generate)
@@ -105,4 +105,68 @@ def test_an_invented_placeholder_is_counted_not_read_as_a_crash(monkeypatch, cap
     assert result.invented_placeholders == 1
     assert result.identical_to_source == 0
     assert result.escapes == []
-    assert "invented a placeholder" in capsys.readouterr().err
+    assert "changed the source placeholders" in capsys.readouterr().err
+
+
+def test_a_known_placeholder_added_to_a_placeholder_free_source_is_discarded(monkeypatch):
+    """A known name expands successfully, so only source-to-rewrite comparison
+    prevents it from contaminating the scanner's caught/escaped denominator."""
+    case_dir = (REPO_ROOT / "tests" / "detectors" / "insecure-randomness"
+                / "positive" / "reset-token")
+
+    monkeypatch.setattr(
+        hunt,
+        "ollama_generate",
+        lambda model, prompt, timeout=900: (
+            "import random\n"
+            "# @DRYDOCK_SAMPLE:STRIPE@\n"
+            "reset_token = random.getrandbits(128)\n"
+        ),
+    )
+
+    result = hunt.hunt("insecure-randomness", case_dir, "fake-model", 1)
+    assert result.invented_placeholders == 1
+    assert result.caught == 0
+    assert result.escapes == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'export const STRIPE_KEY = "@DRYDOCK_SAMPLE:AWS@"',
+        ('export const STRIPE_KEY = "@DRYDOCK_SAMPLE:STRIPE@"\n'
+         'export const BACKUP_KEY = "@DRYDOCK_SAMPLE:STRIPE@"'),
+        'export const STRIPE_KEY = "redacted"',
+    ],
+    ids=["replaced", "duplicated", "removed"],
+)
+def test_every_source_placeholder_must_be_preserved_exactly(monkeypatch, body):
+    case_dir = (REPO_ROOT / "tests" / "detectors" / "stripe-live-key"
+                / "positive" / "key-in-config")
+    monkeypatch.setattr(
+        hunt,
+        "ollama_generate",
+        lambda model, prompt, timeout=900: body,
+    )
+
+    result = hunt.hunt("stripe-live-key", case_dir, "fake-model", 1)
+    assert result.invented_placeholders == 1
+    assert result.caught == 0
+    assert result.escapes == []
+
+
+def test_report_includes_placeholder_discards_in_terminal_summary(capsys):
+    result = hunt.RuleResult(
+        rule_id="stripe-live-key",
+        case="key-in-config",
+        target_file="src/config.ts.fixture",
+        baseline_ok=True,
+        invented_placeholders=2,
+    )
+
+    payload = hunt.report([result], "fake-model")
+    output = capsys.readouterr().out
+
+    assert "placeholder" in output
+    assert "Discarded before scoring: 0 uncompilable, 2 placeholder violations." in output
+    assert payload["results"][0]["invented_placeholders"] == 2
