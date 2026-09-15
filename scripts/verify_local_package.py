@@ -221,7 +221,8 @@ def main():
     args = parser.parse_args()
     version = installed_metadata() if args.module == "drydock_local" else "source-reference"
     with tempfile.TemporaryDirectory(prefix="drydock-installed-") as name:
-        temporary = Path(name)
+        # Match CLI path identity; macOS /var is a symlink to /private/var.
+        temporary = Path(name).resolve()
         reports, root = exercise(args.module, temporary)
         if args.module == "drydock_local":
             console_check(root, temporary)
