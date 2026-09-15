@@ -158,6 +158,14 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     # tail is not read as storage; name it a repository and the pair disagrees
     "unplaceable-storage-verb": ("app/checks.py", "Depends(handle_security)",
                                  "Depends(get_security_repo)"),
+    # a guard on both write routes: drop one and the disagreement appears
+    "check-admin-on-both-siblings": (
+        "app/routes.py",
+        "async def insert_record(payload, admin_guard=Depends(check_admin),\n"
+        "                        record_store",
+        "async def insert_record(payload, record_store"),
+    # check_user_session is not identity: the tail names storage too
+    "check-user-session-sibling": ("app/routes.py", "check_user_session", "check_admin"),
 }
 
 
@@ -420,3 +428,20 @@ def test_rebound_dependency_wrappers_remain_unknown_target_guards(helper):
 def test_later_none_helper_cannot_erase_an_already_evaluated_dependency_default():
     source = "import fastapi\nfrom fastapi import Depends as Guard\n" + none_guard_routes() + "\n" + NONE_GUARD
     assert scan_auth_write(archive(source)) == []
+
+
+def test_verification_heads_before_person_nouns_are_identity_guards():
+    """Hunt round 2: the write rule's guarded siblings spelled their identity
+    dependencies check_admin, validate_admin, check_operator, authenticate --
+    and every disagreement went unread until the shared classifier learned
+    the verification heads. The tail must stay a person noun: session and
+    access name storage too, and a tail both roles wear is not evidence of
+    either."""
+    for dependency in ("check_admin", "validate_admin", "check_operator", "authenticate"):
+        source = GUARDED.replace("actor=Depends(current_actor)",
+                                 f"admin_guard=Depends({dependency})") + UNGUARDED
+        assert len(scan_auth_write(archive(source))) == 1
+    for dependency in ("check_user_session", "validate_access"):
+        boundary = GUARDED.replace("actor=Depends(current_actor)",
+                                   f"guard=Depends({dependency})") + UNGUARDED
+        assert scan_auth_write(archive(boundary)) == []

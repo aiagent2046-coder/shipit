@@ -1,0 +1,7 @@
+{
+  "description": "Both write routes declare the same check_admin identity dependency: nothing disagrees, in whatever spelling the guard uses.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

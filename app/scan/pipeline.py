@@ -246,6 +246,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # pair by comma position (holes keep theirs), object keys by literal key text
 # (last pair wins). Rest patterns, computed keys and non-literal containers
 # stay unresolved.
+# 2026-09-15-4: auth vocabulary grew verification heads: check/confirm/validate/
+#               verify before a person noun reads as identity (check_admin,
+#               validate_user), and authenticate joined the identity words.
+#               Dual-role tails (session, access) stay unknown.
 # 2026-09-14-12: sql-injection reads through a single import-resolved sqlalchemy
 # text() wrapper: the sink's query text is the wrapper argument. text() over a
 # literal stays the parameterised fix; wrappers with keywords, extra arguments,
