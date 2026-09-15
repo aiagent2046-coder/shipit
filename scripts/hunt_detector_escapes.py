@@ -107,6 +107,14 @@ FENCE_BLOCK = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.DOTALL)
 # candidate and a fabricated one.
 FILE_MARKER = re.compile(r"^\s*-{2,}\s*(?:FILE|END FILE)\b.*$", re.MULTILINE)
 
+# A rewrite must preserve the fixture's synthetic placeholders byte-for-byte.
+# Looking only for names missing from SAMPLES is insufficient: a model can add
+# another *valid* name, replace one valid name with another, or duplicate one,
+# and expansion would then silently turn that prompt violation into a scored
+# variation. The prefix count also catches malformed tokens with no closing @.
+SAMPLE_PLACEHOLDER_PREFIX = "@DRYDOCK_SAMPLE:"
+SAMPLE_PLACEHOLDER_RE = re.compile(r"@DRYDOCK_SAMPLE:[A-Za-z0-9_]+@")
+
 PROMPT = """You are helping test a static security scanner. Below is a file from a test \
 fixture that deliberately contains a security defect: {rule_id}.
 
@@ -119,8 +127,9 @@ import style.
 
 Hard rules:
 - The defect must survive in every rewrite. Do not fix, redact or comment it out.
-- Keep any @DRYDOCK_SAMPLE:...@ placeholder EXACTLY as written. Never replace one \
-with an invented key or literal.
+- Keep every @DRYDOCK_SAMPLE:...@ placeholder EXACTLY as written. Never add, remove, \
+rename, duplicate, or replace one with a literal. Any such change makes the rewrite \
+unusable, even when the changed placeholder name exists in the corpus.
 - Keep every literal value AT LEAST AS LONG as it is in the original. Detectors \
 have length thresholds; a shortened value is a different test, not a variation.
 - Keep credential-shaped NAMES intact (api_key stays api_key, not api_key_string). \
@@ -164,6 +173,11 @@ class RuleResult:
     # tells you about the model, not the detector, and the number is how you see
     # that from the report.
     uncompilable: int = 0
+    # Variations whose @DRYDOCK_SAMPLE:...@ occurrences differ from the source
+    # -- a prompt violation, not a scanner result. This includes known as well
+    # as unknown names, replacements, additions, removals and duplicates.
+    # Counted apart for the same reason as uncompilable.
+    invented_placeholders: int = 0
     caught: int = 0
     escapes: list[Escape] = field(default_factory=list)
     seconds: float = 0.0
@@ -206,6 +220,17 @@ def build_archive(files: dict[str, str]) -> io.BytesIO:
 
 def scan(files: dict[str, str]) -> list[dict]:
     return run_static_scan(build_archive(files))["findings"]
+
+
+def placeholders_preserved(source: str, variation: str) -> bool:
+    """Whether a rewrite kept every synthetic sample placeholder unchanged."""
+    source_tokens = sorted(SAMPLE_PLACEHOLDER_RE.findall(source))
+    variation_tokens = sorted(SAMPLE_PLACEHOLDER_RE.findall(variation))
+    return (
+        source_tokens == variation_tokens
+        and source.count(SAMPLE_PLACEHOLDER_PREFIX)
+        == variation.count(SAMPLE_PLACEHOLDER_PREFIX)
+    )
 
 
 def parse_variations(raw: str, expected: int) -> list[str]:
@@ -375,6 +400,12 @@ def hunt(rule_id: str, case_dir: Path, model: str, n: int) -> RuleResult:
             continue
         seen.add(digest)
 
+        if not placeholders_preserved(source, body):
+            result.invented_placeholders += 1
+            print(f"    variation {index}: changed the source placeholders",
+                  file=sys.stderr)
+            continue
+
         broken = variation_is_broken(body, target.removesuffix(".fixture"))
         if broken:
             result.uncompilable += 1
@@ -387,7 +418,8 @@ def hunt(rule_id: str, case_dir: Path, model: str, n: int) -> RuleResult:
             findings = scan(mutated)
         except Exception as exc:      # noqa: BLE001 - a malformed archive is a skip, not a crash
             result.identical_to_source += 1
-            print(f"    variation {index}: unscannable ({type(exc).__name__})", file=sys.stderr)
+            print(f"    variation {index}: unscannable ({type(exc).__name__})",
+                  file=sys.stderr)
             continue
 
         fired = sorted({f.get("rule_id", "") for f in findings})
@@ -437,29 +469,34 @@ def report(results: list[RuleResult], model: str) -> dict:
     scored = [r for r in results if not r.skipped]
     total_escapes = sum(len(r.escapes) for r in scored)
     total_scored = sum(r.caught + len(r.escapes) for r in scored)
+    total_uncompilable = sum(r.uncompilable for r in scored)
+    total_placeholder_violations = sum(r.invented_placeholders for r in scored)
 
-    print(f"\n{'=' * 78}")
+    print(f"\n{'=' * 92}")
     print(f"CANDIDATE ESCAPES  (model: {model})")
-    print("=" * 78)
-    print(f"{'rule':<40} {'caught':>7} {'escaped':>8} {'rate':>7} {'thrown':>7}")
-    print("-" * 78)
+    print("=" * 92)
+    print(f"{'rule':<40} {'caught':>7} {'escaped':>8} {'rate':>7} "
+          f"{'broken':>7} {'placeholder':>11}")
+    print("-" * 92)
     for r in sorted(scored, key=lambda r: -r.escape_rate):
         print(f"{r.rule_id:<40} {r.caught:>7} {len(r.escapes):>8} {r.escape_rate:>6.0%} "
-              f"{r.uncompilable:>7}")
+              f"{r.uncompilable:>7} {r.invented_placeholders:>11}")
 
     skipped = [r for r in results if r.skipped]
     if skipped:
-        print(f"\n{'-' * 78}\nSKIPPED\n{'-' * 78}")
+        print(f"\n{'-' * 92}\nSKIPPED\n{'-' * 92}")
         for r in skipped:
             print(f"{r.rule_id:<40} {r.skipped}")
 
-    print(f"\n{'=' * 78}")
+    print(f"\n{'=' * 92}")
     print(f"{total_escapes} candidates from {total_scored} scored variations "
           f"across {len(scored)} rules.")
+    print(f"Discarded before scoring: {total_uncompilable} uncompilable, "
+          f"{total_placeholder_violations} placeholder violations.")
     print("A candidate is a variation the scanner did not flag. It is NOT a proven")
     print("gap: the model may have removed the defect or broken the syntax. Each")
     print("one needs a human to read it before it means anything.")
-    print("=" * 78)
+    print("=" * 92)
 
     return {
         "model": model,
