@@ -1,0 +1,7 @@
+{
+  "description": "Both sibling routes perform the camelCase authorized read: no disagreement exists, and the camelCase fix must recognize the witness on both sides rather than inventing a gap.",
+  "expect": [],
+  "forbid": [
+    "python-route-read-auth-consistency"
+  ]
+}
