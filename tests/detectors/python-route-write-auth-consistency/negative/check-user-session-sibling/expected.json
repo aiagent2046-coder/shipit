@@ -1,0 +1,7 @@
+{
+  "description": "check_user_session is not an identity dependency: the tail names storage too, and a tail both roles wear is not evidence of either. The route stays unproven rather than witnessed.",
+  "expect": [],
+  "forbid": [
+    "python-route-write-auth-consistency"
+  ]
+}

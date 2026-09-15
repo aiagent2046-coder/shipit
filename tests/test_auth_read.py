@@ -370,3 +370,18 @@ def status(item_id, repo=Depends(get授权Repo)):
                  .replace("user=Depends(get_current_user)", "")
                  .replace("repository.for_user(user)", "repository"))
     assert len(scan_auth_read(archive(unguarded))) == 1
+
+
+@pytest.mark.parametrize("dependency, expected", [
+    ("check_admin", 1), ("validate_user", 1), ("authenticate", 1), ("check_operator", 1),
+    ("check_user_session", 0), ("validate_access", 0),
+])
+def test_identity_witness_vocabulary_reads_verification_heads(dependency, expected):
+    """The shared classifier is the write rule's too: verification heads
+    before person nouns (check_admin, validate_user, check_operator,
+    authenticate) now supply the identity witness. The tail must stay a
+    person noun -- check_user_session and validate_access name storage in
+    their tails and stay unknown, exactly as fetch_audits does."""
+    source = GUARDED_COLLECTION.replace("actor=Depends(current_actor)",
+                                        f"actor=Depends({dependency})") + OPEN_ITEM
+    assert len(scan_auth_read(archive(source))) == expected

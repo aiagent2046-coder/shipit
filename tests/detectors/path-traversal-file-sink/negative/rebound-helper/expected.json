@@ -1,0 +1,7 @@
+{
+  "description": "A module-level rebinding drops the name from the helper registry: the call could reach any of its meanings, and resolving to the declaration would be a guess.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}

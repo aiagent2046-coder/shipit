@@ -1,0 +1,11 @@
+{
+  "description": "The guarded sibling spells its identity dependency check_admin: a verification head before a person noun. Hunt round 2 measured the write rule's disagreements going unread because the shared classifier required a storage head (get_admin read, check_admin did not) and lacked 'authenticate' among the identity words.",
+  "expect": [
+    {
+      "rule_id": "python-route-write-auth-consistency",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}
