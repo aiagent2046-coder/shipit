@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drydock-local"
+version = "0.1.0"
+description = "Offline project security checks with a pinned CVE/GHSA catalog"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.12"
+# Filled from the hash-locked server requirements at build time.
+dynamic = ["dependencies"]
+
+[project.scripts]
+drydock-local = "drydock_local.local_cli:main"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["dependencies.txt"]}
+
+[tool.setuptools.packages.find]
+include = ["drydock_local*"]
+
+[tool.setuptools.package-data]
+drydock_local = ["data/*.json", "data/*.sha256", "build-info.json"]
