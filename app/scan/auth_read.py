@@ -7,6 +7,7 @@ proves public reachability. It never runs uploaded code or calls an LLM.
 from __future__ import annotations
 
 import ast
+import re
 from collections import Counter, deque
 from dataclasses import dataclass, field
 import stat
@@ -19,6 +20,45 @@ from app.scan.secrets import is_non_production_path
 
 RULE_ID = "python-route-read-auth-consistency"
 _METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
+
+# An identifier's words, camelCase humps included: `getAuditRepo_` and
+# `get_audit_repo` both read as get/audit/repo. Measured in hunt round 2:
+# eight model rewrites of the unprotected-sibling positive kept the defect
+# and escaped, because `getAuthorized` missed the literal "get_authorized"
+# and `getAuditRepo_` reached the word sets as ONE token -- so a route pair
+# written in camelCase looked guarded to a rule that could not read its
+# words at all. Digits do not make words: db2Connection reads as
+# db/connection.
+_CAMEL_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
+
+
+def _words(name: str) -> list[str]:
+    # The ASCII camel-case expression must not erase parts of valid Unicode
+    # identifiers: get授权Repo would otherwise become get/repo, and
+    # не_authorize would invent an authorize guard. Preserve the previous
+    # underscore vocabulary for identifiers this expression cannot read.
+    if not name.isascii():
+        return [token for token in name.lower().split("_") if token]
+    return [token.lower() for token in _CAMEL_RE.findall(name) if token]
+
+
+def _snake(name: str) -> str:
+    """The identifier as its underscore-joined word sequence."""
+    return "_".join(_words(name))
+
+
+def _guard_words(name: str) -> str:
+    """The word sequence a guard- or witness-name check reads.
+
+    camelCase humps decompose (hunt round 2: `getAuthorized` had to read as
+    get_authorized). A LEADING underscore still disqualifies exactly as it
+    did before the decomposition: the product's own process-paid endpoint
+    names its bearer-token helper `_require_bearer_token`, and reading that
+    as a sibling witness turned the deliberately free /v1/fixpacks endpoint
+    into a finding against the product's own zero-finding invariant. A
+    change this PR must not make.
+    """
+    return "_" + _snake(name) if name.startswith("_") else _snake(name)
 
 
 def _name(node: ast.AST) -> str:
@@ -105,7 +145,7 @@ _VERIFY_HEADS = frozenset({"check", "confirm", "validate", "verify"})
 
 
 def _dependency_role(dependency: str) -> str:
-    tokens = [token for token in dependency.lower().split("_") if token]
+    tokens = _words(dependency)
     if not tokens:
         return "unknown"
     if _IDENTITY_WORDS & set(tokens):
@@ -312,8 +352,9 @@ def _nodes_guard_role(nodes, bindings: dict[str, str], *, named_calls: bool,
         if not isinstance(node, ast.Call):
             continue
         name = _name(node.func) or (node.func.attr if isinstance(node.func, ast.Attribute) else "")
-        if named_calls and (name == "get_authorized"
-                            or name.startswith(("require_", "authorize", "check_auth", "verify_token"))):
+        if named_calls and (_guard_words(name) == "get_authorized"
+                            or _guard_words(name).startswith(
+                                ("require_", "authorize", "check_auth", "verify_token"))):
             return "identity"
         kind = _dependency_kind(node, bindings, non_dependencies)
         if kind:
@@ -519,9 +560,9 @@ def _scope_findings(scope, factories: set[str], filename: str,
             key = _repository_key(fn, repo, bindings) if repo else None
             if key is None:
                 continue
-            if node.func.attr == "get_authorized":
+            if _guard_words(node.func.attr) == "get_authorized":
                 protected.setdefault((router, key), []).append(
-                    (fn, route, node.lineno, f"calls {repo}.get_authorized"))
+                    (fn, route, node.lineno, f"calls {repo}.{node.func.attr}"))
             elif method == "get" and identity_dependency and node.func.attr in {"get", "list"}:
                 protected.setdefault((router, key), []).append((
                     fn, route, node.lineno, f"declares an identity dependency and calls {repo}.{node.func.attr}"))

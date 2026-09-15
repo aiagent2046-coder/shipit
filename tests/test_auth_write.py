@@ -63,6 +63,34 @@ def test_unprotected_write_beside_a_guarded_sibling_is_an_unverified_signal():
     assert "public reachability have not been resolved" in f["explanation"]
 
 
+def test_unicode_call_cannot_invent_an_identity_witness_or_hide_a_target():
+    source = '''from fastapi import APIRouter
+from app.security import requireOwner
+from app.storage import repository
+router = APIRouter()
+def не_authorize():
+    return None
+@router.put("/items/{item_id}")
+def update(item_id, payload):
+    не_authorize()
+    return repository.update(item_id, payload)
+@router.post("/items")
+def create(payload):
+    return repository.create(payload)
+'''
+    # Neither route has a guard: deleting the Cyrillic prefix would invent
+    # a protected sibling and falsely accuse the POST route.
+    assert scan_auth_write(archive(source)) == []
+    guarded = source.replace("    не_authorize()", "    requireOwner()")
+    hits = scan_auth_write(archive(guarded))
+    assert len(hits) == 1
+    assert "POST /items" in hits[0].explanation
+    # The same no-op on the target must not suppress the real disagreement.
+    target_noop = guarded.replace("    return repository.create(payload)",
+                                  "    не_authorize()\n    return repository.create(payload)")
+    assert len(scan_auth_write(archive(target_noop))) == 1
+
+
 @pytest.mark.parametrize("source", [
     # both write routes declare an identity: nothing disagrees
     GUARDED + UNGUARDED.replace("payload, audit_repo", "payload, actor=Depends(current_actor), audit_repo"),

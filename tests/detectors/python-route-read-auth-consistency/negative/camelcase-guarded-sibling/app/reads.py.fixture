@@ -1,0 +1,8 @@
+from fastapi import APIRouter, Depends
+router = APIRouter()
+@router.get("/audits/{auditId}")
+async def detail_(auditId, authToken, auditRepo_=Depends(getAuditRepo_)):
+    return await auditRepo_.getAuthorized(auditId, authToken)
+@router.get("/audits/{auditId}/status")
+async def status_(auditId, authToken, auditRepo_=Depends(getAuditRepo_)):
+    return await auditRepo_.getAuthorized(auditId, authToken)

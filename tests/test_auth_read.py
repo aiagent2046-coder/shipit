@@ -277,3 +277,111 @@ def test_old_protected_lookup_also_requires_the_same_repository_provider():
     source = PREFIX + UNPROTECTED.replace("Depends(get_audit_repo)", "Depends(get_public_repo)")
     assert scan_auth_read(archive(source)) == []
     assert len(scan_auth_read(archive(PREFIX + UNPROTECTED))) == 1
+
+
+# Hunt round 2: eight model rewrites of the unprotected-sibling positive kept
+# the defect and escaped by spelling everything in camelCase -- getAuthorized
+# missed the literal witness match and getAuditRepo_ reached the word sets as
+# ONE token, so the pair looked guarded to a rule that could not read its
+# words. The fix reads identifiers through their word sequence.
+CAMEL_SIBLING = '''from fastapi import APIRouter, Depends
+router = APIRouter()
+@router.get("/audits/{auditId}")
+async def detail_(auditId, authToken, auditRepo_=Depends(getAuditRepo_)):
+    return await auditRepo_.getAuthorized(auditId, authToken)
+@router.get("/audits/{auditId}/status")
+async def status_(auditId, auditRepo_=Depends(getAuditRepo_)):
+    return await auditRepo_.get(auditId)
+'''
+
+
+def test_camelcase_spellings_do_not_hide_a_read_disagreement():
+    hits = scan_auth_read(archive(CAMEL_SIBLING))
+    assert len(hits) == 1
+    assert "auditRepo_.getAuthorized" in hits[0].explanation
+    # Both routes guarded: no disagreement, whatever the spelling.
+    guarded = CAMEL_SIBLING.replace(
+        "return await auditRepo_.get(auditId)",
+        "return await auditRepo_.getAuthorized(auditId, authToken)")
+    assert scan_auth_read(archive(guarded)) == []
+    # The flip: the same pair in snake_case words is the canonical corpus case.
+    snake_case = (CAMEL_SIBLING.replace("auditRepo_", "audit_repo")
+                  .replace("getAuditRepo_", "get_audit_repo")
+                  .replace("getAuthorized", "get_authorized")
+                  .replace("auditId", "audit_id")
+                  .replace("authToken", "token"))
+    assert len(scan_auth_read(archive(snake_case))) == 1
+
+
+@pytest.mark.parametrize("call", ["requireOwner", "authorizeUser", "checkAuthToken", "verifyToken"])
+def test_camelcase_guard_calls_guard_their_own_route(call):
+    """The named-call guard reader runs over handler bodies, and a camelCase
+    authorization call must suppress the finding on its own route exactly as
+    require_owner does in the snake_case corpus. (Guard calls are not read
+    witnesses: only an authorized READ -- get_authorized, or an identity
+    dependency plus get/list -- can witness a sibling, in either spelling.)"""
+    guarded = CAMEL_SIBLING.replace(
+        "return await auditRepo_.get(auditId)",
+        f"await auditRepo_.{call}(auditId)\n    return await auditRepo_.get(auditId)")
+    assert scan_auth_read(archive(guarded)) == []
+    assert len(scan_auth_read(archive(CAMEL_SIBLING))) == 1
+
+
+def test_a_camelcase_call_without_identity_words_is_not_a_witness():
+    source = CAMEL_SIBLING.replace("getAuthorized", "loadRecord")
+    assert scan_auth_read(archive(source)) == []
+
+
+def test_a_camelcase_identity_dependency_guards_the_sibling_read():
+    guarded = CAMEL_SIBLING.replace(
+        "async def status_(auditId, auditRepo_",
+        "async def status_(auditId, user=Depends(getCurrentUser), auditRepo_")
+    assert scan_auth_read(archive(guarded)) == []
+
+
+def test_a_leading_underscore_helper_is_not_a_read_witness():
+    """The guard-call vocabulary decomposes camelCase but keeps the leading-
+    underscore boundary it always had: the product's own process-paid
+    endpoint names its bearer-token helper `_require_bearer_token`, and
+    reading that as a witness turned the deliberately free /v1/fixpacks
+    endpoint into a finding against the product's zero-finding invariant."""
+    source = CAMEL_SIBLING.replace("getAuthorized", "_require_bearer_token")
+    assert scan_auth_read(archive(source)) == []
+
+
+def test_unicode_dependency_name_does_not_lose_its_unknown_guard():
+    source = '''from fastapi import APIRouter, Depends
+from app.security import get_current_user
+from app.storage import repository
+router = APIRouter()
+def get授权Repo(user=Depends(get_current_user)):
+    return repository.for_user(user)
+@router.get("/items/{item_id}")
+def detail(item_id, repo=Depends(get授权Repo)):
+    return repo.get_authorized(item_id)
+@router.get("/items/{item_id}/status")
+def status(item_id, repo=Depends(get授权Repo)):
+    return repo.get(item_id)
+'''
+    # The dependency authorizes both routes. Its unrecognized name must not
+    # turn into the recognized storage name getRepo by dropping Unicode.
+    assert scan_auth_read(archive(source)) == []
+    unguarded = (source.replace("get授权Repo", "getAuditRepo")
+                 .replace("user=Depends(get_current_user)", "")
+                 .replace("repository.for_user(user)", "repository"))
+    assert len(scan_auth_read(archive(unguarded))) == 1
+
+
+@pytest.mark.parametrize("dependency, expected", [
+    ("check_admin", 1), ("validate_user", 1), ("authenticate", 1), ("check_operator", 1),
+    ("check_user_session", 0), ("validate_access", 0),
+])
+def test_identity_witness_vocabulary_reads_verification_heads(dependency, expected):
+    """The shared classifier is the write rule's too: verification heads
+    before person nouns (check_admin, validate_user, check_operator,
+    authenticate) now supply the identity witness. The tail must stay a
+    person noun -- check_user_session and validate_access name storage in
+    their tails and stay unknown, exactly as fetch_audits does."""
+    source = GUARDED_COLLECTION.replace("actor=Depends(current_actor)",
+                                        f"actor=Depends({dependency})") + OPEN_ITEM
+    assert len(scan_auth_read(archive(source))) == expected

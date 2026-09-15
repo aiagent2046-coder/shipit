@@ -1,0 +1,11 @@
+{
+  "description": "The same unprotected sibling as the canonical case, spelled in camelCase: getAuditRepo_ is one token to a naive splitter and getAuthorized misses the literal witness match. Hunt round 2 escaped eight of eight rewrites on this shape.",
+  "expect": [
+    {
+      "rule_id": "python-route-read-auth-consistency",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}

@@ -122,6 +122,14 @@ Optional: LLM keys, GitHub App, sandbox runner, `YOOKASSA_*`, SMTP / Telegram.
 Without LLM keys the scan degrades to static-only (`basis: static_only`) rather
 than inventing coverage.
 
+## Local offline protection
+
+From an installed checkout, `drydock-local scan /path/to/project` checks a folder
+with the shared static engine and local npm/PyPI CVE/GHSA catalog. `watch` observes
+source/catalog changes; `history` shows local scan summaries. No server, database
+service, LLM or network is needed for scanning. Catalog updates are explicit and
+pinned to a reviewed Shipit commit. See [local setup, scope and exit codes](docs/local-drydock.md).
+
 ## Ownership of results
 
 - Audit report: `GET /v1/audits/{id}?token=…` (per-row `access_token`).
