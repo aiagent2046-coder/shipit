@@ -146,6 +146,15 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
                                    "\n"
                                    "    return read(name)",
                                    "    return open(os.path.join(UPLOAD_DIR, name)).read()"),
+    # a resolvable helper with nothing request-derived to trace
+    "helper-called-with-a-literal": (
+        "app/files.py",
+        '@router.get("/get-file")\nasync def get_file():\n    return open(get_file_path("index.html")).read()',
+        '@router.get("/get-file/{name}")\nasync def get_file(name: str):\n    return open(get_file_path(name)).read()'),
+    # the name no longer means the declaration: resolving it would be a guess
+    "rebound-helper": ("app/files.py", "get_file_path = build_path_elsewhere\n\n\n", ""),
+    # one transition, no call graph: the second hop stays opaque
+    "two-hop-helpers": ("app/files.py", "open(outer(name))", "open(inner(name))"),
 }
 
 
@@ -288,6 +297,95 @@ def test_sanitizer_alias_is_proven_and_cannot_sanitize_an_unrelated_raw_componen
     findings = scan_path_traversal(archive(source))
     assert len(findings) == 1
     assert "assembled from other," in findings[0].explanation
+
+
+# Hunt round 2: nineteen model rewrites of this rule's positives moved the join
+# -- or the whole sink -- into a same-file module-level helper, and every one
+# escaped the "unknown helpers stop this trace" boundary. A helper declared
+# exactly once, undecorated and never rebound is now followed through ONE
+# transition: its body is traced, and a single return is read as the call's.
+HELPER_SOURCE = '''from fastapi import APIRouter
+import os
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+def get_file_path(name):
+    return os.path.join(UPLOAD_DIR, name)
+
+
+@router.get("/get-file/{name}")
+async def get_file(name: str):
+    return open(get_file_path(name)).read()
+'''
+
+
+def test_a_same_file_helper_returning_the_callers_path_is_traced():
+    findings = scan_path_traversal(archive(HELPER_SOURCE))
+    assert len(findings) == 1
+    assert "assembled from name" in findings[0].explanation
+
+
+def test_a_sink_inside_a_same_file_helper_is_traced():
+    source = '''from fastapi import APIRouter
+import shutil
+
+router = APIRouter()
+BASE = "/srv/uploads"
+
+
+def move_file(source):
+    shutil.copy(source, "/var/dest")
+
+
+@router.post("/import/{source}")
+async def handler(source: str):
+    move_file(source)
+    return {"ok": True}
+'''
+    findings = scan_path_traversal(archive(source))
+    assert len(findings) == 1
+    assert findings[0].line == 9
+    assert "assembled from source" in findings[0].explanation
+
+
+@pytest.mark.parametrize("source", [
+    # the helper is called with a literal: its body holds nothing request-derived
+    HELPER_SOURCE.replace(
+        '@router.get("/get-file/{name}")\nasync def get_file(name: str):\n'
+        '    return open(get_file_path(name)).read()',
+        '@router.get("/get-file")\nasync def get_file():\n'
+        '    return open(get_file_path("index.html")).read()'),
+    # the name no longer means the declaration
+    HELPER_SOURCE.replace('UPLOAD_DIR = "/srv/uploads"\n',
+                          'UPLOAD_DIR = "/srv/uploads"\nget_file_path = build_path_elsewhere\n'),
+    # a decorated helper is not a plain function: a decorator can change the callable
+    HELPER_SOURCE.replace("def get_file_path(name):", "@cache\ndef get_file_path(name):"),
+    # two hops are not followed: this is not a call graph
+    HELPER_SOURCE.replace(
+        "def get_file_path(name):\n    return os.path.join(UPLOAD_DIR, name)",
+        "def get_file_path(name):\n    return build_name(name)\n\n\n"
+        "def build_name(name):\n    return os.path.join(UPLOAD_DIR, name)"),
+    # a *args helper stays opaque: mapping the parameters would be guessing
+    HELPER_SOURCE.replace("def get_file_path(name):", "def get_file_path(*args):"),
+])
+def test_unresolvable_helper_shapes_stay_silent(source):
+    assert scan_path_traversal(archive(source)) == []
+
+
+def test_helper_resolution_is_budgeted(monkeypatch):
+    """A generated archive cannot turn helper resolution into a scan bomb: past
+    the budget, resolution stops and the remaining helpers stay opaque."""
+    from app.scan import path_traversal as detector
+    monkeypatch.setattr(detector, "_MAX_HELPER_RESOLUTIONS", 1)
+    helpers = "\n\n".join(
+        f"def helper_{index}(value):\n    return open(value).read()\n" for index in range(3))
+    calls = "\n".join(f"    helper_{index}(name)" for index in range(3))
+    source = ("from fastapi import APIRouter\nimport os\nrouter = APIRouter()\n"
+              + helpers
+              + "\n\n@router.get('/x')\nasync def h(name: str):\n" + calls + "\n")
+    assert len(scan_path_traversal(archive(source))) == 1
 
 
 def test_a_context_manager_that_swallows_the_rejection_does_not_establish_containment():

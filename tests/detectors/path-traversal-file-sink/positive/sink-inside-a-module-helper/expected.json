@@ -1,0 +1,11 @@
+{
+  "description": "The sink sits inside a same-file module-level helper whose parameter the route handler fills with the request value: the trace continues into the body on one transition.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}

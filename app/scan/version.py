@@ -1,4 +1,4 @@
 """Analysis identity shared by server and offline browser entry points."""
 
-# A single sqlalchemy text() wrapper is transparent to the sink.
-AUDIT_ENGINE_VERSION = "2026-09-14-12"
+# Path traces continue into a same-file helper through one transition.
+AUDIT_ENGINE_VERSION = "2026-09-15-3"
