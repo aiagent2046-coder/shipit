@@ -5,22 +5,88 @@ CVE/GHSA snapshot. Scan, watch and history do not send network requests, use an
 LLM, load server credentials, install project dependencies, or run project code.
 Only the explicit `update` command downloads a public catalog.
 
-This first release supports Linux/macOS with Python 3.12+ (Windows: WSL).
-Install from a reviewed Shipit checkout; this is not a published PyPI package:
+This release supports Linux/macOS with Python 3.12+ (Windows: WSL). The
+standalone distribution is named `drydock-local`; it contains four runtime
+dependencies (PyYAML, tree-sitter, tree-sitter-typescript and pglast), the shared
+detectors and the CVE/GHSA snapshot. It does not install Shipit's server stack.
+
+## Install a reviewed build
+
+The `local-package` GitHub Actions workflow produces an install bundle for each
+tested OS/architecture/Python combination. Open a successful run on the reviewed
+commit, download its `drydock-local-...` artifact and extract it. These are CI
+artifacts with retention limits, not a published PyPI package or permanent release
+channel. Do not install an unrelated package from PyPI by guessing the name.
+
+Choose the bundle matching your OS, CPU architecture and Python minor version.
+The first CI matrix covers Linux x86_64 and macOS arm64 with Python 3.12.
+Windows users can use the Linux bundle inside matching WSL. Python must already
+be installed with `venv` support (on distributions that separate it, install the
+matching Python venv package first).
+
+From the extracted bundle, run:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --require-hashes -r requirements.txt
-python -m pip install --no-deps -e .
-drydock-local scan /absolute/path/to/project
+bash install.sh
+"$HOME/.local/share/drydock/venv/bin/drydock-local" scan /absolute/path/to/project
 ```
 
-Installation needs network access to fetch Python packages. Subsequent checks
-use the included catalog and need no API keys, Postgres, Redis or Ollama service.
-The package currently includes server dependencies; a smaller standalone
-distribution is a later packaging step. `python -m app.local_cli` is equivalent
-to `drydock-local` from the checkout.
+`install.sh` creates a private application virtual environment and installs
+only the included wheels, using `--no-index --require-hashes`. Internet is needed
+to obtain the bundle, but neither installation from a complete matching bundle
+nor scanning needs it. No compiler, API keys, Postgres, Redis or Ollama is needed.
+Use `PYTHON=/path/to/python3.12 bash install.sh /new/venv/path` to choose Python
+or the installation directory. The installer refuses an existing destination;
+for an upgrade, install in a new directory and switch the command you use after
+checking it. Scan history stays in the independent state directory.
+
+The wheel itself is platform-independent Python code; its bundled native
+parser dependencies are specific to the target platform. Other Python versions
+need their own wheel bundle and validation. The package uses `drydock_local`
+internally and does not install a generic `app` namespace. Use a separate venv
+from Shipit, since both distributions offer the `drydock-local` command.
+
+To type the short command in the examples below, activate the installed venv:
+
+```bash
+. "$HOME/.local/share/drydock/venv/bin/activate"
+drydock-local --help
+```
+
+## Build from source (maintainers)
+
+From a reviewed Shipit checkout, create a build environment and stage the source:
+
+```bash
+python3.12 -m venv /tmp/drydock-build-env
+. /tmp/drydock-build-env/bin/activate
+python scripts/build_local_package.py --out /tmp/drydock-bootstrap --stage-only
+python -m pip install --require-hashes -r /tmp/drydock-bootstrap/build-requirements.txt
+python scripts/build_local_package.py --out dist/local-bundle --wheelhouse
+```
+
+Each output directory must be new. Build-only setuptools and the four runtime
+pins/hashes come from the reviewed `requirements.txt`. `--wheelhouse` downloads
+binary dependencies for the current platform; without it, only the Drydock wheel
+is built and the directory is not a complete offline installer.
+
+The build stages only the offline import closure from `app`, rewrites internal
+import sites into `drydock_local`, and builds through standard setuptools.
+Evidence strings and the pinned update URL are preserved. New server imports or
+external dependencies fail the build instead of silently expanding this package.
+`build-info.json` records the source revision, dirty-checkout flag, original
+module hashes, engine version, catalog digest and runtime pins. A separate source
+archive can be rebuilt without the original Git checkout. Package version and
+engine version are separate: packaging changes do not claim new detector logic.
+
+The same build identity is installed at
+`drydock_local/build-info.json`. Source hashes and wheel hashes are provenance
+and integrity records, not digital signatures. Public release publication and
+signed automatic updates are separate steps.
+
+The original developer checkout also continues to support
+`python -m app.local_cli`; the standalone wheel supports
+`python -m drydock_local.local_cli`. Both use the same engine and state format.
 
 ## Scan, watch, history
 

@@ -1,0 +1,68 @@
+name: local-package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  standalone:
+    name: local-package (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        python: ['3.12']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Prepare the four runtime dependencies and locked build backend
+        run: |
+          python scripts/build_local_package.py --out "$RUNNER_TEMP/drydock-bootstrap" --stage-only
+          python -m pip install --require-hashes \
+            -r "$RUNNER_TEMP/drydock-bootstrap/build-requirements.txt" \
+            -r "$RUNNER_TEMP/drydock-bootstrap/source/requirements.txt"
+      - name: Build wheel, independent source archive and offline installation bundle
+        run: |
+          python scripts/build_local_package.py --out "$RUNNER_TEMP/drydock-bundle" --wheelhouse
+          PYTHONPATH=. python scripts/verify_local_package.py \
+            --module app --write-reference "$RUNNER_TEMP/source-reference.json"
+      - name: Install into a fresh environment using only bundled wheels
+        run: |
+          PYTHON="$(command -v python)" bash "$RUNNER_TEMP/drydock-bundle/install.sh" "$RUNNER_TEMP/drydock-installed"
+      - name: Verify installed entry point, offline checks and exact source parity
+        run: |
+          "$RUNNER_TEMP/drydock-installed/bin/python" -I scripts/verify_local_package.py \
+            --reference "$RUNNER_TEMP/source-reference.json"
+      - name: Rebuild the source archive without the Shipit checkout
+        run: |
+          python -m pip wheel --no-deps --no-build-isolation --no-index \
+            --wheel-dir "$RUNNER_TEMP/rebuilt" "$RUNNER_TEMP/drydock-bundle/drydock-local-source.tar.gz"
+      - name: Keep the reviewed installation bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: drydock-local-${{ runner.os }}-${{ runner.arch }}-py${{ matrix.python }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/drydock-bundle/wheelhouse/
+            ${{ runner.temp }}/drydock-bundle/install.txt
+            ${{ runner.temp }}/drydock-bundle/install.sh
+            ${{ runner.temp }}/drydock-bundle/README.md
+            ${{ runner.temp }}/drydock-bundle/build-info.json
+            ${{ runner.temp }}/drydock-bundle/drydock-local-source.tar.gz
