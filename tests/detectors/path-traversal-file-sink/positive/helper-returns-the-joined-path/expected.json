@@ -1,0 +1,11 @@
+{
+  "description": "The join moved into a same-file module-level helper: hunt round 2 measured nineteen rewrites of this rule's positives escaping through exactly this mediation. One transition resolves the helper's single return as the call's value.",
+  "expect": [
+    {
+      "rule_id": "path-traversal-file-sink",
+      "count": 1,
+      "verification_status": "unverified"
+    }
+  ],
+  "forbid": []
+}

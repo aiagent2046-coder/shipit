@@ -246,6 +246,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # pair by comma position (holes keep theirs), object keys by literal key text
 # (last pair wins). Rest patterns, computed keys and non-literal containers
 # stay unresolved.
+# 2026-09-15-3: path-traversal follows a same-file module-level helper through
+#               one transition -- the helper body is traced and a single return
+#               is read as the call's value; other files, nested defs, rebound
+#               names, decorated functions and second hops stay opaque.
 # 2026-09-15-2: auth_read decomposes ASCII camelCase names into their word sequence
 #               (getAuthorized reads as get_authorized) for the dependency
 #               role, the guard calls and the protected-read witness. Unicode

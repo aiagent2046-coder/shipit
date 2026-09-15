@@ -1,0 +1,14 @@
+from fastapi import APIRouter
+import os
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+def read_file(name):
+    return open(os.path.join(UPLOAD_DIR, name)).read()
+
+
+@router.get("/get-file/{name}")
+async def get_file(name: str):
+    return read_file(name)

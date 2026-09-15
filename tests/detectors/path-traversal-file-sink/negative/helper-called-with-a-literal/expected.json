@@ -1,0 +1,7 @@
+{
+  "description": "The helper resolves, but every argument is a literal: its body holds nothing request-derived, and tracing it would spend the helper budget for nothing.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}
