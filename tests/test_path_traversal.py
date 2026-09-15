@@ -57,7 +57,7 @@ def test_a_path_built_from_caller_input_is_a_high_severity_signal():
     assert f["category"] == "Security"
     assert f["source"] == "static"
     assert f["verification_status"] == "unverified"
-    assert "traced only inside this function" in f["explanation"]
+    assert "at most one eligible same-file helper" in f["explanation"]
 
 
 @pytest.mark.parametrize("source", [
@@ -146,6 +146,15 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
                                    "\n"
                                    "    return read(name)",
                                    "    return open(os.path.join(UPLOAD_DIR, name)).read()"),
+    # a resolvable helper with nothing request-derived to trace
+    "helper-called-with-a-literal": (
+        "app/files.py",
+        '@router.get("/get-file")\nasync def get_file():\n    return open(get_file_path("index.html")).read()',
+        '@router.get("/get-file/{name}")\nasync def get_file(name: str):\n    return open(get_file_path(name)).read()'),
+    # the name no longer means the declaration: resolving it would be a guess
+    "rebound-helper": ("app/files.py", "get_file_path = build_path_elsewhere\n\n\n", ""),
+    # one transition, no call graph: the second hop stays opaque
+    "two-hop-helpers": ("app/files.py", "open(outer(name))", "open(inner(name))"),
 }
 
 
@@ -290,6 +299,95 @@ def test_sanitizer_alias_is_proven_and_cannot_sanitize_an_unrelated_raw_componen
     assert "assembled from other," in findings[0].explanation
 
 
+# Hunt round 2: nineteen model rewrites of this rule's positives moved the join
+# -- or the whole sink -- into a same-file module-level helper, and every one
+# escaped the "unknown helpers stop this trace" boundary. A helper declared
+# exactly once, undecorated and never rebound is now followed through ONE
+# transition: its body is traced, and a single return is read as the call's.
+HELPER_SOURCE = '''from fastapi import APIRouter
+import os
+
+router = APIRouter()
+UPLOAD_DIR = "/srv/uploads"
+
+
+def get_file_path(name):
+    return os.path.join(UPLOAD_DIR, name)
+
+
+@router.get("/get-file/{name}")
+async def get_file(name: str):
+    return open(get_file_path(name)).read()
+'''
+
+
+def test_a_same_file_helper_returning_the_callers_path_is_traced():
+    findings = scan_path_traversal(archive(HELPER_SOURCE))
+    assert len(findings) == 1
+    assert "assembled from name" in findings[0].explanation
+
+
+def test_a_sink_inside_a_same_file_helper_is_traced():
+    source = '''from fastapi import APIRouter
+import shutil
+
+router = APIRouter()
+BASE = "/srv/uploads"
+
+
+def move_file(source):
+    shutil.copy(source, "/var/dest")
+
+
+@router.post("/import/{source}")
+async def handler(source: str):
+    move_file(source)
+    return {"ok": True}
+'''
+    findings = scan_path_traversal(archive(source))
+    assert len(findings) == 1
+    assert findings[0].line == 9
+    assert "assembled from source" in findings[0].explanation
+
+
+@pytest.mark.parametrize("source", [
+    # the helper is called with a literal: its body holds nothing request-derived
+    HELPER_SOURCE.replace(
+        '@router.get("/get-file/{name}")\nasync def get_file(name: str):\n'
+        '    return open(get_file_path(name)).read()',
+        '@router.get("/get-file")\nasync def get_file():\n'
+        '    return open(get_file_path("index.html")).read()'),
+    # the name no longer means the declaration
+    HELPER_SOURCE.replace('UPLOAD_DIR = "/srv/uploads"\n',
+                          'UPLOAD_DIR = "/srv/uploads"\nget_file_path = build_path_elsewhere\n'),
+    # a decorated helper is not a plain function: a decorator can change the callable
+    HELPER_SOURCE.replace("def get_file_path(name):", "@cache\ndef get_file_path(name):"),
+    # two hops are not followed: this is not a call graph
+    HELPER_SOURCE.replace(
+        "def get_file_path(name):\n    return os.path.join(UPLOAD_DIR, name)",
+        "def get_file_path(name):\n    return build_name(name)\n\n\n"
+        "def build_name(name):\n    return os.path.join(UPLOAD_DIR, name)"),
+    # a *args helper stays opaque: mapping the parameters would be guessing
+    HELPER_SOURCE.replace("def get_file_path(name):", "def get_file_path(*args):"),
+])
+def test_unresolvable_helper_shapes_stay_silent(source):
+    assert scan_path_traversal(archive(source)) == []
+
+
+def test_helper_resolution_is_budgeted(monkeypatch):
+    """A generated archive cannot turn helper resolution into a scan bomb: past
+    the budget, resolution stops and the remaining helpers stay opaque."""
+    from app.scan import path_traversal as detector
+    monkeypatch.setattr(detector, "_MAX_HELPER_RESOLUTIONS", 1)
+    helpers = "\n\n".join(
+        f"def helper_{index}(value):\n    return open(value).read()\n" for index in range(3))
+    calls = "\n".join(f"    helper_{index}(name)" for index in range(3))
+    source = ("from fastapi import APIRouter\nimport os\nrouter = APIRouter()\n"
+              + helpers
+              + "\n\n@router.get('/x')\nasync def h(name: str):\n" + calls + "\n")
+    assert len(scan_path_traversal(archive(source))) == 1
+
+
 def test_a_context_manager_that_swallows_the_rejection_does_not_establish_containment():
     body = ("    p = (Path(BASE) / name).resolve()\n    with suppress(ValueError):\n"
             "        p.relative_to(BASE)\n    return p.read_text()\n")
@@ -336,3 +434,95 @@ def test_path_expansion_is_bounded_before_allocation_in_the_real_static_pipeline
         assert max(slots for _, slots in seen) == _MAX_SLOTS
     else:
         assert max(size for size, _ in seen) > _MAX_TEMPLATE_BYTES // 4
+
+
+@pytest.mark.parametrize(("helper", "body", "expected"), [
+    # All arguments are read before any same-named parameter is bound.
+    ('def h(name, value):\n    return os.path.join("/srv", value)\n',
+     '    return open(h("safe", name)).read()', 1),
+    ('def h(safe, value):\n    return os.path.join("/srv", value)\n',
+     '    safe="safe"\n    return open(h(name, safe)).read()', 0),
+    # Free globals/imports belong to the helper's module, not the handler.
+    ('name="safe"\ndef h(value):\n    return os.path.join("/srv", name)\n',
+     '    return open(h(name)).read()', 0),
+    ('def h(value):\n    return os.path.join("/srv", value)\n',
+     '    os=None\n    return open(h(name)).read()', 1),
+    # Defaults are frozen at definition time, even if the module name changes.
+    ('name="safe"\ndef h(value, filename=name):\n    return os.path.join("/srv", filename)\n'
+     'name=unresolved\n', '    return open(h(name)).read()', 0),
+    ('def h(value, filename="safe"):\n    return os.path.join("/srv", filename)\n',
+     '    return open(h("safe", filename=name)).read()', 1),
+    # A local store shadows builtins throughout the helper, including before it.
+    ('def h(value):\n    open(value)\n    open=unknown\n', '    return h(name)', 0),
+    ('def h(value):\n    open(value)\n', '    return h(name)', 1),
+    # A coroutine/generator call does not execute the filesystem operation.
+    ('async def h(value):\n    return open(value).read()\n', '    return h(name)', 0),
+    ('def h(value):\n    yield open(value).read()\n', '    return h(name)', 0),
+    # Positional-only parameters cannot be filled with keywords.
+    ('def h(value, /):\n    return os.path.join("/srv", value)\n',
+     '    return open(h(value=name)).read()', 0),
+    ('def h(value, /):\n    return os.path.join("/srv", value)\n',
+     '    return open(h(name)).read()', 1),
+    # A global declaration means the callable may be replaced at request time.
+    ('def h(value):\n    return os.path.join("/srv", value)\n'
+     'def replace():\n    global h\n    h=other\n',
+     '    return open(h(name)).read()', 0),
+])
+def test_helper_calls_preserve_python_scope_and_argument_binding(helper, body, expected):
+    source = ('from fastapi import APIRouter\nimport os\nrouter=APIRouter()\n'
+              + helper + '\n@router.get("/x")\nasync def route(name: str):\n' + body + '\n')
+    assert len(scan_path_traversal(archive(source))) == expected
+
+
+def test_helper_return_expansion_obeys_the_file_budget(monkeypatch):
+    from app.scan import path_traversal as detector
+    monkeypatch.setattr(detector, "_MAX_HELPER_RESOLUTIONS", 1)
+    source = HELPER_SOURCE.replace(
+        '    return open(get_file_path(name)).read()',
+        '    open(get_file_path(name)).read()\n    open(get_file_path(name)).read()')
+    coverage = {}
+    assert len(scan_path_traversal(archive(source), coverage=coverage)) == 1
+    assert coverage["skip_reasons"]["analysis_limit"] == 1
+
+
+@pytest.mark.parametrize("sink", ['open(identity(p)).read()', 'q = identity(p)\n    q.read_text()',
+                                  'read_path(p)'])
+def test_helper_identity_preserves_resolved_containment(sink):
+    source = ('from fastapi import APIRouter\nfrom pathlib import Path\nrouter=APIRouter()\n'
+              'BASE="/srv/uploads"\ndef identity(path):\n    return path\n'
+              'def read_path(path):\n    return path.read_text()\n'
+              '@router.get("/x")\nasync def route(name: str):\n'
+              '    p=(Path(BASE)/name).resolve()\n'
+              '    if not p.is_relative_to(BASE):\n        raise ValueError()\n    '
+              + sink + '\n')
+    assert scan_path_traversal(archive(source)) == []
+    unsafe = source.replace('    if not p.is_relative_to(BASE):\n        raise ValueError()\n', '')
+    assert len(scan_path_traversal(archive(unsafe))) == 1
+
+
+def test_helper_global_import_rebinding_is_unresolved():
+    source = HELPER_SOURCE.replace('    return open(get_file_path(name)).read()',
+                                  '    global os\n    os = wrapper\n'
+                                  '    return open(get_file_path(name)).read()')
+    assert scan_path_traversal(archive(source)) == []
+
+
+
+def test_nested_route_cannot_resolve_a_shadowing_local_helper_as_the_module_helper():
+    source = HELPER_SOURCE[:HELPER_SOURCE.index('@router.get')] + (
+        'def register():\n'
+        '    def get_file_path(value):\n        return "safe"\n'
+        '    @router.get("/nested")\n'
+        '    async def nested(name: str):\n'
+        '        return open(get_file_path(name)).read()\n')
+    assert scan_path_traversal(archive(source)) == []
+    assert len(scan_path_traversal(archive(source.replace(
+        '    def get_file_path(value):\n        return "safe"\n', '')))) == 1
+
+
+
+def test_helper_arguments_with_assignment_expressions_remain_unresolved():
+    source = HELPER_SOURCE.replace('def get_file_path(name):', 'def get_file_path(ignored, name):')
+    source = source.replace('get_file_path(name)', 'get_file_path((name := "safe"), name)')
+    assert scan_path_traversal(archive(source)) == []
+    assert len(scan_path_traversal(archive(source.replace('(name := "safe")', '"safe"')))) == 1

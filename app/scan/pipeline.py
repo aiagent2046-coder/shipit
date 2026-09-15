@@ -250,6 +250,10 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 #               verify before a person noun reads as identity (check_admin,
 #               validate_user), and authenticate joined the identity words.
 #               Dual-role tails (session, access) stay unknown.
+# 2026-09-15-3: path-traversal follows a same-file module-level helper through
+#               one transition -- the helper body is traced and a single return
+#               is read as the call's value; other files, nested defs, rebound
+#               names, decorated functions and second hops stay opaque.
 # 2026-09-15-2: auth_read decomposes ASCII camelCase names into their word sequence
 #               (getAuthorized reads as get_authorized) for the dependency
 #               role, the guard calls and the protected-read witness. Unicode

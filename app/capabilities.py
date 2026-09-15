@@ -276,9 +276,14 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Imported file operations and proven pathlib receivers "
         "are traced "
         "locally with bounded expansion. Path construction alone is not a sink. "
+        "A same-file module-level helper declared exactly once and never rebound is "
+        "followed through one transition: its body is traced, and a single-return "
+        "helper's value is read as the call's. Helpers from other files, nested defs, "
+        "decorated or rebound names, coroutines, generators, unpacked or assignment-expression "
+        "arguments, keyword-only parameters and second hops remain opaque. "
         "Containment recognizes imported secure_filename results and a resolved Path "
         "checked against a fixed absolute base on the branch reaching the operation. "
-        "Unknown helpers, general control-flow joins, other validation patterns, "
+        "General control-flow joins, other validation patterns, "
         "runtime symlinks and TS/JS file handling are NOT covered",
     ),
     Capability(

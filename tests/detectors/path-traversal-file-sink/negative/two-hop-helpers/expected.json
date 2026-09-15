@@ -1,0 +1,7 @@
+{
+  "description": "One transition, no call graph: outer resolves to a call of inner, and inner is a second hop the trace does not take. The corpus positive helper-returns-the-joined-path pins the single hop that IS followed.",
+  "expect": [],
+  "forbid": [
+    "path-traversal-file-sink"
+  ]
+}
