@@ -124,7 +124,7 @@ than inventing coverage.
 
 ## Local offline protection
 
-From an installed checkout, `drydock-local scan /path/to/project` checks a folder
+The standalone install bundle provides `drydock-local scan /path/to/project` to check a folder
 with the shared static engine and local npm/PyPI CVE/GHSA catalog. `watch` observes
 source/catalog changes; `history` shows local scan summaries. No server, database
 service, LLM or network is needed for scanning. Catalog updates are explicit and

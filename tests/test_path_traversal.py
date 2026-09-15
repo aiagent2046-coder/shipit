@@ -57,7 +57,7 @@ def test_a_path_built_from_caller_input_is_a_high_severity_signal():
     assert f["category"] == "Security"
     assert f["source"] == "static"
     assert f["verification_status"] == "unverified"
-    assert "traced only inside this function" in f["explanation"]
+    assert "at most one eligible same-file helper" in f["explanation"]
 
 
 @pytest.mark.parametrize("source", [
@@ -434,3 +434,95 @@ def test_path_expansion_is_bounded_before_allocation_in_the_real_static_pipeline
         assert max(slots for _, slots in seen) == _MAX_SLOTS
     else:
         assert max(size for size, _ in seen) > _MAX_TEMPLATE_BYTES // 4
+
+
+@pytest.mark.parametrize(("helper", "body", "expected"), [
+    # All arguments are read before any same-named parameter is bound.
+    ('def h(name, value):\n    return os.path.join("/srv", value)\n',
+     '    return open(h("safe", name)).read()', 1),
+    ('def h(safe, value):\n    return os.path.join("/srv", value)\n',
+     '    safe="safe"\n    return open(h(name, safe)).read()', 0),
+    # Free globals/imports belong to the helper's module, not the handler.
+    ('name="safe"\ndef h(value):\n    return os.path.join("/srv", name)\n',
+     '    return open(h(name)).read()', 0),
+    ('def h(value):\n    return os.path.join("/srv", value)\n',
+     '    os=None\n    return open(h(name)).read()', 1),
+    # Defaults are frozen at definition time, even if the module name changes.
+    ('name="safe"\ndef h(value, filename=name):\n    return os.path.join("/srv", filename)\n'
+     'name=unresolved\n', '    return open(h(name)).read()', 0),
+    ('def h(value, filename="safe"):\n    return os.path.join("/srv", filename)\n',
+     '    return open(h("safe", filename=name)).read()', 1),
+    # A local store shadows builtins throughout the helper, including before it.
+    ('def h(value):\n    open(value)\n    open=unknown\n', '    return h(name)', 0),
+    ('def h(value):\n    open(value)\n', '    return h(name)', 1),
+    # A coroutine/generator call does not execute the filesystem operation.
+    ('async def h(value):\n    return open(value).read()\n', '    return h(name)', 0),
+    ('def h(value):\n    yield open(value).read()\n', '    return h(name)', 0),
+    # Positional-only parameters cannot be filled with keywords.
+    ('def h(value, /):\n    return os.path.join("/srv", value)\n',
+     '    return open(h(value=name)).read()', 0),
+    ('def h(value, /):\n    return os.path.join("/srv", value)\n',
+     '    return open(h(name)).read()', 1),
+    # A global declaration means the callable may be replaced at request time.
+    ('def h(value):\n    return os.path.join("/srv", value)\n'
+     'def replace():\n    global h\n    h=other\n',
+     '    return open(h(name)).read()', 0),
+])
+def test_helper_calls_preserve_python_scope_and_argument_binding(helper, body, expected):
+    source = ('from fastapi import APIRouter\nimport os\nrouter=APIRouter()\n'
+              + helper + '\n@router.get("/x")\nasync def route(name: str):\n' + body + '\n')
+    assert len(scan_path_traversal(archive(source))) == expected
+
+
+def test_helper_return_expansion_obeys_the_file_budget(monkeypatch):
+    from app.scan import path_traversal as detector
+    monkeypatch.setattr(detector, "_MAX_HELPER_RESOLUTIONS", 1)
+    source = HELPER_SOURCE.replace(
+        '    return open(get_file_path(name)).read()',
+        '    open(get_file_path(name)).read()\n    open(get_file_path(name)).read()')
+    coverage = {}
+    assert len(scan_path_traversal(archive(source), coverage=coverage)) == 1
+    assert coverage["skip_reasons"]["analysis_limit"] == 1
+
+
+@pytest.mark.parametrize("sink", ['open(identity(p)).read()', 'q = identity(p)\n    q.read_text()',
+                                  'read_path(p)'])
+def test_helper_identity_preserves_resolved_containment(sink):
+    source = ('from fastapi import APIRouter\nfrom pathlib import Path\nrouter=APIRouter()\n'
+              'BASE="/srv/uploads"\ndef identity(path):\n    return path\n'
+              'def read_path(path):\n    return path.read_text()\n'
+              '@router.get("/x")\nasync def route(name: str):\n'
+              '    p=(Path(BASE)/name).resolve()\n'
+              '    if not p.is_relative_to(BASE):\n        raise ValueError()\n    '
+              + sink + '\n')
+    assert scan_path_traversal(archive(source)) == []
+    unsafe = source.replace('    if not p.is_relative_to(BASE):\n        raise ValueError()\n', '')
+    assert len(scan_path_traversal(archive(unsafe))) == 1
+
+
+def test_helper_global_import_rebinding_is_unresolved():
+    source = HELPER_SOURCE.replace('    return open(get_file_path(name)).read()',
+                                  '    global os\n    os = wrapper\n'
+                                  '    return open(get_file_path(name)).read()')
+    assert scan_path_traversal(archive(source)) == []
+
+
+
+def test_nested_route_cannot_resolve_a_shadowing_local_helper_as_the_module_helper():
+    source = HELPER_SOURCE[:HELPER_SOURCE.index('@router.get')] + (
+        'def register():\n'
+        '    def get_file_path(value):\n        return "safe"\n'
+        '    @router.get("/nested")\n'
+        '    async def nested(name: str):\n'
+        '        return open(get_file_path(name)).read()\n')
+    assert scan_path_traversal(archive(source)) == []
+    assert len(scan_path_traversal(archive(source.replace(
+        '    def get_file_path(value):\n        return "safe"\n', '')))) == 1
+
+
+
+def test_helper_arguments_with_assignment_expressions_remain_unresolved():
+    source = HELPER_SOURCE.replace('def get_file_path(name):', 'def get_file_path(ignored, name):')
+    source = source.replace('get_file_path(name)', 'get_file_path((name := "safe"), name)')
+    assert scan_path_traversal(archive(source)) == []
+    assert len(scan_path_traversal(archive(source.replace('(name := "safe")', '"safe"')))) == 1
