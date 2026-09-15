@@ -347,3 +347,26 @@ def test_a_leading_underscore_helper_is_not_a_read_witness():
     endpoint into a finding against the product's zero-finding invariant."""
     source = CAMEL_SIBLING.replace("getAuthorized", "_require_bearer_token")
     assert scan_auth_read(archive(source)) == []
+
+
+def test_unicode_dependency_name_does_not_lose_its_unknown_guard():
+    source = '''from fastapi import APIRouter, Depends
+from app.security import get_current_user
+from app.storage import repository
+router = APIRouter()
+def get授权Repo(user=Depends(get_current_user)):
+    return repository.for_user(user)
+@router.get("/items/{item_id}")
+def detail(item_id, repo=Depends(get授权Repo)):
+    return repo.get_authorized(item_id)
+@router.get("/items/{item_id}/status")
+def status(item_id, repo=Depends(get授权Repo)):
+    return repo.get(item_id)
+'''
+    # The dependency authorizes both routes. Its unrecognized name must not
+    # turn into the recognized storage name getRepo by dropping Unicode.
+    assert scan_auth_read(archive(source)) == []
+    unguarded = (source.replace("get授权Repo", "getAuditRepo")
+                 .replace("user=Depends(get_current_user)", "")
+                 .replace("repository.for_user(user)", "repository"))
+    assert len(scan_auth_read(archive(unguarded))) == 1

@@ -33,6 +33,12 @@ _CAMEL_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
 
 
 def _words(name: str) -> list[str]:
+    # The ASCII camel-case expression must not erase parts of valid Unicode
+    # identifiers: get授权Repo would otherwise become get/repo, and
+    # не_authorize would invent an authorize guard. Preserve the previous
+    # underscore vocabulary for identifiers this expression cannot read.
+    if not name.isascii():
+        return [token for token in name.lower().split("_") if token]
     return [token.lower() for token in _CAMEL_RE.findall(name) if token]
 
 

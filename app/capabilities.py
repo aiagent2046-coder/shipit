@@ -161,8 +161,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Local FastAPI routes in parseable Python files up to 2 MB; "
         "object lookups compared with protected reads on the same router and repository binding, "
         "including recognized identity dependencies and imported aliases; "
-        "dependency, guard and witness names are decomposed through camelCase humps, "
-        "so getAuthorized reads as get_authorized; "
+        "ASCII dependency, guard and witness names are decomposed through camelCase humps, "
+        "so getAuthorized reads as get_authorized; non-ASCII name parts are preserved; "
         "test/vendor files excluded; middleware and runtime access not resolved",
     ),
     Capability(
