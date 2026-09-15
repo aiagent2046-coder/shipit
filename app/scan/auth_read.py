@@ -95,10 +95,10 @@ def _name(node: ast.AST) -> str:
 # always takes precedence. Unknown suppresses a target finding, but cannot
 # establish that a sibling has an identity check.
 _IDENTITY_WORDS = frozenset({
-    "auth", "authenticated", "authorization", "authorize", "authorized", "claims",
-    "current", "identity", "permission", "permissions", "principal", "require",
-    "required", "requires", "role", "roles", "scope", "scopes", "token", "verify",
-    "verified",
+    "auth", "authenticated", "authenticate", "authentication", "authorization",
+    "authorize", "authorized", "claims", "current", "identity", "permission",
+    "permissions", "principal", "require", "required", "requires", "role",
+    "roles", "scope", "scopes", "token", "verify", "verified",
 })
 _STORAGE_HEADS = frozenset({
     "build", "connect", "create", "db", "fetch", "get", "load", "make", "new",
@@ -131,6 +131,17 @@ _PERSON_NOUNS = frozenset({
     "account", "actor", "admin", "agent", "customer", "member", "operator",
     "owner", "person", "staff", "subscriber", "user", "users",
 })
+# A verification head before a person noun is an identity check. Measured in
+# hunt round 2, on the write side of the shared classifier: guarded siblings
+# spelled their identity dependencies exactly this way -- check_admin,
+# validate_admin, check_operator, authenticate -- and the disagreement went
+# unread because `authenticate` was missing from the identity words and the
+# person-noun rule required a STORAGE head (get_admin read, check_admin did
+# not). The tail must still be a PERSON noun: check_user_session stays
+# unknown because `session` names storage too, and validate_access stays
+# unknown because `access` plays both roles -- a tail both roles wear is not
+# evidence of either.
+_VERIFY_HEADS = frozenset({"check", "confirm", "validate", "verify"})
 
 
 def _dependency_role(dependency: str) -> str:
@@ -139,8 +150,8 @@ def _dependency_role(dependency: str) -> str:
         return "unknown"
     if _IDENTITY_WORDS & set(tokens):
         return "identity"
-    if tokens[0] in _STORAGE_HEADS and tokens[-1] in _PERSON_NOUNS:
-        return "identity"  # get_admin, get_acting_user, resolve_actor
+    if tokens[-1] in _PERSON_NOUNS and tokens[0] in _STORAGE_HEADS | _VERIFY_HEADS:
+        return "identity"  # get_admin, get_acting_user, resolve_actor, check_operator
     # A plural tail is the same tail: the hunt produced manage_services and
     # fetch_notes_collection(s), and refusing to read the plural lost them.
     tail = tokens[-1][:-1] if tokens[-1].endswith("s") and tokens[-1][:-1] in _STORAGE_TAILS else tokens[-1]
