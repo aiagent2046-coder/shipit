@@ -19,6 +19,7 @@ import zipfile
 
 from app.ingest.validators import ArchiveValidationError
 from app.local_store import connect, default_state_dir, load_catalog, update_catalog
+from app.logging_config import configure_logging
 from app.scan.browser import ScanSession
 from app.scan.version import AUDIT_ENGINE_VERSION
 
@@ -204,6 +205,7 @@ def display(report: dict, as_json: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_logging()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", type=Path, default=default_state_dir())
     commands = parser.add_subparsers(dest="command", required=True)
