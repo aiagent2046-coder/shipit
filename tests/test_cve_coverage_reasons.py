@@ -31,7 +31,7 @@ def _lock():
     }})})
 
 
-def _cna(lower="0"):
+def _cna(lower="not-a-version"):
     return {"id": "CVE-2026-11525", "default_status": "unaffected", "versions": [
         {"version": lower, "lessThan": "6.26.0", "versionType": "semver", "status": "affected"},
     ]}
@@ -92,10 +92,10 @@ def test_unresolved_repeated_objects_are_distinguished_from_actual_conflict():
 
 
 @pytest.mark.parametrize(("ecosystem", "version", "introduced", "fixed"), [
-    ("PyPI", "6.0.3", "5.1b7", "5.3.1"),
+    ("PyPI", "6.0.3", "5.1.post1", "5.3.1"),
     ("npm", "16.3.4", "13.0", "14.2.30"),
 ])
-def test_unsupported_pilot_bounds_are_visible_and_never_guessed(ecosystem, version, introduced, fixed):
+def test_unsupported_bounds_are_visible_and_never_guessed(ecosystem, version, introduced, fixed):
     snapshot = _catalog([])
     entry = _ghsa(fixed)
     entry["osv_ranges"][0]["events"][0] = {"introduced": introduced}

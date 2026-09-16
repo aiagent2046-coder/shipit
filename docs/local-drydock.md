@@ -226,6 +226,13 @@ It must not be treated as an affected package or as proof of safety.
 it does not claim that sources disagree about affected versus unaffected.
 Raw reason codes and the individual source assessments remain in JSON.
 
+The shared matcher supports numeric PyPI releases and canonical `aN`, `bN`,
+`rcN` prereleases, such as the `5.1b7` boundary in the PyYAML advisory. Epochs,
+post/dev/local versions and other spellings remain unsupported. CVE range lower
+bound `"0"` denotes the earliest version, including prereleases before `0.0.0`;
+other incomplete npm versions such as `13.0` remain unknown. These comparisons
+preserve the source ranges and do not override disagreement between CVE and GHSA.
+
 Missing lockfiles remain coverage gaps. For example, a `pyproject.toml` that
 declares dynamic dependencies without a neighboring supported lockfile reports
 `dynamic_dependencies_without_lock`. The scanner does not execute the build to
