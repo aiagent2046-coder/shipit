@@ -44,7 +44,7 @@ export default function LandingPage() {
     <div className="mx-auto max-w-5xl px-4">
       {/* Hero — the one expressive marketing moment. Larger type is allowed
           here; interior pages stay capped. */}
-      <section className="pt-16 pb-12 sm:pt-24 sm:pb-16">
+      <section className="pt-12 pb-12 sm:pt-16 sm:pb-16">
         <div className="mx-auto max-w-3xl text-center">
           <span className="inline-block rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted">
             Your AI Production Engineer
@@ -59,15 +59,52 @@ export default function LandingPage() {
             real users — and tells you, in plain language, what would go wrong
             and what it costs you to leave it.
           </p>
+          <a
+            href="#example-report"
+            className="mt-4 inline-block text-sm font-medium text-accent underline underline-offset-4"
+          >
+            See a free example — no project needed
+          </a>
         </div>
 
         <div className="mx-auto mt-10 max-w-2xl">
           <AuditForm />
         </div>
 
-        <p className="mt-6 text-center text-sm text-muted">
-          Free, and no signup. Paste a public repository URL.
+        <p className="mt-5 text-center text-sm text-muted">
+          Free, no account, no card.
         </p>
+        <div className="mx-auto mt-5 max-w-2xl text-center">
+          <Link
+            href="/scanner/index.html"
+            className="text-sm font-medium text-accent underline underline-offset-4"
+          >
+            Scan a ZIP on your device — your code stays with you
+          </Link>
+          <p className="mt-2 text-sm text-muted">
+            Local static checks · ZIP up to 50 MiB · Initial download required.
+          </p>
+        </div>
+      </section>
+
+      <section
+        id="example-report"
+        tabIndex={-1}
+        aria-labelledby="example-report-title"
+        className="scroll-mt-6 border-t border-border pt-14 pb-16"
+      >
+        <div className="mb-6 text-center">
+          <h2 id="example-report-title" className="text-2xl font-semibold tracking-tight">
+            See what you get for free
+          </h2>
+          <p className="mx-auto mt-2 max-w-2xl text-muted">
+            See example findings, source references and suggested next steps.
+            This example shows static checks only. A free online audit also
+            includes a limited model preview when available; static results
+            remain available when it cannot run.
+          </p>
+        </div>
+        <DemoReport />
       </section>
 
       {/* The problem list. This is the "what does it actually solve" section
@@ -183,21 +220,6 @@ export default function LandingPage() {
             </Link>
           </p>
         </div>
-      </section>
-
-      {/* Instant demo — real-shaped sample report, zero interaction. */}
-      <section className="border-t border-border pt-14 pb-20">
-        <div className="mb-6 text-center">
-          <h2 className="text-2xl font-semibold tracking-tight">
-            See what you get
-          </h2>
-          <p className="mt-2 text-muted">
-            A sample report, rendered exactly as a real one is. This one is the
-            full review; both tiers show the source and verification limits
-            alongside each finding.
-          </p>
-        </div>
-        <DemoReport />
       </section>
     </div>
   );

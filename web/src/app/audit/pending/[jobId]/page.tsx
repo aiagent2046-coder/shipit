@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { AuditJobState, AuditJobStatus } from "@/lib/types";
 import { getAuditJob, ApiError } from "@/lib/api";
 import { Spinner } from "@/components/Spinner";
+import { CopyAuditLink } from "@/components/CopyAuditLink";
 
 // Faster than FixpackPurchase's 10s: a Fix Pack involves a human paying and
 // then a PR being opened, while an audit is typically done inside two minutes,
@@ -155,6 +156,7 @@ function PendingAuditPageInner() {
             Most audits finish in a couple of minutes. You can close this tab —
             the scan keeps running, and this link will show the result.
           </p>
+          <CopyAuditLink />
           <p className="mt-3 font-mono text-xs text-muted">job {jobId}</p>
         </div>
       )}
