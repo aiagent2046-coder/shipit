@@ -126,7 +126,11 @@ const CREDENTIAL_RULES = new Set(["connection-string-dev-password", "telegram-bo
 
 export function plainFields(finding: Finding): { what: string; risk: string; fix: string } {
   const rid = finding.rule_id || "";
-  const base = PLAIN[rid];
+  // The assignment pattern also matches application config and documentation;
+  // its internal rule name is not evidence of the source language.
+  const proseRule = rid === "sql-secret-assignment" && !/\.(sql|psql)$/i.test(finding.file || "")
+    ? "generic-assignment" : rid;
+  const base = PLAIN[proseRule];
   if (base && CREDENTIAL_RULES.has(rid)) {
     let { risk, fix } = base;
     if (isNonProductionFinding(finding)) {
