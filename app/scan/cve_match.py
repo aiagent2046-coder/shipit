@@ -16,9 +16,8 @@ import zlib
 from datetime import datetime
 
 from app.sca.lockfiles import (
-    collect_dependency_inventory, generated_dependency_path, normalize_pypi, _vendored,
+    collect_dependency_inventory, dependency_exclusion_reason, normalize_pypi,
 )
-from app.scan.secrets import is_non_production_path
 
 RULE_ID = "dependency-cve-match"
 MAX_ARCHIVE_BYTES = 50_000_000
@@ -392,11 +391,10 @@ def _archive_inventory(data: bytes):
             raise ValueError("duplicate_archive_members")
         # The shared parser uses a neighboring package.json for directness.
         if any(i.file_size > 2_000_000 and i.filename.rsplit("/", 1)[-1] == "package.json"
-               and not generated_dependency_path(i.filename) for i in members):
+               and not dependency_exclusion_reason(i.filename) for i in members):
             raise ValueError("manifest_size_limit")
         paths = {i.filename for i in members if not i.is_dir()
-                 and not is_non_production_path(i.filename) and not _vendored(i.filename)
-                 and not generated_dependency_path(i.filename)}
+                 and not dependency_exclusion_reason(i.filename)}
         gaps = {}
         gap_reasons = {}
         unsupported = {"yarn.lock", "Pipfile.lock",
@@ -528,10 +526,12 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                     reason = "evaluation_limit"
                 elif len(statuses) > 1:
                     source_keys = {source_key for _, _, source_key in group}
-                    reason = (
-                        "conflicting_advisory_sources" if len(source_keys) > 1
-                        else "conflicting_affected_objects"
-                    )
+                    if {"affected", "unaffected"} <= statuses:
+                        reason = ("conflicting_advisory_sources" if len(source_keys) > 1
+                                  else "conflicting_affected_objects")
+                    else:
+                        reason = ("incomplete_advisory_sources" if len(source_keys) > 1
+                                  else "incomplete_affected_objects")
                 else:
                     reason = next(
                         (assessment["reason"] for _, assessment, _ in group
@@ -564,6 +564,9 @@ def match_archive(data: bytes, catalog: dict) -> dict:
             evidence = {
                 "version": 1, "package": name, "ecosystem": dep.ecosystem,
                 "installed_version": dep.version, "manifest": dep.manifest,
+                "dependency_scope": ("development" if dep.development is True else
+                                     "runtime" if dep.development is False else "unknown"),
+                "direct": dep.direct, "dependency_groups": list(dep.dependency_groups),
                 "advisory_id": advisory_id, "advisory_ids": all_ids,
                 "url": _advisory_url(advisory_id), "snapshot": coverage["source"],
                 "snapshot_sources": [

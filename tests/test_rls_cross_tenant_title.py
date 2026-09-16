@@ -48,10 +48,11 @@ def test_rls_on_with_an_open_policy_is_named_as_cross_tenant():
     assert "readable with your public key" not in f.title
 
 
-def test_no_rls_at_all_keeps_the_original_wording():
+def test_no_rls_at_all_is_a_conditional_source_candidate():
     findings = scan_rls(_zip(PRIVATE))
     read = _read_findings(findings)
 
     assert read
-    assert "readable with your public key" in read[0].title
+    assert "Potential anonymous reads" in read[0].title
+    assert "without Row Level Security" in read[0].title
     assert "despite" not in read[0].title

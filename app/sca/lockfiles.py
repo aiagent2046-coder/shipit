@@ -39,7 +39,7 @@ MAX_DEPENDENCIES = 2000
 # the one at the repository root when both are present and the cap is reached.
 MAX_LOCKFILES = 6
 
-# Report generated manifests without letting a build tree inflate the report.
+# Report excluded manifests without letting vendor/build trees inflate output.
 MAX_EXCLUDED_MANIFESTS = 100
 
 _REQUIREMENT = re.compile(
@@ -99,6 +99,8 @@ class Dependency:
     # measured on this repository's own package-lock.json, 170 of 327 entries
     # carry dev: true, so the distinction is not a formality.
     development: bool | None = None
+    # Lockfile-declared development groups; no guess from package names.
+    dependency_groups: tuple[str, ...] = ()
 
 
 def normalize_pypi(name: str) -> str:
@@ -132,11 +134,29 @@ def generated_dependency_path(name: str) -> bool:
     return ".next" in name.split("/")[:-1]
 
 
+def dependency_exclusion_reason(name: str) -> str | None:
+    """Explain the existing inventory boundary before applying file budgets."""
+    if generated_dependency_path(name):
+        return "generated_next_build"
+    if _vendored(name):
+        return "vendored_dependency"
+    if is_non_production_path(name):
+        parts = {part.lower() for part in name.split("/")[:-1]}
+        if parts & {"example", "examples", "sample", "samples", "demo", "demos"}:
+            return "non_production_examples"
+        if parts & {"doc", "docs", "blog", "content", "posts", "articles"}:
+            return "non_production_documentation"
+        return "non_production_tests"
+    return None
+
+
 _DEPENDENCY_MANIFEST_NAMES = frozenset(OSV_ECOSYSTEM) | frozenset(_UNUSABLE) | {
     "package.json", "pyproject.toml", "Pipfile", "setup.py", "setup.cfg",
     "yarn.lock", "Pipfile.lock", "Cargo.lock", "Gemfile.lock", "composer.lock",
     "packages.lock.json",
 }
+
+_SCOPE_PRECEDENCE = {True: 0, None: 1, False: 2}
 
 
 def _depth(name: str) -> tuple[int, str]:
@@ -154,9 +174,7 @@ def find_lockfiles(archive: zipfile.ZipFile) -> list[str]:
         if info.is_dir():
             continue
         name = info.filename
-        if not _looks_like_lockfile(name) or is_non_production_path(name):
-            continue
-        if _vendored(name) or generated_dependency_path(name):
+        if not _looks_like_lockfile(name) or dependency_exclusion_reason(name):
             continue
         if info.file_size > MAX_LOCKFILE_BYTES:
             continue
@@ -223,7 +241,8 @@ def _json_dependencies(name: str, text: str, direct_names: set[str],
             out.append(Dependency("npm", package, version, name,
                                   direct=(location == f"node_modules/{installed_name}"
                                           and installed_name in direct_names),
-                                  development=entry.get("dev") is True))
+                                  development=_npm_development(entry),
+                                  dependency_groups=("devDependencies",) if entry.get("dev") is True else ()))
         return incomplete
     dependencies = data.get("dependencies")
     if not isinstance(dependencies, dict):
@@ -249,8 +268,15 @@ def _json_dependencies(name: str, text: str, direct_names: set[str],
             package, version = identity
             out.append(Dependency("npm", package, version, name,
                                   direct=root and installed_name in direct_names,
-                                  development=entry.get("dev") is True))
+                                  development=_npm_development(entry),
+                                  dependency_groups=("devDependencies",) if entry.get("dev") is True else ()))
     return incomplete
+
+
+def _npm_development(entry: dict) -> bool | None:
+    """Absent dev means runtime under npm's lock schema; invalid values don't."""
+    dev = entry.get("dev", False)
+    return dev if type(dev) is bool else None
 
 
 def _requirement_lines(name: str, text: str, out: list[Dependency]) -> str | None:
@@ -310,7 +336,8 @@ def _poetry_packages(name: str, text: str, out: list[Dependency]) -> str | None:
             continue
         category = entry.get("category")
         out.append(Dependency("PyPI", normalize_pypi(package), version, name,
-                              development=True if category == "dev" else None))
+                              development=True if category == "dev" else None,
+                              dependency_groups=("dev",) if category == "dev" else ()))
     return incomplete
 
 
@@ -357,13 +384,14 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
         selected = set(manifests)
         for info in archive.infolist():
             path = info.filename
-            if info.is_dir() or is_non_production_path(path) or _vendored(path):
+            if info.is_dir():
                 continue
-            if generated_dependency_path(path):
+            exclusion_reason = dependency_exclusion_reason(path)
+            if exclusion_reason:
                 if path.rsplit("/", 1)[-1] in _DEPENDENCY_MANIFEST_NAMES:
                     if path not in excluded:
                         if len(excluded) < MAX_EXCLUDED_MANIFESTS:
-                            excluded[path] = "generated_next_build"
+                            excluded[path] = exclusion_reason
                         else:
                             excluded_truncated += 1
                 continue
@@ -399,7 +427,9 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
         kept = unique.get(key)
         if kept is None:
             unique[key] = dependency
-        elif kept.development is True and dependency.development is False:
+        elif _SCOPE_PRECEDENCE[dependency.development] > _SCOPE_PRECEDENCE[kept.development]:
+            # A second unresolved occurrence prevents a development-only claim;
+            # a proven runtime occurrence takes precedence over both.
             unique[key] = dependency
     ordered = list(unique.values())
     return DependencyInventory(ordered[:MAX_DEPENDENCIES], manifests,

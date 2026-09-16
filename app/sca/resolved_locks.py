@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from dataclasses import replace
 
 import yaml
 
@@ -15,6 +16,7 @@ from app.sca.lockfiles import Dependency, _NPM_NAME, _NPM_VERSION, normalize_pyp
 MAX_YAML_NODES = 100_000
 MAX_YAML_DEPTH = 64
 MAX_UV_REFERENCE_CHECKS = 100_000
+MAX_UV_SCOPE_STEPS = 100_000
 _PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\Z")
 _PYPI_PIN = re.compile(r"[0-9][A-Za-z0-9.!+_-]*\Z")
 
@@ -182,22 +184,33 @@ def uv_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
     reason = None
     direct = set()
     known = {}
+    roots = [i for i, p in enumerate(packages)
+             if p.get("source") in ({"virtual": "."}, {"editable": "."})]
+    scope_complete = len(roots) == 1
+    indices = {id(p): i for i, p in enumerate(packages)}
+    edges: dict[int, set[int]] = {}
+    seeds: dict[str, set[int]] = {}
+    output_indices = {}
     remaining_checks = MAX_UV_REFERENCE_CHECKS
     for package in packages:
         name = package.get("name")
         if isinstance(name, str) and _PYPI_NAME.fullmatch(name):
             known.setdefault(normalize_pypi(name), []).append(package)
-    for package in packages:
+    for index, package in enumerate(packages):
         source = package.get("source")
         root = source in ({"virtual": "."}, {"editable": "."})
-        blocks = [package.get("dependencies", [])]
+        blocks = [("", package.get("dependencies", []))]
         for field in ("optional-dependencies", "dev-dependencies"):
             groups = package.get(field, {})
             if not isinstance(groups, dict):
                 reason = "unresolved"
                 continue
-            blocks.extend(groups.values())
-        for block in blocks:
+            if field == "dev-dependencies" and groups and not root:
+                # Dependency-local development groups are not a supported root.
+                scope_complete = False
+            blocks.extend((group if field == "dev-dependencies" else "", block)
+                          for group, block in groups.items())
+        for group, block in blocks:
             if remaining_checks < 0:
                 break
             if not isinstance(block, list):
@@ -218,6 +231,15 @@ def uv_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
                            and ("source" not in ref or p.get("source") == ref["source"])]
                 if not matches:
                     reason = "unresolved"
+                if len(matches) != 1:
+                    # Platform forks and underspecified references retain all
+                    # pins, but cannot prove that a package is development-only.
+                    scope_complete = False
+                targets = {indices[id(p)] for p in matches}
+                if root:
+                    seeds.setdefault(group, set()).update(targets)
+                else:
+                    edges.setdefault(index, set()).update(targets)
                 if root:
                     direct.update((name, p.get("version")) for p in matches
                                   if isinstance(p.get("version"), str))
@@ -232,10 +254,39 @@ def uv_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
                           {"registry": "https://pypi.org/simple/"}):
             reason = "unresolved"
             continue
+        output_indices[len(out)] = index
         out.append(Dependency("PyPI", normalize_pypi(name), version, manifest))
     # Directness comes from the locked root's references, never version ranges
-    # in pyproject.toml. No claim about selected extras/dev/platform is made.
-    for i, dep in enumerate(out):
-        if dep.manifest == manifest and (dep.name, dep.version) in direct:
-            out[i] = Dependency(dep.ecosystem, dep.name, dep.version, dep.manifest, direct=True)
+    # in pyproject.toml. Scope describes graph ownership, never a deployment's
+    # selected extras/platform. Unknown graph portions cannot prove dev-only.
+    scopes = (_uv_scopes(edges, seeds) if scope_complete and reason is None
+              and remaining_checks >= 0 else {})
+    for i, index in output_indices.items():
+        dep = out[i]
+        groups = scopes.get(index, set())
+        development = False if "" in groups else True if groups else None
+        out[i] = replace(dep, direct=(dep.name, dep.version) in direct,
+                         development=development,
+                         dependency_groups=tuple(sorted(group for group in groups if group)))
     return "parser_limit" if remaining_checks < 0 else reason
+
+
+def _uv_scopes(edges: dict[int, set[int]], seeds: dict[str, set[int]]) -> dict[int, set[str]]:
+    """Propagate root groups iteratively with a separate bounded work budget."""
+    pending = [(index, group) for group, indices in seeds.items() for index in indices]
+    scopes: dict[int, set[str]] = {}
+    work = len(pending)
+    if work > MAX_UV_SCOPE_STEPS:
+        return {}
+    while pending:
+        index, group = pending.pop()
+        reached = scopes.setdefault(index, set())
+        if group in reached:
+            continue
+        reached.add(group)
+        targets = edges.get(index, ())
+        work += len(targets)
+        if work > MAX_UV_SCOPE_STEPS:
+            return {}  # Partial reachability is insufficient for dev-only.
+        pending.extend((target, group) for target in targets)
+    return scopes

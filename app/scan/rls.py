@@ -23,6 +23,13 @@ anyone can rewrite is not a design. So the read rule carries a
 public-by-design exclusion and the write rule deliberately carries none. Only
 the read rule has a Fix Pack behind it — see _why_not_fixable in
 app/fixpack/generate.py for what the customer is told about the other.
+
+APPLICABILITY: only SQL in explicit supabase/migrations or supabase/schemas
+trees, or supabase/schema.sql. Each Supabase directory is a separate schema
+history. Generic SQL, PostgreSQL syntax, comments mentioning Supabase, and a
+Supabase client elsewhere do not establish anonymous grants for a table.
+Custom migration layouts and generic PostgREST deployments remain unresolved;
+silence outside this bounded scope is not evidence of correct authorization.
 """
 
 from __future__ import annotations
@@ -30,7 +37,7 @@ from __future__ import annotations
 import zipfile
 from typing import BinaryIO
 
-from app.scan.checks import CheckFinding
+from app.scan.checks import CheckFinding, archive_root
 from app.scan.sql_schema import Table, parse_schema
 
 RULE_ID = "rls-table-anon-readable"
@@ -171,40 +178,41 @@ def write_finding(table: Table, commands: frozenset[str], why: str,
         verbs = " and ".join(destructive).upper()
         return CheckFinding(
             rule_id=WRITE_RULE_ID,
-            title=f"Anyone can {destructive[0]} rows in `{table.name}`",
+            title=f"Potential anonymous {verbs} access to `{table.name}`",
             severity="critical",
             # Higher than the read rule's 0.6: that one has to guess whether
-            # the data is private, and this one does not. What remains
-            # uncertain is only whether the deployment matches the migrations.
+            # the data is private, and this one does not. Deployment state,
+            # API exposure and effective grants still require verification.
             confidence=0.75,
             category="Security",
             file=path,
             explanation=(
-                f"Your migrations leave `{table.name}` open to {verbs} by the "
-                f"anonymous key ({why}). That key ships to every visitor's "
-                f"browser, so anyone who opens your site can change or delete "
-                f"rows — including rows belonging to your other users.\n\n"
-                f"Supabase grants insert, update and delete to `anon` on a "
-                f"public table by default; Row Level Security is the only "
-                f"thing that takes them back.\n\n"
-                f"We read this from your repository, NOT from your database — "
-                f"the two often differ, so treat it as something to check."
+                f"Committed Supabase SQL suggests that `anon` could {verbs} "
+                f"rows in `{table.name}` ({why}). This requires the table to "
+                f"be exposed through the API, the corresponding role grants "
+                f"to apply, and the deployed schema to match these files. If "
+                f"those conditions hold, other users' rows may be changed or "
+                f"deleted.\n\n"
+                f"We read this from your repository, NOT from your database. "
+                f"API exposure, effective grants and actual access were not "
+                f"checked; treat this as a candidate to verify."
             ),
             fix_hint=(
-                f"Check it against your own project with a harmless write:\n"
-                f"    curl -X PATCH '<project-url>/rest/v1/{table.name}?id=eq.<some-id>' \\\n"
-                f"      -H 'apikey: <anon-key>' -H 'Content-Type: application/json' \\\n"
-                f"      -d '{{}}'\n"
-                f"Anything but a permission error means it is open. The fix is "
-                f"Row Level Security: with it enabled and no write policy, "
-                f"Postgres denies every write by default, which is what you "
-                f"want if this table is only written by your server."
+                f"Inspect the applied schema for `{table.name}`, API exposed "
+                f"schemas, effective `anon` grants and RLS policies. Verify "
+                f"access in a controlled test environment using disposable "
+                f"representative rows owned by different test users; do not "
+                f"probe writes against production rows. Check actual row "
+                f"changes: an HTTP success or empty response does not prove "
+                f"that a write was allowed. If access is unintended, revoke "
+                f"unneeded grants or enable RLS with policies that preserve "
+                f"legitimate application operations."
             ),
         )
 
     return CheckFinding(
         rule_id=WRITE_RULE_ID,
-        title=f"Anyone can add rows to `{table.name}`",
+        title=f"Potential anonymous inserts into `{table.name}`",
         # Deliberately not critical. A waitlist or a contact form is SUPPOSED
         # to accept anonymous inserts, and the customer knows which of their
         # tables those are.
@@ -213,20 +221,23 @@ def write_finding(table: Table, commands: frozenset[str], why: str,
         category="Security",
         file=path,
         explanation=(
-            f"`{table.name}` accepts rows from the anonymous key ({why}). If "
-            f"this is a signup, contact or feedback form, that is the intended "
-            f"design and the thing to check is rate limiting rather than "
-            f"access.\n\n"
-            f"If it is not, note that an unrestricted insert also lets someone "
-            f"write rows attributed to your other users, because nothing "
-            f"constrains what the new row may contain.\n\n"
-            f"Read from your repository, not from your database."
+            f"Committed Supabase SQL suggests that `anon` could add rows to "
+            f"`{table.name}` ({why}), if the API exposes this table, insert "
+            f"grants apply, and the deployed schema matches. For a signup, "
+            f"contact or feedback form, this may be the intended design. "
+            f"Otherwise, unrestricted inserts may allow rows attributed to "
+            f"other users.\n\n"
+            f"Read from your repository, not from your database. API exposure, "
+            f"effective grants, constraints and actual access were not checked."
         ),
         fix_hint=(
-            "If anonymous inserts are intended, a `WITH CHECK` on the policy "
-            "can still pin the columns a stranger may set. If they are not, "
-            "enabling Row Level Security without an insert policy denies them "
-            "outright."
+            "Inspect the applied schema, API exposure, effective `anon` grants "
+            "and insert policies. Check accepted column values with disposable "
+            "representative rows in a controlled test environment, not with "
+            "production writes. If anonymous inserts are intended, scope "
+            "`WITH CHECK` to permitted values and review rate limiting. "
+            "Otherwise, remove the unneeded grant or policy and verify that "
+            "legitimate application operations still work."
         ),
     )
 
@@ -252,20 +263,56 @@ def _migration_order(rel: str) -> tuple[str, str]:
     return (rel.rsplit("/", 1)[-1], rel)
 
 
-def read_committed_sql(fileobj: BinaryIO) -> tuple[str, list[str]]:
-    """Concatenated .sql from the archive, in migration order, plus its paths."""
+# archive_root detects a common first segment, which is ambiguous for a
+# rootless archive containing only one source directory. Never consume these
+# conventional content roots as if they were a GitHub export wrapper.
+_CONTENT_ROOTS = frozenset({
+    "supabase", "migrations", "schema", "schemas", "db", "database", "sql",
+    "app", "apps", "src", "source", "packages", "services", "examples",
+    "example", "tests", "test", "fixtures", "docs", "scripts", "backend",
+    "frontend", "server", "client", "lib", "public", "vendor", "node_modules",
+})
+
+
+def _committed_sql_files(fileobj: BinaryIO) -> list[tuple[str, str]]:
+    """Preserve rootless paths; remove only an inferred export wrapper."""
     kept: list[tuple[str, str]] = []
     with zipfile.ZipFile(fileobj) as zf:
+        root = archive_root(zf.namelist())
+        if root.rstrip("/").lower() in _CONTENT_ROOTS:
+            root = ""
         for info in zf.infolist():
             if info.is_dir() or not info.filename.lower().endswith(".sql"):
                 continue
-            rel = info.filename.split("/", 1)[-1]
+            rel = info.filename[len(root):] if root else info.filename
             if not any(h in rel.lower() for h in _SCHEMA_PATH_HINTS) \
                     and "/" in rel:
                 continue
             kept.append((rel, zf.read(info).decode("utf-8", errors="replace")))
     kept.sort(key=lambda pair: _migration_order(pair[0]))
+    return kept
+
+
+def read_committed_sql(fileobj: BinaryIO) -> tuple[str, list[str]]:
+    """All selected committed SQL in migration order, plus source paths.
+
+    This shared reader intentionally includes generic schemas for Fix Pack
+    and measurement callers. Only scan_rls applies the Supabase scope gate.
+    """
+    kept = _committed_sql_files(fileobj)
     return "\n".join(text for _, text in kept), [rel for rel, _ in kept]
+
+
+def _supabase_scope(path: str) -> str | None:
+    """A conventional Supabase SQL tree, never a repository-wide hint."""
+    parts = path.split("/")
+    for index in range(len(parts) - 2, -1, -1):
+        if parts[index] != "supabase":
+            continue
+        relative = parts[index + 1:]
+        if (len(relative) > 1 and relative[0] in {"migrations", "schemas"}) or relative == ["schema.sql"]:
+            return "/".join(parts[:index + 1])
+    return None
 
 
 def scan_rls(fileobj: BinaryIO) -> list[CheckFinding]:
@@ -277,20 +324,36 @@ def scan_rls(fileobj: BinaryIO) -> list[CheckFinding]:
     probe, which can actually answer it.
     """
     fileobj.seek(0)
-    sql, paths = read_committed_sql(fileobj)
-    if not sql.strip():
-        return []
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for path, text in _committed_sql_files(fileobj):
+        scope = _supabase_scope(path)
+        if scope is not None:
+            groups.setdefault(scope, []).append((path, text))
 
-    schema = parse_schema(sql)
-    path = paths[0] if paths else ""
     findings: list[CheckFinding] = []
+    for entries in groups.values():
+        # Independent Supabase applications can use the same table names.
+        # Their declarations and policy changes must never be concatenated.
+        schema = parse_schema("\n".join(text for _, text in entries))
+        paths: dict[str, str] = {}
+        for path, text in entries:
+            # A source containing an actual table declaration is an actionable
+            # location; the first SQL in the archive may belong to another table.
+            for name in parse_schema(text):
+                paths.setdefault(name, path)
+        findings.extend(_schema_findings(schema, paths))
+    return findings
 
-    for table in schema.values():
+
+def _schema_findings(schema: dict[str, Table], paths: dict[str, str]) -> list[CheckFinding]:
+    findings: list[CheckFinding] = []
+    for name, table in schema.items():
+        path = paths.get(name, "")
         commands, why_write = table.anon_can_write()
         if commands:
             findings.append(write_finding(table, commands, why_write, path))
 
-    for table in schema.values():
+    for name, table in schema.items():
         reported, why = table_is_reported(table)
         if not reported:
             continue
@@ -305,30 +368,30 @@ def scan_rls(fileobj: BinaryIO) -> list[CheckFinding]:
         # `why`, so the two never drift.
         cross_tenant = table.rls_enabled
         if cross_tenant:
-            title = (f"Table `{table.name}` is open to everyone despite "
+            title = (f"Potential anonymous reads of `{table.name}` despite "
                      f"Row Level Security")
             explanation = (
-                f"`{table.name}` has Row Level Security enabled, but a read "
-                f"policy makes it readable by everyone ({why}). The policy is "
-                f"on, so this is easy to mistake for protected — but it does "
-                f"not scope rows to their owner, so the anonymous key (and any "
-                f"signed-in user) can read EVERY row, not just their own. That "
-                f"is a cross-tenant leak: one user's data is visible to "
-                f"another.\n\n"
-                f"We read this from your repository, NOT from your database — "
-                f"the two often differ, so treat it as something to check "
-                f"rather than something we observed."
+                f"Committed Supabase SQL enables Row Level Security for "
+                f"`{table.name}`, but contains a permissive read policy "
+                f"({why}). If the API exposes this table, SELECT grants apply "
+                f"and the deployed schema matches, `anon` could read rows "
+                f"belonging to other users: a potential cross-tenant leak. "
+                f"Other policies and deployment controls may change access.\n\n"
+                f"We read this from your repository, NOT from your database. "
+                f"API exposure, effective grants and actual access were not "
+                f"checked; treat this as a candidate to verify."
             )
         else:
-            title = f"Table `{table.name}` is readable with your public key"
+            title = (f"Potential anonymous reads of `{table.name}` without "
+                     f"Row Level Security")
             explanation = (
-                f"Your migrations define `{table.name}` and leave it readable "
-                f"by the anonymous key ({why}). That key ships to every "
-                f"visitor's browser by design, so anyone who opens your site "
-                f"can request the whole table.\n\n"
-                f"We read this from your repository, NOT from your database — "
-                f"the two often differ, so treat it as something to check "
-                f"rather than something we observed."
+                f"Committed Supabase SQL defines `{table.name}` without "
+                f"observed Row Level Security ({why}). If the API exposes "
+                f"this table, SELECT grants apply and the deployed schema "
+                f"matches, `anon` could read private rows.\n\n"
+                f"We read this from your repository, NOT from your database. "
+                f"API exposure, effective grants and actual access were not "
+                f"checked; treat this as a candidate to verify."
             )
         findings.append(CheckFinding(
             rule_id=RULE_ID,
@@ -340,16 +403,18 @@ def scan_rls(fileobj: BinaryIO) -> list[CheckFinding]:
             # not the database, and the number has to say so.
             confidence=0.6,
             category="Security",
-            file=paths[0] if paths else "",
+            file=paths.get(name, ""),
             explanation=explanation,
             fix_hint=(
-                f"Confirm it in one request against your own project:\n"
-                f"    curl '<project-url>/rest/v1/{table.name}?select=*&limit=3' "
-                f"-H 'apikey: <anon-key>'\n"
-                f"Rows coming back means it is open. The fix is Row Level "
-                f"Security with a policy scoped the way your other tables "
-                f"already scope theirs — enabling RLS *without* a policy "
-                f"closes the table to your application too."
+                f"Inspect the applied schema for `{table.name}`, API exposed "
+                f"schemas, effective `anon` SELECT grants and RLS policies. "
+                f"In a controlled test environment, compare anonymous and "
+                f"authenticated reads using known representative rows owned "
+                f"by different test users. An empty result alone does not "
+                f"prove access is denied. If unintended access is confirmed, "
+                f"remove unneeded grants or scope policies to the owner. "
+                f"Enabling RLS without a policy may also block legitimate "
+                f"application access; verify those operations before rollout."
             ),
         ))
     return findings

@@ -265,6 +265,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # Identity is shared with the offline browser entry in app.scan.version.
 # 2026-09-16-1: ignore generated Next.js dependency manifests, with explicit
 #               exclusion accounting; explain unknown advisory and manifest gaps.
+# 2026-09-16-2: RLS candidates require independent explicit Supabase histories;
+#               dependency evidence carries bounded dev/runtime scope and separates
+#               incomplete advisory sources from opposing verdicts. Local report
+#               groups dependency tasks and contextual findings; env fixtures retain
+#               path context without lowering credential severity.
 
 # 2026-09-09-18: success-copy vocabulary widened past six exact phrases, with
 #               negation excluded -- react_async_context is part of the prompt

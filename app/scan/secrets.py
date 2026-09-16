@@ -1059,6 +1059,10 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
     definition of "what a finding is" (the Fix Pack relocation path must
     reproduce the exact rule_id/context the audit persisted)."""
     severity, confidence, title = rule.severity, rule.confidence, rule.title
+    if rule.id == "sql-secret-assignment" and not name.lower().endswith((".sql", ".psql")):
+        # This assignment pattern also matches Python config and documentation.
+        # The pattern's internal name is not evidence of the source language.
+        title = "Hardcoded credential assignment"
     if rule.id == "jwt-in-code":
         severity, confidence, title = _jwt_severity(matched)
     elif rule.id == "connection-string-password":

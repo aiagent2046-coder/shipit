@@ -109,10 +109,13 @@ def test_the_finding_says_it_read_the_repository_not_the_database() -> None:
     assert "check" in text
 
 
-def test_the_fix_hint_gives_the_one_request_that_settles_it() -> None:
+def test_the_fix_hint_requires_applied_permissions_and_representative_rows() -> None:
     finding = reads(EXPOSED)[0]
-    assert "curl" in finding.fix_hint
-    assert "/rest/v1/users" in finding.fix_hint
+    assert "applied schema" in finding.fix_hint
+    assert "grants" in finding.fix_hint
+    assert "representative rows" in finding.fix_hint
+    assert "controlled test environment" in finding.fix_hint
+    assert "empty result alone does not prove" in finding.fix_hint
 
 
 def test_the_fix_hint_warns_that_rls_alone_closes_the_app_out() -> None:
@@ -169,7 +172,7 @@ def test_insert_only_is_not_critical_and_says_a_form_may_be_intended() -> None:
           for insert with check (true);
     """})[0]
     assert finding.severity == "medium"
-    assert "add rows" in finding.title
+    assert "Potential anonymous inserts" in finding.title
     assert "intended design" in finding.explanation
 
 
@@ -311,3 +314,27 @@ def test_read_and_write_findings_about_one_table_both_survive() -> None:
     rule_ids = [f["rule_id"] for f in run_static_scan(make_zip(EXPOSED))["findings"]]
     assert RULE_ID in rule_ids
     assert WRITE_RULE_ID in rule_ids
+
+
+def test_source_candidates_do_not_claim_proven_access_or_offer_live_write_probes() -> None:
+    findings = reads(EXPOSED) + writes(EXPOSED)
+    findings += reads({"supabase/schema.sql": """
+        create table public.users (id uuid primary key, email text);
+        alter table public.users enable row level security;
+        create policy p on public.users for select using (true);
+    """})
+    findings += writes({"supabase/schema.sql": """
+        create table public.waitlist (id uuid primary key, email text);
+        alter table public.waitlist enable row level security;
+        create policy p on public.waitlist for insert with check (true);
+    """})
+    assert len(findings) == 4
+    for finding in findings:
+        assert finding.title.startswith("Potential anonymous")
+        assert "not from your database" in finding.explanation.lower()
+        assert "grants" in finding.explanation
+        assert "actual access were not checked" in finding.explanation
+        assert "controlled test environment" in finding.fix_hint
+        assert "curl" not in finding.fix_hint
+        assert "Anything but a permission error" not in finding.fix_hint
+        assert "ships to every visitor" not in finding.explanation

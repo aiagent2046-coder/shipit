@@ -16,6 +16,7 @@ from typing import BinaryIO
 from app.scan.gitignore import ArchiveGitIgnore
 from app.scan.secrets import (
     RULES,
+    damp_for_non_production_path,
     is_env_template_name,
     value_has_placeholder_marker,
 )
@@ -348,12 +349,16 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     findings: list[CheckFinding] = []
     for path, body in env_bodies.items():
         exposed = env_file_holds_credentials(body)
+        # Reuse the established path vocabulary, but keep presence-check
+        # severity unchanged: a test directory cannot make a real key safe.
+        _, _, path_context = damp_for_non_production_path(path, "medium", 0.6)
         public = len(body.encode("utf-8")) <= _MAX_ENV_BYTES and env_file_is_public_configuration(body)
         command = "git rm --cached -- " + shlex.quote(path)
         if exposed:
             finding = CheckFinding(
                 "env-file-committed", "Credential-like value in an environment file",
                 severity="critical", confidence=0.9, category="Security", file=path,
+                context=path_context,
                 explanation=(f"{path} is included in the archive and contains a credential-like value. "
                              "Static matching does not establish whether the value is live. "
                              "If it is a real credential in published source, anyone with source access "
@@ -378,6 +383,7 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
             finding = CheckFinding(
                 "env-file-committed", "Environment configuration included in the archive",
                 severity="medium", confidence=0.6, category="Security", file=path,
+                context=path_context,
                 explanation=(f"{path} is included in the archive. No credential-like value was "
                              "recognized in the inspected content (at most 64 KiB); this does not "
                              "establish that all values are public or that Git history is free of secrets."),
