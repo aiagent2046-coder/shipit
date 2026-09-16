@@ -5,12 +5,20 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      release_tag:
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: local-package-${{ github.ref }}
+  group: local-package-${{ github.workflow }}-${{ github.ref }}-${{ inputs.source_sha }}-${{ inputs.release_tag }}
   cancel-in-progress: true
 
 jobs:
@@ -19,15 +27,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
-        python: ['3.12']
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+            python: '3.12'
+          - os: macos-14
+            platform: macos-arm64
+            python: '3.12'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     defaults:
       run:
         shell: bash
+        working-directory: source
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          path: source
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
@@ -42,9 +60,37 @@ jobs:
           python scripts/build_local_package.py --out "$RUNNER_TEMP/drydock-bundle" --wheelhouse
           PYTHONPATH=. python scripts/verify_local_package.py \
             --module app --write-reference "$RUNNER_TEMP/source-reference.json"
-      - name: Install into a fresh environment using only bundled wheels
+      # Release tooling comes from this reviewed workflow revision, allowing an
+      # existing production tag to be packaged without changing its engine.
+      - uses: actions/checkout@v7
+        if: inputs.source_sha != ''
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+          persist-credentials: false
+      - name: Create checksummed installation archive
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PLATFORM: ${{ matrix.platform }}
+          PYTHON_MINOR: ${{ matrix.python }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          PYTHON="$(command -v python)" bash "$RUNNER_TEMP/drydock-bundle/install.sh" "$RUNNER_TEMP/drydock-installed"
+          script=scripts/archive_local_package.py
+          if [[ -n "$SOURCE_SHA" ]]; then
+            script=../release-tools/scripts/archive_local_package.py
+          fi
+          bundle_name="drydock-local-${RELEASE_TAG:-ci}-$PLATFORM-py$PYTHON_MINOR"
+          python "$script" --bundle "$RUNNER_TEMP/drydock-bundle" \
+            --out "$RUNNER_TEMP/release-assets" --name "$bundle_name" \
+            --revision "$(git rev-parse HEAD)"
+          echo "BUNDLE_NAME=$bundle_name" >> "$GITHUB_ENV"
+      - name: Install from the archive using only bundled wheels
+        run: |
+          cd "$RUNNER_TEMP/release-assets"
+          shasum -a 256 -c "$BUNDLE_NAME.tar.gz.sha256"
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -xzf "$BUNDLE_NAME.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          PYTHON="$(command -v python)" bash "$RUNNER_TEMP/unpacked/$BUNDLE_NAME/install.sh" "$RUNNER_TEMP/drydock-installed"
       - name: Verify installed entry point, offline checks and exact source parity
         run: |
           "$RUNNER_TEMP/drydock-installed/bin/python" -I scripts/verify_local_package.py \
@@ -66,3 +112,10 @@ jobs:
             ${{ runner.temp }}/drydock-bundle/README.md
             ${{ runner.temp }}/drydock-bundle/build-info.json
             ${{ runner.temp }}/drydock-bundle/drydock-local-source.tar.gz
+      - name: Keep verified release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: drydock-release-${{ matrix.platform }}-py${{ matrix.python }}
+          retention-days: 30
+          if-no-files-found: error
+          path: ${{ runner.temp }}/release-assets/*

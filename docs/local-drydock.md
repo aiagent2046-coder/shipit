@@ -12,11 +12,33 @@ detectors and the CVE/GHSA snapshot. It does not install Shipit's server stack.
 
 ## Install a reviewed build
 
-The `local-package` GitHub Actions workflow produces an install bundle for each
-tested OS/architecture/Python combination. Open a successful run on the reviewed
-commit, download its `drydock-local-...` artifact and extract it. These are CI
-artifacts with retention limits, not a published PyPI package or permanent release
-channel. Do not install an unrelated package from PyPI by guessing the name.
+Permanent installation archives are published in
+[GitHub Releases](https://github.com/aiagent2046-coder/shipit/releases) after the
+`release-local` workflow verifies both platforms. Use a release that actually
+lists the installation assets; creating a Git tag alone does not publish them.
+A typical name is `drydock-local-v2026.09.16-1-linux-x86_64-py3.12.tar.gz`, with
+a matching `.tar.gz.sha256` file. Download both files for the selected platform.
+There is no published PyPI package: do not guess the package name on PyPI.
+
+In the download directory, verify before extracting (substitute the selected
+release tag):
+
+```bash
+bundle=drydock-local-v2026.09.16-1-linux-x86_64-py3.12
+sha256sum -c "$bundle.tar.gz.sha256"
+tar -xzf "$bundle.tar.gz"
+cd "$bundle"
+```
+
+On macOS use the `macos-arm64` bundle and `shasum -a 256 -c` instead of
+`sha256sum -c`. Checksums detect corruption, not publisher identity; obtain both
+files from the official release. A failed checksum means do not extract/install.
+
+Successful `local-package` Actions runs also keep the unpacked install bundles
+for 30 days for review/pilots. Those temporary artifacts have names such as
+`drydock-local-Linux-X64-py3.12`; extract the downloaded ZIP before running
+`install.sh`. Permanent release archives additionally get tested *after*
+checksumming and extraction, using their own included installer and wheels.
 
 Choose the bundle matching your OS, CPU architecture and Python minor version.
 The first CI matrix covers Linux x86_64 and macOS arm64 with Python 3.12.
@@ -81,12 +103,72 @@ engine version are separate: packaging changes do not claim new detector logic.
 
 The same build identity is installed at
 `drydock_local/build-info.json`. Source hashes and wheel hashes are provenance
-and integrity records, not digital signatures. Public release publication and
-signed automatic updates are separate steps.
+and integrity records, not digital signatures. Signed automatic catalog updates
+are a separate milestone.
 
 The original developer checkout also continues to support
 `python -m app.local_cli`; the standalone wheel supports
 `python -m drydock_local.local_cli`. Both use the same engine and state format.
+
+## Publish installation archives (maintainers)
+
+After this workflow is merged to `main`, an existing reviewed production tag can
+be packaged without a new server deployment:
+
+```bash
+gh workflow run release-local.yml --repo aiagent2046-coder/shipit \
+  --ref main -f tag=v2026.09.16-1
+```
+
+The manual workflow only runs from `main`. It resolves the existing tag, requires
+its commit to be on `main`, and builds that exact SHA using the same Linux/macOS
+acceptance workflow as pull requests. The release archiver comes from the
+workflow revision, so tags created before publication tooling existed can still
+be packaged. The engine and bundled catalog come from the selected tag.
+
+Both archives must pass fresh offline installation, source parity, scan/watch/
+history and source-archive rebuild checks. Only the final publish job gets
+`contents: write`. It rechecks tag identity, verifies both archive checksums,
+creates a draft with all four assets, then publishes it. No deployment is
+triggered. Existing releases/assets are not overwritten. If upload fails, inspect
+the remaining draft before retrying; this workflow intentionally does not delete
+or replace it automatically. A build failure creates no release.
+
+GitHub CLI publication behavior:
+[release create](https://cli.github.com/manual/gh_release_create) and
+[release edit](https://cli.github.com/manual/gh_release_edit).
+
+## Ubuntu pilot using the deployed build
+
+The first pilot uses the verified Linux x86_64 / Python 3.12 artifact from
+[run 34969279185](https://github.com/aiagent2046-coder/shipit/actions/runs/34969279185),
+source `338adce5e1ab2f8233807a252014d2a7eca69a69` (`v2026.09.16-1`).
+Until the permanent release is published, download it with an authenticated `gh`:
+
+```bash
+pilot_dir="$(mktemp -d "$HOME/drydock-pilot.XXXXXX")"
+printf 'Pilot directory: %s\n' "$pilot_dir"
+gh run download 34969279185 --repo aiagent2046-coder/shipit \
+  --name drydock-local-Linux-X64-py3.12 --dir "$pilot_dir"
+PYTHON=python3.12 bash "$pilot_dir/install.sh" "$pilot_dir/venv"
+"$pilot_dir/venv/bin/drydock-local" --help
+"$pilot_dir/venv/bin/drydock-local" scan "$HOME/shipit"
+"$pilot_dir/venv/bin/drydock-local" history "$HOME/shipit"
+```
+
+Run these on the workstation where the project lives. Use an existing project
+path if it differs from `~/shipit`. Python 3.12 and its venv support must already
+be installed; Ubuntu 24.04 x86_64 is the Linux CI baseline. Keep the printed
+`pilot_dir` path to run the same installation again. A scan exit 2 means partial
+coverage or a processing problem; inspect the report rather than treating it as
+an installation failure or a clean project.
+
+For the pilot record elapsed scan time, finding usefulness, skipped checks and
+whether the report is understandable. Disconnect the network and repeat scan
+and history; compare engine/catalog identities. Start `watch` in the foreground,
+make an ordinary source edit and confirm that one new scan appears; stop with
+Ctrl-C. Reports and source stay on the workstation. Share a redacted summary,
+not source files or secrets. Do not run `update` during the offline check.
 
 ## Scan, watch, history
 
