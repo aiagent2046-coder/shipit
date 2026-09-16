@@ -92,6 +92,11 @@ pins/hashes come from the reviewed `requirements.txt`. `--wheelhouse` downloads
 binary dependencies for the current platform; without it, only the Drydock wheel
 is built and the directory is not a complete offline installer.
 
+`local/pyproject.toml.in` is a build template, not a standalone Python project.
+Staging writes it as `source/pyproject.toml` alongside the package sources,
+`dependencies.txt` and a hash-locked `requirements.txt`. The four runtime pins
+come from the root lockfile, which also covers them when scanning this repository.
+
 The build stages only the offline import closure from `app`, rewrites internal
 import sites into `drydock_local`, and builds through standard setuptools.
 Evidence strings and the pinned update URL are preserved. New server imports or
@@ -221,9 +226,8 @@ It must not be treated as an affected package or as proof of safety.
 it does not claim that sources disagree about affected versus unaffected.
 Raw reason codes and the individual source assessments remain in JSON.
 
-Missing lockfiles remain coverage gaps. For example, `local/pyproject.toml` in
-this repository declares dynamic dependencies that are filled in at build time;
-without a neighboring supported lockfile its reason is
+Missing lockfiles remain coverage gaps. For example, a `pyproject.toml` that
+declares dynamic dependencies without a neighboring supported lockfile reports
 `dynamic_dependencies_without_lock`. The scanner does not execute the build to
 guess the dependencies. Other reasons identify unsupported formats, malformed
 metadata and inventory limits.
@@ -331,7 +335,7 @@ lockfiles remain unknown/partial. No findings never establishes global safety.
 packages absent from the catalog and advisory-source uncertainty alone do not
 trigger exit 2. With the default `--fail-on none`, even confirmed version matches
 can exit 0 when execution and dependency inventory completed. A missing
-supported lockfile (such as dynamic `local/pyproject.toml`) does trigger exit 2,
+supported lockfile (including for a project with dynamic dependencies) does trigger exit 2,
 which takes precedence over the selected severity gate.
 
 Runtime tests, model explanations, automatic fixes, GUI, service installation,

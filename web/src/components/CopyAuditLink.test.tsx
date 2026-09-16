@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { CopyAuditLink } from "./CopyAuditLink";
 
 const originalLocation = window.location.href;
@@ -47,9 +47,12 @@ it.each(["denied", "unavailable"])("provides the complete selected link when cli
 
   expect(input.value).toBe(expected);
   expect(input.readOnly).toBe(true);
-  expect(document.activeElement).toBe(input);
-  expect(input.selectionStart).toBe(0);
-  expect(input.selectionEnd).toBe(expected.length);
+  // The field can mount before the passive effect focuses and selects it.
+  await waitFor(() => {
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(expected.length);
+  });
   expect(screen.getByRole("status").textContent).not.toContain("Link copied");
   expect(document.getElementById(input.getAttribute("aria-describedby")!)?.textContent)
     .toContain("Copy the selected link below");

@@ -167,7 +167,7 @@ def stage(root: Path, destination: Path) -> dict:
     digest = hashlib.sha256(raw).hexdigest()
     if digest != (package / "data/cve-catalog.json.sha256").read_text().split()[0]:
         raise ValueError("Bundled catalog checksum mismatch")
-    for source, name in (("local/pyproject.toml", "pyproject.toml"), ("LICENSE", "LICENSE"),
+    for source, name in (("local/pyproject.toml.in", "pyproject.toml"), ("LICENSE", "LICENSE"),
                          ("docs/local-drydock.md", "README.md")):
         shutil.copyfile(root / source, destination / name)
     lock, pins = locked_requirements(root, DEPENDENCIES)
