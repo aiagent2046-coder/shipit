@@ -12,6 +12,7 @@ from itertools import islice
 import re
 import tomllib
 import zipfile
+import zlib
 from datetime import datetime
 
 from app.sca.lockfiles import (
@@ -359,7 +360,8 @@ def _missing_lock_reason(archive: zipfile.ZipFile, path: str) -> str:
         return "manifest_metadata_size_limit"
     try:
         metadata = tomllib.loads(archive.read(path).decode("utf-8"))
-    except (ValueError, UnicodeError, RecursionError):
+    except (ValueError, OSError, RuntimeError, EOFError, zipfile.BadZipFile, zlib.error):
+        # Optional metadata must not discard findings from independent locks.
         return "invalid_manifest_metadata"
     project = metadata.get("project", {})
     dynamic = project.get("dynamic", []) if isinstance(project, dict) else []

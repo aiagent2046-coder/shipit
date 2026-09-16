@@ -8,9 +8,9 @@ import pytest
 from app.scan import cve_match
 
 
-def _archive(files):
+def _archive(files, compression=zipfile.ZIP_STORED):
     stream = io.BytesIO()
-    with zipfile.ZipFile(stream, "w") as archive:
+    with zipfile.ZipFile(stream, "w", compression) as archive:
         for name, text in files.items():
             archive.writestr(name, text)
     return stream.getvalue()
@@ -157,6 +157,45 @@ def test_dynamic_metadata_is_not_executed_and_neighboring_pins_are_respected(tmp
     pinned = cve_match.match_archive(_archive(files), _catalog([]))["coverage"]
     assert pinned["incomplete_manifests"] == {}
     assert pinned["manifest_gap_reason_counts"] == {}
+
+
+@pytest.mark.parametrize("damage", ["crc", "encrypted", "deflate"])
+@pytest.mark.parametrize(("fixed", "status"), [("9.0.0", "affected"), ("6.27.0", "unaffected")])
+def test_unreadable_optional_metadata_preserves_independent_lock_assessments(damage, fixed, status):
+    metadata = '[project]\ndynamic = ["dependencies"]\n'
+    compression = zipfile.ZIP_DEFLATED if damage == "deflate" else zipfile.ZIP_STORED
+    data = bytearray(_archive({
+        "local/pyproject.toml": metadata,
+        "package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
+            "node_modules/undici": {"version": "8.10.2"},
+        }}),
+    }, compression))
+    if damage == "crc":
+        # Change stored metadata without updating its recorded checksum.
+        offset = data.index(metadata.encode())
+        data[offset] ^= 1
+    elif damage == "encrypted":
+        # The first member is metadata; set its encryption bit in both headers.
+        data[6] |= 1
+        data[data.index(b"PK\x01\x02") + 8] |= 1
+    else:
+        # The first compressed byte follows a 30-byte header and the filename.
+        # Set the reserved DEFLATE block type to force a decompressor error.
+        data[30 + len("local/pyproject.toml")] |= 6
+
+    result = cve_match.match_archive(bytes(data), _catalog([_ghsa(fixed)]))
+    coverage = result["coverage"]
+    assert coverage["status"] == "partial"
+    assert coverage["status_counts"][status] == 1
+    assert len(result["findings"]) == (1 if status == "affected" else 0)
+    if result["findings"]:
+        assert result["findings"][0]["file"] == "package-lock.json"
+    assert coverage["incomplete_manifests"] == {"local/pyproject.toml": "unresolved"}
+    assert coverage["manifest_gap_reason_counts"] == {"invalid_manifest_metadata": 1}
+    assert coverage["manifest_gap_details"] == [{
+        "manifest": "local/pyproject.toml", "status": "unresolved",
+        "reason": "invalid_manifest_metadata",
+    }]
 
 
 def test_manifest_diagnostics_are_bounded_but_counts_cover_all_gaps(monkeypatch):
