@@ -5,6 +5,7 @@ import zipfile
 
 import pytest
 
+from app.report.plain_language import plain_fields
 from app.scan.checks import run_checks
 from app.scan.secrets import scan_secrets
 
@@ -40,9 +41,28 @@ def test_noncredential_env_fixture_keeps_context_for_secondary_report():
     assert found.severity == "medium"
 
 
-@pytest.mark.parametrize("path,sql", [("docs/config.rst", False), ("schema.sql", True)])
+@pytest.mark.parametrize("path,sql", [
+    ("docs/config.rst", False),
+    ("docs/SQL.md", False),
+    ("src/flask/config.py", False),
+    ("schema.sql", True),
+    ("schema.psql", True),
+    ("schema.SQL", True),
+    ("schema.PSQL", True),
+])
 def test_assignment_language_comes_from_source_not_rule_name(path, sql):
-    found = next(f for f in scan_secrets(archive(path, "SECRET_KEY = '" + "a" * 24 + "'\n"))
+    source = "SECRET_KEY = '" + "a" * 24 + "'\n"
+    if path.endswith(".py"):
+        source = '"""Configuration example:\n' + source + '"""\n'
+    found = next(f for f in scan_secrets(archive(path, source))
                  if f.rule_id == "sql-secret-assignment")
     assert ("SQL/PLpgSQL" in found.title) is sql
     assert found.masked and "a" * 24 not in repr(found)
+    what, risk, fix = plain_fields(vars(found))
+    assert ("sql" in what.lower()) is sql
+    assert ("database" in risk.lower()) is sql
+    if not sql:
+        assert "sql" not in (risk + fix).lower()
+    if found.context == "doc_example":
+        assert "example" in risk.lower()
+        assert "synthetic" in fix.lower()

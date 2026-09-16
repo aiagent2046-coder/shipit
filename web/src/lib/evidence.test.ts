@@ -264,6 +264,25 @@ it("replaces categorical legacy credential prose without dropping occurrence evi
   expect(text.fix).not.toContain("Rotate everything");
 });
 
+it.each([
+  { file: "docs/config.rst", sql: false }, { file: "src/flask/config.py", sql: false },
+  { file: undefined, sql: false }, { file: "schema.sql", sql: true }, { file: "schema.PSQL", sql: true },
+])("uses source language for assignment advice: $file", ({ file, sql }) => {
+  const finding: Finding = { ...source, rule_id: "sql-secret-assignment", file,
+    context: "doc_example", occurrence_count: 2,
+    occurrence_files: ["docs/config.rst", "src/flask/config.py"] };
+  const before = JSON.stringify(finding);
+  const text = plainFields(finding);
+  expect(/\bsql\b/i.test(text.what)).toBe(sql);
+  expect(/\bdatabase\b/i.test(text.risk)).toBe(sql);
+  expect(text.risk).toContain("test, example or comment");
+  expect(text.risk).toContain("2 occurrences");
+  expect(text.risk).toContain("docs/config.rst, src/flask/config.py");
+  expect(text.fix).toMatch(/synthetic/i);
+  expect(text.fix).toMatch(/rotate.*exposed real/i);
+  expect(JSON.stringify(finding)).toBe(before);
+});
+
 it("does not invent execution records for old audits", () => {
   expect(manifestRows({ total: 0, categories: {} }))
     .toEqual([["Scan record", "Not recorded for this older audit"]]);

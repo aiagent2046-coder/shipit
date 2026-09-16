@@ -377,6 +377,10 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
     own_fix = str(finding.get("fix_hint", "")).strip()
     if rid in PLAIN and rid in CREDENTIAL_RULES:
         what, risk, fix = PLAIN[rid]
+        if rid == "sql-secret-assignment" and not str(finding.get("file", "")).lower().endswith((".sql", ".psql")):
+            # Match the source-language boundary used by _classify_match:
+            # this rule also catches ordinary code and documentation assignments.
+            what, risk, fix = PLAIN["generic-assignment"]
         evidence = finding.get("claim_evidence") or {}
         source_context = finding.get("source_context") or evidence.get("source_context") or {}
         if rid == "generic-assignment" and source_context.get("kind") == "translation_label":
