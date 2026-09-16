@@ -222,7 +222,14 @@ function AuditPageInner() {
             </div>
           </div>
 
-          {returnedFromPayment && <PaymentReturn order={paidOrder} />}
+          {returnedFromPayment && (
+            <>
+              <PaymentReturn order={paidOrder} />
+              <a href="#fix-pack" className="mt-3 inline-block text-sm font-medium text-accent underline underline-offset-4">
+                Jump to Fix Pack details and progress
+              </a>
+            </>
+          )}
 
           <section className="mt-8" aria-labelledby="current-observations-title">
             <h2 id="current-observations-title" className="mb-3 text-lg font-semibold">
@@ -231,12 +238,14 @@ function AuditPageInner() {
             <FindingsList findings={view.findings} />
           </section>
 
-          <FixpackPurchase
-            auditId={view.id}
-            repoUrl={view.repoUrl}
-            autoFixable={view.autoFixable}
-            accessToken={token}
-          />
+          <div id="fix-pack" tabIndex={-1} className="scroll-mt-6">
+            <FixpackPurchase
+              auditId={view.id}
+              repoUrl={view.repoUrl}
+              autoFixable={view.autoFixable}
+              accessToken={token}
+            />
+          </div>
 
           <RlsCheck auditId={view.id} token={token} repoUrl={view.repoUrl} />
 
