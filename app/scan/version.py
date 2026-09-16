@@ -1,4 +1,4 @@
 """Analysis identity shared by server and offline browser entry points."""
 
-# Identity vocabulary grew for verification heads; engine identity moved.
-AUDIT_ENGINE_VERSION = "2026-09-15-4"
+# Dependency inventory excludes generated Next.js manifests and explains coverage gaps.
+AUDIT_ENGINE_VERSION = "2026-09-16-1"
