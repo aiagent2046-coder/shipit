@@ -1,4 +1,4 @@
 """Analysis identity shared by server and offline browser entry points."""
 
-# Keep credential explanations grounded in the source language, including cached reports.
-AUDIT_ENGINE_VERSION = "2026-09-16-3"
+# Recognize CVE earliest-version ranges and canonical PyPI prereleases in all scan modes.
+AUDIT_ENGINE_VERSION = "2026-09-16-4"

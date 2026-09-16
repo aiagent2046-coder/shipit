@@ -1,8 +1,9 @@
 """Offline CVE snapshot matching of resolved registry dependencies.
 
 This intentionally supports a small, auditable ordering subset: npm SemVer
-and numeric PyPI releases. Unsupported syntax and ambiguous records stay
-unknown; neither absent packages nor unmatched records establish global safety.
+and numeric PyPI releases with canonical a/b/rc prereleases. Unsupported syntax
+and ambiguous records stay unknown; neither absent packages nor unmatched
+records establish global safety.
 Only standard-library imports are used so this module runs inside Pyodide.
 """
 from __future__ import annotations
@@ -38,6 +39,7 @@ _STATUSES = {"affected", "unaffected", "unknown"}
 _SEMVER = re.compile(
     r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?\Z")
+_PYPI_VERSION = re.compile(r"([0-9]+(?:\.[0-9]+)*)(?:(a|b|rc)([0-9]+))?\Z")
 _CVE_ID = re.compile(r"CVE-[0-9]{4}-[0-9]{4,19}\Z")
 _GHSA_ID = re.compile(r"GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}\Z")
 
@@ -46,12 +48,16 @@ def _version(value: object, ecosystem: str) -> tuple | None:
     if not isinstance(value, str) or not value or len(value) > 128:
         return None
     if ecosystem == "PyPI":
-        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value):
+        match = _PYPI_VERSION.fullmatch(value)
+        if not match:
             return None
-        release = tuple(int(part) for part in value.split("."))
+        release = tuple(int(part) for part in match[1].split("."))
         while len(release) > 1 and release[-1] == 0:
             release = release[:-1]
-        return release
+        # PEP 440: a < b < rc < final within the same zero-padded release.
+        # Epoch zero keeps OSV's (-1,) start sentinel before even 0a0.
+        phase = {"a": 0, "b": 1, "rc": 2, None: 3}[match[2]]
+        return (0, release, phase, int(match[3] or "0"))
     if ecosystem != "npm":
         return None
     match = _SEMVER.fullmatch(value)
@@ -89,7 +95,11 @@ def _range_status(version: str, ecosystem: str, row: object) -> tuple[str | None
     supported = {"semver"} if ecosystem == "npm" else {"pep440", "python"}
     if (not isinstance(kind, str) or kind not in supported) and not (kind is None and not ranged):
         return "unknown", "unsupported_version_type"
-    relation = compare_versions(version, lower, ecosystem)
+    # CVE defines lower version="0" as the earliest possible version of a
+    # range, not the literal SemVer 0.0.0 (which excludes its prereleases).
+    # Exact versions, upper bounds and installed versions remain strict.
+    earliest = ranged and lower == "0"
+    relation = 1 if earliest else compare_versions(version, lower, ecosystem)
     if relation is None:
         return "unknown", "unsupported_version"
     changes = row.get("changes", [])
@@ -103,7 +113,7 @@ def _range_status(version: str, ecosystem: str, row: object) -> tuple[str | None
         return "unknown", "conflicting_bounds"
     upper = exclusive if exclusive is not None else inclusive
     upper_relation = None if upper == "*" else compare_versions(version, upper, ecosystem)
-    bounds = None if upper == "*" else compare_versions(lower, upper, ecosystem)
+    bounds = None if upper == "*" else -1 if earliest else compare_versions(lower, upper, ecosystem)
     if upper != "*" and (upper_relation is None or bounds is None):
         return "unknown", "unsupported_version"
     if bounds is not None and (bounds > 0 or (bounds == 0 and exclusive is not None)):
@@ -115,7 +125,7 @@ def _range_status(version: str, ecosystem: str, row: object) -> tuple[str | None
             return "unknown", "invalid_changes"
         at = change.get("at")
         key = _version(at, ecosystem)
-        low = compare_versions(at, lower, ecosystem)
+        low = 1 if earliest and key is not None else compare_versions(at, lower, ecosystem)
         high = None if upper == "*" else compare_versions(at, upper, ecosystem)
         if key is None or low is None or low < 0 or (upper != "*" and
                 (high is None or high > 0 or (high == 0 and exclusive is not None))):
@@ -226,6 +236,14 @@ def _evaluate_osv(version: str, ecosystem: str, advisory: dict) -> dict:
         elif item == version:
             exact = True
             result["matched_versions"].append(item)
+        elif ecosystem == "PyPI":
+            relation = compare_versions(version, item, ecosystem)
+            if relation is None:
+                result["unresolved_ranges"] += 1
+                result["reason"] = result["reason"] or "unsupported_osv_version"
+            elif relation == 0:
+                exact = True
+                result["matched_versions"].append(item)
 
     for row in ranges:
         status, reason = _osv_range_status(version, ecosystem, row)
@@ -437,7 +455,9 @@ def match_archive(data: bytes, catalog: dict) -> dict:
             "Locked platform, optional and development variants are included; runtime selection is not evaluated.",
             "A package/version match does not establish reachable or exploitable application code.",
             "Absence from the snapshot, unsupported ranges, and no matches do not establish a clean or safe project.",
-            "PyPI comparisons support numeric releases only; npm comparisons support SemVer.",
+            "PyPI comparisons support numeric releases and canonical a/b/rc prereleases; "
+            "epochs, post/dev/local versions and other spellings remain unsupported. "
+            "npm comparisons require SemVer; CVE range lower bound '0' means the earliest version.",
         ],
     }
     findings = []

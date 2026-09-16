@@ -48,7 +48,21 @@ def catalog(entries=None, key="npm:widget"):
     ("1.0", "1.0.0", "npm", None),
     ("1.10", "1.9", "PyPI", 1),
     ("1.0.0", "1", "PyPI", 0),
-    ("1.0rc1", "1.0", "PyPI", None),
+    ("1.0rc1", "1.0", "PyPI", -1),
+    ("1.0a99", "1.0b0", "PyPI", -1),
+    ("1.0b99", "1.0rc0", "PyPI", -1),
+    ("1.0b9", "1.0b10", "PyPI", -1),
+    ("1.0.0b1", "1b1", "PyPI", 0),
+    ("01.0b01", "1b1", "PyPI", 0),
+    ("1.0", "1.0.1a0", "PyPI", -1),
+    ("1.0rc10", "1.0rc9", "PyPI", 1),
+    ("0a0", "0", "PyPI", -1),
+    ("1.0.post1", "1.0", "PyPI", None),
+    ("1.0.dev1", "1.0", "PyPI", None),
+    ("1.0beta1", "1.0", "PyPI", None),
+    ("1.0b", "1.0", "PyPI", None),
+    ("1.0RC1", "1.0", "PyPI", None),
+    ("1.0b１", "1.0", "PyPI", None),
     ("1!1.0", "1.0", "PyPI", None),
     ("1.0+local", "1.0", "PyPI", None),
     ("1.0.0", "1.0.0", "Go", None),
@@ -147,7 +161,7 @@ def test_pypi_identity_normalization_and_unsupported_releases():
     result = match_archive(archive({"requirements.txt": "Foo_Bar==1.2.3\n"}), snapshot)
     assert result["findings"][0]["claim_evidence"]["ecosystem"] == "PyPI"
     assert result["findings"][0]["line"] == 1
-    result = match_archive(archive({"requirements.txt": "Foo_Bar==1.2rc1\n"}), snapshot)
+    result = match_archive(archive({"requirements.txt": "Foo_Bar==1.2.post1\n"}), snapshot)
     assert result["coverage"]["status_counts"]["unknown"] == 1
 
 
@@ -254,6 +268,64 @@ def test_osv_exact_versions_and_supported_pypi_numeric_ranges():
     ])
     assert evaluate_advisory("1.9", "PyPI", pypi)["status"] == "affected"
     assert evaluate_advisory("1.10", "PyPI", pypi)["status"] == "unaffected"
+
+
+@pytest.mark.parametrize(("version", "expected"), [
+    ("5.1b6", "unaffected"), ("5.1b7", "affected"), ("5.1b8", "affected"),
+    ("5.1rc1", "affected"), ("5.1", "affected"), ("5.3.1rc1", "affected"),
+    ("5.3.1", "unaffected"), ("6.0.3", "unaffected"),
+])
+def test_pyyaml_prerelease_boundaries_preserve_membership_and_evidence(version, expected):
+    # GHSA-6757-jp84-gxfx at advisory-database 6f4744cb422131f1acef9e3054d3955e5658ed44.
+    entry = osv_advisory([{"introduced": "5.1b7"}, {"fixed": "5.3.1"}], aliases=["CVE-2020-1747"])
+    entry["id"] = "GHSA-6757-jp84-gxfx"
+    result = match_archive(archive({"requirements.txt": f"PyYAML=={version}\n"}),
+                           two_source_catalog([entry], "PyPI:pyyaml"))
+    assert result["coverage"]["status_counts"][expected] == 1
+    assert result["coverage"]["unknown_reason_counts"] == {}
+    if expected == "affected":
+        finding, = result["findings"]
+        evidence = finding["claim_evidence"]
+        assert evidence["installed_version"] == version
+        assert evidence["matched_ranges"] == entry["osv_ranges"]
+    else:
+        assert result["findings"] == []
+
+
+def test_pypi_prereleases_share_ordering_across_cve_changes_and_osv_start():
+    entry = advisory(versions=[{
+        "version": "1.0a1", "lessThan": "1.0", "versionType": "pep440", "status": "affected",
+        "changes": [{"at": "1.0b1", "status": "unaffected"}, {"at": "1.0rc1", "status": "affected"}],
+    }])
+    for version, expected in [("1.0a0", "unaffected"), ("1.0a1", "affected"),
+                              ("1.0b1", "unaffected"), ("1.0rc1", "affected"), ("1.0", "unaffected")]:
+        assert evaluate_advisory(version, "PyPI", entry)["status"] == expected
+    origin = osv_advisory([{"introduced": "0"}, {"fixed": "0b1"}])
+    assert evaluate_advisory("0a0", "PyPI", origin)["status"] == "affected"
+    assert evaluate_advisory("0b1", "PyPI", origin)["status"] == "unaffected"
+
+
+@pytest.mark.parametrize(("version", "listed", "expected"), [
+    ("1.0.0b1", "1.0b1", "affected"),
+    ("1.0b01", "1b1", "affected"),
+    ("1.0b1", "1.0b2", "unaffected"),
+    ("1.0b1", "1.0beta1", "unknown"),
+    ("1.0rc1", "1.0RC1", "unknown"),
+    ("1.0", "1.0.post1", "unknown"),
+])
+def test_osv_enumerated_pypi_versions_use_supported_identity_without_guessing(version, listed, expected):
+    result = evaluate_advisory(version, "PyPI", osv_advisory(versions=[listed]))
+    assert result["status"] == expected
+    assert result["matched_versions"] == ([listed] if expected == "affected" else [])
+    assert result["reason"] == ("unsupported_osv_version" if expected == "unknown" else None)
+    assert result["unresolved_ranges"] == (1 if expected == "unknown" else 0)
+
+
+def test_known_enumerated_match_keeps_unresolved_pypi_spellings_visible():
+    result = evaluate_advisory("1.0b1", "PyPI", osv_advisory(versions=["1.0beta1", "1.0.0b1"]))
+    assert result["status"] == "affected"
+    assert result["matched_versions"] == ["1.0.0b1"]
+    assert result["unresolved_ranges"] == 1
 
 
 @pytest.mark.parametrize(("entry", "reason"), [
