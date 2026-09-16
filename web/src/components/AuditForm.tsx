@@ -125,6 +125,7 @@ export function AuditForm() {
           placeholder="https://github.com/owner/repo"
           disabled={submitting}
           aria-label="Public GitHub repository URL"
+          aria-describedby="audit-input-help"
           className="w-full rounded-lg border border-border bg-surface px-4 py-3 font-mono text-sm outline-hidden focus:border-accent disabled:opacity-60"
         />
       ) : (
@@ -136,6 +137,7 @@ export function AuditForm() {
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             disabled={submitting}
             aria-label="Project zip file"
+            aria-describedby="audit-input-help"
             className="block w-full cursor-pointer rounded-lg border border-border bg-surface px-4 py-3 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-accent-fg outline-hidden focus:border-accent disabled:opacity-60"
           />
           {file && (
@@ -165,9 +167,13 @@ export function AuditForm() {
           "Audit my app"
         )}
       </button>
-      <p className="mt-2 text-center text-xs text-muted">
-        Public GitHub repos only. The scan runs in the background — you get a
-        link you can come back to.
+      <p id="audit-input-help" className="mt-3 text-center text-sm text-muted">
+        {mode === "url"
+          ? "Public GitHub repos only. We download the source for an online audit."
+          : "Upload a source ZIP for an online audit. Fix Pack requires an audit from a public GitHub URL."}
+      </p>
+      <p className="mt-2 text-center text-sm text-muted">
+        The scan runs in the background — you get a link you can come back to.
       </p>
     </form>
   );
