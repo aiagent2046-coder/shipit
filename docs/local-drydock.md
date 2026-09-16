@@ -182,8 +182,38 @@ drydock-local history /absolute/path/to/project
 `--json` prints the full structured report; watch emits one JSON object per scan
 with `--json`. Redirect reports outside the project to avoid observing the output
 as a new source change. Reports can contain project paths and finding evidence;
-protect exported files appropriately. Default text output shows the first 20
-findings, dependency coverage, folder exclusions, catalog age and limitations.
+protect exported files appropriately. Default text output shows up to 20 findings
+in descending severity. Within the same severity, findings without a known
+test/example/comment context come first; the original order breaks ties. A
+critical finding in a test still precedes a medium finding in production code.
+This view does not remove findings, change their severity or change `--fail-on`.
+Counts by severity describe the whole report; `--json` retains all findings in
+their original order.
+
+Dependency coverage includes unknown-reason counts and a few examples, with
+per-source assessments in `--json`. `affected`, `unaffected` and `unknown` count
+assessment outcomes (normally an advisory group per dependency entry), not
+distinct packages; `not_in_catalog` counts dependency entries absent from the
+snapshot. Unknown means the supported comparison could not establish a verdict.
+It must not be treated as an affected package or as proof of safety.
+
+Missing lockfiles remain coverage gaps. For example, `local/pyproject.toml` in
+this repository declares dynamic dependencies that are filled in at build time;
+without a neighboring supported lockfile its reason is
+`dynamic_dependencies_without_lock`. The scanner does not execute the build to
+guess the dependencies. Other reasons identify unsupported formats, malformed
+metadata and inventory limits.
+
+Dependency manifests under an exact `.next` directory component are generated
+Next.js output, so they are excluded from dependency inventory and listed as
+`generated_next_build`. This includes `.next/package.json` without a lockfile.
+Ordinary `build` and `dist` directories and similarly named source directories
+are not excluded by this rule. Source/secret scanners keep their existing
+policies (the secret scanner already excludes `.next`); this inventory rule does
+not apply `.gitignore` or remove source files from the local snapshot. Exclusion
+details and coverage examples are bounded and report omitted counts.
+
+Text output also includes folder exclusions, catalog age and coverage limitations.
 
 The watcher reads and hashes included file contents once per interval and skips
 the expensive scan when unchanged. A changed directory snapshot, catalog digest,
@@ -193,7 +223,8 @@ poll prints an error and retries without accepting a new baseline. Ctrl-C stops
 the foreground watcher. No background service is installed automatically.
 
 Each result lists new and no-longer-reported finding identities. First scan is a
-baseline. Disappearance is not proof of a fix: deleting files, losing coverage,
+baseline (shown as `baseline recorded`, rather than new regressions).
+Disappearance is not proof of a fix: deleting files, losing coverage,
 or changing the catalog can remove a finding. The result explicitly indicates
 whether engine/catalog versions are comparable. Identities include rule, file,
 line and advisory/package identity; moving a finding to another line can count

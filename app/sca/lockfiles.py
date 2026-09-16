@@ -18,7 +18,7 @@ import json
 import re
 import tomllib
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 
 from app.scan.secrets import is_non_production_path
 
@@ -38,6 +38,9 @@ MAX_DEPENDENCIES = 2000
 # Root-first, so a nested lockfile (a vendored copy, a fixture) never displaces
 # the one at the repository root when both are present and the cap is reached.
 MAX_LOCKFILES = 6
+
+# Report generated manifests without letting a build tree inflate the report.
+MAX_EXCLUDED_MANIFESTS = 100
 
 _REQUIREMENT = re.compile(
     r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*"
@@ -60,7 +63,8 @@ def unusable_lockfiles(data: bytes) -> list[str]:
             if not info.is_dir()
             and info.filename.rsplit("/", 1)[-1] in _UNUSABLE
             and not is_non_production_path(info.filename)
-            and not _vendored(info.filename))
+            and not _vendored(info.filename)
+            and not generated_dependency_path(info.filename))
 
 # Neither go.mod's minimum requirements nor go.sum's checksum history is a
 # resolved build list. Replacements, exclusions and transitive requirements
@@ -119,6 +123,22 @@ def _vendored(name: str) -> bool:
     return any(segment in name for segment in _VENDORED)
 
 
+def generated_dependency_path(name: str) -> bool:
+    """Recognize Next.js output in archive-relative paths, for SCA only.
+
+    Do not generalize this to build/dist: those may contain the project's
+    actual manifests. Source and secret scanning retain their own policies.
+    """
+    return ".next" in name.split("/")[:-1]
+
+
+_DEPENDENCY_MANIFEST_NAMES = frozenset(OSV_ECOSYSTEM) | frozenset(_UNUSABLE) | {
+    "package.json", "pyproject.toml", "Pipfile", "setup.py", "setup.cfg",
+    "yarn.lock", "Pipfile.lock", "Cargo.lock", "Gemfile.lock", "composer.lock",
+    "packages.lock.json",
+}
+
+
 def _depth(name: str) -> tuple[int, str]:
     return (name.count("/"), name)
 
@@ -136,7 +156,7 @@ def find_lockfiles(archive: zipfile.ZipFile) -> list[str]:
         name = info.filename
         if not _looks_like_lockfile(name) or is_non_production_path(name):
             continue
-        if _vendored(name):
+        if _vendored(name) or generated_dependency_path(name):
             continue
         if info.file_size > MAX_LOCKFILE_BYTES:
             continue
@@ -323,17 +343,29 @@ class DependencyInventory:
     manifests: list[str]
     found: int
     incomplete_manifests: dict[str, str]
+    excluded_manifests: dict[str, str] = dataclass_field(default_factory=dict)
+    excluded_manifests_truncated: int = 0
 
 
 def collect_dependency_inventory(data: bytes) -> DependencyInventory:
     """Read independent files independently, retaining honest coverage gaps."""
     incomplete: dict[str, str] = {}
+    excluded: dict[str, str] = {}
+    excluded_truncated = 0
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         manifests = find_lockfiles(archive)
         selected = set(manifests)
         for info in archive.infolist():
             path = info.filename
             if info.is_dir() or is_non_production_path(path) or _vendored(path):
+                continue
+            if generated_dependency_path(path):
+                if path.rsplit("/", 1)[-1] in _DEPENDENCY_MANIFEST_NAMES:
+                    if path not in excluded:
+                        if len(excluded) < MAX_EXCLUDED_MANIFESTS:
+                            excluded[path] = "generated_next_build"
+                        else:
+                            excluded_truncated += 1
                 continue
             if path.rsplit("/", 1)[-1] in _UNUSABLE:
                 incomplete[path] = "unsupported"
@@ -371,7 +403,7 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
             unique[key] = dependency
     ordered = list(unique.values())
     return DependencyInventory(ordered[:MAX_DEPENDENCIES], manifests,
-                               len(ordered), incomplete)
+                               len(ordered), incomplete, excluded, excluded_truncated)
 
 
 def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str], int]:

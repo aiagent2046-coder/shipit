@@ -21,6 +21,7 @@ from app.ingest.validators import ArchiveValidationError
 from app.local_store import connect, default_state_dir, load_catalog, update_catalog
 from app.logging_config import configure_logging
 from app.scan.browser import ScanSession
+from app.scan.secrets import NON_PRODUCTION_CONTEXTS
 from app.scan.version import AUDIT_ENGINE_VERSION
 
 # Keep local archives within both the static and offline dependency matcher budgets.
@@ -28,6 +29,7 @@ MAX_FILES = 20_000
 MAX_BYTES = 40_000_000
 MAX_ENTRIES = 50_000
 EXCLUDED_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", ".drydock"})
+SEVERITY_RANKS = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
 def snapshot(root: Path, state_dir: Path) -> tuple[bytes, dict]:
@@ -169,8 +171,7 @@ def exit_status(report: dict, threshold: str) -> int:
             or coverage.get("status") == "unavailable" or coverage.get("incomplete_manifests")
             or any(coverage.get(k) for k in ("inventory_truncated", "findings_truncated", "evaluations_truncated"))):
         return 2
-    ranks = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
-    if threshold != "none" and any(ranks.get(f.get("severity"), -1) >= ranks[threshold]
+    if threshold != "none" and any(SEVERITY_RANKS.get(f.get("severity"), -1) >= SEVERITY_RANKS[threshold]
                                    for f in report["findings"]):
         return 1
     return 0
@@ -180,26 +181,61 @@ def display(report: dict, as_json: bool) -> None:
     if as_json:
         print(json.dumps(report, ensure_ascii=False), flush=True)
         return
-    print(f"Drydock local: {len(report['findings'])} findings; "
-          f"{len(report['changes']['new'])} newly reported; "
+    changes = report["changes"]
+    change_summary = "baseline recorded" if changes.get("baseline") else f"{len(changes['new'])} newly reported"
+    print(f"Drydock local: {len(report['findings'])} findings; {change_summary}; "
           f"{len(report['checks_not_run'])} checks unavailable.")
+    severity_counts = Counter(finding.get("severity", "unknown") for finding in report["findings"])
+    print("Findings by severity: " + json.dumps(dict(sorted(
+        severity_counts.items(), key=lambda row: (-SEVERITY_RANKS.get(row[0], -1), row[0])))))
     print(f"Catalog {report['catalog']['sha256'][:12]} — "
           f"{'STALE' if report['catalog']['stale'] else 'within 7-day freshness window'}; "
           f"source age in days: {json.dumps(report['catalog']['age_days'])}")
     dependency = report.get("dependency_cve", {})
     print("Dependency coverage: " + json.dumps({k: dependency.get(k) for k in
                                                ("status", "status_counts", "incomplete_manifests")}))
+    if dependency.get("status_counts"):
+        print("Dependency counts: affected/unaffected/unknown are assessment counts; "
+              "not_in_catalog counts unlisted dependency entries.")
+    if dependency.get("unknown_reason_counts"):
+        print("Unknown dependency reasons: " + json.dumps(dependency["unknown_reason_counts"]))
+        details = dependency.get("details", [])
+        for detail in details[:5]:
+            print("Unknown dependency: " + json.dumps({k: detail.get(k) for k in
+                  ("package", "version", "manifest", "advisory", "reason")}))
+        omitted = max(0, len(details) - 5) + dependency.get("details_truncated", 0)
+        if omitted:
+            print(f"{omitted} additional unknown assessments not shown.")
+        print("Unknown is not confirmed affected or unaffected; --json includes per-source assessments.")
+    for detail in dependency.get("manifest_gap_details", [])[:5]:
+        print("Manifest coverage gap: " + json.dumps(detail))
+    gap_omitted = (max(0, len(dependency.get("manifest_gap_details", [])) - 5)
+                   + dependency.get("manifest_gap_details_truncated", 0))
+    if gap_omitted:
+        print(f"{gap_omitted} additional manifest gaps not shown; use --json for coverage details.")
+    excluded = dependency.get("excluded_manifests", {})
+    excluded_omitted = max(0, len(excluded) - 5) + dependency.get("excluded_manifests_truncated", 0)
+    if excluded or excluded_omitted:
+        print("Dependency manifest exclusions: " + json.dumps({
+            "examples": dict(list(excluded.items())[:5]), "additional": excluded_omitted,
+        }))
     print("Folder exclusions: " + json.dumps(report["snapshot"]["excluded"]))
     gaps = {name: row["skip_reasons"] for name, row in report.get("rule_coverage", {}).items()
             if any(row.get("skip_reasons", {}).values())}
     if gaps or report["checks_not_run"] or report["can_continue"]:
         print("Incomplete checks: " + json.dumps({"unavailable": report["checks_not_run"],
                                                  "rule_skips": gaps, "can_continue": report["can_continue"]}))
-    for finding in report['findings'][:20]:
+    # Presentation only: keep the complete report, identities, history and gates intact.
+    prioritized = sorted(report["findings"], key=lambda finding: (
+        -SEVERITY_RANKS.get(finding.get("severity"), -1),
+        finding.get("context") in NON_PRODUCTION_CONTEXTS,
+    ))
+    for finding in prioritized[:20]:
         # JSON escaping prevents project-controlled paths/titles emitting terminal controls.
-        print(json.dumps({k: finding.get(k) for k in ('severity', 'rule_id', 'file', 'line', 'title')}))
+        print(json.dumps({k: finding.get(k) for k in ('severity', 'rule_id', 'file', 'line', 'title', 'context')}))
     if len(report['findings']) > 20:
-        print("Showing first 20 findings; use --json for the complete report.")
+        print("Showing 20 findings by severity (production context first within each severity); "
+              "use --json for the complete report.")
     print("Coverage limitations: " + json.dumps(report['limitations']))
     print("No findings is not proof of safety. Runtime tests and reachability were not checked.", flush=True)
 

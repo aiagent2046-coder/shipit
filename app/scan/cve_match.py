@@ -10,10 +10,14 @@ from __future__ import annotations
 import io
 from itertools import islice
 import re
+import tomllib
 import zipfile
+import zlib
 from datetime import datetime
 
-from app.sca.lockfiles import collect_dependency_inventory, normalize_pypi, _vendored
+from app.sca.lockfiles import (
+    collect_dependency_inventory, generated_dependency_path, normalize_pypi, _vendored,
+)
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "dependency-cve-match"
@@ -25,6 +29,8 @@ MAX_FINDINGS = 500
 MAX_RANGES = 256
 MAX_EVENTS = 512
 MAX_DETAILS = 200
+MAX_ASSESSMENT_DETAILS = 16
+MAX_MANIFEST_METADATA_BYTES = 2_000_000
 SOURCE_REPOSITORY = "https://github.com/CVEProject/cvelistV5"
 GHSA_REPOSITORY = "https://github.com/github/advisory-database"
 CVE_PAGE = "https://www.cve.org/CVERecord?id="
@@ -345,6 +351,36 @@ def _entry_identity(entry: object, sources: dict[str, dict]) -> tuple[str, list[
 def _advisory_url(advisory_id: str) -> str:
     return (CVE_PAGE if _CVE_ID.fullmatch(advisory_id) else GHSA_PAGE) + advisory_id
 
+
+def _missing_lock_reason(archive: zipfile.ZipFile, path: str) -> str:
+    """Explain missing pins without evaluating project build metadata."""
+    if path.rsplit("/", 1)[-1] != "pyproject.toml":
+        return "missing_supported_lockfile"
+    if archive.getinfo(path).file_size > MAX_MANIFEST_METADATA_BYTES:
+        return "manifest_metadata_size_limit"
+    try:
+        metadata = tomllib.loads(archive.read(path).decode("utf-8"))
+    except (ValueError, OSError, RuntimeError, EOFError, zipfile.BadZipFile, zlib.error):
+        # Optional metadata must not discard findings from independent locks.
+        return "invalid_manifest_metadata"
+    project = metadata.get("project", {})
+    dynamic = project.get("dynamic", []) if isinstance(project, dict) else []
+    if isinstance(dynamic, list) and "dependencies" in dynamic:
+        return "dynamic_dependencies_without_lock"
+    return "missing_supported_lockfile"
+
+
+def _record_unknown(coverage: dict, detail: dict) -> None:
+    """Count every unknown outcome even when its display details are capped."""
+    reason = detail["reason"]
+    counts = coverage["unknown_reason_counts"]
+    counts[reason] = counts.get(reason, 0) + 1
+    if len(coverage["details"]) < MAX_DETAILS:
+        coverage["details"].append(detail)
+    else:
+        coverage["details_truncated"] += 1
+
+
 def _archive_inventory(data: bytes):
     if not isinstance(data, bytes) or len(data) > MAX_ARCHIVE_BYTES:
         raise ValueError("archive_size_limit")
@@ -355,14 +391,17 @@ def _archive_inventory(data: bytes):
         if len({info.filename for info in members}) != len(members):
             raise ValueError("duplicate_archive_members")
         # The shared parser uses a neighboring package.json for directness.
-        if any(i.file_size > 2_000_000 and i.filename.rsplit("/", 1)[-1] == "package.json" for i in members):
+        if any(i.file_size > 2_000_000 and i.filename.rsplit("/", 1)[-1] == "package.json"
+               and not generated_dependency_path(i.filename) for i in members):
             raise ValueError("manifest_size_limit")
         paths = {i.filename for i in members if not i.is_dir()
-                 and not is_non_production_path(i.filename) and not _vendored(i.filename)}
+                 and not is_non_production_path(i.filename) and not _vendored(i.filename)
+                 and not generated_dependency_path(i.filename)}
         gaps = {}
+        gap_reasons = {}
         unsupported = {"yarn.lock", "Pipfile.lock",
                        "Cargo.lock", "Gemfile.lock", "composer.lock", "packages.lock.json"}
-        for path in paths:
+        for path in sorted(paths):
             directory, _, basename = path.rpartition("/")
             prefix = directory + "/" if directory else ""
             if basename in unsupported:
@@ -373,9 +412,11 @@ def _archive_inventory(data: bytes):
             elif basename in {"pyproject.toml", "Pipfile", "setup.py", "setup.cfg"} and not any(
                     prefix + name in paths for name in ("poetry.lock", "requirements.txt", "uv.lock")):
                 gaps[path] = "unresolved"
+            if gaps.get(path) == "unresolved":
+                gap_reasons[path] = _missing_lock_reason(archive, path)
     inventory = collect_dependency_inventory(data)
     inventory.incomplete_manifests.update(gaps)
-    return inventory
+    return inventory, gap_reasons
 
 
 def match_archive(data: bytes, catalog: dict) -> dict:
@@ -387,6 +428,10 @@ def match_archive(data: bytes, catalog: dict) -> dict:
         "advisory_evaluations": 0, "unresolved_ranges": 0, "manifests": [],
         "incomplete_manifests": {}, "inventory_truncated": 0, "findings_truncated": 0,
         "evaluations_truncated": 0,
+        "unknown_reason_counts": {}, "details_truncated": 0,
+        "manifest_gap_reason_counts": {}, "manifest_gap_details": [],
+        "manifest_gap_details_truncated": 0,
+        "excluded_manifests": {}, "excluded_manifests_truncated": 0,
         "source": sources.get("cvelist") if sources else None,
         "sources": sources or {}, "details": [], "catalog_stats": {},
         "limitations": [
@@ -409,13 +454,31 @@ def match_archive(data: bytes, catalog: dict) -> dict:
             if isinstance(key, str) and len(key) <= 128 and type(value) is int and value >= 0:
                 coverage["catalog_stats"][key] = value
     try:
-        inventory = _archive_inventory(data)
+        inventory, gap_reasons = _archive_inventory(data)
     except (ValueError, OSError, RuntimeError, zipfile.BadZipFile, OverflowError):
         coverage.update(status="unavailable", error="invalid_or_oversized_archive")
         return result
     coverage.update(dependencies_found=inventory.found, manifests=inventory.manifests,
                     incomplete_manifests=inventory.incomplete_manifests,
+                    excluded_manifests=inventory.excluded_manifests,
+                    excluded_manifests_truncated=inventory.excluded_manifests_truncated,
                     inventory_truncated=max(0, inventory.found - len(inventory.dependencies)))
+    for manifest, status in sorted(inventory.incomplete_manifests.items()):
+        reason = gap_reasons.get(manifest, {
+            "unresolved": "unresolved_dependency_versions",
+            "unsupported": "unsupported_manifest_format",
+            "malformed": "malformed_lockfile",
+            "oversized": "lockfile_size_limit",
+            "truncated": "lockfile_inventory_limit",
+        }.get(status, status))
+        counts = coverage["manifest_gap_reason_counts"]
+        counts[reason] = counts.get(reason, 0) + 1
+        if len(coverage["manifest_gap_details"]) < MAX_DETAILS:
+            coverage["manifest_gap_details"].append({
+                "manifest": manifest, "status": status, "reason": reason,
+            })
+        else:
+            coverage["manifest_gap_details_truncated"] += 1
     for dep in inventory.dependencies:
         name = normalize_pypi(dep.name) if dep.ecosystem == "PyPI" else dep.name
         key = dep.ecosystem + ":" + name
@@ -428,9 +491,9 @@ def match_archive(data: bytes, catalog: dict) -> dict:
         if not isinstance(entries, list) or not entries:
             coverage["status_counts"]["unknown"] += 1
             coverage["unresolved_ranges"] += 1
-            if len(coverage["details"]) < MAX_DETAILS:
-                coverage["details"].append({"package": key, "version": dep.version,
-                                            "reason": "invalid_catalog_entries"})
+            _record_unknown(coverage, {"package": key, "version": dep.version,
+                                      "manifest": dep.manifest,
+                                      "reason": "invalid_catalog_entries"})
             continue
         grouped: dict[str, list[tuple[dict, dict, str]]] = {}
         for entry_index, entry in enumerate(entries):
@@ -442,6 +505,9 @@ def match_archive(data: bytes, catalog: dict) -> dict:
             if identity is None:
                 coverage["status_counts"]["unknown"] += 1
                 coverage["unresolved_ranges"] += 1
+                _record_unknown(coverage, {"package": key, "version": dep.version,
+                                          "manifest": dep.manifest,
+                                          "reason": "invalid_advisory_identity"})
                 continue
             entry_id, aliases, source_key = identity
             group_id = next((item for item in (entry_id, *aliases) if _CVE_ID.fullmatch(item)), entry_id)
@@ -472,9 +538,16 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                          if assessment["reason"]),
                         "unknown_status",
                     )
-                if len(coverage["details"]) < MAX_DETAILS:
-                    coverage["details"].append({"package": key, "version": dep.version, "manifest": dep.manifest,
-                                                "advisory": group_id, "reason": reason})
+                _record_unknown(coverage, {
+                    "package": key, "version": dep.version, "manifest": dep.manifest,
+                    "advisory": group_id, "reason": reason,
+                    "assessments": [
+                        {"source": source_key, "advisory": entry["id"],
+                         "status": assessment["status"], "reason": assessment["reason"]}
+                        for entry, assessment, source_key in group[:MAX_ASSESSMENT_DETAILS]
+                    ],
+                    "assessments_truncated": max(0, len(group) - MAX_ASSESSMENT_DETAILS),
+                })
                 continue
             if status != "affected":
                 continue
