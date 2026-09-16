@@ -1,0 +1,7 @@
+{
+  "description": "Flask-style SQLite tutorial is not evidence of Supabase anonymous grants.",
+  "expect": [],
+  "forbid": [
+    "rls-table-anon-readable"
+  ]
+}

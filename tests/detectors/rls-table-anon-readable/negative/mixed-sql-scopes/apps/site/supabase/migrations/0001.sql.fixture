@@ -1,0 +1,2 @@
+CREATE TABLE public.users (id uuid PRIMARY KEY, email text);
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;

@@ -159,9 +159,11 @@ PYTHON=python3.12 bash "$pilot_dir/install.sh" "$pilot_dir/venv"
 Run these on the workstation where the project lives. Use an existing project
 path if it differs from `~/shipit`. Python 3.12 and its venv support must already
 be installed; Ubuntu 24.04 x86_64 is the Linux CI baseline. Keep the printed
-`pilot_dir` path to run the same installation again. A scan exit 2 means partial
-coverage or a processing problem; inspect the report rather than treating it as
-an installation failure or a clean project.
+`pilot_dir` path to run the same installation again. A scan exit 2 means an
+execution or inventory gap (for example, a missing lockfile), or a processing
+problem. Partial advisory coverage alone can still exit 0; see the exit-code
+table below. Inspect the report rather than treating it as an installation
+failure or a clean project.
 
 For the pilot record elapsed scan time, finding usefulness, skipped checks and
 whether the report is understandable. Disconnect the network and repeat scan
@@ -175,6 +177,7 @@ not source files or secrets. Do not run `update` during the offline check.
 ```bash
 drydock-local scan /absolute/path/to/project --json
 drydock-local scan /absolute/path/to/project --fail-on high
+drydock-local scan /absolute/path/to/project --show-contextual
 drydock-local watch /absolute/path/to/project --interval 10
 drydock-local history /absolute/path/to/project
 ```
@@ -182,13 +185,31 @@ drydock-local history /absolute/path/to/project
 `--json` prints the full structured report; watch emits one JSON object per scan
 with `--json`. Redirect reports outside the project to avoid observing the output
 as a new source change. Reports can contain project paths and finding evidence;
-protect exported files appropriately. Default text output shows up to 20 findings
-in descending severity. Within the same severity, findings without a known
-test/example/comment context come first; the original order breaks ties. A
-critical finding in a test still precedes a medium finding in production code.
-This view does not remove findings, change their severity or change `--fail-on`.
-Counts by severity describe the whole report; `--json` retains all findings in
-their original order.
+protect exported files appropriately. Default text output shows up to 20
+priority review tasks in descending severity, with a short explanation and next
+action. Missing context is labeled `unknown`, not assumed to be production use.
+High/critical findings remain visible in this section even in tests and examples:
+a real credential there still matters. Lower-severity findings with known
+test/example/comment context and optional Dockerfile hygiene are grouped into
+a secondary summary by context and severity. `--show-contextual` expands up to
+20 of these findings; omitted counts point to the complete `--json` report.
+The option works for both scan and watch.
+
+Dependency findings with the same ecosystem, package, installed version and
+manifest are presented as one review task; distinct packages, versions and
+manifests remain separate. The task shows advisory IDs, linked advisories and
+their matched version ranges, along with known development/runtime scope,
+directness and dependency groups. Unknown scope stays explicit. Development
+dependencies can affect builds and CI; the label does not suppress their
+severity. Range boundaries, including OSV `fixed` events, belong to individual
+advisories and do not establish a universally safe upgrade. Long text, advisory
+lists and ranges are bounded with truncation notices; `--json` contains all
+finding evidence.
+
+These are presentation changes only: findings, severities, identities, history
+and `--fail-on` are unchanged by grouping or `--show-contextual`. Counts by
+severity describe all findings, not grouped tasks. `--json` retains all findings
+in their original order, including contextual findings and every advisory ID.
 
 Dependency coverage includes unknown-reason counts and a few examples, with
 per-source assessments in `--json`. `affected`, `unaffected` and `unknown` count
@@ -196,6 +217,9 @@ assessment outcomes (normally an advisory group per dependency entry), not
 distinct packages; `not_in_catalog` counts dependency entries absent from the
 snapshot. Unknown means the supported comparison could not establish a verdict.
 It must not be treated as an affected package or as proof of safety.
+`incomplete_advisory_sources` means at least one source could not be evaluated;
+it does not claim that sources disagree about affected versus unaffected.
+Raw reason codes and the individual source assessments remain in JSON.
 
 Missing lockfiles remain coverage gaps. For example, `local/pyproject.toml` in
 this repository declares dynamic dependencies that are filled in at build time;
@@ -214,6 +238,10 @@ not apply `.gitignore` or remove source files from the local snapshot. Exclusion
 details and coverage examples are bounded and report omitted counts.
 
 Text output also includes folder exclusions, catalog age and coverage limitations.
+Static Supabase RLS checks apply to SQL in explicit Supabase project paths. A
+generic SQL file, SQLite tutorial or ordinary PostgreSQL schema is not evidence
+that Supabase publicly exposes its tables. These source checks do not verify a
+live database's grants or applied policies.
 
 The watcher reads and hashes included file contents once per interval and skips
 the expensive scan when unchanged. A changed directory snapshot, catalog digest,
@@ -296,8 +324,15 @@ lockfiles remain unknown/partial. No findings never establishes global safety.
 | --- | --- |
 | 0 | Execution completed within reported scope; no selected severity gate triggered. Not a safety certificate. |
 | 1 | A finding meets `--fail-on` (default `none`). |
-| 2 | Input/catalog failure, unavailable check, rule analysis skip, dependency inventory failure or truncation. |
+| 2 | Input/catalog failure, unavailable check, rule analysis skip, incomplete dependency manifest/lockfile, or inventory/findings/evaluation truncation. |
 | 130 | Interrupted by the user. |
+
+`dependency_cve.status = partial` is broader than exit 2. Unknown assessments,
+packages absent from the catalog and advisory-source uncertainty alone do not
+trigger exit 2. With the default `--fail-on none`, even confirmed version matches
+can exit 0 when execution and dependency inventory completed. A missing
+supported lockfile (such as dynamic `local/pyproject.toml`) does trigger exit 2,
+which takes precedence over the selected severity gate.
 
 Runtime tests, model explanations, automatic fixes, GUI, service installation,
 signatures and native Windows packaging are outside this first PR. These can

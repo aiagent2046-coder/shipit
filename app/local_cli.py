@@ -20,6 +20,7 @@ import zipfile
 from app.ingest.validators import ArchiveValidationError
 from app.local_store import connect, default_state_dir, load_catalog, update_catalog
 from app.logging_config import configure_logging
+from app.report.plain_language import plain_fields
 from app.scan.browser import ScanSession
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS
 from app.scan.version import AUDIT_ENGINE_VERSION
@@ -177,7 +178,112 @@ def exit_status(report: dict, threshold: str) -> int:
     return 0
 
 
-def display(report: dict, as_json: bool) -> None:
+def _short(value: object, limit: int = 280) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + "... [see --json]"
+
+
+def _range_preview(row: dict) -> dict:
+    """Show source boundaries without inferring a universally safe upgrade."""
+    result = {key: _short(row[key], 128) for key in
+              ("type", "version", "versionType", "status", "lessThan", "lessThanOrEqual") if key in row}
+    events = row.get("events", [])
+    if events:
+        result["events"] = [{key: _short(value, 128) for key, value in event.items()}
+                            for event in events[:6]]
+        if len(events) > 6:
+            result["additional_events"] = len(events) - 6
+    changes = row.get("changes", [])
+    if changes:
+        result["changes"] = [{key: _short(change.get(key), 128) for key in ("at", "status")}
+                             for change in changes[:6]]
+        if len(changes) > 6:
+            result["additional_changes"] = len(changes) - 6
+    return result
+
+
+def _dependency_task(findings: list[dict]) -> dict:
+    evidence = findings[0]["claim_evidence"]
+    scopes = {f["claim_evidence"].get("dependency_scope", "unknown") for f in findings}
+    scope = next(iter(scopes)) if len(scopes) == 1 else "unknown"
+    if scope not in {"development", "runtime"}:
+        scope = "unknown"
+    direct = {f["claim_evidence"].get("direct") for f in findings}
+    groups = sorted({group for f in findings for group in f["claim_evidence"].get("dependency_groups", [])})
+    advisory_ids = sorted({item for f in findings for item in
+                           [f["claim_evidence"].get("advisory_id"),
+                            *f["claim_evidence"].get("advisory_ids", [])] if item})
+    advisories = []
+    for finding in findings[:5]:
+        detail = finding["claim_evidence"]
+        ranges = detail.get("matched_ranges", [])
+        versions = detail.get("matched_versions", [])
+        advisories.append({
+            "id": _short(detail.get("advisory_id"), 128), "url": _short(detail.get("url"), 400),
+            "matched_ranges": [_range_preview(row) for row in ranges[:2]],
+            "additional_ranges": max(0, len(ranges) - 2),
+            "matched_versions": [_short(version, 128) for version in versions[:3]],
+            "additional_versions": max(0, len(versions) - 3),
+            "default_status_used": bool(detail.get("default_status_used")),
+        })
+    return {
+        "severity": max((f.get("severity", "unknown") for f in findings),
+                        key=lambda severity: SEVERITY_RANKS.get(severity, -1)),
+        "rule_id": "dependency-cve-match", "file": _short(evidence["manifest"]),
+        "ecosystem": _short(evidence["ecosystem"], 32), "package": _short(evidence["package"], 160),
+        "version": _short(evidence["installed_version"], 128), "dependency_scope": scope,
+        "direct": next(iter(direct)) if len(direct) == 1 else None,
+        "dependency_groups": [_short(group, 80) for group in groups[:5]],
+        "additional_groups": max(0, len(groups) - 5),
+        "advisory_findings": len(findings), "advisory_ids": [_short(item, 128) for item in advisory_ids[:8]],
+        "additional_advisory_ids": max(0, len(advisory_ids) - 8),
+        "advisories": advisories, "additional_advisory_details": max(0, len(findings) - 5),
+        "explanation": "The locked version matches these catalog advisories; reachability is not assessed.",
+        "action": ("Review the linked advisories and their individual ranges; update the dependency and lockfile. "
+                   "A fixed boundary for one advisory is not a safe version for all advisories. "
+                   + ("Development scope can still affect builds and CI." if scope == "development"
+                      else "Verify where the affected functionality runs.")),
+    }
+
+
+def _terminal_tasks(findings: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Presentation only; no finding mutation, deduplication or gate suppression."""
+    groups = {}
+    entries = []
+    for index, finding in enumerate(findings):
+        evidence = finding.get("claim_evidence") or {}
+        key = tuple(evidence.get(field) for field in ("ecosystem", "package", "installed_version", "manifest"))
+        if finding.get("rule_id") == "dependency-cve-match" and all(isinstance(item, str) and item for item in key):
+            if key not in groups:
+                groups[key] = []
+                entries.append((index, groups[key]))
+            groups[key].append(finding)
+        else:
+            entries.append((index, [finding]))
+    priority, contextual = [], []
+    for index, members in entries:
+        finding = members[0]
+        evidence = finding.get("claim_evidence") or {}
+        if finding.get("rule_id") == "dependency-cve-match" and all(
+                evidence.get(field) for field in ("ecosystem", "package", "installed_version", "manifest")):
+            row = _dependency_task(members)
+        else:
+            _, explanation, action = plain_fields(finding)
+            row = {key: _short(finding.get(key)) for key in ("severity", "rule_id", "file", "title")}
+            row.update(line=finding.get("line"), context=finding.get("context") or "unknown",
+                       explanation=_short(explanation), action=_short(action))
+        rank = SEVERITY_RANKS.get(row["severity"], -1)
+        context = finding.get("context")
+        secondary = rank < SEVERITY_RANKS["high"] and (
+            context in NON_PRODUCTION_CONTEXTS or finding.get("rule_id") == "no-dockerfile")
+        if secondary:
+            row["context"] = context or "optional_deployment_hygiene"
+        (contextual if secondary else priority).append((rank, index, row))
+    return tuple([row for _, _, row in sorted(section, key=lambda item: (-item[0], item[1]))]
+                 for section in (priority, contextual))
+
+
+def display(report: dict, as_json: bool, show_contextual: bool = False) -> None:
     if as_json:
         print(json.dumps(report, ensure_ascii=False), flush=True)
         return
@@ -207,6 +313,9 @@ def display(report: dict, as_json: bool) -> None:
         if omitted:
             print(f"{omitted} additional unknown assessments not shown.")
         print("Unknown is not confirmed affected or unaffected; --json includes per-source assessments.")
+        if dependency["unknown_reason_counts"].get("incomplete_advisory_sources"):
+            print("Incomplete advisory sources: at least one source could not be evaluated; "
+                  "this is not an affected/unaffected disagreement.")
     for detail in dependency.get("manifest_gap_details", [])[:5]:
         print("Manifest coverage gap: " + json.dumps(detail))
     gap_omitted = (max(0, len(dependency.get("manifest_gap_details", [])) - 5)
@@ -225,17 +334,26 @@ def display(report: dict, as_json: bool) -> None:
     if gaps or report["checks_not_run"] or report["can_continue"]:
         print("Incomplete checks: " + json.dumps({"unavailable": report["checks_not_run"],
                                                  "rule_skips": gaps, "can_continue": report["can_continue"]}))
-    # Presentation only: keep the complete report, identities, history and gates intact.
-    prioritized = sorted(report["findings"], key=lambda finding: (
-        -SEVERITY_RANKS.get(finding.get("severity"), -1),
-        finding.get("context") in NON_PRODUCTION_CONTEXTS,
-    ))
-    for finding in prioritized[:20]:
-        # JSON escaping prevents project-controlled paths/titles emitting terminal controls.
-        print(json.dumps({k: finding.get(k) for k in ('severity', 'rule_id', 'file', 'line', 'title', 'context')}))
-    if len(report['findings']) > 20:
-        print("Showing 20 findings by severity (production context first within each severity); "
-              "use --json for the complete report.")
+    priority, contextual = _terminal_tasks(report["findings"])
+    print(f"Priority review: {len(priority)} tasks (dependency advisories grouped by package/version/manifest).")
+    print("Context unknown does not establish production use. High/critical test and example findings remain here.")
+    for row in priority[:20]:
+        # Escape paths, explanations, URLs, ranges and every other project-controlled value.
+        print(json.dumps(row))
+    if len(priority) > 20:
+        print(f"{len(priority) - 20} additional priority tasks not shown; use --json for the complete report.")
+    if contextual:
+        print("Contextual review: " + json.dumps({
+            "findings": len(contextual), "by_context": dict(Counter(row["context"] for row in contextual)),
+            "by_severity": dict(Counter(row["severity"] for row in contextual)),
+        }))
+        print("Test/example/comment and optional hygiene findings remain in counts, history and --fail-on. "
+              "Use --show-contextual to expand; --json includes every finding.")
+        if show_contextual:
+            for row in contextual[:20]:
+                print(json.dumps(row))
+            if len(contextual) > 20:
+                print(f"{len(contextual) - 20} additional contextual findings not shown; use --json.")
     print("Coverage limitations: " + json.dumps(report['limitations']))
     print("No findings is not proof of safety. Runtime tests and reachability were not checked.", flush=True)
 
@@ -250,6 +368,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("project", type=Path)
         if name != "history":
             command.add_argument("--json", action="store_true", help="complete JSON report (JSON Lines for watch)")
+            command.add_argument("--show-contextual", action="store_true",
+                                 help="expand test/example/comment and optional hygiene findings in text output")
         if name == "scan":
             command.add_argument("--fail-on", choices=["none", "low", "medium", "high", "critical"], default="none")
         if name == "watch":
@@ -286,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
                     time.sleep(args.interval)
                     continue
                 if report is not None:
-                    display(report, args.json)
+                    display(report, args.json, args.show_contextual)
                 if args.command == "scan":
                     return exit_status(report, args.fail_on)
                 time.sleep(args.interval)

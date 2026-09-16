@@ -84,10 +84,12 @@ CAPABILITIES: tuple[Capability, ...] = (
         "rls",
         "Committed SQL suggesting anonymous table access",
         ("rls-table-anon-readable", "rls-table-anon-writable"),
-        "Committed SQL in recognized schema/migration paths, processed in filename order: "
+        "Committed SQL under supabase/migrations, supabase/schemas, or supabase/schema.sql, "
+        "processed in filename order separately for each Supabase directory: "
         "table declarations, RLS flags and supported policy expressions. Read findings use "
         "private-looking table/column heuristics and public-by-design exclusions; write findings "
-        "do not share those exclusions. Missing schema produces no finding. Applied migrations, "
+        "do not share those exclusions. Generic SQL (including SQLite tutorials), custom layouts "
+        "and missing schema produce no finding, not a safety verdict. Applied migrations, "
         "effective database grants, runtime identities and actual row access are not verified; "
         "these are source-based access candidates, not observed database exposure.",
     ),

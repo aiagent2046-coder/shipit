@@ -1,0 +1,7 @@
+{
+  "description": "PostgreSQL table syntax alone does not establish Supabase or anonymous grants.",
+  "expect": [],
+  "forbid": [
+    "rls-table-anon-readable"
+  ]
+}

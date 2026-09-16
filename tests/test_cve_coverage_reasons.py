@@ -44,12 +44,12 @@ def _ghsa(fixed="6.27.0"):
             ], "osv_versions": []}
 
 
-def test_source_disagreement_exposes_unknown_cna_and_unaffected_ghsa():
+def test_incomplete_source_exposes_unknown_cna_and_unaffected_ghsa():
     result = cve_match.match_archive(_lock(), _catalog([_cna(), _ghsa()]))
     coverage = result["coverage"]
     assert result["findings"] == []
     assert coverage["status_counts"]["unknown"] == 1
-    assert coverage["unknown_reason_counts"] == {"conflicting_advisory_sources": 1}
+    assert coverage["unknown_reason_counts"] == {"incomplete_advisory_sources": 1}
     detail, = coverage["details"]
     assert detail["assessments"] == [
         {"source": "cvelist", "advisory": "CVE-2026-11525",
@@ -70,6 +70,25 @@ def test_actual_affected_unaffected_conflict_still_remains_unknown():
     assert result["findings"] == []
     assert coverage["unknown_reason_counts"] == {"conflicting_advisory_sources": 1}
     assert {a["status"] for a in coverage["details"][0]["assessments"]} == {"affected", "unaffected"}
+
+
+def test_incomplete_source_never_promotes_known_affected_to_a_finding():
+    result = cve_match.match_archive(_lock(), _catalog([_cna(), _ghsa("9.0.0")]))
+    assert result["findings"] == []
+    assert result["coverage"]["status_counts"]["unknown"] == 1
+    assert result["coverage"]["unknown_reason_counts"] == {"incomplete_advisory_sources": 1}
+    assert {a["status"] for a in result["coverage"]["details"][0]["assessments"]} == {"affected", "unknown"}
+    # Adding a real opposing verdict makes this a conflict, even with an
+    # unresolved object also present. The positive remains withheld.
+    result = cve_match.match_archive(_lock(), _catalog([_cna(), _cna("0.0.0"), _ghsa("9.0.0")]))
+    assert result["findings"] == []
+    assert result["coverage"]["unknown_reason_counts"] == {"conflicting_advisory_sources": 1}
+
+
+def test_unresolved_repeated_objects_are_distinguished_from_actual_conflict():
+    coverage = cve_match.match_archive(_lock(), _catalog([_cna(), _cna("0.0.0")]))["coverage"]
+    assert coverage["status_counts"]["unknown"] == 1
+    assert coverage["unknown_reason_counts"] == {"incomplete_affected_objects": 1}
 
 
 @pytest.mark.parametrize(("ecosystem", "version", "introduced", "fixed"), [
@@ -102,7 +121,7 @@ def test_reason_counts_remain_complete_past_detail_and_assessment_caps(monkeypat
     ]))["coverage"]
     assert coverage["status_counts"]["unknown"] == 3
     assert coverage["unknown_reason_counts"] == {
-        "conflicting_advisory_sources": 1, "unsupported_version": 1,
+        "incomplete_advisory_sources": 1, "unsupported_version": 1,
         "invalid_advisory_identity": 1,
     }
     assert len(coverage["details"]) == 1

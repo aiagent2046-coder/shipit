@@ -1,0 +1,7 @@
+{
+  "description": "A protected Supabase app cannot lend context to an unrelated SQLite tutorial.",
+  "expect": [],
+  "forbid": [
+    "rls-table-anon-readable"
+  ]
+}
