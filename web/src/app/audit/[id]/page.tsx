@@ -224,6 +224,13 @@ function AuditPageInner() {
 
           {returnedFromPayment && <PaymentReturn order={paidOrder} />}
 
+          <section className="mt-8" aria-labelledby="current-observations-title">
+            <h2 id="current-observations-title" className="mb-3 text-lg font-semibold">
+              Current scan observations
+            </h2>
+            <FindingsList findings={view.findings} />
+          </section>
+
           <FixpackPurchase
             auditId={view.id}
             repoUrl={view.repoUrl}
@@ -234,13 +241,6 @@ function AuditPageInner() {
           <RlsCheck auditId={view.id} token={token} repoUrl={view.repoUrl} />
 
           <PreviewHistory score={view.score} />
-
-          <div className="mt-8">
-            <h2 className="mb-3 text-lg font-semibold">
-              Current scan observations
-            </h2>
-            <FindingsList findings={view.findings} />
-          </div>
         </div>
       )}
     </div>
