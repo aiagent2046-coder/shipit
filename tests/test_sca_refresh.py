@@ -57,7 +57,10 @@ def test_the_inventory_holds_versions_and_nothing_else():
     entry = payload["dependencies"][0]
     assert entry == {"ecosystem": "npm", "name": "lodash", "version": "4.17.4",
                      "manifest": "package-lock.json", "line": 0,
-                     "direct": True, "development": False}
+                     "direct": True, "development": False, "dependency_groups": [],
+                     "occurrences": [{"manifest": "package-lock.json", "line": 0,
+                                      "direct": True, "development": False,
+                                      "dependency_groups": []}]}
 
 
 def test_nothing_is_stored_when_the_stage_never_asked():

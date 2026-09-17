@@ -84,6 +84,16 @@ _NPM_VERSION = re.compile(
 
 
 @dataclass(frozen=True)
+class DependencyOccurrence:
+    """One selected manifest's aggregate evidence for a resolved package pin."""
+    manifest: str
+    line: int = 0
+    direct: bool = False
+    development: bool | None = None
+    dependency_groups: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Dependency:
     """One resolved dependency: what to look up, and where it is written."""
     ecosystem: str
@@ -101,6 +111,44 @@ class Dependency:
     development: bool | None = None
     # Lockfile-declared development groups; no guess from package names.
     dependency_groups: tuple[str, ...] = ()
+    # At most MAX_LOCKFILES selected manifests. Empty on legacy stored data:
+    # the representative still exists, but other locations were not recorded.
+    occurrences: tuple[DependencyOccurrence, ...] = ()
+
+
+def dependency_occurrences(dependency: Dependency) -> tuple[DependencyOccurrence, ...]:
+    """Recorded locations, with a single-location view of legacy dependencies."""
+    return dependency.occurrences or (DependencyOccurrence(
+        dependency.manifest, dependency.line, dependency.direct,
+        dependency.development, dependency.dependency_groups),)
+
+
+def occurrence_evidence(dependency: Dependency) -> list[dict]:
+    return [{"manifest": item.manifest, "line": item.line, "direct": item.direct,
+             "dependency_scope": ("development" if item.development is True else
+                                  "runtime" if item.development is False else "unknown"),
+             "dependency_groups": list(item.dependency_groups)}
+            for item in dependency_occurrences(dependency)]
+
+
+def occurrence_summary(dependency: Dependency) -> str:
+    """Text shared by HTML/browser views that already render explanations."""
+    rows = []
+    for item in occurrence_evidence(dependency):
+        groups = ", ".join(item["dependency_groups"])
+        rows.append(f"{item['manifest']} ({item['dependency_scope']}; "
+                    f"{'direct' if item['direct'] else 'not marked direct'}"
+                    + (f"; groups: {groups}" if groups else "") + ")")
+    return "Recorded manifest locations: " + "; ".join(rows) + "."
+
+
+def _merge_occurrence(left: DependencyOccurrence, right: DependencyOccurrence) -> DependencyOccurrence:
+    lines = [line for line in (left.line, right.line) if line > 0]
+    return DependencyOccurrence(
+        left.manifest, min(lines, default=0), left.direct or right.direct,
+        max((left.development, right.development), key=_SCOPE_PRECEDENCE.__getitem__),
+        tuple(sorted(set(left.dependency_groups) | set(right.dependency_groups))),
+    )
 
 
 def normalize_pypi(name: str) -> str:
@@ -421,17 +469,27 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
             if reason:
                 incomplete[manifest] = reason
 
-    unique: dict[tuple[str, str, str], Dependency] = {}
+    unique: dict[tuple[str, str, str], dict[str, DependencyOccurrence]] = {}
     for dependency in collected:
         key = (dependency.ecosystem, dependency.name, dependency.version)
-        kept = unique.get(key)
-        if kept is None:
-            unique[key] = dependency
-        elif _SCOPE_PRECEDENCE[dependency.development] > _SCOPE_PRECEDENCE[kept.development]:
-            # A second unresolved occurrence prevents a development-only claim;
-            # a proven runtime occurrence takes precedence over both.
-            unique[key] = dependency
-    ordered = list(unique.values())
+        locations = unique.setdefault(key, {})
+        occurrence = dependency_occurrences(dependency)[0]
+        previous = locations.get(occurrence.manifest)
+        locations[occurrence.manifest] = (_merge_occurrence(previous, occurrence)
+                                         if previous is not None else occurrence)
+    ordered = []
+    for (ecosystem, name, version), locations in unique.items():
+        occurrences = tuple(locations[path] for path in sorted(locations))
+        # Compatibility fields all describe the same real manifest. Runtime
+        # evidence wins over unknown, which wins over development-only; ties
+        # are deterministic rather than depending on lockfile entry order.
+        representative = min(occurrences, key=lambda item: (
+            -_SCOPE_PRECEDENCE[item.development], item.manifest, item.line))
+        ordered.append(Dependency(
+            ecosystem, name, version, representative.manifest, representative.line,
+            representative.direct, representative.development, representative.dependency_groups,
+            occurrences=occurrences,
+        ))
     return DependencyInventory(ordered[:MAX_DEPENDENCIES], manifests,
                                len(ordered), incomplete, excluded, excluded_truncated)
 
