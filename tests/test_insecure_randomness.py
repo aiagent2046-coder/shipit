@@ -17,8 +17,10 @@ from pathlib import Path
 
 import pytest
 
+from app.scan import insecure_randomness
 from app.scan.insecure_randomness import RULE_ID, scan_insecure_randomness
 from app.scan.static import run_static_scan
+from tests.test_rule_coverage import assert_accounting
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -34,6 +36,67 @@ def archive(files: dict[str, str] | str, path: str = "repo/app/x.py") -> io.Byte
             z.writestr(name, text)
     buf.seek(0)
     return buf
+
+
+def ast_budget_source(suffix, budget, over_limit):
+    if budget == "nodes":
+        return ("0\n" if suffix == "py" else "0;") * (10_000 if over_limit else 9_999)
+    # Module/program and expression statement add two levels; the terminal
+    # literal reaches depth 100 or 101 without a parser syntax error.
+    return ("+" if suffix == "py" else "!") * (99 if over_limit else 98) + "0\n"
+
+
+@pytest.mark.parametrize("suffix", ["py", "js", "ts", "jsx", "tsx"])
+@pytest.mark.parametrize("budget", ["nodes", "depth"])
+@pytest.mark.parametrize("over_limit", [False, True])
+def test_real_ast_budgets_preserve_later_findings_and_coverage(suffix, budget, over_limit):
+    source = ast_budget_source(suffix, budget, over_limit)
+    assert len(source.encode()) < 400_000
+    positive = POSITIVE if suffix == "py" else "const resetToken = Math.random();\n"
+    path = f"repo/app/token.{suffix}"
+    coverage = {}
+    findings = scan_insecure_randomness(archive({
+        f"repo/app/large.{suffix}": source,
+        path: positive,
+    }), coverage=coverage)
+    assert [(finding.rule_id, finding.file) for finding in findings] == [(RULE_ID, path)]
+    assert_accounting(coverage, total=2, eligible=2, attempted=2,
+                      analyzed=1 if over_limit else 2,
+                      skips={"ast_limit": 1} if over_limit else {})
+
+
+@pytest.mark.parametrize("suffix", ["py", "ts"])
+def test_exact_node_budget_is_analyzed(suffix):
+    # 19,999 nodes plus one pass/comment node reaches the 20,000-node cap.
+    source = ast_budget_source(suffix, "nodes", False)
+    source += "pass\n" if suffix == "py" else "// final node\n"
+    coverage = {}
+    assert scan_insecure_randomness(archive(source, f"repo/app/large.{suffix}"), coverage=coverage) == []
+    assert_accounting(coverage, total=1, eligible=1, attempted=1, analyzed=1)
+
+
+@pytest.mark.parametrize("suffix", ["py", "ts"])
+@pytest.mark.parametrize("budget", ["nodes", "depth"])
+def test_static_scan_reports_ast_gap_without_losing_the_randomness_check(suffix, budget):
+    report = run_static_scan(archive({
+        f"repo/app/large.{suffix}": ast_budget_source(suffix, budget, True),
+        "repo/app/token.py": POSITIVE,
+    }))
+    assert all(failure["check"] != "insecure_randomness" for failure in report["checks_not_run"])
+    assert [finding["rule_id"] for finding in report["findings"]].count(RULE_ID) == 1
+    assert_accounting(report["rule_coverage"]["insecure_randomness"],
+                      total=2, eligible=2, attempted=2, analyzed=1, skips={"ast_limit": 1})
+
+
+@pytest.mark.parametrize("suffix,helper", [("py", "_python_evidence"), ("ts", "_js_evidence")])
+def test_unexpected_value_errors_remain_check_failures(monkeypatch, suffix, helper):
+    def broken_analysis(*args):
+        raise ValueError("unexpected analysis failure")
+
+    monkeypatch.setattr(insecure_randomness, helper, broken_analysis)
+    report = run_static_scan(archive("0\n", f"repo/app/valid.{suffix}"))
+    assert {"check": "insecure_randomness", "reason": "check_error: ValueError"} in report["checks_not_run"]
+    assert report["rule_coverage"]["insecure_randomness"] == {}
 
 
 def test_a_secret_named_value_from_a_predictable_draw_is_high_severity():

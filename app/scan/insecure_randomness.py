@@ -66,7 +66,7 @@ def _ast_nodes(tree):
     while pending:
         node, depth = pending.pop()
         if len(nodes) >= _MAX_NODES or depth > _MAX_DEPTH:
-            raise ValueError("syntax_limit")
+            raise ValueError("ast_limit")
         nodes.append(node)
         pending.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
     return nodes
@@ -549,8 +549,10 @@ def scan_insecure_randomness(fileobj: BinaryIO, *, coverage: dict | None = None)
             except (SyntaxError, RecursionError):
                 accounting.skip("parse_error")
                 continue
-            except ValueError:
-                accounting.skip("syntax_limit")
+            except ValueError as exc:
+                if exc.args != ("ast_limit",):
+                    raise
+                accounting.skip("ast_limit")
                 continue
             for line_no, name in evidence:
                 if len(findings) >= remaining_findings(_MAX_FINDINGS):
