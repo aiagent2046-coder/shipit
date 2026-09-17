@@ -19,7 +19,7 @@ from app.sca.osv import OsvClient
 from app.sca.refresh import (dependencies_from_payload, inventory_payload,
                              refresh_stale_dependency_audits, refreshed_findings,
                              refreshed_score, score_inputs_from_stored)
-from app.sca.stage import RULE_ID, SCA_FRESHNESS_TTL_DAYS
+from app.sca.stage import RULE_ID, SCA_FRESHNESS_TTL_DAYS, freshness
 from app.scan.pipeline import AUDIT_ENGINE_VERSION, run_scan, score_findings
 from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, make_zip
 
@@ -318,8 +318,14 @@ async def test_the_sweep_respects_its_limit():
 # -- what the customer's report says after a refresh ------------------------
 
 @pytest.mark.asyncio
-async def test_the_refreshed_row_reports_a_current_date_to_the_reader():
+async def test_the_refreshed_row_reports_a_current_date_to_the_reader(monkeypatch):
+    # Refresh and rendering must share a clock; the real date eventually makes
+    # the fixed NOW fixture stale even immediately after its simulated refresh.
+    monkeypatch.setattr("app.report.evidence.freshness",
+                        lambda asked_at: freshness(asked_at, now=NOW))
     repo = StoredRepo([stored_row(SCA_FRESHNESS_TTL_DAYS + 3)])
+    before = dict(manifest_rows(repo.rows[0]["score_json"]))
+    assert "true of that date" in before["Dependencies checked"]
     await refresh_stale_dependency_audits(repo, client_factory=silent_client, now=NOW)
     rows = dict(manifest_rows(repo.created[0]["score_json"]))
     assert "true of that date" not in rows["Dependencies checked"], (
