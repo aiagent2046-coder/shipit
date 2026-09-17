@@ -103,6 +103,20 @@ jobs:
       - name: "Real-Postgres billing concurrency"
         run: pytest -q tests/test_billing_concurrency_postgres.py
 
+      - name: "Security properties and targeted mutation controls"
+        run: |
+          python scripts/check_security_mutations.py --with-postgres \
+            --output-dir "$RUNNER_TEMP/security-mutation-evidence"
+
+      - name: "Retain security property and mutation evidence"
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-mutation-evidence
+          path: ${{ runner.temp }}/security-mutation-evidence
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: "Real-Postgres repository write-path smoke"
         run: pytest -q tests/test_db_postgres_smoke.py
 
