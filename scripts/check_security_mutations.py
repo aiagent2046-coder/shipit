@@ -1,4 +1,4 @@
-"""Check that selected security properties reject five concrete regressions.
+"""Check that selected security properties reject six concrete regressions.
 
 This is a bounded sensitivity check, not a repository-wide mutation score.
 Only temporary copies of app/ and tests/ are modified. A clean baseline must
@@ -53,6 +53,13 @@ MUTATIONS = (
         "occurrences=occurrences[:1],",
         "tests/test_dependency_occurrence_properties.py::"
         "test_two_manifests_retain_both_origins_without_duplicate_assessments",
+    ),
+    Mutation(
+        "malformed-manifest-gap-hidden", "app/sca/lockfiles.py",
+        "incomplete[manifest] = reason",
+        "pass  # deliberately lose a selected manifest's failure",
+        "tests/test_manifest_fuzz_integration.py::"
+        "test_malformed_lockfile_cannot_report_success_with_retained_positive",
     ),
     Mutation(
         "rls-ownership-bypassed", "app/routes/rls_check.py",
