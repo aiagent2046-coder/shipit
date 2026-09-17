@@ -18,6 +18,7 @@ from datetime import datetime
 
 from app.sca.lockfiles import (
     collect_dependency_inventory, dependency_exclusion_reason, normalize_pypi,
+    occurrence_evidence, occurrence_summary,
 )
 
 RULE_ID = "dependency-cve-match"
@@ -498,6 +499,8 @@ def match_archive(data: bytes, catalog: dict) -> dict:
         else:
             coverage["manifest_gap_details_truncated"] += 1
     for dep in inventory.dependencies:
+        locations = {"occurrences": occurrence_evidence(dep),
+                     "occurrences_recorded": bool(dep.occurrences)}
         name = normalize_pypi(dep.name) if dep.ecosystem == "PyPI" else dep.name
         key = dep.ecosystem + ":" + name
         entries = packages.get(key)
@@ -510,7 +513,7 @@ def match_archive(data: bytes, catalog: dict) -> dict:
             coverage["status_counts"]["unknown"] += 1
             coverage["unresolved_ranges"] += 1
             _record_unknown(coverage, {"package": key, "version": dep.version,
-                                      "manifest": dep.manifest,
+                                      "manifest": dep.manifest, **locations,
                                       "reason": "invalid_catalog_entries"})
             continue
         grouped: dict[str, list[tuple[dict, dict, str]]] = {}
@@ -524,7 +527,7 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                 coverage["status_counts"]["unknown"] += 1
                 coverage["unresolved_ranges"] += 1
                 _record_unknown(coverage, {"package": key, "version": dep.version,
-                                          "manifest": dep.manifest,
+                                          "manifest": dep.manifest, **locations,
                                           "reason": "invalid_advisory_identity"})
                 continue
             entry_id, aliases, source_key = identity
@@ -559,7 +562,7 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                         "unknown_status",
                     )
                 _record_unknown(coverage, {
-                    "package": key, "version": dep.version, "manifest": dep.manifest,
+                    "package": key, "version": dep.version, "manifest": dep.manifest, **locations,
                     "advisory": group_id, "reason": reason,
                     "assessments": [
                         {"source": source_key, "advisory": entry["id"],
@@ -587,6 +590,7 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                 "dependency_scope": ("development" if dep.development is True else
                                      "runtime" if dep.development is False else "unknown"),
                 "direct": dep.direct, "dependency_groups": list(dep.dependency_groups),
+                **locations,
                 "advisory_id": advisory_id, "advisory_ids": all_ids,
                 "url": _advisory_url(advisory_id), "snapshot": coverage["source"],
                 "snapshot_sources": [
@@ -618,7 +622,8 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                 "explanation": (
                     f"The resolved {dep.ecosystem} package version is listed as affected "
                     f"by {advisory_id} in the bundled advisory snapshot. Application "
-                    "reachability and exploitability have not been verified."
+                    "reachability and exploitability have not been verified. "
+                    + occurrence_summary(dep)
                 ),
                 "fix_hint": (
                     "Review the advisory's affected range and upgrade to a supported "

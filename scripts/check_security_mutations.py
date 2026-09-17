@@ -1,4 +1,4 @@
-"""Check that selected security properties reject four concrete regressions.
+"""Check that selected security properties reject five concrete regressions.
 
 This is a bounded sensitivity check, not a repository-wide mutation score.
 Only temporary copies of app/ and tests/ are modified. A clean baseline must
@@ -46,6 +46,13 @@ MUTATIONS = (
         'status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unknown"',
         'status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unaffected"',
         "tests/test_cve_properties.py::test_source_uncertainty_and_evidence_survive_source_reordering",
+    ),
+    Mutation(
+        "dependency-second-origin-dropped", "app/sca/lockfiles.py",
+        "occurrences=occurrences,",
+        "occurrences=occurrences[:1],",
+        "tests/test_dependency_occurrence_properties.py::"
+        "test_two_manifests_retain_both_origins_without_duplicate_assessments",
     ),
     Mutation(
         "rls-ownership-bypassed", "app/routes/rls_check.py",

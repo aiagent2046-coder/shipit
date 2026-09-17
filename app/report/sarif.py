@@ -48,6 +48,7 @@ LEVELS = {"critical": "error", "high": "error", "medium": "warning", "low": "not
 # GitHub's source-derived `primaryLocationLineHash`, and does not replace its
 # fingerprint generation at upload time. Moving a finding changes this hint.
 FINGERPRINT_KEY = "drydock/finding/v2"
+DEPENDENCY_RULE_IDS = frozenset({"dependency-cve-match", "dependency-known-vulnerability"})
 
 
 def _relative_path(path: str, archive_root: str | None = None) -> str:
@@ -74,6 +75,14 @@ def _relative_path(path: str, archive_root: str | None = None) -> str:
 def _uri(path: str) -> str:
     """A relative source path as a URI reference, preserving dotfiles."""
     return urllib.parse.quote(path, safe="/")
+
+
+def _location(path: str, line: object, rule_id: str, archive_root: str | None) -> dict:
+    physical: dict = {"artifactLocation": {"uri": _uri(_relative_path(path, archive_root))}}
+    if type(line) is int and line > 0:
+        physical["region"] = {"startLine": line}
+    return {"physicalLocation": physical,
+            "logicalLocations": [{"name": rule_id, "kind": "rule"}]}
 
 
 def _level(severity: str) -> str:
@@ -155,17 +164,13 @@ def build_sarif(findings: list[dict], *, engine_version: str,
         if not rule_id:
             continue
         path = _relative_path(str(finding.get("file") or ""), archive_root)
-        physical: dict = {"artifactLocation": {"uri": _uri(path)}}
-        line = finding.get("line")
-        if isinstance(line, int) and line > 0:
-            physical["region"] = {"startLine": line}
         results.append({
             "ruleId": rule_id,
             "ruleIndex": rule_index[rule_id],
             "level": _level(str(finding.get("severity") or "")),
             "message": {"text": _message(finding)},
-            "locations": [{"physicalLocation": physical, "logicalLocations": [
-                {"name": rule_id, "kind": "rule"}]}],
+            "locations": [_location(str(finding.get("file") or ""), finding.get("line"),
+                                    rule_id, archive_root)],
             "partialFingerprints": {FINGERPRINT_KEY: fingerprint({**finding, "file": path})},
         })
         projection = narrative_projection(finding)
@@ -184,12 +189,24 @@ def build_sarif(findings: list[dict], *, engine_version: str,
             }
         record = finding.get("claim_evidence")
         record = record if isinstance(record, dict) else {}
-        if finding.get("rule_id") == "dependency-cve-match":
+        if rule_id in DEPENDENCY_RULE_IDS:
             results[-1].setdefault("properties", {}).update({
                 "dependencyEvidence": record,
                 "verificationStatus": finding.get("verification_status"),
                 "verificationMethod": finding.get("verification_method"),
             })
+            # Origins share one assessment, so they add locations, never
+            # results. Keep the representative first for existing consumers.
+            occurrences = record.get("occurrences")
+            for occurrence in occurrences if isinstance(occurrences, list) else []:
+                if not isinstance(occurrence, dict):
+                    continue
+                manifest_path = occurrence.get("manifest")
+                if not isinstance(manifest_path, str) or not manifest_path:
+                    continue
+                location = _location(manifest_path, occurrence.get("line"), rule_id, archive_root)
+                if location not in results[-1]["locations"]:
+                    results[-1]["locations"].append(location)
         grouping, originals = record.get("grouped_claim_scope"), record.get("grouped_originals")
         if (finding.get("source") == "llm" and record.get("version") == 1 and isinstance(grouping, dict)
                 and grouping.get("mechanism") == "query_read_volume"

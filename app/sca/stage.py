@@ -32,7 +32,13 @@ from datetime import datetime, timezone
 from app.scan.checks import CheckFinding
 from app.scan.cve_evidence import empty_cve_summary, normalize_cve_summary
 from app.sca.cve import CveClient
-from app.sca.lockfiles import Dependency, collect_dependency_inventory, unusable_lockfiles
+from app.sca.lockfiles import (
+    Dependency,
+    collect_dependency_inventory,
+    occurrence_evidence,
+    occurrence_summary,
+    unusable_lockfiles,
+)
 from app.sca.osv import OsvClient, OsvUnavailable
 
 # One rule id for the whole stage: the reader's action is the same for every
@@ -70,6 +76,12 @@ MAX_LISTED_ADVISORIES = 4
 # advisory data changes on the order of days, and past this point "we checked
 # your dependencies" stops being a claim a reader should lean on.
 SCA_FRESHNESS_TTL_DAYS = 7
+
+
+@dataclass(frozen=True)
+class DependencyFinding(CheckFinding):
+    """Dependency provenance belongs to this stage, not every static check."""
+    claim_evidence: dict = field(default_factory=dict)
 
 
 def freshness(asked_at: str | None, now: datetime | None = None) -> str:
@@ -320,7 +332,7 @@ def _scope_sentence(dependency: Dependency) -> str:
 
 
 def build_finding(dependency: Dependency, advisories: list[Advisory],
-                  cve: dict | None = None) -> CheckFinding:
+                  cve: dict | None = None) -> DependencyFinding:
     worst = advisories[0]
     others = advisories[1:]
     # Fixed events belong to individual affected ranges, not to a global
@@ -349,11 +361,12 @@ def build_finding(dependency: Dependency, advisories: list[Advisory],
     if hidden > 0:
         listed.append(f"and {hidden} more")
 
-    how = (f"The lockfile {dependency.manifest} resolves {dependency.name} to "
+    how = (f"The representative lockfile {dependency.manifest} resolves {dependency.name} to "
            f"{dependency.version}, and the vulnerability database lists that "
            f"exact version as affected by {len(advisories)} "
            f"{'advisory' if len(advisories) == 1 else 'advisories'}.")
-    risk = (f"{_scope_sentence(dependency)}. " + "; ".join(listed) +
+    risk = (f"At this representative location: {_scope_sentence(dependency)}. "
+            f"{occurrence_summary(dependency)} " + "; ".join(listed) +
             ". A dependency with a known vulnerability is software someone has "
             "already been told how to break; whether the broken part is "
             "reachable from your code was NOT checked here, so treat this as a "
@@ -401,7 +414,23 @@ def build_finding(dependency: Dependency, advisories: list[Advisory],
         title = (f"{len(advisories)} known vulnerabilities in "
                  f"{dependency.name} {dependency.version}")
 
-    return CheckFinding(
+    evidence = {
+        "version": 1,
+        "package": dependency.name,
+        "ecosystem": dependency.ecosystem,
+        "installed_version": dependency.version,
+        "manifest": dependency.manifest,
+        "line": dependency.line,
+        "direct": dependency.direct,
+        "dependency_scope": ("development" if dependency.development is True else
+                             "runtime" if dependency.development is False else "unknown"),
+        "dependency_groups": list(dependency.dependency_groups),
+        "occurrences": occurrence_evidence(dependency),
+        "occurrences_recorded": bool(dependency.occurrences),
+        "advisory_ids": [advisory.identifier for advisory in advisories],
+        "reachability": "not_assessed",
+    }
+    return DependencyFinding(
         rule_id=RULE_ID,
         title=title,
         severity=worst.severity,
@@ -414,6 +443,7 @@ def build_finding(dependency: Dependency, advisories: list[Advisory],
         line=dependency.line,
         explanation=how + " " + risk,
         fix_hint=fix,
+        claim_evidence=evidence,
     )
 
 

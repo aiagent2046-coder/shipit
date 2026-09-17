@@ -107,6 +107,10 @@ def _identity(finding: dict) -> str:
     fields = [finding.get("rule_id"), finding.get("file"), finding.get("line"),
               evidence.get("advisory_id") or evidence.get("cve_id"), evidence.get("ecosystem"),
               evidence.get("package"), evidence.get("installed_version")]
+    if finding.get("rule_id") == "dependency-cve-match" and evidence.get("occurrences"):
+        # Adding/removing a remediation location is a report change even when
+        # the package/advisory assessment and its representative stay the same.
+        fields.append(sorted(json.dumps(row, sort_keys=True) for row in evidence["occurrences"]))
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
@@ -204,12 +208,16 @@ def _range_preview(row: dict) -> dict:
 
 def _dependency_task(findings: list[dict]) -> dict:
     evidence = findings[0]["claim_evidence"]
-    scopes = {f["claim_evidence"].get("dependency_scope", "unknown") for f in findings}
+    occurrences = {json.dumps(row, sort_keys=True): row for finding in findings
+                   for row in finding["claim_evidence"].get("occurrences", []) if isinstance(row, dict)}
+    locations = [occurrences[key] for key in sorted(occurrences)]
+    scope_rows = locations or [f["claim_evidence"] for f in findings]
+    scopes = {row.get("dependency_scope", "unknown") for row in scope_rows}
     scope = next(iter(scopes)) if len(scopes) == 1 else "unknown"
     if scope not in {"development", "runtime"}:
         scope = "unknown"
-    direct = {f["claim_evidence"].get("direct") for f in findings}
-    groups = sorted({group for f in findings for group in f["claim_evidence"].get("dependency_groups", [])})
+    direct = {row.get("direct") for row in scope_rows}
+    groups = sorted({group for row in scope_rows for group in row.get("dependency_groups", [])})
     advisory_ids = sorted({item for f in findings for item in
                            [f["claim_evidence"].get("advisory_id"),
                             *f["claim_evidence"].get("advisory_ids", [])] if item})
@@ -235,6 +243,15 @@ def _dependency_task(findings: list[dict]) -> dict:
         "direct": next(iter(direct)) if len(direct) == 1 else None,
         "dependency_groups": [_short(group, 80) for group in groups[:5]],
         "additional_groups": max(0, len(groups) - 5),
+        **({"occurrences": [
+            {"manifest": _short(row.get("manifest")), "line": row.get("line", 0),
+             "dependency_scope": row.get("dependency_scope", "unknown"), "direct": row.get("direct"),
+             "dependency_groups": [_short(group, 80) for group in row.get("dependency_groups", [])[:5]],
+             "additional_groups": max(0, len(row.get("dependency_groups", [])) - 5)}
+            for row in locations[:6]],
+            "additional_occurrences": max(0, len(locations) - 6),
+            "occurrences_recorded": all(f["claim_evidence"].get("occurrences_recorded") is True
+                                        for f in findings)} if locations else {}),
         "advisory_findings": len(findings), "advisory_ids": [_short(item, 128) for item in advisory_ids[:8]],
         "additional_advisory_ids": max(0, len(advisory_ids) - 8),
         "advisories": advisories, "additional_advisory_details": max(0, len(findings) - 5),
@@ -302,13 +319,15 @@ def display(report: dict, as_json: bool, show_contextual: bool = False) -> None:
                                                ("status", "status_counts", "incomplete_manifests")}))
     if dependency.get("status_counts"):
         print("Dependency counts: affected/unaffected/unknown are assessment counts; "
-              "not_in_catalog counts unlisted dependency entries.")
+              "not_in_catalog counts unlisted unique package/version entries. "
+              "Repeated manifest locations do not multiply assessments.")
     if dependency.get("unknown_reason_counts"):
         print("Unknown dependency reasons: " + json.dumps(dependency["unknown_reason_counts"]))
         details = dependency.get("details", [])
         for detail in details[:5]:
             print("Unknown dependency: " + json.dumps({k: detail.get(k) for k in
-                  ("package", "version", "manifest", "advisory", "reason")}))
+                  ("package", "version", "manifest", "advisory", "reason", "occurrences",
+                   "occurrences_recorded")}))
         omitted = max(0, len(details) - 5) + dependency.get("details_truncated", 0)
         if omitted:
             print(f"{omitted} additional unknown assessments not shown.")

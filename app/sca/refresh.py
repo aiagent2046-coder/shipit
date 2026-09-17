@@ -29,7 +29,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from app.scan.checks import CheckFinding
-from app.sca.lockfiles import Dependency, collect_dependency_inventory
+from app.sca.lockfiles import (
+    MAX_LOCKFILES,
+    Dependency,
+    DependencyOccurrence,
+    collect_dependency_inventory,
+)
 from app.sca.stage import (RULE_ID, SCA_FRESHNESS_TTL_DAYS, findings_for,
                            freshness, query_dependencies, loses_cve_evidence)
 from app.sca.osv import OsvClient
@@ -65,7 +70,13 @@ def inventory_payload(data: bytes, asked_at: str | None) -> dict | None:
         "dependencies": [
             {"ecosystem": d.ecosystem, "name": d.name, "version": d.version,
              "manifest": d.manifest, "line": d.line, "direct": d.direct,
-             "development": d.development}
+             "development": d.development,
+             "dependency_groups": list(d.dependency_groups),
+             **({"occurrences": [
+                 {"manifest": o.manifest, "line": o.line, "direct": o.direct,
+                  "development": o.development, "dependency_groups": list(o.dependency_groups)}
+                 for o in d.occurrences
+             ]} if d.occurrences else {})}
             for d in dependencies
         ],
     }
@@ -102,14 +113,74 @@ def dependencies_from_payload(payload: object) -> list[Dependency]:
         if not isinstance(line, int) or isinstance(line, bool) or line < 0:
             return []
         development = entry.get("development")
+        groups = _groups(entry.get("dependency_groups", []))
+        if groups is None:
+            return []
+        occurrences: tuple[DependencyOccurrence, ...] = ()
+        if "occurrences" in entry:
+            decoded = _occurrences(entry["occurrences"], payload.get("lockfiles"))
+            if decoded is None:
+                return []
+            occurrences = decoded
+            representative = min(occurrences, key=lambda item: (
+                {False: 0, None: 1, True: 2}[item.development], item.manifest, item.line))
+            # New records keep the compatibility fields bound to ONE actual
+            # location. Accepting mixed scopes/paths here would reintroduce
+            # the ambiguous evidence the occurrences field removes.
+            if (type(entry.get("direct")) is not bool
+                    or (development is not None and type(development) is not bool)
+                    or (entry.get("manifest"), line, entry["direct"], development, groups) != (
+                        representative.manifest, representative.line, representative.direct,
+                        representative.development, representative.dependency_groups)):
+                return []
         out.append(Dependency(
             ecosystem=ecosystem, name=name, version=version,
             manifest=str(entry.get("manifest") or ""),
             line=line,
             direct=bool(entry.get("direct")),
             development=development if isinstance(development, bool) else None,
+            dependency_groups=groups,
+            occurrences=occurrences,
         ))
     return out
+
+
+def _groups(value: object) -> tuple[str, ...] | None:
+    if (not isinstance(value, list)
+            or any(not isinstance(group, str) or not group for group in value)
+            or len(set(value)) != len(value)):
+        return None
+    return tuple(value)
+
+
+def _occurrences(value: object, lockfiles: object) -> tuple[DependencyOccurrence, ...] | None:
+    """New origin metadata is complete or unusable, never partially readable.
+
+    An absent occurrences field is the legacy v1 form; an explicitly empty or
+    malformed field is not legacy and must not authorize a refresh that drops
+    old findings. The selected manifest inventory bounds and binds origins.
+    """
+    if (not isinstance(value, list) or not 1 <= len(value) <= MAX_LOCKFILES
+            or not isinstance(lockfiles, list)
+            or any(not isinstance(path, str) or not path for path in lockfiles)):
+        return None
+    seen: set[str] = set()
+    decoded = []
+    for occurrence in value:
+        if (not isinstance(occurrence, dict)
+                or not {"manifest", "line", "direct", "development", "dependency_groups"} <= occurrence.keys()):
+            return None
+        manifest, line = occurrence["manifest"], occurrence["line"]
+        direct, development = occurrence["direct"], occurrence["development"]
+        groups = _groups(occurrence["dependency_groups"])
+        if (not isinstance(manifest, str) or not manifest or manifest not in lockfiles or manifest in seen
+                or type(line) is not int or line < 0 or type(direct) is not bool
+                or (development is not None and type(development) is not bool)
+                or groups is None):
+            return None
+        seen.add(manifest)
+        decoded.append(DependencyOccurrence(manifest, line, direct, development, groups))
+    return tuple(decoded)
 
 
 def refreshed_findings(stored_findings: list[dict],
