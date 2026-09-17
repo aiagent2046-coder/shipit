@@ -18,6 +18,7 @@ import json
 import re
 import tomllib
 import zipfile
+import zlib
 from dataclasses import dataclass, field as dataclass_field
 
 from app.scan.secrets import is_non_production_path
@@ -81,6 +82,8 @@ OSV_ECOSYSTEM = {
 _NPM_NAME = re.compile(r"(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$")
 _NPM_VERSION = re.compile(
     r"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+_PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\Z")
+_PYPI_PIN = re.compile(r"[0-9][A-Za-z0-9.!+_-]*\Z")
 
 
 @dataclass(frozen=True)
@@ -231,7 +234,25 @@ def find_lockfiles(archive: zipfile.ZipFile) -> list[str]:
 
 
 def _read(archive: zipfile.ZipFile, name: str) -> str:
-    return archive.read(name).decode("utf-8", "replace")
+    return archive.read(name).decode("utf-8")
+
+
+def _json_object(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _invalid_json_constant(value: str):
+    raise ValueError("Non-finite JSON constant")
+
+
+def _load_json(text: str):
+    # Conflicting entries must not silently erase a pin or select a version.
+    return json.loads(text, object_pairs_hook=_json_object, parse_constant=_invalid_json_constant)
 
 
 def _package_location(location: str) -> str:
@@ -264,13 +285,17 @@ def _npm_identity(installed_name: str, entry: dict) -> tuple[str, str] | None:
 def _json_dependencies(name: str, text: str, direct_names: set[str],
                        out: list[Dependency]) -> str | None:
     try:
-        data = json.loads(text)
-    except (ValueError, RecursionError):
+        data = _load_json(text)
+    except RecursionError:
+        return "parser_limit"
+    except ValueError:
         return "malformed"
     if not isinstance(data, dict):
         return "malformed"
     incomplete = None
     packages = data.get("packages")
+    if "packages" in data and not isinstance(packages, dict):
+        return "malformed"
     if isinstance(packages, dict):           # lockfileVersion 2 and 3
         for location, entry in packages.items():
             installed_name = _package_location(location)
@@ -362,7 +387,9 @@ def _requirement_lines(name: str, text: str, out: list[Dependency]) -> str | Non
 def _poetry_packages(name: str, text: str, out: list[Dependency]) -> str | None:
     try:
         data = tomllib.loads(text)
-    except (tomllib.TOMLDecodeError, ValueError):
+    except RecursionError:
+        return "parser_limit"
+    except ValueError:
         return "malformed"
     packages = data.get("package")
     if not isinstance(packages, list):
@@ -373,8 +400,8 @@ def _poetry_packages(name: str, text: str, out: list[Dependency]) -> str | None:
             incomplete = "malformed"
             continue
         package, version = entry.get("name"), entry.get("version")
-        if (not isinstance(package, str) or not package.strip()
-                or not isinstance(version, str) or not version):
+        if (not isinstance(package, str) or not _PYPI_NAME.fullmatch(package)
+                or not isinstance(version, str) or not _PYPI_PIN.fullmatch(version)):
             incomplete = "malformed"
             continue
         source = entry.get("source")
@@ -389,7 +416,7 @@ def _poetry_packages(name: str, text: str, out: list[Dependency]) -> str | None:
     return incomplete
 
 
-def _direct_names(archive: zipfile.ZipFile, manifest_path: str) -> set[str]:
+def _direct_names(archive: zipfile.ZipFile, manifest_path: str) -> tuple[set[str], dict[str, str]]:
     """Names declared in the package.json beside the lockfile, if there is one.
 
     Only for the DIRECT flag: the lockfile already told us every version, and
@@ -399,17 +426,28 @@ def _direct_names(archive: zipfile.ZipFile, manifest_path: str) -> set[str]:
     directory = manifest_path.rsplit("/", 1)[0] if "/" in manifest_path else ""
     candidate = f"{directory}/package.json" if directory else "package.json"
     try:
-        data = json.loads(_read(archive, candidate))
-    except (KeyError, ValueError, RecursionError):
-        return set()
+        info = archive.getinfo(candidate)
+    except KeyError:
+        return set(), {}
+    if info.file_size > MAX_LOCKFILE_BYTES:
+        return set(), {candidate: "oversized"}
+    try:
+        data = _load_json(_read(archive, candidate))
+    except RecursionError:
+        return set(), {candidate: "parser_limit"}
+    except (ValueError, OSError, RuntimeError, EOFError, zipfile.BadZipFile, zlib.error):
+        return set(), {candidate: "malformed"}
     if not isinstance(data, dict):
-        return set()
+        return set(), {candidate: "malformed"}
     names = set()
+    gaps = {}
     for field in ("dependencies", "devDependencies", "optionalDependencies"):
         block = data.get(field)
         if isinstance(block, dict):
             names.update(block)
-    return names
+        elif field in data:
+            gaps[candidate] = "malformed"
+    return names, gaps
 
 
 @dataclass(frozen=True)
@@ -454,8 +492,10 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                 text = _read(archive, manifest)
                 basename = manifest.rsplit("/", 1)[-1]
                 if basename == "package-lock.json":
+                    direct_names, metadata_gaps = _direct_names(archive, manifest)
+                    incomplete.update(metadata_gaps)
                     reason = _json_dependencies(
-                        manifest, text, _direct_names(archive, manifest), collected)
+                        manifest, text, direct_names, collected)
                 elif basename == "requirements.txt":
                     reason = _requirement_lines(manifest, text, collected)
                 elif basename in {"pnpm-lock.yaml", "uv.lock"}:
@@ -464,7 +504,8 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                     reason = reader(manifest, text, collected)
                 else:
                     reason = _poetry_packages(manifest, text, collected)
-            except (KeyError, ValueError, RuntimeError, OSError, zipfile.BadZipFile):
+            except (KeyError, ValueError, RuntimeError, OSError, EOFError,
+                    zipfile.BadZipFile, zlib.error):
                 reason = "malformed"
             if reason:
                 incomplete[manifest] = reason

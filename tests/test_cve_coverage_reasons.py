@@ -243,4 +243,8 @@ def test_oversized_generated_manifest_cannot_disable_source_dependency_checks():
     assert coverage["status_counts"]["unaffected"] == 1
     assert coverage["excluded_manifests"] == {"web/.next/package.json": "generated_next_build"}
     files["web/package.json"] = files.pop("web/.next/package.json")
-    assert cve_match.match_archive(_archive(files), _catalog([_ghsa()]))["coverage"]["status"] == "unavailable"
+    coverage = cve_match.match_archive(_archive(files), _catalog([_ghsa()]))["coverage"]
+    assert coverage["status"] == "partial"
+    assert coverage["status_counts"]["unaffected"] == 1
+    assert coverage["incomplete_manifests"] == {"web/package.json": "oversized"}
+    assert coverage["manifest_gap_reason_counts"] == {"manifest_metadata_size_limit": 1}

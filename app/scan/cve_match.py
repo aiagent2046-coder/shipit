@@ -408,10 +408,6 @@ def _archive_inventory(data: bytes):
             raise ValueError("archive_expansion_limit")
         if len({info.filename for info in members}) != len(members):
             raise ValueError("duplicate_archive_members")
-        # The shared parser uses a neighboring package.json for directness.
-        if any(i.file_size > 2_000_000 and i.filename.rsplit("/", 1)[-1] == "package.json"
-               and not dependency_exclusion_reason(i.filename) for i in members):
-            raise ValueError("manifest_size_limit")
         paths = {i.filename for i in members if not i.is_dir()
                  and not dependency_exclusion_reason(i.filename)}
         gaps = {}
@@ -421,7 +417,12 @@ def _archive_inventory(data: bytes):
         for path in sorted(paths):
             directory, _, basename = path.rpartition("/")
             prefix = directory + "/" if directory else ""
-            if basename in unsupported:
+            if basename == "package.json" and archive.getinfo(path).file_size > MAX_MANIFEST_METADATA_BYTES:
+                # A metadata file cannot discard findings from independent
+                # locks; the shared reader also bounds it before reading.
+                gaps[path] = "oversized"
+                gap_reasons[path] = "manifest_metadata_size_limit"
+            elif basename in unsupported:
                 gaps[path] = "unsupported"
             elif basename == "package.json" and not any(
                     prefix + name in paths for name in ("package-lock.json", "pnpm-lock.yaml")):

@@ -11,6 +11,24 @@ scanner's runtime bundle.
 | `tests/test_billing_properties_postgres.py` | Every prefix of generated replay histories preserves one account per charge, returns a plaintext key only on first grant, and keeps invoice/charge bindings. A small first-association model predicts conflicts independently of SQL. Rejected conflicts leave the ledger unchanged. | Real PostgreSQL; sequential Pro grants, one provider and one amount. Existing concurrency tests remain responsible for races and rollback. Does not exercise provider webhooks or Fix Pack funding. |
 | `tests/test_cve_properties.py` | Numeric intervals independently predict CVE/OSV boundary results; prerelease ordering, status changes and source reordering preserve their specified meaning. Unsupported inputs and source disagreement keep explicit uncertainty. | Bounded npm/PyPI version subset; not full SemVer/PEP 440 conformance and not runtime reachability. |
 | `tests/test_dependency_occurrence_properties.py` | A model of per-manifest source facts predicts scope precedence, directness, groups and canonical scalar fields. File/entry reordering and adding/removing a manifest preserve all selected origins while package/version assessments remain unique. Findings and unknown assessments retain the same recorded origins; different versions remain independent. | Tiny synthetic npm locks within the manifest budget, one requirements-line regression and a legacy fallback control. One occurrence represents a selected manifest, not every installation path or importer within it. `occurrences_recorded` denotes retained origins, not complete archive coverage. |
+| `tests/test_manifest_fuzz_properties.py` | Guaranteed malformed/ambiguous JSON, YAML, TOML and requirements create explicit gaps; arbitrary bytes retain an independent positive without assuming every byte string is invalid. Valid formatting changes and archive entry order preserve pins, findings and locations. | 24 derandomized examples per property/format; five supported lockfile formats, arbitrary byte inputs at most 48 bytes. This is bounded structure-aware fuzzing, not a coverage-guided native-code campaign. |
+
+`tests/test_manifest_parser_limits.py` covers byte-size acceptance/refusal,
+YAML node/depth boundaries, aliases/duplicate keys and file selection. Native
+JSON/TOML recursion refusals run in subprocesses with a 15-second timeout and
+payloads at most 21 KB. `tests/test_manifest_fuzz_integration.py` checks the real
+CLI: malformed/oversized metadata retains independent CVE findings and returns
+exit code 2. Damaged ZIP members (CRC, encryption and DEFLATE failures) retain
+assessments from readable locks. A skipped manifest is never converted to a
+clean result.
+
+Lockfiles must decode as UTF-8; decoding no longer replaces damaged bytes.
+Ambiguous duplicate JSON keys and non-finite JSON constants are rejected.
+Poetry names/pins use the same registry identity grammar as uv. A damaged or
+oversized adjacent `package.json` remains an explicit gap while its valid
+lockfile's pinned versions can still be assessed. Invalid dependency-field
+types are gaps; direct names from other valid fields are preserved. These behaviors also apply
+to the shared online reader; no package manager or repository code is run.
 
 All generated examples create their own mutable state. In particular, a pytest
 function-scoped fixture is not mistaken for per-example database isolation.
@@ -24,7 +42,7 @@ Install the hash-locked development dependencies in a Python 3.12+ environment:
 
 ```bash
 python -m pip install --require-hashes -r requirements-dev.txt
-python -m pytest -q tests/test_authorization_properties.py tests/test_cve_properties.py tests/test_dependency_occurrence_properties.py
+python -m pytest -q tests/test_authorization_properties.py tests/test_cve_properties.py tests/test_dependency_occurrence_properties.py tests/test_manifest_fuzz_properties.py tests/test_manifest_parser_limits.py tests/test_manifest_fuzz_integration.py
 ```
 
 The payment suite requires an already migrated, disposable PostgreSQL database
@@ -51,6 +69,7 @@ copies of `app/` and `tests/`, restoring that source between probes:
 - include a CVE range's exclusive upper bound;
 - convert cross-source uncertainty into `unaffected`;
 - drop a second dependency origin while leaving package/version lookup counts unchanged;
+- hide a malformed selected manifest's gap while retaining the independent positive finding;
 - bypass ownership before an RLS check;
 - refuse a valid completed-payment replay (with PostgreSQL).
 
@@ -65,7 +84,7 @@ job runs this mode, so payment coverage cannot silently be skipped there.
 An assertion failure detects a mutation. A passing mutated suite means it
 survived. A missing report, skipped check, fixture/import error, non-assertion
 exception or 180-second timeout invalidates the probe and fails the command.
-These five checks are not an exhaustive mutation campaign or a mutation score.
+These six checks are not an exhaustive mutation campaign or a mutation score.
 
 `summary.json`, pytest logs and JUnit XML record the seed, selected tests, exit
 codes and original/mutated source hashes. The database workflow retains these

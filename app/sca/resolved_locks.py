@@ -5,20 +5,17 @@ which variants a running deployment selected. Non-registry sources stay gaps.
 """
 from __future__ import annotations
 
-import re
 import tomllib
 from dataclasses import replace
 
 import yaml
 
-from app.sca.lockfiles import Dependency, _NPM_NAME, _NPM_VERSION, normalize_pypi
+from app.sca.lockfiles import Dependency, _NPM_NAME, _NPM_VERSION, _PYPI_NAME, _PYPI_PIN, normalize_pypi
 
 MAX_YAML_NODES = 100_000
 MAX_YAML_DEPTH = 64
 MAX_UV_REFERENCE_CHECKS = 100_000
 MAX_UV_SCOPE_STEPS = 100_000
-_PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\Z")
-_PYPI_PIN = re.compile(r"[0-9][A-Za-z0-9.!+_-]*\Z")
 
 
 class _YamlLimit(ValueError):
@@ -171,7 +168,9 @@ def pnpm_packages(manifest: str, text: str, out: list[Dependency]) -> str | None
 def uv_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
     try:
         data = tomllib.loads(text)
-    except (ValueError, RecursionError):
+    except RecursionError:
+        return "parser_limit"
+    except ValueError:
         return "malformed"
     if type(data.get("version")) is not int or data["version"] != 1:
         return "unsupported"
