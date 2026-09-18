@@ -57,6 +57,7 @@ export interface ModelAcceptance {
 }
 
 export type StaticCoverageRule = "outbound_url" | "tls_verification"
+  | "sql_injection" | "sql_injection_js"
   | "unsafe_deserialization" | "unsafe_xml_parse" | "path_traversal"
   | "xss" | "open_redirect" | "insecure_randomness" | "command_injection" | "archive_extraction";
 export interface StaticRuleCoverage {
@@ -67,7 +68,8 @@ export interface StaticRuleCoverage {
   analyzed_files: number;
   excluded_files: number;
   skipped_files: number;
-  exclusion_reasons: Partial<Record<"unsupported_extension" | "non_production_path" | "dependency_tree" | "generated_build", number>>;
+  exclusion_reasons: Partial<Record<"unsupported_extension" | "non_production_path" | "dependency_tree"
+    | "generated_build" | "symlink" | "git_metadata", number>>;
   skip_reasons: Partial<Record<"file_size_limit" | "file_limit" | "finding_limit" | "read_error"
     | "decode_error" | "parse_error" | "ast_limit" | "analysis_limit"
     | "unsupported_vue_template" | "unsupported_vue_script", number>>;
