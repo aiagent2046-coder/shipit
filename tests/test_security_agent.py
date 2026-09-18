@@ -5,6 +5,7 @@ import io
 import json
 import socket
 import subprocess
+from types import SimpleNamespace
 import zipfile
 
 import pytest
@@ -217,8 +218,12 @@ def test_catalog_and_history_are_available_without_network_or_extra_state(tmp_pa
     project.mkdir()
     (project / "query.py").write_text(SQL)
     command = ["--state-dir", str(tmp_path / "state"), "scan", str(project), "--json"]
+    # ZIP creation time must not alter the source snapshot or observation IDs.
+    clock = SimpleNamespace(time=lambda: 0, localtime=lambda _: (2024, 1, 1, 0, 0, 0))
+    monkeypatch.setattr(zipfile, "time", clock)
     assert local_cli.main(command) == 0
     first = json.loads(capsys.readouterr().out)
+    clock.localtime = lambda _: (2025, 6, 2, 3, 4, 6)
     assert local_cli.main(command) == 0
     second = json.loads(capsys.readouterr().out)
     assert first["security_agent"] == second["security_agent"]

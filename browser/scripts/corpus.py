@@ -1,5 +1,6 @@
 """Build test inputs and native expectations; never included in public assets."""
 import base64
+import hashlib
 import io
 import zipfile
 import json
@@ -69,25 +70,31 @@ def dependency_cases():
 
 def main():
     if "--portable" in sys.argv:
-        print(json.dumps([scan_archive(build_archive(path).getvalue())
-                          for _, _, path in discover_cases()] +
-                         [scan_archive(data) for _, data, _, _ in dependency_cases()]))
+        # Reuse the exact uploaded bytes: independently rebuilt ZIP timestamps
+        # would describe a different source snapshot despite equal file text.
+        print(json.dumps([scan_archive(base64.b64decode(encoded)) for encoded in json.load(sys.stdin)]))
         return
-    portable = json.loads(subprocess.run(
-        [sys.executable, __file__, "--portable"], check=True, capture_output=True, text=True,
-    ).stdout)
     cases = []
-    for index, (rule, polarity, directory) in enumerate(discover_cases()):
+    for rule, polarity, directory in discover_cases():
         data = build_archive(directory).getvalue()
         result = scan_archive(data)
         cases.append({"id": f"{rule}/{polarity}/{directory.name}", "rule": rule,
                       "polarity": polarity, "archive": base64.b64encode(data).decode(),
-                      "expected": load_expected(directory), "native": result, "portable": portable[index]})
+                      "expected": load_expected(directory), "native": result})
     for case_id, data, expected, affected in dependency_cases():
         cases.append({'id': case_id, 'rule': 'dependency-cve-match',
                       'polarity': 'positive' if affected else 'negative',
                       'archive': base64.b64encode(data).decode(), 'expected': expected,
-                      'native': scan_archive(data), 'portable': portable[len(cases)]})
+                      'native': scan_archive(data)})
+    portable = json.loads(subprocess.run(
+        [sys.executable, __file__, "--portable"], check=True, capture_output=True, text=True,
+        input=json.dumps([case['archive'] for case in cases]),
+    ).stdout)
+    for case, result in zip(cases, portable, strict=True):
+        case['portable'] = result
+        digest = hashlib.sha256(base64.b64decode(case['archive'])).hexdigest()
+        assert case['native']['report']['security_agent']['source']['archive_sha256'] == digest
+        assert result['report']['security_agent']['source']['archive_sha256'] == digest
     out = Path(sys.argv[1])
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(cases))

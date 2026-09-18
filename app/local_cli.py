@@ -92,7 +92,13 @@ def snapshot(root: Path, state_dir: Path) -> tuple[bytes, dict]:
                 if len(body) + counts["bytes"] > MAX_BYTES:
                     raise ValueError("project exceeds local byte budget")
                 path = (relative / name).as_posix()
-                archive.writestr(path, body)
+                # Stable metadata keeps the archive/evidence identity tied to
+                # included paths and bytes rather than the scan's wall clock.
+                entry = zipfile.ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
+                entry.create_system = 3
+                entry.external_attr = 0o600 << 16
+                entry.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(entry, body)
                 fingerprint.update(path.encode() + b"\0" + hashlib.sha256(body).digest())
                 counts["files"] += 1
                 counts["bytes"] += len(body)
