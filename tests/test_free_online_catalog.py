@@ -21,6 +21,7 @@ import pytest
 
 from app.llm.client import LLMClient, LLMError
 from app.local_cli import inspect_project
+from app.main import app, get_audit_repo
 from app.report.sarif import build_sarif
 from app.sca.cache import needs_dependency_scan
 from app.scan import pipeline
@@ -475,8 +476,8 @@ async def test_stale_preview_is_refreshed_before_paid_fallback_reuses_it(catalog
 async def test_intake_queues_catalog_staleness_instead_of_returning_old_results(
     catalog_files, monkeypatch, audit_queue, paid,
 ):
-    from app.main import app, get_audit_repo
-
+    # Bind the same app/dependency objects as the shared TestClient at collection
+    # time. Schema tests reload app.main while the client keeps its original app.
     monkeypatch.setenv("SCA_ENABLED", "0")
     raw = project("PyPI", "adyen", "2.2.0")
     repo = Repo()
