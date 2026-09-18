@@ -107,6 +107,8 @@ MODEL_LIMITATIONS = frozenset({
 })
 
 RULE_COVERAGE_LABELS = {
+    "sql_injection": "Python SQL queries",
+    "sql_injection_js": "JavaScript/TypeScript SQL queries",
     "outbound_url": "Outbound request URLs",
     "tls_verification": "TLS verification",
     "unsafe_deserialization": "Unsafe deserialization",

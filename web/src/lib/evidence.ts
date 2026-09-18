@@ -336,6 +336,8 @@ const dependencyLimitations = new Set([
 ]);
 
 const ruleCoverageLabels: Record<StaticCoverageRule, string> = {
+  sql_injection: "Python SQL queries",
+  sql_injection_js: "JavaScript/TypeScript SQL queries",
   outbound_url: "Outbound request URLs",
   tls_verification: "TLS verification",
   unsafe_deserialization: "Unsafe deserialization",

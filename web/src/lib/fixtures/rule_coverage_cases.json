@@ -466,5 +466,159 @@
     "exclusions": null,
     "skips": null,
     "notice": null
+  },
+  {
+    "name": "Python SQL queries file limit remains visible",
+    "rule": "sql_injection",
+    "label": "Python SQL queries",
+    "record": {
+      "version": 1,
+      "files_total": 401,
+      "eligible_files": 401,
+      "attempted_files": 400,
+      "analyzed_files": 400,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "file_limit": 1
+      },
+      "partial": true
+    },
+    "summary": "400 of 401 eligible files analyzed; 400 attempted; 1 not fully analyzed; 0 excluded from 401 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "file count limit: 1",
+    "notice": "Python SQL queries: 400 of 401 eligible files analyzed (file count limit: 1)."
+  },
+  {
+    "name": "Python SQL queries finding limit remains visible",
+    "rule": "sql_injection",
+    "label": "Python SQL queries",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 0,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "finding_limit": 1
+      },
+      "partial": true
+    },
+    "summary": "0 of 1 eligible files analyzed; 1 attempted; 1 not fully analyzed; 0 excluded from 1 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "finding limit: 1",
+    "notice": "Python SQL queries: 0 of 1 eligible files analyzed (finding limit: 1)."
+  },
+  {
+    "name": "Python SQL queries completed scope is not a safety guarantee",
+    "rule": "sql_injection",
+    "label": "Python SQL queries",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 1,
+      "excluded_files": 0,
+      "skipped_files": 0,
+      "exclusion_reasons": {},
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "1 of 1 eligible files analyzed; 1 attempted; 0 not fully analyzed; 0 excluded from 1 archive files. No file-processing gaps recorded within this rule's scope.",
+    "exclusions": "None recorded",
+    "skips": "None recorded",
+    "notice": null
+  },
+  {
+    "name": "Python SQL queries audit without counters stays unknown",
+    "rule": "sql_injection",
+    "label": "Python SQL queries",
+    "record": null,
+    "summary": "Not recorded for this audit",
+    "exclusions": null,
+    "skips": null,
+    "notice": null
+  },
+  {
+    "name": "JavaScript/TypeScript SQL queries file limit remains visible",
+    "rule": "sql_injection_js",
+    "label": "JavaScript/TypeScript SQL queries",
+    "record": {
+      "version": 1,
+      "files_total": 401,
+      "eligible_files": 401,
+      "attempted_files": 400,
+      "analyzed_files": 400,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "file_limit": 1
+      },
+      "partial": true
+    },
+    "summary": "400 of 401 eligible files analyzed; 400 attempted; 1 not fully analyzed; 0 excluded from 401 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "file count limit: 1",
+    "notice": "JavaScript/TypeScript SQL queries: 400 of 401 eligible files analyzed (file count limit: 1)."
+  },
+  {
+    "name": "JavaScript/TypeScript SQL queries finding limit remains visible",
+    "rule": "sql_injection_js",
+    "label": "JavaScript/TypeScript SQL queries",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 0,
+      "excluded_files": 0,
+      "skipped_files": 1,
+      "exclusion_reasons": {},
+      "skip_reasons": {
+        "finding_limit": 1
+      },
+      "partial": true
+    },
+    "summary": "0 of 1 eligible files analyzed; 1 attempted; 1 not fully analyzed; 0 excluded from 1 archive files. Partial check.",
+    "exclusions": "None recorded",
+    "skips": "finding limit: 1",
+    "notice": "JavaScript/TypeScript SQL queries: 0 of 1 eligible files analyzed (finding limit: 1)."
+  },
+  {
+    "name": "JavaScript/TypeScript SQL queries completed scope is not a safety guarantee",
+    "rule": "sql_injection_js",
+    "label": "JavaScript/TypeScript SQL queries",
+    "record": {
+      "version": 1,
+      "files_total": 1,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 1,
+      "excluded_files": 0,
+      "skipped_files": 0,
+      "exclusion_reasons": {},
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "1 of 1 eligible files analyzed; 1 attempted; 0 not fully analyzed; 0 excluded from 1 archive files. No file-processing gaps recorded within this rule's scope.",
+    "exclusions": "None recorded",
+    "skips": "None recorded",
+    "notice": null
+  },
+  {
+    "name": "JavaScript/TypeScript SQL queries audit without counters stays unknown",
+    "rule": "sql_injection_js",
+    "label": "JavaScript/TypeScript SQL queries",
+    "record": null,
+    "summary": "Not recorded for this audit",
+    "exclusions": null,
+    "skips": null,
+    "notice": null
   }
 ]

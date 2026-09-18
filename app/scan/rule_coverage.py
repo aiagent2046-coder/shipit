@@ -14,7 +14,7 @@ from app.scan.secrets import is_non_production_path
 
 RULE_COVERAGE_KEYS = ("outbound_url", "tls_verification", "unsafe_deserialization", "path_traversal",
                       "xss", "open_redirect", "insecure_randomness", "unsafe_xml_parse", "command_injection",
-                      "archive_extraction")
+                      "archive_extraction", "sql_injection", "sql_injection_js")
 EXCLUSION_REASONS = ("unsupported_extension", "non_production_path", "dependency_tree", "generated_build")
 SKIP_REASONS = (
     "file_size_limit", "file_limit", "finding_limit", "read_error", "decode_error", "parse_error", "ast_limit",
@@ -101,7 +101,7 @@ class RuleCoverage:
     """
 
     def __init__(self, archive: zipfile.ZipFile, *, extensions: tuple[str, ...],
-                 max_file_bytes: int, coverage: dict | None = None):
+                 max_file_bytes: int, coverage: dict | None = None, case_sensitive: bool = True):
         self.coverage = coverage
         self.files_total = 0
         self.eligible_files = 0
@@ -110,6 +110,7 @@ class RuleCoverage:
         self.exclusions: Counter[str] = Counter()
         self.skips: Counter[str] = Counter()
         self.infos: list[zipfile.ZipInfo] = []
+        suffixes = extensions if case_sensitive else tuple(suffix.lower() for suffix in extensions)
         for info in archive.infolist():
             if info.is_dir():
                 continue
@@ -120,7 +121,7 @@ class RuleCoverage:
                 self.exclusions["generated_build"] += 1
             elif is_non_production_path(info.filename):
                 self.exclusions["non_production_path"] += 1
-            elif not info.filename.endswith(extensions):
+            elif not (info.filename if case_sensitive else info.filename.lower()).endswith(suffixes):
                 self.exclusions["unsupported_extension"] += 1
             else:
                 self.eligible_files += 1

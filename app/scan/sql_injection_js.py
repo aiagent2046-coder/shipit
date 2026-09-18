@@ -36,6 +36,7 @@ here evaluates, imports or runs any of it.
 from __future__ import annotations
 
 import zipfile
+import zlib
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -43,7 +44,7 @@ import tree_sitter_typescript
 from tree_sitter import Language, Parser
 
 from app.scan.checks import CheckFinding
-from app.scan.secrets import _iter_text_files, is_non_production_path
+from app.scan.rule_coverage import RuleCoverage, mark_analysis_limit, remaining_findings, track_analysis_limits
 
 RULE_ID = "sql-injection-string-built-query"
 
@@ -100,6 +101,14 @@ _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 400
 _MAX_FINDINGS = 32
 _MAX_NODES = 80_000
+
+
+class _AnalysisLimitReached(Exception):
+    """Stop before an incompletely evaluated query can become a finding."""
+
+
+class _InvalidSyntax(ValueError):
+    """The parser explicitly rejected the uploaded source syntax."""
 
 
 def _text(node) -> str:
@@ -386,8 +395,10 @@ class _QueryFlow:
                 environment.bind(child.child_by_field_name("name"), _UNKNOWN, declaration=True)
 
     def visit(self, node, environment, stable):
-        if node is None or environment is None or self.remaining <= 0:
+        if node is None or environment is None:
             return environment
+        if self.remaining <= 0:
+            raise _AnalysisLimitReached
         self.remaining -= 1
         kind = node.type
         if kind in _FUNCTIONS:
@@ -504,40 +515,54 @@ def _findings_for(source: bytes, path: str) -> list[tuple[int, str, str]]:
                 else tree_sitter_typescript.language_typescript())
     root = Parser(Language(language)).parse(source).root_node
     if root.has_error:
-        return []
+        raise _InvalidSyntax("Invalid JavaScript/TypeScript syntax")
     flow = _QueryFlow()
-    stable, hoisted = _scope_writes(root)
-    environment = _Environment()
-    for name in hoisted:
-        environment.frames[-1][name] = _UNKNOWN
     try:
+        stable, hoisted = _scope_writes(root)
+        environment = _Environment()
+        for name in hoisted:
+            environment.frames[-1][name] = _UNKNOWN
         flow.visit(root, environment, stable)
-    except RecursionError:
+    except (RecursionError, _AnalysisLimitReached):
         # Parser success does not imply a recursive visitor can traverse an
         # arbitrarily deep expression. Keep the rest of the archive scannable.
-        pass
+        mark_analysis_limit()
     return sorted(flow.findings)
 
 
-def scan_sql_injection_js(fileobj: BinaryIO) -> list[CheckFinding]:
+def scan_sql_injection_js(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
     """One finding per built query, at most _MAX_FINDINGS per archive."""
     fileobj.seek(0)
     findings: list[CheckFinding] = []
-    seen = 0
+    finding_limit = remaining_findings(_MAX_FINDINGS)
 
     with zipfile.ZipFile(fileobj) as zf:
-        for name, text in _iter_text_files(zf):
-            if seen >= _MAX_FILES or len(findings) >= _MAX_FINDINGS:
-                break
-            if not name.lower().endswith(_SOURCE_EXTS) or is_non_production_path(name):
+        accounting = RuleCoverage(zf, extensions=_SOURCE_EXTS, max_file_bytes=_MAX_FILE_BYTES,
+                                  coverage=coverage, case_sensitive=False)
+        for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
+            name = info.filename
+            try:
+                raw = zf.read(info)
+            except (OSError, RuntimeError, zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError):
+                accounting.skip("read_error")
                 continue
-            if len(text) > _MAX_FILE_BYTES:
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeError:
+                accounting.skip("decode_error")
                 continue
-            seen += 1
 
-            for line, sink, kind in _findings_for(text.encode("utf-8"), name):
-                if len(findings) >= _MAX_FINDINGS:
-                    break
+            try:
+                with track_analysis_limits() as limits:
+                    signals = _findings_for(text.encode("utf-8"), name.lower())
+            except _InvalidSyntax:
+                accounting.skip("parse_error")
+                continue
+            except RecursionError:
+                accounting.skip("ast_limit")
+                continue
+            available = finding_limit - len(findings)
+            for line, sink, kind in signals[:available]:
                 observation = (
                     f"The query text passed to {sink}() at line {line} in {name} is built with "
                     f"{kind} rather than passed as a parameter."
@@ -567,4 +592,11 @@ def scan_sql_injection_js(fileobj: BinaryIO) -> list[CheckFinding]:
                     "$queryRawUnsafe. Where a table or column name must vary, pick it from a "
                     "fixed allow-list in code rather than interpolating it.",
                 ))
+            if len(signals) > available:
+                accounting.skip("finding_limit")
+            elif limits:
+                accounting.skip("analysis_limit")
+            else:
+                accounting.analyzed()
+        accounting.finish()
     return findings

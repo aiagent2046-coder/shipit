@@ -76,6 +76,8 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
     validate_zip(fileobj, size_bytes=size)
     findings: list[ScoredFinding] = []
     rule_coverage = {name: {} for name in RULE_COVERAGE_KEYS}
+    # Producer counts keep independent budgets even when checks share a rule ID.
+    check_finding_counts: dict[str, int] = {}
     checks_not_run: list[dict] = []
     limitations: list[str] = []
 
@@ -96,6 +98,8 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
             reason = f"check_error: {type(exc).__name__}"
             if not any(entry["check"] == check for entry in checks_not_run):
                 checks_not_run.append({"check": check, "reason": reason})
+        finally:
+            check_finding_counts[check] = len(findings) - before
 
     fileobj.seek(0)
     file_coverage: dict = {}
@@ -133,7 +137,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
 
     fileobj.seek(0)
     with attempt("sql_injection"):
-        for q in list(scan_sql_injection(fileobj)):
+        for q in list(scan_sql_injection(fileobj, coverage=rule_coverage["sql_injection"])):
             findings.append(ScoredFinding(
                 rule_id=q.rule_id, title=q.title, severity=q.severity,
                 confidence=q.confidence, category=q.category, file=q.file,
@@ -143,7 +147,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
 
     fileobj.seek(0)
     with attempt("sql_injection_js"):
-        for q in list(scan_sql_injection_js(fileobj)):
+        for q in list(scan_sql_injection_js(fileobj, coverage=rule_coverage["sql_injection_js"])):
             findings.append(ScoredFinding(
                 rule_id=q.rule_id, title=q.title, severity=q.severity,
                 confidence=q.confidence, category=q.category, file=q.file,
@@ -362,6 +366,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
     return {
         "limitations": limitations,
         "rule_coverage": rule_coverage,
+        "check_finding_counts": check_finding_counts,
         "secrets_coverage": file_coverage,
         "source_facts": source_facts,
         # llm_ran=False, not the default: no LLM stage runs inside this
@@ -404,6 +409,8 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
         "checks_run": [name for name in CHECKS_RUN
                        if name not in {entry["check"] for entry in checks_not_run}],
         "coverage": {"secrets": scope_description,
+                     "sql_injection": SCOPE["sql_injection"],
+                     "sql_injection_js": SCOPE["sql_injection_js"],
                      "error_boundary": boundary.coverage,
                      "tls_verification": SCOPE["tls_verification"],
                      "auth_read_consistency": SCOPE["auth_read_consistency"],

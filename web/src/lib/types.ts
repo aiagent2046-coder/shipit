@@ -57,6 +57,7 @@ export interface ModelAcceptance {
 }
 
 export type StaticCoverageRule = "outbound_url" | "tls_verification"
+  | "sql_injection" | "sql_injection_js"
   | "unsafe_deserialization" | "unsafe_xml_parse" | "path_traversal"
   | "xss" | "open_redirect" | "insecure_randomness" | "command_injection" | "archive_extraction";
 export interface StaticRuleCoverage {

@@ -1,4 +1,4 @@
 """Analysis identity shared by server and offline browser entry points."""
 
-# Keep independent dependency evidence when a manifest is malformed or exceeds parser limits.
-AUDIT_ENGINE_VERSION = "2026-09-17-3"
+# Account for bounded SQL analysis and continue each language with its own finding budget.
+AUDIT_ENGINE_VERSION = "2026-09-18-1"

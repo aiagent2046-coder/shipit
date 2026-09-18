@@ -12,6 +12,7 @@ scanner's runtime bundle.
 | `tests/test_cve_properties.py` | Numeric intervals independently predict CVE/OSV boundary results; prerelease ordering, status changes and source reordering preserve their specified meaning. Unsupported inputs and source disagreement keep explicit uncertainty. | Bounded npm/PyPI version subset; not full SemVer/PEP 440 conformance and not runtime reachability. |
 | `tests/test_dependency_occurrence_properties.py` | A model of per-manifest source facts predicts scope precedence, directness, groups and canonical scalar fields. File/entry reordering and adding/removing a manifest preserve all selected origins while package/version assessments remain unique. Findings and unknown assessments retain the same recorded origins; different versions remain independent. | Tiny synthetic npm locks within the manifest budget, one requirements-line regression and a legacy fallback control. One occurrence represents a selected manifest, not every installation path or importer within it. `occurrences_recorded` denotes retained origins, not complete archive coverage. |
 | `tests/test_manifest_fuzz_properties.py` | Guaranteed malformed/ambiguous JSON, YAML, TOML and requirements create explicit gaps; arbitrary bytes retain an independent positive without assuming every byte string is invalid. Valid formatting changes and archive entry order preserve pins, findings and locations. | 24 derandomized examples per property/format; five supported lockfile formats, arbitrary byte inputs at most 48 bytes. This is bounded structure-aware fuzzing, not a coverage-guided native-code campaign. |
+| `tests/test_sql_coverage_contracts.py` | Real CLI scans retain an independent SQL finding alongside a syntax gap and return exit code 2. Browser-engine JSON, SARIF and HTML retain decode, size, finding and analysis gaps. Continuation respects separate Python and JS/TS budgets even though their findings share one rule ID. | Deterministic synthetic source; static string-assembly evidence, not reachable exploitation. Exercises the browser's Python entry point, not a graphical browser or Pyodide. Local history retains finding changes, not a complete coverage snapshot. |
 
 `tests/test_manifest_parser_limits.py` covers byte-size acceptance/refusal,
 YAML node/depth boundaries, aliases/duplicate keys and file selection. Native
@@ -21,6 +22,16 @@ CLI: malformed/oversized metadata retains independent CVE findings and returns
 exit code 2. Damaged ZIP members (CRC, encryption and DEFLATE failures) retain
 assessments from readable locks. A skipped manifest is never converted to a
 clean result.
+
+`tests/test_sql_injection_coverage.py` checks the detector boundaries: file,
+finding, byte-size, decoding, parsing and analysis budgets, retained positives,
+exclusions and continuation accounting. The product contracts additionally use
+the real 400-file batch boundary and check that a completed batch cannot hide
+an earlier syntax gap. Repairing the unread file changes coverage without
+erasing the independent SQL observation or declaring a verified fix. The
+analysis-budget export contract lowers the visitor budget to 64 visits to
+exercise real exhaustion with a small source fixture; detector tests cover the
+remaining traversal behavior.
 
 Lockfiles must decode as UTF-8; decoding no longer replaces damaged bytes.
 Ambiguous duplicate JSON keys and non-finite JSON constants are rejected.
@@ -43,6 +54,7 @@ Install the hash-locked development dependencies in a Python 3.12+ environment:
 ```bash
 python -m pip install --require-hashes -r requirements-dev.txt
 python -m pytest -q tests/test_authorization_properties.py tests/test_cve_properties.py tests/test_dependency_occurrence_properties.py tests/test_manifest_fuzz_properties.py tests/test_manifest_parser_limits.py tests/test_manifest_fuzz_integration.py
+python -m pytest -q tests/test_sql_injection_coverage.py tests/test_sql_coverage_contracts.py
 ```
 
 The payment suite requires an already migrated, disposable PostgreSQL database
@@ -70,6 +82,7 @@ copies of `app/` and `tests/`, restoring that source between probes:
 - convert cross-source uncertainty into `unaffected`;
 - drop a second dependency origin while leaving package/version lookup counts unchanged;
 - hide a malformed selected manifest's gap while retaining the independent positive finding;
+- report unparseable Python SQL source as completely analyzed while retaining an independent SQL finding;
 - bypass ownership before an RLS check;
 - refuse a valid completed-payment replay (with PostgreSQL).
 
@@ -84,7 +97,7 @@ job runs this mode, so payment coverage cannot silently be skipped there.
 An assertion failure detects a mutation. A passing mutated suite means it
 survived. A missing report, skipped check, fixture/import error, non-assertion
 exception or 180-second timeout invalidates the probe and fails the command.
-These six checks are not an exhaustive mutation campaign or a mutation score.
+These seven checks are not an exhaustive mutation campaign or a mutation score.
 
 `summary.json`, pytest logs and JUnit XML record the seed, selected tests, exit
 codes and original/mutated source hashes. The database workflow retains these

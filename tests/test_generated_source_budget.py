@@ -116,7 +116,7 @@ def test_generated_counts_survive_static_manifest_and_sarif_with_secret_findings
     manifest = scan_manifest(data, "test", static, {}, None)
     assert manifest["rule_coverage"] == static["rule_coverage"]
     for key, record in manifest["rule_coverage"].items():
-        if key == "xss":
+        if key in {"xss", "sql_injection_js"}:
             # The JS/TS rule reads no .py file in this archive; the only .py
             # files are the generated build tree and a vendor dependency, and
             # the own .py source is an unsupported extension for it.
