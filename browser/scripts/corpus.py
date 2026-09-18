@@ -26,7 +26,10 @@ if "--portable" in sys.argv:
 from app.scan.browser import ScanSession, scan_archive as _scan_archive  # noqa: E402
 from tests.test_browser_cve import LOCK_GAPS, REAL_CASES, lock_gap_project, project  # noqa: E402
 from tests.detectors.conftest import build_archive, discover_cases, load_expected  # noqa: E402
-from tests.bun_fixtures import GSTACK_ADVISORIES, archive, gstack_project  # noqa: E402
+from tests.bun_fixtures import (  # noqa: E402
+    FAST_URI_ADVISORIES, GSTACK_ADVISORIES, archive, bun_deep_path_project,
+    bun_workspace_project, gstack_project,
+)
 from parser_probes import probe_parsers  # noqa: E402
 
 CATALOG = json.loads((ROOT / "app/data/cve-catalog.json").read_text())
@@ -54,6 +57,14 @@ def dependency_cases():
                               for advisory in sorted(GSTACK_ADVISORIES)]}, not fixed)
     yield ('dependency-cve-match/bun-binary', archive({'bun.lockb': b'\x00binary', 'package.json': '{}'}),
            {'forbid': ['dependency-cve-match']}, False)
+    for name, data in (
+        ('bun-implicit-workspace', bun_workspace_project()),
+        ('bun-deep-path/independent-first', bun_deep_path_project(True)),
+        ('bun-deep-path/independent-last', bun_deep_path_project(False)),
+    ):
+        yield (f'dependency-cve-match/{name}', data, {
+            'expect': [{'rule_id': 'dependency-cve-match', 'advisory_id': advisory}
+                       for advisory in sorted(FAST_URI_ADVISORIES)]}, True)
 
 
 def main():

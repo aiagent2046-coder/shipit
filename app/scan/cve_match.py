@@ -436,7 +436,17 @@ def _archive_inventory(data: bytes):
             if gaps.get(path) == "unresolved":
                 gap_reasons[path] = _missing_lock_reason(archive, path)
     inventory = collect_dependency_inventory(data)
-    inventory.incomplete_manifests.update(gaps)
+    for path, status in gaps.items():
+        if path in inventory.incomplete_manifests:
+            # Keep a specific shared-reader metadata failure instead of the
+            # generic missing-sibling-lock explanation collected above.
+            if gap_reasons.get(path) == "missing_supported_lockfile":
+                gap_reasons.pop(path, None)
+        elif (path in inventory.covered_workspace_manifests
+              and gap_reasons.get(path) == "missing_supported_lockfile"):
+            gap_reasons.pop(path, None)
+        else:
+            inventory.incomplete_manifests[path] = status
     return inventory, gap_reasons
 
 

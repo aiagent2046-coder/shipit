@@ -34,7 +34,10 @@ from tests.test_audit_preview_history import Repo
 from tests.test_browser_cve import CATALOG, project
 from tests.test_sca_stage import make_zip
 from tests.test_sca_wiring import fake_client, repo_with_lockfile
-from tests.bun_fixtures import GSTACK_ADVISORIES, gstack_project
+from tests.bun_fixtures import (
+    FAST_URI_ADVISORIES, GSTACK_ADVISORIES, bun_deep_path_project,
+    bun_workspace_project, gstack_project,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,6 +91,23 @@ def test_bun_gstack_matches_across_free_online_browser_and_local(fixed):
     assert findings == dependency_findings(browser["findings"]) == dependency_findings(local["findings"])
     actual = {f["claim_evidence"]["advisory_id"] for f in findings}
     assert actual & GSTACK_ADVISORIES == (set() if fixed else GSTACK_ADVISORIES)
+
+
+@pytest.mark.parametrize('case', ['implicit-workspace', 'independent-first', 'independent-last'])
+def test_bun_workspace_and_path_limit_match_across_scan_surfaces(case):
+    workspace = case == 'implicit-workspace'
+    raw = (bun_workspace_project() if workspace else
+           bun_deep_path_project(independent_first=case == 'independent-first'))
+    online = free_scan(raw)
+    browser = scan_archive(raw, CATALOG)['report']
+    local = inspect_project(raw, {}, CATALOG, {'sources': CATALOG['sources']})
+    coverage = online['score']['scan_manifest']['dependency_cve']
+    assert coverage == browser['dependency_cve'] == local['dependency_cve']
+    assert coverage['dependencies_found'] == coverage['dependencies_checked'] == (1 if workspace else 65)
+    assert coverage['incomplete_manifests'] == ({} if workspace else {'project/bun.lock': 'parser_limit'})
+    findings = dependency_findings(online['findings'])
+    assert findings == dependency_findings(browser['findings']) == dependency_findings(local['findings'])
+    assert {finding['claim_evidence']['advisory_id'] for finding in findings} == FAST_URI_ADVISORIES
 
 
 @pytest.fixture

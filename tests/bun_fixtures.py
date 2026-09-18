@@ -28,6 +28,40 @@ GSTACK_ADVISORIES = {
     'CVE-2026-90711', 'GHSA-p7fg-763f-g4gf',
 }
 
+FAST_URI_ADVISORIES = {
+    'CVE-2026-84292', 'CVE-2026-84394', 'CVE-2026-86472',
+}
+
+
+def bun_workspace_project():
+    """An implicit workspace is resolved from workspaces, without a tuple."""
+    root = {'name': 'workspace-fixture', 'workspaces': ['apps/web'],
+            'dependencies': {'@project/web': 'workspace:*'}}
+    workspace = {'name': '@project/web', 'dependencies': {'fast-uri': '3.1.6'}}
+    text = bun({'@project/web/fast-uri': registry('fast-uri', '3.1.6')},
+               {'': root, 'apps/web': workspace})
+    return archive({'project/bun.lock': text,
+                    'project/package.json': json.dumps(root),
+                    'project/apps/web/package.json': json.dumps(workspace)})
+
+
+def bun_deep_path_project(independent_first=False):
+    """A 129-byte path reaches the parser's 65th segment, below Bun's limit.
+
+    Each a version requires the next one, forcing separate nested resolutions.
+    A limit on that chain must retain the independent vulnerable root pin,
+    regardless of the order of package keys in JSON.
+    """
+    packages = {}
+    for depth in range(1, 66):
+        metadata = {'dependencies': {'a': f'{depth + 1}.0.0'}} if depth < 65 else {}
+        packages['/'.join(['a'] * depth)] = registry('a', f'{depth}.0.0', **metadata)
+    independent = {'fast-uri': registry('fast-uri', '3.1.6')}
+    packages = ({**independent, **packages} if independent_first else {**packages, **independent})
+    root = {'name': 'deep-path-fixture', 'dependencies': {'a': '1.0.0', 'fast-uri': '3.1.6'}}
+    return archive({'project/bun.lock': bun(packages, {'': root}),
+                    'project/package.json': json.dumps(root)})
+
 
 def gstack_project(fixed=False):
     """Selected pins from the supplied gstack 1.87.4 archive, no project code.

@@ -119,6 +119,100 @@ def test_reference_path_width_is_bounded_before_lookup():
     assert inv.incomplete_manifests == {'bun.lock': 'parser_limit'}
 
 
+@pytest.mark.parametrize('bad_key', ['/'.join(['parent'] * 65), 'x' * 4097])
+@pytest.mark.parametrize('pin_first', [False, True])
+def test_one_path_limit_preserves_independent_cve_pins_and_stays_visible(bad_key, pin_first):
+    entries = [(bad_key, registry('unsupported-path', '1.0.0')),
+               ('fast-uri', registry('fast-uri', '3.1.6'))]
+    if pin_first:
+        entries.reverse()
+    # Later malformed rows must not overwrite the more informative limit.
+    entries.append(('malformed', []))
+    data = archive({'bun.lock': bun(dict(entries))})
+    inv = collect_dependency_inventory(data)
+    assert [(d.name, d.version) for d in inv.dependencies] == [('fast-uri', '3.1.6')]
+    assert inv.incomplete_manifests == {'bun.lock': 'parser_limit'}
+    result = match_archive(data, CATALOG)
+    assert result['coverage']['dependencies_checked'] == 1
+    assert result['coverage']['incomplete_manifests'] == {'bun.lock': 'parser_limit'}
+    assert {f['claim_evidence']['advisory_id'] for f in result['findings']} >= {
+        'CVE-2026-84292', 'CVE-2026-84394', 'CVE-2026-86472'}
+
+
+def test_implicit_workspace_bindings_cover_root_and_workspace_references():
+    text = bun({
+        'lodash': registry('lodash', '4.17.23'),
+        '@project/app/lodash': registry('lodash', '3.10.1'),
+    }, {
+        '': {'dependencies': {'@project/app': 'workspace:apps/app'}},
+        'apps/app': {'name': '@project/app', 'dependencies': {
+            'lib': 'workspace:packages/lib', 'lodash': '^3'}},
+        'packages/lib': {'name': 'lib', 'dependencies': {'lodash': '^4'}},
+    })
+    exported = {}
+    pins = []
+    assert bun_lock.bun_packages('bun.lock', text, pins, workspace_paths=exported) is None
+    assert exported == {'apps/app': '@project/app', 'packages/lib': 'lib'}
+    assert {(d.name, d.version, d.direct) for d in pins} == {
+        ('lodash', '4.17.23', True), ('lodash', '3.10.1', True)}
+    assert inventory(text).incomplete_manifests == {}
+
+
+@pytest.mark.parametrize('packages', [
+    {}, {'app': ['app@workspace:apps/first']}, {'app': registry('app', '1.0.0')},
+])
+def test_duplicate_workspace_names_are_not_resolvable_or_exported(packages):
+    text = bun({'safe': registry('safe', '1.0.0'), **packages}, {
+        '': {'dependencies': {'app': 'workspace:*'}},
+        'apps/first': {'name': 'app'}, 'apps/second': {'name': 'app'},
+    })
+    exported = {}
+    pins = []
+    assert bun_lock.bun_packages('bun.lock', text, pins, workspace_paths=exported) == 'unresolved'
+    assert exported == {}
+    assert [(d.name, d.version) for d in pins] == [('safe', '1.0.0')]
+
+
+def test_registry_collision_cannot_replace_a_workspace_but_nested_copy_survives():
+    text = bun({
+        'app': registry('app', '1.0.0'),
+        'parent/app': registry('app', '2.0.0'),
+    }, {'': {'dependencies': {'app': 'workspace:*'}}, 'apps/app': {'name': 'app'}})
+    exported = {}
+    pins = []
+    assert bun_lock.bun_packages('bun.lock', text, pins, workspace_paths=exported) == 'unresolved'
+    assert exported == {}
+    assert [(d.name, d.version, d.direct) for d in pins] == [('app', '2.0.0', False)]
+
+
+@pytest.mark.parametrize('path', [
+    '.', '..', './app', 'apps/../app', 'apps//app', 'apps/app/', '/apps/app',
+    'apps\\app', 'apps/\x00app', 'C:/apps/app', 'C:apps/app',
+])
+def test_noncanonical_workspace_directories_never_establish_manifest_coverage(path):
+    text = bun({'safe': registry('safe', '1.0.0')}, {'': {}, path: {'name': 'app'}})
+    exported = {}
+    pins = []
+    assert bun_lock.bun_packages('bun.lock', text, pins, workspace_paths=exported) == 'unresolved'
+    assert exported == {}
+    assert [(d.name, d.version) for d in pins] == [('safe', '1.0.0')]
+
+
+@pytest.mark.parametrize('workspace', [[], {'name': []}, {'name': '.'}, {'name': '..'}])
+def test_invalid_workspace_metadata_is_partial_without_a_crash(workspace):
+    text = bun({}, {'': {}, 'apps/app': workspace})
+    exported = {}
+    assert bun_lock.bun_packages('bun.lock', text, [], workspace_paths=exported) == 'unresolved'
+    assert exported == {}
+
+
+def test_partial_lock_does_not_export_even_individually_valid_workspace_paths():
+    text = bun({}, {'': {}, 'apps/app': {'name': 'app', 'dependencies': {'missing': '^1'}}})
+    exported = {'existing': 'evidence-from-another-lock'}
+    assert bun_lock.bun_packages('bun.lock', text, [], workspace_paths=exported) == 'unresolved'
+    assert exported == {'existing': 'evidence-from-another-lock'}
+
+
 def test_shared_file_inventory_and_dependency_limits(monkeypatch):
     text = bun({'a': registry('a', '1.0.0'), 'b': registry('b', '2.0.0')})
     monkeypatch.setattr(lockfiles, 'MAX_LOCKFILES', 1)

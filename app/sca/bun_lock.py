@@ -105,7 +105,20 @@ def _npm_name(name: object) -> bool:
     return isinstance(name, str) and len(name) <= 214 and bool(_NPM_NAME.fullmatch(name))
 
 
-def bun_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
+def _workspace_path(path: str) -> bool:
+    """Accept only canonical, archive-relative workspace directories."""
+    return (bool(path) and '\\' not in path and '\x00' not in path
+            and not (len(path) >= 2 and path[0].isalpha() and path[1] == ':')
+            and all(part not in {'', '.', '..'} for part in path.split('/')))
+
+
+def bun_packages(manifest: str, text: str, out: list[Dependency], *,
+                 workspace_paths: dict[str, str] | None = None) -> str | None:
+    """Collect public pins and optionally export fully validated workspace paths.
+
+    The caller may use the exported directory/name pairs to verify companion
+    manifests. A partial lockfile never contributes that coverage evidence.
+    """
     try:
         data = _jsonc(text)
     except (_ParserLimit, RecursionError):
@@ -124,34 +137,72 @@ def bun_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
     resolved = {}
     metadata = {}
     paths = {}
-    workspace_links = set()
-    try:
-        for key, row in packages.items():
+
+    def unresolved():
+        nonlocal reason
+        if reason != "parser_limit":
+            reason = "unresolved"
+
+    # Bun v1 registers workspace names before reading packages. The matching
+    # workspace tuple may be absent, so it is not the source of this binding.
+    workspace_names = {}
+    ambiguous_names = set()
+    for path, workspace in workspaces.items():
+        if not path:
+            continue
+        if (not isinstance(workspace, dict) or not _workspace_path(path)
+                or not _npm_name(workspace.get('name'))
+                or workspace['name'] in {'.', '..'}):
+            unresolved()
+            continue
+        name = workspace['name']
+        if name in workspace_names:
+            ambiguous_names.add(name)
+            unresolved()
+        else:
+            workspace_names[name] = path
+    declared_workspace_names = set(workspace_names)
+    for name in ambiguous_names:
+        del workspace_names[name]
+    validated_workspace_paths = {path: name for name, path in workspace_names.items()}
+    workspace_links = set(workspace_names)
+
+    for key, row in packages.items():
+        try:
             segments = _segments(key)
-            if not segments or not isinstance(row, list) or not row or not isinstance(row[0], str):
-                reason = "unresolved"
-                continue
-            paths[key] = segments
-            # A workspace itself is local project code, not an npm release.
-            name, sep, version = row[0].partition('@workspace:')
-            if sep and len(row) == 1 and _npm_name(name):
-                workspace = workspaces.get(version)
-                if version and isinstance(workspace, dict) and workspace.get('name') == name:
-                    workspace_links.add(key)
-                    continue
-            name, sep, version = row[0].rpartition('@')
-            if (len(row) != 4 or not sep or not _npm_name(name)
-                    or not _NPM_VERSION.fullmatch(version) or row[1] != ''
-                    or not isinstance(row[2], dict) or not isinstance(row[3], str) or not row[3]
-                    or row[2].get('bundled')):
-                # A custom registry, git/file/link/tarball or bundled source
-                # does not establish the public npm package's identity.
-                reason = "unresolved"
-                continue
-            resolved[key] = (name, version)
-            metadata[key] = row[2]
-    except _ParserLimit:
-        reason = "parser_limit"
+        except _ParserLimit:
+            # A pathological path must not discard independent public pins
+            # later in the same lockfile. Keep the coverage gap sticky.
+            reason = "parser_limit"
+            continue
+        if not segments or not isinstance(row, list) or not row or not isinstance(row[0], str):
+            unresolved()
+            workspace_links.discard(key)
+            continue
+        paths[key] = segments
+        # A workspace itself is local project code, not an npm release.
+        name, sep, version = row[0].partition('@workspace:')
+        if (sep and len(row) == 1 and workspace_names.get(name) == version
+                and (key not in declared_workspace_names or key == name)):
+            workspace_links.add(key)
+            continue
+        if key in declared_workspace_names:
+            # Conflicting root bindings cannot establish which local/public
+            # package is installed. Nested npm copies remain independent.
+            workspace_links.discard(key)
+            unresolved()
+            continue
+        name, sep, version = row[0].rpartition('@')
+        if (len(row) != 4 or not sep or not _npm_name(name)
+                or not _NPM_VERSION.fullmatch(version) or row[1] != ''
+                or not isinstance(row[2], dict) or not isinstance(row[3], str) or not row[3]
+                or row[2].get('bundled')):
+            # A custom registry, git/file/link/tarball or bundled source
+            # does not establish the public npm package's identity.
+            unresolved()
+            continue
+        resolved[key] = (name, version)
+        metadata[key] = row[2]
 
     direct = set()
     resolved_names = {identity[0] for identity in resolved.values()}
@@ -164,7 +215,7 @@ def bun_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
             if checks > MAX_REFERENCE_CHECKS:
                 raise _ParserLimit
             key = '/'.join((*parent[:depth], name))
-            if key in packages:
+            if key in packages or key in workspace_links:
                 return key
         return None
 
@@ -177,19 +228,16 @@ def bun_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
         if (not isinstance(optional_peers, list)
                 or any(not isinstance(name, str) for name in optional_peers)):
             optional_peers = []
-            if reason != "parser_limit":
-                reason = "unresolved"
+            unresolved()
         optional_peers = set(optional_peers)
         for field in fields:
             entries = block.get(field, {})
             if not isinstance(entries, dict):
-                if reason != "parser_limit":
-                    reason = "unresolved"
+                unresolved()
                 continue
             for name, spec in entries.items():
                 if not _npm_name(name) or not isinstance(spec, str) or not spec:
-                    if reason != "parser_limit":
-                        reason = "unresolved"
+                    unresolved()
                     continue
                 key = lookup(parent, name)
                 # Bun may bind peers by version across the package tree. All
@@ -198,16 +246,13 @@ def bun_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
                 if field == 'peerDependencies' and (name in optional_peers or name in resolved_names):
                     continue
                 if key not in resolved and key not in workspace_links:
-                    if reason != "parser_limit":
-                        reason = "unresolved"
+                    unresolved()
                 elif workspace and key in resolved:
                     direct.add(key)
 
     try:
         for path, workspace in workspaces.items():
-            if (not isinstance(workspace, dict) or (path and not _npm_name(workspace.get('name')))):
-                if reason != "parser_limit":
-                    reason = "unresolved"
+            if path and path not in validated_workspace_paths:
                 continue
             parent = (workspace['name'],) if path else ()
             references(parent, workspace, workspace=True)
@@ -218,4 +263,6 @@ def bun_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
         direct.clear()
     for key, (name, version) in resolved.items():
         out.append(Dependency('npm', name, version, manifest, direct=key in direct))
+    if reason is None and workspace_paths is not None:
+        workspace_paths.update(validated_workspace_paths)
     return reason
