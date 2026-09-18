@@ -35,7 +35,9 @@ The preview compares resolved npm/PyPI dependencies against a pinned local
 catalog compiled from the CVE List and GitHub-reviewed GHSA records. It sends no
 package queries or archive content to advisory services.
 Supported inputs include `package-lock.json`, pinned `requirements.txt`,
-`poetry.lock`, `pnpm-lock.yaml` v9, and `uv.lock` v1 (revisions 0–3).
+`poetry.lock`, `pnpm-lock.yaml` v9, `bun.lock` v1, and `uv.lock` v1 (revisions 0–3).
+Binary `bun.lockb` is unsupported; provide a text `bun.lock`. If both are
+present, the text lock takes precedence, including any coverage gaps it has.
 All locked platform/optional/development variants are inspected; this is not
 an assertion that every variant is installed in production.
 Source commits, snapshot age, unsupported manifests, unlisted packages and

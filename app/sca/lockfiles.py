@@ -51,7 +51,12 @@ _REQUIREMENT = re.compile(
 
 # Dependency files that cannot establish the selected versions by themselves.
 # Their presence must remain visible as a gap in dependency coverage.
-_UNUSABLE = ("go.mod", "go.sum")
+_UNUSABLE = ("go.mod", "go.sum", "bun.lockb")
+
+
+def _shadowed_bun_binary(path: str, paths: set[str]) -> bool:
+    # Bun gives the text lock precedence when both files are committed.
+    return path.rsplit('/', 1)[-1] == 'bun.lockb' and path[:-1] in paths
 
 
 def unusable_lockfiles(data: bytes) -> list[str]:
@@ -59,10 +64,12 @@ def unusable_lockfiles(data: bytes) -> list[str]:
     read, so the caller can say WHY nothing was resolved instead of reporting
     an empty dependency list as if the repository had none."""
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        paths = {info.filename for info in archive.infolist() if not info.is_dir()}
         return sorted(
             info.filename for info in archive.infolist()
             if not info.is_dir()
             and info.filename.rsplit("/", 1)[-1] in _UNUSABLE
+            and not _shadowed_bun_binary(info.filename, paths)
             and not is_non_production_path(info.filename)
             and not _vendored(info.filename)
             and not generated_dependency_path(info.filename))
@@ -76,6 +83,7 @@ OSV_ECOSYSTEM = {
     "requirements.txt": "PyPI",
     "poetry.lock": "PyPI",
     "pnpm-lock.yaml": "npm",
+    "bun.lock": "npm",
     "uv.lock": "PyPI",
 }
 
@@ -450,6 +458,75 @@ def _direct_names(archive: zipfile.ZipFile, manifest_path: str) -> tuple[set[str
     return names, gaps
 
 
+def _bun_workspace_manifests(archive: zipfile.ZipFile, manifest: str,
+                             workspaces: dict[str, str], paths: set[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """Confirm manifest ownership from a successfully read Bun workspace lock.
+
+    This establishes membership, not freshness relative to package.json (the
+    same lockfile assumption as sibling manifests). A separate package-manager
+    lock, including an unreadable one, starts an independent inventory boundary.
+    """
+    directory, _, _ = manifest.rpartition('/')
+    prefix = directory + '/' if directory else ''
+    covered, gaps = {}, {}
+    boundaries = ('bun.lock', 'bun.lockb', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock')
+    # Index directory components once; repeatedly joining every ancestor would
+    # make a long workspace path quadratic in length.
+    boundary_tree: dict = {}
+    for path in paths:
+        if not path.startswith(prefix):
+            continue
+        relative_directory, _, basename = path[len(prefix):].rpartition('/')
+        if not relative_directory or basename not in boundaries:
+            continue
+        node = boundary_tree
+        for component in relative_directory.split('/'):
+            node = node.setdefault(component, {})
+        node[''] = {}
+    for relative, workspace_name in workspaces.items():
+        candidate = f'{prefix}{relative}/package.json'
+        if candidate not in paths or dependency_exclusion_reason(candidate):
+            continue
+        node = boundary_tree
+        independent = False
+        for component in relative.split('/'):
+            node = node.get(component)
+            if node is None:
+                break
+            if '' in node:
+                independent = True
+                break
+        if independent:
+            continue
+        if archive.getinfo(candidate).file_size > MAX_LOCKFILE_BYTES:
+            gaps[candidate] = 'oversized'
+            continue
+        try:
+            data = _load_json(_read(archive, candidate))
+        except RecursionError:
+            gaps[candidate] = 'parser_limit'
+            continue
+        except (ValueError, OSError, RuntimeError, EOFError, zipfile.BadZipFile, zlib.error):
+            gaps[candidate] = 'malformed'
+            continue
+        if not isinstance(data, dict):
+            gaps[candidate] = 'malformed'
+            continue
+        if data.get('name') != workspace_name:
+            gaps[candidate] = 'unresolved'
+            continue
+        for field in ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'):
+            entries = data.get(field, {})
+            if (not isinstance(entries, dict) or any(
+                    not _NPM_NAME.fullmatch(name) or not isinstance(spec, str) or not spec
+                    for name, spec in entries.items())):
+                gaps[candidate] = 'malformed'
+                break
+        else:
+            covered[candidate] = manifest
+    return covered, gaps
+
+
 @dataclass(frozen=True)
 class DependencyInventory:
     dependencies: list[Dependency]
@@ -458,6 +535,8 @@ class DependencyInventory:
     incomplete_manifests: dict[str, str]
     excluded_manifests: dict[str, str] = dataclass_field(default_factory=dict)
     excluded_manifests_truncated: int = 0
+    # Only manifests whose ownership a fully parsed workspace lock establishes.
+    covered_workspace_manifests: dict[str, str] = dataclass_field(default_factory=dict)
 
 
 def collect_dependency_inventory(data: bytes) -> DependencyInventory:
@@ -465,9 +544,11 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
     incomplete: dict[str, str] = {}
     excluded: dict[str, str] = {}
     excluded_truncated = 0
+    covered_workspaces: dict[str, str] = {}
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         manifests = find_lockfiles(archive)
         selected = set(manifests)
+        paths = {info.filename for info in archive.infolist() if not info.is_dir()}
         for info in archive.infolist():
             path = info.filename
             if info.is_dir():
@@ -482,7 +563,8 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                             excluded_truncated += 1
                 continue
             if path.rsplit("/", 1)[-1] in _UNUSABLE:
-                incomplete[path] = "unsupported"
+                if not _shadowed_bun_binary(path, paths):
+                    incomplete[path] = "unsupported"
             elif _looks_like_lockfile(path) and path not in selected:
                 incomplete[path] = ("oversized" if info.file_size > MAX_LOCKFILE_BYTES
                                     else "truncated")
@@ -498,6 +580,15 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                         manifest, text, direct_names, collected)
                 elif basename == "requirements.txt":
                     reason = _requirement_lines(manifest, text, collected)
+                elif basename == "bun.lock":
+                    from app.sca.bun_lock import bun_packages
+                    workspace_paths: dict[str, str] = {}
+                    reason = bun_packages(manifest, text, collected, workspace_paths=workspace_paths)
+                    if reason is None:
+                        covered, metadata_gaps = _bun_workspace_manifests(
+                            archive, manifest, workspace_paths, paths)
+                        covered_workspaces.update(covered)
+                        incomplete.update(metadata_gaps)
                 elif basename in {"pnpm-lock.yaml", "uv.lock"}:
                     from app.sca.resolved_locks import pnpm_packages, uv_packages
                     reader = pnpm_packages if basename == "pnpm-lock.yaml" else uv_packages
@@ -532,7 +623,7 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
             occurrences=occurrences,
         ))
     return DependencyInventory(ordered[:MAX_DEPENDENCIES], manifests,
-                               len(ordered), incomplete, excluded, excluded_truncated)
+                               len(ordered), incomplete, excluded, excluded_truncated, covered_workspaces)
 
 
 def collect_dependencies(data: bytes) -> tuple[list[Dependency], list[str], int]:

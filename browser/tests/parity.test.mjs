@@ -45,3 +45,17 @@ test('a failed check stays visible and cannot produce a green full profile', () 
 test('an empty corpus is never a successful parity measurement', () => {
   assert.equal(summarize([]).full_parity, false);
 });
+
+test('advisory expectations check GHSA identities without requiring a CVE field', () => {
+  const item = fixture(['dependencies']);
+  const advisory = 'GHSA-p7fg-763f-g4gf';
+  item.native.report.findings = [{ rule_id: 'dependency-cve-match', claim_evidence: { advisory_id: advisory } }];
+  item.expected = { expect: [{ rule_id: 'dependency-cve-match', advisory_id: advisory }] };
+  assert.equal(evaluateCase(item, item.native).expectation_passed, true);
+  const missing = structuredClone(item.native);
+  missing.report.findings = [];
+  assert.equal(evaluateCase(item, missing).expectation_passed, false);
+  item.expected = { forbid_advisories: [advisory] };
+  assert.equal(evaluateCase(item, item.native).expectation_passed, false);
+  assert.equal(evaluateCase(item, missing).expectation_passed, true);
+});

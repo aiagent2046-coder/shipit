@@ -6,6 +6,9 @@ const repositories: Record<string, string> = {
   "github-reviewed": "https://github.com/github/advisory-database",
 };
 const labels: Record<string, string> = { cvelist: "CVE Program", "github-reviewed": "GitHub-reviewed GHSA" };
+const gapLabels: Record<string, string> = {
+  unsupported_bun_binary_lockfile: "Binary bun.lockb is unsupported; provide a text bun.lock",
+};
 export const snapshotScopeReasons = new Set(["dependency_snapshot_scope", "dependency_runtime_reachability_not_checked"]);
 const scope = "Exact npm/PyPI lockfile versions are compared with a bundled advisory snapshot. "
   + "A match does not establish reachable or exploitable application code. "
@@ -112,7 +115,7 @@ export function snapshotRows(value: unknown, metadataValue?: unknown): [string, 
     + "Assessment counts are not unique dependency counts."]);
   for (const [key, label] of [["unknown_reason_counts", "Snapshot unknown reasons"],
     ["manifest_gap_reason_counts", "Snapshot manifest gaps"]] as const) rows.push([label,
-    Object.entries(coverage[key]).map(([reason, n]) => `${reason.replaceAll("_", " ")}: ${n}`).join(", ") || "None recorded"]);
+    Object.entries(coverage[key]).map(([reason, n]) => `${gapLabels[reason] ?? reason.replaceAll("_", " ")}: ${n}`).join(", ") || "None recorded"]);
   rows.push(["Snapshot processing gaps", `Incomplete manifests: ${coverage.incomplete_manifest_count}; `
     + `inventory omitted: ${coverage.inventory_truncated}; findings omitted: ${coverage.findings_truncated}; `
     + `evaluations omitted: ${coverage.evaluations_truncated}.`]);

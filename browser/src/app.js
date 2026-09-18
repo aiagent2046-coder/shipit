@@ -295,7 +295,9 @@ function renderReport(report) {
       ['Resolved dependencies checked', `${text(dependency.dependencies_checked, 0)} / ${text(dependency.dependencies_found, 0)}`],
       ['Version comparisons unresolved', text(dependency.unresolved_ranges, 0)],
       ['Dependencies absent from this catalog', text(dependency.status_counts?.not_in_catalog, 0)],
-      ['Unresolved manifests', Object.entries(dependency.incomplete_manifests || {}).map(([path, reason]) => `${path}: ${reason}`).join('; ') || 'None reported'],
+      ['Unresolved manifests', Object.entries(dependency.incomplete_manifests || {}).map(([path, reason]) =>
+        `${path}: ${reason === 'unsupported' && path.split('/').at(-1) === 'bun.lockb'
+          ? 'Binary bun.lockb is unsupported; provide a text bun.lock' : reason}`).join('; ') || 'None reported'],
       ['Scope', 'A match identifies a package version listed by a CVE or reviewed GHSA. Runtime exploitability is not checked. Unlisted packages are not a clean bill of health.'],
     ]);
     if (dependency.status === 'partial' || dependency.status === 'unavailable') {
