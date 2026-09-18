@@ -19,6 +19,7 @@ from app.scan.query_read_identity import valid_query_read_identity
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.manifest import SCA_LIMITATIONS
 from app.report.cve import cve_rows, cve_notices
+from app.report.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapshot_notices, snapshot_finding_rows
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
 
@@ -103,7 +104,7 @@ def source_severity_counts(findings: list[dict]) -> dict[str, int]:
 # of being assigned to a model failure by exclusion.
 MODEL_LIMITATIONS = frozenset({
     "billing", "provider", "provider_failure", "cost_cap_exceeded", "daily_spend_cap",
-    "input_truncated", "invalid_responses", "no_providers_configured", "free_tier",
+    "input_truncated", "invalid_responses", "no_providers_configured", "free_tier", "paid_job_cost_cap",
 })
 
 RULE_COVERAGE_LABELS = {
@@ -189,7 +190,15 @@ def _classified_limits(score: dict) -> tuple[list[str], list[str], list[str]]:
 def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
     """Keep dependency gaps and unclassified reasons visible above the findings."""
     _, dependency, other = _classified_limits(score)
-    notices = cve_notices((score.get("scan_manifest") or {}).get("sca_cve"))
+    manifest = score.get("scan_manifest") or {}
+    has_snapshot = manifest.get("dependency_cve") is not None or manifest.get("dependency_snapshot") is not None
+    notices = [*cve_notices(manifest.get("sca_cve")),
+               *snapshot_notices(manifest.get("dependency_cve"), manifest.get("dependency_snapshot"))]
+    if has_snapshot:
+        handled = SCOPE_REASONS | {"dependency_snapshot_unavailable"}
+        if manifest.get("sca_skipped_reason") == "no_client":
+            handled |= {"dependency_coverage_incomplete"}
+        dependency = [reason for reason in dependency if reason not in handled]
     failures = normalize_check_failures((score.get("scan_manifest") or {}).get("static_checks_not_run"))
     if failures:
         notices.append(("Static checks failed",
@@ -218,8 +227,18 @@ def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
             details.append("A dependency lockfile could not be read.")
         if "dependency_coverage_incomplete" in dependency:
             details.append("Dependency coverage is incomplete; some dependencies could not be checked.")
+        if "dependency_snapshot_scope" in dependency:
+            details.append("Only the recorded advisory snapshot was considered.")
+        if "dependency_runtime_reachability_not_checked" in dependency:
+            details.append("Application reachability was not checked.")
+        if "dependency_snapshot_unavailable" in dependency:
+            details.append("The bundled advisory catalog could not be checked.")
         title = ("Dependency check not run" if set(dependency) == {"dependency_check_not_run"}
+                 else "Dependency snapshot scope" if set(dependency) <= SCOPE_REASONS
                  else "Dependency check incomplete")
+        if has_snapshot:
+            title = ("Live OSV lookup not run" if set(dependency) == {"dependency_check_not_run"}
+                     else "Live dependency lookup incomplete")
         notices.append((title, " ".join(details) +
                         " This does not establish the absence of vulnerable dependencies."))
     if other:
@@ -258,7 +277,7 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
     if ("provider" in reasons or "provider_failure" in reasons
             or any(r.startswith("rubric_failed:") for r in reasons)):
         detail += " A model request failed."
-    if "cost_cap_exceeded" in reasons or "daily_spend_cap" in reasons:
+    if "cost_cap_exceeded" in reasons or "daily_spend_cap" in reasons or "paid_job_cost_cap" in reasons:
         detail += " A review spending limit was reached."
     if "input_truncated" in reasons:
         detail += " Token accounting suggests possible input truncation; this is not independently verified."
@@ -304,6 +323,8 @@ def evidence_label(finding: dict, historical: bool = False) -> str:
     if is_informational(finding):
         return "Deployment inventory — informational"
     source = finding.get("source")
+    if source == "dependency" and finding.get("verification_method") == "package_version_match":
+        return "Dependency version match — reachability unverified"
     if source == "llm" or str(finding.get("rule_id", "")).startswith("llm-"):
         return "Model hypothesis — unverified"
     if source == "static":
@@ -356,9 +377,13 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
                    "This does not verify the interpretation.")
     elif check.get("kind") == "static_rule":
         checked = "A static rule emitted this observation. Its consequence was not tested."
+    elif finding.get("source") == "dependency" and finding.get("verification_method") == "package_version_match":
+        checked = "A locked package version matched an advisory. Application reachability was not checked."
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
+    if finding.get("source") == "dependency" and finding.get("verification_method") == "package_version_match":
+        rows.extend(snapshot_finding_rows(record))
     if not historical and unsupported_transport(record):
         rows.append(("Needs exposure evidence",
                      "This transport-only hypothesis is excluded from the score. Runtime routing, logging "
@@ -539,6 +564,12 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
     current forever.
     """
     skipped = manifest.get("sca_skipped_reason")
+    if manifest.get("dependency_cve") is not None or manifest.get("dependency_snapshot") is not None:
+        if skipped == "no_client":
+            return ("Live OSV lookup", "Not run. Bundled snapshot results are recorded separately.")
+        # This row describes only the network stage when both kinds are recorded.
+        return ("Live OSV lookup", _dependency_row({key: value for key, value in manifest.items()
+                                                   if key not in {"dependency_cve", "dependency_snapshot"}})[1])
     resolved = manifest.get("sca_dependencies")
     found = manifest.get("sca_dependencies_found")
     if skipped == "no_client":
@@ -624,6 +655,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Files in archive", str(manifest.get("archive_files", "Not recorded"))),
         ("Static checks run", ", ".join(manifest.get("static_checks", [])) or "Not recorded"),
         _dependency_row(manifest),
+        *snapshot_rows(manifest.get("dependency_cve"), manifest.get("dependency_snapshot")),
         *cve_rows(manifest.get("sca_cve")),
         ("Last responding model", manifest.get("model") or "No model response recorded"),
         ("Model responses", str(manifest.get("model_calls", 0))),

@@ -457,13 +457,15 @@ def test_deep_review_reuses_a_full_audit_of_identical_bytes(monkeypatch):
     # Seed a full-basis row for exactly these bytes, as a previous purchase
     # would have left behind.
     from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
+    from tests.test_audit_preview_history import SNAPSHOT
     audits.rows.append({
         "id": "already-there", "status": "completed",
         "content_hash": content_digest(zip_bytes),
         "engine_version": AUDIT_ENGINE_VERSION,
         "score_json": {"basis": "static+llm", "total": 7.0, "free_baseline": {
             "version": 1, "status": "completed", "origin": "included",
-            "score": {"basis": "static+preview", "total": 7.0}, "findings": []}},
+            "score": {"basis": "static+preview", "total": 7.0,
+                      "scan_manifest": {"dependency_snapshot": SNAPSHOT["dependency_snapshot"]}}, "findings": []}},
         "findings_json": [], "repo_url": "https://github.com/acme/app",
         "access_token": "seededtok",
     })

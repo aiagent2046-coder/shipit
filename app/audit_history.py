@@ -14,6 +14,7 @@ from app.scan.pipeline import FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND, FREE_TIE
 
 from app.scan.pipeline import BASIS_PREVIEW
 from app.db import DatabaseNotConfigured
+from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
 
 
 def _observation_key(finding: dict) -> str:
@@ -22,7 +23,7 @@ def _observation_key(finding: dict) -> str:
 
 
 async def score_with_preview_history(repo, score: dict, findings: list[dict],
-                                     digest: str, engine_version: str) -> dict:
+                                     digest: str, engine_version: str, *, raw: bytes | None = None) -> dict:
     """Called only for full-depth requests, including their failed/partial scans."""
     preview = await repo.get_by_content_hash(digest, engine_version, BASIS_PREVIEW)
     if (not preview or not preview.get("id")
@@ -32,6 +33,14 @@ async def score_with_preview_history(repo, score: dict, findings: list[dict],
             or (preview.get("score_json") or {}).get("basis") != BASIS_PREVIEW):
         return score
     previous = preview.get("findings_json") or []
+    preview_score = preview["score_json"]
+    baseline_findings, origin = previous, "reused"
+    if not snapshot_is_current(preview_score):
+        if raw is None:
+            return score
+        refreshed = await asyncio.to_thread(refresh_snapshot, preview_score, previous, raw)
+        preview_score, baseline_findings = refreshed["score"], refreshed["findings"]
+        origin = "refreshed"
     keys = {_observation_key(f) for f in findings}
     retained = [deepcopy(f) for f in previous if _observation_key(f) not in keys]
     history = {
@@ -45,10 +54,10 @@ async def score_with_preview_history(repo, score: dict, findings: list[dict],
         "retained_findings": retained,
         "status": "not_reassessed",
     }
-    if score.get("preview_history") == history and score.get("free_baseline"):
+    if score.get("preview_history") == history and baseline_is_current(score):
         return score
     return {**score, "preview_history": history,
-            "free_baseline": baseline_snapshot(preview["score_json"], previous, "reused", str(preview["id"]))}
+            "free_baseline": baseline_snapshot(preview_score, baseline_findings, origin, str(preview["id"]))}
 
 
 async def refresh_cached_preview_history(repo, cached: dict) -> dict | None:
@@ -87,7 +96,8 @@ def baseline_snapshot(score, findings, origin, audit_id=None):
     """Keep the complete free result, with no access tokens or nested history."""
     clean_score = {k: deepcopy(v) for k, v in score.items()
                    if k not in {"free_baseline", "preview_history", "analysis_reused_from"}}
-    return {"version": 1, "origin": origin, "audit_id": audit_id,
+    return {"version": 1, "origin": origin, "audit_id": None if origin == "refreshed" else audit_id,
+            **({"source_audit_id": audit_id} if origin == "refreshed" else {}),
             "status": "completed" if score.get("basis") == BASIS_PREVIEW else "incomplete",
             "score": clean_score, "findings": deepcopy(findings)}
 
@@ -99,19 +109,25 @@ async def ensure_paid_baseline(repo, scan, raw, client, digest, engine, *, runne
     remaining paid-job spend budget bounds subsequent preview calls. Like the
     existing cap, one provider response may overshoot; no hard dollar reservation.
     """
-    score = await score_with_preview_history(repo, scan["score"], scan["findings"], digest, engine)
-    if score.get("free_baseline"):
+    score = await score_with_preview_history(repo, scan["score"], scan["findings"], digest, engine, raw=raw)
+    if baseline_is_current(score):
         return score
+    baseline = score.get("free_baseline") or {}
+    if isinstance(baseline.get("score"), dict):
+        refreshed = await asyncio.to_thread(refresh_snapshot, baseline["score"],
+                                            baseline.get("findings") or [], raw)
+        return {**score, "free_baseline": baseline_snapshot(
+            refreshed["score"], refreshed["findings"], "refreshed",
+            baseline.get("audit_id") or baseline.get("source_audit_id"))}
     usage = scan.get("llm_usage") or {}
     remaining = llm_scan.JOB_COST_CAP_USD - pricing.cost_usd(
         usage.get("model"), usage.get("input_tokens", 0), usage.get("output_tokens", 0))
-    if not client.providers or remaining <= 0:
-        return {**score, "free_baseline": {"version": 1, "origin": "included",
-                "status": "unavailable", "reason": "no_providers_configured" if not client.providers
-                else "paid_job_cost_cap", "findings": [], "score": None}}
-    preview = await runner(raw, client.with_model(FREE_TIER_MODEL, by_kind=FREE_TIER_MODEL_BY_KIND),
+    skip = ("no_providers_configured" if not client.providers else
+            "paid_job_cost_cap" if remaining <= 0 else None)
+    preview_client = client if skip else client.with_model(FREE_TIER_MODEL, by_kind=FREE_TIER_MODEL_BY_KIND)
+    preview = await runner(raw, preview_client,
                            llm_passes=1, llm_rubrics=FREE_TIER_RUBRICS, depth=BASIS_PREVIEW,
-                           llm_cost_cap=remaining)
+                           llm_cost_cap=max(0, remaining), **({"llm_skip_reason": skip} if skip else {}))
     # Record this model separately: the paid and free models have different
     # prices. Do this before persisting any report, also on later DB failure.
     await asyncio.shield(record_usage(preview["llm_usage"]))

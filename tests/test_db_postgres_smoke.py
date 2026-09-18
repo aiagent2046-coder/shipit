@@ -1844,6 +1844,7 @@ async def test_legacy_job_with_multiple_completed_payments_has_no_guessed_owner(
 
 async def test_history_copy_remains_refreshable_without_exposing_inventory(real_db):
     """Exercise real SELECT/RETURNING and refresh supersession, not a broad fake row."""
+    from tests.test_audit_preview_history import SNAPSHOT
     repo = AuditRepository()
     digest = f"inventory-history-{uuid.uuid4().hex}"
     engine = "history-inventory-smoke"
@@ -1859,7 +1860,8 @@ async def test_history_copy_remains_refreshable_without_exposing_inventory(real_
     assert paid["dependency_inventory"] == inventory
     await repo.create(
         stack="nextjs", file_count=1, score_total=9.0,
-        score_json={"total": 9.0, "categories": {}, "basis": "static+preview"},
+        score_json={"total": 9.0, "categories": {}, "basis": "static+preview",
+                    "scan_manifest": {"dependency_snapshot": SNAPSHOT["dependency_snapshot"]}},
         findings_json=[], content_hash=digest, engine_version=engine)
     cached = await repo.get_by_content_hash(digest, engine, "static+llm")
     assert cached["dependency_inventory"] == inventory

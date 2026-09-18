@@ -393,5 +393,76 @@
     "model_details": [
       "details were not recorded"
     ]
+  },
+  {
+    "name": "dependency_snapshot_scope",
+    "basis": "static+preview",
+    "calls": 1,
+    "limitations": [
+      "dependency_snapshot_scope"
+    ],
+    "model_title": null,
+    "model_details": [],
+    "model_reasons": [],
+    "dependency_reasons": [
+      "dependency_snapshot_scope"
+    ],
+    "dependency_title": "Dependency snapshot scope",
+    "dependency_detail": "Only the recorded advisory snapshot was considered.",
+    "other_reasons": []
+  },
+  {
+    "name": "dependency_runtime_reachability_not_checked",
+    "basis": "static+preview",
+    "calls": 1,
+    "limitations": [
+      "dependency_runtime_reachability_not_checked"
+    ],
+    "model_title": null,
+    "model_details": [],
+    "model_reasons": [],
+    "dependency_reasons": [
+      "dependency_runtime_reachability_not_checked"
+    ],
+    "dependency_title": "Dependency snapshot scope",
+    "dependency_detail": "Application reachability was not checked.",
+    "other_reasons": []
+  },
+  {
+    "name": "dependency_snapshot_unavailable",
+    "basis": "static+preview",
+    "calls": 1,
+    "limitations": [
+      "dependency_snapshot_unavailable"
+    ],
+    "model_title": null,
+    "model_details": [],
+    "model_reasons": [],
+    "dependency_reasons": [
+      "dependency_snapshot_unavailable"
+    ],
+    "dependency_title": "Dependency check incomplete",
+    "dependency_detail": "The bundled advisory catalog could not be checked.",
+    "other_reasons": []
+  },
+  {
+    "name": "paid_job_cost_cap",
+    "basis": "static_only",
+    "calls": 0,
+    "limitations": [
+      "paid_job_cost_cap"
+    ],
+    "model_title": "Model review unavailable",
+    "model_details": [
+      "No model response is recorded.",
+      "A review spending limit was reached."
+    ],
+    "model_reasons": [
+      "paid_job_cost_cap"
+    ],
+    "dependency_reasons": [],
+    "dependency_title": null,
+    "dependency_detail": "",
+    "other_reasons": []
   }
 ]

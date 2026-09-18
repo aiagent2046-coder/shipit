@@ -198,11 +198,13 @@ class CachedAuditRepo:
 
 def test_cache_hit_answers_inline_and_queues_nothing(audit_queue,
                                                      audit_spool_dir):
+    from tests.test_audit_preview_history import SNAPSHOT
     cached = {
         "id": str(uuid.uuid4()), "access_token": "fake-audit-token-not-a-secret",
         "stack": "nextjs", "file_count": 1, "score_json": {"total": 9.0},
         "findings_json": [], "repo_url": None,
     }
+    cached["score_json"]["scan_manifest"] = {"dependency_snapshot": SNAPSHOT["dependency_snapshot"]}
     app.dependency_overrides[get_audit_repo] = lambda: CachedAuditRepo(cached)
     try:
         resp = _post_zip()

@@ -27,6 +27,7 @@ from app.scan.version import AUDIT_ENGINE_VERSION
 from app.scan.check_failure_scoring import failed_check_categories
 from app.sca.osv import OsvClient
 from app.sca.stage import run_sca_stage
+from app.sca.snapshot import run_snapshot_stage
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +264,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # literal stays the parameterised fix; wrappers with keywords, extra arguments,
 # rebound aliases and unknown spellings are not unwrapped.
 # Identity is shared with the offline browser entry in app.scan.version.
+# 2026-09-18-4: free online audits use the bundled CVE/GHSA catalog. Catalog
+# updates refresh only dependency evidence; previous model analysis is reused.
 # 2026-09-16-1: ignore generated Next.js dependency manifests, with explicit
 #               exclusion accounting; explain unknown advisory and manifest gaps.
 # 2026-09-16-2: RLS candidates require independent explicit Supabase histories;
@@ -619,8 +622,9 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
 
     `sca_client` turns on the dependency stage: it resolves the archive's
     lockfile versions and asks the OSV database about them. No client means the
-    stage is skipped with a recorded reason (for example the free tier or a
-    deployment with SCA disabled), and a database
+    remote stage is skipped with a recorded reason. Preview depth instead
+    matches the bundled offline catalog without sending an inventory, even
+    when the model cannot run. A database
     that cannot be reached degrades the same way -- never a failed audit, and
     never a clean bill of health. It is a separate argument from `llm_client`
     because the two decisions are separate: one is about spending money on a
@@ -657,9 +661,12 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
     # After the LLM stage and outside its try/except on purpose: a provider
     # failure must not cost the dependency check, and the dependency check's
     # failure must not degrade the basis. They answer different questions.
-    sca_findings, sca_summary = run_sca_stage(data, sca_client)
-    if sca_findings:
-        findings = findings + [vars(finding) for finding in sca_findings]
+    if depth == BASIS_PREVIEW and sca_client is None:
+        dependency_findings, sca_summary = run_snapshot_stage(data)
+    else:
+        sca_findings, sca_summary = run_sca_stage(data, sca_client)
+        dependency_findings = [vars(finding) for finding in sca_findings]
+    findings = findings + dependency_findings
 
     # Here and nowhere else, because here is the last place the repository is
     # in memory. Whether the Fix Pack's RLS generator can actually write a

@@ -28,6 +28,7 @@ import json
 import urllib.parse
 
 from app.report.plain_language import plain_fields
+from app.report.dependency_snapshot import snapshot_metadata
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
 from app.scan.cve_evidence import normalize_cve_summary
@@ -236,6 +237,8 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 "cveEvidence": normalize_cve_summary(manifest.get("sca_cve")),
                 **({"dependencyCve": manifest["dependency_cve"]}
                    if isinstance(manifest.get("dependency_cve"), dict) else {}),
+                **({"dependencySnapshot": metadata} if
+                   (metadata := snapshot_metadata(manifest.get("dependency_snapshot"))) is not None else {}),
                 "staticChecksNotRun": failures,
             },
         }],

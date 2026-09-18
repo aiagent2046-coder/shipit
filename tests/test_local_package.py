@@ -55,7 +55,7 @@ def test_real_closure_and_runtime_lock_are_complete():
     files = builder.source_files(ROOT)
     names = {p.relative_to(ROOT).as_posix() for p in files}
     assert {'app/local_cli.py', 'app/local_store.py', 'app/scan/cookie_flags.py',
-            'app/scan/recommendations.py', 'app/sca/resolved_locks.py'} <= names
+            'app/scan/recommendations.py', 'app/sca/resolved_locks.py', 'app/report/dependency_snapshot.py'} <= names
     assert not names & {'app/main.py', 'app/db.py', 'app/scan/pipeline.py', 'app/scan/llm_scan.py'}
     lock, pins = builder.locked_requirements(ROOT, builder.DEPENDENCIES)
     assert len(pins) == 4

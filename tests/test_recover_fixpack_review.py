@@ -88,9 +88,11 @@ class AuditRepo:
 
 
 def saved_review(data, *, basis="static+llm", baseline="completed"):
+    from tests.test_audit_preview_history import SNAPSHOT
     return {"id": REVIEW_ID, "status": "completed", "content_hash": content_digest(data.raw),
             "repo_url": REPO_URL, "engine_version": AUDIT_ENGINE_VERSION, "access_token": PRIVATE_TOKEN,
-            "score_json": {"total": 9.0, "basis": basis, "free_baseline": {"status": baseline},
+            "score_json": {"total": 9.0, "basis": basis, "free_baseline": {"status": baseline,
+                           "score": {"scan_manifest": {"dependency_snapshot": SNAPSHOT["dependency_snapshot"]}}},
                            "scan_manifest": {"limitations": [] if basis == "static+llm" else ["billing"]}},
             "findings_json": [], "stack": "python", "file_count": 2, "score_total": 9.0}
 
