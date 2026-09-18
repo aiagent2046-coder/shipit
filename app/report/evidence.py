@@ -107,6 +107,8 @@ MODEL_LIMITATIONS = frozenset({
 })
 
 RULE_COVERAGE_LABELS = {
+    "sql_injection": "Python SQL queries",
+    "sql_injection_js": "JavaScript/TypeScript SQL queries",
     "outbound_url": "Outbound request URLs",
     "tls_verification": "TLS verification",
     "unsafe_deserialization": "Unsafe deserialization",
@@ -123,6 +125,8 @@ RULE_EXCLUSION_LABELS = {
     "non_production_path": "test/example paths",
     "dependency_tree": "dependency directories",
     "generated_build": "generated build directories",
+    "symlink": "symbolic links",
+    "git_metadata": "Git metadata",
 }
 RULE_SKIP_LABELS = {
     "file_size_limit": "file size limit",

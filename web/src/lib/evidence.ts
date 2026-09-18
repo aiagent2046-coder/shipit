@@ -336,6 +336,8 @@ const dependencyLimitations = new Set([
 ]);
 
 const ruleCoverageLabels: Record<StaticCoverageRule, string> = {
+  sql_injection: "Python SQL queries",
+  sql_injection_js: "JavaScript/TypeScript SQL queries",
   outbound_url: "Outbound request URLs",
   tls_verification: "TLS verification",
   unsafe_deserialization: "Unsafe deserialization",
@@ -352,6 +354,8 @@ const ruleExclusionLabels = {
   non_production_path: "test/example paths",
   dependency_tree: "dependency directories",
   generated_build: "generated build directories",
+  symlink: "symbolic links",
+  git_metadata: "Git metadata",
 };
 const ruleSkipLabels = {
   file_size_limit: "file size limit",

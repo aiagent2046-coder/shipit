@@ -38,11 +38,12 @@ from __future__ import annotations
 
 import ast
 import zipfile
+import zlib
 from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
-from app.scan.secrets import _iter_text_files, is_non_production_path
+from app.scan.rule_coverage import RuleCoverage, mark_analysis_limit, remaining_findings, track_analysis_limits
 
 RULE_ID = "sql-injection-string-built-query"
 
@@ -97,6 +98,11 @@ def _text_import_targets(node: ast.AST):
 _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 400
 _MAX_FINDINGS = 32
+_MAX_NODES = 80_000
+
+
+class _AnalysisLimitReached(Exception):
+    """Stop before an incompletely evaluated query can become a finding."""
 
 
 def _is_literal(node: ast.AST, known: frozenset[str] = frozenset()) -> bool:
@@ -316,7 +322,7 @@ class _QueryFlow:
 
     def __init__(self):
         self.findings: set[tuple[int, str, str]] = set()
-        self.remaining = 80_000
+        self.remaining = _MAX_NODES
 
     def _text_import(self, node: ast.AST, state) -> str | None:
         """The dotted import target a func spelling resolves to, in this state."""
@@ -381,8 +387,10 @@ class _QueryFlow:
             self.block(node.body, state, stable)
 
     def expression(self, node, state, stable):
-        if node is None or self.remaining <= 0:
+        if node is None:
             return _UNKNOWN
+        if self.remaining <= 0:
+            raise _AnalysisLimitReached
         self.remaining -= 1
         if isinstance(node, ast.Lambda):
             self.scope(node, {k: v for k, v in state.items() if k in stable})
@@ -505,8 +513,10 @@ class _QueryFlow:
 
     def block(self, statements, state, stable, captures=None):
         for node in statements:
-            if self.remaining <= 0 or state is None:
+            if state is None:
                 break
+            if self.remaining <= 0:
+                raise _AnalysisLimitReached
             self.remaining -= 1
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for expr in [*node.decorator_list, *node.args.defaults, *node.args.kw_defaults]:
@@ -622,43 +632,55 @@ class _QueryFlow:
 
 def _find_in_module(tree: ast.AST) -> list[tuple[int, str, str]]:
     flow = _QueryFlow()
-    _, stable = _scope_bindings(tree)
     try:
+        _, stable = _scope_bindings(tree)
         flow.block(tree.body, {}, stable)
-    except RecursionError:
+    except (RecursionError, _AnalysisLimitReached):
         # A deeply nested uploaded expression must not abort the archive's
         # static stage. Preserve findings already established before the limit.
-        pass
+        mark_analysis_limit()
     return sorted(flow.findings)
 
 
-def scan_sql_injection(fileobj: BinaryIO) -> list[CheckFinding]:
+def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
     """One finding per built query, at most _MAX_FINDINGS per archive."""
     fileobj.seek(0)
     findings: list[CheckFinding] = []
-    seen = 0
+    finding_limit = remaining_findings(_MAX_FINDINGS)
 
     with zipfile.ZipFile(fileobj) as zf:
-        for name, text in _iter_text_files(zf):
-            if seen >= _MAX_FILES or len(findings) >= _MAX_FINDINGS:
-                break
-            if not name.lower().endswith(".py") or is_non_production_path(name):
+        accounting = RuleCoverage(zf, extensions=(".py",), max_file_bytes=_MAX_FILE_BYTES,
+                                  coverage=coverage, case_sensitive=False,
+                                  exclude_symlinks=True, exclude_git_metadata=True)
+        for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
+            name = info.filename
+            try:
+                raw = zf.read(info)
+            except (OSError, RuntimeError, zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError):
+                accounting.skip("read_error")
                 continue
-            if len(text) > _MAX_FILE_BYTES:
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeError:
+                accounting.skip("decode_error")
                 continue
-            seen += 1
             try:
                 tree = ast.parse(text)
-            except (SyntaxError, ValueError, RecursionError):
+            except (SyntaxError, ValueError):
                 # An unparseable file is not a clean file; it is one this rule
                 # could not read. Skipping is the honest answer -- the
                 # alternative is a regex fallback that would reintroduce the
                 # literal-vs-variable confusion ast was chosen to avoid.
+                accounting.skip("parse_error")
+                continue
+            except RecursionError:
+                accounting.skip("ast_limit")
                 continue
 
-            for line, sink, kind in _find_in_module(tree):
-                if len(findings) >= _MAX_FINDINGS:
-                    break
+            with track_analysis_limits() as limits:
+                signals = _find_in_module(tree)
+            available = finding_limit - len(findings)
+            for line, sink, kind in signals[:available]:
                 observation = (
                     f"The query text passed to {sink}() at line {line} in {name} is built with "
                     f"{kind} rather than passed as a parameter."
@@ -689,4 +711,11 @@ def scan_sql_injection(fileobj: BinaryIO) -> list[CheckFinding]:
                     "Keep the query text a plain literal. Where a table or column name really must "
                     "vary, select it from a fixed allow-list in code rather than interpolating it.",
                 ))
+            if len(signals) > available:
+                accounting.skip("finding_limit")
+            elif limits:
+                accounting.skip("analysis_limit")
+            else:
+                accounting.analyzed()
+        accounting.finish()
     return findings

@@ -128,27 +128,29 @@ class ScanSession:
         from app.scan.check_failure_scoring import failed_check_categories
 
         scanners = {
-            "outbound_url": (stage.scan_outbound_url, "python-outbound-request-unvalidated-url"),
-            "tls_verification": (stage.scan_tls_verification, "tls-verification-disabled"),
-            "unsafe_deserialization": (stage.scan_unsafe_deserialization, "unsafe-deserialization"),
-            "unsafe_xml_parse": (stage.scan_unsafe_xml_parse, "unsafe-xml-parse"),
-            "path_traversal": (stage.scan_path_traversal, "path-traversal-file-sink"),
-            "xss": (stage.scan_xss, "xss-unsafe-html-injection"),
-            "open_redirect": (stage.scan_open_redirect, "python-open-redirect-unvalidated-url"),
-            "insecure_randomness": (stage.scan_insecure_randomness, "insecure-randomness"),
-            "command_injection": (stage.scan_command_injection, "command-injection-shell-built-command"),
-            "archive_extraction": (stage.scan_archive_extraction, "archive-extraction-fully-trusted"),
+            "sql_injection": stage.scan_sql_injection,
+            "sql_injection_js": stage.scan_sql_injection_js,
+            "outbound_url": stage.scan_outbound_url,
+            "tls_verification": stage.scan_tls_verification,
+            "unsafe_deserialization": stage.scan_unsafe_deserialization,
+            "unsafe_xml_parse": stage.scan_unsafe_xml_parse,
+            "path_traversal": stage.scan_path_traversal,
+            "xss": stage.scan_xss,
+            "open_redirect": stage.scan_open_redirect,
+            "insecure_randomness": stage.scan_insecure_randomness,
+            "command_injection": stage.scan_command_injection,
+            "archive_extraction": stage.scan_archive_extraction,
         }
         updated = {**self.static, **deepcopy({key: self.static[key] for key in (
-            "findings", "rule_coverage", "checks_not_run", "checks_run", "coverage",
+            "findings", "rule_coverage", "check_finding_counts", "checks_not_run", "checks_run", "coverage",
         )})}
         failed = {item["check"] for item in updated["checks_not_run"]}
-        for name, (scanner, rule_id) in scanners.items():
+        for name, scanner in scanners.items():
             previous = self.static["rule_coverage"].get(name, {})
             if name in failed or not previous.get("skip_reasons", {}).get("file_limit"):
                 continue
             coverage = {}
-            count = sum(f["rule_id"] == rule_id for f in updated["findings"])
+            count = updated["check_finding_counts"][name]
             try:
                 with resume_rule(previous, count):
                     candidates = scanner(io.BytesIO(self.data), coverage=coverage)
@@ -167,6 +169,7 @@ class ScanSession:
                         finding = stage.prepare_recommendation(finding, updated["source_facts"])
                     added.append(vars(finding))
                 updated["findings"].extend(added)
+                updated["check_finding_counts"][name] = count + len(added)
                 updated["rule_coverage"][name] = coverage
                 prefix = "Continued in local batches; the file limit below applies to each batch. "
                 if not updated["coverage"][name].startswith(prefix):
