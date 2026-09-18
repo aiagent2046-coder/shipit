@@ -22,6 +22,7 @@ from app.report.cve import cve_rows, cve_notices
 from app.report.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapshot_notices, snapshot_finding_rows
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
+from app.scan.security_agent import agent_record, sql_observation
 
 
 def is_non_production(finding: dict) -> bool:
@@ -194,6 +195,10 @@ def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
     has_snapshot = manifest.get("dependency_cve") is not None or manifest.get("dependency_snapshot") is not None
     notices = [*cve_notices(manifest.get("sca_cve")),
                *snapshot_notices(manifest.get("dependency_cve"), manifest.get("dependency_snapshot"))]
+    agent = agent_record(manifest.get("security_agent"))
+    if agent and agent["status"] in {"unavailable", "partial"}:
+        notices.append(("Pattern review incomplete", "The coordinator could not complete its bounded plan. "
+                        "Existing findings are retained; missing review does not establish safety."))
     if has_snapshot:
         handled = SCOPE_REASONS | {"dependency_snapshot_unavailable"}
         if manifest.get("sca_skipped_reason") == "no_client":
@@ -382,6 +387,13 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
+    if trace := sql_observation(finding):
+        rows.extend([
+            ("SQL source trace", f"{trace['assembly_kind']} at line {trace['assembly_line']} → "
+             f"{trace['sink_method']}() at line {trace['sink_line']}. Possible local flow; "
+             "driver identity, input control and runtime behavior were not checked."),
+            ("SQL source SHA-256", trace["source_sha256"]),
+        ])
     if finding.get("source") == "dependency" and finding.get("verification_method") == "package_version_match":
         rows.extend(snapshot_finding_rows(record))
     if not historical and unsupported_transport(record):
@@ -661,6 +673,14 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Model responses", str(manifest.get("model_calls", 0))),
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),
     ]
+    if agent := agent_record(manifest.get("security_agent")):
+        catalog = agent.get("catalog") or {}
+        rows.extend([
+            ("Pattern review", f"{agent['status']}; {len(agent['observations'])} observations; "
+             f"{agent['stop_reason']}. Completion describes bounded review, not project safety."),
+            ("Pattern catalog", f"{catalog.get('version', 'Unavailable')}; "
+             f"SHA-256: {catalog.get('sha256', 'Unavailable')}"),
+        ])
     accounting = manifest.get("model_findings")
     rows.extend((f"Static check failed: {item['check']}", item["reason"])
                 for item in normalize_check_failures(manifest.get("static_checks_not_run")))

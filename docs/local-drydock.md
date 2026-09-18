@@ -5,6 +5,12 @@ CVE/GHSA snapshot. Scan, watch and history do not send network requests, use an
 LLM, load server credentials, install project dependencies, or run project code.
 Only the explicit `update` command downloads a public catalog.
 
+The [deterministic pattern review](deterministic-security-agent.md) classifies
+selected Python observations using bundled, versioned CWE cards. Inspect them
+with `drydock-local patterns` or `drydock-local patterns --json`. Scan reports
+include the card catalog identity, source evidence, missing prerequisites and
+the next manual-review step. This stage makes no model calls and applies no patches.
+
 This release supports Linux/macOS with Python 3.12+ (Windows: WSL). The
 standalone distribution is named `drydock-local`; it contains four runtime
 dependencies (PyYAML, tree-sitter, tree-sitter-typescript and pglast), the shared

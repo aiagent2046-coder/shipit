@@ -369,9 +369,65 @@ function renderReport(report) {
   renderDefinitions(byId('coverage-descriptions'), Object.entries(coverage));
   const ruleCoverage = report.rule_coverage && typeof report.rule_coverage === 'object' ? report.rule_coverage : {};
   renderRuleCoverage(ruleCoverage);
+  renderSecurityAgent(report.security_agent);
   const limits = Array.isArray(report.limitations) ? report.limitations : [];
   const baseline = 'No runtime tests or LLM analysis. Dependency results, when present, are limited to the recorded advisory snapshot. Absence of findings does not establish safety.';
   byId('limitations').replaceChildren(node('li', baseline), ...limits.map((limit) => node('li', text(limit))));
+}
+
+function renderSecurityAgent(agent) {
+  const details = byId('security-agent-details');
+  const container = byId('security-agent');
+  container.replaceChildren();
+  details.hidden = !agent || typeof agent !== 'object' || Array.isArray(agent);
+  details.open = false;
+  if (details.hidden) return;
+
+  const observations = Array.isArray(agent.observations)
+    ? agent.observations.filter(observation => observation && typeof observation === 'object') : [];
+  const reviewStatus = ['completed', 'partial', 'unavailable'].includes(agent.status) ? agent.status : 'unavailable';
+  const label = value => text(value, 'Not reported').replaceAll('_', ' ');
+  const count = value => Number.isInteger(value) && value >= 0 ? value : 'Not reported';
+  byId('security-agent-summary').textContent = `Pattern review · ${reviewStatus} · observations: ${observations.length}`;
+  container.append(node('p', 'Static review with no LLM. Completion describes the review scope; runtime exploitability and repairs remain unverified.', 'hint'));
+  const summary = node('div');
+  const catalog = agent.catalog || {};
+  const budget = agent.budget || {};
+  const plan = Array.isArray(agent.plan) ? agent.plan.filter(step => step && typeof step === 'object') : [];
+  renderDefinitions(summary, [
+    ['Pattern catalog', `${text(catalog.version, 'Not reported')} · patterns: ${count(catalog.cards)}`],
+    ['Catalog SHA-256', text(catalog.sha256, 'Not reported')],
+    ['Candidate review', `${count(budget.processed)} processed / ${count(budget.candidates_found)} found · ${count(budget.candidates_omitted)} omitted · limit ${count(budget.max_candidates)}`],
+    ['Pattern checks', plan.map(step => `${text(step.title, text(step.pattern_id))}: ${label(step.status)}`).join('; ') || 'Not reported'],
+    ['Stop reason', label(agent.stop_reason)],
+  ]);
+  container.append(summary);
+  for (const observation of observations) {
+    const section = node('section');
+    section.append(node('h4', `${text(observation.title, 'Static observation')} · ${label(observation.state)}`));
+    const sql = observation.evidence?.sql_observation;
+    const location = text(observation.file, 'Project');
+    const line = Number.isInteger(observation.line) && observation.line > 0 ? `:${observation.line}` : '';
+    section.append(node('p', `${location}${line}`, 'finding-location'));
+    if (sql && typeof sql === 'object') {
+      section.append(node('p', `Possible local SQL flow: assembly line ${count(sql.assembly_line)} → ${text(sql.sink_method, 'query call')} line ${count(sql.sink_line)}. Driver behavior and external input control are not checked.`, 'hint'));
+    }
+    const missing = Array.isArray(observation.missing_evidence) ? observation.missing_evidence : [];
+    const evidence = node('div');
+    renderDefinitions(evidence, [
+      ['Candidate weakness classes', Array.isArray(observation.weaknesses)
+        ? observation.weaknesses.map(value => text(value)).join(', ') || 'Not reported' : 'Not reported'],
+      ['Missing evidence', missing.length ? missing.map(label).join('; ') : 'Not reported'],
+      ['Next step', sql
+        ? 'Manual review: trace the input origin and check the database driver’s parameter binding at the query call.'
+        : 'Manual review: inspect the reported source location and gather the missing evidence.'],
+      ['Repair guidance', observation.recipe?.status === 'manual_guidance'
+        ? `${text(observation.recipe.id, 'Manual guidance')} · review prerequisites before choosing a repair; no patch is applied.`
+        : 'No repair guidance available; no patch is applied.'],
+    ]);
+    section.append(evidence);
+    container.append(section);
+  }
 }
 
 function renderRuleCoverage(coverage) {

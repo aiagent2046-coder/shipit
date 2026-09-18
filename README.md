@@ -39,6 +39,11 @@ coverage gaps; a version match does not establish runtime reachability.
 Catalog updates refresh cached dependency results without repeating model
 analysis, while keeping the original report intact.
 
+The shared static engine includes a [deterministic pattern-review agent](docs/deterministic-security-agent.md):
+versioned CWE cards classify selected Python source observations, preserve SQL
+assembly-to-sink evidence, and list missing prerequisites for manual review.
+It shares the local/browser/free-audit static engine and makes no model calls.
+
 When available, the free audit also includes a limited model security
 preview of selected code (`basis: static+preview`). Static results remain
 available if the preview is unavailable or incomplete, including provider

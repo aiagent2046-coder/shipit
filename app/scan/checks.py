@@ -45,6 +45,7 @@ class CheckFinding:
     explanation: str = ""
     fix_hint: str = ""
     context: str | None = None
+    claim_evidence: dict | None = None
 
 
 def archive_root(names: list[str]) -> str:

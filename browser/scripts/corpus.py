@@ -104,7 +104,9 @@ def main():
         z.writestr('src/first.py', 'from lxml import etree\n' + xml_call * 31)
         for index in range(399):
             z.writestr(f'src/module{index}.py', 'pass\n')
-        z.writestr('src/tail.py', 'from lxml import etree\n' + xml_call * 2)
+        z.writestr('src/tail.py', 'from lxml import etree\n' + xml_call * 2
+                   + 'query = "SELECT id FROM users WHERE id = " + user_id\n'
+                     'cursor.execute(query)\n')
     session = ScanSession(archive.getvalue(), CATALOG)
     continuation = {"archive": base64.b64encode(archive.getvalue()).decode(),
                     "initial": session.result()}
@@ -114,7 +116,18 @@ def main():
     # Parity alone could preserve the same continuation bug in both runtimes.
     # Require tail discovery, a shared cap and an honest remaining coverage gap.
     assert continuation['initial']['can_continue']
+    assert continuation['initial']['report']['security_agent']['status'] == 'partial'
+    assert not continuation['initial']['report']['security_agent']['observations']
     final = continuation['final']
+    agent = final['report']['security_agent']
+    assert agent['status'] == 'completed'
+    assert len(agent['observations']) == 1
+    decision = agent['observations'][0]
+    assert decision['file'] == 'src/tail.py' and decision['weaknesses'] == ['CWE-89']
+    trace = decision['evidence']['sql_observation']
+    assert (trace['assembly_line'], trace['sink_line']) == (4, 5)
+    assert 'psycopg3_cursor_provenance' in decision['missing_evidence']
+    assert not agent['automatic_patch'] and not agent['runtime_verified']
     xml_findings = [f for f in final['report']['findings'] if f['rule_id'] == 'unsafe-xml-parse']
     assert len(xml_findings) == 32
     assert sum(f['file'] == 'src/tail.py' for f in xml_findings) == 1

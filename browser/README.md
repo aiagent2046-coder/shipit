@@ -67,6 +67,13 @@ inert `.env.fixture` files and entirely wrapped test dependency trees do not
 produce instructions to remove working configuration or installed dependencies.
 Their contents remain subject to the existing secret scanner and its exclusions.
 
+The collapsible **Pattern review** section shows the shared
+[deterministic agent](../docs/deterministic-security-agent.md): selected CWE cards,
+SQL assembly-to-sink observations, missing evidence, and manual-review decisions.
+JSON and SARIF retain the same record and pattern-catalog identity. Continuation
+recomputes this plan from cumulative findings and coverage. A completed plan
+does not establish runtime exploitability or prove that the project is safe.
+
 ## Build and serve
 
 From the repository root, Node 22 or later and `curl` are needed:

@@ -7,6 +7,7 @@ import zipfile
 
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
+from app.scan.security_agent import agent_record
 from app.scan.check_failures import normalize_check_failures
 from app.scan.cve_evidence import normalize_cve_summary
 from app.sca.lockfiles import OSV_ECOSYSTEM
@@ -123,6 +124,8 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
     failed_checks = normalize_check_failures(static.get('checks_not_run'))
     if failed_checks:
         reasons.append('static_checks_failed')
+    reasons.extend(reason for reason in static.get("limitations", [])
+                   if reason in {"security_agent_unavailable", "security_agent_incomplete"})
     return {
         "archive_sha256": hashlib.sha256(data).hexdigest(),
         "engine_version": engine,
@@ -141,6 +144,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         "static_limits": static.get("coverage", {}),
         "secrets_coverage": _file_counts(static.get("secrets_coverage")),
         "rule_coverage": normalize_rule_coverage(static.get("rule_coverage")),
+        "security_agent": agent_record(static.get("security_agent")),
         "source_facts": static.get("source_facts"),
         "model": stats.get("model"),
         "model_calls": stats.get("calls", 0),

@@ -1,8 +1,10 @@
 # SQL pattern pilot: Python and Psycopg 3
 
-Card ID: `sql-value-parameterization-python-psycopg3`, revision 1.
-Status: design pilot tied to existing static evidence and tests; no automatic
-patch application or new agent coordinator is enabled by this card.
+Pattern ID: `python-sql-string-assembly`, revision 1.
+Recipe ID: `sql-value-parameterization-python-psycopg3`, revision 1.
+Status: executable static-evidence pilot selected by the
+[deterministic coordinator](deterministic-security-agent.md). The recipe remains
+manual guidance; it does not enable automatic patch application.
 
 ## Applicability and evidence
 
@@ -83,6 +85,7 @@ rule did not produce a finding, not that the application is safe.
 
 The runtime repair checks in steps 2–4 are proposed work, not capabilities added
 by this PR. The current pilot delivers bounded static evidence, explicit gaps
-and a reviewable recipe. A future deterministic coordinator can select this card
-only when its applicability evidence is present; otherwise it should return the
-specific missing evidence and stop within its budget.
+and a reviewable recipe. The deterministic coordinator classifies the source
+observation, records which recipe prerequisites are missing, and stops within
+its budget with `next_action: manual_review`. It cannot establish the driver's
+identity or promote the proposed transformation to an automatic repair.
