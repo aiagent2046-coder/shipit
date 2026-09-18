@@ -15,12 +15,22 @@ from app.sca.lockfiles import OSV_ECOSYSTEM
 SCA_LIMITATIONS = frozenset({
     "dependency_check_not_run", "dependency_database_unavailable",
     "dependency_lockfile_unreadable", "dependency_coverage_incomplete",
+    "dependency_snapshot_scope", "dependency_runtime_reachability_not_checked",
+    "dependency_snapshot_unavailable",
 })
 
 
 def sca_limitations(sca: dict) -> list[str]:
     """Dependency coverage facts shared by initial scans and cached refreshes."""
     reasons = []
+    snapshot = sca.get("dependency_cve")
+    if isinstance(snapshot, dict):
+        if snapshot.get("status") == "unavailable":
+            return ["dependency_check_not_run", "dependency_snapshot_unavailable"]
+        reasons = ["dependency_snapshot_scope", "dependency_runtime_reachability_not_checked"]
+        if snapshot.get("status") == "partial":
+            reasons.append("dependency_coverage_incomplete")
+        return reasons
     skipped = str(sca.get("skipped_reason") or "")
     if skipped == "no_client" and sca.get("dependencies"):
         reasons.append("dependency_check_not_run")
@@ -44,6 +54,9 @@ def sca_manifest_fields(sca: dict) -> dict:
                    "sca_cve": normalize_cve_summary(sca.get("cve")),
                    "sca_findings_truncated": sca.get("truncated", 0),
                    "sca_skipped_reason": sca.get("skipped_reason") or None})
+    for name in ("dependency_cve", "dependency_snapshot"):
+        if name in sca:
+            fields[name] = sca[name]
     return fields
 
 

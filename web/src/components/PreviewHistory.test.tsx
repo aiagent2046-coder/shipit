@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { PreviewHistory, SeveritySummary } from "./FindingsList";
 import type { Finding, Score } from "@/lib/types";
+import snapshotCases from "@/lib/fixtures/dependency_snapshot_cases.json";
 
 afterEach(cleanup);
 
@@ -105,4 +106,39 @@ it("keeps the free original alongside readable counterevidence and a contradicte
   expect(section.textContent).toContain("Syntax premise contradicted");
   expect(section.querySelector("script")).toBeNull();
   expect(JSON.stringify(original)).toBe(before);
+});
+
+it("distinguishes refreshed dependency matches from retained matches and reused model observations", () => {
+  const current = { rule_id: "dependency-cve-match", title: "Newly published advisory match", severity: "high",
+    confidence: .9, category: "Security", source: "dependency", verification_method: "package_version_match",
+    fix_hint: "Review the advisory.", claim_evidence: { version: 1 } } as Finding;
+  const retained = { ...current, title: "Earlier advisory match", claim_evidence: {
+    ...current.claim_evidence!, snapshot_check_status: "retained_not_reconfirmed" as const } };
+  const c = snapshotCases.find(c => c.name === "partial-retained")!;
+  const refreshed = { total: 0, categories: {}, free_baseline: {
+    version: 1, origin: "refreshed", source_audit_id: "original-free", status: "completed",
+    findings: [current, retained, prior], score: { total: 0, categories: {}, basis: "static+preview", scan_manifest: {
+      static_checks: [], rubrics_completed: [], static_limits: {}, inventory: {}, model_calls: 1, limitations: [],
+      dependency_cve: c.coverage, dependency_snapshot: { ...c.metadata, retained_findings: 1 }, sca_skipped_reason: "no_client",
+    } },
+  } } as unknown as Score;
+  const before = JSON.stringify(refreshed);
+  render(<PreviewHistory score={refreshed} />);
+  const section = screen.getByRole("region", { name: "Included free audit" });
+  expect(section.textContent).toContain("Free audit with refreshed dependency snapshot");
+  expect(section.textContent).toContain("Static observations and model hypotheses were reused without rerunning their checks");
+  for (const [title, label, guidance] of [
+    [current.title, "Dependency match — checked with refreshed snapshot", "Snapshot advisory guidance — reachability unverified"],
+    [retained.title, "Earlier dependency finding — not reconfirmed", "Earlier advisory guidance — not reconfirmed"],
+    [prior.title, "Reused free audit observation — not reassessed", "Reused free audit suggestion — not reassessed"],
+  ]) {
+    const card = within(section).getAllByText(title)[0].closest("li")!;
+    expect(card.textContent).toContain(label);
+    expect(card.textContent).toContain(guidance);
+    expect(card.textContent).not.toContain("Previous preview — not reassessed");
+  }
+  expect(within(section).getByLabelText("Earlier dependency findings retained").textContent)
+    .toContain("the current check did not reconfirm them");
+  expect(screen.queryByText("Potential high impact")).toBeNull();
+  expect(JSON.stringify(refreshed)).toBe(before);
 });

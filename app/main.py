@@ -69,6 +69,7 @@ from app.db import (
     monitoring_processor_lock,
 )
 from app.audit_history import refresh_cached_preview_history, ensure_paid_baseline
+from app.sca.snapshot import baseline_is_current, snapshot_is_current
 from app.sca.refresh import inventory_payload
 from app.sca.cache import needs_dependency_scan
 from app.deploypack import github_app
@@ -543,7 +544,7 @@ async def run_repo_audit(
         digest, AUDIT_ENGINE_VERSION, BASIS_FULL)
     if cached is not None:
         cached = await refresh_cached_preview_history(audit_repo, cached)
-        if cached["score_json"].get("free_baseline"):
+        if baseline_is_current(cached["score_json"]):
             return {
                 "audit_id": cached["id"],
                 "findings": cached["findings_json"] or [],
@@ -2076,10 +2077,14 @@ async def create_audit(
         basis_for_account(account["id"] if account else None))
     if cached is not None and account:
         cached = await refresh_cached_preview_history(audit_repo, cached)
-        if (not cached["score_json"].get("free_baseline")
+        if (not baseline_is_current(cached["score_json"])
                 or needs_dependency_scan(cached)):
             # Complete missing stages in the worker, never in HTTP intake.
             cached = None
+    elif cached is not None and not snapshot_is_current(cached["score_json"]):
+        # The worker refreshes just the bundled advisory evidence; intake
+        # never returns results from an older or repaired catalog.
+        cached = None
     logger.info(
         "audit intake: cache %s for digest %s",
         "hit" if cached is not None else "miss", digest[:12],

@@ -90,6 +90,9 @@ export interface RejectionDiagnostic {
 export interface ScanManifest {
   // Validated at the presentation boundary for older/malformed stored reports.
   sca_cve?: unknown;
+  dependency_cve?: unknown;
+  dependency_snapshot?: unknown;
+  sca_skipped_reason?: string | null;
   source_facts?: {
     guards?: ReviewContextIndex;
     cost_context?: ReviewContextIndex;
@@ -148,7 +151,8 @@ export interface ScanManifest {
 
 export interface Score {
   free_baseline?: {
-    version: 1; origin: "reused" | "included"; audit_id?: string | null;
+    version: 1; origin: "reused" | "included" | "refreshed"; audit_id?: string | null;
+    source_audit_id?: string | null;
     status: "completed" | "incomplete" | "unavailable"; reason?: string;
     score: Score | null; findings: Finding[];
   };
@@ -249,6 +253,7 @@ export interface NarrativeProjection {
 export interface Finding {
   claim_evidence?: {
     version: 1;
+    snapshot_check_status?: "retained_not_reconfirmed";
     source_check: { kind: "quote_match"; line_start: number; line_end: number }
       | { kind: "static_rule" | "not_recorded" };
     observation: string | null;
@@ -300,9 +305,9 @@ export interface Finding {
   masked?: string;
   explanation?: string;
   fix_hint?: string;
-  source?: "static" | "llm" | "unknown";
+  source?: "static" | "llm" | "dependency" | "unknown";
   verification_status?: "unverified";
-  verification_method?: "source_pattern" | "model_review" | "not_run";
+  verification_method?: "source_pattern" | "model_review" | "package_version_match" | "not_run";
   context?: string | null;
 
 }

@@ -60,6 +60,7 @@ from app.db import (
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import detect_stack
 from app.audit_history import refresh_cached_preview_history, ensure_paid_baseline
+from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
 from app.log_context import log_context, set_log_context
@@ -314,8 +315,8 @@ async def _execute_job(
         # twice -- the same reuse create_audit does, just later in the timeline.
         if job.get("account_id"):
             cached = await refresh_cached_preview_history(audit_repo, cached)
-        if (not job.get("account_id")
-                or (cached["score_json"].get("free_baseline")
+        if ((not job.get("account_id") and snapshot_is_current(cached["score_json"]))
+                or (job.get("account_id") and baseline_is_current(cached["score_json"])
                     and not needs_dependency_scan(cached))):
             return str(cached["id"])
 
@@ -369,6 +370,12 @@ async def _execute_job(
         sca_client=sca_client_for(
             paid=depth == BASIS_FULL and bool(job.get("account_id"))),
         ))
+
+    if cached and not job.get("account_id"):
+        scan = await asyncio.to_thread(refresh_snapshot, cached["score_json"],
+                                       cached["findings_json"] or [], raw)
+        scan["score"]["analysis_reused_from"] = (
+            cached["score_json"].get("analysis_reused_from") or str(cached["id"]))
 
     if cached and job.get("account_id") and needs_dependency_scan(cached):
         sca_client = sca_client_for(paid=True)
