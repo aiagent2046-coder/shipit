@@ -354,6 +354,8 @@ const ruleExclusionLabels = {
   non_production_path: "test/example paths",
   dependency_tree: "dependency directories",
   generated_build: "generated build directories",
+  symlink: "symbolic links",
+  git_metadata: "Git metadata",
 };
 const ruleSkipLabels = {
   file_size_limit: "file size limit",

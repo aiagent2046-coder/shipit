@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+import stat
 import zipfile
 
 from app.scan.file_scope import is_dependency_path, is_generated_path
@@ -15,7 +16,8 @@ from app.scan.secrets import is_non_production_path
 RULE_COVERAGE_KEYS = ("outbound_url", "tls_verification", "unsafe_deserialization", "path_traversal",
                       "xss", "open_redirect", "insecure_randomness", "unsafe_xml_parse", "command_injection",
                       "archive_extraction", "sql_injection", "sql_injection_js")
-EXCLUSION_REASONS = ("unsupported_extension", "non_production_path", "dependency_tree", "generated_build")
+EXCLUSION_REASONS = ("unsupported_extension", "non_production_path", "dependency_tree", "generated_build",
+                     "symlink", "git_metadata")
 SKIP_REASONS = (
     "file_size_limit", "file_limit", "finding_limit", "read_error", "decode_error", "parse_error", "ast_limit",
     "analysis_limit", "unsupported_vue_template", "unsupported_vue_script",
@@ -101,7 +103,8 @@ class RuleCoverage:
     """
 
     def __init__(self, archive: zipfile.ZipFile, *, extensions: tuple[str, ...],
-                 max_file_bytes: int, coverage: dict | None = None, case_sensitive: bool = True):
+                 max_file_bytes: int, coverage: dict | None = None, case_sensitive: bool = True,
+                 exclude_symlinks: bool = False, exclude_git_metadata: bool = False):
         self.coverage = coverage
         self.files_total = 0
         self.eligible_files = 0
@@ -115,7 +118,13 @@ class RuleCoverage:
             if info.is_dir():
                 continue
             self.files_total += 1
-            if is_dependency_path(info.filename):
+            # Preserve each caller's source policy before either analysis budget.
+            # A symbolic link's bytes name its target; they are not source code.
+            if exclude_symlinks and stat.S_ISLNK(info.external_attr >> 16):
+                self.exclusions["symlink"] += 1
+            elif exclude_git_metadata and ".git" in info.filename.replace("\\", "/").split("/")[:-1]:
+                self.exclusions["git_metadata"] += 1
+            elif is_dependency_path(info.filename):
                 self.exclusions["dependency_tree"] += 1
             elif is_generated_path(info.filename):
                 self.exclusions["generated_build"] += 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import stat
 import zipfile
 import zlib
 
@@ -28,6 +29,13 @@ def archive(files):
         for name, source in files:
             zipped.writestr(name, source)
     return buffer
+
+
+def symlink(name):
+    info = zipfile.ZipInfo(name)
+    info.create_system = 3
+    info.external_attr = (stat.S_IFLNK | 0o777) << 16
+    return info
 
 
 def assert_coverage(record, *, total, eligible, attempted, analyzed, exclusions=None, skips=None):
@@ -136,6 +144,50 @@ def test_excluded_files_do_not_consume_sql_budget_and_case_variants_remain_suppo
     assert_coverage(coverage, total=405, eligible=1, attempted=1, analyzed=1,
                     exclusions={"dependency_tree": 401, "non_production_path": 1,
                                 "generated_build": 1, "unsupported_extension": 1})
+
+
+@pytest.mark.parametrize("module,scanner,extension", CASES)
+def test_symlinks_do_not_consume_sql_file_budget(module, scanner, extension):
+    coverage = {}
+    files = [(symlink(f"app/linked_{index}.{extension}"), f"../shared/query.{extension}")
+             for index in range(400)]
+    files.append((f"app/query.{extension}", UNSAFE))
+
+    findings = scanner(archive(files), coverage=coverage)
+
+    assert [(finding.file, finding.line) for finding in findings] == [(f"app/query.{extension}", 1)]
+    assert_coverage(coverage, total=401, eligible=1, attempted=1, analyzed=1,
+                    exclusions={"symlink": 400})
+
+
+@pytest.mark.parametrize("module,scanner,extension", CASES)
+def test_symlink_target_text_cannot_become_a_sql_finding(module, scanner, extension):
+    coverage = {}
+    files = [(symlink(f"app/linked.{extension}"), UNSAFE),
+             (f"app/query.{extension}", UNSAFE)]
+
+    findings = scanner(archive(files), coverage=coverage)
+
+    assert [(finding.file, finding.line) for finding in findings] == [(f"app/query.{extension}", 1)]
+    assert_coverage(coverage, total=2, eligible=1, attempted=1, analyzed=1,
+                    exclusions={"symlink": 1})
+
+
+@pytest.mark.parametrize("module,scanner,extension", CASES)
+@pytest.mark.parametrize("prefix", ["", "project/nested/"])
+def test_git_metadata_does_not_consume_sql_finding_budget(module, scanner, extension, prefix):
+    coverage = {}
+    files = [(f"{prefix}.git/hooks/helper.{extension}", UNSAFE * 32),
+             (f"{prefix}my.git/query.{extension}", UNSAFE),
+             (f"{prefix}app/query.{extension}", UNSAFE)]
+
+    findings = scanner(archive(files), coverage=coverage)
+
+    assert [(finding.file, finding.line) for finding in findings] == [
+        (f"{prefix}my.git/query.{extension}", 1), (f"{prefix}app/query.{extension}", 1),
+    ]
+    assert_coverage(coverage, total=3, eligible=2, attempted=2, analyzed=2,
+                    exclusions={"git_metadata": 1})
 
 
 @pytest.mark.parametrize("module,scanner,extension", CASES)

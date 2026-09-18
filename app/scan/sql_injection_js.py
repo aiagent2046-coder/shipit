@@ -538,7 +538,8 @@ def scan_sql_injection_js(fileobj: BinaryIO, *, coverage: dict | None = None) ->
 
     with zipfile.ZipFile(fileobj) as zf:
         accounting = RuleCoverage(zf, extensions=_SOURCE_EXTS, max_file_bytes=_MAX_FILE_BYTES,
-                                  coverage=coverage, case_sensitive=False)
+                                  coverage=coverage, case_sensitive=False,
+                                  exclude_symlinks=True, exclude_git_metadata=True)
         for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
             name = info.filename
             try:

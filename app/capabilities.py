@@ -193,7 +193,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "query text inside it is what is read. A parameterized call is silent. Whether the value "
         "is attacker-controlled, and any database-side policy, is not verified. "
         "At most 400 eligible files up to 400 KB each and 32 findings per check; "
-        "test/example paths, dependency trees and generated builds are excluded. "
+        "test/example paths, dependency trees, generated builds, symbolic links and Git metadata are excluded. "
         "File, finding, decoding, parsing and expression-analysis gaps are recorded explicitly.",
     ),
     Capability(
@@ -204,8 +204,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         "that runs on the Next.js repositories Drydock audits in the main. Template literals and "
         "concatenation at the call site are read; cross-file builders, ORM query construction and "
         "runtime reachability are not resolved. At most 400 eligible files up to 400 KB each "
-        "and 32 findings per check; test/example paths, dependency trees and generated builds "
-        "are excluded. File, finding, decoding, parsing and expression-analysis gaps are recorded explicitly.",
+        "and 32 findings per check; test/example paths, dependency trees, generated builds, "
+        "symbolic links and Git metadata are excluded. File, finding, decoding, parsing "
+        "and expression-analysis gaps are recorded explicitly.",
     ),
     Capability(
         "outbound_url",

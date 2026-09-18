@@ -25,7 +25,9 @@ clean result.
 
 `tests/test_sql_injection_coverage.py` checks the detector boundaries: file,
 finding, byte-size, decoding, parsing and analysis budgets, retained positives,
-exclusions and continuation accounting. The product contracts additionally use
+exclusions and continuation accounting. ZIP symbolic links and Git metadata are
+excluded before SQL file and finding budgets, with explicit exclusion counts;
+SQL-like link targets cannot become findings. The product contracts additionally use
 the real 400-file batch boundary and check that a completed batch cannot hide
 an earlier syntax gap. Repairing the unread file changes coverage without
 erasing the independent SQL observation or declaring a verified fix. The

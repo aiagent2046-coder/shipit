@@ -125,6 +125,8 @@ RULE_EXCLUSION_LABELS = {
     "non_production_path": "test/example paths",
     "dependency_tree": "dependency directories",
     "generated_build": "generated build directories",
+    "symlink": "symbolic links",
+    "git_metadata": "Git metadata",
 }
 RULE_SKIP_LABELS = {
     "file_size_limit": "file size limit",

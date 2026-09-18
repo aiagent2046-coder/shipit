@@ -620,5 +620,55 @@
     "exclusions": null,
     "skips": null,
     "notice": null
+  },
+  {
+    "name": "Python SQL queries preserve symlink and Git metadata exclusions",
+    "rule": "sql_injection",
+    "label": "Python SQL queries",
+    "record": {
+      "version": 1,
+      "files_total": 6,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 1,
+      "excluded_files": 5,
+      "skipped_files": 0,
+      "exclusion_reasons": {
+        "unsupported_extension": 1,
+        "symlink": 2,
+        "git_metadata": 2
+      },
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "1 of 1 eligible files analyzed; 1 attempted; 0 not fully analyzed; 5 excluded from 6 archive files. No file-processing gaps recorded within this rule's scope.",
+    "exclusions": "unsupported file types: 1, symbolic links: 2, Git metadata: 2",
+    "skips": "None recorded",
+    "notice": null
+  },
+  {
+    "name": "JavaScript/TypeScript SQL queries preserve symlink and Git metadata exclusions",
+    "rule": "sql_injection_js",
+    "label": "JavaScript/TypeScript SQL queries",
+    "record": {
+      "version": 1,
+      "files_total": 6,
+      "eligible_files": 1,
+      "attempted_files": 1,
+      "analyzed_files": 1,
+      "excluded_files": 5,
+      "skipped_files": 0,
+      "exclusion_reasons": {
+        "unsupported_extension": 1,
+        "symlink": 2,
+        "git_metadata": 2
+      },
+      "skip_reasons": {},
+      "partial": false
+    },
+    "summary": "1 of 1 eligible files analyzed; 1 attempted; 0 not fully analyzed; 5 excluded from 6 archive files. No file-processing gaps recorded within this rule's scope.",
+    "exclusions": "unsupported file types: 1, symbolic links: 2, Git metadata: 2",
+    "skips": "None recorded",
+    "notice": null
   }
 ]

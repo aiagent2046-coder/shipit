@@ -650,7 +650,8 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
 
     with zipfile.ZipFile(fileobj) as zf:
         accounting = RuleCoverage(zf, extensions=(".py",), max_file_bytes=_MAX_FILE_BYTES,
-                                  coverage=coverage, case_sensitive=False)
+                                  coverage=coverage, case_sensitive=False,
+                                  exclude_symlinks=True, exclude_git_metadata=True)
         for info in accounting.files(findings, max_files=_MAX_FILES, max_findings=_MAX_FINDINGS):
             name = info.filename
             try:

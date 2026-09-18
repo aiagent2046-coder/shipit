@@ -3,6 +3,7 @@
 from html import escape
 import io
 import json
+import stat
 import zipfile
 
 import pytest
@@ -36,6 +37,63 @@ def archive(files):
 
 def sql_findings(report):
     return [finding for finding in report["findings"] if finding["rule_id"] == RULE_ID]
+
+
+def test_sql_exclusions_and_real_findings_survive_report_boundaries():
+    files = []
+    for suffix, positive in (("py", PYTHON_QUERY), ("ts", TYPESCRIPT_QUERY)):
+        link = zipfile.ZipInfo(f"links/query.{suffix}")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        files.extend([
+            (link, f"../src/positive.{suffix}"),
+            (f".git/hooks/query.{suffix}", positive * 32),
+            (f"src/positive.{suffix}", positive),
+        ])
+    data = archive(files)
+    result = json.loads(json.dumps(scan_archive(data)))
+    report = result["report"]
+    findings = sql_findings(report)
+    assert {(finding["file"], finding["line"]) for finding in findings} == {
+        ("src/positive.py", 1), ("src/positive.ts", 1),
+    }
+    assert len(findings) == 2
+    assert all(finding["verification_status"] == "unverified" for finding in findings)
+    record = {
+        "version": 1,
+        "files_total": 6,
+        "eligible_files": 1,
+        "attempted_files": 1,
+        "analyzed_files": 1,
+        "excluded_files": 5,
+        "skipped_files": 0,
+        "exclusion_reasons": {"unsupported_extension": 1, "symlink": 2, "git_metadata": 2},
+        "skip_reasons": {},
+        "partial": False,
+    }
+    manifest = scan_manifest(data, "test", report, None, None)
+    score = {"basis": "static_only", "categories": {}, "scan_manifest": manifest}
+    rows = dict(manifest_rows(score))
+    html = render_report({"score": score, "findings": report["findings"]})
+    invocation = result["sarif"]["runs"][0]["invocations"][0]
+    for check in ("sql_injection", "sql_injection_js"):
+        assert report["rule_coverage"][check] == record
+        assert manifest["rule_coverage"][check] == record
+        assert invocation["properties"]["ruleCoverage"][check] == record
+        label = RULE_COVERAGE_LABELS[check]
+        assert rows[f"Files excluded: {label}"] == (
+            "unsupported file types: 1, symbolic links: 2, Git metadata: 2"
+        )
+        assert rows[f"Files not fully analyzed: {label}"] == "None recorded"
+        assert escape(rows[f"File coverage: {label}"]) in html
+        assert escape(rows[f"Files excluded: {label}"]) in html
+        assert not any(title == "Static checks incomplete" and label in detail
+                       for title, detail in non_model_status_notices(score))
+    exported = [row for row in result["sarif"]["runs"][0]["results"] if row["ruleId"] == RULE_ID]
+    assert len(exported) == 2
+    assert {row["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] for row in exported} == {
+        "src/positive.py", "src/positive.ts",
+    }
 
 
 @pytest.mark.parametrize("check,suffix,positive,harmless,malformed,module", CASES)
