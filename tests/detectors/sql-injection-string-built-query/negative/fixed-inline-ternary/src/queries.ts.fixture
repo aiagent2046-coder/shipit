@@ -1,0 +1,3 @@
+function load(db, req) {
+  db.query(`SELECT id FROM items WHERE id = $1${req.lock ? ' FOR UPDATE' : ''}`, [req.id]);
+}
