@@ -20,13 +20,14 @@ button:disabled{cursor:not-allowed;opacity:.45}
 .back-link:hover{color:var(--text)}
 .back-link span{margin-left:8px}
 .page{max-width:900px;margin:0 auto;padding:64px 28px 80px}
-.intro{max-width:700px;margin-bottom:36px}
+.intro{max-width:700px;margin:0 auto 36px;text-align:center}
 .eyebrow{display:flex;align-items:center;gap:8px;text-transform:uppercase;letter-spacing:.13em;font-size:11px;font-weight:650;color:var(--muted)}
+.intro .eyebrow{justify-content:center}
 .status-dot{width:6px;height:6px;background:var(--accent);border-radius:50%}
 h1{margin:20px 0 20px;font-size:clamp(38px,6.5vw,62px);line-height:1.08;letter-spacing:-.055em;font-weight:650}
 h1 span{color:var(--accent)}
-.lead{font-size:18px;color:#c7c7cf;max-width:630px;line-height:1.65;margin:0 0 14px}
-.privacy-note{font-size:13px;color:var(--muted);max-width:610px;margin:0}
+.lead{font-size:18px;color:#c7c7cf;max-width:630px;line-height:1.65;margin:0 auto 14px}
+.privacy-note{font-size:13px;color:var(--muted);max-width:610px;margin:0 auto}
 .scan-panel{padding:26px 28px 22px;background:var(--surface);border:1px solid var(--border);border-radius:16px}
 .section-heading{display:flex;gap:12px;align-items:center;margin-bottom:22px}
 .step{font-size:11px;color:var(--accent);border:1px solid #285342;border-radius:6px;padding:3px 7px;font-variant-numeric:tabular-nums}

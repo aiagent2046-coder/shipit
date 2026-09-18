@@ -45,13 +45,13 @@ export default function LandingPage() {
       {/* Hero — the one expressive marketing moment. Larger type is allowed
           here; interior pages stay capped. */}
       <section className="pt-12 pb-12 sm:pt-16 sm:pb-16">
-        <div className="mx-auto max-w-3xl text-center">
+        <div className="mx-auto max-w-4xl text-center">
           <span className="inline-block rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted">
             Your AI Production Engineer
           </span>
           <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight sm:text-6xl">
             Your app works.{" "}
-            <span className="block text-accent">What might you be missing?</span>
+            <span className="block text-accent lg:whitespace-nowrap">What might you be missing?</span>
           </h1>
           <p className="mx-auto mt-5 max-w-2xl text-lg text-muted">
             Drydock checks your code for exposed secrets, risky patterns and
