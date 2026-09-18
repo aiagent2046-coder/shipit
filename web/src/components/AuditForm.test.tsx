@@ -14,7 +14,7 @@ function submitWithResponse(status: number, retryAfter?: string, reason = "rate_
   ));
   render(<AuditForm />);
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "https://github.com/example/repo" } });
-  fireEvent.click(screen.getByRole("button", { name: "Audit my app" }));
+  fireEvent.click(screen.getByRole("button", { name: "Check my app for free" }));
 }
 
 it("shows the server's retry time across midnight through the real API client", async () => {
@@ -29,7 +29,7 @@ it("shows the server's retry time across midnight through the real API client", 
   expect(alert.textContent).toContain(`Try again after ${expected} (your local time).`);
   expect(push).not.toHaveBeenCalled();
   expect(globalThis.fetch).toHaveBeenCalledTimes(1); // No automatic quota-consuming retry.
-  expect((screen.getByRole("button", { name: "Audit my app" }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: "Check my app for free" }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 it.each([undefined, "", "-1", "no date", "1.5", "9".repeat(400)])(

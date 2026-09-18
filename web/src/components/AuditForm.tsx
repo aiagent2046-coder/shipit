@@ -164,7 +164,7 @@ export function AuditForm() {
             <Spinner /> Submitting…
           </>
         ) : (
-          "Audit my app"
+          "Check my app for free"
         )}
       </button>
       <p id="audit-input-help" className="mt-3 text-center text-sm text-muted">
