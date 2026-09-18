@@ -8,6 +8,7 @@ import { getAudit, reportUrl, ApiError } from "@/lib/api";
 import { RESULT_PREFIX } from "@/components/AuditForm";
 import { findingCounts } from "@/lib/evidence";
 import { AuditCoverage } from "@/components/AuditCoverage";
+import { CopyAuditLink } from "@/components/CopyAuditLink";
 import { FindingsList, PreviewHistory, SeveritySummary } from "@/components/FindingsList";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
@@ -206,6 +207,8 @@ function AuditPageInner() {
                 </div>
               </div>
             </div>
+
+            <CopyAuditLink />
 
             <div className="my-6 border-t border-border" />
             <AuditCoverage score={view.score} findings={view.findings} />
