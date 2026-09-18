@@ -1,0 +1,7 @@
+{
+  "description": "All leaves in this nested conditional are fixed SQL fragments.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

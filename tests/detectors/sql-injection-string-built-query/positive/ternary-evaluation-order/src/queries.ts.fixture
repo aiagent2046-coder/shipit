@@ -1,0 +1,4 @@
+function load(db, req) {
+  let fragment = req.fragment;
+  db.query(`SELECT id FROM items${req.lock ? fragment : ''}`, [fragment = '']);
+}

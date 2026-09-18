@@ -1,0 +1,12 @@
+{
+  "description": "Changing one conditional arm to request text must retain the SQL assembly observation.",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "severity": "high",
+      "file_endswith": "src/queries.ts",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}
