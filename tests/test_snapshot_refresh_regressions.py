@@ -161,4 +161,3 @@ def test_internal_assessment_observer_does_not_change_public_matcher_output(cata
 
     assert output == cve_match.match_archive(raw, data)
     assert {dep.name for dep, _, _ in observed} == {"adyen", "requests"}
-
