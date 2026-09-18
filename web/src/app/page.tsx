@@ -50,20 +50,18 @@ export default function LandingPage() {
             Your AI Production Engineer
           </span>
           <h1 className="mt-5 text-4xl font-bold leading-tight tracking-tight sm:text-6xl">
-            Is your app{" "}
-            <span className="text-accent">ready to ship?</span>
+            Your app works.{" "}
+            <span className="block text-accent">What might you be missing?</span>
           </h1>
           <p className="mx-auto mt-5 max-w-2xl text-lg text-muted">
-            You built it with Lovable, Bolt or v0, and it works. Drydock reads
-            the code the way a production engineer would before letting it near
-            real users — and tells you, in plain language, what would go wrong
-            and what it costs you to leave it.
+            Drydock checks your code for exposed secrets, risky patterns and
+            setup gaps — then explains what it found and what you can do next.
           </p>
           <a
             href="#example-report"
             className="mt-4 inline-block text-sm font-medium text-accent underline underline-offset-4"
           >
-            See a free example — no project needed
+            See an example report
           </a>
         </div>
 
@@ -72,7 +70,7 @@ export default function LandingPage() {
         </div>
 
         <p className="mt-5 text-center text-sm text-muted">
-          Free, no account, no card.
+          No account. No card.
         </p>
         <div className="mx-auto mt-5 max-w-2xl text-center">
           <Link

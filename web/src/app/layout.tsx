@@ -15,7 +15,7 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Drydock — Your AI Production Engineer",
   description:
-    "Drydock is the AI production engineer for AI-generated repos. Paste a GitHub URL or upload a zip: it audits your app, scores production-readiness out of 10, and ships the fixes as a pull request.",
+    "Drydock checks your code for exposed secrets, risky patterns and setup gaps — then explains what it found and what you can do next.",
   // Proof to enot.io that whoever controls this domain also controls the
   // merchant account being opened against it. Their checker fetches the home
   // page and looks for `<meta name="enot" content="...">`; Next renders this
