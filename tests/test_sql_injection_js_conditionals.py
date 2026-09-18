@@ -20,6 +20,31 @@ CASES = [
     pytest.param(
         """
         function load(db, req) {
+          db.query(req.lock ? 'SELECT id FROM items FOR UPDATE' : 'SELECT id FROM items');
+        }
+        """,
+        False, id='whole-query-fixed-arms',
+    ),
+    pytest.param(
+        """
+        function load(db, req) {
+          db.query(req.lock ? `SELECT id FROM items WHERE id = ${req.id}` : 'SELECT id FROM items');
+        }
+        """,
+        True, id='whole-query-preserves-assembled-arm',
+    ),
+    pytest.param(
+        """
+        function load(db, req) {
+          db.query(req.lock ? `SELECT id FROM items ${predicate(1)}` : `DELETE FROM items ${predicate(1)}`,
+                   [req.id]);
+        }
+        """,
+        True, id='whole-query-helper-remains-unverified',
+    ),
+    pytest.param(
+        """
+        function load(db, req) {
           const fragment = req.lock ? ' FOR UPDATE' : '';
           db.query(`SELECT id FROM items WHERE id = $1${fragment}`, [req.id]);
         }
