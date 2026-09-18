@@ -1,0 +1,12 @@
+{
+  "description": "A later conditional interpolation cannot sanitize an earlier interpolation in the same SQL string.",
+  "expect": [
+    {
+      "rule_id": "sql-injection-string-built-query",
+      "severity": "high",
+      "file_endswith": "src/queries.ts",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

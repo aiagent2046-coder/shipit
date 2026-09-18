@@ -1,0 +1,7 @@
+{
+  "description": "A request chooses between fixed SQL fragments; the separately parameterized value stays data.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

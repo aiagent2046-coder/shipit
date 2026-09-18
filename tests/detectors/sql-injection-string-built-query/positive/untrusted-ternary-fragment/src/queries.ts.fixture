@@ -1,0 +1,4 @@
+function load(db, req) {
+  const fragment = req.lock ? req.fragment : '';
+  db.query(`SELECT id FROM items WHERE id = $1${fragment}`, [req.id]);
+}

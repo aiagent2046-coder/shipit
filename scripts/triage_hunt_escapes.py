@@ -91,7 +91,9 @@ SPECS: dict[str, Spec] = {
                  # in a literal from a later `template % value` operation is
                  # semantic work, and dropping the latter would hide exactly
                  # the detector escapes this queue exists to expose.
-                 r"\+|\.format\b|\bf['\"]|\{\}|%"),
+                 # JS template substitutions are assembly too, including
+                 # branches whose later assignments cannot sanitize them.
+                 r"\+|\.format\b|\bf['\"]|\{\}|%|\$\{"),
     ),
     "archive-extraction-fully-trusted": Spec(
         markers=(r"fully_trusted",),

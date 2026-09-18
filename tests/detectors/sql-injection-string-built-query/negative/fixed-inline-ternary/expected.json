@@ -1,0 +1,7 @@
+{
+  "description": "An inline choice between fixed SQL fragments is as fixed as the variable form.",
+  "expect": [],
+  "forbid": [
+    "sql-injection-string-built-query"
+  ]
+}

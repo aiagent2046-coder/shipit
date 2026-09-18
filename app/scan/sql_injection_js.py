@@ -145,51 +145,13 @@ def _unwrap(node):
     return node
 
 
-def _is_literal(node, known: frozenset[str] = frozenset()) -> bool:
-    node = _unwrap(node)
-    if node is None:
-        return False
-    if node.type in {"string", "number", "true", "false", "null", "regex"}:
-        return True
-    if node.type == "identifier":
-        return _text(node) in known
-    if node.type == "template_string":
-        return all(child.type != "template_substitution"
-                   or all(_is_literal(expr, known) for expr in child.named_children)
-                   for child in node.named_children)
-    if node.type == "binary_expression":
-        return (_text(node.child_by_field_name("operator")) == "+"
-                and _is_literal(node.child_by_field_name("left"), known)
-                and _is_literal(node.child_by_field_name("right"), known))
-    if node.type == "array":
-        return all(_is_literal(child, known) for child in node.named_children
-                   if child.type != "comment")
-    if node.type == "call_expression":
-        func = node.child_by_field_name("function")
-        args = node.child_by_field_name("arguments")
-        if func is not None and func.type == "member_expression" and args is not None:
-            return (_text(func.child_by_field_name("property")) in {"join", "concat", "replace"}
-                    and _is_literal(func.child_by_field_name("object"), known)
-                    and all(_is_literal(arg, known) for arg in args.named_children
-                            if arg.type != "comment"))
+def _optional_chain(node) -> bool:
+    """An optional receiver also makes later arguments/indexes conditional."""
+    while node is not None and node.type in {"call_expression", "member_expression", "subscript_expression"}:
+        if any(child.type in {"optional_chain", "?."} for child in node.children):
+            return True
+        node = node.child_by_field_name("function" if node.type == "call_expression" else "object")
     return False
-
-
-def _assembly_kind(node, known: frozenset[str] = frozenset()) -> str | None:
-    node = _unwrap(node)
-    if node is None or _is_literal(node, known):
-        return None
-    if node.type == "template_string":
-        return "a template literal with ${...}"
-    if node.type == "binary_expression" and _text(node.child_by_field_name("operator")) == "+":
-        return "string concatenation with +"
-    if node.type == "call_expression":
-        func = node.child_by_field_name("function")
-        if func is not None and func.type == "member_expression":
-            name = _text(func.child_by_field_name("property"))
-            if name in {"concat", "replace", "join"}:
-                return f".{name}()"
-    return None
 
 
 def _sink_name(call) -> str | None:
@@ -233,6 +195,9 @@ class _Binding:
     literal: bool = False
     sql: bool = False
     assembly: tuple[int, str] | None = None
+    # Array/RegExp contents and their aliases are not proved immutable. Keep
+    # the existing literal policy, but do not extend it to new branch proofs.
+    mutable_origin: bool = False
 
 
 _UNKNOWN = _Binding()
@@ -307,7 +272,7 @@ class _Environment:
     def bind(self, target, value, declaration=False, function_scoped=False):
         names = _pattern_names(target)
         if target is not None and target.type != "identifier":
-            value = _Binding(literal=value.literal)
+            value = _Binding(literal=value.literal, mutable_origin=value.mutable_origin)
         for name in names:
             if declaration:
                 self.frames[self.function_slot if function_scoped else -1][name] = value
@@ -333,6 +298,7 @@ def _merge_environments(*environments):
                 literal=all(value.literal for value in values),
                 sql=any(value.sql for value in values),
                 assembly=next((value.assembly for value in values if value.assembly), None),
+                mutable_origin=any(value.mutable_origin for value in values),
             )
     return result
 
@@ -343,16 +309,15 @@ class _QueryFlow:
     def __init__(self):
         self.findings = set()
         self.remaining = _MAX_NODES
+        self.values: dict[int, _Binding] = {}
 
-    def has_sql(self, node, environment):
+    def observed(self, node, environment):
+        """Read this occurrence's value before any later sibling changed bindings."""
         node = _unwrap(node)
         if node is None:
-            return False
-        if node.type == "identifier":
-            return environment.get(_text(node)).sql
-        if node.type in {"string", "template_string"}:
-            return _looks_like_sql(_text(node))
-        return any(self.has_sql(child, environment) for child in node.named_children)
+            return _UNKNOWN
+        value = self.values.get(node.id)
+        return value if value is not None else self.value(node, environment)
 
     def value(self, node, environment):
         node = _unwrap(node)
@@ -360,12 +325,45 @@ class _QueryFlow:
             return _UNKNOWN
         if node.type == "identifier":
             return environment.get(_text(node))
-        known = frozenset(name for name, value in environment.visible().items() if value.literal)
-        sql = self.has_sql(node, environment)
-        if _is_literal(node, known):
-            return _Binding(literal=True, sql=sql)
-        kind = _assembly_kind(node, known)
-        return _Binding(sql=sql, assembly=(node.start_point[0] + 1, kind) if kind else None)
+        children = [child for child in node.named_children if child.type != "comment"]
+        values = [self.observed(child, environment) for child in children]
+        mutable = any(value.mutable_origin for value in values)
+        sql = (_looks_like_sql(_text(node)) if node.type in {"string", "template_string"}
+               else any(value.sql for value in values))
+        if node.type in {"string", "number", "true", "false", "null", "regex"}:
+            return _Binding(literal=True, sql=sql, mutable_origin=node.type == "regex")
+        if node.type == "ternary_expression":
+            arms = [self.observed(node.child_by_field_name(field), environment)
+                    for field in ("consequence", "alternative")]
+            return _Binding(literal=all(arm.literal and not arm.mutable_origin for arm in arms),
+                            sql=any(arm.sql for arm in arms),
+                            assembly=next((arm.assembly for arm in arms if arm.assembly), None),
+                            mutable_origin=any(arm.mutable_origin for arm in arms))
+        if node.type == "array":
+            return _Binding(literal=all(value.literal for value in values), sql=sql, mutable_origin=True)
+        if node.type == "template_substitution":
+            return _Binding(literal=all(value.literal for value in values), sql=sql, mutable_origin=mutable)
+        kind, literal = None, False
+        if node.type == "template_string":
+            literal = all(self.observed(child, environment).literal for child in children
+                          if child.type == "template_substitution")
+            kind = "a template literal with ${...}"
+        elif node.type == "binary_expression" and _text(node.child_by_field_name("operator")) == "+":
+            literal = all(self.observed(node.child_by_field_name(field), environment).literal
+                          for field in ("left", "right"))
+            kind = "string concatenation with +"
+        elif node.type == "call_expression":
+            func, args = node.child_by_field_name("function"), node.child_by_field_name("arguments")
+            if func is not None and func.type == "member_expression" and args is not None:
+                name = _text(func.child_by_field_name("property"))
+                if name in {"join", "concat", "replace"}:
+                    literal = (self.observed(func.child_by_field_name("object"), environment).literal
+                               and all(self.observed(arg, environment).literal for arg in args.named_children
+                                       if arg.type != "comment"))
+                    kind = f".{name}()"
+        if literal:
+            return _Binding(literal=True, sql=sql, mutable_origin=mutable)
+        return _Binding(sql=sql, assembly=(node.start_point[0] + 1, kind) if kind else None, mutable_origin=mutable)
 
     def scope(self, node, environment, stable):
         captures = {name: value for name, value in environment.visible().items()
@@ -400,6 +398,18 @@ class _QueryFlow:
         if self.remaining <= 0:
             raise _AnalysisLimitReached
         self.remaining -= 1
+        # A loop revisits the same AST occurrences. Replace, never reuse, their
+        # previous observation when the current path evaluates them again.
+        self.values.pop(node.id, None)
+        skipped = environment.copy() if _optional_chain(node) else None
+        result = self._visit(node, environment, stable)
+        if skipped is not None:
+            result = _merge_environments(skipped, result)
+        if result is not None and node.id not in self.values:
+            self.values[node.id] = self.value(node, result)
+        return result
+
+    def _visit(self, node, environment, stable):
         kind = node.type
         if kind in _FUNCTIONS:
             self.scope(node, environment, stable)
@@ -422,52 +432,78 @@ class _QueryFlow:
             return current
         if kind == "variable_declarator":
             value = node.child_by_field_name("value")
-            self.visit(value, environment, stable)
+            environment = self.visit(value, environment, stable)
             target = node.child_by_field_name("name")
             if value is not None:
-                environment.bind(target, self.value(value, environment), declaration=True,
+                environment.bind(target, self.observed(value, environment), declaration=True,
                                  function_scoped=node.parent.type == "variable_declaration")
             elif node.parent.type != "variable_declaration":
                 environment.bind(target, _UNKNOWN, declaration=True)
             return environment
         if kind in {"assignment_expression", "augmented_assignment_expression"}:
             target, right = node.child_by_field_name("left"), node.child_by_field_name("right")
-            before = self.value(target, environment)
-            self.visit(right, environment, stable)
-            value = self.value(right, environment)
+            environment = self.visit(target, environment, stable)
+            before = self.observed(target, environment)
+            environment = self.visit(right, environment, stable)
+            value = self.observed(right, environment)
             if kind == "augmented_assignment_expression":
                 if _text(node.child_by_field_name("operator")) == "+=":
                     literal = before.literal and value.literal
                     value = _Binding(literal=literal, sql=before.sql or value.sql,
                                      assembly=None if literal else before.assembly or
-                                     (node.start_point[0] + 1, "string concatenation with +"))
+                                     (node.start_point[0] + 1, "string concatenation with +"),
+                                     mutable_origin=before.mutable_origin or value.mutable_origin)
                 else:
                     value = _UNKNOWN
             environment.bind(target, value)
+            self.values[node.id] = value
             return environment
         if kind == "update_expression":
-            environment.bind(node.child_by_field_name("argument"), _UNKNOWN)
+            target = node.child_by_field_name("argument")
+            environment = self.visit(target, environment, stable)
+            environment.bind(target, _UNKNOWN)
             return environment
         if kind in {"if_statement", "ternary_expression"}:
-            self.visit(node.child_by_field_name("condition"), environment, stable)
+            environment = self.visit(node.child_by_field_name("condition"), environment, stable)
             return _merge_environments(
                 self.visit(node.child_by_field_name("consequence"), environment.copy(), stable),
                 self.visit(node.child_by_field_name("alternative"), environment.copy(), stable),
             )
+        if kind == "binary_expression" and _text(node.child_by_field_name("operator")) in {"&&", "||", "??"}:
+            environment = self.visit(node.child_by_field_name("left"), environment, stable)
+            # The right operand may be skipped. Its assignments cannot prove
+            # a fixed fragment on the path which did not evaluate it.
+            return _merge_environments(environment,
+                                       self.visit(node.child_by_field_name("right"), environment.copy(), stable))
+        if kind == "switch_statement":
+            environment = self.visit(node.child_by_field_name("value"), environment, stable)
+            joined = environment.copy()
+            body = node.child_by_field_name("body")
+            # Case selection, breaks and fallthrough are not resolved. Retain
+            # every observed state so a later case cannot erase an unsafe one.
+            for case in body.named_children if body is not None else []:
+                current = joined.copy()
+                for child in case.named_children:
+                    current = self.visit(child, current, stable)
+                    if current is None:
+                        break
+                    joined = _merge_environments(joined, current)
+            return joined
         if kind in {"for_in_statement", "for_statement", "while_statement", "do_statement"}:
             environment.frames.append({})
-            self.visit(node.child_by_field_name("initializer"), environment, stable)
+            environment = self.visit(node.child_by_field_name("initializer"), environment, stable)
             right = node.child_by_field_name("right")
-            self.visit(right, environment, stable)
+            environment = self.visit(right, environment, stable)
             entry, loop = environment.copy(), environment.copy()
             for _ in range(2):
                 if kind == "for_in_statement":
                     target = node.child_by_field_name("left")
                     declaration = any(child.type in {"const", "let", "var"} for child in node.children)
-                    loop.bind(target, _Binding(literal=self.value(right, loop).literal),
+                    loop.bind(target, _Binding(literal=self.observed(right, loop).literal,
+                                               mutable_origin=self.observed(right, loop).mutable_origin),
                               declaration=declaration,
                               function_scoped=any(child.type == "var" for child in node.children))
-                self.visit(node.child_by_field_name("condition"), loop, stable)
+                loop = self.visit(node.child_by_field_name("condition"), loop, stable)
                 body = self.visit(node.child_by_field_name("body"), loop, stable)
                 body = self.visit(node.child_by_field_name("increment"), body, stable)
                 loop = _merge_environments(entry, body)
@@ -495,7 +531,7 @@ class _QueryFlow:
         sink = _sink_name(node)
         if sink is not None:
             argument = _unwrap(_first_argument(node))
-            value = self.value(argument, environment)
+            value = self.observed(argument, environment)
             if value.assembly and (sink not in _WEAK_SINKS or value.sql):
                 line, assembly = value.assembly
                 if argument.type == "identifier":

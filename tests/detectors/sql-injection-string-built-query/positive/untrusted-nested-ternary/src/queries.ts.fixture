@@ -1,0 +1,4 @@
+function load(db, req) {
+  const fragment = req.lock ? ' FOR UPDATE' : (req.share ? ' FOR SHARE' : req.fragment);
+  db.query(`SELECT id FROM items WHERE id = $1${fragment}`, [req.id]);
+}
