@@ -51,7 +51,12 @@ _REQUIREMENT = re.compile(
 
 # Dependency files that cannot establish the selected versions by themselves.
 # Their presence must remain visible as a gap in dependency coverage.
-_UNUSABLE = ("go.mod", "go.sum")
+_UNUSABLE = ("go.mod", "go.sum", "bun.lockb")
+
+
+def _shadowed_bun_binary(path: str, paths: set[str]) -> bool:
+    # Bun gives the text lock precedence when both files are committed.
+    return path.rsplit('/', 1)[-1] == 'bun.lockb' and path[:-1] in paths
 
 
 def unusable_lockfiles(data: bytes) -> list[str]:
@@ -59,10 +64,12 @@ def unusable_lockfiles(data: bytes) -> list[str]:
     read, so the caller can say WHY nothing was resolved instead of reporting
     an empty dependency list as if the repository had none."""
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        paths = {info.filename for info in archive.infolist() if not info.is_dir()}
         return sorted(
             info.filename for info in archive.infolist()
             if not info.is_dir()
             and info.filename.rsplit("/", 1)[-1] in _UNUSABLE
+            and not _shadowed_bun_binary(info.filename, paths)
             and not is_non_production_path(info.filename)
             and not _vendored(info.filename)
             and not generated_dependency_path(info.filename))
@@ -76,6 +83,7 @@ OSV_ECOSYSTEM = {
     "requirements.txt": "PyPI",
     "poetry.lock": "PyPI",
     "pnpm-lock.yaml": "npm",
+    "bun.lock": "npm",
     "uv.lock": "PyPI",
 }
 
@@ -468,6 +476,7 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         manifests = find_lockfiles(archive)
         selected = set(manifests)
+        paths = {info.filename for info in archive.infolist() if not info.is_dir()}
         for info in archive.infolist():
             path = info.filename
             if info.is_dir():
@@ -482,7 +491,8 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                             excluded_truncated += 1
                 continue
             if path.rsplit("/", 1)[-1] in _UNUSABLE:
-                incomplete[path] = "unsupported"
+                if not _shadowed_bun_binary(path, paths):
+                    incomplete[path] = "unsupported"
             elif _looks_like_lockfile(path) and path not in selected:
                 incomplete[path] = ("oversized" if info.file_size > MAX_LOCKFILE_BYTES
                                     else "truncated")
@@ -498,6 +508,9 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                         manifest, text, direct_names, collected)
                 elif basename == "requirements.txt":
                     reason = _requirement_lines(manifest, text, collected)
+                elif basename == "bun.lock":
+                    from app.sca.bun_lock import bun_packages
+                    reason = bun_packages(manifest, text, collected)
                 elif basename in {"pnpm-lock.yaml", "uv.lock"}:
                     from app.sca.resolved_locks import pnpm_packages, uv_packages
                     reader = pnpm_packages if basename == "pnpm-lock.yaml" else uv_packages

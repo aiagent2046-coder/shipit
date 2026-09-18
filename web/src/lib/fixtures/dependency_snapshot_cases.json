@@ -583,5 +583,56 @@
     "fragments": [
       "Coverage not recorded or unreadable"
     ]
+  },
+  {
+    "name": "unsupported-binary-bun",
+    "coverage": {
+      "status": "partial",
+      "dependencies_found": 0,
+      "dependencies_checked": 0,
+      "status_counts": {
+        "affected": 0,
+        "unaffected": 0,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {
+        "unsupported_bun_binary_lockfile": 1
+      },
+      "incomplete_manifests": {
+        "bun.lockb": "unsupported"
+      },
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": "partial",
+    "notice_titles": [
+      "Dependency snapshot incomplete"
+    ],
+    "fragments": [
+      "Binary bun.lockb is unsupported; provide a text bun.lock",
+      "0 of 0 dependency versions checked."
+    ]
   }
 ]

@@ -424,8 +424,11 @@ def _archive_inventory(data: bytes):
                 gap_reasons[path] = "manifest_metadata_size_limit"
             elif basename in unsupported:
                 gaps[path] = "unsupported"
+            elif basename == "bun.lockb" and prefix + "bun.lock" not in paths:
+                gap_reasons[path] = "unsupported_bun_binary_lockfile"
             elif basename == "package.json" and not any(
-                    prefix + name in paths for name in ("package-lock.json", "pnpm-lock.yaml")):
+                    prefix + name in paths for name in (
+                        "package-lock.json", "pnpm-lock.yaml", "bun.lock", "bun.lockb")):
                 gaps[path] = "unresolved"
             elif basename in {"pyproject.toml", "Pipfile", "setup.py", "setup.cfg"} and not any(
                     prefix + name in paths for name in ("poetry.lock", "requirements.txt", "uv.lock")):

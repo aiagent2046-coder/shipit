@@ -11,6 +11,9 @@ SOURCE_REPOSITORIES = {
     "github-reviewed": "https://github.com/github/advisory-database",
 }
 SOURCE_LABELS = {"cvelist": "CVE Program", "github-reviewed": "GitHub-reviewed GHSA"}
+GAP_LABELS = {
+    "unsupported_bun_binary_lockfile": "Binary bun.lockb is unsupported; provide a text bun.lock",
+}
 SCOPE = ("Exact npm/PyPI lockfile versions are compared with a bundled advisory snapshot. "
          "A match does not establish reachable or exploitable application code. "
          "Unknown assessments and packages absent from the snapshot are not safe results.")
@@ -145,7 +148,7 @@ def snapshot_rows(value: object, metadata_value: object = None) -> list[tuple[st
     for key, label in (("unknown_reason_counts", "Snapshot unknown reasons"),
                        ("manifest_gap_reason_counts", "Snapshot manifest gaps")):
         reasons = coverage[key]
-        rows.append((label, ", ".join(f"{reason.replace('_', ' ')}: {count}"
+        rows.append((label, ", ".join(f"{GAP_LABELS.get(reason, reason.replace('_', ' '))}: {count}"
                                      for reason, count in reasons.items()) or "None recorded"))
     rows.append(("Snapshot processing gaps",
                  f"Incomplete manifests: {coverage['incomplete_manifest_count']}; "

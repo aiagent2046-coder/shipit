@@ -34,6 +34,7 @@ from tests.test_audit_preview_history import Repo
 from tests.test_browser_cve import CATALOG, project
 from tests.test_sca_stage import make_zip
 from tests.test_sca_wiring import fake_client, repo_with_lockfile
+from tests.bun_fixtures import GSTACK_ADVISORIES, gstack_project
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,22 @@ def free_scan(raw, **kwargs):
 
 def dependency_findings(findings):
     return [finding for finding in findings if finding["rule_id"] == RULE_ID]
+
+
+@pytest.mark.parametrize("fixed", [False, True])
+def test_bun_gstack_matches_across_free_online_browser_and_local(fixed):
+    raw = gstack_project(fixed)
+    online = free_scan(raw)
+    browser = scan_archive(raw, CATALOG)["report"]
+    local = inspect_project(raw, {}, CATALOG, {"sources": CATALOG["sources"]})
+    coverage = online["score"]["scan_manifest"]["dependency_cve"]
+    assert coverage == browser["dependency_cve"] == local["dependency_cve"]
+    assert coverage["dependencies_checked"] == 5
+    assert coverage["incomplete_manifests"] == {}
+    findings = dependency_findings(online["findings"])
+    assert findings == dependency_findings(browser["findings"]) == dependency_findings(local["findings"])
+    actual = {f["claim_evidence"]["advisory_id"] for f in findings}
+    assert actual & GSTACK_ADVISORIES == (set() if fixed else GSTACK_ADVISORIES)
 
 
 @pytest.fixture
