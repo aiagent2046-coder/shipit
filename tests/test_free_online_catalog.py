@@ -221,7 +221,10 @@ def test_incomplete_refresh_retains_previous_matches_with_their_original_provena
     manifest = refreshed["score"]["scan_manifest"]
     assert manifest["dependency_cve"]["status"] == "partial"
     assert manifest["dependency_snapshot"]["retained_findings"] == 1
-    assert dependency_findings(refreshed["findings"]) == dependency_findings(initial["findings"])
+    expected = deepcopy(dependency_findings(initial["findings"]))
+    for finding in expected:
+        finding["claim_evidence"]["snapshot_check_status"] = "retained_not_reconfirmed"
+    assert dependency_findings(refreshed["findings"]) == expected
     assert refreshed["score"]["total"] == initial["score"]["total"]
     assert initial == original
 

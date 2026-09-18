@@ -15,11 +15,30 @@ from app.scan.pipeline import FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND, FREE_TIE
 from app.scan.pipeline import BASIS_PREVIEW
 from app.db import DatabaseNotConfigured
 from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
+from app.scan.cve_match import RULE_ID as SNAPSHOT_RULE_ID
 
 
 def _observation_key(finding: dict) -> str:
     # Do not silently discard changed evidence, grouped occurrences or advice.
     return json.dumps(finding, sort_keys=True, ensure_ascii=False)
+
+
+def _with_prior_dependency_evidence(findings: list[dict], previous: list[dict]) -> list[dict]:
+    """Keep the new preview's code findings and alias-deduplicate old advisories."""
+    merged = list(findings)
+    identities = {}
+    for index, finding in enumerate([*findings, *previous]):
+        if finding.get("rule_id") != SNAPSHOT_RULE_ID:
+            continue
+        evidence = finding.get("claim_evidence") or {}
+        key = tuple(evidence.get(name) for name in ("ecosystem", "package", "installed_version"))
+        ids = {value for value in (evidence.get("advisory_id"), *(evidence.get("advisory_ids") or []))
+               if isinstance(value, str) and value}
+        seen = identities.setdefault(key, set())
+        if index >= len(findings) and not ids & seen:
+            merged.append(finding)
+        seen.update(ids)
+    return merged
 
 
 async def score_with_preview_history(repo, score: dict, findings: list[dict],
@@ -35,10 +54,29 @@ async def score_with_preview_history(repo, score: dict, findings: list[dict],
     previous = preview.get("findings_json") or []
     preview_score = preview["score_json"]
     baseline_findings, origin = previous, "reused"
-    if not snapshot_is_current(preview_score):
+    baseline = score.get("free_baseline") or {}
+    source_score, source_findings = preview_score, previous
+    needs_refresh = not snapshot_is_current(preview_score)
+    if isinstance(baseline.get("score"), dict):
+        same_source = (baseline.get("audit_id") or baseline.get("source_audit_id")) == str(preview["id"])
+        if needs_refresh and same_source:
+            # This embedded result may already contain a newer catalog answer
+            # for the same preview. Refresh that answer so a failed catalog
+            # cannot lose newly established findings or resurrect withdrawn
+            # ones. The original preview still owns the immutable history below.
+            source_score = baseline["score"]
+            source_findings = baseline.get("findings") or []
+        elif not same_source:
+            # A first standalone preview may have failed its dependency check
+            # after an included baseline established evidence. Keep the new
+            # preview's model/static work, but reassess that earlier evidence
+            # before replacing it; history must still describe only the preview.
+            source_findings = _with_prior_dependency_evidence(previous, baseline.get("findings") or [])
+            needs_refresh = needs_refresh or source_findings != previous
+    if needs_refresh:
         if raw is None:
             return score
-        refreshed = await asyncio.to_thread(refresh_snapshot, preview_score, previous, raw)
+        refreshed = await asyncio.to_thread(refresh_snapshot, source_score, source_findings, raw)
         preview_score, baseline_findings = refreshed["score"], refreshed["findings"]
         origin = "refreshed"
     keys = {_observation_key(f) for f in findings}

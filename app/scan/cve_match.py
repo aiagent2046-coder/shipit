@@ -437,8 +437,15 @@ def _archive_inventory(data: bytes):
     return inventory, gap_reasons
 
 
-def match_archive(data: bytes, catalog: dict) -> dict:
-    """Match ZIP lockfile pins against an identified, offline advisory snapshot."""
+def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> dict:
+    """Match ZIP lockfile pins against an identified, offline advisory snapshot.
+
+    The optional internal observer receives each inventoried dependency's
+    assessments and whether all advisory identities were examined. It lets a
+    server refresh distinguish a withdrawn match from one we could not recheck
+    without exporting an unbounded assessment log or repeating the evaluation.
+    Observer work is bounded by the same inventory and evaluation limits.
+    """
     sources = _sources(catalog)
     coverage = {
         "status": "partial", "status_counts": dict.fromkeys((*sorted(_STATUSES), "not_in_catalog"), 0),
@@ -508,6 +515,8 @@ def match_archive(data: bytes, catalog: dict) -> dict:
         coverage["dependencies_checked"] += 1
         if entries is None:
             coverage["status_counts"]["not_in_catalog"] += 1
+            if assessment_observer is not None:
+                assessment_observer(dep, [], True)
             continue
         coverage["packages_in_catalog"] += 1
         if not isinstance(entries, list) or not entries:
@@ -516,15 +525,20 @@ def match_archive(data: bytes, catalog: dict) -> dict:
             _record_unknown(coverage, {"package": key, "version": dep.version,
                                       "manifest": dep.manifest, **locations,
                                       "reason": "invalid_catalog_entries"})
+            if assessment_observer is not None:
+                assessment_observer(dep, [], False)
             continue
         grouped: dict[str, list[tuple[dict, dict, str]]] = {}
+        identities_complete = True
         for entry_index, entry in enumerate(entries):
             if coverage["advisory_evaluations"] >= MAX_EVALUATIONS:
                 coverage["evaluations_truncated"] += len(entries) - entry_index
+                identities_complete = False
                 break
             coverage["advisory_evaluations"] += 1
             identity = _entry_identity(entry, sources)
             if identity is None:
+                identities_complete = False
                 coverage["status_counts"]["unknown"] += 1
                 coverage["unresolved_ranges"] += 1
                 _record_unknown(coverage, {"package": key, "version": dep.version,
@@ -539,9 +553,17 @@ def match_archive(data: bytes, catalog: dict) -> dict:
         # If the cap cut across repeated affected objects, their interpretation
         # is incomplete; never emit a positive based on that partial group.
         truncated = coverage["advisory_evaluations"] >= MAX_EVALUATIONS and coverage["evaluations_truncated"] > 0
+        assessments = []
         for group_id, group in grouped.items():
             statuses = {assessment["status"] for _, assessment, _ in group}
             status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unknown"
+            all_ids = sorted({item for entry, _, _ in group
+                              for item in (entry["id"], *entry.get("aliases", []))})
+            if assessment_observer is not None:
+                assessments.append({
+                    "advisory_ids": frozenset(all_ids), "status": status,
+                    "reported": status == "affected" and len(findings) < MAX_FINDINGS,
+                })
             coverage["status_counts"][status] += 1
             if status == "unknown":
                 if len(statuses) > 1:
@@ -579,8 +601,6 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                 coverage["findings_truncated"] += 1
                 continue
             entry_ids = sorted({entry["id"] for entry, _, _ in group})
-            all_ids = sorted({item for entry, _, _ in group
-                              for item in (entry["id"], *entry.get("aliases", []))})
             cve_id = next((item for item in entry_ids if _CVE_ID.fullmatch(item)), None)
             ghsa_id = next((item for item in entry_ids if _GHSA_ID.fullmatch(item)), None)
             advisory_id = cve_id or ghsa_id or group_id
@@ -634,6 +654,8 @@ def match_archive(data: bytes, catalog: dict) -> dict:
                 "verification_method": "package_version_match",
                 "claim_evidence": evidence,
             })
+        if assessment_observer is not None:
+            assessment_observer(dep, assessments, identities_complete)
     gaps = (coverage["incomplete_manifests"] or coverage["inventory_truncated"] or
             coverage["findings_truncated"] or coverage["evaluations_truncated"] or
             coverage["status_counts"]["unknown"] or coverage["status_counts"]["not_in_catalog"])

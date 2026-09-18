@@ -253,6 +253,7 @@ export interface NarrativeProjection {
 export interface Finding {
   claim_evidence?: {
     version: 1;
+    snapshot_check_status?: "retained_not_reconfirmed";
     source_check: { kind: "quote_match"; line_start: number; line_end: number }
       | { kind: "static_rule" | "not_recorded" };
     observation: string | null;

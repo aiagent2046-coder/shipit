@@ -38,7 +38,8 @@ def _category_label(f: dict) -> str:
     return f"{cat} (moved from {origin})" if origin and origin != cat else cat
 
 
-def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -> str:
+def _finding_row(f: dict, *, historical: bool = False, included: bool = False,
+                 refreshed: bool = False) -> str:
     sev = str(f.get("severity", "low"))
     color = _SEVERITY_COLOR.get(sev, "#8b8d98")
     loc = escape(str(f.get("file", "")))
@@ -52,6 +53,9 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
     partial = partial_contradicted(f.get("claim_evidence")) and not historical
     unsupported = unsupported_transport(f.get("claim_evidence")) and not historical
     review = bool(narrative_review_checks(f.get("claim_evidence"))) and not historical
+    snapshot_match = (f.get("rule_id") == "dependency-cve-match" and f.get("source") == "dependency"
+                      and f.get("verification_method") == "package_version_match")
+    retained_match = (f.get("claim_evidence") or {}).get("snapshot_check_status") == "retained_not_reconfirmed"
     if contradicted:
         emoji, tier_label, color = "", "Syntax premise contradicted", "#8b8d98"
     elif partial:
@@ -66,6 +70,10 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         emoji, color = "", "#8b8d98"
         tier_label = ("Free audit observation — included in this audit" if included
                       else "Previous preview — not reassessed")
+        if refreshed:
+            tier_label = ("Earlier dependency finding — not reconfirmed" if retained_match else
+                          "Dependency match — checked with refreshed snapshot") if snapshot_match else (
+                              "Reused free audit observation — not reassessed")
         if is_non_production(f):
             tier_label += " · Test/example context"
     risk_html = f'<div class="risk">{escape(risk)}</div>' if risk else ""
@@ -81,10 +89,15 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False) -
         fix_html = ('<details><summary>Original model suggestion — premise contradicted</summary>'
                     + escape(fix) + '</details>') if fix else ""
     if historical:
+        guidance = ('Recorded verification guidance — not reassessed' if projection else
+                    'Free audit suggestion — unverified' if included else
+                    'Original preview suggestion — not reassessed')
+        if refreshed and not projection:
+            guidance = ("Earlier advisory guidance — not reconfirmed" if retained_match else
+                        "Snapshot advisory guidance — reachability unverified") if snapshot_match else (
+                            "Reused free audit suggestion — not reassessed")
         fix_html = ('<details><summary>'
-                    + ('Recorded verification guidance — not reassessed' if projection else
-                       'Free audit suggestion — unverified' if included
-                       else 'Original preview suggestion — not reassessed')
+                    + guidance
                     + '</summary>'
                     + escape(fix) + '</details>') if fix else ""
     if partial and not projection:
@@ -152,8 +165,9 @@ NON_PRODUCTION_NOTE = (
 
 _is_non_production = is_non_production
 
-def _findings_table(findings: list[dict], *, historical: bool = False, included: bool = False) -> str:
-    rows = "".join(_finding_row(f, historical=historical, included=included) for f in findings)
+def _findings_table(findings: list[dict], *, historical: bool = False, included: bool = False,
+                    refreshed: bool = False) -> str:
+    rows = "".join(_finding_row(f, historical=historical, included=included, refreshed=refreshed) for f in findings)
     return (
         '<table><thead><tr><th></th><th>Finding</th></tr></thead>'
         f'<tbody>{rows}</tbody></table>'
@@ -189,11 +203,18 @@ def _free_baseline(score: dict) -> str:
         return ""
     status = escape(str(baseline.get("status", "unavailable")))
     origin = "Reused same-archive free audit" if baseline.get("origin") == "reused" else "Included in this paid audit"
+    refreshed = baseline.get("origin") == "refreshed"
+    if refreshed:
+        origin = "Free audit with refreshed dependency snapshot"
     result = ('<section aria-label="Included free audit"><h2 class="sechead">Included free audit</h2>'
               f'<p>{origin}. Status: {status}.</p>'
               '<p>The complete baseline is preserved below, including observations repeated in the paid review. '
-              'It includes static observations and any model hypotheses; repeated observations are not '
-              'independent confirmation or additional current-scan findings.</p>')
+              'It includes static observations, dependency matches and any model hypotheses; repeated observations '
+              'are not independent confirmation or additional current-scan findings.</p>')
+    if refreshed:
+        result += ('<p>Dependency matching was attempted again against the recorded snapshot. '
+                   'Static observations and model hypotheses were reused without rerunning their checks. '
+                   'Earlier matches may be retained when the snapshot check is incomplete.</p>')
     prior = baseline.get("score")
     if not prior:
         return (result + '<p>Free audit unavailable: '
@@ -202,11 +223,15 @@ def _free_baseline(score: dict) -> str:
     if acceptance:
         result += ('<aside aria-label="Free audit observation acceptance"><strong>'
                    + escape(acceptance[0]) + '</strong><p>' + escape(acceptance[1]) + '</p></aside>')
+    for title, detail in non_model_status_notices(prior):
+        result += (f'<aside aria-label="{escape(title)}"><strong>{escape(title)}</strong>'
+                   f'<p>{escape(detail)}</p></aside>')
     findings = baseline.get("findings") or []
     rows = coverage_rows(prior, findings) + manifest_rows(prior)
     record = ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in rows)
     return (result + '<details><summary>Full baseline findings and scope</summary>'
-            + _findings_table(findings, historical=True, included=baseline.get("origin") == "included")
+            + _findings_table(findings, historical=True, included=baseline.get("origin") == "included",
+                              refreshed=refreshed)
             + '<dl style="overflow-wrap:anywhere">'
             + record + '</dl></details></section>')
 
