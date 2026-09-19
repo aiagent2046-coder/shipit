@@ -69,6 +69,8 @@ actions, results, produced facts, reasons and spent work. It contains no SQL tex
 input values or exception messages. Simple aliases, f-strings and string
 concatenation are supported; branches, wrappers, dependency injection,
 asynchronous routes, dynamic identifiers and ambiguous SQL remain unknown.
+Repository-local `fastapi` or `starlette` modules/packages prevent framework
+identity claims, including the decorated driver's source proof.
 
 HTTP origin does not prove caller authorization or deployed route reachability.
 A declared type is not intended business semantics. SQL value position is not

@@ -131,10 +131,11 @@ class _State:
 
 
 class _Trace:
-    def __init__(self, writes, budget, tree):
+    def __init__(self, writes, budget, tree, allow_fastapi_routes):
         self.writes = writes
         self.budget = budget
         self.tree = tree
+        self.allow_fastapi_routes = allow_fastapi_routes
         self.sinks = {}
         self.visited = Counter()
         self.driver_escaped = False
@@ -248,7 +249,8 @@ class _Trace:
                 # Only immutable import bindings cross a deferred scope. Never
                 # freeze a connection/cursor from the time a function is defined.
                 supported_route = False
-                if functions and isinstance(node, ast.FunctionDef) and node.decorator_list:
+                if (functions and self.allow_fastapi_routes and isinstance(node, ast.FunctionDef)
+                        and node.decorator_list):
                     from app.scan.sql_input_evidence import is_supported_fastapi_route
 
                     supported_route = is_supported_fastapi_route(self.tree, node, spend=self.budget.spend)
@@ -300,7 +302,7 @@ class _Trace:
                 # No descent: a call at this location remains unknown.
 
 
-def _cursor_provenance(tree, max_nodes, budget):
+def _cursor_provenance(tree, max_nodes, budget, allow_fastapi_routes):
     nodes = list(islice(budget.walk(tree), max_nodes + 1))
     if len(nodes) > max_nodes:
         return {}
@@ -373,7 +375,7 @@ def _cursor_provenance(tree, max_nodes, budget):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if any(not isinstance(target, ast.Name) for target in targets):
                 return {}
-    trace = _Trace(_writes(nodes, budget), budget, tree)
+    trace = _Trace(_writes(nodes, budget), budget, tree, allow_fastapi_routes)
     trace.block(tree.body, _State(trace))
     if trace.driver_escaped:
         return {}
@@ -386,9 +388,10 @@ def _cursor_provenance(tree, max_nodes, budget):
             if origin and trace.visited[key] == expected[key]}
 
 
-def cursor_provenance(tree: ast.AST, *, max_nodes: int = 80_000, max_work: int = 640_000) -> dict:
+def cursor_provenance(tree: ast.AST, *, max_nodes: int = 80_000, max_work: int = 640_000,
+                      allow_fastapi_routes: bool = True) -> dict:
     """Return complete source facts, or none when either analysis budget is spent."""
     try:
-        return _cursor_provenance(tree, max_nodes, _Budget(max_work))
+        return _cursor_provenance(tree, max_nodes, _Budget(max_work), allow_fastapi_routes)
     except (RecursionError, _WorkLimitReached):
         return {}

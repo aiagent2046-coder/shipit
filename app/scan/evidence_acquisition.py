@@ -91,6 +91,11 @@ def acquire_sql_evidence(trace, snapshot, budget):
                 from app.scan.sql_input_evidence import analyze_query_input
 
                 analysis = analyze_query_input(document.tree, sink, spend=budget.spend)
+                if snapshot.framework_shadowed:
+                    # Visible local modules prevent claiming the imported
+                    # framework's HTTP semantics. Symbolic SQL remains usable.
+                    analysis = {**analysis, "status": "unknown", "reason": "framework_import_shadowed",
+                                "facts": [], "constraints": [], "constraint_status": "unknown"}
                 result = analysis
                 reason = ("request_flow_established" if result["status"] == "established"
                           else "request_flow_not_established")

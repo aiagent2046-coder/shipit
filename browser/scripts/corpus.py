@@ -109,6 +109,7 @@ def acquisition_cases():
               '    cur.execute(f"SELECT id FROM users WHERE name = \'{name}\'")\n')
     for name, body, established, skipped in (
         ('source-goal', source, True, set()),
+        ('shadowed-framework', source, False, {'inspect_sql_slots', 'collect_value_constraints'}),
         ('unknown-driver', source.replace('connect(dsn)', 'connect(dsn, cursor_factory=CustomCursor)'),
          False, {'inspect_sql_slots'}),
         ('unknown-wrapper', source.replace("'{name}'", "'{normalize(name)}'"),
@@ -118,7 +119,10 @@ def acquisition_cases():
         ('bound-input', source.replace("'{name}'", "'{value}'").replace(
             '    cur.execute', '    value = name\n    name = "constant"\n    cur.execute'), True, set()),
     ):
-        data = archive({'src/query.py': body})
+        files = {'src/query.py': body}
+        if name == 'shadowed-framework':
+            files['src/fastapi.py'] = 'class FastAPI: pass\n'
+        data = archive(files)
         result = scan_archive(data)
         decision, = result['report']['security_agent']['observations']
         acquisition = decision['acquisition']

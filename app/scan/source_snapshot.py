@@ -52,6 +52,9 @@ class SourceSnapshot:
                 self._archive.close()
                 raise SourceUnavailable("source_unavailable")
             self._entries[info.filename] = info
+        self.framework_shadowed = any(
+            part.casefold().split(".", 1)[0] in {"fastapi", "starlette"}
+            for path in self._entries for part in path.replace("\\", "/").split("/"))
         self._documents = {}
         self._source_bytes = 0
         self.acquisitions = {}

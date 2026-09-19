@@ -683,6 +683,8 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
         # bounded source check does not resolve sys.path or import hooks.
         driver_shadowed = any(part.casefold().split(".", 1)[0] == "psycopg"
                               for info in zf.infolist() for part in info.filename.replace("\\", "/").split("/"))
+        framework_shadowed = any(part.casefold().split(".", 1)[0] in {"fastapi", "starlette"}
+                                 for info in zf.infolist() for part in info.filename.replace("\\", "/").split("/"))
         accounting = RuleCoverage(zf, extensions=(".py",), max_file_bytes=_MAX_FILE_BYTES,
                                   coverage=coverage, case_sensitive=False,
                                   exclude_symlinks=True, exclude_git_metadata=True)
@@ -714,7 +716,7 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
             observations: dict[tuple[int, str, str], dict] = {}
             with track_analysis_limits() as limits:
                 signals = _find_in_module(tree, observations=observations)
-            drivers = (cursor_provenance(tree, max_nodes=_MAX_NODES)
+            drivers = (cursor_provenance(tree, max_nodes=_MAX_NODES, allow_fastapi_routes=not framework_shadowed)
                        if signals and not driver_shadowed else {})
             source_digest = hashlib.sha256(raw).hexdigest()
             available = finding_limit - len(findings)

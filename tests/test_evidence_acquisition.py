@@ -93,6 +93,26 @@ def test_unknown_driver_does_not_schedule_psycopg_sql_slot_analysis():
     assert len(sql_findings(result["report"])) == 1
 
 
+@pytest.mark.parametrize("path", ["src/fastapi.py", "src/fastapi/__init__.py",
+                                  "src/starlette.py", "src/starlette/requests.py"])
+def test_repository_local_framework_cannot_establish_http_or_decorated_driver(path):
+    result, observation, acquisition = acquired(files={path: "class FastAPI: pass\n"})
+    assert not fact_ids(acquisition)
+    assert observation["state"] == "needs_evidence"
+    assert observation["evidence"]["sql_observation"]["driver_status"] == "unknown"
+    assert {"request_input_source", "local_input_flow", "psycopg3_cursor_provenance"} <= set(
+        observation["missing_evidence"])
+    assert acquisition["attempts"][-1]["detail"] == "framework_import_shadowed"
+    assert len(sql_findings(result["report"])) == 1
+
+
+def test_local_framework_does_not_revoke_an_undecorated_driver_chain():
+    source = HTTP_SQL.replace('@app.get("/users")\n', '')
+    _, observation, acquisition = acquired(source, files={"src/fastapi.py": "pass\n"})
+    assert observation["evidence"]["sql_observation"]["driver_status"] == "source_resolved"
+    assert fact_ids(acquisition) == {"sql_value_position"}
+
+
 @pytest.mark.parametrize("source", [
     HTTP_SQL.replace('app = FastAPI()', 'FastAPI = CustomFactory\napp = FastAPI()'),
     HTTP_SQL.replace('@app.get("/users")', 'app = CustomApp()\n@app.get("/users")'),
