@@ -4,6 +4,10 @@ Drydock source is distributed under AGPL-3.0-or-later; see LICENSE.txt and
 https://github.com/aiagent2046-coder/shipit/tree/main/browser .
 The engine-files.json artifact includes the exact Python modules in this build.
 
+@noble/hashes 2.4.0 is distributed under the MIT license. Its unmodified SHA-256
+modules verify saved task receipts locally; the complete license is included in
+licenses/noble-hashes-MIT.txt. Source: https://github.com/paulmillr/noble-hashes .
+
 Pyodide 314.0.6 is distributed under MPL-2.0. Source, license and bundled library
 notices: https://github.com/pyodide/pyodide/tree/314.0.6 .
 Pyodide incorporates CPython and other runtime components under their respective
