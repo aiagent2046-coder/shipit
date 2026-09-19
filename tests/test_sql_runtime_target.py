@@ -6,7 +6,7 @@ import pytest
 
 from scripts import verify_sql_runtime_contract as runner
 
-DSN = 'postgresql://postgres:synthetic@localhost:5432/drydock_sql_contract'
+DSN = 'postgresql://postgres:synthetic@localhost:5432/drydock_sql_contract'  # scan-allow: fake test DSN
 
 
 @pytest.fixture(autouse=True)
@@ -17,7 +17,7 @@ def clean_libpq_environment(monkeypatch):
 
 
 @pytest.mark.parametrize('target', [
-    'postgresql://postgres:synthetic@production.example/drydock_sql_contract',
+    'postgresql://postgres:synthetic@production.example/drydock_sql_contract',  # scan-allow: fake rejected DSN
     DSN.replace('drydock_sql_contract', 'production'),
     DSN + '?hostaddr=203.0.113.1', DSN + '?service=production',
     DSN + '?options=-csearch_path=public', DSN + '#fragment',

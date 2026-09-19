@@ -31,7 +31,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      SQL_CONTRACT_DATABASE_URL: postgresql://postgres:synthetic-contract-password@127.0.0.1:5432/drydock_sql_contract
+      SQL_CONTRACT_DATABASE_URL: postgresql://postgres:synthetic-contract-password@127.0.0.1:5432/drydock_sql_contract # scan-allow: disposable CI service
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

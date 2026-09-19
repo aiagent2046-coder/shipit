@@ -46,7 +46,7 @@ With the repository's locked development dependencies and a disposable local
 PostgreSQL server configured, run:
 
 ```bash
-export SQL_CONTRACT_DATABASE_URL='postgresql://postgres:synthetic-contract-password@127.0.0.1:5432/drydock_sql_contract'
+export SQL_CONTRACT_DATABASE_URL='postgresql://postgres:synthetic-contract-password@127.0.0.1:5432/drydock_sql_contract' # scan-allow: disposable local example
 python -m pytest -q tests/test_sql_runtime_target.py tests/test_sql_runtime_contract.py
 python scripts/verify_sql_runtime_contract.py --output /tmp/sql-runtime-contract.json
 ```
