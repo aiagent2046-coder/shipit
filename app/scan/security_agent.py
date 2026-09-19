@@ -11,6 +11,8 @@ import hashlib
 import json
 import re
 
+from app.scan.agent_chain import normalize_chain, run_chain
+from app.scan.evidence_record import normalize_acquisition
 from app.scan.pattern_catalog import catalog_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.evidence_acquisition import EvidenceBudget, acquire_sql_evidence
@@ -99,18 +101,13 @@ def _base(archive_sha256: str, engine_version: str) -> dict:
     }
 
 
-def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: int,
-                      source_snapshot=None, evidence_budget=None) -> dict:
+def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: int) -> dict:
     trace = sql_observation(finding) if card["detection"]["check"] == "sql_injection" else None
     established = {"static_rule_observation", "source_pattern"}
     if trace is not None:
         established.add("sql_source_observation")
         if trace.get("driver_status") == "source_resolved":
             established.add("psycopg3_cursor_provenance")
-    acquisition = None
-    if trace is not None:
-        acquisition = acquire_sql_evidence(trace, source_snapshot, evidence_budget or EvidenceBudget())
-        established.update(fact["id"] for fact in acquisition["facts"])
     required = list(dict.fromkeys([
         *card["applicability"]["required_evidence"], *card["recipe"]["preconditions"],
     ]))
@@ -123,13 +120,10 @@ def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: i
         "pattern_id": card["id"], "pattern_revision": card["revision"], "title": card["title"],
         "weaknesses": [weakness["id"] for weakness in card["weaknesses"]],
         "rule_id": finding["rule_id"], "file": finding["file"], "line": finding["line"],
-        "state": ("source_evidence_collected" if acquisition and acquisition["status"] == "completed"
-                  else "needs_evidence"),
+        "state": "needs_evidence",
         "evidence": {"sql_observation": trace} if trace else {},
-        **({"acquisition": acquisition} if acquisition is not None else {}),
         "missing_evidence": missing,
-        "next_action": ("review_runtime_contract" if acquisition and acquisition["status"] == "completed"
-                        else "manual_review"),
+        "next_action": "manual_review",
         "recipe": {"id": recipe.get("id"), "status": recipe["status"], "automatic_apply": False},
         "steps": [
             {"action": "classify_observation", "result": "candidate_weakness_class"},
@@ -141,53 +135,88 @@ def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: i
     }
 
 
-def _collect_synthetic_evidence(result, executor):
-    """One trusted zero-input experiment per investigation, shared across candidates.
+def _research_candidate(observation, snapshot, budget):
+    trace = observation["evidence"]["sql_observation"]
+    acquisition = acquire_sql_evidence(trace, snapshot, budget)
+    acquisition = normalize_acquisition(acquisition, trace)
+    if acquisition is None:
+        raise ValueError("Invalid acquired evidence")
+    observation["acquisition"] = acquisition
+    facts = {fact["id"] for fact in acquisition["facts"]}
+    observation["missing_evidence"] = [item for item in observation["missing_evidence"] if item not in facts]
+    completed = acquisition["status"] == "completed"
+    if completed:
+        observation.update(state="source_evidence_collected", next_action="review_runtime_contract")
+    return observation, "completed" if completed else "blocked", (
+        "source_evidence_collected" if completed else "source_evidence_incomplete")
 
-    No saved report is used as an execution plan and no customer material is
-    passed to the executor. Even a passed recipe leaves all project gaps intact.
-    """
-    result["mode"] = "deterministic_evidence"
-    runs = reused = 0
-    summary = None
-    for observation in result["observations"]:
-        if not supports_synthetic_contract(observation):
-            continue
-        observation["steps"].append({"action": "select_synthetic_contract", "result": "single_text_value_psycopg3"})
-        cached = summary is not None
-        if cached:
-            reused += 1
-        else:
-            runs += 1
-            try:
-                summary = normalize_synthetic_summary(executor())
-                if summary is None:
-                    summary = unavailable_summary("invalid_contract_result")
-            except Exception:
-                summary = unavailable_summary("execution_unavailable")
-        contract = {**deepcopy(summary), "reused": cached, "source": {
-            "archive_sha256": result["source"]["archive_sha256"],
-            "engine_version": result["source"]["engine_version"],
-            "source_sha256": observation["evidence"]["sql_observation"]["source_sha256"],
-            "observation_id": observation["id"], "catalog_sha256": result["catalog"]["sha256"],
-        }}
-        passed = summary["status"] == "passed"
-        if passed:
-            observation.update(state="synthetic_recipe_verified", next_action="review_project_runtime_contract")
-        observation["synthetic_contract"] = contract
-        observation["steps"].extend([
-            {"action": "verify_synthetic_recipe", "result": summary["status"]},
-            {"action": "replan_after_synthetic_contract", "result": observation["next_action"]},
-        ])
-        if normalize_synthetic_contract(contract, observation, result["source"], result["catalog"]) is None:
-            raise ValueError("Invalid synthetic evidence binding")
-        if not passed and result["status"] == "completed":
-            result.update(status="partial", stop_reason="synthetic_verification_incomplete")
-    result["budget"].update(synthetic_contract_runs=runs, max_synthetic_contract_runs=1,
-                            synthetic_contract_reuses=reused)
-    if runs:
-        result["limitations"] = [item for item in result["limitations"] if item != "runtime_tests_not_run"]
-        result["limitations"].extend(["synthetic_recipe_scope_only", "customer_project_runtime_not_verified"])
+
+def _experiment_candidate(observation, executor, session, binding):
+    if not supports_synthetic_contract(observation):
+        return observation, "blocked", "contract_prerequisites_missing"
+    if executor is None:
+        return observation, "blocked", "executor_not_supplied"
+    observation["steps"].append({"action": "select_synthetic_contract", "result": "single_text_value_psycopg3"})
+    cached = session["summary"] is not None
+    if cached:
+        session["reuses"] += 1
+    else:
+        session["runs"] += 1
+        try:
+            session["summary"] = normalize_synthetic_summary(executor())
+            if session["summary"] is None:
+                session["summary"] = unavailable_summary("invalid_contract_result")
+        except Exception:
+            session["summary"] = unavailable_summary("execution_unavailable")
+    # The experimenter cannot promote a candidate. Only the verifier consumes
+    # this pending message; it never escapes into a saved report.
+    observation["_pending_contract"] = {**deepcopy(session["summary"]), "reused": cached,
+                                        "source": deepcopy(binding)}
+    return observation, "completed", "contract_reused" if cached else "contract_obtained"
+
+
+def _verify_candidate(observation, source, catalog):
+    contract = observation.pop("_pending_contract", None)
+    if contract is None:
+        return observation, "blocked", "synthetic_evidence_missing"
+    summary = normalize_synthetic_summary({key: value for key, value in contract.items()
+                                            if key not in {"source", "reused"}})
+    if summary is None:
+        raise ValueError("Invalid experiment message")
+    passed = summary["status"] == "passed"
+    if passed:
+        observation.update(state="synthetic_recipe_verified", next_action="review_project_runtime_contract")
+    if normalize_synthetic_contract(contract, observation, source, catalog) is None:
+        raise ValueError("Invalid synthetic evidence binding")
+    observation["synthetic_contract"] = contract
+    observation["steps"].extend([
+        {"action": "verify_synthetic_recipe", "result": summary["status"]},
+        {"action": "replan_after_synthetic_contract", "result": observation["next_action"]},
+    ])
+    return observation, "completed" if passed else "blocked", (
+        "synthetic_recipe_verified" if passed else "synthetic_verification_incomplete")
+
+
+def _coordinate_candidate(card, finding, ordinal, result, snapshot, budget, executor, session):
+    seed = _review_candidate(card, finding, result["source"]["archive_sha256"], ordinal)
+    trace = seed["evidence"].get("sql_observation")
+    if trace is None:
+        return seed
+    binding = {**result["source"], "source_sha256": trace["source_sha256"],
+               "observation_id": seed["id"], "catalog_sha256": result["catalog"]["sha256"]}
+
+    def detect(observation):
+        # Revalidate the scanner-owned hand-off, never a model-written claim.
+        if sql_observation(finding) != observation["evidence"]["sql_observation"]:
+            raise ValueError("Invalid detector hand-off")
+        return observation, "completed", "static_sql_observation"
+
+    return run_chain(seed, binding, {
+        "detector": detect,
+        "researcher": lambda item: _research_candidate(item, snapshot, budget),
+        "experimenter": lambda item: _experiment_candidate(item, executor, session, binding),
+        "verifier": lambda item: _verify_candidate(item, result["source"], result["catalog"]),
+    })
 
 
 def review_static_observations(static: dict, *, archive_sha256: str, engine_version: str,
@@ -230,12 +259,13 @@ def review_static_observations(static: dict, *, archive_sha256: str, engine_vers
     ))
     occurrences: Counter = Counter()
     evidence_budget = EvidenceBudget()
+    session = {"summary": None, "runs": 0, "reuses": 0}
     for card, finding in candidates[:MAX_CANDIDATES]:
         key = (card["id"], finding["rule_id"], finding["file"], finding["line"])
         ordinal = occurrences[key]
         occurrences[key] += 1
-        result["observations"].append(_review_candidate(card, finding, archive_sha256, ordinal,
-                                                      source_snapshot, evidence_budget))
+        result["observations"].append(_coordinate_candidate(
+            card, finding, ordinal, result, source_snapshot, evidence_budget, synthetic_sql_executor, session))
     omitted = max(0, len(candidates) - MAX_CANDIDATES)
     result["budget"].update(candidates_found=len(candidates), processed=len(result["observations"]),
                             candidates_omitted=omitted, evidence_actions=evidence_budget.actions,
@@ -252,8 +282,18 @@ def review_static_observations(static: dict, *, archive_sha256: str, engine_vers
         result["status"], result["stop_reason"] = "partial", "evidence_collection_incomplete"
     else:
         result["status"], result["stop_reason"] = "completed", "bounded_review_completed"
+    if any(row.get("agent_chain", {}).get("status") == "error" for row in result["observations"]):
+        result.update(status="partial", stop_reason="agent_task_failed")
     if synthetic_sql_executor is not None:
-        _collect_synthetic_evidence(result, synthetic_sql_executor)
+        result["mode"] = "deterministic_evidence"
+        result["budget"].update(synthetic_contract_runs=session["runs"], max_synthetic_contract_runs=1,
+                                synthetic_contract_reuses=session["reuses"])
+        if session["runs"]:
+            result["limitations"] = [item for item in result["limitations"] if item != "runtime_tests_not_run"]
+            result["limitations"].extend(["synthetic_recipe_scope_only", "customer_project_runtime_not_verified"])
+        if (any(row.get("synthetic_contract", {}).get("status") in {"failed", "unavailable"}
+                for row in result["observations"]) and result["status"] == "completed"):
+            result.update(status="partial", stop_reason="synthetic_verification_incomplete")
     return result
 
 
@@ -311,4 +351,14 @@ def agent_record(value: object) -> dict | None:
                 and step.get("action") not in ("select_synthetic_contract", "verify_synthetic_recipe",
                                                "replan_after_synthetic_contract")]
         result.update(status="partial", stop_reason="synthetic_evidence_invalid")
+    for observation in result["observations"]:
+        if not isinstance(observation, dict) or "agent_chain" not in observation:
+            continue
+        chain = normalize_chain(observation["agent_chain"], observation, result.get("source"), result.get("catalog"))
+        if chain is None:
+            observation.pop("agent_chain", None)
+            if result.get("stop_reason") != "synthetic_evidence_invalid":
+                result.update(status="partial", stop_reason="agent_chain_invalid")
+        else:
+            observation["agent_chain"] = chain
     return result

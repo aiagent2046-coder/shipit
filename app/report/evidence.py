@@ -691,7 +691,8 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
     stop = agent.get("stop_reason")
     known_stops = {"agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
                    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete",
-                   "synthetic_verification_incomplete", "synthetic_evidence_invalid"}
+                   "synthetic_verification_incomplete", "synthetic_evidence_invalid",
+                   "agent_task_failed", "agent_chain_invalid"}
     # Saved diagnostics are untrusted. Only the producer's type-only error
     # form is displayable; never echo exception messages or arbitrary reasons.
     if not (isinstance(stop, str) and (stop in known_stops

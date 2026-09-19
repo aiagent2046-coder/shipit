@@ -44,7 +44,7 @@ jobs:
       - name: Verify target boundaries and real PostgreSQL behavior
         run: >-
           python -m pytest -q tests/test_sql_runtime_target.py tests/test_sql_runtime_contract.py
-          tests/test_sql_runtime_executor.py tests/test_agent_synthetic_runtime.py
+          tests/test_sql_runtime_executor.py tests/test_agent_synthetic_runtime.py tests/test_security_agent_chain.py
       - name: Compare before, after and restored mutation
         run: python scripts/verify_sql_runtime_contract.py --output "$RUNNER_TEMP/sql-runtime-contract.json"
       - name: Let the agent select, execute and consume the contract
