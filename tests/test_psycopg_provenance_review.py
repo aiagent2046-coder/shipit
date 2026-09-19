@@ -26,7 +26,8 @@ def assert_driver_decision(source, *, resolved=False):
     assert trace['driver_status'] == ('source_resolved' if resolved else 'unknown')
     assert ('driver_provenance' in trace) is resolved
     assert ('psycopg3_cursor_provenance' not in observation['missing_evidence']) is resolved
-    assert {'attacker_control', 'sql_value_position', 'intended_value_type',
+    assert {'request_input_source', 'local_input_flow', 'caller_authorization',
+            'route_reachability', 'intended_value_type',
             'runtime_behavior_contract'} <= set(observation['missing_evidence'])
     assert observation['state'] == 'needs_evidence'
     assert observation['next_action'] == 'manual_review'

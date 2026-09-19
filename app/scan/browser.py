@@ -188,6 +188,6 @@ class ScanSession:
         )
         updated["score"]["frontend_scan"] = frontend
         attach_security_agent(updated, archive_sha256=hashlib.sha256(self.data).hexdigest(),
-                              engine_version=AUDIT_ENGINE_VERSION)
+                              engine_version=AUDIT_ENGINE_VERSION, source_archive=io.BytesIO(self.data))
         self.static = updated
         return self.result()

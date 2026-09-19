@@ -23,6 +23,7 @@ from app.report.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapsho
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
 from app.scan.security_agent import agent_record, sql_driver_rows, sql_observation
+from app.scan.evidence_record import acquisition_rows, normalize_acquisition
 
 
 def is_non_production(finding: dict) -> bool:
@@ -688,7 +689,7 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
 
     stop = agent.get("stop_reason")
     known_stops = {"agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
-                   "coverage_incomplete", "bounded_review_completed"}
+                   "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete"}
     # Saved diagnostics are untrusted. Only the producer's type-only error
     # form is displayable; never echo exception messages or arbitrary reasons.
     if not (isinstance(stop, str) and (stop in known_stops
@@ -746,12 +747,22 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
     for index, observation in enumerate(agent["observations"][:128], 1):
         if (not isinstance(observation, dict) or not isinstance(observation.get("file"), str)
                 or type(observation.get("line")) is not int or observation["line"] < 1
-                or observation.get("state") != "needs_evidence"
-                or observation.get("next_action") != "manual_review"):
+                or (observation.get("state"), observation.get("next_action")) not in (
+                    ("needs_evidence", "manual_review"),
+                    ("source_evidence_collected", "review_runtime_contract"),
+                )):
             continue
         recipe = observation.get("recipe")
         if (not isinstance(recipe, dict) or recipe.get("automatic_apply") is not False
                 or recipe.get("status") not in ("manual_guidance", "not_available")):
+            continue
+        evidence = observation.get("evidence")
+        trace = sql_observation({"source": "static", "rule_id": observation.get("rule_id"),
+                                 "file": observation.get("file"), "line": observation.get("line"),
+                                 "claim_evidence": {"version": 1, **evidence}}) if isinstance(evidence, dict) else None
+        acquisition = normalize_acquisition(observation.get("acquisition"), trace)
+        collected = observation.get("state") == "source_evidence_collected"
+        if collected and (acquisition is None or acquisition["status"] != "completed"):
             continue
         displayed += 1
         rows.append((f"Pattern observation {index}",
@@ -765,11 +776,13 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
         rows.append(("Candidate weakness classes",
                      ", ".join(weaknesses) + " — candidate classes, not verified vulnerabilities."
                      if weaknesses else "Not recorded; do not infer a weakness class."))
-        rows.append(("Review state", "Needs evidence; the candidate and repair preconditions remain unverified."))
-        evidence = observation.get("evidence")
-        trace = sql_observation({"source": "static", "rule_id": observation.get("rule_id"),
-                                 "file": observation.get("file"), "line": observation.get("line"),
-                                 "claim_evidence": {"version": 1, **evidence}}) if isinstance(evidence, dict) else None
+        rows.append(("Review state", "Supported source evidence collected; runtime behavior and repair "
+                     "preconditions remain unverified." if collected else
+                     "Needs evidence; the candidate and repair preconditions remain unverified."))
+        rows.extend(acquisition_rows(acquisition, trace))
+        if "acquisition" in observation and acquisition is None:
+            rows.append(("Source investigation unavailable", "The saved evidence could not be validated. "
+                         "Do not treat missing source facts as established."))
         if trace:
             rows.extend([
                 ("SQL source trace", f"{humanize(trace['assembly_kind'])} at line {trace['assembly_line']} → "
@@ -784,7 +797,9 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
         missing = [item for item in missing if isinstance(item, str)] if isinstance(missing, list) else []
         rows.append(("Missing evidence", "; ".join(humanize(item) for item in missing) if missing else
                      "Not recorded; do not assume the repair preconditions are satisfied."))
-        rows.append(("Next step", "Manual review: gather the missing evidence before evaluating a repair."))
+        rows.append(("Next step", "Review the runtime contract: confirm reachability, input control and expected "
+                     "query behavior before choosing a repair." if collected else
+                     "Manual review: gather the missing evidence before evaluating a repair."))
         guidance = (f"{text(recipe.get('id'))} — manual guidance only; establish the missing preconditions "
                     "before applying the recorded recipe. No automatic patch was applied."
                     if recipe.get("status") == "manual_guidance" and recipe.get("automatic_apply") is False else

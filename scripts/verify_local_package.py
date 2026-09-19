@@ -49,6 +49,15 @@ CREATE POLICY read_users ON public.private_users FOR SELECT TO authenticated USI
 '''
 SQL_QUERY = ('query = "SELECT id FROM users WHERE id = " + user_id\n'
              'cursor.execute(query)\n')
+SQL_HTTP = '''from fastapi import FastAPI
+import psycopg
+app = FastAPI()
+@app.get("/users")
+def load(name: str):
+    conn = psycopg.connect(dsn)
+    cur = conn.cursor()
+    cur.execute(f"SELECT id FROM users WHERE name = '{name}'")
+'''
 DEPENDENCIES = {"pyyaml", "tree-sitter", "tree-sitter-typescript", "pglast"}
 SERVER_DISTRIBUTIONS = {"fastapi", "httpx", "psycopg", "redis", "uvicorn", "shipit"}
 
@@ -62,6 +71,7 @@ def fixture(root: Path):
     files = {
         "routes.py": CAMEL_ROUTES,
         "query.py": SQL_QUERY,
+        "sql_http.py": SQL_HTTP,
         "src/server.ts": JAVASCRIPT,
         "migrations/001_users.sql": MIGRATION,
         "requirements.txt": "langflow==1.0.12\n",
@@ -156,13 +166,22 @@ def exercise(namespace, temporary):
         require(agent["status"] == "completed" and not agent["automatic_patch"],
                 "Deterministic pattern review unavailable or claims automatic patching")
         decision = next(row for row in agent["observations"]
-                        if row["pattern_id"] == "python-sql-string-assembly")
+                        if row["pattern_id"] == "python-sql-string-assembly" and row["file"] == "query.py")
         require(decision["file"] == "query.py" and decision["weaknesses"] == ["CWE-89"],
                 "SQL pattern classification was lost")
         require(decision["evidence"]["sql_observation"]["source_sha256"]
                 == hashlib.sha256(SQL_QUERY.encode()).hexdigest(), "SQL source identity was lost")
         require("psycopg3_cursor_provenance" in decision["missing_evidence"],
                 "Method name was mistaken for driver evidence")
+        investigated = next(row for row in agent["observations"] if row["file"] == "sql_http.py")
+        require(investigated["state"] == "source_evidence_collected"
+                and investigated["next_action"] == "review_runtime_contract",
+                "Installed engine did not collect the missing SQL source evidence")
+        require({fact["id"] for fact in investigated["acquisition"]["facts"]}
+                == {"request_input_source", "local_input_flow", "sql_value_position", "value_constraints"},
+                "Source investigation did not establish all four independent facts")
+        require({"caller_authorization", "route_reachability", "intended_value_type", "runtime_behavior_contract"}
+                <= set(investigated["missing_evidence"]), "Source facts closed runtime prerequisites")
         status, patterns = captured_main(cli, ["patterns", "--json"])
         require(status == 0 and patterns["catalog_sha256"] == agent["catalog"]["sha256"],
                 "Installed pattern catalog differs from the report")

@@ -57,7 +57,8 @@ def test_sql_candidate_is_classified_without_driver_or_runtime_proof():
     assert decision["next_action"] == "manual_review"
     assert decision["recipe"]["automatic_apply"] is False
     assert set(decision["missing_evidence"]) == {
-        "attacker_control", "psycopg3_cursor_provenance", "sql_value_position",
+        "request_input_source", "local_input_flow", "caller_authorization", "route_reachability",
+        "psycopg3_cursor_provenance", "sql_value_position",
         "intended_value_type", "runtime_behavior_contract",
     }
     trace = decision["evidence"]["sql_observation"]
@@ -139,7 +140,10 @@ def test_candidate_budget_and_input_order_cannot_hide_omitted_review(monkeypatch
     assert first == second
     assert first["status"] == "partial"
     assert first["stop_reason"] == "candidate_budget_exhausted"
-    assert first["budget"] == {"max_candidates": 1, "candidates_found": 2, "processed": 1, "candidates_omitted": 1}
+    candidate_fields = ("max_candidates", "candidates_found", "processed", "candidates_omitted")
+    assert {field: first["budget"][field] for field in candidate_fields} == {
+        "max_candidates": 1, "candidates_found": 2, "processed": 1, "candidates_omitted": 1,
+    }
     assert first["observations"][0]["file"] == "src/a.py"
     assert len(sql_findings(static)) == 2
 

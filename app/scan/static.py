@@ -438,5 +438,5 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
     }
     fileobj.seek(0)
     attach_security_agent(result, archive_sha256=hashlib.file_digest(fileobj, "sha256").hexdigest(),
-                          engine_version=AUDIT_ENGINE_VERSION)
+                          engine_version=AUDIT_ENGINE_VERSION, source_archive=fileobj)
     return result

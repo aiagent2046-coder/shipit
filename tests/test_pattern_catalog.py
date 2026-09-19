@@ -143,7 +143,7 @@ def test_broken_links_or_stronger_claims_are_rejected_before_publication(monkeyp
     elif mutation == "missing_driver":
         card["recipe"]["preconditions"].remove("psycopg3_cursor_provenance")
     elif mutation == "missing_evidence_description":
-        card["applicability"]["evidence_descriptions"].pop("attacker_control")
+        card["applicability"]["evidence_descriptions"].pop("request_input_source")
     elif mutation == "unsupported_claim":
         card["weaknesses"][0]["relationship"] = "confirmed_vulnerability"
     else:
