@@ -529,12 +529,100 @@ function acquisitionRows(value, trace) {
     return rows;
 }
 
+"use strict";
+"use strict";
+"use strict";
+// Mirror the pure Python saved-record boundary. This validates a saved synthetic
+// recipe record; it does not authenticate JSON or verify the customer project.
+function normalizeSyntheticContract(value, observation, agentSource, catalog) {
+    const obj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+    const keys = (v, required) => obj(v)
+        && required.every(k => Object.hasOwn(v, k)) && Object.keys(v).length === required.length;
+    const integer = (v) => Number.isSafeInteger(v) && Number(v) > 0 && Number(v) <= 2 ** 31 - 1;
+    const sha = (v) => typeof v === "string" && /^[a-f0-9]{64}(?![\s\S])/.test(v);
+    const exactRows = (v, expected) => Array.isArray(v) && v.length === expected.length
+        && v.every((id, index) => id === expected[index]);
+    if (!keys(value, ["version", "scope", "contract_id", "contract_revision", "status", "reason", "evidence_sha256",
+        "synthetic_recipe_verified", "runtime_verified", "customer_project_verified", "automatic_patch", "proof", "source", "reused"])
+        || value.version !== 1 || value.scope !== "synthetic_recipe" || value.contract_revision !== 1
+        || value.contract_id !== "sql-value-parameterization-python-psycopg3" || !sha(value.evidence_sha256)
+        || value.runtime_verified !== false || value.customer_project_verified !== false || value.automatic_patch !== false
+        || typeof value.reused !== "boolean" || !obj(observation) || !obj(agentSource) || !obj(catalog))
+        return null;
+    const passed = value.status === "passed";
+    const unavailableReasons = ["database_not_configured", "invalid_database_target", "ambient_libpq_options", "execution_unavailable",
+        "execution_timeout", "output_limit", "invalid_contract_result", "unsupported_runtime", "budget_exhausted"];
+    if (value.synthetic_recipe_verified !== passed || (passed ? value.reason !== "synthetic_contract_passed"
+        : value.status === "failed" ? value.reason !== "synthetic_contract_failed"
+            : value.status !== "unavailable" || typeof value.reason !== "string" || !unavailableReasons.includes(value.reason)))
+        return null;
+    if (observation.pattern_id !== "python-sql-string-assembly" || !integer(observation.pattern_revision)
+        || observation.rule_id !== "sql-injection-string-built-query" || typeof observation.file !== "string"
+        || !observation.file.toLowerCase().endsWith(".py") || !integer(observation.line) || !sha(observation.id)
+        || !obj(observation.recipe) || observation.recipe.id !== value.contract_id || observation.recipe.status !== "manual_guidance"
+        || observation.recipe.automatic_apply !== false || !obj(observation.evidence))
+        return null;
+    if (passed ? observation.state !== "synthetic_recipe_verified" || observation.next_action !== "review_project_runtime_contract"
+        : observation.state !== "source_evidence_collected" || observation.next_action !== "review_runtime_contract")
+        return null;
+    const gaps = ["runtime_behavior_contract", "intended_value_type", "caller_authorization", "route_reachability"];
+    const missing = observation.missing_evidence;
+    if (!Array.isArray(missing) || !missing.every(item => typeof item === "string") || !gaps.every(gap => missing.includes(gap)))
+        return null;
+    const trace = observation.evidence.sql_observation;
+    if (!obj(trace) || trace.file !== observation.file || trace.sink_line !== observation.line
+        || trace.driver_status !== "source_resolved" || trace.sink_method !== "execute")
+        return null;
+    const acquisition = normalizeAcquisition(observation.acquisition, trace);
+    if (acquisition?.status !== "completed")
+        return null;
+    const slots = acquisition.facts.find(fact => fact.id === "sql_value_position")?.slots;
+    const constraints = acquisition.facts.find(fact => fact.id === "value_constraints")?.constraints;
+    if (slots?.length !== 1 || !constraints?.length || constraints.some(item => item.slot !== 0 || item.type !== "str"))
+        return null;
+    const source = value.source;
+    if (!keys(source, ["archive_sha256", "source_sha256", "observation_id", "engine_version", "catalog_sha256"])
+        || !sha(source.archive_sha256) || source.archive_sha256 !== agentSource.archive_sha256
+        || !sha(source.source_sha256) || source.source_sha256 !== trace.source_sha256
+        || !sha(source.observation_id) || source.observation_id !== observation.id
+        || !sha(source.catalog_sha256) || source.catalog_sha256 !== catalog.sha256
+        || typeof source.engine_version !== "string" || !source.engine_version.length || [...source.engine_version].length > 128
+        || source.engine_version !== agentSource.engine_version)
+        return null;
+    const proof = value.proof;
+    if (passed) {
+        if (!keys(proof, ["fixture_sha256", "schema_sha256", "psycopg_version", "postgresql_version", "executions", "cases_per_stage",
+            "before_row_ids", "after_row_ids", "mutation_row_ids", "rollback_completed", "temporary_table_absent"])
+            || proof.fixture_sha256 !== "8c856f7ededaa7fc4bf8c8cbb56819a30eb3f9553209e222e13ad7e4926b9517"
+            || proof.schema_sha256 !== "9ca4174618e52ccbafebba9d1b5b6151f6ecdd1d5c67ba9f3b7f4706e2ff91a2"
+            || typeof proof.psycopg_version !== "string" || proof.psycopg_version.length > 64
+            || !/^3\.[0-9]+\.[0-9]+(?![\s\S])/.test(proof.psycopg_version) || !integer(proof.postgresql_version) || proof.postgresql_version < 100000
+            || proof.executions !== 27 || proof.cases_per_stage !== 9 || proof.rollback_completed !== true
+            || proof.temporary_table_absent !== true || !exactRows(proof.before_row_ids, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+            || !exactRows(proof.after_row_ids, [9]) || !exactRows(proof.mutation_row_ids, [1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            return null;
+    }
+    else if (proof !== null)
+        return null;
+    return structuredClone(value);
+}
+function syntheticContractRows(record) {
+    const rows = [
+        ["Synthetic recipe contract", `Saved synthetic evidence: ${record.status}; ${record.reason.replaceAll("_", " ")}. Scope: synthetic recipe.`],
+        ["Synthetic evidence SHA-256", record.evidence_sha256],
+    ];
+    if (record.proof)
+        rows.push(["Before / after / mutation", "9 / 1 / 9 rows in the attack control; 27 executions across 9 cases."], ["Fixture cleanup", "Transaction rollback and temporary table removal confirmed."], ["Synthetic runtime", `PostgreSQL ${record.proof.postgresql_version}; Psycopg ${record.proof.psycopg_version}.`]);
+    rows.push(["Synthetic execution", record.reused ? "Reused within this investigation." : "One bounded attempt; no automatic retry."], ["Customer project verification", "Customer project runtime tests not run. No automatic patch applied."]);
+    return rows;
+}
+
 function renderSecurityAgent(agent) {
   const details = byId('security-agent-details');
   const container = byId('security-agent');
   container.replaceChildren();
   details.hidden = !agent || typeof agent !== 'object' || Array.isArray(agent)
-    || agent.version !== 1 || agent.mode !== 'deterministic_static'
+    || agent.version !== 1 || !['deterministic_static', 'deterministic_evidence'].includes(agent.mode)
     || agent.runtime_verified !== false || agent.automatic_patch !== false;
   details.open = false;
   if (details.hidden) return;
@@ -545,7 +633,10 @@ function renderSecurityAgent(agent) {
   const label = value => text(value, 'Not reported').replaceAll('_', ' ');
   const count = value => Number.isInteger(value) && value >= 0 ? value : 'Not reported';
   byId('security-agent-summary').textContent = `Pattern review · ${reviewStatus} · observations: ${observations.length}`;
-  container.append(node('p', 'Static review with no LLM. Completion describes the review scope; runtime exploitability and repairs remain unverified.', 'hint'));
+  const hasSynthetic = observations.some(item => 'synthetic_contract' in item);
+  container.append(node('p', hasSynthetic
+    ? 'Review with no LLM, including saved synthetic recipe evidence. Customer project runtime exploitability and repairs remain unverified.'
+    : 'Static review with no LLM. Completion describes the review scope; runtime exploitability and repairs remain unverified.', 'hint'));
   const summary = node('div');
   const catalog = agent.catalog || {};
   const budget = agent.budget || {};
@@ -564,8 +655,11 @@ function renderSecurityAgent(agent) {
     const acquisition = observation.rule_id === 'sql-injection-string-built-query'
       && sqlRecord?.file === observation.file && sqlRecord?.sink_line === observation.line
       ? normalizeAcquisition(observation.acquisition, sqlRecord) : null;
+    const synthetic = normalizeSyntheticContract(observation.synthetic_contract, observation, agent.source, agent.catalog);
+    const verified = observation.state === 'synthetic_recipe_verified';
     const collected = observation.state === 'source_evidence_collected';
-    if (!(collected && observation.next_action === 'review_runtime_contract' && acquisition?.status === 'completed')
+    if (!(verified && observation.next_action === 'review_project_runtime_contract' && synthetic?.status === 'passed')
+        && !(collected && observation.next_action === 'review_runtime_contract' && acquisition?.status === 'completed')
         && !(observation.state === 'needs_evidence' && observation.next_action === 'manual_review')) continue;
     if (!observation.recipe || observation.recipe.automatic_apply !== false
         || !['manual_guidance', 'not_available'].includes(observation.recipe.status)) continue;
@@ -604,9 +698,14 @@ function renderSecurityAgent(agent) {
         ? observation.weaknesses.map(value => text(value)).join(', ') || 'Not reported' : 'Not reported'],
       ['Missing evidence', missing.length ? missing.map(label).join('; ') : 'Not reported'],
       ...acquisitionRows(acquisition, sqlRecord),
+      ...(synthetic ? syntheticContractRows(synthetic) : []),
+      ...('synthetic_contract' in observation && !synthetic ? [['Synthetic evidence unavailable',
+        'The saved synthetic evidence could not be validated. Customer project runtime behavior remains unverified.']] : []),
       ...('acquisition' in observation && !acquisition ? [['Source investigation unavailable',
         'The saved evidence could not be validated. Do not treat missing source facts as established.']] : []),
-      ['Next step', collected
+      ['Next step', verified
+        ? 'Review the customer project runtime contract: confirm authorization, deployed reachability, intended value types and expected query behavior before choosing a repair.'
+        : collected
         ? 'Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair.'
         : !('acquisition' in observation) && sql
           ? 'Manual review: trace the input origin and check the database driver’s parameter binding at the query call.'

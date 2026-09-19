@@ -24,6 +24,7 @@ from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
 from app.scan.security_agent import agent_record, sql_driver_rows, sql_observation
 from app.scan.evidence_record import acquisition_rows, normalize_acquisition
+from app.scan.synthetic_record import normalize_synthetic_contract, synthetic_contract_rows
 
 
 def is_non_production(finding: dict) -> bool:
@@ -689,7 +690,8 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
 
     stop = agent.get("stop_reason")
     known_stops = {"agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
-                   "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete"}
+                   "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete",
+                   "synthetic_verification_incomplete", "synthetic_evidence_invalid"}
     # Saved diagnostics are untrusted. Only the producer's type-only error
     # form is displayable; never echo exception messages or arbitrary reasons.
     if not (isinstance(stop, str) and (stop in known_stops
@@ -700,6 +702,8 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
     source = agent.get("source")
     source = source if isinstance(source, dict) else {}
     budget = agent["budget"]
+    has_synthetic = any(isinstance(item, dict) and "synthetic_contract" in item
+                        for item in agent["observations"])
     rows = [
         ("Pattern review", f"{agent['status']}; {len(agent['observations'])} observations; "
          f"{stop}. Completion describes bounded review, not project safety."),
@@ -714,7 +718,8 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
          f"limit: {count(budget.get('max_candidates'))}."),
         ("Pattern review limits", "Selected static patterns only. Candidate classes are unverified; "
          "attacker control and runtime behavior were not checked. "
-         "No runtime tests or automatic patches were run."),
+         + ("Customer project runtime tests not run. No automatic patch applied." if has_synthetic else
+            "No runtime tests or automatic patches were run.")),
     ]
     plan_labels = {
         "analyzed": "Analyzed within the recorded scope",
@@ -750,6 +755,7 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
                 or (observation.get("state"), observation.get("next_action")) not in (
                     ("needs_evidence", "manual_review"),
                     ("source_evidence_collected", "review_runtime_contract"),
+                    ("synthetic_recipe_verified", "review_project_runtime_contract"),
                 )):
             continue
         recipe = observation.get("recipe")
@@ -761,7 +767,11 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
                                  "file": observation.get("file"), "line": observation.get("line"),
                                  "claim_evidence": {"version": 1, **evidence}}) if isinstance(evidence, dict) else None
         acquisition = normalize_acquisition(observation.get("acquisition"), trace)
-        collected = observation.get("state") == "source_evidence_collected"
+        synthetic = normalize_synthetic_contract(observation.get("synthetic_contract"), observation, source, catalog)
+        verified = observation.get("state") == "synthetic_recipe_verified"
+        collected = observation.get("state") in ("source_evidence_collected", "synthetic_recipe_verified")
+        if verified and (synthetic is None or synthetic["status"] != "passed"):
+            continue
         if collected and (acquisition is None or acquisition["status"] != "completed"):
             continue
         displayed += 1
@@ -776,10 +786,17 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
         rows.append(("Candidate weakness classes",
                      ", ".join(weaknesses) + " — candidate classes, not verified vulnerabilities."
                      if weaknesses else "Not recorded; do not infer a weakness class."))
-        rows.append(("Review state", "Supported source evidence collected; runtime behavior and repair "
+        rows.append(("Review state", "Saved synthetic recipe evidence passed; customer project runtime behavior "
+                     "and repair preconditions remain unverified." if verified else
+                     "Supported source evidence collected; runtime behavior and repair "
                      "preconditions remain unverified." if collected else
                      "Needs evidence; the candidate and repair preconditions remain unverified."))
         rows.extend(acquisition_rows(acquisition, trace))
+        if synthetic is not None:
+            rows.extend(synthetic_contract_rows(synthetic))
+        elif "synthetic_contract" in observation:
+            rows.append(("Synthetic evidence unavailable", "The saved synthetic evidence could not be validated. "
+                         "Customer project runtime behavior remains unverified."))
         if "acquisition" in observation and acquisition is None:
             rows.append(("Source investigation unavailable", "The saved evidence could not be validated. "
                          "Do not treat missing source facts as established."))
@@ -797,7 +814,9 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
         missing = [item for item in missing if isinstance(item, str)] if isinstance(missing, list) else []
         rows.append(("Missing evidence", "; ".join(humanize(item) for item in missing) if missing else
                      "Not recorded; do not assume the repair preconditions are satisfied."))
-        rows.append(("Next step", "Review the runtime contract: confirm reachability, input control and expected "
+        rows.append(("Next step", "Review the customer project runtime contract: confirm authorization, deployed "
+                     "reachability, intended value types and expected query behavior before choosing a repair."
+                     if verified else "Review the runtime contract: confirm reachability, input control and expected "
                      "query behavior before choosing a repair." if collected else
                      "Manual review: gather the missing evidence before evaluating a repair."))
         guidance = (f"{text(recipe.get('id'))} — manual guidance only; establish the missing preconditions "

@@ -214,3 +214,104 @@ def test_interpretation_label_uses_recorded_finding_provenance(source, rule_id, 
     assert rows[label] == "Recorded observation."
     assert len([value for value in rows.values() if value == "Recorded observation."]) == 1
     assert rows["Consequence check"] == "No independent verification recorded."
+
+
+@pytest.fixture(scope="module")
+def synthetic_report():
+    from tests.test_evidence_acquisition import HTTP_SQL
+
+    result = scan({"src/query.py": HTTP_SQL})
+    agent = result["score"]["scan_manifest"]["security_agent"]
+    agent["mode"] = "deterministic_evidence"
+    observation, = agent["observations"]
+    observation.update(state="synthetic_recipe_verified", next_action="review_project_runtime_contract")
+    observation["synthetic_contract"] = {
+        "version": 1, "scope": "synthetic_recipe", "contract_id": "sql-value-parameterization-python-psycopg3",
+        "contract_revision": 1, "status": "passed", "reason": "synthetic_contract_passed",
+        "evidence_sha256": "d" * 64, "synthetic_recipe_verified": True, "runtime_verified": False,
+        "customer_project_verified": False, "automatic_patch": False, "reused": False,
+        "source": {"archive_sha256": agent["source"]["archive_sha256"],
+                   "source_sha256": observation["evidence"]["sql_observation"]["source_sha256"],
+                   "observation_id": observation["id"], "engine_version": agent["source"]["engine_version"],
+                   "catalog_sha256": agent["catalog"]["sha256"]},
+        "proof": {
+            "fixture_sha256": "8c856f7ededaa7fc4bf8c8cbb56819a30eb3f9553209e222e13ad7e4926b9517",
+            "schema_sha256": "9ca4174618e52ccbafebba9d1b5b6151f6ecdd1d5c67ba9f3b7f4706e2ff91a2",
+            "psycopg_version": "3.3.5", "postgresql_version": 170011, "executions": 27, "cases_per_stage": 9,
+            "before_row_ids": list(range(1, 10)), "after_row_ids": [9], "mutation_row_ids": list(range(1, 10)),
+            "rollback_completed": True, "temporary_table_absent": True,
+        },
+    }
+    return result
+
+
+def test_saved_synthetic_evidence_keeps_project_gaps_in_html_and_sarif(synthetic_report):
+    from app.report.sarif import build_sarif
+
+    before = deepcopy(synthetic_report)
+    agent = synthetic_report["score"]["scan_manifest"]["security_agent"]
+    rows = dict(security_agent_rows(agent))
+    assert "Saved synthetic evidence: passed" in rows["Synthetic recipe contract"]
+    assert "9 / 1 / 9" in rows["Before / after / mutation"]
+    assert "rollback" in rows["Fixture cleanup"]
+    assert "customer project runtime behavior" in rows["Review state"]
+    assert "Customer project runtime tests not run" in rows["Customer project verification"]
+    assert "No automatic patch applied" in rows["Customer project verification"]
+    assert "customer project runtime contract" in rows["Next step"]
+    assert "runtime behavior contract" in rows["Missing evidence"]
+    html = render_report(synthetic_report)
+    assert "Saved synthetic evidence: passed" in html
+    assert "Customer project runtime tests not run" in html
+    sarif = build_sarif(synthetic_report["findings"], score=synthetic_report["score"],
+                        engine_version=agent["source"]["engine_version"])
+    saved = sarif["runs"][0]["invocations"][0]["properties"]["securityAgent"]
+    assert saved["observations"][0]["synthetic_contract"]["scope"] == "synthetic_recipe"
+    assert saved["runtime_verified"] is saved["automatic_patch"] is False
+    assert synthetic_report == before
+
+
+@pytest.mark.parametrize("field,value", [
+    ("scope", "customer_project"), ("runtime_verified", True), ("customer_project_verified", True),
+    ("automatic_patch", True), ("evidence_sha256", "d" * 64 + "\n"),
+    ("proof.fixture_sha256", "b" * 64), ("proof.schema_sha256", "b" * 64),
+    ("proof.before_row_ids", []), ("proof.after_row_ids", [1]), ("proof.mutation_row_ids", [9]),
+    ("proof.executions", 26), ("proof.rollback_completed", False), ("proof.temporary_table_absent", False),
+    ("source.archive_sha256", "b" * 64), ("source.source_sha256", "b" * 64),
+    ("source.observation_id", "b" * 64), ("source.catalog_sha256", "b" * 64),
+    ("source.engine_version", "another-engine"), ("reason", "private error text"),
+])
+def test_inconsistent_synthetic_evidence_cannot_promote_saved_html_or_sarif(synthetic_report, field, value):
+    from app.report.sarif import build_sarif
+
+    result = deepcopy(synthetic_report)
+    agent = result["score"]["scan_manifest"]["security_agent"]
+    target = agent["observations"][0]["synthetic_contract"]
+    path = field.split(".")
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    html = render_report(result)
+    assert "Saved synthetic evidence: passed" not in html
+    assert "Review the customer project runtime contract" not in html
+    sarif = build_sarif(result["findings"], score=result["score"], engine_version=agent["source"]["engine_version"])
+    exported = sarif["runs"][0]["invocations"][0]["properties"]["securityAgent"]
+    assert exported["status"] == "partial"
+    assert exported["stop_reason"] == "synthetic_evidence_invalid"
+    assert "synthetic_contract" not in exported["observations"][0]
+    assert exported["observations"][0]["state"] == "source_evidence_collected"
+    assert exported["runtime_verified"] is exported["automatic_patch"] is False
+
+
+@pytest.mark.parametrize("status,reason", [
+    ("failed", "synthetic_contract_failed"), ("unavailable", "execution_timeout"),
+])
+def test_unsuccessful_synthetic_attempt_does_not_hide_source_evidence(synthetic_report, status, reason):
+    agent = deepcopy(synthetic_report["score"]["scan_manifest"]["security_agent"])
+    observation = agent["observations"][0]
+    observation.update(state="source_evidence_collected", next_action="review_runtime_contract")
+    observation["synthetic_contract"].update(status=status, reason=reason, synthetic_recipe_verified=False, proof=None)
+    rows = dict(security_agent_rows(agent))
+    assert f"Saved synthetic evidence: {status}" in rows["Synthetic recipe contract"]
+    assert "Before / after / mutation" not in rows
+    assert "Supported source evidence collected" in rows["Review state"]
+    assert "Customer project runtime tests not run" in rows["Customer project verification"]
