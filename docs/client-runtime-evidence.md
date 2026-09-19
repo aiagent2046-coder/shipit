@@ -68,7 +68,10 @@ This scenario does not demonstrate SQL-injection repair or whole-project safety.
 
 Tests construct receipts to exercise the validator, tampering rejection,
 chain handoffs, no-LLM pipeline integration, legacy reporting and HTML safety.
-Those tests do not stand in for real Cumora execution. The operator reported a
-successful Docker run on 2026-09-19, but its raw scenario.json must be supplied
-for an actual import. The terminal PASS has not been silently converted into
-accepted evidence.
+Those tests do not stand in for real Cumora execution. On 2026-09-19, the
+operator supplied the raw scenario.json, pinned scenario script and separate
+run-id.txt from a successful Docker run. The actual import accepted all 12
+checks and preserved the attachment through saved-report normalization.
+A control scan of the same archive confirmed identical findings and score,
+with zero model calls in both scans. This verifies import consistency only;
+execution remains operator-reported, without independent attestation.
