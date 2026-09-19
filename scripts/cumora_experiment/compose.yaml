@@ -25,7 +25,7 @@ services:
   app:
     build: .
     environment:
-      DATABASE_URL: postgres://control:disposable-control-only@postgres:5432/cumora_control
+      DATABASE_URL: postgres://control:disposable-control-only@postgres:5432/cumora_control # scan-allow: disposable database on internal Docker network only
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: offline-control-placeholder
       OPENAI_BASE_URL: http://127.0.0.1:9/v1
