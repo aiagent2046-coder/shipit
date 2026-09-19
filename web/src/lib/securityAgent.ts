@@ -21,20 +21,37 @@ const digest = (value: unknown): value is string => typeof value === "string" &&
 function sqlTraceRows(value: unknown, file: unknown, line: unknown): Rows {
   // Mirror app.scan.security_agent.sql_observation. A renderer does not infer
   // source/driver/runtime proof from a stored claim or a familiar method name.
-  if (!object(value) || value.version !== 1 || value.method !== "python_ast_local_flow"
+  if (!object(value) || (value.version !== 1 && value.version !== 2)
+    || value.method !== "python_ast_local_flow"
     || value.file !== file || !digest(value.source_sha256)
     || !["concatenation", "percent_format", "f_string", "format_call", "join_call"].includes(text(value.assembly_kind, ""))
     || !["execute", "executemany", "executescript", "raw", "execute_sql"].includes(text(value.sink_method, ""))
-    || value.flow_status !== "possible_local_flow" || value.driver_status !== "not_checked"
+    || value.flow_status !== "possible_local_flow"
     || value.input_control_status !== "not_checked"
     || !count(value.assembly_line) || value.assembly_line < 1 || value.assembly_line > 2 ** 31 - 1
     || !count(value.sink_line) || value.sink_line < 1 || value.sink_line > 2 ** 31 - 1
     || value.sink_line !== line) return [];
+  const proof = value.driver_provenance;
+  let driver = value.version === 1 ? "Not checked in this historical report."
+    : "Unknown; cursor provenance was not established.";
+  if (value.version === 1 ? value.driver_status !== "not_checked"
+    : !["unknown", "source_resolved"].includes(text(value.driver_status, ""))) return [];
+  if (value.version === 2 && value.driver_status === "source_resolved") {
+    if (!object(proof) || proof.version !== 1 || proof.driver !== "psycopg3"
+      || proof.method !== "python_ast_straight_line" || !["execute", "executemany"].includes(text(value.sink_method))
+      || !count(proof.import_line) || !count(proof.connection_line) || !count(proof.cursor_line)
+      || proof.import_line < 1 || proof.import_line > proof.connection_line
+      || proof.connection_line > proof.cursor_line || proof.cursor_line > value.sink_line) return [];
+    driver = `Psycopg 3: import line ${proof.import_line} → connect() line ${proof.connection_line} → `
+      + `cursor() line ${proof.cursor_line}. Static source provenance only; `
+      + "installed driver and runtime behavior are unverified.";
+  } else if ("driver_provenance" in value) return [];
   return [
     ["SQL source trace", `${value.assembly_kind} at line ${value.assembly_line} → `
       + `${value.sink_method}() at line ${value.sink_line}. Possible local flow; `
-      + "driver identity, input control and runtime behavior were not checked."],
+      + "input control and runtime behavior were not checked."],
     ["SQL source SHA-256", value.source_sha256],
+    ["SQL driver source", driver],
   ];
 }
 

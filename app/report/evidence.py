@@ -22,7 +22,7 @@ from app.report.cve import cve_rows, cve_notices
 from app.report.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapshot_notices, snapshot_finding_rows
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
-from app.scan.security_agent import agent_record, sql_observation
+from app.scan.security_agent import agent_record, sql_driver_rows, sql_observation
 
 
 def is_non_production(finding: dict) -> bool:
@@ -391,8 +391,9 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
         rows.extend([
             ("SQL source trace", f"{trace['assembly_kind']} at line {trace['assembly_line']} → "
              f"{trace['sink_method']}() at line {trace['sink_line']}. Possible local flow; "
-             "driver identity, input control and runtime behavior were not checked."),
+             "input control and runtime behavior were not checked."),
             ("SQL source SHA-256", trace["source_sha256"]),
+            *sql_driver_rows(trace),
         ])
     if finding.get("source") == "dependency" and finding.get("verification_method") == "package_version_match":
         rows.extend(snapshot_finding_rows(record))
@@ -711,7 +712,7 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
          f"{count(budget.get('candidates_omitted'))} omitted; "
          f"limit: {count(budget.get('max_candidates'))}."),
         ("Pattern review limits", "Selected static patterns only. Candidate classes are unverified; "
-         "attacker control, driver identity and runtime behavior were not checked. "
+         "attacker control and runtime behavior were not checked. "
          "No runtime tests or automatic patches were run."),
     ]
     plan_labels = {
@@ -773,8 +774,9 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
             rows.extend([
                 ("SQL source trace", f"{humanize(trace['assembly_kind'])} at line {trace['assembly_line']} → "
                  f"{trace['sink_method']}() at line {trace['sink_line']}. Possible local flow; "
-                 "driver identity, input control and runtime behavior were not checked."),
+                 "input control and runtime behavior were not checked."),
                 ("SQL source SHA-256", trace["source_sha256"]),
+                *sql_driver_rows(trace),
             ])
         else:
             rows.append(("Source evidence", "Static rule observation only; no additional SQL source trace recorded."))

@@ -27,7 +27,7 @@ it.each(reports)("preserves the saved $name scan and explains the bounded review
   expect(evidence["Static observation — unverified"]).toBe(report.finding.claim_evidence.observation);
   expect(evidence["Model interpretation — unverified"]).toBeUndefined();
   expect(evidence["SQL source trace"]).toBe("concatenation at line 2 → execute() at line 3. Possible local flow; "
-    + "driver identity, input control and runtime behavior were not checked.");
+    + "input control and runtime behavior were not checked.");
   expect(evidence["SQL source SHA-256"]).toBe(report.finding.claim_evidence.sql_observation.source_sha256);
   for (const observation of review.observations) {
     const detail = Object.fromEntries(observation.rows);
@@ -105,4 +105,47 @@ it("leaves legacy findings readable without inventing a trace or review", () => 
   expect(patternReview(undefined)).toBeNull();
   expect(Object.fromEntries(claimEvidenceRows(changed))["Static observation — unverified"])
     .toBe(finding.claim_evidence!.observation);
+});
+
+const driverTrace = {
+  ...completed.finding.claim_evidence.sql_observation, version: 2, driver_status: "source_resolved",
+  driver_provenance: { version: 1, driver: "psycopg3", method: "python_ast_straight_line",
+    import_line: 1, connection_line: 2, cursor_line: 2 },
+};
+
+it("shows the source driver chain in findings and pattern decisions without runtime proof", () => {
+  const changed = { ...finding, claim_evidence: { ...finding.claim_evidence!, sql_observation: driverTrace } };
+  const rows = Object.fromEntries(sqlEvidenceRows(changed));
+  expect(rows["SQL driver source"]).toContain("import line 1 → connect() line 2 → cursor() line 2");
+  expect(rows["SQL driver source"]).toContain("installed driver and runtime behavior are unverified");
+  const observation = record.observations[0];
+  const review = patternReview({ ...record, observations: [{ ...observation,
+    evidence: { sql_observation: driverTrace },
+    missing_evidence: observation.missing_evidence.filter(key => key !== "psycopg3_cursor_provenance"),
+  }] })!;
+  const details = Object.fromEntries(review.observations[0].rows);
+  expect(details["SQL driver source"]).toBe(rows["SQL driver source"]);
+  expect(details["Missing evidence"]).not.toContain("psycopg3 cursor provenance");
+  expect(details["Missing evidence"]).toContain("attacker control");
+  expect(details["Review state"]).toContain("Needs evidence");
+  expect(details["Repair guidance"]).toContain("No automatic patch applied");
+});
+
+it.each([
+  { driver_status: "unknown" }, { version: 1 }, { version: 3 },
+  { driver_provenance: null }, { driver_provenance: { ...driverTrace.driver_provenance, version: true } },
+  { driver_provenance: { ...driverTrace.driver_provenance, import_line: 0 } },
+  { driver_provenance: { ...driverTrace.driver_provenance, connection_line: 3 } },
+  { driver_provenance: { ...driverTrace.driver_provenance, cursor_line: 4 } },
+  { driver_provenance: { ...driverTrace.driver_provenance, driver: "psycopg2" } },
+])("rejects contradictory or malformed driver proof: %j", invalid => {
+  expect(sqlEvidenceRows({ ...finding, claim_evidence: { ...finding.claim_evidence!,
+    sql_observation: { ...driverTrace, ...invalid } } })).toEqual([]);
+});
+
+it("keeps unknown and historical driver evidence distinguishable", () => {
+  const trace = { ...completed.finding.claim_evidence.sql_observation, version: 2, driver_status: "unknown" };
+  expect(Object.fromEntries(sqlEvidenceRows({ ...finding, claim_evidence: { ...finding.claim_evidence!,
+    sql_observation: trace } }))["SQL driver source"]).toContain("Unknown");
+  expect(Object.fromEntries(sqlEvidenceRows(finding))["SQL driver source"]).toContain("historical report");
 });

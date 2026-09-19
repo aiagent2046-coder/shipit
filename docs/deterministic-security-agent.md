@@ -47,9 +47,10 @@ copied SQL expressions or values.
 
 The SQL card only selects Python findings. A shared JavaScript rule ID cannot
 select the Psycopg recipe. Neither an `execute` method name nor an `import psycopg`
-establishes the cursor's driver. Current missing prerequisites include attacker
-control, Psycopg 3 cursor provenance, value position, intended value type and a
-runtime behavior contract. These remain explicit even when a plan completes.
+establishes the cursor's driver. A bounded same-file import → connect() → cursor()
+chain can establish static Psycopg 3 provenance and remove that single prerequisite.
+Unknown chains retain it. Attacker control, value position, intended value type
+and a runtime behavior contract remain missing even when a plan completes.
 See the [SQL pilot](sql-pattern-pilot.md) for the proposed value-binding recipe.
 
 ## Bounded execution and reporting
@@ -86,7 +87,7 @@ block network/process calls and include a source-execution canary. Installed-whe
 acceptance and the browser CPython/WASM/Chromium corpus exercise the same record.
 
 This release provides classification, static evidence and bounded decisions.
-Driver provenance resolution, cross-function input flow, automatic repairs and
+Broader driver resolution, cross-function input flow, automatic repairs and
 database execution tests remain future work. Promoting the SQL recipe requires
 an independent synthetic runtime contract and a mutation that restores the
 vulnerable construction and is detected by that contract.

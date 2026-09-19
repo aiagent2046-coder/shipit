@@ -35,9 +35,11 @@ const report = {
     observations: [{ id: 'observation-1', pattern_id: 'sql-string-assembly', pattern_revision: 1,
       title: 'String-built SQL', weaknesses: ['CWE-89'], rule_id: 'sql-injection-string-built-query',
       file: '<img src=x onerror=alert(2)>.py', line: 9, state: 'needs_evidence',
-      evidence: { sql_observation: { source_sha256: 'b'.repeat(64), file: '<img src=x onerror=alert(2)>.py',
+      evidence: { sql_observation: { version: 2, method: 'python_ast_local_flow', source_sha256: 'b'.repeat(64), file: '<img src=x onerror=alert(2)>.py',
         assembly_line: 7, assembly_kind: 'f_string', sink_line: 9, sink_method: 'execute',
-        flow_status: 'possible_local_flow', driver_status: 'not_checked', input_control_status: 'not_checked' } },
+        flow_status: 'possible_local_flow', driver_status: 'source_resolved', input_control_status: 'not_checked',
+        driver_provenance: { version: 1, driver: 'psycopg3', method: 'python_ast_straight_line',
+          import_line: 1, connection_line: 3, cursor_line: 4 } } },
       missing_evidence: ['external_input_control', 'driver_parameter_binding', 'runtime_exploitability'],
       next_action: 'manual_review', recipe: { id: 'sql-parameter-binding', status: 'manual_guidance', automatic_apply: false },
       steps: [],
@@ -101,6 +103,8 @@ try {
   assert.match(patternText, /128 processed \/ 129 found · 1 omitted · limit 128/);
   assert.match(patternText, /String-built SQL: partial/);
   assert.match(patternText, /assembly line 7 → execute line 9/);
+  assert.match(patternText, /Psycopg 3: import line 1 → connect\(\) line 3 → cursor\(\) line 4/);
+  assert.match(patternText, /installed driver and runtime behavior are unverified/);
   assert.match(patternText, /Candidate weakness classes[\s\S]*CWE-89/);
   assert.ok(patternText.includes('<img src=x onerror=alert(2)>.py:9'));
   assert.equal(await patternReview.locator('img').count(), 0, 'Observation filenames must remain text');

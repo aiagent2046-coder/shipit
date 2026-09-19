@@ -68,6 +68,40 @@ def dependency_cases():
                        for advisory in sorted(FAST_URI_ADVISORIES)]}, True)
 
 
+def provenance_cases():
+    prefix = 'import psycopg as pg\nc = pg.connect(dsn)\ncur = c.cursor()\n'
+    sink = 'cur.execute(f"SELECT {user_id}")\n'
+    for name, source, resolved in (
+        ('resolved', prefix + sink, True),
+        ('escaped', prefix + 'customize(cur)\n' + sink, False),
+        ('custom-method', 'import psycopg\n' + sink, False),
+        ('with', 'from psycopg import connect\nwith connect(dsn) as c:\n'
+         '    with c.cursor() as cur:\n        ' + sink, True),
+        ('annotation-rebinding', prefix + 'marker: (cur := CustomCursor())\n' + sink, False),
+        ('default-escape', prefix + 'def configure(connection=c):\n'
+         '    customize(connection)\nconfigure()\n' + sink, False),
+        ('bound-setter', 'import psycopg\nc = psycopg.connect(dsn)\n'
+         'change = c.__setattr__\nchange("cursor_factory", CustomCursor)\n'
+         'cur = c.cursor()\n' + sink, False),
+        ('chained-store', 'import psycopg\nregistry["driver"] = pg = psycopg\n'
+         'c = pg.connect(dsn)\ncur = c.cursor()\n' + sink, False),
+        ('match-binding', 'import psycopg\ndef load(value):\n'
+         '    c = psycopg.connect(dsn)\n    cur = c.cursor()\n    ' + sink
+         + '    match value:\n        case psycopg:\n            pass\n', False),
+    ):
+        data = archive({'src/query.py': source})
+        result = scan_archive(data)
+        decision, = result['report']['security_agent']['observations']
+        assert decision['evidence']['sql_observation']['driver_status'] == (
+            'source_resolved' if resolved else 'unknown')
+        assert ('psycopg3_cursor_provenance' not in decision['missing_evidence']) == resolved
+        assert decision['state'] == 'needs_evidence' and decision['recipe']['automatic_apply'] is False
+        yield {'id': f'psycopg-provenance/{name}', 'rule': 'sql-injection-string-built-query',
+               'polarity': 'positive', 'archive': base64.b64encode(data).decode(),
+               'expected': {'expect': [{'rule_id': 'sql-injection-string-built-query', 'count': 1}]},
+               'native': result}
+
+
 def main():
     if "--portable" in sys.argv:
         # Reuse the exact uploaded bytes: independently rebuilt ZIP timestamps
@@ -86,6 +120,7 @@ def main():
                       'polarity': 'positive' if affected else 'negative',
                       'archive': base64.b64encode(data).decode(), 'expected': expected,
                       'native': scan_archive(data)})
+    cases.extend(provenance_cases())
     portable = json.loads(subprocess.run(
         [sys.executable, __file__, "--portable"], check=True, capture_output=True, text=True,
         input=json.dumps([case['archive'] for case in cases]),

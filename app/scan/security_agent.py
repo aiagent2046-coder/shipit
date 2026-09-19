@@ -33,7 +33,7 @@ def sql_observation(finding: dict) -> dict | None:
     value = evidence.get("sql_observation")
     if not isinstance(value, dict):
         return None
-    if (type(value.get("version")) is not int or value["version"] != 1
+    if (type(value.get("version")) is not int or value["version"] not in (1, 2)
             or value.get("method") != "python_ast_local_flow"
             or value.get("file") != finding.get("file")
             or not isinstance(value.get("source_sha256"), str)
@@ -41,17 +41,46 @@ def sql_observation(finding: dict) -> dict | None:
             or not isinstance(value.get("assembly_kind"), str) or value["assembly_kind"] not in _ASSEMBLIES
             or not isinstance(value.get("sink_method"), str) or value["sink_method"] not in _SINKS
             or value.get("flow_status") != "possible_local_flow"
-            or value.get("driver_status") != "not_checked"
             or value.get("input_control_status") != "not_checked"):
         return None
     if (any(type(value.get(key)) is not int or not 1 <= value[key] <= 2**31 - 1
             for key in ("assembly_line", "sink_line"))
             or value["sink_line"] != finding.get("line")):
         return None
-    return {key: value[key] for key in (
+    status = value.get("driver_status")
+    if value["version"] == 1:
+        if status != "not_checked":
+            return None
+    elif status not in ("unknown", "source_resolved"):
+        return None
+    result = {key: value[key] for key in (
         "version", "method", "file", "source_sha256", "assembly_line", "assembly_kind",
         "sink_line", "sink_method", "flow_status", "driver_status", "input_control_status",
     )}
+    if value["version"] == 2 and status == "source_resolved":
+        proof = value.get("driver_provenance")
+        if (not isinstance(proof, dict) or type(proof.get("version")) is not int or proof["version"] != 1
+                or proof.get("driver") != "psycopg3" or proof.get("method") != "python_ast_straight_line"
+                or value["sink_method"] not in {"execute", "executemany"}
+                or any(type(proof.get(key)) is not int or not 1 <= proof[key] <= value["sink_line"]
+                       for key in ("import_line", "connection_line", "cursor_line"))
+                or not proof["import_line"] <= proof["connection_line"] <= proof["cursor_line"]):
+            return None
+        result["driver_provenance"] = {key: proof[key] for key in (
+            "version", "driver", "method", "import_line", "connection_line", "cursor_line")}
+    elif "driver_provenance" in value:
+        return None
+    return result
+
+
+def sql_driver_rows(trace: dict) -> list[tuple[str, str]]:
+    proof = trace.get("driver_provenance")
+    if proof:
+        return [("SQL driver source", f"Psycopg 3: import line {proof['import_line']} → "
+                 f"connect() line {proof['connection_line']} → cursor() line {proof['cursor_line']}. "
+                 "Static source provenance only; installed driver and runtime behavior are unverified.")]
+    return [("SQL driver source", "Unknown; cursor provenance was not established."
+             if trace["version"] == 2 else "Not checked in this historical report.")]
 
 
 def _base(archive_sha256: str, engine_version: str) -> dict:
@@ -63,7 +92,7 @@ def _base(archive_sha256: str, engine_version: str) -> dict:
                    "processed": 0, "candidates_omitted": 0},
         "stop_reason": "agent_unavailable", "runtime_verified": False, "automatic_patch": False,
         "limitations": ["catalog_covers_selected_patterns", "static_observations_only",
-                        "attacker_control_not_checked", "driver_identity_not_checked",
+                        "attacker_control_not_checked", "runtime_driver_identity_not_checked",
                         "runtime_tests_not_run", "automatic_patch_not_run"],
     }
 
@@ -73,6 +102,8 @@ def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: i
     established = {"static_rule_observation", "source_pattern"}
     if trace is not None:
         established.add("sql_source_observation")
+        if trace.get("driver_status") == "source_resolved":
+            established.add("psycopg3_cursor_provenance")
     required = list(dict.fromkeys([
         *card["applicability"]["required_evidence"], *card["recipe"]["preconditions"],
     ]))

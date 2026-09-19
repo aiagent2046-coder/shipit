@@ -54,7 +54,7 @@ it("keeps the completed source review separate from runtime, driver and patch ve
     .toBe("Manual review: gather the missing evidence before choosing a repair.");
   expect(screen.getByText("SQL source trace").nextElementSibling?.textContent)
     .toBe("concatenation at line 2 → execute() at line 3. Possible local flow; "
-      + "driver identity, input control and runtime behavior were not checked.");
+      + "input control and runtime behavior were not checked.");
   expect(screen.getByText("Verification and changes").nextElementSibling?.textContent)
     .toBe("Runtime tests not run. No automatic patch applied.");
   expect(container.textContent).toContain("Completion describes bounded review, not project safety.");

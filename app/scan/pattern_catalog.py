@@ -17,11 +17,11 @@ from app.capabilities import CAPABILITIES
 
 _CATALOG = {
     "schema_version": 1,
-    "catalog_version": "2026-09-18.1",
+    "catalog_version": "2026-09-19.1",
     "cards": [
         {
             "id": "python-sql-string-assembly",
-            "revision": 1,
+            "revision": 2,
             "title": "SQL text assembled from Python values",
             "languages": ["Python"],
             "weaknesses": [{
@@ -39,7 +39,8 @@ _CATALOG = {
                 "evidence_descriptions": {
                     "sql_source_observation": "The Python SQL check observed nonliteral query assembly at a sink.",
                     "attacker_control": "Establish who can influence the assembled value and reach the operation.",
-                    "psycopg3_cursor_provenance": "Establish a Psycopg 3 cursor; execute() alone is insufficient.",
+                    "psycopg3_cursor_provenance": (
+                        "Trace a same-file import → connect() → cursor() chain; execute() alone is insufficient."),
                     "sql_value_position": "Establish that the expression supplies a SQL value, not an identifier.",
                     "intended_value_type": "Establish the intended parameter type, including NULL handling.",
                     "runtime_behavior_contract": "Establish expected results, API behavior and transaction semantics.",
@@ -47,6 +48,8 @@ _CATALOG = {
                 "unresolved_boundaries": [
                     "The source observation does not establish attacker control or runtime exploitability.",
                     "A Python SQL candidate does not establish the narrower Psycopg 3 repair preconditions.",
+                    "Static driver provenance does not verify installed modules, input control or runtime behavior.",
+                    "Branches, wrappers, custom factories and cross-file drivers remain unknown.",
                     "Cross-file builders, dynamic drivers and authorization require separate evidence.",
                     "Missing or partial rule coverage remains incomplete even when a candidate is present.",
                 ],
@@ -79,6 +82,7 @@ _CATALOG = {
                     "tests/detectors/sql-injection-string-built-query/negative/parameterised-query",
                 ],
                 "unknown_refs": [
+                    "tests/test_psycopg_provenance.py::test_ambiguous_chains_keep_the_driver_prerequisite",
                     "tests/test_sql_injection_coverage.py::test_decode_parse_and_byte_size_gaps_keep_independent_findings",
                     "tests/test_sql_coverage_contracts.py::test_sql_parse_gap_cannot_report_success_with_retained_positive",
                 ],

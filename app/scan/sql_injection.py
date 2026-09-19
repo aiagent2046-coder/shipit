@@ -45,6 +45,7 @@ from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
 from app.scan.claim_evidence import static_claim_evidence
+from app.scan.psycopg_provenance import cursor_provenance
 from app.scan.rule_coverage import RuleCoverage, mark_analysis_limit, remaining_findings, track_analysis_limits
 
 RULE_ID = "sql-injection-string-built-query"
@@ -678,6 +679,10 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
     finding_limit = remaining_findings(_MAX_FINDINGS)
 
     with zipfile.ZipFile(fileobj) as zf:
+        # A repository-local module can shadow the installed driver. This
+        # bounded source check does not resolve sys.path or import hooks.
+        driver_shadowed = any(part.casefold().split(".", 1)[0] == "psycopg"
+                              for info in zf.infolist() for part in info.filename.replace("\\", "/").split("/"))
         accounting = RuleCoverage(zf, extensions=(".py",), max_file_bytes=_MAX_FILE_BYTES,
                                   coverage=coverage, case_sensitive=False,
                                   exclude_symlinks=True, exclude_git_metadata=True)
@@ -709,6 +714,8 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
             observations: dict[tuple[int, str, str], dict] = {}
             with track_analysis_limits() as limits:
                 signals = _find_in_module(tree, observations=observations)
+            drivers = (cursor_provenance(tree, max_nodes=_MAX_NODES)
+                       if signals and not driver_shadowed else {})
             source_digest = hashlib.sha256(raw).hexdigest()
             available = finding_limit - len(findings)
             for line, sink, kind in signals[:available]:
@@ -734,12 +741,13 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
                         **static_claim_evidence(),
                         "observation": observation,
                         "sql_observation": {
-                            "version": 1,
+                            "version": 2,
                             "method": "python_ast_local_flow",
                             "source_sha256": source_digest,
                             "file": name,
                             **observations[(line, sink, kind)],
-                            "driver_status": "not_checked",
+                            "driver_status": "source_resolved" if (line, sink) in drivers else "unknown",
+                            **({"driver_provenance": drivers[(line, sink)]} if (line, sink) in drivers else {}),
                             "input_control_status": "not_checked",
                         },
                     },
