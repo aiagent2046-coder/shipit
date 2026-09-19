@@ -8,7 +8,7 @@ from copy import deepcopy
 import hashlib
 import json
 
-from app.scan.evidence_record import normalize_acquisition
+from app.scan.evidence_record import normalize_acquisition, normalize_deserialization_observation
 from app.scan.synthetic_record import normalize_synthetic_contract
 
 ROLES = ("detector", "researcher", "experimenter", "verifier")
@@ -32,8 +32,25 @@ def candidate_digest(value):
     return digest({key: item for key, item in value.items() if key != "agent_chain"})
 
 
+def _trace(value):
+    evidence = value.get("evidence", {})
+    return evidence.get("sql_observation") or normalize_deserialization_observation(
+        evidence.get("deserialization_observation")) or {}
+
+
+def _goals(value):
+    if "deserialization_observation" in value.get("evidence", {}):
+        return {**GOALS, "detector": "classify_static_deserialization_observation",
+                "researcher": "collect_missing_deserialization_source_facts"}
+    return GOALS
+
+
+def _scope(value):
+    return "source_evidence" if "deserialization_observation" in value.get("evidence", {}) else "synthetic_recipe"
+
+
 def _matches(value, binding):
-    trace = value.get("evidence", {}).get("sql_observation", {})
+    trace = _trace(value)
     return (value.get("id") == binding["observation_id"]
             and trace.get("source_sha256") == binding["source_sha256"]
             and value.get("file") == trace.get("file")
@@ -54,7 +71,7 @@ def _valid_transition(role, before, after, binding):
     if not changed <= allowed[role]:
         return False
     if role == "researcher":
-        record = normalize_acquisition(after.get("acquisition"), before["evidence"]["sql_observation"])
+        record = normalize_acquisition(after.get("acquisition"), _trace(before))
         if record is None:
             return False
         facts = {fact["id"] for fact in record["facts"]}
@@ -106,7 +123,7 @@ its predecessor. Unsupported evidence is an explicit blocked task, not proof.
         if role == "verifier":
             accepted.pop("_pending_contract", None)
         receipts.append({
-            "id": digest([binding, role]), "agent": role, "goal": GOALS[role],
+            "id": digest([binding, role]), "agent": role, "goal": _goals(seed)[role],
             "source": deepcopy(binding), "depends_on": [receipts[-1]["id"]] if receipts else [],
             "input_sha256": before, "output_sha256": candidate_digest(accepted),
             "attempts": attempts, "max_attempts": 1, "status": status, "reason": reason,
@@ -114,7 +131,7 @@ its predecessor. Unsupported evidence is an explicit blocked task, not proof.
         if len(receipts) < len(ROLES):
             queue.append(ROLES[len(receipts)])
     accepted["agent_chain"] = {
-        "version": 1, "mode": "in_process_queue", "scope": "synthetic_recipe",
+        "version": 1, "mode": "in_process_queue", "scope": _scope(seed),
         "status": ("error" if any(row["status"] == "error" for row in receipts)
                    else "waiting_for_evidence" if any(row["status"] == "blocked" for row in receipts)
                    else "completed"),
@@ -134,12 +151,12 @@ def normalize_chain(value, observation, source, catalog):
 def _normalize_chain(value, observation, source, catalog):
     if (not isinstance(value, dict) or set(value) != {"version", "mode", "scope", "status", "max_tasks", "tasks"}
             or type(value["version"]) is not int or value["version"] != 1
-            or value["mode"] != "in_process_queue" or value["scope"] != "synthetic_recipe"
+            or value["mode"] != "in_process_queue" or value["scope"] != _scope(observation)
             or type(value["max_tasks"]) is not int or value["max_tasks"] != MAX_TASKS
             or not isinstance(value["tasks"], list) or len(value["tasks"]) != len(ROLES)
             or not isinstance(source, dict) or not isinstance(catalog, dict)):
         return None
-    trace = observation.get("evidence", {}).get("sql_observation", {})
+    trace = _trace(observation)
     binding = {**source, "catalog_sha256": catalog.get("sha256"),
                "source_sha256": trace.get("source_sha256"), "observation_id": observation.get("id")}
     previous = None
@@ -148,7 +165,7 @@ def _normalize_chain(value, observation, source, catalog):
                 "id", "agent", "goal", "source", "depends_on", "input_sha256", "output_sha256",
                 "attempts", "max_attempts", "status", "reason"}
                 or task["id"] != digest([binding, role]) or task["agent"] != role
-                or task["source"] != binding or task["goal"] != GOALS[role]
+                or task["source"] != binding or task["goal"] != _goals(observation)[role]
                 or task["depends_on"] != ([previous["id"]] if previous else [])
                 or type(task["attempts"]) is not int or task["attempts"] != (
                     0 if task["status"] == "blocked" and task["reason"] == "upstream_task_failed" else 1)

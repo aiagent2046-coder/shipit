@@ -22,7 +22,7 @@ from app.report.cve import cve_rows, cve_notices
 from app.report.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapshot_notices, snapshot_finding_rows
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
-from app.scan.security_agent import agent_record, sql_driver_rows, sql_observation
+from app.scan.security_agent import agent_record, deserialization_observation, sql_driver_rows, sql_observation
 from app.scan.evidence_record import acquisition_rows, normalize_acquisition
 from app.scan.synthetic_record import normalize_synthetic_contract, synthetic_contract_rows
 
@@ -397,6 +397,8 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
             ("SQL source SHA-256", trace["source_sha256"]),
             *sql_driver_rows(trace),
         ])
+    if trace := deserialization_observation(finding):
+        rows.extend(_deserialization_trace_rows(trace))
     if finding.get("source") == "dependency" and finding.get("verification_method") == "package_version_match":
         rows.extend(snapshot_finding_rows(record))
     if not historical and unsupported_transport(record):
@@ -668,6 +670,12 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
             f"this application was not checked.{aged}")
 
 
+def _deserialization_trace_rows(trace: dict) -> list[tuple[str, str]]:
+    return [("Deserialization source trace", f"Import-resolved pickle.loads() at line {trace['sink_line']}. "
+             "Input trust and loader runtime behavior were not checked."),
+            ("Deserialization source SHA-256", trace["source_sha256"])]
+
+
 def security_agent_rows(value: object) -> list[tuple[str, str]]:
     """Explain the saved bounded review without substituting today's catalog.
 
@@ -691,7 +699,7 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
     stop = agent.get("stop_reason")
     known_stops = {"agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
                    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete",
-                   "synthetic_verification_incomplete", "synthetic_evidence_invalid",
+                   "synthetic_verification_incomplete", "synthetic_evidence_invalid", "source_evidence_invalid",
                    "agent_task_failed", "agent_chain_invalid"}
     # Saved diagnostics are untrusted. Only the producer's type-only error
     # form is displayable; never echo exception messages or arbitrary reasons.
@@ -795,9 +803,11 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
                 or recipe.get("status") not in ("manual_guidance", "not_available")):
             continue
         evidence = observation.get("evidence")
-        trace = sql_observation({"source": "static", "rule_id": observation.get("rule_id"),
-                                 "file": observation.get("file"), "line": observation.get("line"),
-                                 "claim_evidence": {"version": 1, **evidence}}) if isinstance(evidence, dict) else None
+        finding = {"source": "static", "rule_id": observation.get("rule_id"),
+                   "file": observation.get("file"), "line": observation.get("line"),
+                   "claim_evidence": {"version": 1, **evidence}} if isinstance(evidence, dict) else {}
+        deserialization = observation.get("rule_id") == "unsafe-deserialization"
+        trace = deserialization_observation(finding) if deserialization else sql_observation(finding)
         acquisition = normalize_acquisition(observation.get("acquisition"), trace)
         synthetic = normalize_synthetic_contract(observation.get("synthetic_contract"), observation, source, catalog)
         verified = observation.get("state") == "synthetic_recipe_verified"
@@ -805,6 +815,12 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
         if verified and (synthetic is None or synthetic["status"] != "passed"):
             continue
         if collected and (acquisition is None or acquisition["status"] != "completed"):
+            continue
+        missing = observation.get("missing_evidence")
+        missing = [item for item in missing if isinstance(item, str)] if isinstance(missing, list) else []
+        if deserialization and acquisition is not None and (
+                observation.get("pattern_id") != "python-unsafe-deserialization"
+                or not {"input_trust_boundary", "loader_runtime_contract"} <= set(missing)):
             continue
         displayed += 1
         rows.append((f"Pattern observation {index}",
@@ -832,7 +848,9 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
         if "acquisition" in observation and acquisition is None:
             rows.append(("Source investigation unavailable", "The saved evidence could not be validated. "
                          "Do not treat missing source facts as established."))
-        if trace:
+        if trace and deserialization:
+            rows.extend(_deserialization_trace_rows(trace))
+        elif trace:
             rows.extend([
                 ("SQL source trace", f"{humanize(trace['assembly_kind'])} at line {trace['assembly_line']} → "
                  f"{trace['sink_method']}() at line {trace['sink_line']}. Possible local flow; "
@@ -841,14 +859,16 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
                 *sql_driver_rows(trace),
             ])
         else:
-            rows.append(("Source evidence", "Static rule observation only; no additional SQL source trace recorded."))
-        missing = observation.get("missing_evidence")
-        missing = [item for item in missing if isinstance(item, str)] if isinstance(missing, list) else []
+            rows.append(("Source evidence", "Static rule observation only; no additional source trace recorded."
+                         if deserialization else
+                         "Static rule observation only; no additional SQL source trace recorded."))
         rows.append(("Missing evidence", "; ".join(humanize(item) for item in missing) if missing else
                      "Not recorded; do not assume the repair preconditions are satisfied."))
         rows.append(("Next step", "Review the customer project runtime contract: confirm authorization, deployed "
                      "reachability, intended value types and expected query behavior before choosing a repair."
-                     if verified else "Review the runtime contract: confirm reachability, input control and expected "
+                     if verified else "Review the runtime contract: confirm input trust, loader options and expected "
+                     "object types before choosing a repair." if collected and deserialization else
+                     "Review the runtime contract: confirm reachability, input control and expected "
                      "query behavior before choosing a repair." if collected else
                      "Manual review: gather the missing evidence before evaluating a repair."))
         guidance = (f"{text(recipe.get('id'))} — manual guidance only; establish the missing preconditions "

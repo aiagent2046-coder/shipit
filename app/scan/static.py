@@ -197,7 +197,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                 rule_id=d.rule_id, title=d.title, severity=d.severity,
                 confidence=d.confidence, category=d.category, file=d.file,
                 line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
-                claim_evidence=static_claim_evidence(),
+                claim_evidence=d.claim_evidence or static_claim_evidence(),
             ))
 
     fileobj.seek(0)

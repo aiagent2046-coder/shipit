@@ -55,6 +55,10 @@ class SourceSnapshot:
         self.framework_shadowed = any(
             part.casefold().split(".", 1)[0] in {"fastapi", "starlette"}
             for path in self._entries for part in path.replace("\\", "/").split("/"))
+        self.deserialization_import_shadowed = any(
+            part.casefold().split(".", 1)[0] in {
+                "pickle", "fastapi", "starlette", "typing", "typing_extensions", "builtins"}
+            for path in self._entries for part in path.replace("\\", "/").split("/"))
         self._documents = {}
         self._source_bytes = 0
         self.acquisitions = {}
@@ -88,7 +92,9 @@ class SourceSnapshot:
             self._documents[path] = document
         if document.source_sha256 != trace["source_sha256"]:
             raise SourceUnavailable("source_changed")
-        candidates = document.calls.get((trace["sink_line"], trace["sink_method"]), ())
+        key = (tuple(trace["sink_span"]) if trace.get("method") == "python_ast_import_resolved"
+               else (trace["sink_line"], trace["sink_method"]))
+        candidates = document.calls.get(key, ())
         if not candidates:
             raise SourceUnavailable("sink_not_found")
         if len(candidates) != 1:
@@ -118,8 +124,10 @@ class SourceSnapshot:
         for node in islice(ast.walk(tree), MAX_SOURCE_NODES + 1):
             count += 1
             spend()
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                calls.setdefault((node.lineno, node.func.attr), []).append(node)
+            if isinstance(node, ast.Call):
+                calls.setdefault(tuple(source_span(node)), []).append(node)
+                if isinstance(node.func, ast.Attribute):
+                    calls.setdefault((node.lineno, node.func.attr), []).append(node)
         if count > MAX_SOURCE_NODES:
             raise SourceUnavailable("source_limit")
         return SourceDocument(path, hashlib.sha256(data).hexdigest(), tree, calls)

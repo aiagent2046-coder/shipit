@@ -1,3 +1,4 @@
+import { sha256 } from "@noble/hashes/sha2.js";
 import { jsSqlReview } from "./jsSqlReview";
 import type { Finding } from "./types";
 
@@ -71,7 +72,7 @@ type AcquisitionFact = {
   constraints?: { slot: number; kind: string; type: string; span: AcquisitionSpan }[];
 };
 export interface SourceAcquisition {
-  version: 1; status: "completed" | "partial" | "unsupported"; stop_reason: string;
+  version: 1 | 2; status: "completed" | "partial" | "unsupported"; stop_reason: string;
   source: { file: string; source_sha256: string; sink_span?: AcquisitionSpan };
   facts: AcquisitionFact[];
   attempts: { action: string; result: string; reason: string; produced: string[]; detail?: string }[];
@@ -96,7 +97,9 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     && !/[\u200c\u200d]/u.test(v);
   const choice = (v: unknown, options: string[]): v is string => typeof v === "string" && options.includes(v);
   const sha = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
-  const actions = ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
+  const deserialization = normalizeDeserializationObservation(trace) !== null;
+  const actions = deserialization ? ["locate_source", "trace_request_input"]
+    : ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
   const methods: Record<string, string> = { request_input_source: "fastapi_ast_binding",
     local_input_flow: "python_ast_straight_line", sql_value_position: "postgresql_ast_slot_context",
     value_constraints: "python_ast_constraints" };
@@ -110,11 +113,9 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     "sink_not_found", "ambiguous_sink", "request_flow_established", "request_flow_not_established",
     "sql_value_positions_established", "sql_slots_not_established", "value_constraints_recorded",
     "value_constraints_unknown", "collector_failed", "work_budget_exhausted", "step_budget_exhausted"];
-  if (!obj(trace) || trace.version !== 2 || trace.method !== "python_ast_local_flow"
-    || trace.input_control_status !== "not_checked" || trace.flow_status !== "possible_local_flow"
-    || !integer(trace.sink_line, 1)
+  if (!obj(trace) || !integer(trace.sink_line, 1)
     || !keys(value, ["version", "status", "stop_reason", "source", "facts", "attempts", "budget"])
-    || value.version !== 1 || !choice(value.status, ["completed", "partial", "unsupported"])
+    || value.version !== (deserialization ? 2 : 1) || !choice(value.status, ["completed", "partial", "unsupported"])
     || !choice(value.stop_reason, stops)) return null;
   const driver = trace.driver_provenance;
   const validDriver = trace.driver_status === "source_resolved" && choice(trace.sink_method, ["execute", "executemany"])
@@ -122,31 +123,37 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     && integer(driver.import_line, 1, trace.sink_line) && integer(driver.connection_line, 1, trace.sink_line)
     && integer(driver.cursor_line, 1, trace.sink_line)
     && driver.import_line <= driver.connection_line && driver.connection_line <= driver.cursor_line;
-  if (trace.driver_status === "source_resolved" && !validDriver
+  if (!deserialization && (trace.version !== 2 || trace.method !== "python_ast_local_flow"
+    || trace.input_control_status !== "not_checked" || trace.flow_status !== "possible_local_flow"
+    || trace.driver_status === "source_resolved" && !validDriver
     || trace.driver_status === "unknown" && "driver_provenance" in trace
     || !choice(trace.driver_status, ["unknown", "source_resolved"])
     || !integer(trace.assembly_line, 1)
     || !choice(trace.assembly_kind, ["concatenation", "percent_format", "f_string", "format_call", "join_call"])
-    || !choice(trace.sink_method, ["execute", "executemany", "executescript", "raw", "execute_sql"])) return null;
+    || !choice(trace.sink_method, ["execute", "executemany", "executescript", "raw", "execute_sql"]))) return null;
   const source = value.source;
   if (!keys(source, ["file", "source_sha256"], ["sink_span"]) || typeof source.file !== "string"
     || !source.file.length || source.file.length > 4096 || /[\x00-\x1f]/.test(source.file)
     || source.file !== trace.file || !sha(source.source_sha256) || source.source_sha256 !== trace.source_sha256
+    || deserialization && (!span(source.sink_span) || !Array.isArray(trace.sink_span)
+      || source.sink_span.some((n, i) => n !== (trace.sink_span as number[])[i]))
     || "sink_span" in source && (!span(source.sink_span) || source.sink_span[0] !== trace.sink_line)) return null;
   const { facts, attempts, budget } = value;
-  if (!Array.isArray(facts) || facts.length > 4 || !Array.isArray(attempts) || attempts.length > 4
-    || !keys(budget, ["max_steps", "steps", "work_units"]) || !integer(budget.max_steps, 0, 4)
+  if (!Array.isArray(facts) || facts.length > actions.length || !Array.isArray(attempts) || attempts.length > actions.length
+    || !keys(budget, ["max_steps", "steps", "work_units"]) || !integer(budget.max_steps, 0, actions.length)
     || !integer(budget.steps, 0, budget.max_steps) || budget.steps !== attempts.length || !integer(budget.work_units)) return null;
   const found = new Map<string, AcquisitionFact>();
   for (const fact of facts) {
     if (!obj(fact) || typeof fact.id !== "string" || !Object.hasOwn(methods, fact.id) || found.has(fact.id)
-      || fact.method !== methods[fact.id]) return null;
+      || fact.method !== methods[fact.id]
+      || deserialization && !["request_input_source", "local_input_flow"].includes(fact.id)) return null;
     const field = fields[fact.id], entries = fact[field];
     if (!keys(fact, ["id", "method", field]) || !Array.isArray(entries) || !entries.length
       || entries.length > (["locations", "constraints"].includes(field) ? 128 : 64)) return null;
     if (field === "sources") {
+      if (deserialization && entries.length !== 1) return null;
       if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !parameter(item.parameter)
-        || !choice(item.channel, ["query", "path"]) || !span(item.span))) return null;
+        || !choice(item.channel, deserialization ? ["body"] : ["query", "path"]) || !span(item.span))) return null;
     } else if (field === "locations") {
       if (!entries.every(span)) return null;
     } else if (field === "slots") {
@@ -159,6 +166,13 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     found.set(fact.id, fact as unknown as AcquisitionFact);
   }
   if (found.has("request_input_source") !== found.has("local_input_flow")) return null;
+  if (deserialization && found.has("local_input_flow")) {
+    const locations = found.get("local_input_flow")!.locations!;
+    const origin = found.get("request_input_source")!.sources![0].span;
+    if (JSON.stringify(locations[0]) !== JSON.stringify(origin)
+      || JSON.stringify(locations.at(-1)) !== JSON.stringify(trace.sink_span)
+      || new Set(locations.map(location => JSON.stringify(location))).size !== locations.length) return null;
+  }
   if (found.has("value_constraints")) {
     if (!found.has("local_input_flow")) return null;
     const covered = new Set(found.get("value_constraints")!.constraints!.map(item => item.slot));
@@ -187,10 +201,145 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     produced.forEach(id => emitted.add(id)); previous = order;
   }
   if (emitted.size !== found.size || facts.length > 0 && !("sink_span" in source)) return null;
-  const complete = found.size === 4;
+  const complete = found.size === actions.length;
   if ((value.status === "completed") !== complete || (value.stop_reason === "source_goal_reached") !== complete
     || (value.status === "partial") !== choice(value.stop_reason, ["budget_exhausted", "collector_error", "source_limit"])) return null;
   return structuredClone(value) as unknown as SourceAcquisition;
+}
+
+export function normalizeDeserializationObservation(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const required = ["version", "method", "file", "source_sha256", "sink_line", "sink_span", "sink_method", "loader", "input_control_status"];
+  const integer = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0 && Number(v) < 2 ** 31;
+  const span = record.sink_span;
+  if (Object.keys(record).length !== required.length || !required.every(key => Object.hasOwn(record, key))
+    || record.version !== 1 || record.method !== "python_ast_import_resolved"
+    || typeof record.file !== "string" || !record.file.length || [...record.file].length > 4096 || /[\x00-\x1f]/.test(record.file)
+    || typeof record.source_sha256 !== "string" || !/^[a-f0-9]{64}(?![\s\S])/.test(record.source_sha256)
+    || !integer(record.sink_line) || record.sink_line < 1 || !Array.isArray(span) || span.length !== 4 || !span.every(integer)
+    || span[0] !== record.sink_line || !(span[2] > span[0] || span[2] === span[0] && span[3] > span[1])
+    || record.sink_method !== "loads" || record.loader !== "pickle.loads" || record.input_control_status !== "not_checked") return null;
+  return structuredClone(record);
+}
+
+// Mirror agent_chain.normalize_chain for source-evidence receipts. Hashes bind
+// saved facts to this run; they establish consistency, not authenticity.
+function validDeserializationChain(observation: Record<string, unknown>, source: unknown, catalog: unknown): boolean {
+  const obj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  const keys = (v: unknown, names: string[]): v is Record<string, unknown> => obj(v)
+    && Object.keys(v).length === names.length && names.every(key => Object.hasOwn(v, key));
+  const sha = (v: unknown) => typeof v === "string" && /^[a-f0-9]{64}(?![\s\S])/.test(v);
+  try {
+    // Python's ensure_ascii JSON, with bounded work for untrusted saved reports.
+    let remaining = 20000, characters = 1000000;
+    const canonical = (v: unknown, depth = 0): string => {
+      if (--remaining < 0 || depth > 32) throw new Error("Receipt limit");
+      if (typeof v === "string") {
+        characters -= v.length;
+        if (characters < 0) throw new Error("Receipt limit");
+        return JSON.stringify(v).replace(/[\u007f-\uffff]/g, c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+      }
+      if (v === null || typeof v === "boolean" || typeof v === "number" && Number.isSafeInteger(v)) return JSON.stringify(v);
+      if (Array.isArray(v)) return "[" + v.map(item => canonical(item, depth + 1)).join(",") + "]";
+      if (!obj(v)) throw new Error("Invalid receipt value");
+      // Python orders keys by Unicode code point rather than UTF-16 code unit.
+      const order = (a: string, b: string): number => {
+        const left = Array.from(a), right = Array.from(b);
+        for (let i = 0; i < Math.min(left.length, right.length); i++) {
+          const delta = left[i].codePointAt(0)! - right[i].codePointAt(0)!;
+          if (delta) return delta;
+        }
+        return left.length - right.length;
+      };
+      return "{" + Object.keys(v).sort(order).map(key => canonical(key, depth + 1) + ":" + canonical(v[key], depth + 1)).join(",") + "}";
+    };
+    const hash = (v: unknown) => Array.from(sha256(Uint8Array.from(canonical(v), c => c.charCodeAt(0))),
+      byte => byte.toString(16).padStart(2, "0")).join("");
+    const chain = observation.agent_chain;
+    if (!keys(chain, ["version", "mode", "scope", "status", "max_tasks", "tasks"])
+      || chain.version !== 1 || chain.mode !== "in_process_queue" || chain.scope !== "source_evidence"
+      || chain.max_tasks !== 4 || !Array.isArray(chain.tasks) || chain.tasks.length !== 4
+      || !obj(source) || !obj(catalog) || !obj(observation.evidence)) return false;
+    const trace = observation.evidence.sql_observation || normalizeDeserializationObservation(observation.evidence.deserialization_observation);
+    if (!obj(trace)) return false;
+    const binding = { ...source, catalog_sha256: catalog.sha256 ?? null,
+      source_sha256: trace.source_sha256 ?? null, observation_id: observation.id ?? null };
+    const roles = ["detector", "researcher", "experimenter", "verifier"];
+    const goals = ["classify_static_deserialization_observation", "collect_missing_deserialization_source_facts",
+      "obtain_selected_synthetic_contract", "validate_evidence_and_identify_remaining_gaps"];
+    let previous: Record<string, unknown> | null = null;
+    const statuses: unknown[] = [];
+    for (let i = 0; i < roles.length; i++) {
+      const task = chain.tasks[i];
+      if (!keys(task, ["id", "agent", "goal", "source", "depends_on", "input_sha256", "output_sha256",
+        "attempts", "max_attempts", "status", "reason"])
+        || task.id !== hash([binding, roles[i]]) || task.agent !== roles[i] || task.goal !== goals[i]
+        || canonical(task.source) !== canonical(binding)
+        || canonical(task.depends_on) !== canonical(previous ? [previous.id] : [])
+        || task.attempts !== (task.status === "blocked" && task.reason === "upstream_task_failed" ? 0 : 1)
+        || task.max_attempts !== 1 || !["completed", "blocked", "error"].includes(String(task.status))
+        || typeof task.reason !== "string" || task.reason.length > 80
+        || !/^[A-Za-z0-9_]*(?![\s\S])/.test(task.reason) || !/[A-Za-z0-9]/.test(task.reason)
+        || !sha(task.input_sha256) || !sha(task.output_sha256)
+        || previous !== null && task.input_sha256 !== previous.output_sha256) return false;
+      statuses.push(task.status);
+      previous = task;
+    }
+    const expected = statuses.includes("error") ? "error" : statuses.includes("blocked") ? "waiting_for_evidence" : "completed";
+    const candidate = Object.fromEntries(Object.entries(observation).filter(([key]) => key !== "agent_chain"));
+    return chain.status === expected && previous?.output_sha256 === hash(candidate);
+  } catch {
+    return false;
+  }
+}
+
+// Revoke inconsistent deserialization proof before building either summary or
+// observation rows, preserving the detector candidate and the caller's record.
+function normalizeDeserializationAgent(value: unknown): unknown {
+  const obj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  if (!obj(value) || !Array.isArray(value.observations)) return value;
+  let invalid = false;
+  const observations = value.observations.map(observation => {
+    if (!obj(observation) || observation.pattern_id !== "python-unsafe-deserialization") return observation;
+    const evidence = obj(observation.evidence) ? observation.evidence : {};
+    if (obj(observation.evidence) && !("deserialization_observation" in evidence)
+      && !("acquisition" in observation) && observation.state === "needs_evidence") return observation;
+    const savedTrace = normalizeDeserializationObservation(evidence.deserialization_observation);
+    const trace = observation.rule_id === "unsafe-deserialization" && (!Object.hasOwn(evidence, "version") || evidence.version === 1)
+      && savedTrace?.file === observation.file && savedTrace?.sink_line === observation.line ? savedTrace : null;
+    const acquisition = normalizeAcquisition(observation.acquisition, trace);
+    const required = ["request_input_source", "local_input_flow", "input_trust_boundary", "loader_runtime_contract"];
+    const missing = required.filter(key => !acquisition?.facts.some(fact => fact.id === key));
+    const completed = acquisition?.status === "completed";
+    const savedMissing = observation.missing_evidence;
+    if (acquisition && Array.isArray(savedMissing)
+      && savedMissing.length === missing.length && missing.every((key, i) => key === savedMissing[i])
+      && observation.state === (completed ? "source_evidence_collected" : "needs_evidence")
+      && observation.next_action === (completed ? "review_runtime_contract" : "manual_review")
+      && validDeserializationChain(observation, value.source, value.catalog)) return observation;
+    invalid = true;
+    const restored: Record<string, unknown> = { ...observation, evidence: { ...evidence }, state: "needs_evidence",
+      next_action: "manual_review", missing_evidence: required };
+    delete restored.acquisition;
+    delete restored.agent_chain;
+    if (!trace) delete (restored.evidence as Record<string, unknown>).deserialization_observation;
+    return restored;
+  });
+  return invalid ? { ...value, observations, status: "partial", stop_reason: "source_evidence_invalid" } : value;
+}
+
+function deserializationTraceRows(value: unknown, file: unknown, line: unknown): Rows {
+  const trace = normalizeDeserializationObservation(value);
+  if (!trace || trace.file !== file || trace.sink_line !== line) return [];
+  return [["Deserialization source trace", `Import-resolved pickle.loads() at line ${trace.sink_line}. `
+    + "Input trust and loader runtime behavior were not checked."],
+    ["Deserialization source SHA-256", String(trace.source_sha256)]];
+}
+
+export function deserializationEvidenceRows(finding: Finding): Rows {
+  if (finding.source !== "static" || finding.rule_id !== "unsafe-deserialization" || finding.claim_evidence?.version !== 1) return [];
+  return deserializationTraceRows(finding.claim_evidence.deserialization_observation, finding.file, finding.line);
 }
 
 export function acquisitionRows(value: unknown, trace: unknown): [string, string][] {
@@ -306,6 +455,7 @@ export function syntheticContractRows(record: SyntheticContract): [string, strin
 }
 
 export function patternReview(value: unknown): PatternReviewView | null {
+  value = normalizeDeserializationAgent(value);
   // Older/future records must not acquire a review or a stronger verdict.
   if (!object(value) || value.version !== 1 || !["deterministic_static", "deterministic_evidence"].includes(String(value.mode))
     || !(value.status === "completed" || value.status === "partial" || value.status === "unavailable")
@@ -316,7 +466,7 @@ export function patternReview(value: unknown): PatternReviewView | null {
   const budget = value.budget;
   const js = jsSqlReview(value.js_sql_review, source);
   const knownStops = ["agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
-    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete", "synthetic_verification_incomplete", "synthetic_evidence_invalid",
+    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete", "synthetic_verification_incomplete", "synthetic_evidence_invalid", "source_evidence_invalid",
     "agent_task_failed", "agent_chain_invalid"];
   const stop = typeof value.stop_reason === "string" && (knownStops.includes(value.stop_reason)
     || /^agent_error: [A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.stop_reason)) ? value.stop_reason : "Stop reason not recorded";
@@ -356,8 +506,13 @@ export function patternReview(value: unknown): PatternReviewView | null {
     if (!object(recipe) || recipe.automatic_apply !== false
       || !["manual_guidance", "not_available"].includes(text(recipe.status, ""))) continue;
     const evidence = object(item.evidence) ? item.evidence : {};
-    const traceRows = item.rule_id === "sql-injection-string-built-query" ? sqlTraceRows(evidence.sql_observation, item.file, item.line) : [];
-    const acquisition = traceRows.length ? normalizeAcquisition(item.acquisition, evidence.sql_observation) : null;
+    const deserialization = item.rule_id === "unsafe-deserialization";
+    const trace = deserialization ? evidence.deserialization_observation : evidence.sql_observation;
+    const traceRows = deserialization ? deserializationTraceRows(trace, item.file, item.line)
+      : item.rule_id === "sql-injection-string-built-query" ? sqlTraceRows(trace, item.file, item.line) : [];
+    const acquisition = traceRows.length ? normalizeAcquisition(item.acquisition, trace) : null;
+    if (deserialization && acquisition && (item.pattern_id !== "python-unsafe-deserialization"
+      || !["input_trust_boundary", "loader_runtime_contract"].every(key => missing.includes(key)))) continue;
     const synthetic = normalizeSyntheticContract(item.synthetic_contract, item, source, catalog);
     const verified = item.state === "synthetic_recipe_verified";
     const collected = item.state === "source_evidence_collected" || verified;
@@ -371,13 +526,15 @@ export function patternReview(value: unknown): PatternReviewView | null {
         : collected ? "Supported source evidence collected; runtime behavior and repair preconditions remain unverified."
         : "Needs evidence; the candidate and repair preconditions remain unverified."],
       ...traceRows,
-      ...acquisitionRows(acquisition, evidence.sql_observation),
+      ...acquisitionRows(acquisition, trace),
       ...(synthetic ? syntheticContractRows(synthetic) : []),
       ...("synthetic_contract" in item && !synthetic ? [["Synthetic evidence unavailable", "The saved synthetic evidence could not be validated. Customer project runtime behavior remains unverified."]] as Rows : []),
       ...("acquisition" in item && !acquisition ? [["Source investigation unavailable", "The saved evidence could not be validated. Do not treat missing source facts as established."]] as Rows : []),
       ["Missing evidence", missing.length ? missing.map(label).join("; ") : "Not recorded; prerequisites are not established."],
       ["Next step", verified ? "Review the customer project runtime contract: confirm authorization, deployed reachability, intended value types and expected query behavior before choosing a repair."
-        : collected ? "Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair."
+        : collected ? (deserialization
+          ? "Review the runtime contract: confirm input trust, loader options and expected object types before choosing a repair."
+          : "Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair.")
         : "Manual review: gather the missing evidence before choosing a repair."],
       ["Repair guidance", recipe.status === "manual_guidance" && recipe.automatic_apply === false
         ? `${text(recipe.id)} · manual guidance; check all prerequisites. No automatic patch applied.`

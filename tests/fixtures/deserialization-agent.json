@@ -1,0 +1,712 @@
+[
+  {
+    "name": "completed",
+    "source": "from fastapi import FastAPI, Body\nimport pickle\napp = FastAPI()\n@app.post(\"/load\")\ndef load(payload: bytes = Body(...)):\n    data = payload\n    return pickle.loads(data)\n",
+    "report": {
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/load.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.loads(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/load.py",
+              "source_sha256": "89863f50dd9967b56c7b5ff6d8c0043a5b3b1c9fbe3c8f9e7eb5706440f43ad0",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                11,
+                7,
+                29
+              ],
+              "sink_method": "loads",
+              "loader": "pickle.loads",
+              "input_control_status": "not_checked"
+            }
+          }
+        }
+      ],
+      "security_agent": {
+        "version": 1,
+        "mode": "deterministic_static",
+        "source": {
+          "archive_sha256": "9d49fe6e0ee749683e398c3ef41171e9595959334c9943c241d052265bb5e198",
+          "engine_version": "2026-09-19-6"
+        },
+        "catalog": {
+          "version": "2026-09-19.3",
+          "sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed",
+          "cards": 3
+        },
+        "status": "completed",
+        "plan": [
+          {
+            "pattern_id": "python-outbound-request-input",
+            "title": "Python outbound address influenced by a request",
+            "check": "outbound_url",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-sql-string-assembly",
+            "title": "SQL text assembled from Python values",
+            "check": "sql_injection",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-unsafe-deserialization",
+            "title": "Python deserialization requiring trusted input",
+            "check": "unsafe_deserialization",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          }
+        ],
+        "observations": [
+          {
+            "id": "9b11175c2cf6b4e75b63ec61f315f09f81444d2828ca1f23d6ad92c8a59f378f",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 2,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/load.py",
+            "line": 7,
+            "state": "source_evidence_collected",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/load.py",
+                "source_sha256": "89863f50dd9967b56c7b5ff6d8c0043a5b3b1c9fbe3c8f9e7eb5706440f43ad0",
+                "sink_line": 7,
+                "sink_span": [
+                  7,
+                  11,
+                  7,
+                  29
+                ],
+                "sink_method": "loads",
+                "loader": "pickle.loads",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "review_runtime_contract",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 2,
+              "status": "completed",
+              "stop_reason": "source_goal_reached",
+              "source": {
+                "file": "src/load.py",
+                "source_sha256": "89863f50dd9967b56c7b5ff6d8c0043a5b3b1c9fbe3c8f9e7eb5706440f43ad0",
+                "sink_span": [
+                  7,
+                  11,
+                  7,
+                  29
+                ]
+              },
+              "facts": [
+                {
+                  "id": "request_input_source",
+                  "method": "fastapi_ast_binding",
+                  "sources": [
+                    {
+                      "parameter": "payload",
+                      "channel": "body",
+                      "span": [
+                        5,
+                        9,
+                        5,
+                        23
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "local_input_flow",
+                  "method": "python_ast_straight_line",
+                  "locations": [
+                    [
+                      5,
+                      9,
+                      5,
+                      23
+                    ],
+                    [
+                      6,
+                      11,
+                      6,
+                      18
+                    ],
+                    [
+                      6,
+                      4,
+                      6,
+                      8
+                    ],
+                    [
+                      7,
+                      24,
+                      7,
+                      28
+                    ],
+                    [
+                      7,
+                      11,
+                      7,
+                      29
+                    ]
+                  ]
+                }
+              ],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_request_input",
+                  "result": "established",
+                  "reason": "request_flow_established",
+                  "produced": [
+                    "request_input_source",
+                    "local_input_flow"
+                  ],
+                  "detail": "fastapi_body_straight_line_input"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 225
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "899733131eb36d30e42c2990bcb77d01c578d2acbe3f96086f955be032d3b16e",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "9d49fe6e0ee749683e398c3ef41171e9595959334c9943c241d052265bb5e198",
+                    "engine_version": "2026-09-19-6",
+                    "source_sha256": "89863f50dd9967b56c7b5ff6d8c0043a5b3b1c9fbe3c8f9e7eb5706440f43ad0",
+                    "observation_id": "9b11175c2cf6b4e75b63ec61f315f09f81444d2828ca1f23d6ad92c8a59f378f",
+                    "catalog_sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "7c6a435c14cee3228edd6527f7467a4363b84658334ad09f1349b2d875974655",
+                  "output_sha256": "7c6a435c14cee3228edd6527f7467a4363b84658334ad09f1349b2d875974655",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "9ebf6bed91d3d48d164d825e94de404dbfa499e141941344a27ddd4eb1dadcc2",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "9d49fe6e0ee749683e398c3ef41171e9595959334c9943c241d052265bb5e198",
+                    "engine_version": "2026-09-19-6",
+                    "source_sha256": "89863f50dd9967b56c7b5ff6d8c0043a5b3b1c9fbe3c8f9e7eb5706440f43ad0",
+                    "observation_id": "9b11175c2cf6b4e75b63ec61f315f09f81444d2828ca1f23d6ad92c8a59f378f",
+                    "catalog_sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed"
+                  },
+                  "depends_on": [
+                    "899733131eb36d30e42c2990bcb77d01c578d2acbe3f96086f955be032d3b16e"
+                  ],
+                  "input_sha256": "7c6a435c14cee3228edd6527f7467a4363b84658334ad09f1349b2d875974655",
+                  "output_sha256": "082271fb9f1e8be5f51a809a9896e538e11c404fb9ae8f742cab32954d12a398",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "source_evidence_collected"
+                },
+                {
+                  "id": "7e5a9897c854306f14f61c27c481b0db599612b2c57c7a8e2fc89e183a5be8e6",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "9d49fe6e0ee749683e398c3ef41171e9595959334c9943c241d052265bb5e198",
+                    "engine_version": "2026-09-19-6",
+                    "source_sha256": "89863f50dd9967b56c7b5ff6d8c0043a5b3b1c9fbe3c8f9e7eb5706440f43ad0",
+                    "observation_id": "9b11175c2cf6b4e75b63ec61f315f09f81444d2828ca1f23d6ad92c8a59f378f",
+                    "catalog_sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed"
+                  },
+                  "depends_on": [
+                    "9ebf6bed91d3d48d164d825e94de404dbfa499e141941344a27ddd4eb1dadcc2"
+                  ],
+                  "input_sha256": "082271fb9f1e8be5f51a809a9896e538e11c404fb9ae8f742cab32954d12a398",
+                  "output_sha256": "082271fb9f1e8be5f51a809a9896e538e11c404fb9ae8f742cab32954d12a398",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "b1e4e869d6347662e9213e45c812e32d1d487b4b0e2c9cce70f829b38b3249e7",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "9d49fe6e0ee749683e398c3ef41171e9595959334c9943c241d052265bb5e198",
+                    "engine_version": "2026-09-19-6",
+                    "source_sha256": "89863f50dd9967b56c7b5ff6d8c0043a5b3b1c9fbe3c8f9e7eb5706440f43ad0",
+                    "observation_id": "9b11175c2cf6b4e75b63ec61f315f09f81444d2828ca1f23d6ad92c8a59f378f",
+                    "catalog_sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed"
+                  },
+                  "depends_on": [
+                    "7e5a9897c854306f14f61c27c481b0db599612b2c57c7a8e2fc89e183a5be8e6"
+                  ],
+                  "input_sha256": "082271fb9f1e8be5f51a809a9896e538e11c404fb9ae8f742cab32954d12a398",
+                  "output_sha256": "082271fb9f1e8be5f51a809a9896e538e11c404fb9ae8f742cab32954d12a398",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          }
+        ],
+        "budget": {
+          "max_candidates": 128,
+          "candidates_found": 1,
+          "processed": 1,
+          "candidates_omitted": 0,
+          "evidence_actions": 2,
+          "max_evidence_actions": 512,
+          "evidence_work": 225,
+          "max_evidence_work": 640000
+        },
+        "stop_reason": "bounded_review_completed",
+        "runtime_verified": false,
+        "automatic_patch": false,
+        "limitations": [
+          "catalog_covers_selected_patterns",
+          "static_observations_only",
+          "attacker_control_not_checked",
+          "runtime_driver_identity_not_checked",
+          "runtime_tests_not_run",
+          "automatic_patch_not_run"
+        ]
+      }
+    }
+  },
+  {
+    "name": "unsupported",
+    "source": "from fastapi import FastAPI, Body\nimport pickle\napp = FastAPI()\n@app.post(\"/load\")\ndef load(payload: bytes):\n    data = payload\n    return pickle.loads(data)\n",
+    "report": {
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/load.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.loads(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/load.py",
+              "source_sha256": "9f3f409fc623569bd747ae6e5111dccd912e97395cb6115b2346a0ee6bebf49c",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                11,
+                7,
+                29
+              ],
+              "sink_method": "loads",
+              "loader": "pickle.loads",
+              "input_control_status": "not_checked"
+            }
+          }
+        }
+      ],
+      "security_agent": {
+        "version": 1,
+        "mode": "deterministic_static",
+        "source": {
+          "archive_sha256": "061149d3a3b1ac308be494f295f67d09334b1ee89f3b5ad937cf9402bd0bf6cc",
+          "engine_version": "2026-09-19-6"
+        },
+        "catalog": {
+          "version": "2026-09-19.3",
+          "sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed",
+          "cards": 3
+        },
+        "status": "completed",
+        "plan": [
+          {
+            "pattern_id": "python-outbound-request-input",
+            "title": "Python outbound address influenced by a request",
+            "check": "outbound_url",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-sql-string-assembly",
+            "title": "SQL text assembled from Python values",
+            "check": "sql_injection",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-unsafe-deserialization",
+            "title": "Python deserialization requiring trusted input",
+            "check": "unsafe_deserialization",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          }
+        ],
+        "observations": [
+          {
+            "id": "7b32143d6b498da9f5b9d0da25147afbba13c50b938c1b238cd776e768d17aba",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 2,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/load.py",
+            "line": 7,
+            "state": "needs_evidence",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/load.py",
+                "source_sha256": "9f3f409fc623569bd747ae6e5111dccd912e97395cb6115b2346a0ee6bebf49c",
+                "sink_line": 7,
+                "sink_span": [
+                  7,
+                  11,
+                  7,
+                  29
+                ],
+                "sink_method": "loads",
+                "loader": "pickle.loads",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "local_input_flow",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "manual_review",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 2,
+              "status": "unsupported",
+              "stop_reason": "no_further_action",
+              "source": {
+                "file": "src/load.py",
+                "source_sha256": "9f3f409fc623569bd747ae6e5111dccd912e97395cb6115b2346a0ee6bebf49c",
+                "sink_span": [
+                  7,
+                  11,
+                  7,
+                  29
+                ]
+              },
+              "facts": [],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_request_input",
+                  "result": "unknown",
+                  "reason": "request_flow_not_established",
+                  "produced": [],
+                  "detail": "body_binding_not_established"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 110
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "57ce3a7285d89577e412ac9d87bedd3f4c7b9206a57a89edf39204c99f9ff777",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "061149d3a3b1ac308be494f295f67d09334b1ee89f3b5ad937cf9402bd0bf6cc",
+                    "engine_version": "2026-09-19-6",
+                    "source_sha256": "9f3f409fc623569bd747ae6e5111dccd912e97395cb6115b2346a0ee6bebf49c",
+                    "observation_id": "7b32143d6b498da9f5b9d0da25147afbba13c50b938c1b238cd776e768d17aba",
+                    "catalog_sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "1bf10ed6c8f23464ffc363cbaa51efc1c58cdb138b7ff048d3247f72df7a2fba",
+                  "output_sha256": "1bf10ed6c8f23464ffc363cbaa51efc1c58cdb138b7ff048d3247f72df7a2fba",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "92756bb2890e2b2669563ca3586d2b57adda64e6be82791f6565e0a1e5562395",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "061149d3a3b1ac308be494f295f67d09334b1ee89f3b5ad937cf9402bd0bf6cc",
+                    "engine_version": "2026-09-19-6",
+                    "source_sha256": "9f3f409fc623569bd747ae6e5111dccd912e97395cb6115b2346a0ee6bebf49c",
+                    "observation_id": "7b32143d6b498da9f5b9d0da25147afbba13c50b938c1b238cd776e768d17aba",
+                    "catalog_sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed"
+                  },
+                  "depends_on": [
+                    "57ce3a7285d89577e412ac9d87bedd3f4c7b9206a57a89edf39204c99f9ff777"
+                  ],
+                  "input_sha256": "1bf10ed6c8f23464ffc363cbaa51efc1c58cdb138b7ff048d3247f72df7a2fba",
+                  "output_sha256": "82db3deec2fe324d262b96431cd95edee238c483da216cc405a3f21316c30585",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "source_evidence_incomplete"
+                },
+                {
+                  "id": "bdef3e7a0f0c691a3a79c7c7cbff8ac815e86b7dee16b06ff76675410b640789",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "061149d3a3b1ac308be494f295f67d09334b1ee89f3b5ad937cf9402bd0bf6cc",
+                    "engine_version": "2026-09-19-6",
+                    "source_sha256": "9f3f409fc623569bd747ae6e5111dccd912e97395cb6115b2346a0ee6bebf49c",
+                    "observation_id": "7b32143d6b498da9f5b9d0da25147afbba13c50b938c1b238cd776e768d17aba",
+                    "catalog_sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed"
+                  },
+                  "depends_on": [
+                    "92756bb2890e2b2669563ca3586d2b57adda64e6be82791f6565e0a1e5562395"
+                  ],
+                  "input_sha256": "82db3deec2fe324d262b96431cd95edee238c483da216cc405a3f21316c30585",
+                  "output_sha256": "82db3deec2fe324d262b96431cd95edee238c483da216cc405a3f21316c30585",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "7f2860bbcfd63697cb95db8be57639a25932169ccc6492f647dd369e637e6226",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "061149d3a3b1ac308be494f295f67d09334b1ee89f3b5ad937cf9402bd0bf6cc",
+                    "engine_version": "2026-09-19-6",
+                    "source_sha256": "9f3f409fc623569bd747ae6e5111dccd912e97395cb6115b2346a0ee6bebf49c",
+                    "observation_id": "7b32143d6b498da9f5b9d0da25147afbba13c50b938c1b238cd776e768d17aba",
+                    "catalog_sha256": "134d9ee6e4658a8b141e04358b7200c3b1a35e3a5d5a850b405f0816f1ca9aed"
+                  },
+                  "depends_on": [
+                    "bdef3e7a0f0c691a3a79c7c7cbff8ac815e86b7dee16b06ff76675410b640789"
+                  ],
+                  "input_sha256": "82db3deec2fe324d262b96431cd95edee238c483da216cc405a3f21316c30585",
+                  "output_sha256": "82db3deec2fe324d262b96431cd95edee238c483da216cc405a3f21316c30585",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          }
+        ],
+        "budget": {
+          "max_candidates": 128,
+          "candidates_found": 1,
+          "processed": 1,
+          "candidates_omitted": 0,
+          "evidence_actions": 2,
+          "max_evidence_actions": 512,
+          "evidence_work": 110,
+          "max_evidence_work": 640000
+        },
+        "stop_reason": "bounded_review_completed",
+        "runtime_verified": false,
+        "automatic_patch": false,
+        "limitations": [
+          "catalog_covers_selected_patterns",
+          "static_observations_only",
+          "attacker_control_not_checked",
+          "runtime_driver_identity_not_checked",
+          "runtime_tests_not_run",
+          "automatic_patch_not_run"
+        ]
+      }
+    }
+  }
+]

@@ -1,4 +1,4 @@
-# SQL evidence task chain
+# Source evidence task chain
 
 The SQL reviewer now delegates work through a bounded in-process queue. This is
 an execution path, not a journal reconstructed after a monolithic review. Each
@@ -12,7 +12,11 @@ validates and commits the hand-off before scheduling the next task.
 | Experimenter | Select the registered synthetic contract when source prerequisites match | One trusted executor result obtained, or an explicit blocked reason |
 | Verifier | Validate the experiment, its source binding and scope; plan the next missing proof | Accepted synthetic result with remaining project gaps, or explicit missing evidence |
 
-The first implementation covers the existing Python/Psycopg SQL pattern.
+The chain covers the existing Python/Psycopg SQL pattern and the bounded
+[FastAPI Body-to-pickle input trace](deserialization-source-evidence.md).
+Deserialization receipts use `scope: source_evidence`; the researcher establishes
+only HTTP origin and local flow. Its experimenter has no registered recipe and
+remains blocked, and the verifier retains the missing trust/runtime evidence.
 Other weakness cards retain their previous review behavior. This does not add
 cross-process distribution, automatic repair, or customer-project execution.
 
