@@ -197,6 +197,35 @@ it("reports dependent evidence actions and the remaining runtime contract", () =
   expect(JSON.stringify(saved)).toBe(before);
 });
 
+// Keep this corpus aligned with tests/test_evidence_record.py. It covers Python
+// identifiers, code-point bounds and Unicode forms that JS otherwise accepts.
+it.each(["имя", "变量", "é", "e\u0301", "_данные2", "℘", "ᢅ", "a·", "𐐀".repeat(128), "a".repeat(128)])(
+  "preserves Unicode Python input identifiers in both renderers: %s", parameter => {
+    const value = sourceAcquisition();
+    value.facts[0].sources![0].parameter = parameter;
+    expect(normalizeAcquisition(value, driverTrace)).toEqual(value);
+    expect(browserNormalizeAcquisition(value, driverTrace)).toEqual(value);
+    const rows = Object.fromEntries(patternReview(acquiredReview(value))!.observations[0].rows);
+    expect(rows["Source fact: request input source"]).toContain(`query parameter ${parameter} at line 2`);
+    expect(browserAcquisitionRows(value, driverTrace)).toEqual(acquisitionRows(value, driverTrace));
+  });
+
+it.each(["", "2name", "name\n", "name\r", "a\u200c", "a\u200d", "😀", "a".repeat(129),
+  "𐐀".repeat(129), "\u0301name", "<script>"])("rejects invalid or oversized input identifiers: %s", parameter => {
+  const value = sourceAcquisition();
+  value.facts[0].sources![0].parameter = parameter;
+  expect(normalizeAcquisition(value, driverTrace)).toBeNull();
+  expect(browserNormalizeAcquisition(value, driverTrace)).toBeNull();
+  expect(patternReview(acquiredReview(value))!.observations).toHaveLength(0);
+});
+
+it("keeps diagnostic names ASCII when source identifiers are Unicode", () => {
+  const value = sourceAcquisition();
+  Object.assign(value.attempts[1], { detail: "имя" });
+  expect(normalizeAcquisition(value, driverTrace)).toBeNull();
+  expect(browserNormalizeAcquisition(value, driverTrace)).toBeNull();
+});
+
 it.each([
   (v: ReturnType<typeof sourceAcquisition>) => { v.source.file = "another.py"; },
   (v: ReturnType<typeof sourceAcquisition>) => { v.source.source_sha256 = "b".repeat(64); },

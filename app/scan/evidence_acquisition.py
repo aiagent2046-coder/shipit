@@ -14,6 +14,7 @@ MAX_EVIDENCE_WORK = 640_000
 MAX_EVIDENCE_ACTIONS = 512
 MAX_CANDIDATE_STEPS = 4
 SOURCE_GOALS = frozenset({"request_input_source", "local_input_flow", "sql_value_position", "value_constraints"})
+COLLECTOR_LIMITS = frozenset({"input_evidence_limit", "sql_input_limit", "sql_ast_limit"})
 
 
 class EvidenceLimit(Exception):
@@ -91,7 +92,7 @@ def acquire_sql_evidence(trace, snapshot, budget):
                 from app.scan.sql_input_evidence import analyze_query_input
 
                 analysis = analyze_query_input(document.tree, sink, spend=budget.spend)
-                if snapshot.framework_shadowed:
+                if snapshot.framework_shadowed and analysis.get("reason") not in COLLECTOR_LIMITS:
                     # Visible local modules prevent claiming the imported
                     # framework's HTTP semantics. Symbolic SQL remains usable.
                     analysis = {**analysis, "status": "unknown", "reason": "framework_import_shadowed",
@@ -121,6 +122,10 @@ def acquire_sql_evidence(trace, snapshot, budget):
                 record["facts"].extend(deepcopy(result["facts"]))
             record["attempts"].append(step)
             record["budget"].update(steps=len(record["attempts"]), work_units=initial_work - budget.remaining)
+            limited = result.get("reason") in COLLECTOR_LIMITS
+            if limited:
+                step["reason"] = "source_limit"
+                record.update(status="partial", stop_reason="source_limit")
             if SOURCE_GOALS <= {fact["id"] for fact in record["facts"]}:
                 record.update(status="completed", stop_reason="source_goal_reached")
             # Each result must satisfy the same schema used for saved reports
@@ -129,6 +134,8 @@ def acquire_sql_evidence(trace, snapshot, budget):
 
             if normalize_acquisition(record, trace) is None:
                 raise ValueError("invalid_collector_record")
+            if limited:
+                break
         except SourceUnavailable as exc:
             step.update(result="unsupported", reason=exc.reason)
             record["attempts"].append(step)

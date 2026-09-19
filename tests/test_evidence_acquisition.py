@@ -291,3 +291,40 @@ def test_failed_collector_preserves_findings_and_prior_facts_without_exception_t
     assert "sql_value_position" in observation["missing_evidence"]
     assert result["report"]["security_agent"]["status"] == "partial"
     assert "private SQL text" not in json.dumps(result)
+
+
+@pytest.mark.parametrize('count', [64, 130])
+def test_collector_location_limits_make_review_incomplete(count):
+    aliases = ''.join(f'    v{i} = ' + ('name' if not i else f'v{i-1}') + '\n' for i in range(count))
+    source = HTTP_SQL.replace('    cur.execute', aliases + '    cur.execute').replace('{name}', f'{{v{count-1}}}')
+    result, observation, acquisition = acquired(source)
+    assert acquisition['status'] == 'partial'
+    assert acquisition['stop_reason'] == 'source_limit'
+    assert acquisition['attempts'][-1]['detail'] == 'input_evidence_limit'
+    assert result['report']['security_agent']['status'] == 'partial'
+    assert local_cli.exit_status(result['report'], 'none') == 2
+    assert len(sql_findings(result['report'])) == 1
+
+
+def test_sql_parser_node_budget_retains_input_facts_and_marks_incomplete(monkeypatch):
+    from app.scan import sql_slot_evidence
+
+    monkeypatch.setattr(sql_slot_evidence, '_MAX_AST_NODES', 1)
+    result, observation, acquisition = acquired()
+    assert acquisition['status'] == 'partial' and acquisition['stop_reason'] == 'source_limit'
+    assert acquisition['attempts'][-1]['detail'] == 'sql_ast_limit'
+    assert fact_ids(acquisition) == {'request_input_source', 'local_input_flow'}
+    assert result['report']['security_agent']['status'] == 'partial'
+
+
+def test_long_python_identifier_is_unsupported_without_a_collector_failure():
+    _, _, acquisition = acquired(HTTP_SQL.replace('name', 'n' * 129))
+    assert acquisition['status'] == 'unsupported'
+    assert acquisition['attempts'][1]['detail'] == 'input_identifier_unsupported'
+
+
+def test_unicode_python_parameter_can_complete_source_investigation():
+    _, observation, acquisition = acquired(HTTP_SQL.replace('name', 'имя'))
+    assert acquisition['status'] == 'completed'
+    assert observation['state'] == 'source_evidence_collected'
+    assert acquisition['facts'][0]['sources'][0]['parameter'] == 'имя'

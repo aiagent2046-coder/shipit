@@ -109,6 +109,18 @@ def acquisition_cases():
               '    cur.execute(f"SELECT id FROM users WHERE name = \'{name}\'")\n')
     for name, body, established, skipped in (
         ('source-goal', source, True, set()),
+        ('unicode-parameter', source.replace('name', 'имя'), True, set()),
+        ('exception-shadow', source.replace('{name}', '{int(name)}')
+         + '    try:\n        pass\n    except Exception as int:\n        pass\n', False,
+         {'collect_value_constraints'}),
+        ('vararg-annotation', source.replace('@app.get',
+         'def other(*unused: (app := replacement)):\n    pass\n@app.get'), False,
+         {'collect_value_constraints'}),
+        ('router-prefix', source.replace('FastAPI', 'APIRouter').replace('APIRouter()',
+         'APIRouter(prefix="/users/{name}")'), False, {'collect_value_constraints'}),
+        ('input-location-limit', source.replace('    cur.execute', ''.join(
+            f'    v{i} = ' + ('name' if not i else f'v{i-1}') + '\n' for i in range(64))
+         + '    cur.execute').replace('{name}', '{v63}'), False, {'collect_value_constraints'}),
         ('shadowed-framework', source, False, {'inspect_sql_slots', 'collect_value_constraints'}),
         ('unknown-driver', source.replace('connect(dsn)', 'connect(dsn, cursor_factory=CustomCursor)'),
          False, {'inspect_sql_slots'}),

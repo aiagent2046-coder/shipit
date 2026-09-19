@@ -88,6 +88,11 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
   const span = (v: unknown): v is AcquisitionSpan => Array.isArray(v) && v.length === 4
     && v.every(n => integer(n)) && v[0] > 0 && (v[2] > v[0] || v[2] === v[0] && v[3] > v[1]);
   const identifier = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(v);
+  // Python uses Unicode identifier rules and counts code points, not UTF-16
+  // units. Join controls are not Python identifiers; require absolute end too.
+  const parameter = (v: unknown): v is string => typeof v === "string" && v.length <= 256
+    && [...v].length <= 128 && /^[_\p{XID_Start}]\p{XID_Continue}*(?![\s\S])/u.test(v)
+    && !/[\u200c\u200d]/u.test(v);
   const choice = (v: unknown, options: string[]): v is string => typeof v === "string" && options.includes(v);
   const sha = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
   const actions = ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
@@ -139,7 +144,7 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     if (!keys(fact, ["id", "method", field]) || !Array.isArray(entries) || !entries.length
       || entries.length > (["locations", "constraints"].includes(field) ? 128 : 64)) return null;
     if (field === "sources") {
-      if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !identifier(item.parameter)
+      if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !parameter(item.parameter)
         || !choice(item.channel, ["query", "path"]) || !span(item.span))) return null;
     } else if (field === "locations") {
       if (!entries.every(span)) return null;

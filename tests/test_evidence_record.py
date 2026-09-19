@@ -68,6 +68,29 @@ def test_complete_source_investigation_exposes_actions_and_remaining_runtime_gap
     assert acquisition == before
 
 
+@pytest.mark.parametrize("parameter", ["имя", "变量", "é", "e\u0301", "_данные2", "℘", "ᢅ", "a·",
+                                      "𐐀" * 128, "a" * 128])
+def test_python_identifiers_survive_saved_source_evidence(trace, acquisition, parameter):
+    acquisition["facts"][0]["sources"][0]["parameter"] = parameter
+    assert normalize_acquisition(acquisition, trace) == acquisition
+    rows = dict(security_agent_rows(agent(trace, acquisition)))
+    assert f"query parameter {parameter} at line 5" in rows["Source fact: request input source"]
+    assert rows["Next step"].startswith("Review the runtime contract")
+
+
+@pytest.mark.parametrize("parameter", ["", "2name", "name\n", "name\r", "a\u200c", "a\u200d", "😀",
+                                      "a" * 129, "𐐀" * 129, "\u0301name", "<script>"])
+def test_invalid_or_oversized_identifiers_cannot_be_saved_facts(trace, acquisition, parameter):
+    acquisition["facts"][0]["sources"][0]["parameter"] = parameter
+    assert normalize_acquisition(acquisition, trace) is None
+    assert acquisition_rows(acquisition, trace) == []
+
+
+def test_unicode_parameter_support_does_not_expand_diagnostic_names(trace, acquisition):
+    acquisition["attempts"][1]["detail"] = "имя"
+    assert normalize_acquisition(acquisition, trace) is None
+
+
 @pytest.mark.parametrize("mutate", [
     lambda v: v.update(version=True),
     lambda v: v.update(status="verified"),

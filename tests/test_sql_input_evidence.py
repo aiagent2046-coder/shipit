@@ -83,6 +83,13 @@ def test_explicit_int_conversion_is_recorded_without_claiming_business_type():
     assert not any('intended' in key for item in result['constraints'] for key in item)
 
 
+def test_router_prefix_is_not_misreported_as_a_query_parameter():
+    source = route(SETUP + 'cur.execute(f"SELECT {name}")\n', path='/lookup',
+                   prefix='from fastapi import APIRouter\nimport psycopg\n'
+                          'app = APIRouter(prefix="/users/{name}")\n')
+    assert collect(source)['facts'] == []
+
+
 def test_request_query_read_and_immutable_alias_snapshot():
     result = collect(route(SETUP + 'request_alias = request\nvalue = request_alias.query_params["private_key"]\n'
                            'q = "SELECT \'" + value + "\'"\nrequest = None\ncur.execute(q)\n',
@@ -105,6 +112,8 @@ def test_connection_cursor_with_context_managers():
     (SETUP + 'name = wrap(name)\ncur.execute(f"SELECT {name}")\n', 'name: str'),
     (SETUP + 'int = custom\ncur.execute(f"SELECT {int(name)}")\n', 'name: str'),
     (SETUP + 'cur.execute(f"SELECT {int(name)}")\nint = custom\n', 'name: str'),
+    (SETUP + 'cur.execute(f"SELECT {int(name)}")\ntry:\n    pass\n'
+     'except Exception as int:\n    pass\n', 'name: str'),
     (SETUP + 'request = replacement\ncur.execute(f"SELECT {request.query_params[\'name\']}")\n', 'request: Request'),
     (SETUP + 'escape(request)\ncur.execute(f"SELECT {request.query_params[\'name\']}")\n', 'request: Request'),
     (SETUP + 'store.value = name\ncur.execute(f"SELECT {name}")\n', 'name: str'),
@@ -227,6 +236,8 @@ def test_sink_lookup_requires_same_ast_object_not_equal_source_location():
 @pytest.mark.parametrize('change', [
     'def other(value: mutate()):\n    pass\n',
     'def other(value: unknown.descriptor):\n    pass\n',
+    'def other(*unused: (app := replacement)):\n    pass\n',
+    'def other(**unused: (app := replacement)):\n    pass\n',
 ])
 def test_other_function_annotation_effects_invalidate_framework_identity(change):
     result = collect(route(SETUP + 'cur.execute(f"SELECT {name}")\n') + change)

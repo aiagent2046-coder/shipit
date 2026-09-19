@@ -384,6 +384,9 @@ function normalizeAcquisition(value, trace) {
     const span = (v) => Array.isArray(v) && v.length === 4
         && v.every(n => integer(n)) && v[0] > 0 && (v[2] > v[0] || v[2] === v[0] && v[3] > v[1]);
     const identifier = (v) => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(v);
+    // Match Python identifiers and its code-point length, including astral letters.
+    const parameter = (v) => typeof v === "string" && v.length <= 256 && [...v].length <= 128
+        && /^[_\p{XID_Start}]\p{XID_Continue}*(?![\s\S])/u.test(v) && !/[\u200c\u200d]/u.test(v);
     const choice = (v, options) => typeof v === "string" && options.includes(v);
     const sha = (v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
     const actions = ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
@@ -441,7 +444,7 @@ function normalizeAcquisition(value, trace) {
             || entries.length > (["locations", "constraints"].includes(field) ? 128 : 64))
             return null;
         if (field === "sources") {
-            if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !identifier(item.parameter)
+            if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !parameter(item.parameter)
                 || !choice(item.channel, ["query", "path"]) || !span(item.span)))
                 return null;
         }

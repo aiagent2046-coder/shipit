@@ -69,6 +69,9 @@ actions, results, produced facts, reasons and spent work. It contains no SQL tex
 input values or exception messages. Simple aliases, f-strings and string
 concatenation are supported; branches, wrappers, dependency injection,
 asynchronous routes, dynamic identifiers and ambiguous SQL remain unknown.
+Nonempty router prefixes remain unsupported because they can introduce path
+parameters absent from the decorator. Parameter names support Unicode Python
+identifiers up to 128 characters; longer names remain explicitly unsupported.
 Repository-local `fastapi` or `starlette` modules/packages prevent framework
 identity claims, including the decorated driver's source proof.
 

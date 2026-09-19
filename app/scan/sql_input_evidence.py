@@ -143,6 +143,12 @@ class _InputTrace:
                 if isinstance(value, ast.Call) and self.qualified(value.func) in _ROUTERS:
                     if value.args or any(kw.arg is None or not self.constant(kw.value) for kw in value.keywords):
                         safe = False
+                    # Route paths currently come from the decorator alone.
+                    # A router prefix may add path parameters; do not report
+                    # those parameters as query input by dropping the prefix.
+                    if any(kw.arg == 'prefix' and not (isinstance(kw.value, ast.Constant)
+                            and kw.value.value == '') for kw in value.keywords):
+                        safe = False
                     self.bindings[name] = '@router'
                 elif qualified:
                     self.bindings[name] = qualified
@@ -162,7 +168,8 @@ class _InputTrace:
                     if stmt.decorator_list and self.route_path(stmt) is None:
                         safe = False
                     annotations = [arg.annotation for arg in
-                                   [*stmt.args.posonlyargs, *stmt.args.args, *stmt.args.kwonlyargs]]
+                                   [*stmt.args.posonlyargs, *stmt.args.args, *stmt.args.kwonlyargs,
+                                    stmt.args.vararg, stmt.args.kwarg] if arg is not None]
                     annotations.append(stmt.returns)
                     for annotation in annotations:
                         self.spend()
@@ -256,6 +263,8 @@ class _InputTrace:
                 self.locals.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
             elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
                 self.locals.add(node.name)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                self.locals.add(node.name)
             elif isinstance(node, ast.MatchMapping) and node.rest:
                 self.locals.add(node.rest)
         defaults = [*fn.args.defaults, *(value for value in fn.args.kw_defaults if value is not None)]
@@ -291,7 +300,7 @@ class _InputTrace:
         for part in value.parts:
             if isinstance(part, _Slot):
                 if len(part.locations) >= _MAX_LOCATIONS:
-                    raise _Unsupported
+                    raise _InputLimit
                 self.spend(len(part.locations))
                 part = replace(part, locations=(*part.locations, span))
             parts.append(part)
@@ -301,10 +310,10 @@ class _InputTrace:
         size = sum(len(value.parts) for value in values)
         self.spend(size)
         if size > _MAX_PARTS:
-            raise _Unsupported
+            raise _InputLimit
         parts = tuple(part for value in values for part in value.parts)
         if sum(len(part) for part in parts if isinstance(part, str)) > _MAX_TEXT:
-            raise _Unsupported
+            raise _InputLimit
         return _Value(parts, 'str')
 
     def request(self, node: ast.AST) -> _Value | None:
@@ -349,7 +358,7 @@ class _InputTrace:
             return request
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             if len(node.value) > _MAX_TEXT:
-                raise _Unsupported
+                raise _InputLimit
             return _Value((node.value,), 'str')
         if isinstance(node, ast.Name):
             return self.located(self.values.get(node.id, self.unknown(node)), node)
@@ -380,7 +389,7 @@ class _InputTrace:
                 if len(value.parts) == 1 and isinstance(value.parts[0], _Slot):
                     part = value.parts[0]
                     if len(part.constraints) > 8:
-                        raise _Unsupported
+                        raise _InputLimit
                     constraint = _Constraint('int_conversion', 'int', _span(node))
                     converted = replace(part, constraints=(*part.constraints, constraint))
                     return self.located(_Value((converted,), 'int'), node)
@@ -515,6 +524,8 @@ class _InputTrace:
         for index, slot in enumerate(slots):
             self.spend()
             source = slot.source
+            if len(source.parameter) > 128:
+                return {**_empty('unsupported', 'input_identifier_unsupported'), 'parts': parts}
             if source not in seen_sources:
                 seen_sources.add(source)
                 sources.append({'parameter': source.parameter, 'channel': source.channel, 'span': list(source.span)})
@@ -547,9 +558,9 @@ def analyze_query_input(tree: ast.Module, sink: ast.Call, *, spend: Callable) ->
     """Trace a selected call; caller owns the shared work budget and its exception."""
     try:
         return _InputTrace(tree, sink, spend).collect()
-    except _InputLimit:
+    except (_InputLimit, RecursionError):
         return _empty('unsupported', 'input_evidence_limit')
-    except (_Unsupported, RecursionError):
+    except _Unsupported:
         return _empty('unsupported', 'unsupported_query_expression')
 
 

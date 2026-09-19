@@ -112,7 +112,8 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
         if field == "sources":
             for item in entries:
                 if (not _keys(item, {"parameter", "channel", "span"})
-                        or not isinstance(item["parameter"], str) or not _NAME.fullmatch(item["parameter"])
+                        or not isinstance(item["parameter"], str) or len(item["parameter"]) > 128
+                        or not item["parameter"].isidentifier()
                         or item["channel"] not in ("query", "path") or not _span(item["span"])):
                     return None
         elif field == "locations":
