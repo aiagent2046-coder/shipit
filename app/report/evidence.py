@@ -707,8 +707,9 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
                         for item in agent["observations"])
     client_runtime = (agent.get("client_runtime")
                       if agent.get("client_runtime_status") == "accepted" else None)
+    observation_label = "Python catalog observations" if agent.get("js_sql_review") else "observations"
     rows = [
-        ("Pattern review", f"{agent['status']}; {len(agent['observations'])} observations; "
+        ("Pattern review", f"{agent['status']}; {len(agent['observations'])} {observation_label}; "
          f"{stop}. Completion describes bounded review, not project safety."),
         ("Pattern catalog", f"{text(catalog.get('version'), 'Unavailable')}; "
          f"SHA-256: {text(catalog.get('sha256'), 'Unavailable')}"),
@@ -730,6 +731,10 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
             + ("Customer project runtime tests not run. No automatic patch applied." if has_synthetic else
                "No runtime tests or automatic patches were run."))),
     ]
+    from app.report.js_sql_review import js_sql_review_rows
+    rows.extend(js_sql_review_rows(agent.get("js_sql_review"), source))
+    if agent.get("js_sql_review_rejected"):
+        rows.append(("JavaScript SQL source review", "Saved source review rejected; findings remain unchanged."))
     if client_runtime:
         rows.extend([
             ("Client runtime evidence", "Operator-supplied scenario results accepted for consistency only. "
@@ -772,7 +777,9 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
         rows.append((f"Pattern check: {text(item.get('title'))}", detail))
     if not agent["observations"]:
         rows.append(("Pattern observations",
-                     "No reviewed candidates recorded. An empty result does not establish safety."))
+                     ("No Python catalog candidates recorded. An empty result does not establish safety."
+                      if agent.get("js_sql_review") else
+                      "No reviewed candidates recorded. An empty result does not establish safety.")))
     displayed = 0
     for index, observation in enumerate(agent["observations"][:128], 1):
         if (not isinstance(observation, dict) or not isinstance(observation.get("file"), str)

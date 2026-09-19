@@ -84,6 +84,10 @@ try {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await context.route('**/*', async route => {
     const name = new URL(route.request().url()).pathname.slice(1) || 'index.html';
+    if (['sha2.js', '_md.js', '_u64.js', 'utils.js'].some(file => name === 'vendor/noble/' + file)) {
+      return route.fulfill({ body: await readFile(resolve(root, 'node_modules/@noble/hashes', name.slice('vendor/noble/'.length))),
+        contentType: 'application/javascript' });
+    }
     if (!['index.html', 'app.js', 'styles.css'].includes(name)) return route.abort();
     await route.fulfill({ body: await readFile(resolve(source, name)), contentType: name.endsWith('.js')
       ? 'application/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html' });

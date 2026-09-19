@@ -71,6 +71,14 @@ await cp(join(root, 'LICENSE'), join(out, 'LICENSE.txt'));
 await cp(join(root, 'browser/THIRD_PARTY_NOTICES.md'), join(out, 'THIRD_PARTY_NOTICES.txt'));
 await cp(join(root, 'browser/native/manifest.json'), join(out, 'native-manifest.json'));
 await cp(join(root, 'browser/native/licenses'), join(out, 'licenses'), { recursive: true });
+// Keep the SHA implementation local and pin it through package-lock.json.
+// sha2.js imports only these modules in @noble/hashes 2.4.0.
+const noble = join(root, 'browser/node_modules/@noble/hashes');
+await mkdir(join(out, 'vendor/noble'), { recursive: true });
+for (const name of ['sha2.js', '_md.js', '_u64.js', 'utils.js']) {
+  await cp(join(noble, name), join(out, 'vendor/noble', name));
+}
+await cp(join(noble, 'LICENSE'), join(out, 'licenses/noble-hashes-MIT.txt'));
 for (const name of ['index.html', 'app.js', 'styles.css', 'worker.js', 'runtime.js']) {
   await cp(join(root, 'browser/src', name), join(out, name));
 }
@@ -79,6 +87,7 @@ const manifest = {
   python: lock.info.python, engine_sha256: createHash('sha256').update(bundle).digest('hex'),
   cve_catalog_sha256: catalogHash,
   native_parsers: Object.fromEntries(native.packages.map(p => [p.name, p.version])),
+  receipt_hash_library: { name: '@noble/hashes', version: JSON.parse(await readFile(join(noble, 'package.json'))).version },
 };
 await writeFile(join(out, 'build.json'), JSON.stringify(manifest, null, 2) + '\n');
 let bytes = 0;
